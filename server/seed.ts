@@ -473,7 +473,7 @@ export async function ensureUserHasWorkspace(userId: number, userName: string | 
 
   const slug = `ws-${userId}-${Math.random().toString(36).slice(2, 6)}`;
   const r = await db.insert(workspaces).values({
-    name: userName ? `${userName}'s workspace` : "USIP workspace",
+    name: "LSI Media",
     slug,
     ownerUserId: userId,
     plan: "trial",

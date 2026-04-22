@@ -128,12 +128,11 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
         "fixed inset-y-0 left-0 z-50 transform transition-transform duration-200 md:translate-x-0 md:static md:transform-none",
         mobileOpen ? "translate-x-0" : "-translate-x-full",
       )}>
-        <div className="px-4 py-5 flex items-center gap-2 border-b border-white/10">
-          <div className="size-8 rounded-md bg-primary flex items-center justify-center text-primary-foreground font-bold">U</div>
-          <div className="leading-tight">
-            <div className="font-semibold text-[15px]">USIP</div>
-            <div className="text-[11px] text-white/60">Unified Sales Intelligence</div>
+        <div className="px-4 py-4 border-b border-white/10">
+          <div className="bg-white rounded-md px-3 py-2 flex items-center justify-center">
+            <img src="/manus-storage/LSiMediaBadge180x48_fdf5dbe6.png" alt="LSI Media" className="h-7 w-auto max-w-full" />
           </div>
+          <div className="text-[10px] text-white/55 tracking-wider uppercase mt-2 text-center">USIP · Sales Intelligence</div>
         </div>
 
         <nav className="flex-1 overflow-y-auto py-3 px-2 space-y-3">

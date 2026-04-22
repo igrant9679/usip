@@ -121,3 +121,20 @@
 - [x] Dashboard widget grid: each widget card wrapped in `@container`; KPI text scales by widget width, not viewport; funnel/table monetary cells use `tabular-nums shrink-0`
 - [x] Table headers / monetary cells in Tasks / Quotes / Sequences / Drafts / Renewals / Pipeline / Accounts / Products: `tabular-nums whitespace-nowrap shrink-0` on $/numeric cells, `truncate` + `title` on long names
 - [x] Topbar workspace switcher: button gets `truncate min-w-0`; PageHeader stacks title/actions vertically on `<sm`; sidebar nav labels truncate
+
+
+## 14. LSI Media branding (in-app, code-side)
+- [x] Uploaded `lsilogo.jpg` (icon mark) and `LSiMediaBadge180x48.png` (wordmark badge) to webdev static assets
+- [x] Sidebar header replaced with the actual `LSiMediaBadge180x48.png` wordmark on a white card, with "USIP · Sales Intelligence" caption below; rendered as a plain image, not clickable (per user request)
+- [x] Favicon set to LSI icon mark (`lsilogo_9858f3e6.jpg`) via `<link rel="icon">`
+- [x] Browser page `<title>` set to "LSI Media · USIP"
+- [x] Existing seeded workspace renamed to "LSI Media" (UPDATE workspaces); new workspaces also default to "LSI Media" via `seed.ts`
+
+## 15. LSI Media branding (platform-side, manual)
+- [ ] Update `VITE_APP_TITLE` to "LSI Media · USIP" via Management UI → Settings → General (protected built-in secret — not editable from agent code)
+- [ ] Update `VITE_APP_LOGO` to the LSI icon URL (e.g. `/manus-storage/lsilogo_9858f3e6.jpg`) via Management UI → Settings → General (protected built-in secret — not editable from agent code)
+
+
+## 16. Remove lsi-media.com link (per user)
+- [x] Stripped the `<a href="https://www.lsi-media.com">` wrapper from sidebar logo — renders as plain image
+- [x] Updated earlier todo entry to remove the link claim
