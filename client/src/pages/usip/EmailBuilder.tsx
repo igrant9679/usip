@@ -1458,7 +1458,7 @@ export default function EmailBuilderPage() {
   if (templateId) {
     return (
       <Shell title="Email Builder">
-        <div className="flex h-[calc(100vh-56px)] -mt-6 -mx-4 md:-mx-6 overflow-hidden">
+        <div className="flex h-[calc(100vh-56px)] -mx-4 md:-mx-6 overflow-hidden">
           <Builder templateId={templateId} />
         </div>
       </Shell>

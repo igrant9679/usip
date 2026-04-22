@@ -416,7 +416,12 @@
 - [x] sectionPreviewLabel: singular for single block
 - [x] 165/165 total vitest specs passing
 
-## 25. Email Builder — Onboarding UX improvements
+## 25b. Bug: Full-bleed pages clipped under top nav
+- [ ] Email Builder canvas toolbar clipped under Shell top nav bar
+- [ ] Audit SequenceCanvas for the same offset issue
+- [ ] Fix by using correct top offset in the full-bleed container calc
+
+## 26. Email Builder — Onboarding UX improvements
 - [ ] Empty canvas: replace plain placeholder with a starter template picker (5 layouts: Blank, Simple Intro, Product Spotlight, Newsletter, Follow-Up)
 - [ ] Each starter card shows a mini block-stack preview and a "Start with this" button that pre-populates the canvas with the layout's blocks
 - [ ] Right panel: when no block is selected, show a contextual "Getting Started" hint panel (3 steps: pick a block, edit properties, preview)
