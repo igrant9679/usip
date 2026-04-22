@@ -230,11 +230,11 @@
 - [x] default notifyPolicy shape
 
 ### vitest gaps (pure-logic only — no DB fixtures in this template)
-- [ ] DB-backed integration: settings.save round-trips through workspace_settings row
-- [ ] DB-backed integration: team.invite creates users row + workspace_members row
-- [ ] DB-backed integration: team.changeRole router throws FORBIDDEN when actor < target rank
-- [ ] DB-backed integration: team.deactivate sets deactivatedAt AND reassigns ownerUserId on leads/opportunities/tasks
-- [ ] (needs a test-container or mocked drizzle client — current test runner is pure-logic only)
+- [~] DB-backed integration: settings.save round-trips through workspace_settings row — DEFERRED (needs test-container/mocked drizzle)
+- [~] DB-backed integration: team.invite creates users row + workspace_members row — DEFERRED
+- [~] DB-backed integration: team.changeRole router throws FORBIDDEN when actor < target rank — DEFERRED
+- [~] DB-backed integration: team.deactivate sets deactivatedAt AND reassigns ownerUserId on leads/opportunities/tasks — DEFERRED
+- [~] (needs a test-container or mocked drizzle client — current test runner is pure-logic only)
 
 ## 20. Visual Canvas Sequence Builder (Sprint 2 — Tier 1) ✅ DELIVERED
 - [x] Install @xyflow/react 12.10.2
