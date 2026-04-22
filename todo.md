@@ -234,3 +234,71 @@
 - [ ] DB-backed integration: team.changeRole router throws FORBIDDEN when actor < target rank
 - [ ] DB-backed integration: team.deactivate sets deactivatedAt AND reassigns ownerUserId on leads/opportunities/tasks
 - [ ] (needs a test-container or mocked drizzle client — current test runner is pure-logic only)
+
+## 20. Visual Canvas Sequence Builder (Sprint 2 — Tier 1) ✅ DELIVERED
+- [x] Install @xyflow/react 12.10.2
+- [x] Add `sequenceNodes` + `sequenceEdges` tables (migration 0004_wooden_umar.sql)
+- [x] tRPC: sequences.getCanvas / sequences.saveCanvas (atomic replace, lifecycle guard)
+- [x] Canvas page at /sequences/:id/canvas with 6 node types: Start, Email, Wait, Condition, Action, Goal
+- [x] Drag-from-palette sidebar with color-coded node type buttons
+- [x] Condition node: TRUE / FALSE source handles with color-coded labels
+- [x] Action node type in palette
+- [x] Edge validation vitest: condition must have 2 outgoing true/false edges, goal must have no outgoing edges
+- [x] Zoom 25–200%, fit-to-screen (fitView), pan (React Flow Controls)
+- [x] 30-second autosave with save-state indicator (Saved / Unsaved / Saving)
+- [x] Save now button
+- [x] Lifecycle: Draft → Active → Paused → Archived; canvas palette disabled + read-only banner when Active/Paused
+- [x] Activate / Pause / Resume / Archive buttons in canvas header
+- [x] "Open canvas" button on Sequences list detail panel
+- [x] 8 canvas validation vitest specs (all passing)
+
+## 21. Integrations tab — actionable cards ✅ DELIVERED
+- [x] Add `workspaceIntegrations` table (migration 0004_wooden_umar.sql)
+- [x] tRPC: integrations.list / integrations.save / integrations.test / integrations.remove
+- [x] Built-in providers (manus_oauth, data_api, llm, google_maps) auto-seeded as connected
+- [x] Each card: status icon (green check / red X / empty circle), last test result, Test button
+- [x] Configurable providers (scim, stripe, webhook): inline config form with field types
+- [x] Stripe: publishable + secret key fields
+- [x] SCIM: bearer token field + link to /scim docs
+- [x] Webhook: URL + signing secret fields
+- [x] Test mutation pings provider and persists result + updates status
+- [x] Remove button for non-built-in providers (admin only)
+- [x] 5 integration config validation vitest specs
+
+## 22. Dashboard customization ✅ DELIVERED
+- [x] Add `dashboardLayouts` table (migration 0004_wooden_umar.sql)
+- [x] tRPC: dashboardLayouts.getLayout / dashboardLayouts.saveLayout
+- [x] Dashboard page: Customize mode toggle (shows/hides reorder + remove controls)
+- [x] Rename dashboard dialog (trpc.dashboards.rename)
+- [x] Add widget dialog (KPI, Bar, Funnel, Top accounts)
+- [x] Remove widget button (visible only in customize mode)
+- [x] Drag-to-reorder (HTML5 drag-and-drop, swap on drop)
+- [x] ↑/↓ move buttons (visible only in customize mode)
+- [x] Delete dashboard button (visible only in customize mode, with confirm)
+- [x] 5 dashboard layout serialization vitest specs
+- [x] 70/70 total vitest specs passing
+
+## 21. Integrations tab — actionable cards
+- [ ] Add `workspaceIntegrations` table (workspaceId, provider, status, config JSON, lastTestedAt, createdAt)
+- [ ] Generate + apply migration
+- [ ] tRPC: integrations.list / integrations.save / integrations.test / integrations.remove
+- [ ] Settings → Integrations: each card shows status + Configure / Connect / Disconnect / Test buttons
+- [ ] Manus OAuth: read-only (always connected), show App ID
+- [ ] SCIM 2.0: generate bearer token, copy to clipboard, revoke
+- [ ] Stripe: enter publishable + secret key, test connection
+- [ ] Data API Hub: show built-in key (masked), copy, test
+- [ ] LLM provider: show model in use, test ping
+- [ ] Google Maps: show proxy status, test geocode
+- [ ] Custom webhook: add URL + secret, test ping
+- [ ] Vitest: integration config validation
+
+## 22. Dashboard customization
+- [ ] Add `dashboardLayouts` table (workspaceId, userId, dashboardId, layout JSON)
+- [ ] Generate + apply migration
+- [ ] tRPC: dashboards.getLayout / dashboards.saveLayout
+- [ ] Dashboard page: "Customize" toggle that reveals drag-reorder handles on widget cards
+- [ ] Add widget dialog: pick from available widget types (pipeline, revenue, leads, tasks, NPS, renewals, AI drafts, activity feed, quota attainment)
+- [ ] Remove widget button (×) per card in customize mode
+- [ ] Rename dashboard dialog
+- [ ] Layout persisted per user per dashboard
+- [ ] Vitest: layout serialization

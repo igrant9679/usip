@@ -5,7 +5,7 @@ import { Section, StatusPill, fmt$ } from "@/components/usip/Common";
 import { PageHeader, Shell, StatCard } from "@/components/usip/Shell";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { trpc } from "@/lib/trpc";
-import { AlertTriangle, Bell, Building2, CreditCard, Download, Palette, Plug, ShieldCheck } from "lucide-react";
+import { AlertTriangle, Bell, Building2, CheckCircle2, CreditCard, Download, ExternalLink, Loader2, Palette, Plug, ShieldCheck, TestTube2, Trash2, XCircle } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
@@ -378,29 +378,172 @@ function NotificationsTab({ settings, save, canEdit }: { settings: any; save: (v
   );
 }
 
+/* ─── Provider metadata ──────────────────────────────────────────────── */
+const PROVIDER_META: Record<string, { name: string; hint: string; builtIn?: boolean; configFields?: { key: string; label: string; type?: string }[]; docsUrl?: string }> = {
+  manus_oauth: { name: "Manus OAuth", hint: "Primary authentication — always connected via the platform.", builtIn: true },
+  data_api: { name: "Manus Data API Hub", hint: "Bulk enrichment + news / funding signals. Built-in, no setup required.", builtIn: true },
+  llm: { name: "LLM Provider", hint: "AI email compose, lead scoring, research pipeline. Built-in via platform key.", builtIn: true },
+  google_maps: { name: "Google Maps", hint: "Geocoding + routing via Manus proxy. No API key required.", builtIn: true },
+  scim: {
+    name: "SCIM 2.0",
+    hint: "Provision users + groups from Okta, Entra ID, or any SCIM-compatible IdP.",
+    docsUrl: "/scim",
+    configFields: [{ key: "bearerToken", label: "Bearer token (auto-generated)", type: "password" }],
+  },
+  stripe: {
+    name: "Stripe",
+    hint: "Payment processing for CPQ / quotes. Requires Stripe publishable + secret keys.",
+    configFields: [
+      { key: "publishableKey", label: "Publishable key" },
+      { key: "secretKey", label: "Secret key", type: "password" },
+    ],
+  },
+  webhook: {
+    name: "Custom Webhook",
+    hint: "POST JSON events to an external URL on CRM triggers.",
+    configFields: [
+      { key: "url", label: "Endpoint URL" },
+      { key: "secret", label: "Signing secret", type: "password" },
+    ],
+  },
+};
+
+const ALL_PROVIDERS = Object.keys(PROVIDER_META);
+
 function IntegrationsTab() {
-  const items = [
-    { name: "Manus OAuth", status: "Connected", tone: "success" as const, hint: "Primary authentication provider" },
-    { name: "SCIM 2.0", status: "Available", tone: "info" as const, hint: "Provision users + groups from Okta / Entra ID" },
-    { name: "Stripe", status: "Not connected", tone: "muted" as const, hint: "Enable via Management → Add feature" },
-    { name: "Manus Data API Hub", status: "Available", tone: "info" as const, hint: "Bulk enrichment + news / funding signals" },
-    { name: "LLM provider", status: "Built-in", tone: "success" as const, hint: "invokeLLM via platform key (no setup)" },
-    { name: "Google Maps", status: "Built-in", tone: "success" as const, hint: "Geocoding + routing via Manus proxy" },
-  ];
+  const { current } = useWorkspace();
+  const isAdmin = current?.role === "admin" || current?.role === "super_admin";
+  const utils = trpc.useUtils();
+
+  const listQ = trpc.integrations.list.useQuery();
+  const saveMut = trpc.integrations.save.useMutation({
+    onSuccess: () => { utils.integrations.list.invalidate(); toast.success("Integration saved"); },
+    onError: (e) => toast.error(e.message),
+  });
+  const testMut = trpc.integrations.test.useMutation({
+    onSuccess: (d) => { utils.integrations.list.invalidate(); toast[d.ok ? "success" : "error"](d.result); },
+    onError: (e) => toast.error(e.message),
+  });
+  const removeMut = trpc.integrations.remove.useMutation({
+    onSuccess: () => { utils.integrations.list.invalidate(); toast.success("Integration removed"); },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const [configOpen, setConfigOpen] = useState<string | null>(null);
+  const [configDraft, setConfigDraft] = useState<Record<string, string>>({});
+
+  // Build a map of provider → row
+  const rowMap = useMemo(() => {
+    const m: Record<string, any> = {};
+    (listQ.data ?? []).forEach((r: any) => { m[r.provider] = r; });
+    return m;
+  }, [listQ.data]);
+
+  // Merge server rows with static provider list
+  const providers = ALL_PROVIDERS.map((p) => ({
+    provider: p,
+    meta: PROVIDER_META[p],
+    row: rowMap[p] ?? null,
+  }));
+
+  const openConfig = (provider: string) => {
+    const row = rowMap[provider];
+    setConfigDraft((row?.config as Record<string, string>) ?? {});
+    setConfigOpen(provider);
+  };
+
+  const saveConfig = (provider: string) => {
+    saveMut.mutate({ provider, config: configDraft, status: "connected" });
+    setConfigOpen(null);
+  };
+
+  const statusIcon = (status: string | null) => {
+    if (status === "connected") return <CheckCircle2 className="size-4 text-green-600" />;
+    if (status === "error") return <XCircle className="size-4 text-red-500" />;
+    return <div className="size-4 rounded-full border-2 border-muted-foreground/30" />;
+  };
+
   return (
-    <Section title="Integrations" description="Status of external services this workspace uses.">
-      <ul className="divide-y">
-        {items.map((i) => (
-          <li key={i.name} className="flex items-center gap-3 px-4 py-3">
-            <div className="flex-1">
-              <div className="text-sm font-medium">{i.name}</div>
-              <div className="text-xs text-muted-foreground">{i.hint}</div>
-            </div>
-            <StatusPill tone={i.tone}>{i.status}</StatusPill>
-          </li>
-        ))}
-      </ul>
-    </Section>
+    <>
+      <Section title="Integrations" description="Connect and configure external services. Built-in integrations are always active with no setup required.">
+        {listQ.isLoading ? (
+          <div className="p-6 flex justify-center"><Loader2 className="size-5 animate-spin text-muted-foreground" /></div>
+        ) : (
+          <ul className="divide-y">
+            {providers.map(({ provider, meta, row }) => (
+              <li key={provider} className="px-4 py-3">
+                <div className="flex items-center gap-3">
+                  {statusIcon(row?.status ?? null)}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium">{meta.name}</span>
+                      {meta.builtIn && <span className="text-[10px] bg-muted text-muted-foreground px-1.5 py-0.5 rounded-full">built-in</span>}
+                      {row?.status === "connected" && !meta.builtIn && <span className="text-[10px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full">connected</span>}
+                      {row?.status === "error" && <span className="text-[10px] bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full">error</span>}
+                    </div>
+                    <div className="text-xs text-muted-foreground">{meta.hint}</div>
+                    {row?.lastTestResult && (
+                      <div className={`text-xs mt-0.5 ${row.status === "error" ? "text-red-500" : "text-muted-foreground"}`}>
+                        Last test: {row.lastTestResult}
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
+                    {meta.docsUrl && (
+                      <Button size="sm" variant="ghost" asChild>
+                        <a href={meta.docsUrl} target="_blank" rel="noreferrer"><ExternalLink className="size-3.5" /></a>
+                      </Button>
+                    )}
+                    <Button
+                      size="sm" variant="ghost"
+                      disabled={testMut.isPending}
+                      onClick={() => testMut.mutate({ provider })}
+                    >
+                      {testMut.isPending && testMut.variables?.provider === provider
+                        ? <Loader2 className="size-3.5 animate-spin" />
+                        : <TestTube2 className="size-3.5" />}
+                      Test
+                    </Button>
+                    {!meta.builtIn && isAdmin && (
+                      <>
+                        <Button size="sm" variant="outline" onClick={() => openConfig(provider)}>Configure</Button>
+                        {row && (
+                          <Button size="sm" variant="ghost" className="text-destructive" onClick={() => removeMut.mutate({ provider })}>
+                            <Trash2 className="size-3.5" />
+                          </Button>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                {/* Inline config form */}
+                {configOpen === provider && (
+                  <div className="mt-3 ml-7 space-y-2 border rounded-md p-3 bg-muted/30">
+                    {(meta.configFields ?? []).map((f) => (
+                      <div key={f.key} className="space-y-1">
+                        <Label className="text-xs">{f.label}</Label>
+                        <Input
+                          type={f.type ?? "text"}
+                          value={configDraft[f.key] ?? ""}
+                          onChange={(e) => setConfigDraft((d) => ({ ...d, [f.key]: e.target.value }))}
+                          placeholder={f.type === "password" ? "••••••••" : ""}
+                          className="h-8 text-xs"
+                        />
+                      </div>
+                    ))}
+                    <div className="flex gap-2 pt-1">
+                      <Button size="sm" onClick={() => saveConfig(provider)} disabled={saveMut.isPending}>Save</Button>
+                      <Button size="sm" variant="ghost" onClick={() => setConfigOpen(null)}>Cancel</Button>
+                    </div>
+                  </div>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </Section>
+    </>
   );
 }
 

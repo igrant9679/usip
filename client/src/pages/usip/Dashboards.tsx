@@ -2,7 +2,7 @@ import { Button } from "@/components/ui/button";
 import { Field, FormDialog, Section, SelectField, StatusPill } from "@/components/usip/Common";
 import { EmptyState, PageHeader, Shell } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
-import { LayoutDashboard, Plus, Send, Trash2 } from "lucide-react";
+import { Edit2, LayoutDashboard, Pencil, Plus, Send, Settings2, Trash2, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, XAxis, YAxis } from "recharts";
 import { toast } from "sonner";
@@ -14,7 +14,7 @@ const METRICS_KPI = [
   { value: "avg_deal", label: "Avg deal size" },
 ];
 
-function WidgetCard({ widgetId, onRemove, onMove, onSwap, idx, total }: { widgetId: number; onRemove: () => void; onMove: (dir: -1 | 1) => void; onSwap: (sourceId: number) => void; idx: number; total: number }) {
+function WidgetCard({ widgetId, onRemove, onMove, onSwap, idx, total, customizeMode }: { widgetId: number; onRemove: () => void; onMove: (dir: -1 | 1) => void; onSwap: (sourceId: number) => void; idx: number; total: number; customizeMode?: boolean }) {
   const { data } = trpc.dashboards.resolveWidget.useQuery({ id: widgetId });
   const [over, setOver] = useState(false);
   if (!data) return <div className="border rounded-lg bg-card p-3 text-xs text-muted-foreground">Loading…</div>;
@@ -29,9 +29,13 @@ function WidgetCard({ widgetId, onRemove, onMove, onSwap, idx, total }: { widget
     >
       <div className="flex items-center mb-2">
         <div className="text-xs uppercase font-semibold text-muted-foreground tracking-wide flex-1">{data.title}</div>
-        <Button size="sm" variant="ghost" disabled={idx === 0} onClick={() => onMove(-1)}>↑</Button>
-        <Button size="sm" variant="ghost" disabled={idx === total - 1} onClick={() => onMove(1)}>↓</Button>
-        <Button size="sm" variant="ghost" onClick={onRemove}><Trash2 className="size-3.5" /></Button>
+        {customizeMode && (
+          <>
+            <Button size="sm" variant="ghost" disabled={idx === 0} onClick={() => onMove(-1)}>↑</Button>
+            <Button size="sm" variant="ghost" disabled={idx === total - 1} onClick={() => onMove(1)}>↓</Button>
+            <Button size="sm" variant="ghost" className="text-destructive" onClick={onRemove}><X className="size-3.5" /></Button>
+          </>
+        )}
       </div>
       {data.type === "kpi" && (
         <div className="font-mono tabular-nums text-xl @[14rem]:text-2xl truncate" title={String(data.value ?? "")}>
@@ -83,8 +87,11 @@ export default function Dashboards() {
   const [openNew, setOpenNew] = useState(false);
   const [openWidget, setOpenWidget] = useState(false);
   const [openSched, setOpenSched] = useState(false);
+  const [openRename, setOpenRename] = useState(false);
+  const [customizeMode, setCustomizeMode] = useState(false);
 
   const create = trpc.dashboards.create.useMutation({ onSuccess: (r) => { utils.dashboards.list.invalidate(); setSelected(r.id); setOpenNew(false); } });
+  const rename = trpc.dashboards.rename.useMutation({ onSuccess: () => { utils.dashboards.list.invalidate(); utils.dashboards.get.invalidate(); setOpenRename(false); toast.success("Dashboard renamed"); }, onError: (e: any) => toast.error(e.message) });
   const addW = trpc.dashboards.addWidget.useMutation({ onSuccess: () => { utils.dashboards.get.invalidate(); setOpenWidget(false); toast.success("Widget added"); } });
   const delW = trpc.dashboards.deleteWidget.useMutation({ onSuccess: () => utils.dashboards.get.invalidate() });
   const saveLayout = trpc.dashboards.saveLayout.useMutation();
@@ -119,6 +126,14 @@ export default function Dashboards() {
   return (
     <Shell title="Dashboards">
       <PageHeader title="Custom dashboards" description="Drag widgets to reorder. Widgets resolve server-side.">
+        {selected && (
+          <>
+            <Button variant="ghost" size="sm" onClick={() => setCustomizeMode((v) => !v)}>
+              {customizeMode ? <><X className="size-4" /> Done</> : <><Settings2 className="size-4" /> Customize</>}
+            </Button>
+            <Button variant="outline" onClick={() => setOpenRename(true)} disabled={!selected}><Pencil className="size-4" /> Rename</Button>
+          </>
+        )}
         <Button variant="outline" onClick={() => setOpenSched(true)} disabled={!selected}><Send className="size-4" /> Schedule</Button>
         <Button onClick={() => setOpenNew(true)}><Plus className="size-4" /> New dashboard</Button>
       </PageHeader>
@@ -151,15 +166,23 @@ export default function Dashboards() {
         </div>
         <div className="lg:col-span-3 space-y-3">
           {selected && (
-            <div className="flex items-center mb-3">
+            <div className="flex items-center mb-3 gap-2">
               <div className="text-sm font-semibold">{(dash.data as any)?.name}</div>
-              <Button size="sm" variant="outline" className="ml-auto" onClick={() => setOpenWidget(true)}><Plus className="size-3.5" /> Add widget</Button>
-              <Button size="sm" variant="ghost" onClick={() => delDash.mutate({ id: selected })}><Trash2 className="size-3.5" /></Button>
+              {customizeMode && (
+                <span className="text-[10px] bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">Customize mode — drag to reorder, × to remove</span>
+              )}
+              <div className="ml-auto flex gap-1">
+                <Button size="sm" variant="outline" onClick={() => setOpenWidget(true)}><Plus className="size-3.5" /> Add widget</Button>
+                {customizeMode && (
+                  <Button size="sm" variant="ghost" className="text-destructive" onClick={() => { if (confirm("Delete this dashboard?")) delDash.mutate({ id: selected }); }}><Trash2 className="size-3.5" /></Button>
+                )}
+              </div>
             </div>
           )}
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
             {widgets.map((w: any, i: number) => (
               <WidgetCard key={w.id} widgetId={w.id} idx={i} total={widgets.length}
+                customizeMode={customizeMode}
                 onRemove={() => delW.mutate({ id: w.id })} onMove={(dir) => move(w.id, dir)} onSwap={(src) => swap(src, w.id)} />
             ))}
             {selected && widgets.length === 0 && <EmptyState icon={LayoutDashboard} title="No widgets" description="Click Add widget to populate this dashboard." />}
@@ -171,6 +194,12 @@ export default function Dashboards() {
         onSubmit={(f) => create.mutate({ name: String(f.get("name")), description: String(f.get("description") ?? "") || undefined })}>
         <Field name="name" label="Name" required />
         <Field name="description" label="Description" />
+      </FormDialog>
+
+      <FormDialog open={openRename} onOpenChange={setOpenRename} title="Rename dashboard" isPending={rename.isPending}
+        onSubmit={(f) => rename.mutate({ id: selected!, name: String(f.get("name")), description: String(f.get("description") ?? "") || undefined })}>
+        <Field name="name" label="New name" required defaultValue={(dash.data as any)?.name ?? ""} />
+        <Field name="description" label="Description" defaultValue={(dash.data as any)?.description ?? ""} />
       </FormDialog>
 
       <FormDialog open={openWidget} onOpenChange={setOpenWidget} title="Add widget" isPending={addW.isPending}

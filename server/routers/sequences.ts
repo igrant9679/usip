@@ -1,7 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod";
-import { contacts, emailDrafts, enrollments, leads, sequences } from "../../drizzle/schema";
+import { contacts, emailDrafts, enrollments, leads, sequenceEdges, sequenceNodes, sequences } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
 import { getDb } from "../db";
 import { invokeLLM } from "../_core/llm";
@@ -55,6 +55,71 @@ export const sequencesRouter = router({
     await db.update(sequences).set({ status: input.status }).where(and(eq(sequences.id, input.id), eq(sequences.workspaceId, ctx.workspace.id)));
     return { ok: true };
   }),
+
+  /* ── Canvas ── */
+  getCanvas: workspaceProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) return { nodes: [], edges: [] };
+    const [nodes, edges] = await Promise.all([
+      db.select().from(sequenceNodes).where(and(eq(sequenceNodes.sequenceId, input.id), eq(sequenceNodes.workspaceId, ctx.workspace.id))),
+      db.select().from(sequenceEdges).where(and(eq(sequenceEdges.sequenceId, input.id), eq(sequenceEdges.workspaceId, ctx.workspace.id))),
+    ]);
+    return { nodes, edges };
+  }),
+
+  saveCanvas: repProcedure
+    .input(z.object({
+      id: z.number(),
+      nodes: z.array(z.object({
+        id: z.string(),
+        type: z.enum(["start", "email", "wait", "condition", "action", "goal"]),
+        positionX: z.number(),
+        positionY: z.number(),
+        data: z.record(z.string(), z.any()),
+      })),
+      edges: z.array(z.object({
+        id: z.string(),
+        source: z.string(),
+        target: z.string(),
+        sourceHandle: z.string().nullable().optional(),
+        label: z.string().nullable().optional(),
+      })),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // Verify sequence belongs to workspace
+      const [seq] = await db.select().from(sequences).where(and(eq(sequences.id, input.id), eq(sequences.workspaceId, ctx.workspace.id)));
+      if (!seq) throw new TRPCError({ code: "NOT_FOUND" });
+      if (seq.status === "active" || seq.status === "paused") throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot edit canvas of an active/paused sequence" });
+      // Replace all nodes + edges atomically
+      await db.delete(sequenceNodes).where(and(eq(sequenceNodes.sequenceId, input.id), eq(sequenceNodes.workspaceId, ctx.workspace.id)));
+      await db.delete(sequenceEdges).where(and(eq(sequenceEdges.sequenceId, input.id), eq(sequenceEdges.workspaceId, ctx.workspace.id)));
+      if (input.nodes.length > 0) {
+        await db.insert(sequenceNodes).values(input.nodes.map((n) => ({
+          id: n.id,
+          sequenceId: input.id,
+          workspaceId: ctx.workspace.id,
+          type: n.type,
+          positionX: n.positionX,
+          positionY: n.positionY,
+          data: n.data,
+        })));
+      }
+      if (input.edges.length > 0) {
+        await db.insert(sequenceEdges).values(input.edges.map((e) => ({
+          id: e.id,
+          sequenceId: input.id,
+          workspaceId: ctx.workspace.id,
+          source: e.source,
+          target: e.target,
+          sourceHandle: e.sourceHandle ?? null,
+          label: e.label ?? null,
+        })));
+      }
+      await db.update(sequences).set({ updatedAt: new Date() }).where(eq(sequences.id, input.id));
+      return { ok: true };
+    }),
 
   /* ── Enrollments ── */
   listEnrollments: workspaceProcedure.input(z.object({ sequenceId: z.number().optional() }).optional()).query(async ({ ctx, input }) => {

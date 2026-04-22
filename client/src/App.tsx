@@ -30,6 +30,7 @@ import Territories from "@/pages/usip/Territories";
 import Workflows from "@/pages/usip/Workflows";
 import LeadScoring from "@/pages/usip/LeadScoring";
 import LeadRouting from "@/pages/usip/LeadRouting";
+import SequenceCanvas from "@/pages/usip/SequenceCanvas";
 import { Loader2 } from "lucide-react";
 import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
@@ -67,6 +68,7 @@ function Router() {
       <Route path="/accounts"><AuthGate><Accounts /></AuthGate></Route>
       <Route path="/pipeline"><AuthGate><Pipeline /></AuthGate></Route>
       <Route path="/sequences"><AuthGate><Sequences /></AuthGate></Route>
+      <Route path="/sequences/:id/canvas"><AuthGate><SequenceCanvas /></AuthGate></Route>
       <Route path="/email-drafts"><AuthGate><EmailDrafts /></AuthGate></Route>
       <Route path="/social"><AuthGate><Social /></AuthGate></Route>
       <Route path="/campaigns"><AuthGate><Campaigns /></AuthGate></Route>

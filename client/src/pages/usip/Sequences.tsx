@@ -2,8 +2,9 @@ import { Button } from "@/components/ui/button";
 import { Field, FormDialog, Section, SelectField, StatusPill, TextareaField } from "@/components/usip/Common";
 import { EmptyState, PageHeader, Shell } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
-import { Activity, Pause, Play, Plus, Power } from "lucide-react";
+import { Activity, GitBranch, Pause, Play, Plus, Power } from "lucide-react";
 import { useState } from "react";
+import { Link } from "wouter";
 import { toast } from "sonner";
 
 export default function Sequences() {
@@ -47,6 +48,9 @@ export default function Sequences() {
               <Section title={detail.data.name} description={detail.data.description ?? ""}
                 right={
                   <div className="flex gap-1">
+                    <Link href={`/sequences/${detail.data.id}/canvas`}>
+                      <Button size="sm" variant="outline"><GitBranch className="size-3.5" /> Open canvas</Button>
+                    </Link>
                     <Button size="sm" variant="ghost" onClick={() => setStatus.mutate({ id: detail.data!.id, status: detail.data!.status === "active" ? "paused" : "active" })}>
                       {detail.data.status === "active" ? <><Pause className="size-3.5" /> Pause</> : <><Play className="size-3.5" /> Activate</>}
                     </Button>

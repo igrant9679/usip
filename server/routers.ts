@@ -10,6 +10,8 @@ import { csRouter } from "./routers/cs";
 import { auditRouter, campaignsRouter, dashboardsRouter, notificationsRouter, quotesRouter, scimRouter, socialRouter, workflowsRouter } from "./routers/operations";
 import { leadRoutingRouter, leadScoringRouter } from "./routers/leadScoring";
 import { settingsRouter, teamRouter, usageRouter } from "./routers/admin";
+import { integrationsRouter } from "./routers/integrations";
+import { dashboardLayoutsRouter } from "./routers/dashboardLayouts";
 
 export const appRouter = router({
   system: systemRouter,
@@ -48,6 +50,8 @@ export const appRouter = router({
   settings: settingsRouter,
   team: teamRouter,
   usage: usageRouter,
+  integrations: integrationsRouter,
+  dashboardLayouts: dashboardLayoutsRouter,
 });
 
 export type AppRouter = typeof appRouter;

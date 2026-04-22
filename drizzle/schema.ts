@@ -973,3 +973,90 @@ export const usageCounters = mysqlTable(
   }),
 );
 export type UsageCounter = typeof usageCounters.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Visual Canvas Sequence Builder (Sprint 2 — Tier 1)
+   ────────────────────────────────────────────────────────────────────────── */
+
+export const sequenceNodes = mysqlTable(
+  "sequence_nodes",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(), // React Flow node id (uuid)
+    sequenceId: int("sequenceId").notNull(),
+    workspaceId: int("workspaceId").notNull(),
+    type: mysqlEnum("type", ["start", "email", "wait", "condition", "action", "goal"]).notNull(),
+    positionX: int("positionX").default(0).notNull(),
+    positionY: int("positionY").default(0).notNull(),
+    data: json("data").notNull(), // node-type-specific config payload
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    bySeq: index("ix_sn_seq").on(t.sequenceId),
+    byWs: index("ix_sn_ws").on(t.workspaceId),
+  }),
+);
+export type SequenceNode = typeof sequenceNodes.$inferSelect;
+
+export const sequenceEdges = mysqlTable(
+  "sequence_edges",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(), // React Flow edge id
+    sequenceId: int("sequenceId").notNull(),
+    workspaceId: int("workspaceId").notNull(),
+    source: varchar("source", { length: 64 }).notNull(),
+    target: varchar("target", { length: 64 }).notNull(),
+    sourceHandle: varchar("sourceHandle", { length: 32 }), // "true" | "false" | null
+    label: varchar("label", { length: 64 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    bySeq: index("ix_se_seq").on(t.sequenceId),
+  }),
+);
+export type SequenceEdge = typeof sequenceEdges.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Workspace Integrations (Settings → Integrations tab)
+   ────────────────────────────────────────────────────────────────────────── */
+
+export const workspaceIntegrations = mysqlTable(
+  "workspace_integrations",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    provider: varchar("provider", { length: 64 }).notNull(), // "scim" | "stripe" | "webhook" | etc.
+    status: mysqlEnum("status", ["connected", "disconnected", "error"]).default("disconnected").notNull(),
+    config: json("config"), // provider-specific key/value (tokens stored masked)
+    lastTestedAt: timestamp("lastTestedAt"),
+    lastTestResult: text("lastTestResult"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    uq: uniqueIndex("uq_wi_ws_prov").on(t.workspaceId, t.provider),
+    byWs: index("ix_wi_ws").on(t.workspaceId),
+  }),
+);
+export type WorkspaceIntegration = typeof workspaceIntegrations.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Dashboard Layouts (per-user widget configuration)
+   ────────────────────────────────────────────────────────────────────────── */
+
+export const dashboardLayouts = mysqlTable(
+  "dashboard_layouts",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    userId: int("userId").notNull(),
+    dashboardId: int("dashboardId").notNull(),
+    layout: json("layout").notNull(), // [{widgetId, col, row, w, h, title?}]
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    uq: uniqueIndex("uq_dl_ws_user_dash").on(t.workspaceId, t.userId, t.dashboardId),
+    byWs: index("ix_dl_ws").on(t.workspaceId),
+  }),
+);
+export type DashboardLayout = typeof dashboardLayouts.$inferSelect;
