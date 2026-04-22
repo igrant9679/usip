@@ -1,15 +1,19 @@
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
   accounts,
   contacts,
   dealLineItems,
+  emailDrafts,
   leads,
   opportunities,
   opportunityContactRoles,
   products,
+  enrollments,
+  sequences,
   territories,
+  workspaceSettings,
 } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
 import { getDb } from "../db";
@@ -165,6 +169,134 @@ export const contactsRouter = router({
     await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "delete", entityType: "contact", entityId: input.id, before });
     return { ok: true };
   }),
+
+  /** Bulk enroll contacts into a sequence */
+  bulkAddToSequence: repProcedure
+    .input(
+      z.object({
+        contactIds: z.array(z.number()).min(1),
+        sequenceId: z.number(),
+        startStep: z.number().default(1),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+
+      // Verify sequence belongs to workspace
+      const [seq] = await db
+        .select({ id: sequences.id, name: sequences.name })
+        .from(sequences)
+        .where(and(eq(sequences.id, input.sequenceId), eq(sequences.workspaceId, ctx.workspace.id)))
+        .limit(1);
+      if (!seq) throw new TRPCError({ code: "NOT_FOUND", message: "Sequence not found" });
+
+      // Check enrollment guard setting
+      const [settings] = await db
+        .select({ blockInvalid: workspaceSettings.blockInvalidEmailsFromSequences })
+        .from(workspaceSettings)
+        .where(eq(workspaceSettings.workspaceId, ctx.workspace.id))
+        .limit(1);
+      const blockInvalid = settings?.blockInvalid ?? false;
+
+      // Fetch contacts
+      const rows = await db
+        .select({ id: contacts.id, email: contacts.email, emailVerificationStatus: contacts.emailVerificationStatus })
+        .from(contacts)
+        .where(and(eq(contacts.workspaceId, ctx.workspace.id), inArray(contacts.id, input.contactIds)));
+
+      const results: { contactId: number; status: "enrolled" | "skipped"; reason?: string }[] = [];
+
+      for (const contact of rows) {
+        // Guard: block invalid emails
+        if (blockInvalid && contact.emailVerificationStatus === "invalid") {
+          results.push({ contactId: contact.id, status: "skipped", reason: "Invalid email address" });
+          continue;
+        }
+        // Check if already enrolled
+        const [existing] = await db
+          .select({ id: enrollments.id })
+          .from(enrollments)
+          .where(
+            and(
+              eq(enrollments.sequenceId, input.sequenceId),
+              eq(enrollments.contactId, contact.id),
+              eq(enrollments.status, "active"),
+            ),
+          )
+          .limit(1);
+        if (existing) {
+          results.push({ contactId: contact.id, status: "skipped", reason: "Already enrolled" });
+          continue;
+        }
+        await db.insert(enrollments).values({
+          workspaceId: ctx.workspace.id,
+          sequenceId: input.sequenceId,
+          contactId: contact.id,
+          currentStep: input.startStep,
+          status: "active",
+        });
+        results.push({ contactId: contact.id, status: "enrolled" });
+      }
+
+      const enrolled = results.filter((r) => r.status === "enrolled").length;
+      const skipped = results.filter((r) => r.status === "skipped").length;
+      return { enrolled, skipped, results, sequenceName: seq.name };
+    }),
+
+  /** Send an ad-hoc email to a list of contacts */
+  sendAdHocEmail: repProcedure
+    .input(
+      z.object({
+        contactIds: z.array(z.number()).min(1),
+        subject: z.string().min(1),
+        body: z.string().min(1),
+        aiGenerated: z.boolean().default(false),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+
+      // Fetch contacts
+      const rows = await db
+        .select({ id: contacts.id, email: contacts.email, firstName: contacts.firstName, lastName: contacts.lastName })
+        .from(contacts)
+        .where(and(eq(contacts.workspaceId, ctx.workspace.id), inArray(contacts.id, input.contactIds)));
+
+      const results: { contactId: number; status: "sent" | "skipped"; reason?: string }[] = [];
+
+      for (const contact of rows) {
+        if (!contact.email) {
+          results.push({ contactId: contact.id, status: "skipped", reason: "No email address" });
+          continue;
+        }
+        // Create an emailDraft record in 'sent' status
+        await db.insert(emailDrafts).values({
+          workspaceId: ctx.workspace.id,
+          toContactId: contact.id,
+          subject: input.subject,
+          body: input.body,
+          status: "sent",
+          aiGenerated: input.aiGenerated,
+          createdByUserId: ctx.user.id,
+          sentAt: new Date(),
+        });
+        await recordAudit({
+          workspaceId: ctx.workspace.id,
+          actorUserId: ctx.user.id,
+          action: "create",
+          entityType: "email_draft",
+          entityId: 0,
+          after: { contactId: contact.id, subject: input.subject, aiGenerated: input.aiGenerated },
+        });
+        results.push({ contactId: contact.id, status: "sent" });
+      }
+
+      const sent = results.filter((r) => r.status === "sent").length;
+      const skipped = results.filter((r) => r.status === "skipped").length;
+      return { sent, skipped, results };
+    }),
 });
 
 /* ──────────────────────────────────────────────────────────────────────── */

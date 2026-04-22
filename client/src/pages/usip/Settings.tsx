@@ -557,23 +557,61 @@ function EmailVerificationSettingsSection({ isAdmin }: { isAdmin: boolean }) {
     onError: (e) => toast.error(e.message),
   });
   const balanceQ = trpc.emailVerification.getAccountBalance.useQuery(undefined, { retry: false });
+  const reverifyQ = trpc.emailVerification.getReverifySettings.useQuery();
+  const saveReverifyMut = trpc.emailVerification.saveReverifySettings.useMutation({
+    onSuccess: () => { reverifyQ.refetch(); toast.success("Auto re-verify settings saved"); },
+    onError: (e) => toast.error(e.message),
+  });
+  const triggerNowMut = trpc.emailVerification.triggerReverifyNow.useMutation({
+    onSuccess: () => toast.success("Re-verify job started — check the Contacts page for progress"),
+    onError: (e) => toast.error(e.message),
+  });
   const [blockInvalid, setBlockInvalid] = useState(false);
+  const [reverifyInterval, setReverifyInterval] = useState<string>("disabled");
+  const [reverifyRisky, setReverifyRisky] = useState(true);
+  const [reverifyAcceptAll, setReverifyAcceptAll] = useState(true);
+
   useEffect(() => {
     if (settingsQ.data) setBlockInvalid(Boolean((settingsQ.data as any).blockInvalidEmailsFromSequences));
   }, [settingsQ.data]);
+
+  useEffect(() => {
+    if (reverifyQ.data) {
+      setReverifyInterval(reverifyQ.data.reverifyIntervalDays ? String(reverifyQ.data.reverifyIntervalDays) : "disabled");
+      setReverifyRisky(reverifyQ.data.reverifyStatuses.includes("risky"));
+      setReverifyAcceptAll(reverifyQ.data.reverifyStatuses.includes("accept_all"));
+    }
+  }, [reverifyQ.data]);
+
+  const handleSaveReverify = () => {
+    const statuses: string[] = [];
+    if (reverifyRisky) statuses.push("risky");
+    if (reverifyAcceptAll) statuses.push("accept_all");
+    saveReverifyMut.mutate({
+      reverifyIntervalDays: reverifyInterval === "disabled" ? null : Number(reverifyInterval),
+      reverifyStatuses: statuses,
+    });
+  };
+
+  // Compute "next run" estimate: oldest emailVerifiedAt + interval
+  const nextRunLabel = reverifyInterval !== "disabled"
+    ? `Runs daily — contacts verified more than ${reverifyInterval} days ago will be re-checked`
+    : "Disabled";
+
   return (
     <Section
       title="Email Verification (Reoon)"
-      description="Configure how email verification status affects sequence enrollment."
+      description="Configure how email verification status affects sequence enrollment and automatic re-verification."
       right={
         isAdmin ? (
           <Button size="sm" onClick={() => saveMut.mutate({ blockInvalidEmailsFromSequences: blockInvalid })} disabled={saveMut.isPending}>
-            {saveMut.isPending ? <Loader2 className="size-3.5 animate-spin mr-1" /> : null}Save
+            {saveMut.isPending ? <Loader2 className="size-3.5 animate-spin mr-1" /> : null}Save Guard
           </Button>
         ) : null
       }
     >
       <div className="p-4 space-y-4">
+        {/* API status card */}
         <div className="flex items-center gap-3 p-3 border rounded-lg bg-muted/30">
           <ShieldCheck className="size-5 text-[#14B89A] shrink-0" />
           <div className="flex-1 min-w-0">
@@ -587,12 +625,14 @@ function EmailVerificationSettingsSection({ isAdmin }: { isAdmin: boolean }) {
               <span className="text-xs text-destructive">Check API key</span>
             ) : (
               <div>
-                <div className="text-sm font-mono tabular-nums font-semibold">{(balanceQ.data as any)?.daily_remaining ?? "—"}</div>
+                <div className="text-sm font-mono tabular-nums font-semibold">{(balanceQ.data as any)?.remaining_daily_credits ?? "—"}</div>
                 <div className="text-xs text-muted-foreground">daily credits left</div>
               </div>
             )}
           </div>
         </div>
+
+        {/* Enrollment guard */}
         <div className="flex items-start gap-3 p-3 border rounded-lg">
           <div className="flex-1 min-w-0">
             <div className="text-sm font-medium">Block invalid emails from sequences</div>
@@ -610,6 +650,71 @@ function EmailVerificationSettingsSection({ isAdmin }: { isAdmin: boolean }) {
             />
             <span className="text-sm">{blockInvalid ? "Enabled" : "Disabled"}</span>
           </label>
+        </div>
+
+        {/* Auto re-verify scheduler */}
+        <div className="p-3 border rounded-lg space-y-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="text-sm font-medium">Auto Re-Verify Schedule</div>
+              <div className="text-xs text-muted-foreground mt-0.5">
+                Automatically re-verify contacts whose status may have changed over time.
+              </div>
+            </div>
+            {isAdmin && (
+              <div className="flex items-center gap-2 shrink-0">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => triggerNowMut.mutate()}
+                  disabled={triggerNowMut.isPending || reverifyInterval === "disabled"}
+                  title="Run re-verify now for all qualifying contacts"
+                >
+                  {triggerNowMut.isPending ? <Loader2 className="size-3.5 animate-spin mr-1" /> : null}
+                  Run Now
+                </Button>
+                <Button size="sm" onClick={handleSaveReverify} disabled={saveReverifyMut.isPending}>
+                  {saveReverifyMut.isPending ? <Loader2 className="size-3.5 animate-spin mr-1" /> : null}
+                  Save
+                </Button>
+              </div>
+            )}
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-muted-foreground">Re-verify interval</label>
+              <select
+                value={reverifyInterval}
+                onChange={(e) => setReverifyInterval(e.target.value)}
+                disabled={!isAdmin}
+                className="w-full h-8 px-2 text-sm border rounded-md bg-background"
+              >
+                <option value="disabled">Disabled</option>
+                <option value="30">Every 30 days</option>
+                <option value="60">Every 60 days</option>
+                <option value="90">Every 90 days</option>
+              </select>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-muted-foreground">Re-verify these statuses</label>
+              <div className="flex flex-col gap-1.5 pt-0.5">
+                <label className="flex items-center gap-2 text-sm cursor-pointer">
+                  <input type="checkbox" checked={reverifyRisky} onChange={(e) => setReverifyRisky(e.target.checked)} disabled={!isAdmin || reverifyInterval === "disabled"} className="size-3.5" />
+                  <span className="text-orange-600 font-medium">Risky</span>
+                </label>
+                <label className="flex items-center gap-2 text-sm cursor-pointer">
+                  <input type="checkbox" checked={reverifyAcceptAll} onChange={(e) => setReverifyAcceptAll(e.target.checked)} disabled={!isAdmin || reverifyInterval === "disabled"} className="size-3.5" />
+                  <span className="text-yellow-600 font-medium">Accept-All</span>
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <span className="inline-block size-1.5 rounded-full bg-[#14B89A] shrink-0" />
+            {nextRunLabel}
+          </div>
         </div>
       </div>
     </Section>

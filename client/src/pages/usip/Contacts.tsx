@@ -19,9 +19,13 @@ import {
   Loader2,
   X,
   Filter,
+  ListPlus,
+  Send,
+  Wand2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 
 type VerifFilter = "all" | "valid" | "accept_all" | "risky" | "invalid" | "unknown";
 
@@ -219,6 +223,250 @@ function BulkVerifyModal({
   );
 }
 
+
+/* ─── Add to Sequence Modal ─────────────────────────────────────────────── */
+function AddToSequenceModal({
+  open,
+  onOpenChange,
+  contactIds,
+  onComplete,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  contactIds: number[];
+  onComplete: () => void;
+}) {
+  const { data: sequences } = trpc.sequences.list.useQuery(undefined, { enabled: open });
+  const [sequenceId, setSequenceId] = useState<string>("");
+  const [result, setResult] = useState<{ enrolled: number; skipped: number; sequenceName: string } | null>(null);
+  const addMut = trpc.contacts.bulkAddToSequence.useMutation({
+    onSuccess: (data) => {
+      setResult({ enrolled: data.enrolled, skipped: data.skipped, sequenceName: data.sequenceName });
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const handleClose = () => {
+    setSequenceId("");
+    setResult(null);
+    onOpenChange(false);
+    if (result) onComplete();
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={handleClose}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <ListPlus className="size-5 text-[#14B89A]" />
+            Add to Sequence
+          </DialogTitle>
+          <DialogDescription>
+            Enroll {contactIds.length} selected contact{contactIds.length !== 1 ? "s" : ""} into a sequence.
+          </DialogDescription>
+        </DialogHeader>
+        {result ? (
+          <div className="space-y-4 py-2">
+            <div className="flex items-center gap-2 p-3 rounded-lg bg-green-50 border border-green-200">
+              <CheckCircle2 className="size-5 text-green-600 shrink-0" />
+              <div>
+                <div className="text-sm font-medium text-green-800">Enrollment complete</div>
+                <div className="text-xs text-green-700">Sequence: {result.sequenceName}</div>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="p-3 rounded-lg border text-center">
+                <div className="text-2xl font-bold text-green-600">{result.enrolled}</div>
+                <div className="text-xs text-muted-foreground">Enrolled</div>
+              </div>
+              <div className="p-3 rounded-lg border text-center">
+                <div className="text-2xl font-bold text-orange-500">{result.skipped}</div>
+                <div className="text-xs text-muted-foreground">Skipped</div>
+              </div>
+            </div>
+            {result.skipped > 0 && (
+              <p className="text-xs text-muted-foreground">
+                Skipped contacts were either already enrolled or have invalid email addresses blocked by your guard setting.
+              </p>
+            )}
+            <Button className="w-full" onClick={handleClose}>Done</Button>
+          </div>
+        ) : (
+          <div className="space-y-4 py-2">
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Select sequence</label>
+              <Select value={sequenceId} onValueChange={setSequenceId}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Choose a sequence..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {(sequences ?? []).map((s: any) => (
+                    <SelectItem key={s.id} value={String(s.id)}>
+                      {s.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex gap-2 justify-end">
+              <Button variant="outline" onClick={handleClose}>Cancel</Button>
+              <Button
+                onClick={() => addMut.mutate({ contactIds, sequenceId: Number(sequenceId) })}
+                disabled={!sequenceId || addMut.isPending}
+              >
+                {addMut.isPending ? <Loader2 className="size-4 animate-spin mr-1" /> : <ListPlus className="size-4 mr-1" />}
+                Enroll {contactIds.length} contact{contactIds.length !== 1 ? "s" : ""}
+              </Button>
+            </div>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/* ─── Send Email Modal ──────────────────────────────────────────────────── */
+function SendEmailModal({
+  open,
+  onOpenChange,
+  contactIds,
+  onComplete,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  contactIds: number[];
+  onComplete: () => void;
+}) {
+  const [subject, setSubject] = useState("");
+  const [body, setBody] = useState("");
+  const [aiMode, setAiMode] = useState(false);
+  const [aiPrompt, setAiPrompt] = useState("");
+  const [result, setResult] = useState<{ sent: number; skipped: number } | null>(null);
+
+  const generateMut = trpc.emailDrafts.compose.useMutation({
+    onSuccess: (data) => {
+      setSubject(data.subject ?? "");
+      setBody(data.body ?? "");
+      setAiMode(false);
+      toast.success("AI email generated — review and send");
+    },
+    onError: (e: any) => toast.error(e.message),
+  });
+
+  const sendMut = trpc.contacts.sendAdHocEmail.useMutation({
+    onSuccess: (data) => setResult({ sent: data.sent, skipped: data.skipped }),
+    onError: (e: any) => toast.error(e.message),
+  });
+
+  const handleClose = () => {
+    setSubject("");
+    setBody("");
+    setAiPrompt("");
+    setAiMode(false);
+    setResult(null);
+    onOpenChange(false);
+    if (result) onComplete();
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={handleClose}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Send className="size-5 text-[#14B89A]" />
+            Send Email
+          </DialogTitle>
+          <DialogDescription>
+            Send an email to {contactIds.length} selected contact{contactIds.length !== 1 ? "s" : ""}.
+          </DialogDescription>
+        </DialogHeader>
+        {result ? (
+          <div className="space-y-4 py-2">
+            <div className="flex items-center gap-2 p-3 rounded-lg bg-green-50 border border-green-200">
+              <CheckCircle2 className="size-5 text-green-600 shrink-0" />
+              <div>
+                <div className="text-sm font-medium text-green-800">Emails sent</div>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="p-3 rounded-lg border text-center">
+                <div className="text-2xl font-bold text-green-600">{result.sent}</div>
+                <div className="text-xs text-muted-foreground">Sent</div>
+              </div>
+              <div className="p-3 rounded-lg border text-center">
+                <div className="text-2xl font-bold text-orange-500">{result.skipped}</div>
+                <div className="text-xs text-muted-foreground">Skipped (no email)</div>
+              </div>
+            </div>
+            <Button className="w-full" onClick={handleClose}>Done</Button>
+          </div>
+        ) : (
+          <div className="space-y-3 py-2">
+            {/* AI generate toggle */}
+            <div className="flex items-center gap-2 p-3 rounded-lg border bg-muted/30">
+              <Wand2 className="size-4 text-violet-500 shrink-0" />
+              <div className="flex-1 text-sm">Generate with AI</div>
+              <Button
+                size="sm"
+                variant={aiMode ? "default" : "outline"}
+                onClick={() => setAiMode(!aiMode)}
+              >
+                {aiMode ? "Cancel" : "Use AI"}
+              </Button>
+            </div>
+            {aiMode && (
+              <div className="space-y-2">
+                <Textarea
+                  placeholder="Describe the email you want to send (e.g. 'Follow up on our product demo last week, offer a free trial')"
+                  value={aiPrompt}
+                  onChange={(e) => setAiPrompt(e.target.value)}
+                  rows={3}
+                />
+                <Button
+                  size="sm"
+                  className="w-full"
+                  onClick={() => generateMut.mutate({ prompt: aiPrompt })}
+                  disabled={!aiPrompt.trim() || generateMut.isPending}
+                >
+                  {generateMut.isPending ? <Loader2 className="size-4 animate-spin mr-1" /> : <Wand2 className="size-4 mr-1" />}
+                  Generate Email
+                </Button>
+              </div>
+            )}
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Subject</label>
+              <Input
+                placeholder="Email subject..."
+                value={subject}
+                onChange={(e) => setSubject(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Body</label>
+              <Textarea
+                placeholder="Email body..."
+                value={body}
+                onChange={(e) => setBody(e.target.value)}
+                rows={8}
+              />
+            </div>
+            <div className="flex gap-2 justify-end">
+              <Button variant="outline" onClick={handleClose}>Cancel</Button>
+              <Button
+                onClick={() => sendMut.mutate({ contactIds, subject, body, aiGenerated: false })}
+                disabled={!subject.trim() || !body.trim() || sendMut.isPending}
+              >
+                {sendMut.isPending ? <Loader2 className="size-4 animate-spin mr-1" /> : <Send className="size-4 mr-1" />}
+                Send to {contactIds.length}
+              </Button>
+            </div>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 /* ─── Main Contacts page ────────────────────────────────────────────────── */
 export default function Contacts() {
   const [search, setSearch] = useState("");
@@ -226,6 +474,8 @@ export default function Contacts() {
   const [drawer, setDrawer] = useState<{ id: number; name: string; subtitle: string } | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [bulkVerifyOpen, setBulkVerifyOpen] = useState(false);
+  const [addToSeqOpen, setAddToSeqOpen] = useState(false);
+  const [sendEmailOpen, setSendEmailOpen] = useState(false);
   const [verifFilter, setVerifFilter] = useState<VerifFilter>("all");
 
   const utils = trpc.useUtils();
@@ -313,15 +563,33 @@ export default function Contacts() {
           )}
         </div>
         {someSelected && (
-          <Button
-            variant="outline"
-            onClick={() => setBulkVerifyOpen(true)}
-            disabled={verifiableIds.length === 0}
-            className="gap-2"
-          >
-            <ShieldCheck className="h-4 w-4 text-[#14B89A]" />
-            Verify Emails ({verifiableIds.length})
-          </Button>
+          <>
+            <Button
+              variant="outline"
+              onClick={() => setBulkVerifyOpen(true)}
+              disabled={verifiableIds.length === 0}
+              className="gap-2"
+            >
+              <ShieldCheck className="h-4 w-4 text-[#14B89A]" />
+              Verify Emails ({verifiableIds.length})
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => setAddToSeqOpen(true)}
+              className="gap-2"
+            >
+              <ListPlus className="h-4 w-4 text-violet-500" />
+              Add to Sequence ({selectedIds.size})
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => setSendEmailOpen(true)}
+              className="gap-2"
+            >
+              <Send className="h-4 w-4 text-blue-500" />
+              Send Email ({selectedIds.size})
+            </Button>
+          </>
         )}
         <Button onClick={() => setOpen(true)}>
           <Plus className="size-4" /> New contact
@@ -460,6 +728,20 @@ export default function Contacts() {
           setSelectedIds(new Set());
           utils.contacts.list.invalidate();
         }}
+      />
+      {/* Add to sequence modal */}
+      <AddToSequenceModal
+        open={addToSeqOpen}
+        onOpenChange={setAddToSeqOpen}
+        contactIds={Array.from(selectedIds)}
+        onComplete={() => setSelectedIds(new Set())}
+      />
+      {/* Send email modal */}
+      <SendEmailModal
+        open={sendEmailOpen}
+        onOpenChange={setSendEmailOpen}
+        contactIds={Array.from(selectedIds)}
+        onComplete={() => setSelectedIds(new Set())}
       />
     </Shell>
   );

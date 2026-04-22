@@ -4,7 +4,8 @@ import { EmptyState, PageHeader, Shell } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import { Edit2, LayoutDashboard, Pencil, Plus, Send, Settings2, ShieldCheck, Trash2, X } from "lucide-react";
 import { useEffect, useState } from "react";
-import { Bar, BarChart, CartesianGrid, ResponsiveContainer, XAxis, YAxis } from "recharts";
+import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+
 import { toast } from "sonner";
 
 const METRICS_KPI = [
@@ -13,6 +14,113 @@ const METRICS_KPI = [
   { value: "win_rate", label: "Win rate" },
   { value: "avg_deal", label: "Avg deal size" },
 ];
+
+/* ─── Email Health Widget ───────────────────────────────────────────────── */
+function EmailHealthWidget({ data }: { data: any }) {
+  const [period, setPeriod] = useState<"30" | "60" | "90" | "120">("30");
+  const trendQ = trpc.emailVerification.getHealthTrend.useQuery({ period });
+  const total = data.total ?? 0;
+  const bars = [
+    { label: "Valid", value: data.valid ?? 0, color: "#22c55e" },
+    { label: "Accept-All", value: data.acceptAll ?? 0, color: "#eab308" },
+    { label: "Risky", value: data.risky ?? 0, color: "#f97316" },
+    { label: "Invalid", value: data.invalid ?? 0, color: "#ef4444" },
+    { label: "Unknown", value: data.unknown ?? 0, color: "#94a3b8" },
+  ];
+  const trendData = (trendQ.data ?? []) as Array<{
+    date: string;
+    valid: number;
+    acceptAll: number;
+    risky: number;
+    invalid: number;
+    unknown: number;
+    total: number;
+  }>;
+
+  return (
+    <div className="space-y-3">
+      {/* Summary row */}
+      <div className="flex items-center gap-2">
+        <ShieldCheck className="size-4 text-[#14B89A]" />
+        <span className="text-xl font-mono tabular-nums font-semibold">{data.verifiedPct ?? 0}%</span>
+        <span className="text-xs text-muted-foreground">verified</span>
+        <span className="ml-auto text-xs text-muted-foreground">{total} total</span>
+      </div>
+      {/* Stacked bar */}
+      <div className="flex h-2 rounded overflow-hidden gap-px">
+        {bars.map((b) => total > 0 && b.value > 0 ? (
+          <div key={b.label} style={{ width: `${(b.value / total) * 100}%`, background: b.color }} title={`${b.label}: ${b.value}`} />
+        ) : null)}
+      </div>
+      {/* Legend */}
+      <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-xs">
+        {bars.map((b) => (
+          <div key={b.label} className="flex items-center gap-1.5">
+            <div className="size-2 rounded-full shrink-0" style={{ background: b.color }} />
+            <span className="text-muted-foreground">{b.label}</span>
+            <span className="ml-auto font-mono tabular-nums">{b.value}</span>
+          </div>
+        ))}
+      </div>
+      {(data.invalid ?? 0) > 0 && (
+        <p className="text-xs text-rose-600 font-medium">{data.invalid} invalid — verify or remove</p>
+      )}
+
+      {/* Trend chart */}
+      <div className="pt-1 border-t">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-xs font-medium text-muted-foreground">Historical trend</span>
+          <div className="flex gap-1">
+            {(["30", "60", "90", "120"] as const).map((d) => (
+              <button
+                key={d}
+                onClick={() => setPeriod(d)}
+                className={`text-xs px-1.5 py-0.5 rounded transition-colors ${
+                  period === d
+                    ? "bg-[#14B89A] text-white font-medium"
+                    : "text-muted-foreground hover:bg-secondary"
+                }`}
+              >
+                {d}d
+              </button>
+            ))}
+          </div>
+        </div>
+        {trendQ.isLoading ? (
+          <div className="h-24 flex items-center justify-center text-xs text-muted-foreground">Loading trend…</div>
+        ) : trendData.length < 2 ? (
+          <div className="h-24 flex items-center justify-center text-xs text-muted-foreground">
+            Not enough data yet — trend builds as daily snapshots accumulate
+          </div>
+        ) : (
+          <ResponsiveContainer width="100%" height={90}>
+            <LineChart data={trendData} margin={{ top: 2, right: 4, left: -28, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+              <XAxis
+                dataKey="date"
+                tick={{ fontSize: 9, fill: "hsl(var(--muted-foreground))" }}
+                tickFormatter={(v: string) => {
+                  const d = new Date(v);
+                  return `${d.getMonth() + 1}/${d.getDate()}`;
+                }}
+                interval="preserveStartEnd"
+              />
+              <YAxis tick={{ fontSize: 9, fill: "hsl(var(--muted-foreground))" }} />
+              <Tooltip
+                contentStyle={{ fontSize: 11, padding: "4px 8px", borderRadius: 6 }}
+                labelFormatter={(v: string) => new Date(v).toLocaleDateString()}
+              />
+              <Line type="monotone" dataKey="valid" stroke="#22c55e" dot={false} strokeWidth={1.5} name="Valid" />
+              <Line type="monotone" dataKey="acceptAll" stroke="#eab308" dot={false} strokeWidth={1.5} name="Accept-All" />
+              <Line type="monotone" dataKey="risky" stroke="#f97316" dot={false} strokeWidth={1.5} name="Risky" />
+              <Line type="monotone" dataKey="invalid" stroke="#ef4444" dot={false} strokeWidth={1.5} name="Invalid" />
+            </LineChart>
+          </ResponsiveContainer>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function WidgetCard({ widgetId, onRemove, onMove, onSwap, idx, total, customizeMode }: { widgetId: number; onRemove: () => void; onMove: (dir: -1 | 1) => void; onSwap: (sourceId: number) => void; idx: number; total: number; customizeMode?: boolean }) {
   const { data } = trpc.dashboards.resolveWidget.useQuery({ id: widgetId });
@@ -72,46 +180,7 @@ function WidgetCard({ widgetId, onRemove, onMove, onSwap, idx, total, customizeM
           <li key={r.id} className="py-1 flex gap-2 min-w-0"><span className="flex-1 truncate">#{r.id}</span><span className="font-mono tabular-nums whitespace-nowrap shrink-0">${Number(r.value).toLocaleString()}</span></li>
         ))}</ul>
       )}
-      {data.type === "email_health" && (() => {
-        const d = data as any;
-        const total = d.total ?? 0;
-        const bars = [
-          { label: "Valid", value: d.valid ?? 0, color: "#22c55e" },
-          { label: "Accept-All", value: d.acceptAll ?? 0, color: "#eab308" },
-          { label: "Risky", value: d.risky ?? 0, color: "#f97316" },
-          { label: "Invalid", value: d.invalid ?? 0, color: "#ef4444" },
-          { label: "Unknown", value: d.unknown ?? 0, color: "#94a3b8" },
-        ];
-        return (
-          <div className="space-y-2">
-            <div className="flex items-center gap-2">
-              <ShieldCheck className="size-4 text-[#14B89A]" />
-              <span className="text-xl font-mono tabular-nums font-semibold">{d.verifiedPct ?? 0}%</span>
-              <span className="text-xs text-muted-foreground">verified</span>
-              <span className="ml-auto text-xs text-muted-foreground">{total} total</span>
-            </div>
-            {/* Stacked bar */}
-            <div className="flex h-2 rounded overflow-hidden gap-px">
-              {bars.map((b) => total > 0 && b.value > 0 ? (
-                <div key={b.label} style={{ width: `${(b.value / total) * 100}%`, background: b.color }} title={`${b.label}: ${b.value}`} />
-              ) : null)}
-            </div>
-            {/* Legend */}
-            <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-xs">
-              {bars.map((b) => (
-                <div key={b.label} className="flex items-center gap-1.5">
-                  <div className="size-2 rounded-full shrink-0" style={{ background: b.color }} />
-                  <span className="text-muted-foreground">{b.label}</span>
-                  <span className="ml-auto font-mono tabular-nums">{b.value}</span>
-                </div>
-              ))}
-            </div>
-            {(d.invalid ?? 0) > 0 && (
-              <p className="text-xs text-rose-600 font-medium">{d.invalid} invalid — verify or remove</p>
-            )}
-          </div>
-        );
-      })()}
+      {data.type === "email_health" && <EmailHealthWidget data={data as any} />}
     </div>
   );
 }

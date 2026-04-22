@@ -1,6 +1,7 @@
 import {
   bigint,
   boolean,
+  date,
   decimal,
   index,
   int,
@@ -958,6 +959,8 @@ export const workspaceSettings = mysqlTable("workspace_settings", {
   enforce2fa: boolean("enforce2fa").default(false).notNull(),
   notifyPolicy: json("notifyPolicy"),
   blockInvalidEmailsFromSequences: boolean("blockInvalidEmailsFromSequences").default(false).notNull(),
+  reverifyIntervalDays: int("reverifyIntervalDays"), // null = disabled; 30 | 60 | 90
+  reverifyStatuses: json("reverifyStatuses"), // string[] e.g. ["risky","accept_all"]
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
 export type WorkspaceSettings = typeof workspaceSettings.$inferSelect;
@@ -1495,7 +1498,7 @@ export const emailVerificationJobs = mysqlTable(
     totalEmails: int("totalEmails").default(0).notNull(),
     checkedEmails: int("checkedEmails").default(0).notNull(),
     progressPct: decimal("progressPct", { precision: 5, scale: 2 }).default("0"),
-    triggeredByUserId: int("triggeredByUserId").notNull(),
+    triggeredByUserId: int("triggeredByUserId"),
     completedAt: timestamp("completedAt"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
@@ -1530,3 +1533,26 @@ export const linkedinConnections = mysqlTable(
   }),
 );
 export type LinkedinConnection = typeof linkedinConnections.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Email Verification Snapshots (daily health trend)
+   ────────────────────────────────────────────────────────────────────────── */
+export const emailVerificationSnapshots = mysqlTable(
+  "email_verification_snapshots",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    snapshotDate: date("snapshotDate").notNull(), // YYYY-MM-DD
+    valid: int("valid").default(0).notNull(),
+    acceptAll: int("acceptAll").default(0).notNull(),
+    risky: int("risky").default(0).notNull(),
+    invalid: int("invalid").default(0).notNull(),
+    unknown: int("unknown").default(0).notNull(),
+    total: int("total").default(0).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    byWsDate: index("ix_evs_ws_date").on(t.workspaceId, t.snapshotDate),
+  }),
+);
+export type EmailVerificationSnapshot = typeof emailVerificationSnapshots.$inferSelect;

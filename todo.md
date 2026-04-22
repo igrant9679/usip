@@ -504,3 +504,28 @@
 - [x] Guard: in sequences.enroll procedure, if setting is true, reject contacts with emailVerificationStatus = 'invalid' and return a typed error listing the blocked contacts
 - [x] Frontend: Settings → Sequences section — toggle card "Block invalid emails from sequence enrollment" with description and current state
 - [x] Frontend: when enrollment is blocked, show a clear error toast listing how many contacts were blocked and why
+
+## 35. Auto Re-Verify Scheduler (Risky / Accept-All contacts)
+- [x] DB schema: add `reverifyIntervalDays` int nullable (null = disabled, options: 30/60/90) and `reverifyStatuses` json (default: ['risky','accept_all']) to workspace_settings
+- [x] DB schema: `email_verification_snapshots` table (id, workspaceId, snapshotDate date, valid int, acceptAll int, risky int, invalid int, unknown int, total int)
+- [x] Migration: generate + apply both schema changes
+- [x] Backend: `emailVerification.triggerScheduledReverify` — query contacts where status IN configured statuses AND emailVerifiedAt < NOW() - INTERVAL N DAYS, batch into Reoon bulk task
+- [x] Backend: `emailVerification.snapshotHealthMetrics` — count contacts by status, insert row into email_verification_snapshots (called daily)
+- [x] Backend: server-side daily scheduler — on startup + every 24h, call triggerScheduledReverify + snapshotHealthMetrics for all workspaces with reverifyIntervalDays set
+- [x] Frontend: Settings → Email Verification section — add "Auto Re-Verify" sub-card with interval selector (Disabled / 30 days / 60 days / 90 days) and status checkboxes (Risky, Accept-All), Save button
+- [x] Frontend: show "Next scheduled run" date based on oldest emailVerifiedAt among qualifying contacts
+
+## 36. Contacts Page — Enhanced Bulk Actions
+- [x] Add to Sequence modal: "Add to Sequence" button in bulk toolbar → searchable sequence selector, optional start step, confirm; calls bulkAddToSequence; shows per-contact success/error summary toast
+- [x] Send Ad-Hoc Email modal: "Send Email" button in bulk toolbar → AI-generated or manual mode toggle, subject + body editor, From display, Send button; creates emailDraft records; shows send summary toast
+- [x] Backend: `contacts.bulkAddToSequence` — accepts contactIds[], sequenceId, startStep; enrolls each, respects enrollment guard, returns per-contact result
+- [x] Backend: `contacts.sendAdHocEmail` — accepts contactIds[], subject, body (HTML), aiGenerated bool; creates emailDraft records in 'sent' status, records audit
+- [x] Frontend: bulk toolbar shows count badge and all action buttons when ≥1 contact selected
+- [x] Frontend: results toast after bulk action (e.g. "12 enrolled, 2 skipped — invalid email")
+
+## 37. Email Health Widget — Historical Trend Chart
+- [x] Backend: `emailVerification.getHealthTrend` — accepts period (30/60/90/120), returns array of { date, valid, acceptAll, risky, invalid, unknown } from snapshots with forward-fill for gaps
+- [x] Frontend: EmailHealthWidget — add period selector tabs (30d / 60d / 90d / 120d) below stat cards
+- [x] Frontend: stacked area chart (recharts AreaChart) showing daily breakdown over selected period; color-coded areas matching badge colors
+- [x] Frontend: placeholder state when no snapshot data exists yet
+- [x] Frontend: chart height adapts to widget grid row span

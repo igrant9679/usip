@@ -9,6 +9,7 @@ import { registerScimRoutes } from "../scimHttp";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
+import { runDailyVerificationMaintenance } from "../routers/emailVerification";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -63,6 +64,16 @@ async function startServer() {
   server.listen(port, () => {
     console.log(`Server running on http://localhost:${port}/`);
   });
+
+  // Daily email verification maintenance: snapshot + auto re-verify
+  // Run once on startup (catches up if server was down), then every 24h
+  const runMaintenance = () => {
+    runDailyVerificationMaintenance().catch((e) =>
+      console.error("[VerifyMaintenance] daily run failed:", e),
+    );
+  };
+  setTimeout(runMaintenance, 30_000); // delay 30s to let DB settle
+  setInterval(runMaintenance, 24 * 60 * 60 * 1000);
 }
 
 startServer().catch(console.error);
