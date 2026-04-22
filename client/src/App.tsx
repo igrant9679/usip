@@ -38,6 +38,8 @@ import EmailBuilder from "@/pages/usip/EmailBuilder";
 import Snippets from "@/pages/usip/Snippets";
 import BrandVoice from "@/pages/usip/BrandVoice";
 import PromptTemplates from "@/pages/usip/PromptTemplates";
+import ImportContacts from "@/pages/usip/ImportContacts";
+import MyLinkedIn from "@/pages/usip/MyLinkedIn";
 import { Loader2 } from "lucide-react";
 import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
@@ -101,6 +103,8 @@ function Router() {
       <Route path="/snippets"><AuthGate><Snippets /></AuthGate></Route>
       <Route path="/brand-voice"><AuthGate><BrandVoice /></AuthGate></Route>
       <Route path="/prompt-templates"><AuthGate><PromptTemplates /></AuthGate></Route>
+      <Route path="/import"><AuthGate><ImportContacts /></AuthGate></Route>
+      <Route path="/my-linkedin"><AuthGate><MyLinkedIn /></AuthGate></Route>
       <Route path="/settings"><AuthGate><Settings /></AuthGate></Route>
       <Route path="/404"><NotFound /></Route>
       <Route><NotFound /></Route>

@@ -64,6 +64,13 @@
       "when": 1776884854276,
       "tag": "0008_tiny_loki",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "5",
+      "when": 1776890177435,
+      "tag": "0009_thin_unicorn",
+      "breakpoints": true
     }
   ]
 }

@@ -19,6 +19,9 @@ import { researchPipelineRouter } from "./routers/researchPipeline";
 import { opportunityIntelligenceRouter } from "./routers/opportunityIntelligence";
 import { emailTemplatesRouter, snippetsRouter, brandVoiceRouter, emailPromptTemplatesRouter } from "./routers/emailBuilder";
 import { savedSectionsRouter } from "./routers/savedSections";
+import { importsRouter } from "./routers/imports";
+import { emailVerificationRouter } from "./routers/emailVerification";
+import { linkedinRouter } from "./routers/linkedin";
 
 export const appRouter = router({
   system: systemRouter,
@@ -69,6 +72,9 @@ export const appRouter = router({
   brandVoice: brandVoiceRouter,
   promptTemplates: emailPromptTemplatesRouter,
   savedSections: savedSectionsRouter,
+  imports: importsRouter,
+  emailVerification: emailVerificationRouter,
+  linkedin: linkedinRouter,
 });
 
 export type AppRouter = typeof appRouter;

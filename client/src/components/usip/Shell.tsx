@@ -39,6 +39,8 @@ import {
   Workflow,
   X,
   Zap,
+  Upload,
+  Linkedin,
 } from "lucide-react";
 import { ReactNode, useEffect, useState } from "react";
 import { Link, useLocation } from "wouter";
@@ -59,6 +61,7 @@ const NAV: NavGroup[] = [
     items: [
       { href: "/leads", label: "Leads", icon: Target },
       { href: "/contacts", label: "Contacts", icon: Users },
+      { href: "/import", label: "Import Contacts", icon: Upload },
       { href: "/accounts", label: "Accounts", icon: Building2 },
       { href: "/pipeline", label: "Pipeline", icon: KanbanSquare },
     ],
@@ -106,6 +109,7 @@ const NAV: NavGroup[] = [
       { href: "/brand-voice", label: "Brand Voice", icon: Mic2 },
       { href: "/audit", label: "Audit Log", icon: Database },
       { href: "/scim", label: "SCIM", icon: Zap },
+      { href: "/my-linkedin", label: "My LinkedIn", icon: Linkedin },
       { href: "/settings", label: "Settings", icon: Settings },
     ],
   },

@@ -132,6 +132,10 @@ export const contacts = mysqlTable(
     isPrimary: boolean("isPrimary").default(false).notNull(),
     ownerUserId: int("ownerUserId"),
     customFields: json("customFields"),
+    // Email verification (Module 13 — VER-001..VER-005)
+    emailVerificationStatus: varchar("emailVerificationStatus", { length: 20 }), // safe|invalid|risky|catch_all|unknown
+    emailVerifiedAt: timestamp("emailVerifiedAt"),
+    emailVerificationData: json("emailVerificationData"), // full Reoon response
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
@@ -1397,3 +1401,131 @@ export const emailSavedSections = mysqlTable(
   }),
 );
 export type EmailSavedSection = typeof emailSavedSections.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Module 13 — CSV Import (IMP-001..IMP-006)
+   ────────────────────────────────────────────────────────────────────────── */
+
+export const contactImports = mysqlTable(
+  "contact_imports",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    filename: varchar("filename", { length: 255 }).notNull(),
+    fileKey: text("fileKey"), // S3 key of original file
+    status: mysqlEnum("status", [
+      "pending",
+      "validating",
+      "ready",
+      "importing",
+      "completed",
+      "failed",
+    ])
+      .default("pending")
+      .notNull(),
+    totalRows: int("totalRows").default(0).notNull(),
+    importedRows: int("importedRows").default(0).notNull(),
+    skippedRows: int("skippedRows").default(0).notNull(),
+    errorRows: int("errorRows").default(0).notNull(),
+    /** Column→field mapping JSON: { "CSV Column": "systemField" | null } */
+    fieldMapping: json("fieldMapping"),
+    /** Post-import actions JSON: { tag, ownerUserId, sequenceId, segmentId } */
+    postImportActions: json("postImportActions"),
+    ownerId: int("ownerId").notNull(), // user who triggered the import
+    completedAt: timestamp("completedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    byWs: index("ix_ci_ws").on(t.workspaceId),
+    byOwner: index("ix_ci_owner").on(t.ownerId),
+  }),
+);
+export type ContactImport = typeof contactImports.$inferSelect;
+
+export const contactImportRows = mysqlTable(
+  "contact_import_rows",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    importId: int("importId").notNull(),
+    rowIndex: int("rowIndex").notNull(), // 1-based row number in original CSV
+    rowData: json("rowData").notNull(), // raw CSV row as { columnName: value }
+    mappedData: json("mappedData"), // after field mapping applied
+    status: mysqlEnum("status", [
+      "pending",
+      "valid",
+      "duplicate",
+      "error",
+      "imported",
+      "skipped",
+    ])
+      .default("pending")
+      .notNull(),
+    errorReason: text("errorReason"),
+    contactId: int("contactId"), // set after successful import
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    byImport: index("ix_cir_import").on(t.importId),
+    byStatus: index("ix_cir_status").on(t.importId, t.status),
+  }),
+);
+export type ContactImportRow = typeof contactImportRows.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Module 13 — Email Verification (VER-001..VER-005)
+   ────────────────────────────────────────────────────────────────────────── */
+
+/** Bulk verification jobs (maps to a Reoon bulk task) */
+export const emailVerificationJobs = mysqlTable(
+  "email_verification_jobs",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    reoonTaskId: varchar("reoonTaskId", { length: 64 }), // Reoon task_id
+    status: mysqlEnum("status", [
+      "pending",
+      "running",
+      "completed",
+      "failed",
+    ])
+      .default("pending")
+      .notNull(),
+    totalEmails: int("totalEmails").default(0).notNull(),
+    checkedEmails: int("checkedEmails").default(0).notNull(),
+    progressPct: decimal("progressPct", { precision: 5, scale: 2 }).default("0"),
+    triggeredByUserId: int("triggeredByUserId").notNull(),
+    completedAt: timestamp("completedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    byWs: index("ix_evj_ws").on(t.workspaceId),
+  }),
+);
+export type EmailVerificationJob = typeof emailVerificationJobs.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Module 13 — LinkedIn OAuth Connection (LNK-004)
+   ────────────────────────────────────────────────────────────────────────── */
+
+export const linkedinConnections = mysqlTable(
+  "linkedin_connections",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    userId: int("userId").notNull().unique(), // one connection per user
+    workspaceId: int("workspaceId").notNull(),
+    accessToken: text("accessToken").notNull(), // encrypted at rest (AES-256)
+    tokenExpiry: timestamp("tokenExpiry"),
+    linkedinId: varchar("linkedinId", { length: 64 }),
+    displayName: varchar("displayName", { length: 200 }),
+    profileUrl: text("profileUrl"),
+    syncedAt: timestamp("syncedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    byWs: index("ix_lc_ws").on(t.workspaceId),
+  }),
+);
+export type LinkedinConnection = typeof linkedinConnections.$inferSelect;

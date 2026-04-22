@@ -434,3 +434,44 @@
 - [x] Email Builder: remove -mx-4 md:-mx-6 negative horizontal margins from full-bleed container
 - [x] Audit all pages for -mt-*, -mx-*, -ml-*, h-[calc(100vh-*)] patterns that cause clipping
 - [x] Fix every instance found (only EmailBuilder had layout-level negative margins; all other matches were shadcn/ui internal components or intentional small offsets inside cards)
+
+## 28. Module 13 — CSV Import Wizard (IMP-001 to IMP-006) ✅ DELIVERED
+- [x] DB schema: `contact_imports` table (id, workspaceId, filename, fileKey, status, totalRows, importedRows, skippedRows, errorRows, ownerId, createdAt, completedAt) + `contact_import_rows` table (id, importId, rowData JSON, status, errorReason, contactId)
+- [x] tRPC: imports.parseCSV — accept CSV text, return column headers + first 5 preview rows
+- [x] tRPC: imports.validateRows — accept column→field mapping + all rows, run validation (syntax, duplicates, required fields), return validation report
+- [x] tRPC: imports.commit — commit valid rows to contacts table, apply post-import actions (tag, owner, sequence, segment), persist import record
+- [x] tRPC: imports.getHistory — list all past imports with stats (paginated)
+- [x] tRPC: imports.getImport — get single import detail + error rows
+- [x] Frontend: 5-step wizard at /import (Upload → Map Fields → Validate & Review → Post-Import Actions → Complete)
+- [x] Step 1: drag-and-drop CSV upload (max 50,000 rows), file size + row count display
+- [x] Step 2: column mapping table (CSV column header → system field dropdown, skip option, required field indicators)
+- [x] Step 3: validation results (valid/duplicate/error counts, error table with row number + reason, download error CSV button)
+- [x] Step 4: post-import actions (assign import source tag, set record owner, enroll in sequence, add to segment — all optional toggles)
+- [x] Step 5: completion summary with counts + link to Import History
+- [x] Import History page at Settings → Data Management → Import History (table: filename, date, user, total/imported/skipped/error, download links)
+- [x] Navigation: add "Import Contacts" entry to sidebar under Contacts section
+
+## 29. Module 13 — Email Verification with Reoon API (VER-001 to VER-005) ✅ DELIVERED
+- [x] DB schema: add `emailVerificationStatus`, `emailVerifiedAt`, `emailVerificationData` (JSON) columns to contacts table via migration
+- [x] server/reoon.ts: helper module wrapping Reoon single verify (power mode) + bulk task create + bulk task poll + balance check
+- [x] tRPC: emailVerification.verifySingle — call Reoon power mode for one email, store result on contact record, return status
+- [x] tRPC: emailVerification.verifyBulk — create Reoon bulk task for a list of contact IDs, store task_id, return job ID
+- [x] tRPC: emailVerification.getBulkJobStatus — poll Reoon for task progress, update contacts when completed, return progress %
+- [x] tRPC: emailVerification.getAccountBalance — return Reoon remaining daily + instant credits
+- [x] Status mapping: safe→Valid(green), catch_all→Accept-All(yellow), role_account/disposable/inbox_full→Risky(yellow), invalid/disabled/spamtrap→Invalid(red), unknown→Unknown(gray)
+- [x] Contact list view: colored email verification badge (colored dot + status text) next to email column
+- [x] Contact detail view: verification status badge + inline "Re-verify" button + last verified timestamp tooltip
+- [x] Bulk verify: "Verify Emails" button in contact list toolbar → opens progress modal with real-time polling
+- [x] Settings → Integrations: add Reoon card with API key config, account balance display, re-verification cadence setting
+- [x] Sequence enrollment guard: block contacts with Invalid status (admin-configurable toggle)
+
+## 30. Per-User LinkedIn Credential Storage (LNK-004 revised) ✅ DELIVERED
+- [x] DB schema: `linkedin_credentials` table (id, userId, workspaceId, credentialType enum(oauth_token|api_key|session_cookie), credentialValue text encrypted, profileName, profileUrl, linkedinEmail, isActive, createdAt, updatedAt)
+- [x] tRPC: linkedin.saveCredentials — store/update credential for calling user (type + value + profile info)
+- [x] tRPC: linkedin.getMyCredentials — return current user's credential record (value masked, show last 4 chars only)
+- [x] tRPC: linkedin.deleteCredentials — remove current user's credential record
+- [x] tRPC: linkedin.listTeamCredentials — admin-only: list all team members with their LinkedIn connection status (connected/not connected), no credential values exposed
+- [x] Frontend: Profile / My Account page → LinkedIn section with credential type selector + masked input + save/delete
+- [x] Frontend: Team page → LinkedIn status column (green check / gray dash per member)
+- [x] Frontend: Contact detail → LinkedIn outreach button that opens linkedin.com/in/{handle} in new tab when contact has linkedinUrl
+- [x] Note: LinkedIn's official API does not expose outreach/messaging to third-party apps without Sales Navigator partner approval. This implementation stores credentials for reference and enables direct profile-link navigation; actual message sending happens in the LinkedIn UI itself.
