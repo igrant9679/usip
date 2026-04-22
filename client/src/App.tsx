@@ -44,6 +44,7 @@ import DataHealth from "@/pages/usip/DataHealth";
 import Segments from "@/pages/usip/Segments";
 import AIPipelineQueue from "@/pages/usip/AIPipelineQueue";
 import PipelineAlerts from "@/pages/usip/PipelineAlerts";
+import SegmentRules from "@/pages/usip/SegmentRules";
 import { Loader2 } from "lucide-react";
 import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
@@ -114,6 +115,7 @@ function Router() {
       <Route path="/data-health"><AuthGate><DataHealth /></AuthGate></Route>
       <Route path="/segments"><AuthGate><Segments /></AuthGate></Route>
       <Route path="/segments/:id"><AuthGate><Segments /></AuthGate></Route>
+      <Route path="/segment-rules"><AuthGate><SegmentRules /></AuthGate></Route>
       <Route path="/settings"><AuthGate><Settings /></AuthGate></Route>
       <Route path="/404"><NotFound /></Route>
       <Route><NotFound /></Route>

@@ -27,6 +27,8 @@ import { segmentsRouter } from "./routers/segments";
 import { aiPipelineRouter } from "./routers/aiPipeline";
 import { pipelineAlertsRouter } from "./routers/pipelineAlerts";
 import { accountBriefsRouter } from "./routers/accountBriefs";
+import { smtpConfigRouter } from "./routers/smtpConfig";
+import { segmentRulesRouter } from "./routers/segmentRules";
 
 export const appRouter = router({
   system: systemRouter,
@@ -86,6 +88,8 @@ export const appRouter = router({
   aiPipeline: aiPipelineRouter,
   pipelineAlerts: pipelineAlertsRouter,
   accountBriefs: accountBriefsRouter,
+  smtpConfig: smtpConfigRouter,
+  segmentRules: segmentRulesRouter,
 });
 
 export type AppRouter = typeof appRouter;

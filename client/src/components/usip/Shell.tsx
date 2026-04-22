@@ -75,6 +75,7 @@ const NAV: NavGroup[] = [
     label: "Engage",
     items: [
       { href: "/segments", label: "Segments", icon: Filter },
+      { href: "/segment-rules", label: "Segment Auto-Enroll", icon: Zap },
       { href: "/sequences", label: "Sequences", icon: Activity },
       { href: "/email-drafts", label: "Email Drafts", icon: FileText },
       { href: "/email-builder", label: "Email Builder", icon: LayoutTemplate },

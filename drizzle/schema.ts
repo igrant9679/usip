@@ -966,6 +966,8 @@ export const workspaceSettings = mysqlTable("workspace_settings", {
   blockInvalidEmailsFromSequences: boolean("blockInvalidEmailsFromSequences").default(false).notNull(),
   reverifyIntervalDays: int("reverifyIntervalDays"), // null = disabled; 30 | 60 | 90
   reverifyStatuses: json("reverifyStatuses"), // string[] e.g. ["risky","accept_all"]
+  nightlyPipelineEnabled: boolean("nightlyPipelineEnabled").default(false).notNull(),
+  nightlyScoreThreshold: int("nightlyScoreThreshold").default(60).notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
 export type WorkspaceSettings = typeof workspaceSettings.$inferSelect;
@@ -1668,3 +1670,57 @@ export type AccountBrief = typeof accountBriefs.$inferSelect;
 // Note: sequences table gets enrollmentTrigger and dailyCap via migration
 // enrollmentTrigger: json — [{type: 'status_change'|'tag_applied'|'score_threshold', value: string}]
 // dailyCap: int — max emails per day for this sequence (null = unlimited)
+
+/* ──────────────────────────────────────────────────────────────────────────
+   SMTP Delivery Config (Feature 44)
+   ────────────────────────────────────────────────────────────────────────── */
+export const smtpConfigs = mysqlTable(
+  "smtp_configs",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull().unique(),
+    host: varchar("host", { length: 255 }).notNull(),
+    port: int("port").default(587).notNull(),
+    secure: boolean("secure").default(false).notNull(), // true = TLS/465, false = STARTTLS
+    username: varchar("username", { length: 255 }).notNull(),
+    encryptedPassword: text("encryptedPassword").notNull(), // AES-256 encrypted
+    fromName: varchar("fromName", { length: 120 }),
+    fromEmail: varchar("fromEmail", { length: 255 }).notNull(),
+    replyTo: varchar("replyTo", { length: 255 }),
+    enabled: boolean("enabled").default(true).notNull(),
+    lastTestedAt: timestamp("lastTestedAt"),
+    lastTestStatus: varchar("lastTestStatus", { length: 16 }), // 'ok' | 'error'
+    lastTestError: text("lastTestError"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    byWs: index("ix_smtp_ws").on(t.workspaceId),
+  }),
+);
+export type SmtpConfig = typeof smtpConfigs.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Segment → Sequence Auto-Enroll Rules (Feature 46)
+   ────────────────────────────────────────────────────────────────────────── */
+export const segmentSequenceRules = mysqlTable(
+  "segment_sequence_rules",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    segmentId: int("segmentId").notNull(),
+    sequenceId: int("sequenceId").notNull(),
+    enabled: boolean("enabled").default(true).notNull(),
+    lastRunAt: timestamp("lastRunAt"),
+    enrolledCount: int("enrolledCount").default(0).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    byWs: index("ix_ssr_ws").on(t.workspaceId),
+    bySegment: index("ix_ssr_seg").on(t.segmentId),
+    bySequence: index("ix_ssr_seq").on(t.sequenceId),
+    uniq: index("ix_ssr_uniq").on(t.workspaceId, t.segmentId, t.sequenceId),
+  }),
+);
+export type SegmentSequenceRule = typeof segmentSequenceRules.$inferSelect;

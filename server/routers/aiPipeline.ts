@@ -19,7 +19,7 @@ import { invokeLLM } from "../_core/llm";
 
 /* ─── Helpers ─────────────────────────────────────────────────────────── */
 
-async function runPipelineForContact(
+export async function runPipelineForContact(
   workspaceId: number,
   jobId: number,
   contactId: number | null,

@@ -11,6 +11,8 @@ import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 import { runDailyVerificationMaintenance } from "../routers/emailVerification";
 import { processEnrollments } from "../sequenceEngine";
+import { runNightlyBatch } from "../nightlyBatch";
+import { runSegmentEnrollmentForAllWorkspaces } from "../routers/segmentRules"; // eslint-disable-line
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -84,6 +86,35 @@ async function startServer() {
   };
   setTimeout(runSequenceEngine, 60_000); // first run after 60s
   setInterval(runSequenceEngine, 5 * 60 * 1000); // every 5 minutes
+
+  // Hourly segment → sequence auto-enroll: evaluate all enabled rules
+  const runSegmentEnrollment = () => {
+    runSegmentEnrollmentForAllWorkspaces().catch((e: unknown) =>
+      console.error("[SegmentEnroll] hourly run failed:", e)
+    );
+  };
+  setTimeout(runSegmentEnrollment, 90_000); // first run after 90s
+  setInterval(runSegmentEnrollment, 60 * 60 * 1000); // every hour
+
+
+  // Nightly AI pipeline batch: midnight cron for leads above score threshold
+  const scheduleNightlyBatch = () => {
+    const now = new Date();
+    const nextMidnight = new Date(now);
+    nextMidnight.setHours(24, 0, 0, 0); // next midnight
+    const msUntilMidnight = nextMidnight.getTime() - now.getTime();
+    setTimeout(() => {
+      const runBatch = () => {
+        runNightlyBatch().catch((e) =>
+          console.error("[NightlyBatch] nightly run failed:", e)
+        );
+      };
+      runBatch();
+      setInterval(runBatch, 24 * 60 * 60 * 1000); // every 24h after first run
+    }, msUntilMidnight);
+    console.log(`[NightlyBatch] Scheduled for midnight (~${Math.round(msUntilMidnight / 60000)} min away)`);
+  };
+  scheduleNightlyBatch();
 }
 
 startServer().catch(console.error);

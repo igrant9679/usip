@@ -5,7 +5,7 @@ import { Section, StatusPill, fmt$ } from "@/components/usip/Common";
 import { PageHeader, Shell, StatCard } from "@/components/usip/Shell";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { trpc } from "@/lib/trpc";
-import { AlertTriangle, Bell, Building2, CheckCircle2, CreditCard, Download, ExternalLink, Loader2, Palette, Plug, ShieldCheck, TestTube2, Trash2, XCircle } from "lucide-react";
+import { AlertTriangle, Bell, Building2, CheckCircle2, CreditCard, Download, ExternalLink, Loader2, Mail, Palette, Plug, ShieldCheck, TestTube2, Trash2, XCircle } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
@@ -17,6 +17,7 @@ const TABS = [
   { id: "security", label: "Security", icon: ShieldCheck },
   { id: "notifications", label: "Notifications", icon: Bell },
   { id: "integrations", label: "Integrations", icon: Plug },
+  { id: "smtp", label: "Email Delivery", icon: Mail },
   { id: "billing", label: "Billing", icon: CreditCard },
   { id: "danger", label: "Danger zone", icon: AlertTriangle },
 ] as const;
@@ -113,6 +114,7 @@ export default function Settings() {
           {tab === "security" && <SecurityTab settings={settings.data} save={save.mutate} canEdit={isAdmin} />}
           {tab === "notifications" && <NotificationsTab settings={settings.data} save={save.mutate} canEdit={isAdmin} />}
           {tab === "integrations" && <IntegrationsTab />}
+          {tab === "smtp" && <SmtpTab canEdit={isAdmin} />}
           {tab === "billing" && <BillingTab usage={usage.data} />}
           {tab === "danger" && <DangerTab canEdit={isAdmin} />}
         </div>
@@ -122,6 +124,121 @@ export default function Settings() {
 }
 
 /* ─── Tabs ─────────────────────────────────────────────────────────────── */
+
+function SmtpTab({ canEdit }: { canEdit: boolean }) {
+  const utils = trpc.useUtils();
+  const cfg = trpc.smtpConfig.get.useQuery();
+  const save = trpc.smtpConfig.save.useMutation({
+    onSuccess: () => { utils.smtpConfig.get.invalidate(); toast.success("SMTP config saved"); },
+    onError: (e) => toast.error(e.message),
+  });
+  const test = trpc.smtpConfig.test.useMutation({
+    onSuccess: () => toast.success("Test email sent successfully!"),
+    onError: (e) => toast.error(e.message),
+  });
+
+  const [host, setHost] = useState("");
+  const [port, setPort] = useState("587");
+  const [secure, setSecure] = useState(false);
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [fromName, setFromName] = useState("");
+  const [fromEmail, setFromEmail] = useState("");
+  const [replyTo, setReplyTo] = useState("");
+  const [enabled, setEnabled] = useState(true);
+  const [testEmail, setTestEmail] = useState("");
+
+  useEffect(() => {
+    if (cfg.data) {
+      setHost(cfg.data.host ?? "");
+      setPort(String(cfg.data.port ?? 587));
+      setSecure(cfg.data.secure ?? false);
+      setUsername(cfg.data.username ?? "");
+      setFromName(cfg.data.fromName ?? "");
+      setFromEmail(cfg.data.fromEmail ?? "");
+      setReplyTo(cfg.data.replyTo ?? "");
+      setEnabled(cfg.data.enabled ?? true);
+    }
+  }, [cfg.data]);
+
+  return (
+    <Section title="Email Delivery (SMTP)" description="Configure outbound SMTP so approved email drafts are sent via your own mail server.">
+      <div className="grid gap-4 max-w-xl">
+        {cfg.data?.lastTestStatus && (
+          <div className={`flex items-center gap-2 text-sm px-3 py-2 rounded-md ${cfg.data.lastTestStatus === "ok" ? "bg-green-500/10 text-green-600" : "bg-red-500/10 text-red-600"}`}>
+            {cfg.data.lastTestStatus === "ok" ? <CheckCircle2 className="size-4" /> : <XCircle className="size-4" />}
+            Last test: {cfg.data.lastTestStatus === "ok" ? "Connection verified" : cfg.data.lastTestError ?? "Error"}
+            {cfg.data.lastTestedAt && <span className="ml-auto text-xs text-muted-foreground">{new Date(cfg.data.lastTestedAt).toLocaleString()}</span>}
+          </div>
+        )}
+        <div className="grid grid-cols-2 gap-3">
+          <div className="col-span-2">
+            <Label>SMTP Host</Label>
+            <Input placeholder="smtp.gmail.com" value={host} onChange={(e) => setHost(e.target.value)} disabled={!canEdit} />
+          </div>
+          <div>
+            <Label>Port</Label>
+            <Input type="number" placeholder="587" value={port} onChange={(e) => setPort(e.target.value)} disabled={!canEdit} />
+          </div>
+          <div className="flex items-end gap-2">
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input type="checkbox" checked={secure} onChange={(e) => setSecure(e.target.checked)} disabled={!canEdit} className="rounded" />
+              TLS/SSL (port 465)
+            </label>
+          </div>
+          <div className="col-span-2">
+            <Label>Username / Email</Label>
+            <Input placeholder="you@example.com" value={username} onChange={(e) => setUsername(e.target.value)} disabled={!canEdit} />
+          </div>
+          <div className="col-span-2">
+            <Label>Password {cfg.data ? "(leave blank to keep existing)" : ""}</Label>
+            <Input type="password" placeholder={cfg.data ? "••••••••" : "App password"} value={password} onChange={(e) => setPassword(e.target.value)} disabled={!canEdit} />
+          </div>
+          <div>
+            <Label>From Name</Label>
+            <Input placeholder="Acme Sales" value={fromName} onChange={(e) => setFromName(e.target.value)} disabled={!canEdit} />
+          </div>
+          <div>
+            <Label>From Email</Label>
+            <Input placeholder="sales@acme.com" value={fromEmail} onChange={(e) => setFromEmail(e.target.value)} disabled={!canEdit} />
+          </div>
+          <div className="col-span-2">
+            <Label>Reply-To (optional)</Label>
+            <Input placeholder="replies@acme.com" value={replyTo} onChange={(e) => setReplyTo(e.target.value)} disabled={!canEdit} />
+          </div>
+        </div>
+        {canEdit && (
+          <div className="flex gap-2 flex-wrap">
+            <Button
+              size="sm"
+              onClick={() => save.mutate({ host, port: parseInt(port) || 587, secure, username, password: password || undefined, fromName: fromName || undefined, fromEmail, replyTo: replyTo || undefined, enabled })}
+              disabled={save.isPending || !host || !username || !fromEmail}
+            >
+              {save.isPending ? <Loader2 className="size-4 animate-spin mr-1" /> : null}
+              Save config
+            </Button>
+            {cfg.data && (
+              <div className="flex items-center gap-2">
+                <Input placeholder="Test recipient email" value={testEmail} onChange={(e) => setTestEmail(e.target.value)} className="w-52" />
+                <Button
+                  size="sm" variant="outline"
+                  onClick={() => test.mutate({ toEmail: testEmail })}
+                  disabled={test.isPending || !testEmail}
+                >
+                  {test.isPending ? <Loader2 className="size-4 animate-spin mr-1" /> : <TestTube2 className="size-4 mr-1" />}
+                  Send test
+                </Button>
+              </div>
+            )}
+          </div>
+        )}
+        <p className="text-xs text-muted-foreground">
+          Common settings: Gmail → smtp.gmail.com:587 (STARTTLS), port 465 (TLS). Outlook → smtp.office365.com:587. SendGrid → smtp.sendgrid.net:587 (username: apikey).
+        </p>
+      </div>
+    </Section>
+  );
+}
 
 function GeneralTab({
   settings,
