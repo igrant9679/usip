@@ -584,11 +584,11 @@
 - [x] Sidebar nav: AI Draft Queue under Engage group
 
 ## 42. Sequence Execution Engine (MKT-007, MKT-008)
-- [ ] Backend: 5-min cron - process active enrollments with next_step_due <= now
-- [ ] Backend: auto-enrollment triggers - on contact status change, tag applied, or score threshold crossed
-- [ ] Backend: per-sequence daily cap + per-user daily email cap enforcement
-- [ ] Backend: auto-pause on reply - when reply_detected, pause enrollment + create review task
-- [ ] Frontend: Sequence detail stats - enrollment counts by status, per-step performance metrics
+- [x] Backend: 5-min cron - process active enrollments with next_step_due <= now
+- [x] Backend: auto-enrollment triggers - on contact status change, tag applied, or score threshold crossed
+- [x] Backend: per-sequence daily cap + per-user daily email cap enforcement
+- [x] Backend: auto-pause on reply - when reply_detected, pause enrollment + create review task
+- [x] Frontend: Sequence detail stats - enrollment counts by status, per-step performance metrics
 
 ## 43. Pipeline Health Alerts (CRMA-012) + AI Account Brief (CRMA-010)
 - [x] DB schema: pipeline_alerts table

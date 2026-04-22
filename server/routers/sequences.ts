@@ -161,6 +161,43 @@ export const sequencesRouter = router({
     await db.update(enrollments).set({ status: "paused" }).where(and(eq(enrollments.id, input.id), eq(enrollments.workspaceId, ctx.workspace.id)));
     return { ok: true };
   }),
+
+  resumeEnrollment: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    await db.update(enrollments).set({ status: "active", nextActionAt: new Date() }).where(and(eq(enrollments.id, input.id), eq(enrollments.workspaceId, ctx.workspace.id)));
+    return { ok: true };
+  }),
+
+  exitEnrollment: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    await db.update(enrollments).set({ status: "exited" }).where(and(eq(enrollments.id, input.id), eq(enrollments.workspaceId, ctx.workspace.id)));
+    return { ok: true };
+  }),
+
+  pauseOnReply: repProcedure.input(z.object({ enrollmentId: z.number() })).mutation(async ({ ctx, input }) => {
+    const { pauseOnReply } = await import("../sequenceEngine");
+    await pauseOnReply(input.enrollmentId, ctx.workspace.id);
+    return { ok: true };
+  }),
+
+  getEnrollmentStats: workspaceProcedure.input(z.object({ sequenceId: z.number() })).query(async ({ ctx, input }) => {
+    const { getEnrollmentStats } = await import("../sequenceEngine");
+    return getEnrollmentStats(input.sequenceId, ctx.workspace.id);
+  }),
+
+  getEnrollmentStepStats: workspaceProcedure.input(z.object({ sequenceId: z.number() })).query(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) return [];
+    const rows = await db.select().from(enrollments).where(and(eq(enrollments.sequenceId, input.sequenceId), eq(enrollments.workspaceId, ctx.workspace.id)));
+    // Count by currentStep
+    const stepCounts: Record<number, number> = {};
+    for (const r of rows) {
+      stepCounts[r.currentStep] = (stepCounts[r.currentStep] ?? 0) + 1;
+    }
+    return Object.entries(stepCounts).map(([step, count]) => ({ step: Number(step), count }));
+  }),
 });
 
 /* ─── Email Drafts ────────────────────────────────────────────────────── */

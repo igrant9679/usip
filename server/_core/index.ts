@@ -10,6 +10,7 @@ import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 import { runDailyVerificationMaintenance } from "../routers/emailVerification";
+import { processEnrollments } from "../sequenceEngine";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -74,6 +75,15 @@ async function startServer() {
   };
   setTimeout(runMaintenance, 30_000); // delay 30s to let DB settle
   setInterval(runMaintenance, 24 * 60 * 60 * 1000);
+
+  // Sequence execution engine: process active enrollments every 5 minutes
+  const runSequenceEngine = () => {
+    processEnrollments().catch((e) =>
+      console.error("[SequenceEngine] cron run failed:", e)
+    );
+  };
+  setTimeout(runSequenceEngine, 60_000); // first run after 60s
+  setInterval(runSequenceEngine, 5 * 60 * 1000); // every 5 minutes
 }
 
 startServer().catch(console.error);
