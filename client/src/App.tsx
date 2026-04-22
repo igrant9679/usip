@@ -34,6 +34,10 @@ import SequenceCanvas from "@/pages/usip/SequenceCanvas";
 import ResearchPipeline from "@/pages/usip/ResearchPipeline";
 import Quota from "@/pages/usip/Quota";
 import CustomFields from "@/pages/usip/CustomFields";
+import EmailBuilder from "@/pages/usip/EmailBuilder";
+import Snippets from "@/pages/usip/Snippets";
+import BrandVoice from "@/pages/usip/BrandVoice";
+import PromptTemplates from "@/pages/usip/PromptTemplates";
 import { Loader2 } from "lucide-react";
 import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
@@ -92,6 +96,11 @@ function Router() {
       <Route path="/research-pipeline"><AuthGate><ResearchPipeline /></AuthGate></Route>
       <Route path="/quota"><AuthGate><Quota /></AuthGate></Route>
       <Route path="/custom-fields"><AuthGate><CustomFields /></AuthGate></Route>
+      <Route path="/email-builder"><AuthGate><EmailBuilder /></AuthGate></Route>
+      <Route path="/email-builder/:id"><AuthGate><EmailBuilder /></AuthGate></Route>
+      <Route path="/snippets"><AuthGate><Snippets /></AuthGate></Route>
+      <Route path="/brand-voice"><AuthGate><BrandVoice /></AuthGate></Route>
+      <Route path="/prompt-templates"><AuthGate><PromptTemplates /></AuthGate></Route>
       <Route path="/settings"><AuthGate><Settings /></AuthGate></Route>
       <Route path="/404"><NotFound /></Route>
       <Route><NotFound /></Route>

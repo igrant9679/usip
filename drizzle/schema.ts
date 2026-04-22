@@ -1274,3 +1274,92 @@ export const stageApprovals = mysqlTable(
   }),
 );
 export type StageApproval = typeof stageApprovals.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Email Dynamic Path — Templates, Snippets, Brand Voice, Prompt Templates
+   ────────────────────────────────────────────────────────────────────────── */
+
+/** Reusable email templates with drag-and-drop block design data */
+export const emailTemplates = mysqlTable(
+  "email_templates",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    name: varchar("name", { length: 200 }).notNull(),
+    description: text("description"),
+    category: varchar("category", { length: 64 }).default("general").notNull(),
+    subject: text("subject"),
+    designData: json("designData").notNull(), // [{id, type, props, sortOrder}]
+    htmlOutput: text("htmlOutput"),           // compiled inline-CSS HTML
+    plainOutput: text("plainOutput"),         // plain-text fallback
+    status: mysqlEnum("status", ["draft", "active", "archived"]).default("draft").notNull(),
+    createdByUserId: int("createdByUserId").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    byWs: index("ix_et_ws").on(t.workspaceId, t.status),
+  }),
+);
+export type EmailTemplate = typeof emailTemplates.$inferSelect;
+
+/** Reusable content snippets (intros, CTAs, objection handles, P.S. lines) */
+export const emailSnippets = mysqlTable(
+  "email_snippets",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    name: varchar("name", { length: 200 }).notNull(),
+    category: mysqlEnum("category", ["opener", "value_prop", "social_proof", "objection_handler", "cta", "closing", "ps"]).notNull(),
+    bodyHtml: text("bodyHtml").notNull(),
+    bodyPlain: text("bodyPlain").notNull(),
+    mergeTagsUsed: json("mergeTagsUsed"), // ["{{firstName}}", "{{company}}"]
+    createdByUserId: int("createdByUserId").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    byWs: index("ix_es_ws").on(t.workspaceId, t.category),
+  }),
+);
+export type EmailSnippet = typeof emailSnippets.$inferSelect;
+
+/** Brand voice profile — one per workspace */
+export const brandVoiceProfiles = mysqlTable("brand_voice_profiles", {
+  workspaceId: int("workspaceId").primaryKey(),
+  tone: mysqlEnum("tone", ["professional", "conversational", "direct", "empathetic", "authoritative"]).default("professional").notNull(),
+  vocabulary: json("vocabulary"),   // string[] — power words to use
+  avoidWords: json("avoidWords"),   // string[] — words to avoid
+  signatureHtml: text("signatureHtml"),
+  fromName: varchar("fromName", { length: 120 }),
+  fromEmail: varchar("fromEmail", { length: 200 }),
+  primaryColor: varchar("primaryColor", { length: 16 }).default("#14B89A").notNull(),
+  secondaryColor: varchar("secondaryColor", { length: 16 }).default("#0F766E").notNull(),
+  applyToAI: boolean("applyToAI").default(true).notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+export type BrandVoiceProfile = typeof brandVoiceProfiles.$inferSelect;
+
+/** Prompt template versions for AI email generation (A/B testing + audit) */
+export const emailPromptTemplates = mysqlTable(
+  "email_prompt_templates",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    name: varchar("name", { length: 200 }).notNull(),
+    goal: mysqlEnum("goal", ["intro", "follow_up", "meeting_request", "value_prop", "breakup", "check_in"]).notNull(),
+    promptText: text("promptText").notNull(),
+    isActive: boolean("isActive").default(false).notNull(),
+    abGroup: mysqlEnum("abGroup", ["A", "B"]).default("A").notNull(),
+    draftsGenerated: int("draftsGenerated").default(0).notNull(),
+    draftsApproved: int("draftsApproved").default(0).notNull(),
+    avgSubjectScore: decimal("avgSubjectScore", { precision: 5, scale: 2 }),
+    createdByUserId: int("createdByUserId").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    byWs: index("ix_ept_ws").on(t.workspaceId, t.goal, t.isActive),
+  }),
+);
+export type EmailPromptTemplate = typeof emailPromptTemplates.$inferSelect;

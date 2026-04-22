@@ -302,3 +302,69 @@
 - [ ] Rename dashboard dialog
 - [ ] Layout persisted per user per dashboard
 - [ ] Vitest: layout serialization
+
+## 23. Email Dynamic Path — Visual Builder + Snippets + Brand Voice ✅ DELIVERED
+
+### Schema additions (migration 0007_low_nitro.sql)
+- [x] `email_templates` table (id, workspaceId, name, description, category, subject, designData JSON, htmlOutput, plainOutput, status, createdBy, createdAt, updatedAt)
+- [x] `email_snippets` table (id, workspaceId, name, category, bodyHtml, bodyPlain, mergeTagsUsed JSON, createdBy, createdAt)
+- [x] `brand_voice_profiles` table (id, workspaceId, tone, vocabulary JSON, avoidWords JSON, signatureHtml, fromName, fromEmail, primaryColor, secondaryColor, applyToAI bool, updatedAt)
+- [x] `email_prompt_templates` table (id, workspaceId, name, goal, promptText, isActive, abGroup, version, createdBy, createdAt)
+
+### Server routers (server/routers/emailBuilder.ts)
+- [x] `emailTemplates.list` / `emailTemplates.get` / `emailTemplates.create` / `emailTemplates.save` / `emailTemplates.duplicate` / `emailTemplates.archive`
+- [x] `emailTemplates.renderPreview` — resolves merge tags against sample contact/lead, returns final HTML
+- [x] `snippets.list` / `snippets.create` / `snippets.update` / `snippets.delete` / `snippets.generate` (AI-generated snippet)
+- [x] `brandVoice.get` / `brandVoice.save`
+- [x] `promptTemplates.list` / `promptTemplates.create` / `promptTemplates.update` / `promptTemplates.activate` / `promptTemplates.delete`
+- [x] All routers registered in server/routers.ts
+
+### Visual Email Builder UI (`/email-builder`, `/email-builder/:id`)
+- [x] Three-panel layout: block palette (left) / canvas (center) / properties (right)
+- [x] 8 block types: Header, Text, Image, Button, Divider, Spacer, Two-Column, Footer
+- [x] Drag block from palette onto canvas (HTML5 DnD)
+- [x] Canvas: vertical block stack, drag-to-reorder, click-to-select with highlight ring
+- [x] Right panel: block-specific property editor per block type (all 8 types)
+- [x] Merge-tag picker: {{firstName}}, {{lastName}}, {{company}}, {{title}}, {{senderName}} + customField.* — inserts at cursor
+- [x] Subject line field at top with merge-tag support
+- [x] Preview toggle: Desktop / Mobile (375px)
+- [x] 30s autosave + manual Save button with save-state indicator (Saved / Unsaved / Saving)
+- [x] Duplicate + Archive buttons
+- [x] Template status lifecycle: Draft → Active → Archived
+- [x] Template list sidebar (left panel top) with create + select
+- [~] "Use template" entry point from Email Drafts compose dialog — route exists, deep-link not yet wired
+
+### Snippet Library (`/snippets`)
+- [x] Grid view: name, category badge, preview excerpt, copy/edit/delete
+- [x] Create/edit dialog: name, category (7 types), body textarea, merge-tag picker
+- [x] AI Generate button (calls snippets.generate with category + tone)
+- [x] Search + category filter
+- [~] "Insert into draft" action — copy-to-clipboard covers this; deep-link not yet wired
+
+### Brand Voice (`/brand-voice`)
+- [x] Tone selector: 5 options (Professional / Conversational / Direct / Empathetic / Authoritative)
+- [x] Vocabulary power words list (add/remove chips)
+- [x] Avoid words list (add/remove chips)
+- [x] Default email signature (HTML textarea)
+- [x] From name + from email defaults
+- [x] Primary + secondary brand colors (color picker + hex input)
+- [x] "Apply to AI drafts" toggle
+- [x] Live brand color preview swatch
+
+### Prompt Template Versioning (`/prompt-templates`)
+- [x] List grouped by goal, with active badge, A/B group, version number
+- [x] Create/edit dialog: name, goal, full prompt text, A/B group, merge-tag inserter
+- [x] Activate button (deactivates previous active for same goal)
+- [x] Duplicate button (flips A/B group)
+- [~] Stats panel (drafts generated, approval rate, avg subject score) — stub, no analytics writer yet
+
+### Vitest (server/emailDynamic.test.ts — 34 specs)
+- [x] Merge-tag resolution (all 5 standard tokens + customField.* + unknown fallback + empty string)
+- [x] Block renderer: all 8 block types (header, text, image, button, divider, spacer, footer, sort-order)
+- [x] HTML shell wrapping + subject injection
+- [x] Merge-tag resolution inside rendered HTML
+- [x] Spam score heuristics: ALL CAPS, fake Re: prefix, dollar amount, free keyword, urgency language, caps-at-100
+- [x] Snippet category enum + body validation + merge-tag detection
+- [x] Brand voice tone enum + hex color validation
+- [x] Prompt template A/B group logic + activate deactivates others with same goal
+- [x] 148/148 total vitest specs passing
