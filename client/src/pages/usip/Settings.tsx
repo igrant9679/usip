@@ -543,7 +543,76 @@ function IntegrationsTab() {
           </ul>
         )}
       </Section>
+      {/* Email Verification Settings */}
+      <EmailVerificationSettingsSection isAdmin={isAdmin} />
     </>
+  );
+}
+
+function EmailVerificationSettingsSection({ isAdmin }: { isAdmin: boolean }) {
+  const utils = trpc.useUtils();
+  const settingsQ = trpc.settings.get.useQuery();
+  const saveMut = trpc.settings.save.useMutation({
+    onSuccess: () => { utils.settings.get.invalidate(); toast.success("Email verification settings saved"); },
+    onError: (e) => toast.error(e.message),
+  });
+  const balanceQ = trpc.emailVerification.getAccountBalance.useQuery(undefined, { retry: false });
+  const [blockInvalid, setBlockInvalid] = useState(false);
+  useEffect(() => {
+    if (settingsQ.data) setBlockInvalid(Boolean((settingsQ.data as any).blockInvalidEmailsFromSequences));
+  }, [settingsQ.data]);
+  return (
+    <Section
+      title="Email Verification (Reoon)"
+      description="Configure how email verification status affects sequence enrollment."
+      right={
+        isAdmin ? (
+          <Button size="sm" onClick={() => saveMut.mutate({ blockInvalidEmailsFromSequences: blockInvalid })} disabled={saveMut.isPending}>
+            {saveMut.isPending ? <Loader2 className="size-3.5 animate-spin mr-1" /> : null}Save
+          </Button>
+        ) : null
+      }
+    >
+      <div className="p-4 space-y-4">
+        <div className="flex items-center gap-3 p-3 border rounded-lg bg-muted/30">
+          <ShieldCheck className="size-5 text-[#14B89A] shrink-0" />
+          <div className="flex-1 min-w-0">
+            <div className="text-sm font-medium">Reoon Email Verifier</div>
+            <div className="text-xs text-muted-foreground">API key configured via environment variable REOON_API_KEY</div>
+          </div>
+          <div className="text-right shrink-0">
+            {balanceQ.isLoading ? (
+              <Loader2 className="size-4 animate-spin text-muted-foreground" />
+            ) : balanceQ.error ? (
+              <span className="text-xs text-destructive">Check API key</span>
+            ) : (
+              <div>
+                <div className="text-sm font-mono tabular-nums font-semibold">{(balanceQ.data as any)?.daily_remaining ?? "—"}</div>
+                <div className="text-xs text-muted-foreground">daily credits left</div>
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="flex items-start gap-3 p-3 border rounded-lg">
+          <div className="flex-1 min-w-0">
+            <div className="text-sm font-medium">Block invalid emails from sequences</div>
+            <div className="text-xs text-muted-foreground mt-0.5">
+              When enabled, contacts with a Reoon verification status of <span className="font-mono text-rose-600">invalid</span> cannot be enrolled in any sequence. Contacts with <span className="font-mono text-yellow-600">risky</span> or <span className="font-mono text-yellow-600">accept_all</span> status are still allowed.
+            </div>
+          </div>
+          <label className="flex items-center gap-2 shrink-0 pt-0.5 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={blockInvalid}
+              onChange={(e) => setBlockInvalid(e.target.checked)}
+              disabled={!isAdmin}
+              className="size-4"
+            />
+            <span className="text-sm">{blockInvalid ? "Enabled" : "Disabled"}</span>
+          </label>
+        </div>
+      </div>
+    </Section>
   );
 }
 

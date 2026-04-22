@@ -5,6 +5,7 @@ import {
   auditLog,
   campaignComponents,
   campaigns,
+  contacts,
   dashboardWidgets,
   dashboards,
   notifications,
@@ -608,6 +609,18 @@ async function resolveWidgetData(workspaceId: number, w: { type: string; config:
       const top = Array.from(map.entries()).sort((a, b) => b[1] - a[1]).slice(0, cfg.limit ?? 5);
       return { type: "table", title: w.title, rows: top.map(([id, v]) => ({ id, value: v })) };
     }
+  }
+  // Email Health widget
+  if (w.type === "email_health") {
+    const allContacts = await db.select().from(contacts).where(eq(contacts.workspaceId, workspaceId));
+    const total = allContacts.length;
+    const valid = allContacts.filter((c) => c.emailVerificationStatus === "valid").length;
+    const acceptAll = allContacts.filter((c) => c.emailVerificationStatus === "accept_all").length;
+    const risky = allContacts.filter((c) => c.emailVerificationStatus === "risky").length;
+    const invalid = allContacts.filter((c) => c.emailVerificationStatus === "invalid").length;
+    const unknown = allContacts.filter((c) => !c.emailVerificationStatus).length;
+    const verifiedPct = total === 0 ? 0 : Math.round(((total - unknown) / total) * 100);
+    return { type: "email_health", title: w.title, total, valid, acceptAll, risky, invalid, unknown, verifiedPct };
   }
   return { type: w.type, title: w.title, value: null };
 }

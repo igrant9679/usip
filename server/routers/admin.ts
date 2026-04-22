@@ -80,6 +80,7 @@ export const settingsRouter = router({
         sessionTimeoutMin: z.number().int().min(15).max(60 * 24 * 7).optional(),
         ipAllowlist: z.array(z.string()).optional(),
         enforce2fa: z.boolean().optional(),
+        blockInvalidEmailsFromSequences: z.boolean().optional(),
         notifyPolicy: z
           .record(
             z.string(),

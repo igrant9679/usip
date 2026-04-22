@@ -957,6 +957,7 @@ export const workspaceSettings = mysqlTable("workspace_settings", {
   ipAllowlist: json("ipAllowlist"),
   enforce2fa: boolean("enforce2fa").default(false).notNull(),
   notifyPolicy: json("notifyPolicy"),
+  blockInvalidEmailsFromSequences: boolean("blockInvalidEmailsFromSequences").default(false).notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
 export type WorkspaceSettings = typeof workspaceSettings.$inferSelect;

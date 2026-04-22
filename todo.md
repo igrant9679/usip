@@ -483,3 +483,24 @@
 - [x] Contact detail: verification status badge next to email field
 - [x] Contact detail: inline "Re-verify" button that calls verifySingle and refreshes status
 - [x] Contact detail: last verified timestamp shown as tooltip or sub-text
+
+## 32. Email Verification — Contact List Filter
+- [x] Add verification status filter dropdown to Contacts page header (options: All, Valid, Accept-All, Risky, Invalid, Not Verified)
+- [x] Filter applies client-side to the already-loaded contact list (no extra query needed)
+- [x] Filter state persists across search changes (both filters active simultaneously)
+- [x] Active filter shown as a dismissible badge next to the dropdown
+- [x] Contact count shown in header updates to reflect filtered result count
+
+## 33. Email Health Dashboard Widget
+- [x] Backend: add `emailHealth` widget resolver in the dashboard widget system — returns { total, valid, acceptAll, risky, invalid, unknown, verifiedPct }
+- [x] Frontend: new EmailHealthWidget card showing a mini donut/bar breakdown + key stats (% verified, # invalid to fix)
+- [x] Widget available in the "Add Widget" dialog under a new "Email" category
+- [x] Widget renders correctly at all dashboard grid sizes
+
+## 34. Sequence Enrollment Guard — Admin Toggle
+- [x] Backend: add `blockInvalidEmailsFromSequences` boolean setting to workspace_settings table (default: false)
+- [x] tRPC: settings.getEmailGuardSetting — return current value
+- [x] tRPC: settings.setEmailGuardSetting — admin-only, update the setting
+- [x] Guard: in sequences.enroll procedure, if setting is true, reject contacts with emailVerificationStatus = 'invalid' and return a typed error listing the blocked contacts
+- [x] Frontend: Settings → Sequences section — toggle card "Block invalid emails from sequence enrollment" with description and current state
+- [x] Frontend: when enrollment is blocked, show a clear error toast listing how many contacts were blocked and why

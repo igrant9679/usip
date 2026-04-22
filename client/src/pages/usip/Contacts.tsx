@@ -18,8 +18,21 @@ import {
   AlertCircle,
   Loader2,
   X,
+  Filter,
 } from "lucide-react";
 import { toast } from "sonner";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+
+type VerifFilter = "all" | "valid" | "accept_all" | "risky" | "invalid" | "unknown";
+
+const VERIF_FILTER_OPTIONS: { value: VerifFilter; label: string }[] = [
+  { value: "all", label: "All statuses" },
+  { value: "valid", label: "Valid" },
+  { value: "accept_all", label: "Accept-All" },
+  { value: "risky", label: "Risky" },
+  { value: "invalid", label: "Invalid" },
+  { value: "unknown", label: "Not verified" },
+];
 
 /* ─── Bulk Verify Modal ─────────────────────────────────────────────────── */
 function BulkVerifyModal({
@@ -213,9 +226,16 @@ export default function Contacts() {
   const [drawer, setDrawer] = useState<{ id: number; name: string; subtitle: string } | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [bulkVerifyOpen, setBulkVerifyOpen] = useState(false);
+  const [verifFilter, setVerifFilter] = useState<VerifFilter>("all");
 
   const utils = trpc.useUtils();
-  const { data } = trpc.contacts.list.useQuery({ search });
+  const { data: rawContacts } = trpc.contacts.list.useQuery({ search });
+  // Apply verification status filter client-side
+  const data = verifFilter === "all"
+    ? rawContacts
+    : verifFilter === "unknown"
+      ? (rawContacts ?? []).filter((c) => !c.emailVerificationStatus)
+      : (rawContacts ?? []).filter((c) => c.emailVerificationStatus === verifFilter);
   const { data: accounts } = trpc.accounts.list.useQuery();
 
   const create = trpc.contacts.create.useMutation({
@@ -254,13 +274,44 @@ export default function Contacts() {
 
   return (
     <Shell title="Contacts">
-      <PageHeader title="Contacts" description="People at your accounts.">
+      <PageHeader title="Contacts" description={`${(data ?? []).length} contact${(data ?? []).length !== 1 ? "s" : ""}${verifFilter !== "all" ? " · filtered" : " · all"}`}>
         <Input
           placeholder="Search…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           className="w-56"
         />
+        {/* Verification status filter */}
+        <div className="flex items-center gap-1.5">
+          <Select
+            value={verifFilter}
+            onValueChange={(v) => {
+              setVerifFilter(v as VerifFilter);
+              setSelectedIds(new Set());
+            }}
+          >
+            <SelectTrigger className="w-40 h-9 text-xs gap-1">
+              <Filter className="h-3 w-3 text-muted-foreground shrink-0" />
+              <SelectValue placeholder="Filter status" />
+            </SelectTrigger>
+            <SelectContent>
+              {VERIF_FILTER_OPTIONS.map((o) => (
+                <SelectItem key={o.value} value={o.value} className="text-xs">
+                  {o.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {verifFilter !== "all" && (
+            <button
+              onClick={() => { setVerifFilter("all"); setSelectedIds(new Set()); }}
+              className="flex items-center gap-1 rounded-full border bg-primary/10 text-primary px-2 py-0.5 text-xs font-medium hover:bg-primary/20 transition-colors"
+            >
+              {VERIF_FILTER_OPTIONS.find((o) => o.value === verifFilter)?.label}
+              <X className="h-3 w-3" />
+            </button>
+          )}
+        </div>
         {someSelected && (
           <Button
             variant="outline"

@@ -1,7 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod";
-import { contacts, emailDrafts, enrollments, leads, sequenceEdges, sequenceNodes, sequences } from "../../drizzle/schema";
+import { contacts, emailDrafts, enrollments, leads, sequenceEdges, sequenceNodes, sequences, workspaceSettings } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
 import { getDb } from "../db";
 import { invokeLLM } from "../_core/llm";
@@ -133,6 +133,16 @@ export const sequencesRouter = router({
     if (!input.contactId && !input.leadId) throw new TRPCError({ code: "BAD_REQUEST", message: "contactId or leadId required" });
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    // Enrollment guard: block contacts with invalid email if workspace setting is enabled
+    if (input.contactId) {
+      const [settings] = await db.select().from(workspaceSettings).where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
+      if (settings?.blockInvalidEmailsFromSequences) {
+        const [contact] = await db.select().from(contacts).where(and(eq(contacts.id, input.contactId), eq(contacts.workspaceId, ctx.workspace.id)));
+        if (contact?.emailVerificationStatus === "invalid") {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "This contact has an invalid email address and is blocked from sequence enrollment. Verify or update their email to proceed." });
+        }
+      }
+    }
     await db.insert(enrollments).values({
       workspaceId: ctx.workspace.id,
       sequenceId: input.sequenceId,
