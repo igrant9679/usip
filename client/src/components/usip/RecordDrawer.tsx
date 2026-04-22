@@ -2,7 +2,7 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { trpc } from "@/lib/trpc";
 import { fmtDate, StatusPill } from "./Common";
-import { Brain, ChevronDown, CheckCircle2, Clock, Loader2, Paperclip, Phone, Calendar, MessageSquare, RefreshCw, Trash2, Users, XCircle, ShieldCheck } from "lucide-react";
+import { Brain, ChevronDown, CheckCircle2, Clock, Loader2, Paperclip, Phone, Calendar, MessageSquare, RefreshCw, Trash2, Users, XCircle, ShieldCheck, FileText, Download } from "lucide-react";
 import { EmailVerificationBadge } from "./EmailVerificationBadge";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
@@ -276,6 +276,95 @@ function OppIntelligencePanel({ opportunityId }: { opportunityId: number }) {
   );
 }
 
+/* ─── Account Brief Panel ──────────────────────────────────────────────── */
+function AccountBriefPanel({ accountId }: { accountId: number }) {
+  const utils = trpc.useUtils();
+  const { data: brief, isLoading } = trpc.accountBriefs.getLatest.useQuery({ accountId });
+  const generate = trpc.accountBriefs.generate.useMutation({
+    onSuccess: () => {
+      utils.accountBriefs.getLatest.invalidate({ accountId });
+      toast.success("Account brief generated");
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const exportPdf = trpc.accountBriefs.exportPdf.useMutation({
+    onSuccess: (data) => {
+      window.open(data.url, "_blank");
+      toast.success("PDF ready");
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center gap-2 text-sm text-muted-foreground py-6">
+        <Loader2 className="size-3 animate-spin" /> Loading…
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-sm font-semibold">AI Account Brief</p>
+          {brief && (
+            <p className="text-xs text-muted-foreground">
+              Generated {new Date(brief.generatedAt).toLocaleDateString()}
+            </p>
+          )}
+        </div>
+        <div className="flex gap-2">
+          {brief && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => exportPdf.mutate({ briefId: brief.id })}
+              disabled={exportPdf.isPending}
+            >
+              {exportPdf.isPending ? <Loader2 className="size-3 animate-spin mr-1" /> : <Download className="size-3 mr-1" />}
+              PDF
+            </Button>
+          )}
+          <Button
+            size="sm"
+            onClick={() => generate.mutate({ accountId })}
+            disabled={generate.isPending}
+          >
+            {generate.isPending ? <Loader2 className="size-3 animate-spin mr-1" /> : <Brain className="size-3 mr-1" />}
+            {brief ? "Regenerate" : "Generate Brief"}
+          </Button>
+        </div>
+      </div>
+
+      {!brief && !generate.isPending && (
+        <div className="rounded-lg border bg-muted/30 p-6 text-center">
+          <FileText className="size-8 text-muted-foreground/30 mx-auto mb-2" />
+          <p className="text-sm text-muted-foreground">No brief generated yet.</p>
+          <p className="text-xs text-muted-foreground/70 mt-1">
+            Click "Generate Brief" to create an AI-powered 300-word executive account summary.
+          </p>
+        </div>
+      )}
+
+      {generate.isPending && (
+        <div className="rounded-lg border bg-muted/30 p-6 text-center">
+          <Loader2 className="size-6 text-[#14B89A] animate-spin mx-auto mb-2" />
+          <p className="text-sm text-muted-foreground">Generating brief…</p>
+        </div>
+      )}
+
+      {brief && !generate.isPending && (
+        <div className="rounded-lg border bg-card p-4">
+          <div className="prose prose-sm dark:prose-invert max-w-none text-sm leading-relaxed whitespace-pre-wrap">
+            {brief.content}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ─── Contact Email Verify Panel ───────────────────────────────────────── */
 function ContactVerifyPanel({
   contact,
@@ -403,7 +492,7 @@ export function RecordDrawer({
   subtitle?: string;
   headerExtras?: React.ReactNode;
 }) {
-  const [tab, setTab] = useState<"timeline" | "call" | "meeting" | "note" | "files" | "score" | "intelligence" | "verify">("timeline");
+  const [tab, setTab] = useState<"timeline" | "call" | "meeting" | "note" | "files" | "score" | "intelligence" | "verify" | "brief">("timeline");
   const contactData = trpc.contacts.get.useQuery(
     { id: relatedId ?? 0 },
     { enabled: relatedType === "contact" && !!relatedId },
@@ -475,6 +564,7 @@ export function RecordDrawer({
             ...(relatedType === "lead" ? [{ k: "score", label: "Score" }] : []),
             ...(relatedType === "opportunity" ? [{ k: "intelligence", label: "AI Intel" }] : []),
             ...(relatedType === "contact" ? [{ k: "verify", label: "Email Verify" }] : []),
+            ...(relatedType === "account" ? [{ k: "brief", label: "AI Brief" }] : []),
           ].map((t) => (
             <button
               key={t.k}
@@ -600,6 +690,10 @@ export function RecordDrawer({
 
           {tab === "intelligence" && relatedType === "opportunity" && relatedId && (
             <OppIntelligencePanel opportunityId={relatedId} />
+          )}
+
+          {tab === "brief" && relatedType === "account" && relatedId && (
+            <AccountBriefPanel accountId={relatedId} />
           )}
 
           {tab === "verify" && relatedType === "contact" && (

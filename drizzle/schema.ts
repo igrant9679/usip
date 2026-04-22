@@ -356,6 +356,8 @@ export const sequences = mysqlTable(
     description: text("description"),
     status: mysqlEnum("status", ["draft", "active", "paused", "archived"]).default("draft").notNull(),
     steps: json("steps").notNull(), // [{type:'email'|'wait'|'task', ...}]
+    enrollmentTrigger: json("enrollmentTrigger"), // [{type: 'status_change'|'tag_applied'|'score_threshold', value: string}]
+    dailyCap: int("dailyCap"), // max emails per day for this sequence (null = unlimited)
     ownerUserId: int("ownerUserId"),
     enrolledCount: int("enrolledCount").default(0).notNull(),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
@@ -392,9 +394,11 @@ export const emailDrafts = mysqlTable(
     toEmail: varchar("toEmail", { length: 320 }),
     sequenceId: int("sequenceId"),
     enrollmentId: int("enrollmentId"),
-    status: mysqlEnum("status", ["pending_review", "approved", "rejected", "sent"]).default("pending_review").notNull(),
+    pipelineJobId: int("pipelineJobId"),
+    status: mysqlEnum("status", ["pending_review", "approved", "rejected", "sent", "ai_pending_review"]).default("pending_review").notNull(),
     aiGenerated: boolean("aiGenerated").default(true).notNull(),
     aiPrompt: text("aiPrompt"),
+    tone: varchar("tone", { length: 64 }), // 'formal' | 'casual' | 'value_prop' | etc.
     createdByUserId: int("createdByUserId"),
     reviewedByUserId: int("reviewedByUserId"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
@@ -1580,3 +1584,86 @@ export const audienceSegments = mysqlTable(
   }),
 );
 export type AudienceSegment = typeof audienceSegments.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   AI Research-to-Email Pipeline Jobs (MKT-014..MKT-017)
+   ────────────────────────────────────────────────────────────────────────── */
+export const aiPipelineJobs = mysqlTable(
+  "ai_pipeline_jobs",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    contactId: int("contactId"),
+    leadId: int("leadId"),
+    status: mysqlEnum("status", ["queued", "running", "done", "failed"]).default("queued").notNull(),
+    orgResearch: text("orgResearch"),
+    contactResearch: text("contactResearch"),
+    fitAnalysis: json("fitAnalysis"), // {fit_score, pain_points, recommended_products, objection_risks}
+    draftsGenerated: int("draftsGenerated").default(0).notNull(),
+    errorMessage: text("errorMessage"),
+    triggeredByUserId: int("triggeredByUserId"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    completedAt: timestamp("completedAt"),
+  },
+  (t) => ({
+    byWs: index("ix_apj_ws").on(t.workspaceId, t.status),
+    byContact: index("ix_apj_contact").on(t.contactId),
+  }),
+);
+export type AiPipelineJob = typeof aiPipelineJobs.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Pipeline Health Alerts (CRMA-012)
+   ────────────────────────────────────────────────────────────────────────── */
+export const pipelineAlerts = mysqlTable(
+  "pipeline_alerts",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    opportunityId: int("opportunityId").notNull(),
+    alertType: mysqlEnum("alertType", [
+      "no_activity",
+      "closing_soon_regression",
+      "amount_change",
+      "no_champion",
+    ]).notNull(),
+    details: json("details"), // {daysSinceActivity, closeDate, previousAmount, currentAmount, etc.}
+    dismissedAt: timestamp("dismissedAt"),
+    dismissedByUserId: int("dismissedByUserId"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    byWs: index("ix_pa_ws").on(t.workspaceId),
+    byOpp: index("ix_pa_opp").on(t.opportunityId),
+  }),
+);
+export type PipelineAlert = typeof pipelineAlerts.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   AI Account Briefs (CRMA-010)
+   ────────────────────────────────────────────────────────────────────────── */
+export const accountBriefs = mysqlTable(
+  "account_briefs",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    accountId: int("accountId").notNull(),
+    content: text("content").notNull(), // 300-word markdown narrative
+    pdfUrl: text("pdfUrl"), // S3 URL after export
+    generatedAt: timestamp("generatedAt").defaultNow().notNull(),
+    generatedByUserId: int("generatedByUserId"),
+  },
+  (t) => ({
+    byWs: index("ix_ab_ws").on(t.workspaceId),
+    byAccount: index("ix_ab_account").on(t.accountId),
+  }),
+);
+export type AccountBrief = typeof accountBriefs.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Sequence Execution — add enrollmentTrigger + dailyCap to sequences
+   (new columns added via ALTER TABLE in migration)
+   ────────────────────────────────────────────────────────────────────────── */
+// Note: sequences table gets enrollmentTrigger and dailyCap via migration
+// enrollmentTrigger: json — [{type: 'status_change'|'tag_applied'|'score_threshold', value: string}]
+// dailyCap: int — max emails per day for this sequence (null = unlimited)

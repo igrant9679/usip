@@ -568,3 +568,40 @@
 - [x] Frontend: Opportunity detail drawer — "AI Insights" tab with Win Probability gauge, confidence, reasoning, full Next Best Actions list
 - [x] Frontend: "Refresh AI" button in opportunity detail with loading spinner
 - [x] Frontend: Pipeline page header — "Refresh All AI" button for bulk refresh
+
+## 41. AI Research-to-Email Draft Pipeline (MKT-014 to MKT-017)
+- [x] DB schema: ai_pipeline_jobs table
+- [x] DB schema: ensure emailDrafts has pipelineJobId, aiGenerated bool, tone varchar columns
+- [x] Migration: generate + apply
+- [x] Backend: aiPipeline.runForContact - 5-stage pipeline
+- [x] Backend: aiPipeline.runBulk - accept contactIds[], run pipeline for each
+- [x] Backend: aiPipeline.getQueueStats - count drafts by status
+- [x] Backend: aiPipeline.approveDraft - set status=approved with optional edits
+- [x] Backend: aiPipeline.rejectDraft - set status=rejected
+- [x] Backend: aiPipeline.regenerateDraft - re-run Stage 4 with revision preset
+- [x] Frontend: /ai-pipeline page - trigger panel + pipeline status cards + Draft Review Queue
+- [x] Frontend: Draft Review Queue - paginated list, bulk approve, individual draft editor, Research Context accordion
+- [x] Sidebar nav: AI Draft Queue under Engage group
+
+## 42. Sequence Execution Engine (MKT-007, MKT-008)
+- [ ] Backend: 5-min cron - process active enrollments with next_step_due <= now
+- [ ] Backend: auto-enrollment triggers - on contact status change, tag applied, or score threshold crossed
+- [ ] Backend: per-sequence daily cap + per-user daily email cap enforcement
+- [ ] Backend: auto-pause on reply - when reply_detected, pause enrollment + create review task
+- [ ] Frontend: Sequence detail stats - enrollment counts by status, per-step performance metrics
+
+## 43. Pipeline Health Alerts (CRMA-012) + AI Account Brief (CRMA-010)
+- [x] DB schema: pipeline_alerts table
+- [x] DB schema: account_briefs table
+- [x] Migration: generate + apply
+- [x] Backend: pipelineAlerts.scan - scan open opps for 4 at-risk conditions
+- [x] Backend: pipelineAlerts.list - return active alerts with opportunity context
+- [x] Backend: pipelineAlerts.dismiss - mark single alert dismissed
+- [x] Backend: pipelineAlerts.dismissAllForOpp - dismiss all alerts for an opportunity
+- [x] Backend: pipelineAlerts.summary - alert count by type
+- [x] Backend: accountBriefs.generate - LLM 300-word narrative
+- [x] Backend: accountBriefs.getLatest - return latest brief for account
+- [x] Backend: accountBriefs.exportPdf - generate PDF, return storage URL
+- [x] Frontend: /pipeline-alerts page - summary cards + filter bar + alert list with dismiss
+- [x] Frontend: Account detail drawer - AI Brief tab with generate/refresh/export PDF buttons
+- [x] Sidebar nav: Pipeline Alerts under Acquire group

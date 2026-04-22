@@ -42,6 +42,8 @@ import ImportContacts from "@/pages/usip/ImportContacts";
 import MyLinkedIn from "@/pages/usip/MyLinkedIn";
 import DataHealth from "@/pages/usip/DataHealth";
 import Segments from "@/pages/usip/Segments";
+import AIPipelineQueue from "@/pages/usip/AIPipelineQueue";
+import PipelineAlerts from "@/pages/usip/PipelineAlerts";
 import { Loader2 } from "lucide-react";
 import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
@@ -98,6 +100,8 @@ function Router() {
       <Route path="/lead-scoring"><AuthGate><LeadScoring /></AuthGate></Route>
       <Route path="/lead-routing"><AuthGate><LeadRouting /></AuthGate></Route>
       <Route path="/research-pipeline"><AuthGate><ResearchPipeline /></AuthGate></Route>
+      <Route path="/ai-pipeline"><AuthGate><AIPipelineQueue /></AuthGate></Route>
+      <Route path="/pipeline-alerts"><AuthGate><PipelineAlerts /></AuthGate></Route>
       <Route path="/quota"><AuthGate><Quota /></AuthGate></Route>
       <Route path="/custom-fields"><AuthGate><CustomFields /></AuthGate></Route>
       <Route path="/email-builder"><AuthGate><EmailBuilder /></AuthGate></Route>

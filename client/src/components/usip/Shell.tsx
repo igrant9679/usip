@@ -43,6 +43,7 @@ import {
   Linkedin,
   BarChart3,
   Filter,
+  AlertTriangle,
 } from "lucide-react";
 import { ReactNode, useEffect, useState } from "react";
 import { Link, useLocation } from "wouter";
@@ -67,6 +68,7 @@ const NAV: NavGroup[] = [
       { href: "/data-health", label: "Data Health", icon: BarChart3 },
       { href: "/accounts", label: "Accounts", icon: Building2 },
       { href: "/pipeline", label: "Pipeline", icon: KanbanSquare },
+      { href: "/pipeline-alerts", label: "Pipeline Alerts", icon: AlertTriangle },
     ],
   },
   {
@@ -78,6 +80,7 @@ const NAV: NavGroup[] = [
       { href: "/email-builder", label: "Email Builder", icon: LayoutTemplate },
       { href: "/snippets", label: "Snippet Library", icon: BookOpen },
       { href: "/research-pipeline", label: "AI Research Pipeline", icon: Sparkles },
+      { href: "/ai-pipeline", label: "AI Draft Queue", icon: Sparkles },
       { href: "/social", label: "Social", icon: Share2 },
       { href: "/campaigns", label: "Campaigns", icon: Megaphone },
     ],
