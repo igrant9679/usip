@@ -204,10 +204,23 @@ export const leadsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      const r = await db.insert(leads).values({ ...input, workspaceId: ctx.workspace.id, ownerUserId: ctx.user.id, status: "new" });
+      // Apply lead-routing rules first; fall back to creator as owner.
+      const { routeLeadOwner } = await import("./leadScoring");
+      const routedOwner = await routeLeadOwner(ctx.workspace.id, {
+        title: input.title ?? null,
+        company: input.company ?? null,
+        source: input.source ?? null,
+        score: 0,
+        industry: null,
+        country: null,
+        state: null,
+        city: null,
+      });
+      const ownerUserId = routedOwner ?? ctx.user.id;
+      const r = await db.insert(leads).values({ ...input, workspaceId: ctx.workspace.id, ownerUserId, status: "new" });
       const id = Number((r as any)[0]?.insertId ?? 0);
-      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "create", entityType: "lead", entityId: id, after: input });
-      return { id };
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "create", entityType: "lead", entityId: id, after: { ...input, ownerUserId, routed: routedOwner != null } });
+      return { id, ownerUserId, routed: routedOwner != null };
     }),
 
   update: repProcedure.input(z.object({ id: z.number(), patch: z.record(z.string(), z.any()) })).mutation(async ({ ctx, input }) => {

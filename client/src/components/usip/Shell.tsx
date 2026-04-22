@@ -85,12 +85,14 @@ const NAV: NavGroup[] = [
       { href: "/products", label: "Products", icon: Package },
       { href: "/quotes", label: "Quotes", icon: FileText },
       { href: "/territories", label: "Territories", icon: Network },
+      { href: "/lead-routing", label: "Lead Routing", icon: Sparkles },
     ],
   },
   {
     label: "Admin",
     items: [
       { href: "/team", label: "Team", icon: Users },
+      { href: "/lead-scoring", label: "Lead Scoring", icon: Target },
       { href: "/audit", label: "Audit Log", icon: Database },
       { href: "/scim", label: "SCIM", icon: Zap },
       { href: "/settings", label: "Settings", icon: Settings },

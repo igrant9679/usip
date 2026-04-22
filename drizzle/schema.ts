@@ -845,3 +845,88 @@ export const scimEvents = mysqlTable(
   },
   (t) => ({ byProv: index("ix_scim_prov").on(t.providerId, t.receivedAt) }),
 );
+
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Tier-1: Lead Scoring Engine + Lead Routing (Module 9 + CRM-010)
+   ────────────────────────────────────────────────────────────────────────── */
+
+export const leadScoreConfig = mysqlTable(
+  "lead_score_config",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull().unique(),
+    // Firmographic weights (sum target = 40)
+    firmoOrgTypeWeight: int("firmoOrgTypeWeight").default(15).notNull(),
+    firmoTitleWeight: int("firmoTitleWeight").default(15).notNull(),
+    firmoCompletenessWeight: int("firmoCompletenessWeight").default(10).notNull(),
+    // Behavioral (sum target = 30)
+    behavOpenPoints: int("behavOpenPoints").default(5).notNull(),
+    behavOpenMax: int("behavOpenMax").default(15).notNull(),
+    behavClickPoints: int("behavClickPoints").default(10).notNull(),
+    behavClickMax: int("behavClickMax").default(20).notNull(),
+    behavReplyPoints: int("behavReplyPoints").default(25).notNull(),
+    behavStepPoints: int("behavStepPoints").default(3).notNull(),
+    behavBouncePenalty: int("behavBouncePenalty").default(-10).notNull(),
+    behavUnsubPenalty: int("behavUnsubPenalty").default(-15).notNull(),
+    behavDecayPctPer30d: int("behavDecayPctPer30d").default(10).notNull(),
+    // AI-fit (max 30)
+    aiFitMax: int("aiFitMax").default(30).notNull(),
+    // Tiers
+    tierWarmMin: int("tierWarmMin").default(31).notNull(),
+    tierHotMin: int("tierHotMin").default(61).notNull(),
+    tierSalesReadyMin: int("tierSalesReadyMin").default(81).notNull(),
+    notifyOnSalesReady: boolean("notifyOnSalesReady").default(true).notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+);
+export type LeadScoreConfig = typeof leadScoreConfig.$inferSelect;
+
+export const leadScoreHistory = mysqlTable(
+  "lead_score_history",
+  {
+    id: bigint("id", { mode: "number" }).autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    leadId: int("leadId").notNull(),
+    firmographic: int("firmographic").notNull(),
+    behavioral: int("behavioral").notNull(),
+    aiFit: int("aiFit").notNull(),
+    total: int("total").notNull(),
+    tier: varchar("tier", { length: 16 }).notNull(),
+    aiFitPayload: json("aiFitPayload"),
+    computedAt: timestamp("computedAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    byLead: index("ix_lsh_lead").on(t.leadId, t.computedAt),
+    byWs: index("ix_lsh_ws").on(t.workspaceId, t.computedAt),
+  }),
+);
+export type LeadScoreHistoryRow = typeof leadScoreHistory.$inferSelect;
+
+export const leadRoutingRules = mysqlTable(
+  "lead_routing_rules",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    name: varchar("name", { length: 160 }).notNull(),
+    priority: int("priority").default(100).notNull(), // lower = higher priority
+    enabled: boolean("enabled").default(true).notNull(),
+    // Match conditions [{field, op, value}] evaluated by evalConditions
+    conditions: json("conditions").notNull(),
+    // Strategy: round_robin | geography | industry | direct
+    strategy: mysqlEnum("strategy", ["round_robin", "geography", "industry", "direct"]).notNull(),
+    // For round_robin: list of userIds; for direct: [userId]; for geography/industry: not used
+    targetUserIds: json("targetUserIds"),
+    // Round-robin pointer
+    rrCursor: int("rrCursor").default(0).notNull(),
+    matchCount: int("matchCount").default(0).notNull(),
+    lastMatchedAt: timestamp("lastMatchedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    byWs: index("ix_lrr_ws").on(t.workspaceId, t.priority),
+  }),
+);
+export type LeadRoutingRule = typeof leadRoutingRules.$inferSelect;

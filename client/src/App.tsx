@@ -28,6 +28,8 @@ import Tasks from "@/pages/usip/Tasks";
 import Team from "@/pages/usip/Team";
 import Territories from "@/pages/usip/Territories";
 import Workflows from "@/pages/usip/Workflows";
+import LeadScoring from "@/pages/usip/LeadScoring";
+import LeadRouting from "@/pages/usip/LeadRouting";
 import { Loader2 } from "lucide-react";
 import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
@@ -80,6 +82,8 @@ function Router() {
       <Route path="/team"><AuthGate><Team /></AuthGate></Route>
       <Route path="/audit"><AuthGate><Audit /></AuthGate></Route>
       <Route path="/scim"><AuthGate><SCIM /></AuthGate></Route>
+      <Route path="/lead-scoring"><AuthGate><LeadScoring /></AuthGate></Route>
+      <Route path="/lead-routing"><AuthGate><LeadRouting /></AuthGate></Route>
       <Route path="/settings"><AuthGate><Settings /></AuthGate></Route>
       <Route path="/404"><NotFound /></Route>
       <Route><NotFound /></Route>

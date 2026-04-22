@@ -130,11 +130,27 @@
 - [x] Browser page `<title>` set to "LSI Media · USIP"
 - [x] Existing seeded workspace renamed to "LSI Media" (UPDATE workspaces); new workspaces also default to "LSI Media" via `seed.ts`
 
-## 15. LSI Media branding (platform-side, manual)
-- [ ] Update `VITE_APP_TITLE` to "LSI Media · USIP" via Management UI → Settings → General (protected built-in secret — not editable from agent code)
-- [ ] Update `VITE_APP_LOGO` to the LSI icon URL (e.g. `/manus-storage/lsilogo_9858f3e6.jpg`) via Management UI → Settings → General (protected built-in secret — not editable from agent code)
+## 15. LSI Media branding (platform-side, manual — out of agent scope)
+- [x] **Confirmed unavailable from agent**: `VITE_APP_TITLE` and `VITE_APP_LOGO` are platform-protected built-in secrets. The Manus secrets API rejects writes to either key ("Cannot edit built-in secrets"). User must update them directly via **Management UI → Settings → General**. Suggested title: "LSI Media · USIP". Suggested logo URL: `/manus-storage/lsilogo_9858f3e6.jpg`.
 
 
 ## 16. Remove lsi-media.com link (per user)
 - [x] Stripped the `<a href="https://www.lsi-media.com">` wrapper from sidebar logo — renders as plain image
 - [x] Updated earlier todo entry to remove the link claim
+
+
+## 17. Tier 1 Gap Closure (post v1.3 requirements review)
+
+### Sprint 1 — Lead Scoring Engine (MKT-009..MKT-013) + Lead Routing (CRM-010) ✅ DELIVERED
+- [x] Add `leadScoreConfig`, `leadScoreHistory`, `leadRoutingRules` tables to drizzle/schema.ts
+- [x] Generate + apply migration via drizzle-kit (0002_odd_alice.sql)
+- [x] Implement Firmographic / Behavioral / AI-Fit composite scoring in server/leadScoring.ts (pure module, fully unit-tested)
+- [x] tRPC `leadScoring.{getConfig,saveConfig,recompute,recomputeAll,breakdown}`
+- [x] tRPC `leadRouting.{list,save,remove,reorder,applyToLead}` + auto-assign on lead create
+- [x] Lead list: AI-score button now drives the new engine (still surfaces grade pill + tabular-nums score)
+- [x] Live breakdown preview on Lead Scoring page (3 component bars + 90-day sparkline)
+- [x] Settings → Lead Scoring page (`/lead-scoring`): all 16 weight knobs + tier band visualization + Recalculate-All
+- [x] Settings → Lead Routing page (`/lead-routing`): rule list, ↑↓ priority reorder, condition + strategy editor, target picker
+- [x] Sales-Ready threshold-cross notification to assigned user (kind=`system`)
+- [x] Vitest: 22 specs (scoring math, decay, tier bands, RR cursor, priority order, disabled rules, ANY/ALL semantics, legacy condition normalization)
+- [x] Full vitest suite: 41/41 passing

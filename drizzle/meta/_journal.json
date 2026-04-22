@@ -15,6 +15,13 @@
       "when": 1776866987394,
       "tag": "0001_mushy_hitman",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1776872621056,
+      "tag": "0002_odd_alice",
+      "breakpoints": true
     }
   ]
 }

@@ -11,13 +11,29 @@ import { toast } from "sonner";
 
 const GRADE_TONE: Record<string, string> = { A: "bg-emerald-100 text-emerald-800", B: "bg-blue-100 text-blue-800", C: "bg-amber-100 text-amber-800", D: "bg-rose-100 text-rose-800" };
 
+const TIER_TONE: Record<string, { label: string; cls: string }> = {
+  cold: { label: "Cold", cls: "bg-slate-200 text-slate-700" },
+  warm: { label: "Warm", cls: "bg-yellow-100 text-yellow-800" },
+  hot: { label: "Hot", cls: "bg-orange-100 text-orange-800" },
+  sales_ready: { label: "Sales Ready", cls: "bg-emerald-100 text-emerald-800" },
+};
+function tierFromScore(s: number | null | undefined): keyof typeof TIER_TONE {
+  const n = s ?? 0;
+  if (n >= 81) return "sales_ready";
+  if (n >= 61) return "hot";
+  if (n >= 31) return "warm";
+  return "cold";
+}
+
 export default function Leads() {
   const [search, setSearch] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
   const [drawer, setDrawer] = useState<{ id: number; name: string; subtitle: string } | null>(null);
   const utils = trpc.useUtils();
   const { data, isLoading } = trpc.leads.list.useQuery({ search });
-  const rescore = trpc.leads.rescore.useMutation({ onSuccess: () => utils.leads.list.invalidate() });
+  const rescore = trpc.leadScoring.recompute.useMutation({
+    onSuccess: () => { utils.leads.list.invalidate(); toast.success("Re-scored"); },
+  });
   const convert = trpc.leads.convert.useMutation({
     onSuccess: () => { utils.leads.list.invalidate(); utils.workspace.summary.invalidate(); toast.success("Converted to account + contact + opportunity"); },
   });
@@ -55,10 +71,11 @@ export default function Leads() {
                     <td className="px-3 py-2">
                       <span className="font-mono tabular-nums">{l.score}</span>
                       <span className={`ml-2 inline-block px-1.5 rounded text-xs ${GRADE_TONE[l.grade ?? "C"] ?? ""}`}>{l.grade ?? "—"}</span>
+                      {(() => { const t = tierFromScore(l.score); return <span className={`ml-1 inline-block px-1.5 rounded text-xs ${TIER_TONE[t].cls}`}>{TIER_TONE[t].label}</span>; })()}
                     </td>
                     <td className="px-3 py-2 text-muted-foreground">{l.status}</td>
                     <td className="px-3 py-2 text-right space-x-1" onClick={(e) => e.stopPropagation()}>
-                      <Button size="sm" variant="ghost" onClick={() => rescore.mutate({ id: l.id })} disabled={rescore.isPending}><Sparkles className="size-3.5" /> AI score</Button>
+                      <Button size="sm" variant="ghost" onClick={() => rescore.mutate({ leadId: l.id })} disabled={rescore.isPending}><Sparkles className="size-3.5" /> AI score</Button>
                       {l.status !== "converted" && (
                         <Button size="sm" variant="outline" className="bg-card" onClick={() => convert.mutate({ id: l.id, createOpportunity: true })} disabled={convert.isPending}><UserCheck className="size-3.5" /> Convert</Button>
                       )}

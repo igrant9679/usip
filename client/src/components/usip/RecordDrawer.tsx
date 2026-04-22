@@ -2,7 +2,7 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { trpc } from "@/lib/trpc";
 import { fmtDate, StatusPill } from "./Common";
-import { Loader2, Paperclip, Phone, Calendar, MessageSquare, Trash2 } from "lucide-react";
+import { ChevronDown, Loader2, Paperclip, Phone, Calendar, MessageSquare, RefreshCw, Trash2 } from "lucide-react";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -17,6 +17,67 @@ const DISPOSITIONS = [
   ["callback_requested", "Callback requested"],
   ["not_interested", "Not interested"],
 ] as const;
+
+function LeadScorePanel({ leadId }: { leadId: number }) {
+  const utils = trpc.useUtils();
+  const { data: bd, isLoading } = trpc.leadScoring.breakdown.useQuery({ leadId });
+  const recompute = trpc.leadScoring.recompute.useMutation({ onSuccess: () => { utils.leadScoring.breakdown.invalidate({ leadId }); utils.leads.list.invalidate(); toast.success("Re-scored"); } });
+  const [openSec, setOpenSec] = useState<"firmo" | "behav" | "ai" | null>("firmo");
+  if (isLoading || !bd) return <div className="text-sm text-muted-foreground py-6 flex items-center gap-2"><Loader2 className="size-3 animate-spin" /> Loading score…</div>;
+  const tier = bd.tier as string;
+  const tierLabel = tier === "sales_ready" ? "Sales Ready" : tier.charAt(0).toUpperCase() + tier.slice(1);
+  const tierCls = tier === "sales_ready" ? "bg-emerald-100 text-emerald-800" : tier === "hot" ? "bg-orange-100 text-orange-800" : tier === "warm" ? "bg-yellow-100 text-yellow-800" : "bg-slate-200 text-slate-700";
+  const max = (bd.firmographic.max ?? 40) + (bd.behavioral.max ?? 30) + (bd.aiFit.max ?? 30);
+  const sparkW = 540, sparkH = 36;
+  const vals = (bd.history ?? []).map((h: any) => h.total);
+  const sparkPts = vals.length ? vals.map((v: number, i: number) => `${(i * sparkW) / Math.max(1, vals.length - 1)},${sparkH - (v / 100) * (sparkH - 4)}`).join(" ") : "";
+  return (
+    <div className="space-y-3">
+      <div className="rounded border bg-card p-3 flex items-center justify-between">
+        <div>
+          <div className="text-xs text-muted-foreground">Total score</div>
+          <div className="text-2xl font-mono tabular-nums">{bd.total}<span className="text-sm text-muted-foreground">/100</span> <span className={`text-xs ml-2 px-1.5 rounded ${tierCls}`}>{tierLabel}</span></div>
+          <div className="text-[11px] text-muted-foreground mt-1">Max possible: {max} pts · Grade {bd.grade ?? "—"}</div>
+        </div>
+        <Button size="sm" variant="outline" className="bg-card" onClick={() => recompute.mutate({ leadId })} disabled={recompute.isPending}>
+          <RefreshCw className={`size-3.5 ${recompute.isPending ? "animate-spin" : ""}`} /> Recompute
+        </Button>
+      </div>
+
+      <Accordion open={openSec === "firmo"} onToggle={() => setOpenSec(openSec === "firmo" ? null : "firmo")} title="Firmographic" value={bd.firmographic.value} max={bd.firmographic.max} reasons={bd.firmographic.reasons} />
+      <Accordion open={openSec === "behav"} onToggle={() => setOpenSec(openSec === "behav" ? null : "behav")} title="Behavioral" value={Math.max(0, bd.behavioral.value)} max={bd.behavioral.max} reasons={bd.behavioral.reasons} />
+      <Accordion open={openSec === "ai"} onToggle={() => setOpenSec(openSec === "ai" ? null : "ai")} title="AI Fit" value={bd.aiFit.value} max={bd.aiFit.max} reasons={[`Tier: ${tierLabel}`]} />
+
+      <div className="rounded border bg-card p-3">
+        <div className="text-xs font-semibold mb-1">90-day history</div>
+        {vals.length === 0 ? <div className="text-[11px] text-muted-foreground">No history yet — click Recompute to capture the first snapshot.</div> : (
+          <svg viewBox={`0 0 ${sparkW} ${sparkH}`} className="w-full h-9"><polyline points={sparkPts} fill="none" stroke="#16a34a" strokeWidth="1.5" /></svg>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Accordion({ open, onToggle, title, value, max, reasons }: { open: boolean; onToggle: () => void; title: string; value: number; max: number; reasons: string[] }) {
+  const pct = Math.max(0, Math.min(100, Math.round((value / Math.max(1, max)) * 100)));
+  return (
+    <div className="rounded border bg-card">
+      <button className="w-full flex items-center justify-between p-3 text-left" onClick={onToggle}>
+        <div className="flex items-center gap-2">
+          <ChevronDown className={`size-3 transition-transform ${open ? "" : "-rotate-90"}`} />
+          <span className="text-sm font-medium">{title}</span>
+        </div>
+        <div className="font-mono tabular-nums text-sm">{value}/{max}</div>
+      </button>
+      <div className="px-3"><div className="h-1.5 bg-muted rounded overflow-hidden"><div className="h-full bg-emerald-500" style={{ width: `${pct}%` }} /></div></div>
+      {open && (
+        <ul className="px-3 pt-2 pb-3 text-[11px] text-muted-foreground space-y-0.5">
+          {reasons.length === 0 ? <li>No contributing signals.</li> : reasons.slice(0, 8).map((r, i) => <li key={i}>• {r}</li>)}
+        </ul>
+      )}
+    </div>
+  );
+}
 
 export function RecordDrawer({
   open,
@@ -35,7 +96,7 @@ export function RecordDrawer({
   subtitle?: string;
   headerExtras?: React.ReactNode;
 }) {
-  const [tab, setTab] = useState<"timeline" | "call" | "meeting" | "note" | "files">("timeline");
+  const [tab, setTab] = useState<"timeline" | "call" | "meeting" | "note" | "files" | "score">("timeline");
   const utils = trpc.useUtils();
   const enabled = !!relatedId;
   const acts = trpc.activities.list.useQuery(
@@ -93,6 +154,7 @@ export function RecordDrawer({
             { k: "meeting", label: "Log meeting" },
             { k: "note", label: "Add note" },
             { k: "files", label: `Files (${files.data?.length ?? 0})` },
+            ...(relatedType === "lead" ? [{ k: "score", label: "Score" }] : []),
           ].map((t) => (
             <button
               key={t.k}
@@ -210,6 +272,10 @@ export function RecordDrawer({
               <textarea name="body" required rows={6} placeholder="Quick update on this account…" className="w-full border rounded-md px-3 py-2 text-sm" />
               <Button type="submit" disabled={addNote.isPending}>{addNote.isPending ? "Saving…" : "Add note"}</Button>
             </form>
+          )}
+
+          {tab === "score" && relatedType === "lead" && relatedId && (
+            <LeadScorePanel leadId={relatedId} />
           )}
 
           {tab === "files" && (
