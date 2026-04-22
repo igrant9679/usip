@@ -40,6 +40,8 @@ import BrandVoice from "@/pages/usip/BrandVoice";
 import PromptTemplates from "@/pages/usip/PromptTemplates";
 import ImportContacts from "@/pages/usip/ImportContacts";
 import MyLinkedIn from "@/pages/usip/MyLinkedIn";
+import DataHealth from "@/pages/usip/DataHealth";
+import Segments from "@/pages/usip/Segments";
 import { Loader2 } from "lucide-react";
 import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
@@ -105,6 +107,9 @@ function Router() {
       <Route path="/prompt-templates"><AuthGate><PromptTemplates /></AuthGate></Route>
       <Route path="/import"><AuthGate><ImportContacts /></AuthGate></Route>
       <Route path="/my-linkedin"><AuthGate><MyLinkedIn /></AuthGate></Route>
+      <Route path="/data-health"><AuthGate><DataHealth /></AuthGate></Route>
+      <Route path="/segments"><AuthGate><Segments /></AuthGate></Route>
+      <Route path="/segments/:id"><AuthGate><Segments /></AuthGate></Route>
       <Route path="/settings"><AuthGate><Settings /></AuthGate></Route>
       <Route path="/404"><NotFound /></Route>
       <Route><NotFound /></Route>

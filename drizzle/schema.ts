@@ -1556,3 +1556,27 @@ export const emailVerificationSnapshots = mysqlTable(
   }),
 );
 export type EmailVerificationSnapshot = typeof emailVerificationSnapshots.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Audience Segments (rule-based contact filters)
+   ────────────────────────────────────────────────────────────────────────── */
+export const audienceSegments = mysqlTable(
+  "audience_segments",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    name: varchar("name", { length: 200 }).notNull(),
+    description: text("description"),
+    matchType: varchar("matchType", { length: 10 }).default("all").notNull(),
+    rules: json("rules").notNull(),
+    contactCount: int("contactCount").default(0),
+    lastEvaluatedAt: timestamp("lastEvaluatedAt"),
+    createdByUserId: int("createdByUserId"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    byWs: index("ix_as_ws").on(t.workspaceId),
+  }),
+);
+export type AudienceSegment = typeof audienceSegments.$inferSelect;

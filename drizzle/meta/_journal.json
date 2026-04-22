@@ -85,6 +85,13 @@
       "when": 1776895061533,
       "tag": "0011_first_nebula",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "5",
+      "when": 1776896942315,
+      "tag": "0012_wild_dazzler",
+      "breakpoints": true
     }
   ]
 }

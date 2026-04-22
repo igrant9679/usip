@@ -369,4 +369,25 @@ export const opportunityIntelligenceRouter = router({
       await db.update(opportunities).set({ customFields: { ...existing, coOwners } }).where(eq(opportunities.id, input.opportunityId));
       return { ok: true };
     }),
+
+  /** Batch fetch latest intelligence snapshots for all board opportunities (one query) */
+  getIntelligenceForBoard: workspaceProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) return [];
+    const allIntel = await db
+      .select()
+      .from(opportunityIntelligence)
+      .where(eq(opportunityIntelligence.workspaceId, ctx.workspace.id))
+      .orderBy(desc(opportunityIntelligence.generatedAt));
+    // Keep only the latest snapshot per opportunityId
+    const seen = new Set<number>();
+    const latest: typeof allIntel = [];
+    for (const row of allIntel) {
+      if (!seen.has(row.opportunityId)) {
+        seen.add(row.opportunityId);
+        latest.push(row);
+      }
+    }
+    return latest;
+  }),
 });

@@ -22,6 +22,8 @@ import { savedSectionsRouter } from "./routers/savedSections";
 import { importsRouter } from "./routers/imports";
 import { emailVerificationRouter } from "./routers/emailVerification";
 import { linkedinRouter } from "./routers/linkedin";
+import { dataHealthRouter } from "./routers/dataHealth";
+import { segmentsRouter } from "./routers/segments";
 
 export const appRouter = router({
   system: systemRouter,
@@ -75,6 +77,8 @@ export const appRouter = router({
   imports: importsRouter,
   emailVerification: emailVerificationRouter,
   linkedin: linkedinRouter,
+  dataHealth: dataHealthRouter,
+  segments: segmentsRouter,
 });
 
 export type AppRouter = typeof appRouter;

@@ -41,6 +41,8 @@ import {
   Zap,
   Upload,
   Linkedin,
+  BarChart3,
+  Filter,
 } from "lucide-react";
 import { ReactNode, useEffect, useState } from "react";
 import { Link, useLocation } from "wouter";
@@ -62,6 +64,7 @@ const NAV: NavGroup[] = [
       { href: "/leads", label: "Leads", icon: Target },
       { href: "/contacts", label: "Contacts", icon: Users },
       { href: "/import", label: "Import Contacts", icon: Upload },
+      { href: "/data-health", label: "Data Health", icon: BarChart3 },
       { href: "/accounts", label: "Accounts", icon: Building2 },
       { href: "/pipeline", label: "Pipeline", icon: KanbanSquare },
     ],
@@ -69,6 +72,7 @@ const NAV: NavGroup[] = [
   {
     label: "Engage",
     items: [
+      { href: "/segments", label: "Segments", icon: Filter },
       { href: "/sequences", label: "Sequences", icon: Activity },
       { href: "/email-drafts", label: "Email Drafts", icon: FileText },
       { href: "/email-builder", label: "Email Builder", icon: LayoutTemplate },

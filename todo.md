@@ -529,3 +529,42 @@
 - [x] Frontend: stacked area chart (recharts AreaChart) showing daily breakdown over selected period; color-coded areas matching badge colors
 - [x] Frontend: placeholder state when no snapshot data exists yet
 - [x] Frontend: chart height adapts to widget grid row span
+
+## 38. CSV Data Health Dashboard (IMP-006 / ENR-004)
+- [x] Backend: `dataHealth.getMetrics` — query contacts table and return: total, withEmail, withPhone, withCompany, withTitle, withLinkedIn, verifiedValid, verifiedRisky, verifiedInvalid, verifiedUnknown, enrichedLast90Days, estimatedDuplicates
+- [x] Backend: `dataHealth.getDuplicateGroups` — return top 20 duplicate groups (contacts sharing email or name+company)
+- [x] Frontend: /data-health page under Admin section in sidebar
+- [x] Frontend: top summary row — 6 KPI cards (Total Contacts, % With Email, % With Phone, % Enriched, Duplicate Groups, Invalid Emails)
+- [x] Frontend: Email Verification Health section — stacked bar + counts
+- [x] Frontend: Field Coverage section — horizontal bar chart showing % of contacts with each key field populated
+- [x] Frontend: Duplicate Detection section — top duplicate groups table with "View" link
+- [x] Frontend: Fix Now quick actions — each problem metric has a button linking to Contacts pre-filtered to the problem set
+- [x] Sidebar nav: "Data Health" entry under Admin group
+
+## 39. Audience Segmentation (MKT-018 to MKT-021)
+- [x] DB schema: `segments` table (id, workspaceId, name, description, rules JSON, matchType enum(all|any), contactCount int cached, lastEvaluatedAt, createdByUserId, createdAt, updatedAt)
+- [x] Migration: generate + apply
+- [x] Backend: `segments.list` — list all segments for workspace with cached contact count
+- [x] Backend: `segments.create` — create segment with rules, evaluate immediately, cache count
+- [x] Backend: `segments.update` — update name/description/rules, re-evaluate
+- [x] Backend: `segments.delete` — soft delete
+- [x] Backend: `segments.evaluate` — run rules against contacts table, return matching contact IDs + count
+- [x] Backend: `segments.getContacts` — return paginated contacts matching a segment
+- [x] Frontend: /segments page — list of saved segments with name, description, contact count badge, last evaluated date, Edit/Delete actions
+- [x] Frontend: Segment builder modal — rule rows (field + operator + value), AND/OR toggle, live preview count, Save button
+- [x] Frontend: Segment detail page — shows matching contacts list with pagination, bulk action buttons
+- [x] Frontend: Integration — sequence enrollment and bulk email modals gain an "Enroll from Segment" option
+- [x] Sidebar nav: "Segments" entry under Engage group
+
+## 40. AI Win Probability + Next Best Action on Deals (CRMA-006 / CRMA-007)
+- [x] DB schema: add `winProbability` int nullable, `winProbabilityUpdatedAt` timestamp nullable, `nextBestActions` JSON nullable to opportunities table
+- [x] Migration: generate + apply
+- [x] Backend: `opportunities.computeWinProbability` — call LLM with deal context, return probability 0-100 + confidence + reasoning
+- [x] Backend: `opportunities.computeNextBestActions` — call LLM with deal context, return array of 1-3 action objects
+- [x] Backend: `opportunities.refreshAI` — run both, persist to DB, return updated opportunity
+- [x] Backend: `opportunities.list` — include winProbability and nextBestActions in response
+- [x] Frontend: Pipeline deal card — Win Probability badge (color-coded: ≥70% green, 40-69% yellow, <40% red)
+- [x] Frontend: Pipeline deal card — top Next Best Action chip
+- [x] Frontend: Opportunity detail drawer — "AI Insights" tab with Win Probability gauge, confidence, reasoning, full Next Best Actions list
+- [x] Frontend: "Refresh AI" button in opportunity detail with loading spinner
+- [x] Frontend: Pipeline page header — "Refresh All AI" button for bulk refresh
