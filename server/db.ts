@@ -1,11 +1,21 @@
-import { eq } from "drizzle-orm";
+import { and, eq, sql, desc } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import { InsertUser, users } from "../drizzle/schema";
-import { ENV } from './_core/env';
+import {
+  accounts,
+  contacts,
+  customers,
+  InsertUser,
+  leads,
+  opportunities,
+  tasks,
+  users,
+  workspaceMembers,
+  workspaces,
+} from "../drizzle/schema";
+import { ENV } from "./_core/env";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
-// Lazily create the drizzle instance so local tooling can run without a DB.
 export async function getDb() {
   if (!_db && process.env.DATABASE_URL) {
     try {
@@ -19,9 +29,7 @@ export async function getDb() {
 }
 
 export async function upsertUser(user: InsertUser): Promise<void> {
-  if (!user.openId) {
-    throw new Error("User openId is required for upsert");
-  }
+  if (!user.openId) throw new Error("User openId is required for upsert");
 
   const db = await getDb();
   if (!db) {
@@ -30,9 +38,7 @@ export async function upsertUser(user: InsertUser): Promise<void> {
   }
 
   try {
-    const values: InsertUser = {
-      openId: user.openId,
-    };
+    const values: InsertUser = { openId: user.openId };
     const updateSet: Record<string, unknown> = {};
 
     const textFields = ["name", "email", "loginMethod"] as const;
@@ -45,7 +51,6 @@ export async function upsertUser(user: InsertUser): Promise<void> {
       values[field] = normalized;
       updateSet[field] = normalized;
     };
-
     textFields.forEach(assignNullable);
 
     if (user.lastSignedIn !== undefined) {
@@ -56,21 +61,13 @@ export async function upsertUser(user: InsertUser): Promise<void> {
       values.role = user.role;
       updateSet.role = user.role;
     } else if (user.openId === ENV.ownerOpenId) {
-      values.role = 'admin';
-      updateSet.role = 'admin';
+      values.role = "admin";
+      updateSet.role = "admin";
     }
+    if (!values.lastSignedIn) values.lastSignedIn = new Date();
+    if (Object.keys(updateSet).length === 0) updateSet.lastSignedIn = new Date();
 
-    if (!values.lastSignedIn) {
-      values.lastSignedIn = new Date();
-    }
-
-    if (Object.keys(updateSet).length === 0) {
-      updateSet.lastSignedIn = new Date();
-    }
-
-    await db.insert(users).values(values).onDuplicateKeyUpdate({
-      set: updateSet,
-    });
+    await db.insert(users).values(values).onDuplicateKeyUpdate({ set: updateSet });
   } catch (error) {
     console.error("[Database] Failed to upsert user:", error);
     throw error;
@@ -79,14 +76,81 @@ export async function upsertUser(user: InsertUser): Promise<void> {
 
 export async function getUserByOpenId(openId: string) {
   const db = await getDb();
-  if (!db) {
-    console.warn("[Database] Cannot get user: database not available");
-    return undefined;
-  }
-
+  if (!db) return undefined;
   const result = await db.select().from(users).where(eq(users.openId, openId)).limit(1);
-
   return result.length > 0 ? result[0] : undefined;
 }
 
-// TODO: add feature queries here as your schema grows.
+/* ─── Workspace ────────────────────────────────────────────────────────── */
+
+export async function getUserWorkspaces(userId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select({
+      id: workspaces.id,
+      name: workspaces.name,
+      slug: workspaces.slug,
+      plan: workspaces.plan,
+      role: workspaceMembers.role,
+    })
+    .from(workspaceMembers)
+    .innerJoin(workspaces, eq(workspaceMembers.workspaceId, workspaces.id))
+    .where(eq(workspaceMembers.userId, userId));
+}
+
+export async function getWorkspaceMembers(workspaceId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select({
+      id: users.id,
+      openId: users.openId,
+      name: users.name,
+      email: users.email,
+      avatarUrl: users.avatarUrl,
+      role: workspaceMembers.role,
+      title: workspaceMembers.title,
+      quota: workspaceMembers.quota,
+      memberId: workspaceMembers.id,
+    })
+    .from(workspaceMembers)
+    .innerJoin(users, eq(workspaceMembers.userId, users.id))
+    .where(eq(workspaceMembers.workspaceId, workspaceId));
+}
+
+/* ─── Aggregate dashboard counts ──────────────────────────────────────── */
+
+export async function getWorkspaceCounts(workspaceId: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const [accCount] = await db.select({ c: sql<number>`count(*)` }).from(accounts).where(eq(accounts.workspaceId, workspaceId));
+  const [conCount] = await db.select({ c: sql<number>`count(*)` }).from(contacts).where(eq(contacts.workspaceId, workspaceId));
+  const [leadCount] = await db.select({ c: sql<number>`count(*)` }).from(leads).where(eq(leads.workspaceId, workspaceId));
+  const [oppCount] = await db.select({ c: sql<number>`count(*)` }).from(opportunities).where(eq(opportunities.workspaceId, workspaceId));
+  const [openTasks] = await db.select({ c: sql<number>`count(*)` }).from(tasks).where(and(eq(tasks.workspaceId, workspaceId), eq(tasks.status, "open")));
+  const [pipeline] = await db.select({ s: sql<string>`COALESCE(SUM(${opportunities.value}),0)` }).from(opportunities).where(and(eq(opportunities.workspaceId, workspaceId), sql`${opportunities.stage} NOT IN ('won','lost')`));
+  const [won] = await db.select({ s: sql<string>`COALESCE(SUM(${opportunities.value}),0)` }).from(opportunities).where(and(eq(opportunities.workspaceId, workspaceId), eq(opportunities.stage, "won")));
+  const [custCount] = await db.select({ c: sql<number>`count(*)` }).from(customers).where(eq(customers.workspaceId, workspaceId));
+  return {
+    accounts: Number(accCount?.c ?? 0),
+    contacts: Number(conCount?.c ?? 0),
+    leads: Number(leadCount?.c ?? 0),
+    opportunities: Number(oppCount?.c ?? 0),
+    openTasks: Number(openTasks?.c ?? 0),
+    pipelineValue: Number(pipeline?.s ?? 0),
+    closedWon: Number(won?.s ?? 0),
+    customers: Number(custCount?.c ?? 0),
+  };
+}
+
+export async function listRecentOpportunities(workspaceId: number, limit = 8) {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(opportunities)
+    .where(eq(opportunities.workspaceId, workspaceId))
+    .orderBy(desc(opportunities.updatedAt))
+    .limit(limit);
+}
