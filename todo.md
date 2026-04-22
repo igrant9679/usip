@@ -416,16 +416,21 @@
 - [x] sectionPreviewLabel: singular for single block
 - [x] 165/165 total vitest specs passing
 
-## 25b. Bug: Full-bleed pages clipped under top nav
-- [ ] Email Builder canvas toolbar clipped under Shell top nav bar
-- [ ] Audit SequenceCanvas for the same offset issue
-- [ ] Fix by using correct top offset in the full-bleed container calc
+## 25b. Bug: Full-bleed pages clipped under top nav ✅ FIXED
+- [x] Email Builder canvas toolbar clipped under Shell top nav bar — fixed: removed -mt-6 from full-bleed container
+- [x] Audited SequenceCanvas — renders outside Shell (h-screen with own header), not affected
+- [x] Fix applied: removed -mt-6 from `h-[calc(100vh-56px)] -mt-6 -mx-4 md:-mx-6 overflow-hidden` container
 
-## 26. Email Builder — Onboarding UX improvements
-- [ ] Empty canvas: replace plain placeholder with a starter template picker (5 layouts: Blank, Simple Intro, Product Spotlight, Newsletter, Follow-Up)
-- [ ] Each starter card shows a mini block-stack preview and a "Start with this" button that pre-populates the canvas with the layout's blocks
-- [ ] Right panel: when no block is selected, show a contextual "Getting Started" hint panel (3 steps: pick a block, edit properties, preview)
-- [ ] Template name field: add a visible edit icon (pencil) and "Click to rename" placeholder so it's obvious it's editable
-- [ ] Dismissible tip banner below the toolbar: "Tip: Click Select to choose multiple blocks and save them as a reusable section" — shown only on first visit, dismissed via localStorage flag
-- [ ] Block palette: add a subtle tooltip on hover for each block type explaining what it's for
-- [ ] Canvas empty state: add a "Quick add" row of icon buttons for the 4 most common blocks (Header, Text, Button, Footer) so users can add without reading the palette
+## 26. Email Builder — Onboarding UX improvements ✅ DELIVERED
+- [x] Empty canvas: replace plain placeholder with a starter template picker (5 layouts: Blank, Simple Intro, Product Spotlight, Newsletter, Follow-Up)
+- [x] Each starter card shows a mini block-stack preview and a "Start with this" button that pre-populates the canvas with the layout's blocks
+- [x] Right panel: when no block is selected, show a contextual "Getting Started" hint panel (3 steps: pick a block, edit properties, preview)
+- [x] Template name field: add a visible edit icon (pencil) and "Click to rename" placeholder so it's obvious it's editable
+- [x] Dismissible tip banner below the toolbar: "Tip: Click Select to choose multiple blocks and save them as a reusable section" — shown only on first visit, dismissed via localStorage flag
+- [x] Block palette: add a subtle tooltip on hover for each block type explaining what it's for
+- [x] Canvas empty state: add a "Quick add" row of icon buttons for the 4 most common blocks (Header, Text, Button, Footer) so users can add without reading the palette
+
+## 27. Bug: Full-bleed layout clipping (left + top) — full app audit ✅ FIXED
+- [x] Email Builder: remove -mx-4 md:-mx-6 negative horizontal margins from full-bleed container
+- [x] Audit all pages for -mt-*, -mx-*, -ml-*, h-[calc(100vh-*)] patterns that cause clipping
+- [x] Fix every instance found (only EmailBuilder had layout-level negative margins; all other matches were shadcn/ui internal components or intentional small offsets inside cards)

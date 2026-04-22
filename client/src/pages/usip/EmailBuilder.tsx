@@ -1458,7 +1458,7 @@ export default function EmailBuilderPage() {
   if (templateId) {
     return (
       <Shell title="Email Builder">
-        <div className="flex h-[calc(100vh-56px)] -mx-4 md:-mx-6 overflow-hidden">
+        <div className="flex h-[calc(100vh-56px)] overflow-hidden">
           <Builder templateId={templateId} />
         </div>
       </Shell>
@@ -1472,7 +1472,7 @@ export default function EmailBuilderPage() {
         title="Email Builder"
         description="Design reusable email templates with drag-and-drop blocks"
       />
-      <div className="flex h-[calc(100vh-180px)] border rounded-xl overflow-hidden bg-card">
+      <div className="flex flex-1 min-h-0 border rounded-xl overflow-hidden bg-card" style={{height: 'calc(100vh - 180px)'}}>
         <TemplateList onOpen={(id) => navigate(`/email-builder/${id}`)} />
       </div>
     </Shell>
