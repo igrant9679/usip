@@ -2,7 +2,8 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { trpc } from "@/lib/trpc";
 import { fmtDate, StatusPill } from "./Common";
-import { Brain, ChevronDown, CheckCircle2, Clock, Loader2, Paperclip, Phone, Calendar, MessageSquare, RefreshCw, Trash2, Users, XCircle } from "lucide-react";
+import { Brain, ChevronDown, CheckCircle2, Clock, Loader2, Paperclip, Phone, Calendar, MessageSquare, RefreshCw, Trash2, Users, XCircle, ShieldCheck } from "lucide-react";
+import { EmailVerificationBadge } from "./EmailVerificationBadge";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -275,6 +276,116 @@ function OppIntelligencePanel({ opportunityId }: { opportunityId: number }) {
   );
 }
 
+/* ─── Contact Email Verify Panel ───────────────────────────────────────── */
+function ContactVerifyPanel({
+  contact,
+  isLoading,
+  isVerifying,
+  onVerify,
+}: {
+  contact: any;
+  isLoading: boolean;
+  isVerifying: boolean;
+  onVerify: () => void;
+}) {
+  if (isLoading) {
+    return (
+      <div className="flex items-center gap-2 text-sm text-muted-foreground py-6">
+        <Loader2 className="size-3 animate-spin" /> Loading…
+      </div>
+    );
+  }
+
+  if (!contact?.email) {
+    return (
+      <div className="rounded-lg border bg-muted/30 p-4 text-sm text-muted-foreground text-center">
+        No email address on this contact. Add one to enable verification.
+      </div>
+    );
+  }
+
+  const status = contact.emailVerificationStatus as string | null;
+  const verifiedAt = contact.emailVerifiedAt as Date | string | null;
+  const rawData = contact.emailVerificationData as Record<string, any> | null;
+
+  const DETAIL_LABELS: Record<string, string> = {
+    is_valid_syntax: "Valid syntax",
+    is_disposable: "Disposable domain",
+    is_role_account: "Role account",
+    is_catch_all: "Catch-all domain",
+    is_spamtrap: "Spam trap",
+    is_free: "Free email provider",
+    overall_score: "Overall score",
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Status card */}
+      <div className="rounded-lg border bg-card p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="space-y-1">
+            <p className="text-xs text-muted-foreground">Email address</p>
+            <p className="text-sm font-medium">{contact.email}</p>
+          </div>
+          <EmailVerificationBadge status={status} verifiedAt={verifiedAt} />
+        </div>
+
+        {verifiedAt && (
+          <p className="text-xs text-muted-foreground">
+            Last verified: {new Date(verifiedAt).toLocaleString()}
+          </p>
+        )}
+
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={onVerify}
+          disabled={isVerifying}
+          className="w-full gap-2"
+        >
+          {isVerifying ? (
+            <><Loader2 className="size-3 animate-spin" /> Verifying…</>
+          ) : (
+            <><ShieldCheck className="size-3" /> {status ? "Re-verify" : "Verify Email"}</>
+          )}
+        </Button>
+      </div>
+
+      {/* Reoon detail breakdown */}
+      {rawData && (
+        <div className="rounded-lg border bg-card p-4 space-y-2">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Verification Details</p>
+          <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
+            {Object.entries(DETAIL_LABELS).map(([key, label]) => {
+              const val = rawData[key];
+              if (val === undefined || val === null) return null;
+              const isBool = typeof val === "boolean";
+              return (
+                <div key={key} className="flex items-center justify-between col-span-1">
+                  <span className="text-muted-foreground">{label}</span>
+                  {isBool ? (
+                    <span className={val ? "text-amber-600 font-medium" : "text-green-600 font-medium"}>
+                      {val ? "Yes" : "No"}
+                    </span>
+                  ) : (
+                    <span className="font-medium">{String(val)}</span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {!status && !isVerifying && (
+        <p className="text-xs text-muted-foreground text-center">
+          Click "Verify Email" to check deliverability using Reoon Power Mode.
+        </p>
+      )}
+    </div>
+  );
+}
+
 export function RecordDrawer({
   open,
   onOpenChange,
@@ -292,7 +403,18 @@ export function RecordDrawer({
   subtitle?: string;
   headerExtras?: React.ReactNode;
 }) {
-  const [tab, setTab] = useState<"timeline" | "call" | "meeting" | "note" | "files" | "score" | "intelligence">("timeline");
+  const [tab, setTab] = useState<"timeline" | "call" | "meeting" | "note" | "files" | "score" | "intelligence" | "verify">("timeline");
+  const contactData = trpc.contacts.get.useQuery(
+    { id: relatedId ?? 0 },
+    { enabled: relatedType === "contact" && !!relatedId },
+  );
+  const verifySingle = trpc.emailVerification.verifySingle.useMutation({
+    onSuccess: () => {
+      contactData.refetch();
+      toast.success("Email verified");
+    },
+    onError: (err) => toast.error(err.message ?? "Verification failed"),
+  });
   const utils = trpc.useUtils();
   const enabled = !!relatedId;
   const acts = trpc.activities.list.useQuery(
@@ -352,6 +474,7 @@ export function RecordDrawer({
             { k: "files", label: `Files (${files.data?.length ?? 0})` },
             ...(relatedType === "lead" ? [{ k: "score", label: "Score" }] : []),
             ...(relatedType === "opportunity" ? [{ k: "intelligence", label: "AI Intel" }] : []),
+            ...(relatedType === "contact" ? [{ k: "verify", label: "Email Verify" }] : []),
           ].map((t) => (
             <button
               key={t.k}
@@ -477,6 +600,19 @@ export function RecordDrawer({
 
           {tab === "intelligence" && relatedType === "opportunity" && relatedId && (
             <OppIntelligencePanel opportunityId={relatedId} />
+          )}
+
+          {tab === "verify" && relatedType === "contact" && (
+            <ContactVerifyPanel
+              contact={contactData.data}
+              isLoading={contactData.isLoading}
+              isVerifying={verifySingle.isPending}
+              onVerify={() => {
+                if (relatedId && contactData.data?.email) {
+                  verifySingle.mutate({ contactId: relatedId });
+                }
+              }}
+            />
           )}
 
           {tab === "files" && (

@@ -475,3 +475,11 @@
 - [x] Frontend: Team page → LinkedIn status column (green check / gray dash per member)
 - [x] Frontend: Contact detail → LinkedIn outreach button that opens linkedin.com/in/{handle} in new tab when contact has linkedinUrl
 - [x] Note: LinkedIn's official API does not expose outreach/messaging to third-party apps without Sales Navigator partner approval. This implementation stores credentials for reference and enables direct profile-link navigation; actual message sending happens in the LinkedIn UI itself.
+
+## 31. Email Verification — Frontend Integration ✅ DELIVERED
+- [x] Contact list: add email verification status badge column (colored dot + label: Valid/Accept-All/Risky/Invalid/Unknown)
+- [x] Contact list: "Verify Emails" button in toolbar → opens bulk verify modal with contact selection + progress polling
+- [x] Bulk verify modal: shows job progress bar, live status updates via polling, close when complete
+- [x] Contact detail: verification status badge next to email field
+- [x] Contact detail: inline "Re-verify" button that calls verifySingle and refreshes status
+- [x] Contact detail: last verified timestamp shown as tooltip or sub-text
