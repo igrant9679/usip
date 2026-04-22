@@ -68,7 +68,7 @@ export default function Workflows() {
                     <div className="flex items-center gap-2">
                       <Switch checked={r.enabled} onCheckedChange={(v) => toggle.mutate({ id: r.id, enabled: v })} onClick={(e) => e.stopPropagation()} />
                       <div className="text-sm font-medium flex-1 truncate">{r.name}</div>
-                      <span className="text-xs text-muted-foreground font-mono">{r.fireCount}x</span>
+                      <span className="text-xs text-muted-foreground font-mono tabular-nums">{r.fireCount}x</span>
                     </div>
                     <div className="text-xs text-muted-foreground mt-0.5"><StatusPill tone="info">{r.triggerType}</StatusPill></div>
                   </li>

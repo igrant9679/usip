@@ -53,7 +53,7 @@ export default function Leads() {
                     <td className="px-3 py-2 text-muted-foreground">{l.email}</td>
                     <td className="px-3 py-2 text-muted-foreground">{l.source}</td>
                     <td className="px-3 py-2">
-                      <span className="font-mono">{l.score}</span>
+                      <span className="font-mono tabular-nums">{l.score}</span>
                       <span className={`ml-2 inline-block px-1.5 rounded text-xs ${GRADE_TONE[l.grade ?? "C"] ?? ""}`}>{l.grade ?? "—"}</span>
                     </td>
                     <td className="px-3 py-2 text-muted-foreground">{l.status}</td>

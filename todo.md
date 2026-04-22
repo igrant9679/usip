@@ -116,8 +116,8 @@
 - [x] Notification badge on topbar (refetches every 30s)
 
 ## 13. Sizing / overflow fixes (post-delivery feedback)
-- [ ] KPI numerics shrink/wrap at narrow widths (Dashboard 6-col tile row overflows on `<lg`)
-- [ ] Customer detail health components stay on one line ($ amounts truncating)
-- [ ] Dashboard widget grid columns reflow at `<xl` instead of squeezing
-- [ ] Table headers (Tasks / Quotes / Sequences / Drafts) clip — add ellipsis + min-width
-- [ ] Topbar workspace switcher button doesn't truncate at `<md`
+- [x] KPI numerics: container queries on StatCard + dashboard widgets (`@container` + `@[14rem]:text-2xl`), `tabular-nums`, `truncate`+`title`; grid breakpoints loosened to `grid-cols-2 sm:grid-cols-3 lg:grid-cols-6` so values fit on `<lg`
+- [x] Customer detail health components: 6-up grid loosened, ARR/NPS cells use `tabular-nums whitespace-nowrap`, churn banner + sparkline + expansion stay one-line
+- [x] Dashboard widget grid: each widget card wrapped in `@container`; KPI text scales by widget width, not viewport; funnel/table monetary cells use `tabular-nums shrink-0`
+- [x] Table headers / monetary cells in Tasks / Quotes / Sequences / Drafts / Renewals / Pipeline / Accounts / Products: `tabular-nums whitespace-nowrap shrink-0` on $/numeric cells, `truncate` + `title` on long names
+- [x] Topbar workspace switcher: button gets `truncate min-w-0`; PageHeader stacks title/actions vertically on `<sm`; sidebar nav labels truncate

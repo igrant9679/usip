@@ -111,7 +111,7 @@ export default function Customers() {
                   <ul className="divide-y">
                     {(amendments.data ?? []).length === 0 ? <li className="p-3 text-xs text-muted-foreground">No amendments yet.</li> : amendments.data!.map((a) => (
                       <li key={a.id} className="p-3 text-xs">
-                        <div className="flex items-center gap-2"><StatusPill tone="info">{a.type}</StatusPill><span className="font-mono">{fmt$(Number(a.arrDelta ?? 0))}</span><span className="text-muted-foreground ml-auto">{fmtDate(a.effectiveAt)}</span></div>
+                        <div className="flex items-center gap-2"><StatusPill tone="info">{a.type}</StatusPill><span className="font-mono tabular-nums whitespace-nowrap">{fmt$(Number(a.arrDelta ?? 0))}</span><span className="text-muted-foreground ml-auto whitespace-nowrap">{fmtDate(a.effectiveAt)}</span></div>
                         <div className="text-muted-foreground mt-1">{a.notes}</div>
                       </li>
                     ))}
@@ -154,7 +154,7 @@ function NpsSparkline({ history, current }: { history: Array<{ month: number; sc
     <div className="p-3 text-xs">
       <div className="flex items-center gap-2 mb-2">
         <span className="text-muted-foreground">Current</span>
-        <span className="font-mono font-semibold text-base">{last}</span>
+        <span className="font-mono tabular-nums font-semibold text-base">{last}</span>
         <span className="ml-auto text-muted-foreground">{series.length} pts</span>
       </div>
       <svg width={w} height={h} className="w-full">
@@ -170,7 +170,7 @@ function SliderRow({ label, value, onChange }: { label: string; value: number; o
     <div className="flex items-center gap-2">
       <div className="w-20">{label}</div>
       <input type="range" min={0} max={100} value={value} onChange={(e) => onChange(Number(e.target.value))} className="flex-1" />
-      <div className="w-10 text-right font-mono">{value}</div>
+      <div className="w-10 text-right font-mono tabular-nums">{value}</div>
     </div>
   );
 }
