@@ -18,6 +18,7 @@ import { dashboardLayoutsRouter } from "./routers/dashboardLayouts";
 import { researchPipelineRouter } from "./routers/researchPipeline";
 import { opportunityIntelligenceRouter } from "./routers/opportunityIntelligence";
 import { emailTemplatesRouter, snippetsRouter, brandVoiceRouter, emailPromptTemplatesRouter } from "./routers/emailBuilder";
+import { savedSectionsRouter } from "./routers/savedSections";
 
 export const appRouter = router({
   system: systemRouter,
@@ -67,6 +68,7 @@ export const appRouter = router({
   snippets: snippetsRouter,
   brandVoice: brandVoiceRouter,
   promptTemplates: emailPromptTemplatesRouter,
+  savedSections: savedSectionsRouter,
 });
 
 export type AppRouter = typeof appRouter;

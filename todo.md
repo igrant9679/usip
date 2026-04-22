@@ -368,3 +368,50 @@
 - [x] Brand voice tone enum + hex color validation
 - [x] Prompt template A/B group logic + activate deactivates others with same goal
 - [x] 148/148 total vitest specs passing
+
+## 24. Email Builder — Saved Sections ✅ DELIVERED
+
+### Schema (migration 0008_tiny_loki.sql)
+- [x] `email_saved_sections` table (id, workspaceId, name, description, category, blocks JSON, previewHtml, createdBy, createdAt, updatedAt)
+
+### Server router (server/routers/savedSections.ts)
+- [x] `savedSections.list` — filterable by category + search
+- [x] `savedSections.get` — get single saved section by id
+- [x] `savedSections.create` — save blocks JSON + auto-renders previewHtml
+- [x] `savedSections.update` — rename / re-describe / update blocks
+- [x] `savedSections.delete` — remove a saved section
+- [x] Registered in server/routers.ts
+
+### Visual Email Builder UI
+- [x] Block palette: "Blocks" tab + "Saved" tab (Tabs component in left panel)
+- [x] Saved Sections tab: SavedSectionsPanel component with section cards (name, category badge, block count, preview excerpt, Insert + Edit + Delete actions)
+- [x] Search + category filter on Saved Sections tab
+- [x] Canvas: multi-select mode toggle button in top bar ("Select" button)
+- [x] In multi-select mode: each block shows checkbox overlay, click toggles selection, selection count badge shown
+- [x] "Save as Section" button in toolbar when ≥1 block selected (disabled when 0 selected)
+- [x] Save as Section dialog: name field, description, category picker (7 types), block count preview, create mutation
+- [x] Insert Section: "Insert" button on each saved section card appends its blocks to canvas with re-indexed sort orders
+- [x] Edit Section: pencil icon opens edit dialog (rename/re-describe/update blocks)
+- [x] Delete Section: trash icon with confirm popover
+- [x] Section category badge on each card
+- [x] Cancel multi-select mode restores normal canvas interaction
+
+### Vitest (server/savedSections.test.ts — 17 specs)
+- [x] validateSection: passes for valid input
+- [x] validateSection: rejects empty name
+- [x] validateSection: rejects name > 200 chars
+- [x] validateSection: rejects invalid category
+- [x] validateSection: accepts all 7 valid categories
+- [x] validateSection: rejects empty blocks array
+- [x] validateSection: reports multiple errors simultaneously
+- [x] insertSectionIntoCanvas (append): appends section blocks after existing
+- [x] insertSectionIntoCanvas (append): re-indexes sort orders sequentially from 0
+- [x] insertSectionIntoCanvas (append): assigns new IDs (no collision)
+- [x] insertSectionIntoCanvas (append): works with empty canvas
+- [x] insertSectionIntoCanvas (append): works with single block
+- [x] insertSectionIntoCanvas (insert-after): inserts at correct position
+- [x] insertSectionIntoCanvas (insert-after): re-indexes after mid-insert
+- [x] insertSectionIntoCanvas (insert-after): falls back to append when index >= length
+- [x] sectionPreviewLabel: correct count + unique types
+- [x] sectionPreviewLabel: singular for single block
+- [x] 165/165 total vitest specs passing

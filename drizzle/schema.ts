@@ -1363,3 +1363,37 @@ export const emailPromptTemplates = mysqlTable(
   }),
 );
 export type EmailPromptTemplate = typeof emailPromptTemplates.$inferSelect;
+
+/** Reusable email sections saved from the Visual Email Builder canvas */
+export const emailSavedSections = mysqlTable(
+  "email_saved_sections",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    name: varchar("name", { length: 200 }).notNull(),
+    description: varchar("description", { length: 500 }),
+    category: mysqlEnum("category", [
+      "layout",
+      "header",
+      "footer",
+      "cta",
+      "testimonial",
+      "pricing",
+      "custom",
+    ])
+      .default("custom")
+      .notNull(),
+    /** JSON array of Block objects (same shape as email_templates.designData) */
+    blocks: json("blocks").notNull(),
+    /** Pre-rendered HTML preview (server-side render of blocks at save time) */
+    previewHtml: text("previewHtml"),
+    createdByUserId: int("createdByUserId").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    byWs: index("ix_ess_ws").on(t.workspaceId, t.category),
+    byCreator: index("ix_ess_creator").on(t.createdByUserId),
+  }),
+);
+export type EmailSavedSection = typeof emailSavedSections.$inferSelect;

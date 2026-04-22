@@ -22,6 +22,7 @@ import { toast } from "sonner";
 import {
   AlignCenter, AlignLeft, AlignRight,
   ArrowDown, ArrowUp, Bold,
+  Bookmark, BookmarkCheck, CheckSquare,
   ChevronLeft, Columns2, Copy, Eye,
   FileText, Footprints, GripVertical,
   Heading, Image, Link2, Minus,
@@ -554,6 +555,209 @@ function TemplateList({ onOpen }: { onOpen: (id: number) => void }) {
 }
 
 /* ─── Main builder ───────────────────────────────────────────────────────── */
+/* ─── Saved Sections palette tab ────────────────────────────────────────── */
+const SECTION_CATEGORIES = [
+  { value: "all", label: "All" },
+  { value: "layout", label: "Layout" },
+  { value: "header", label: "Header" },
+  { value: "footer", label: "Footer" },
+  { value: "cta", label: "CTA" },
+  { value: "testimonial", label: "Testimonial" },
+  { value: "pricing", label: "Pricing" },
+  { value: "custom", label: "Custom" },
+] as const;
+
+type SectionCategory = typeof SECTION_CATEGORIES[number]["value"];
+
+function SavedSectionsPanel({
+  onInsert,
+  isReadOnly,
+}: {
+  onInsert: (blocks: Block[]) => void;
+  isReadOnly: boolean;
+}) {
+  const [category, setCategory] = useState<SectionCategory>("all");
+  const [search, setSearch] = useState("");
+  const { data: sections, refetch } = trpc.savedSections.list.useQuery(
+    { category, search },
+  );
+  const deleteMutation = trpc.savedSections.delete.useMutation({
+    onSuccess: () => { toast.success("Section deleted"); refetch(); },
+    onError: () => toast.error("Delete failed"),
+  });
+
+  return (
+    <div className="flex flex-col h-full">
+      <div className="p-2 border-b space-y-1.5">
+        <Input
+          placeholder="Search sections…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="h-7 text-xs"
+        />
+        <Select value={category} onValueChange={(v) => setCategory(v as SectionCategory)}>
+          <SelectTrigger className="h-7 text-xs">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {SECTION_CATEGORIES.map((c) => (
+              <SelectItem key={c.value} value={c.value} className="text-xs">{c.label}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      <ScrollArea className="flex-1">
+        <div className="p-2 space-y-2">
+          {!sections?.length && (
+            <p className="text-[10px] text-muted-foreground text-center py-6 px-2">
+              No saved sections yet. Select blocks on the canvas and click "Save as Section".
+            </p>
+          )}
+          {sections?.map((section) => (
+            <div key={section.id} className="border rounded-lg overflow-hidden bg-card">
+              {/* Mini preview */}
+              {section.previewHtml ? (
+                <div className="h-16 overflow-hidden bg-white pointer-events-none">
+                  <div
+                    className="scale-[0.25] origin-top-left"
+                    style={{ width: "400%", height: "400%" }}
+                    dangerouslySetInnerHTML={{ __html: section.previewHtml }}
+                  />
+                </div>
+              ) : (
+                <div className="h-10 bg-muted/40 flex items-center justify-center">
+                  <Bookmark size={12} className="text-muted-foreground" />
+                </div>
+              )}
+              <div className="p-1.5">
+                <div className="flex items-start justify-between gap-1">
+                  <div className="min-w-0">
+                    <p className="text-[11px] font-medium truncate">{section.name}</p>
+                    <Badge variant="outline" className="text-[9px] px-1 py-0 mt-0.5">{section.category}</Badge>
+                  </div>
+                  <div className="flex gap-0.5 shrink-0">
+                    <button
+                      onClick={() => !isReadOnly && onInsert((section.blocks as Block[]).map((b, i) => ({ ...b, id: uid(), sortOrder: i })))}
+                      disabled={isReadOnly}
+                      className="p-1 rounded hover:bg-primary/10 hover:text-primary transition-colors disabled:opacity-40"
+                      title="Insert into canvas"
+                    >
+                      <Plus size={11} />
+                    </button>
+                    <button
+                      onClick={() => {
+                        if (confirm(`Delete "${section.name}"?`)) deleteMutation.mutate({ id: section.id });
+                      }}
+                      className="p-1 rounded hover:bg-destructive/10 hover:text-destructive transition-colors"
+                      title="Delete section"
+                    >
+                      <Trash2 size={11} />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </ScrollArea>
+    </div>
+  );
+}
+
+/* ─── Save as Section dialog ─────────────────────────────────────────────── */
+function SaveSectionDialog({
+  open,
+  selectedBlocks,
+  onClose,
+  onSaved,
+}: {
+  open: boolean;
+  selectedBlocks: Block[];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [category, setCategory] = useState<string>("custom");
+  const createMutation = trpc.savedSections.create.useMutation({
+    onSuccess: () => {
+      toast.success("Section saved!");
+      setName("");
+      setDescription("");
+      setCategory("custom");
+      onSaved();
+      onClose();
+    },
+    onError: (e) => toast.error(e.message ?? "Save failed"),
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={onClose}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <BookmarkCheck size={16} /> Save as Reusable Section
+          </DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3 py-1">
+          <div className="space-y-1">
+            <Label className="text-xs">Section Name <span className="text-destructive">*</span></Label>
+            <Input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="e.g. Product intro with CTA"
+              className="h-8 text-sm"
+            />
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">Description (optional)</Label>
+            <Input
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Short note about when to use this section"
+              className="h-8 text-sm"
+            />
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">Category</Label>
+            <Select value={category} onValueChange={setCategory}>
+              <SelectTrigger className="h-8 text-sm">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {SECTION_CATEGORIES.filter((c) => c.value !== "all").map((c) => (
+                  <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <p className="text-[11px] text-muted-foreground">
+            {selectedBlocks.length} block{selectedBlocks.length !== 1 ? "s" : ""} will be saved.
+          </p>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" size="sm" onClick={onClose}>Cancel</Button>
+          <Button
+            size="sm"
+            disabled={!name.trim() || createMutation.isPending}
+            onClick={() =>
+              createMutation.mutate({
+                name: name.trim(),
+                description: description.trim() || undefined,
+                category: category as any,
+                blocks: selectedBlocks.map((b, i) => ({ ...b, sortOrder: i })),
+              })
+            }
+          >
+            {createMutation.isPending ? "Saving…" : "Save Section"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/* ─── Main Builder ───────────────────────────────────────────────────────── */
 function Builder({ templateId }: { templateId: number }) {
   const [, navigate] = useLocation();
   const { data: template, isLoading } = trpc.emailTemplates.get.useQuery({ id: templateId });
@@ -569,16 +773,22 @@ function Builder({ templateId }: { templateId: number }) {
     { id: templateId },
     { enabled: false }
   );
+  const savedSectionsUtils = trpc.useUtils();
 
   const [blocks, setBlocks] = useState<Block[]>([]);
   const [subject, setSubject] = useState("");
   const [templateName, setTemplateName] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Multi-select for Save as Section
+  const [multiSelectMode, setMultiSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [showSaveSectionDialog, setShowSaveSectionDialog] = useState(false);
   const [saveState, setSaveState] = useState<"saved" | "unsaved" | "saving">("saved");
   const [previewMode, setPreviewMode] = useState<"desktop" | "mobile">("desktop");
   const [showPreview, setShowPreview] = useState(false);
   const [previewHtml, setPreviewHtml] = useState("");
   const [dragOverId, setDragOverId] = useState<string | null>(null);
+  const [palettTab, setPaletteTab] = useState<"blocks" | "sections">("blocks");
   const dragSrcId = useRef<string | null>(null);
   const autosaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -592,6 +802,15 @@ function Builder({ templateId }: { templateId: number }) {
     }
   }, [template]);
 
+  // Toggle a block in/out of multi-select
+  const toggleBlockSelection = useCallback((id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }, []);
+
   // Autosave
   useEffect(() => {
     if (saveState === "unsaved") {
@@ -602,6 +821,17 @@ function Builder({ templateId }: { templateId: number }) {
   }, [saveState, blocks, subject]);
 
   const markDirty = useCallback(() => setSaveState("unsaved"), []);
+
+  // Insert blocks from a saved section at the end of the canvas
+  const insertSectionBlocks = useCallback((newBlocks: Block[]) => {
+    setBlocks((prev) => {
+      const offset = prev.length;
+      const appended = newBlocks.map((b, i) => ({ ...b, sortOrder: offset + i }));
+      return [...prev, ...appended];
+    });
+    setSaveState("unsaved");
+    toast.success(`${newBlocks.length} block${newBlocks.length !== 1 ? "s" : ""} inserted`);
+  }, []);
 
   const handleSave = useCallback(async () => {
     setSaveState("saving");
@@ -749,6 +979,41 @@ function Builder({ templateId }: { templateId: number }) {
           />
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
+          {/* Multi-select mode controls */}
+          {!isReadOnly && (
+            multiSelectMode ? (
+              <>
+                <span className="text-xs text-primary font-medium">{selectedIds.size} selected</span>
+                <Button
+                  size="sm"
+                  variant="default"
+                  className="h-7 px-2 text-xs"
+                  disabled={selectedIds.size === 0}
+                  onClick={() => setShowSaveSectionDialog(true)}
+                >
+                  <BookmarkCheck size={12} className="mr-1" /> Save as Section
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 px-2 text-xs"
+                  onClick={() => { setMultiSelectMode(false); setSelectedIds(new Set()); }}
+                >
+                  <X size={12} className="mr-1" /> Cancel
+                </Button>
+              </>
+            ) : (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 px-2 text-xs"
+                onClick={() => { setMultiSelectMode(true); setSelectedIds(new Set()); }}
+                title="Select multiple blocks to save as a reusable section"
+              >
+                <CheckSquare size={12} className="mr-1" /> Select
+              </Button>
+            )
+          )}
           <span className={`text-xs ${saveState === "saved" ? "text-green-600" : saveState === "saving" ? "text-amber-500" : "text-muted-foreground"}`}>
             {saveState === "saved" ? "Saved" : saveState === "saving" ? "Saving…" : "Unsaved"}
           </span>
@@ -776,29 +1041,41 @@ function Builder({ templateId }: { templateId: number }) {
 
       {/* 3-panel body */}
       <div className="flex flex-1 overflow-hidden">
-        {/* Left: block palette */}
-        <div className="w-44 shrink-0 border-r bg-muted/30 flex flex-col">
-          <div className="px-3 py-2 border-b">
-            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Blocks</p>
-          </div>
-          <ScrollArea className="flex-1">
-            <div className="p-2 space-y-1">
-              {BLOCK_DEFS.map((def) => {
-                const Icon = def.icon;
-                return (
-                  <button
-                    key={def.type}
-                    onClick={() => !isReadOnly && addBlock(def.type)}
-                    disabled={isReadOnly}
-                    className="w-full flex items-center gap-2 px-2.5 py-2 rounded-md hover:bg-background hover:shadow-sm transition-all text-left disabled:opacity-40 disabled:cursor-not-allowed"
-                  >
-                    <Icon size={14} className="text-muted-foreground shrink-0" />
-                    <span className="text-xs font-medium">{def.label}</span>
-                  </button>
-                );
-              })}
-            </div>
-          </ScrollArea>
+        {/* Left: block palette + saved sections */}
+        <div className="w-48 shrink-0 border-r bg-muted/30 flex flex-col">
+          <Tabs value={palettTab} onValueChange={(v) => setPaletteTab(v as "blocks" | "sections")} className="flex flex-col h-full">
+            <TabsList className="w-full rounded-none border-b h-8 shrink-0 bg-transparent px-1 gap-1">
+              <TabsTrigger value="blocks" className="flex-1 text-[11px] h-6 data-[state=active]:bg-background data-[state=active]:shadow-sm">
+                Blocks
+              </TabsTrigger>
+              <TabsTrigger value="sections" className="flex-1 text-[11px] h-6 data-[state=active]:bg-background data-[state=active]:shadow-sm">
+                <Bookmark size={10} className="mr-1" /> Saved
+              </TabsTrigger>
+            </TabsList>
+            <TabsContent value="blocks" className="flex-1 overflow-hidden mt-0">
+              <ScrollArea className="h-full">
+                <div className="p-2 space-y-1">
+                  {BLOCK_DEFS.map((def) => {
+                    const Icon = def.icon;
+                    return (
+                      <button
+                        key={def.type}
+                        onClick={() => !isReadOnly && addBlock(def.type)}
+                        disabled={isReadOnly}
+                        className="w-full flex items-center gap-2 px-2.5 py-2 rounded-md hover:bg-background hover:shadow-sm transition-all text-left disabled:opacity-40 disabled:cursor-not-allowed"
+                      >
+                        <Icon size={14} className="text-muted-foreground shrink-0" />
+                        <span className="text-xs font-medium">{def.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </ScrollArea>
+            </TabsContent>
+            <TabsContent value="sections" className="flex-1 overflow-hidden mt-0">
+              <SavedSectionsPanel onInsert={insertSectionBlocks} isReadOnly={isReadOnly} />
+            </TabsContent>
+          </Tabs>
         </div>
 
         {/* Center: canvas */}
@@ -820,19 +1097,48 @@ function Builder({ templateId }: { templateId: number }) {
                 key={block.id}
                 className={dragOverId === block.id ? "ring-2 ring-primary ring-offset-1 rounded-lg" : ""}
               >
-                <CanvasBlock
-                  block={block}
-                  isSelected={selectedId === block.id}
-                  isReadOnly={isReadOnly}
-                  onSelect={() => setSelectedId(block.id)}
-                  onMoveUp={() => moveBlock(block.id, "up")}
-                  onMoveDown={() => moveBlock(block.id, "down")}
-                  onDuplicate={() => duplicateBlock(block.id)}
-                  onDelete={() => deleteBlock(block.id)}
-                  onDragStart={(e) => handleDragStart(e, block.id)}
-                  onDragOver={(e) => handleDragOver(e, block.id)}
-                  onDrop={(e) => handleDrop(e, block.id)}
-                />
+                {multiSelectMode ? (
+                  // Multi-select overlay: click to toggle, show checkbox
+                  <div
+                    onClick={() => toggleBlockSelection(block.id)}
+                    className={`relative border-2 rounded-lg p-3 cursor-pointer transition-all ${
+                      selectedIds.has(block.id)
+                        ? "border-primary bg-primary/10 shadow-md"
+                        : "border-dashed border-border hover:border-primary/50"
+                    }`}
+                  >
+                    <div className="absolute top-2 left-2 z-10">
+                      <div className={`w-4 h-4 rounded border-2 flex items-center justify-center ${
+                        selectedIds.has(block.id) ? "bg-primary border-primary" : "bg-background border-muted-foreground"
+                      }`}>
+                        {selectedIds.has(block.id) && (
+                          <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                            <path d="M2 5l2.5 2.5L8 3" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                          </svg>
+                        )}
+                      </div>
+                    </div>
+                    <div className="pointer-events-none select-none overflow-hidden max-h-24 pl-6">
+                      <div className="flex items-center gap-1 mb-1 text-xs text-muted-foreground">
+                        <span className="capitalize">{block.type.replace("_", " ")}</span>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <CanvasBlock
+                    block={block}
+                    isSelected={selectedId === block.id}
+                    isReadOnly={isReadOnly}
+                    onSelect={() => setSelectedId(block.id)}
+                    onMoveUp={() => moveBlock(block.id, "up")}
+                    onMoveDown={() => moveBlock(block.id, "down")}
+                    onDuplicate={() => duplicateBlock(block.id)}
+                    onDelete={() => deleteBlock(block.id)}
+                    onDragStart={(e) => handleDragStart(e, block.id)}
+                    onDragOver={(e) => handleDragOver(e, block.id)}
+                    onDrop={(e) => handleDrop(e, block.id)}
+                  />
+                )}
               </div>
             ))}
           </div>
@@ -894,6 +1200,18 @@ function Builder({ templateId }: { templateId: number }) {
           )}
         </div>
       </div>
+
+      {/* Save as Section dialog */}
+      <SaveSectionDialog
+        open={showSaveSectionDialog}
+        selectedBlocks={blocks.filter((b) => selectedIds.has(b.id))}
+        onClose={() => setShowSaveSectionDialog(false)}
+        onSaved={() => {
+          setMultiSelectMode(false);
+          setSelectedIds(new Set());
+          savedSectionsUtils.savedSections.list.invalidate();
+        }}
+      />
 
       {/* Preview dialog */}
       <Dialog open={showPreview} onOpenChange={setShowPreview}>
