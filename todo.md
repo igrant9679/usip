@@ -415,3 +415,12 @@
 - [x] sectionPreviewLabel: correct count + unique types
 - [x] sectionPreviewLabel: singular for single block
 - [x] 165/165 total vitest specs passing
+
+## 25. Email Builder — Onboarding UX improvements
+- [ ] Empty canvas: replace plain placeholder with a starter template picker (5 layouts: Blank, Simple Intro, Product Spotlight, Newsletter, Follow-Up)
+- [ ] Each starter card shows a mini block-stack preview and a "Start with this" button that pre-populates the canvas with the layout's blocks
+- [ ] Right panel: when no block is selected, show a contextual "Getting Started" hint panel (3 steps: pick a block, edit properties, preview)
+- [ ] Template name field: add a visible edit icon (pencil) and "Click to rename" placeholder so it's obvious it's editable
+- [ ] Dismissible tip banner below the toolbar: "Tip: Click Select to choose multiple blocks and save them as a reusable section" — shown only on first visit, dismissed via localStorage flag
+- [ ] Block palette: add a subtle tooltip on hover for each block type explaining what it's for
+- [ ] Canvas empty state: add a "Quick add" row of icon buttons for the 4 most common blocks (Header, Text, Button, Footer) so users can add without reading the palette

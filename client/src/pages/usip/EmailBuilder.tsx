@@ -19,14 +19,15 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "sonner";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   AlignCenter, AlignLeft, AlignRight,
   ArrowDown, ArrowUp, Bold,
   Bookmark, BookmarkCheck, CheckSquare,
   ChevronLeft, Columns2, Copy, Eye,
   FileText, Footprints, GripVertical,
-  Heading, Image, Link2, Minus,
-  Monitor, Plus, Save, Smartphone,
+  Heading, Image, Info, LayoutTemplate, Link2, Minus,
+  Monitor, Pencil, Plus, Save, Smartphone,
   Space, Square, Tag, Trash2, Type,
   Wand2, X, Zap,
 } from "lucide-react";
@@ -757,6 +758,74 @@ function SaveSectionDialog({
   );
 }
 
+/* ─── Starter templates ─────────────────────────────────────────────────── */
+const STARTER_TEMPLATES: { id: string; label: string; description: string; blocks: Omit<Block, "id">[] }[] = [
+  {
+    id: "blank",
+    label: "Blank",
+    description: "Start from scratch with an empty canvas",
+    blocks: [],
+  },
+  {
+    id: "simple_intro",
+    label: "Simple Intro",
+    description: "Header + short intro text + CTA button",
+    blocks: [
+      { type: "header", props: { headline: "Hi {{firstName}},", subheadline: "A quick note from {{senderName}}", bgColor: "#14B89A", textColor: "#ffffff", logoUrl: "" }, sortOrder: 0 },
+      { type: "text", props: { content: "<p>I wanted to reach out because I think {{company}} could benefit from what we do. Would you be open to a 15-minute call this week?</p>", fontSize: 14, color: "#1a1a1a" }, sortOrder: 1 },
+      { type: "button", props: { label: "Schedule a Call", url: "https://", bgColor: "#14B89A", textColor: "#ffffff", align: "center", borderRadius: 4 }, sortOrder: 2 },
+      { type: "footer", props: { content: "© 2025 {{senderCompany}}. All rights reserved.", bgColor: "#f9fafb", textColor: "#6b7280", unsubscribeUrl: "" }, sortOrder: 3 },
+    ],
+  },
+  {
+    id: "product_spotlight",
+    label: "Product Spotlight",
+    description: "Header + image + two-column features + CTA",
+    blocks: [
+      { type: "header", props: { headline: "Introducing Something New", subheadline: "Built for teams like {{company}}", bgColor: "#1e293b", textColor: "#ffffff", logoUrl: "" }, sortOrder: 0 },
+      { type: "image", props: { src: "", alt: "Product screenshot", caption: "", align: "center", borderRadius: 8 }, sortOrder: 1 },
+      { type: "two_column", props: { leftContent: "<p><strong>Feature One</strong><br>Describe your first key benefit here.</p>", rightContent: "<p><strong>Feature Two</strong><br>Describe your second key benefit here.</p>", split: 50 }, sortOrder: 2 },
+      { type: "button", props: { label: "See It in Action", url: "https://", bgColor: "#14B89A", textColor: "#ffffff", align: "center", borderRadius: 4 }, sortOrder: 3 },
+      { type: "footer", props: { content: "© 2025 {{senderCompany}}. All rights reserved.", bgColor: "#f9fafb", textColor: "#6b7280", unsubscribeUrl: "" }, sortOrder: 4 },
+    ],
+  },
+  {
+    id: "newsletter",
+    label: "Newsletter",
+    description: "Branded header + 3 content sections + footer",
+    blocks: [
+      { type: "header", props: { headline: "Monthly Update", subheadline: "What's new at {{senderCompany}}", bgColor: "#0f172a", textColor: "#ffffff", logoUrl: "" }, sortOrder: 0 },
+      { type: "text", props: { content: "<p><strong>This Month's Highlights</strong><br>Share your top update or announcement here.</p>", fontSize: 14, color: "#1a1a1a" }, sortOrder: 1 },
+      { type: "divider", props: { color: "#e5e7eb", thickness: 1, style: "solid" }, sortOrder: 2 },
+      { type: "text", props: { content: "<p><strong>Industry Insight</strong><br>Share a relevant tip or insight for your audience.</p>", fontSize: 14, color: "#1a1a1a" }, sortOrder: 3 },
+      { type: "divider", props: { color: "#e5e7eb", thickness: 1, style: "solid" }, sortOrder: 4 },
+      { type: "text", props: { content: "<p><strong>Coming Up</strong><br>Let readers know what to expect next month.</p>", fontSize: 14, color: "#1a1a1a" }, sortOrder: 5 },
+      { type: "footer", props: { content: "© 2025 {{senderCompany}}. You're receiving this because you opted in.<br><a href='{{unsubscribeUrl}}'>Unsubscribe</a>", bgColor: "#f9fafb", textColor: "#6b7280", unsubscribeUrl: "" }, sortOrder: 6 },
+    ],
+  },
+  {
+    id: "follow_up",
+    label: "Follow-Up",
+    description: "Short, personal follow-up with a single CTA",
+    blocks: [
+      { type: "text", props: { content: "<p>Hi {{firstName}},</p><p>Just following up on my previous note. I know your time is valuable, so I'll keep this brief.</p><p>I'd love to show you how we've helped companies like {{company}} achieve [specific result]. Would 15 minutes this week work?</p><p>Best,<br>{{senderName}}</p>", fontSize: 14, color: "#1a1a1a" }, sortOrder: 0 },
+      { type: "button", props: { label: "Pick a Time", url: "https://", bgColor: "#14B89A", textColor: "#ffffff", align: "left", borderRadius: 4 }, sortOrder: 1 },
+      { type: "footer", props: { content: "{{senderName}} · {{senderTitle}} · {{senderCompany}}", bgColor: "#f9fafb", textColor: "#6b7280", unsubscribeUrl: "" }, sortOrder: 2 },
+    ],
+  },
+];
+
+const BLOCK_TOOLTIPS: Record<string, string> = {
+  header: "A branded banner with headline, subheadline, and optional logo",
+  text: "A rich-text paragraph block — supports HTML and merge tags like {{firstName}}",
+  image: "An image with optional caption and alignment",
+  button: "A call-to-action button with customizable color and URL",
+  divider: "A horizontal rule to separate sections",
+  spacer: "Empty vertical space to control layout breathing room",
+  two_column: "A side-by-side two-column layout for features or comparisons",
+  footer: "Branded footer with company info and unsubscribe link",
+};
+
 /* ─── Main Builder ───────────────────────────────────────────────────────── */
 function Builder({ templateId }: { templateId: number }) {
   const [, navigate] = useLocation();
@@ -778,6 +847,11 @@ function Builder({ templateId }: { templateId: number }) {
   const [blocks, setBlocks] = useState<Block[]>([]);
   const [subject, setSubject] = useState("");
   const [templateName, setTemplateName] = useState("");
+  const [editingName, setEditingName] = useState(false);
+  const [showTipBanner, setShowTipBanner] = useState(() => {
+    try { return localStorage.getItem("usip_builder_tip_dismissed") !== "1"; } catch { return true; }
+  });
+  const [showStarterPicker, setShowStarterPicker] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Multi-select for Save as Section
   const [multiSelectMode, setMultiSelectMode] = useState(false);
@@ -792,13 +866,18 @@ function Builder({ templateId }: { templateId: number }) {
   const dragSrcId = useRef<string | null>(null);
   const autosaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Load template data
+  // Load template data — show starter picker for new empty templates
   useEffect(() => {
     if (template) {
-      setBlocks((template.designData as Block[]) ?? []);
+      const loadedBlocks = (template.designData as Block[]) ?? [];
+      setBlocks(loadedBlocks);
       setSubject(template.subject ?? "");
       setTemplateName(template.name);
       setSaveState("saved");
+      // Show starter picker if this is a freshly-created template with no blocks
+      if (loadedBlocks.length === 0 && template.name === "Untitled Template") {
+        setShowStarterPicker(true);
+      }
     }
   }, [template]);
 
@@ -962,12 +1041,26 @@ function Builder({ templateId }: { templateId: number }) {
     <div className="flex flex-col h-full">
       {/* Top bar */}
       <div className="flex items-center gap-3 px-4 py-2 border-b bg-card shrink-0">
-        <Input
-          value={templateName}
-          onChange={(e) => { setTemplateName(e.target.value); markDirty(); }}
-          className="h-8 text-sm font-semibold max-w-[240px]"
-          disabled={isReadOnly}
-        />
+        {/* Template name — click-to-edit with pencil affordance */}
+        {editingName && !isReadOnly ? (
+          <Input
+            autoFocus
+            value={templateName}
+            onChange={(e) => { setTemplateName(e.target.value); markDirty(); }}
+            onBlur={() => setEditingName(false)}
+            onKeyDown={(e) => { if (e.key === "Enter" || e.key === "Escape") setEditingName(false); }}
+            className="h-8 text-sm font-semibold max-w-[240px]"
+          />
+        ) : (
+          <button
+            onClick={() => !isReadOnly && setEditingName(true)}
+            className={`flex items-center gap-1.5 px-2 h-8 rounded-md text-sm font-semibold max-w-[240px] truncate hover:bg-muted transition-colors group ${isReadOnly ? "cursor-default" : "cursor-text"}`}
+            title={isReadOnly ? undefined : "Click to rename template"}
+          >
+            <span className="truncate">{templateName || "Untitled Template"}</span>
+            {!isReadOnly && <Pencil size={11} className="shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />}
+          </button>
+        )}
         <div className="flex-1 flex items-center gap-2">
           <Label className="text-xs text-muted-foreground shrink-0">Subject:</Label>
           <Input
@@ -1055,20 +1148,28 @@ function Builder({ templateId }: { templateId: number }) {
             <TabsContent value="blocks" className="flex-1 overflow-hidden mt-0">
               <ScrollArea className="h-full">
                 <div className="p-2 space-y-1">
-                  {BLOCK_DEFS.map((def) => {
-                    const Icon = def.icon;
-                    return (
-                      <button
-                        key={def.type}
-                        onClick={() => !isReadOnly && addBlock(def.type)}
-                        disabled={isReadOnly}
-                        className="w-full flex items-center gap-2 px-2.5 py-2 rounded-md hover:bg-background hover:shadow-sm transition-all text-left disabled:opacity-40 disabled:cursor-not-allowed"
-                      >
-                        <Icon size={14} className="text-muted-foreground shrink-0" />
-                        <span className="text-xs font-medium">{def.label}</span>
-                      </button>
-                    );
-                  })}
+                  <TooltipProvider delayDuration={400}>
+                    {BLOCK_DEFS.map((def) => {
+                      const Icon = def.icon;
+                      return (
+                        <Tooltip key={def.type}>
+                          <TooltipTrigger asChild>
+                            <button
+                              onClick={() => !isReadOnly && addBlock(def.type)}
+                              disabled={isReadOnly}
+                              className="w-full flex items-center gap-2 px-2.5 py-2 rounded-md hover:bg-background hover:shadow-sm transition-all text-left disabled:opacity-40 disabled:cursor-not-allowed"
+                            >
+                              <Icon size={14} className="text-muted-foreground shrink-0" />
+                              <span className="text-xs font-medium">{def.label}</span>
+                            </button>
+                          </TooltipTrigger>
+                          <TooltipContent side="right" className="max-w-[180px] text-xs">
+                            {BLOCK_TOOLTIPS[def.type]}
+                          </TooltipContent>
+                        </Tooltip>
+                      );
+                    })}
+                  </TooltipProvider>
                 </div>
               </ScrollArea>
             </TabsContent>
@@ -1080,6 +1181,19 @@ function Builder({ templateId }: { templateId: number }) {
 
         {/* Center: canvas */}
         <div className="flex-1 overflow-auto bg-muted/20 p-4">
+          {/* Tip banner — dismissible, shown once */}
+          {showTipBanner && !isReadOnly && (
+            <div className="mb-3 px-3 py-2 bg-primary/5 border border-primary/20 rounded-lg text-xs text-primary flex items-center gap-2">
+              <Info size={12} className="shrink-0" />
+              <span className="flex-1"><strong>Tip:</strong> Click <strong>Select</strong> in the toolbar to choose multiple blocks and save them as a reusable section — perfect for headers, footers, and CTAs you use often.</span>
+              <button
+                onClick={() => { setShowTipBanner(false); try { localStorage.setItem("usip_builder_tip_dismissed", "1"); } catch {} }}
+                className="shrink-0 text-primary/60 hover:text-primary"
+              >
+                <X size={12} />
+              </button>
+            </div>
+          )}
           {isReadOnly && (
             <div className="mb-3 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-700 flex items-center gap-2">
               <Zap size={12} /> This template is <strong>{template?.status}</strong>. Duplicate it to make edits.
@@ -1087,9 +1201,35 @@ function Builder({ templateId }: { templateId: number }) {
           )}
           <div className="max-w-[600px] mx-auto space-y-1.5">
             {blocks.length === 0 && (
-              <div className="border-2 border-dashed border-border rounded-xl p-12 text-center">
-                <LayoutTemplate size={32} className="mx-auto text-muted-foreground mb-3" />
-                <p className="text-sm font-medium text-muted-foreground">Click a block type on the left to add it to your email</p>
+              <div className="border-2 border-dashed border-border rounded-xl p-6 text-center space-y-4">
+                <LayoutTemplate size={32} className="mx-auto text-muted-foreground" />
+                <div>
+                  <p className="text-sm font-semibold text-foreground mb-1">Start building your email</p>
+                  <p className="text-xs text-muted-foreground">Pick a starter layout or add blocks one by one from the left panel</p>
+                </div>
+                {/* Quick-add row */}
+                <div className="flex justify-center gap-2 flex-wrap">
+                  {(["header", "text", "button", "footer"] as BlockType[]).map((t) => {
+                    const def = BLOCK_DEFS.find((d) => d.type === t)!;
+                    const Icon = def.icon;
+                    return (
+                      <button
+                        key={t}
+                        onClick={() => addBlock(t)}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-border bg-background hover:bg-muted hover:border-primary/40 text-xs font-medium transition-all"
+                      >
+                        <Icon size={11} className="text-muted-foreground" />
+                        {def.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <button
+                  onClick={() => setShowStarterPicker(true)}
+                  className="inline-flex items-center gap-1.5 text-xs text-primary hover:underline font-medium"
+                >
+                  <LayoutTemplate size={11} /> Browse starter layouts
+                </button>
               </div>
             )}
             {blocks.map((block) => (
@@ -1146,6 +1286,33 @@ function Builder({ templateId }: { templateId: number }) {
 
         {/* Right: properties panel */}
         <div className="w-64 shrink-0 border-l bg-card flex flex-col">
+          {/* Getting-started hint when nothing is selected */}
+          {!selectedBlock && blocks.length === 0 && (
+            <div className="p-4 space-y-3">
+              <p className="text-xs font-semibold text-foreground">Getting Started</p>
+              <ol className="space-y-2.5">
+                {[
+                  { step: "1", text: "Click a block type on the left (or use a starter layout) to add it to your canvas" },
+                  { step: "2", text: "Click any block on the canvas to edit its content and style here" },
+                  { step: "3", text: "Use the Preview button to see how your email looks on desktop and mobile" },
+                ].map(({ step, text }) => (
+                  <li key={step} className="flex gap-2.5 text-xs text-muted-foreground">
+                    <span className="shrink-0 w-4 h-4 rounded-full bg-primary/10 text-primary text-[10px] font-bold flex items-center justify-center">{step}</span>
+                    <span>{text}</span>
+                  </li>
+                ))}
+              </ol>
+              <div className="pt-1 border-t">
+                <p className="text-[10px] text-muted-foreground">Use <strong>{"{{firstName}}"}</strong>, <strong>{"{{company}}"}</strong> and other merge tags to personalize each send automatically.</p>
+              </div>
+            </div>
+          )}
+          {!selectedBlock && blocks.length > 0 && (
+            <div className="flex-1 flex flex-col items-center justify-center p-4 gap-2">
+              <p className="text-xs text-muted-foreground text-center">Click a block to edit its properties</p>
+              <p className="text-[10px] text-muted-foreground/60 text-center">Or use <strong>Select</strong> mode to save groups of blocks as reusable sections</p>
+            </div>
+          )}
           {selectedBlock ? (
             <>
               <div className="px-3 py-2 border-b flex items-center justify-between">
@@ -1200,6 +1367,40 @@ function Builder({ templateId }: { templateId: number }) {
           )}
         </div>
       </div>
+
+      {/* Starter template picker dialog */}
+      <Dialog open={showStarterPicker} onOpenChange={setShowStarterPicker}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Choose a Starter Layout</DialogTitle>
+          </DialogHeader>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 py-2">
+            {STARTER_TEMPLATES.map((tmpl) => (
+              <button
+                key={tmpl.id}
+                onClick={() => {
+                  if (tmpl.blocks.length > 0) {
+                    const withIds = tmpl.blocks.map((b) => ({ ...b, id: uid() }));
+                    setBlocks(withIds);
+                    markDirty();
+                  }
+                  setShowStarterPicker(false);
+                }}
+                className="flex flex-col items-start gap-1.5 p-3 rounded-lg border border-border hover:border-primary hover:bg-primary/5 text-left transition-all group"
+              >
+                <div className="w-full h-20 rounded bg-muted flex items-center justify-center mb-1 group-hover:bg-primary/10 transition-colors">
+                  <LayoutTemplate size={24} className="text-muted-foreground group-hover:text-primary transition-colors" />
+                </div>
+                <p className="text-xs font-semibold">{tmpl.label}</p>
+                <p className="text-[10px] text-muted-foreground leading-snug">{tmpl.description}</p>
+                {tmpl.blocks.length > 0 && (
+                  <span className="text-[10px] text-primary/70">{tmpl.blocks.length} block{tmpl.blocks.length !== 1 ? "s" : ""}</span>
+                )}
+              </button>
+            ))}
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Save as Section dialog */}
       <SaveSectionDialog
@@ -1281,10 +1482,4 @@ export default function EmailBuilderPage() {
 // Re-export for lazy import
 export { EmailBuilderPage };
 
-// Needed for the import in App.tsx
-const LayoutTemplate = ({ size, className }: { size?: number; className?: string }) => (
-  <svg width={size ?? 16} height={size ?? 16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <rect x="3" y="3" width="18" height="18" rx="2" />
-    <path d="M3 9h18M9 21V9" />
-  </svg>
-);
+
