@@ -369,6 +369,10 @@ export default function AIPipelineQueue() {
     },
     onError: (e) => toast.error(e.message),
   });
+  const sendBulkApproved = trpc.smtpConfig.sendBulkApproved.useMutation({
+    onSuccess: (data) => { toast.success(`Sent ${data.sent} emails, ${data.failed} failed`); refetchDrafts(); refetchStats(); },
+    onError: (e) => toast.error(e.message.includes("No active SMTP") ? "SMTP not configured — set up in Settings → Email Delivery" : e.message),
+  });
 
   const handleRefresh = () => {
     refetchDrafts();
@@ -564,6 +568,7 @@ export default function AIPipelineQueue() {
                 </Badge>
               ) : null}
             </h2>
+            <div className="flex items-center gap-2">
             {pendingDraftIds.length > 0 && (
               <Button
                 size="sm"
@@ -579,6 +584,22 @@ export default function AIPipelineQueue() {
                 Approve All ({pendingDraftIds.length})
               </Button>
             )}
+            {(stats?.approved ?? 0) > 0 && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => sendBulkApproved.mutate({})}
+                disabled={sendBulkApproved.isPending}
+              >
+                {sendBulkApproved.isPending ? (
+                  <Loader2 className="h-4 w-4 animate-spin mr-1" />
+                ) : (
+                  <Mail className="h-4 w-4 mr-1" />
+                )}
+                Send Approved ({stats?.approved})
+              </Button>
+            )}
+            </div>
           </div>
 
           {loadingDrafts ? (

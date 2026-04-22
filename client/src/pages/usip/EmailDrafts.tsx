@@ -106,7 +106,22 @@ export default function EmailDrafts() {
   });
   const approve = trpc.emailDrafts.approve.useMutation({ onSuccess: () => utils.emailDrafts.list.invalidate() });
   const reject = trpc.emailDrafts.reject.useMutation({ onSuccess: () => utils.emailDrafts.list.invalidate() });
-  const send = trpc.emailDrafts.send.useMutation({ onSuccess: () => utils.emailDrafts.list.invalidate() });
+  const sendViaDb = trpc.emailDrafts.send.useMutation({ onSuccess: () => { utils.emailDrafts.list.invalidate(); toast.success("Draft marked sent"); } });
+  const sendViaSmtp = trpc.smtpConfig.sendDraft.useMutation({
+    onSuccess: () => { utils.emailDrafts.list.invalidate(); toast.success("Email sent via SMTP"); },
+    onError: (e) => {
+      // If SMTP not configured, show a warning
+      if (e.message.includes("SMTP") || e.message.includes("not configured") || e.message.includes("No active SMTP")) {
+        toast.warning("SMTP not configured — configure SMTP in Settings → Email Delivery first.");
+      } else {
+        toast.error(e.message);
+      }
+    },
+  });
+  const sendBulkApproved = trpc.smtpConfig.sendBulkApproved.useMutation({
+    onSuccess: (data) => { utils.emailDrafts.list.invalidate(); toast.success(`Sent ${data.sent} emails, ${data.failed} failed`); },
+    onError: (e) => toast.error(e.message),
+  });
 
   return (
     <Shell title="Email Drafts">
@@ -116,6 +131,11 @@ export default function EmailDrafts() {
             <button key={f} onClick={() => setFilter(f)} className={`px-2 py-1 text-xs rounded ${filter === f ? "bg-card shadow-sm" : "text-muted-foreground"}`}>{f.replace("_", " ")}</button>
           ))}
         </div>
+        {filter === "approved" && (
+          <Button size="sm" variant="outline" onClick={() => sendBulkApproved.mutate({})} disabled={sendBulkApproved.isPending}>
+            <Send className="size-4" /> Send All Approved
+          </Button>
+        )}
         <Button onClick={() => setComposeOpen(true)}><Sparkles className="size-4" /> AI compose</Button>
       </PageHeader>
       <div className="p-6 space-y-3">
@@ -129,7 +149,7 @@ export default function EmailDrafts() {
                   <Button size="sm" variant="ghost" onClick={() => approve.mutate({ id: d.id })}><Check className="size-3.5" /> Approve</Button>
                   <Button size="sm" variant="ghost" onClick={() => reject.mutate({ id: d.id })}><X className="size-3.5" /> Reject</Button>
                 </>}
-                {d.status === "approved" && <Button size="sm" onClick={() => send.mutate({ id: d.id })}><Send className="size-3.5" /> Send</Button>}
+                {d.status === "approved" && <Button size="sm" onClick={() => sendViaSmtp.mutate({ draftId: d.id })} disabled={sendViaSmtp.isPending}><Send className="size-3.5" /> Send</Button>}
               </div>
             </div>
             <div className="text-sm whitespace-pre-wrap mt-3 text-muted-foreground">{d.body}</div>

@@ -608,36 +608,36 @@
 - [x] Sidebar nav: Pipeline Alerts under Acquire group
 
 ## 44. Real SMTP Transport via Nodemailer
-- [ ] Install nodemailer + @types/nodemailer
-- [ ] DB schema: smtp_configs table (workspaceId, host, port, secure, username, encryptedPassword, fromName, fromEmail, replyTo, createdAt, updatedAt)
-- [ ] Migration: generate + apply
-- [ ] Backend: smtpConfig.get / smtpConfig.save / smtpConfig.test (send test email to actor)
-- [ ] Backend: smtpConfig.sendDraft — look up approved draft, resolve SMTP config, send via Nodemailer, mark draft status=sent, log to activities
-- [ ] Backend: smtpConfig.sendBulkApproved — send all approved drafts for workspace in one call (rate-limited, 1/sec)
-- [ ] Frontend: Settings → Email Delivery tab — SMTP config form (host, port, TLS toggle, username, password, from name, from email, reply-to)
-- [ ] Frontend: Test connection button → calls smtpConfig.test, shows success/error toast
-- [ ] Frontend: Email Drafts page — "Send" button on approved drafts calls smtpConfig.sendDraft
-- [ ] Frontend: AI Draft Queue — "Send All Approved" button calls smtpConfig.sendBulkApproved
-- [ ] Vitest: SMTP config validation logic (host/port/email format checks)
+- [x] Install nodemailer + @types/nodemailer
+- [x] DB schema: smtp_configs table (workspaceId, host, port, secure, username, encryptedPassword, fromName, fromEmail, replyTo, createdAt, updatedAt)
+- [x] Migration: generate + apply
+- [x] Backend: smtpConfig.get / smtpConfig.save / smtpConfig.test (send test email to actor)
+- [x] Backend: smtpConfig.sendDraft — look up approved draft, resolve SMTP config, send via Nodemailer, mark draft status=sent, log to activities
+- [x] Backend: smtpConfig.sendBulkApproved — send all approved drafts for workspace in one call (rate-limited, 1/sec)
+- [x] Frontend: Settings → Email Delivery tab — SMTP config form (host, port, TLS toggle, username, password, from name, from email, reply-to)
+- [x] Frontend: Test connection button → calls smtpConfig.test, shows success/error toast
+- [x] Frontend: Email Drafts page — "Send" button on approved drafts calls smtpConfig.sendDraft
+- [x] Frontend: AI Draft Queue — "Send All Approved" button calls smtpConfig.sendBulkApproved
+- [x] Vitest: SMTP config validation logic (host/port/email format checks)
 
 ## 45. Nightly AI Pipeline Batch Cron
-- [ ] Backend: aiPipeline.runNightlyBatch — query leads with leadScore >= threshold AND no pending/done pipeline job in last 7 days, trigger runPipeline for each (max 50/night)
-- [ ] Backend: workspace setting: nightlyPipelineEnabled (bool) + nightlyScoreThreshold (int, default 60)
-- [ ] DB schema: add nightlyPipelineEnabled + nightlyScoreThreshold to workspace_settings
-- [ ] Migration: generate + apply
-- [ ] Server startup: register midnight cron (0 0 * * *) calling aiPipeline.runNightlyBatch for all workspaces with nightlyPipelineEnabled=true
-- [ ] Frontend: Settings → AI Pipeline tab — nightly batch toggle + score threshold slider (0-100)
-- [ ] Vitest: nightly batch eligibility logic (score filter, dedup, max cap)
+- [x] Backend: aiPipeline.runNightlyBatch — query leads with leadScore >= threshold AND no pending/done pipeline job in last 7 days, trigger runPipeline for each (max 50/night)
+- [x] Backend: workspace setting: nightlyPipelineEnabled (bool) + nightlyScoreThreshold (int, default 60)
+- [x] DB schema: add nightlyPipelineEnabled + nightlyScoreThreshold to workspace_settings
+- [x] Migration: generate + apply
+- [x] Server startup: register midnight cron (0 0 * * *) calling aiPipeline.runNightlyBatch for all workspaces with nightlyPipelineEnabled=true
+- [x] Frontend: Settings → AI Pipeline tab — nightly batch toggle + score threshold slider (0-100)
+- [x] Vitest: nightly batch eligibility logic (score filter, dedup, max cap)
 
 ## 46. Audience Segment Auto-Enroll into Sequences
-- [ ] DB schema: segment_sequence_rules table (id, workspaceId, segmentId, sequenceId, enabled, lastRunAt, createdAt)
-- [ ] Migration: generate + apply
-- [ ] Backend: segmentRules.list / segmentRules.save / segmentRules.delete — manage which segment → sequence mappings exist
-- [ ] Backend: segmentRules.runEnrollment — for each enabled rule, evaluate segment, find contacts not already enrolled, call sequenceEngine.triggerAutoEnroll for each
-- [ ] Server startup: register hourly cron calling segmentRules.runEnrollment for all workspaces
-- [ ] Frontend: Segments page — "Auto-enroll" button per segment → opens dialog to pick a sequence + enable/disable toggle
-- [ ] Frontend: Sequences page — show linked segments count badge on each sequence row
-- [ ] Vitest: segment rule enrollment dedup logic
+- [x] DB schema: segment_sequence_rules table (id, workspaceId, segmentId, sequenceId, enabled, lastRunAt, createdAt)
+- [x] Migration: generate + apply
+- [x] Backend: segmentRules.list / segmentRules.save / segmentRules.delete — manage which segment → sequence mappings exist
+- [x] Backend: segmentRules.runEnrollment — for each enabled rule, evaluate segment, find contacts not already enrolled, call sequenceEngine.triggerAutoEnroll for each
+- [x] Server startup: register hourly cron calling segmentRules.runEnrollment for all workspaces
+- [x] Frontend: Segments page — "Auto-enroll" button per segment → opens dialog to pick a sequence + enable/disable toggle
+- [x] Frontend: Sequences page — show linked segments count badge on each sequence row
+- [x] Vitest: segment rule enrollment dedup logic
 
 ## 44. Real SMTP Transport via Nodemailer
 - [x] DB schema: smtp_configs table (host, port, secure, username, encryptedPassword, fromName, fromEmail, replyTo, enabled, lastTestedAt, lastTestStatus, lastTestError)
