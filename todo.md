@@ -154,3 +154,83 @@
 - [x] Sales-Ready threshold-cross notification to assigned user (kind=`system`)
 - [x] Vitest: 22 specs (scoring math, decay, tier bands, RR cursor, priority order, disabled rules, ANY/ALL semantics, legacy condition normalization)
 - [x] Full vitest suite: 41/41 passing
+
+
+## 18. Email Tool — Dynamic + Static paths (from pasted spec, scope review)
+
+### Dynamic path — AI resolved at send time (MKT-014..MKT-017, EML-004..EML-007)
+- [ ] 5-Stage Research-to-Email pipeline: (1) Organization research → (2) Contact research → (3) Fit analysis JSON {fit_score, pain_points, recommended_products, objection_risks} → (4) 3-variant draft generation (ROI / pain-point / social-proof) in parallel → (5) Queue for human approval
+- [ ] Trigger modes for pipeline: manual, bulk multi-select, auto-on-sequence-enroll, nightly batch for leads above score threshold
+- [ ] Email Draft Review Queue: surface research context accordion (org + contact + fit JSON) so reviewer can validate personalization
+- [ ] Variant selector in review UI (pick 1 of 3 before approve, or re-request with different angle)
+- [ ] Dynamic audience segments (saved filter → re-evaluated at send time, auto-enroll)
+- [ ] Merge variable live-resolution at send: recent news, job changes, funding events, tech-stack updates (not baked into draft)
+- [ ] Subject-line A/B optimizer wired to send-time variant pick
+- [ ] Brand Voice / AI Personality profile (persona name, tone rules, prohibited words, style examples) applied to generation prompts
+
+### Static path — Visual Drag-and-Drop Builder (MKT-022..MKT-025, EML-008..EML-011)
+- [ ] Three-panel builder canvas (block library left / canvas middle / properties right)
+- [ ] Block types: Text, Image, Button, Divider, Spacer, Social Icons, Unsubscribe
+- [ ] Row layouts: 1-col / 2-col / 3-col with drag-to-reorder
+- [ ] Canvas serialization → `design_data` JSON column on email templates
+- [ ] Renderer: `design_data` → inline-CSS HTML compatible with major email clients
+- [ ] Inline AI writing assistant per Text block: rewrite / shorten / lengthen / tone-shift
+- [ ] Subject Line Optimizer: generate up to 5 variants against finished creative
+- [ ] Readability + spam-score analyzer (flag trigger words + formatting risks)
+- [ ] Snippet library (reusable AI-drafted intros, CTAs, objection handles, P.S. lines)
+- [ ] Merge variables with configurable fallback values resolve at send even on static layouts
+- [ ] Mixed-mode sequence support: Day 1 dynamic AI draft + Day 14 static newsletter in same cadence, both tracked into the same CRM activity timeline
+
+### Schema / infra dependencies these unlock
+- [ ] New tables: `email_templates` (design_data + compiled_html), `email_snippets`, `brand_voice_profiles`, `audience_segments`, `email_research_artifacts`, `email_variants`, `email_send_log`
+- [ ] Real SMTP transport (currently `send` only marks DB row → no outbound delivery)
+- [ ] Open-pixel / click-tracking / reply-webhook ingestion (currently columns exist, no writers)
+
+
+## 19. Settings + Team rebuild ✅ DELIVERED
+### Settings page (tabbed) — all shipped
+- [x] General: timezone editor + 8 summary stat cards
+- [x] Branding: primary + accent color pickers, email-from name, email signature defaults
+- [x] Security: session timeout, IP allowlist (text area), 2FA-enforcement toggle
+- [x] Notifications: per-event in-app + email toggles (5 events: newLeadRouted, salesReadyCrossed, dealMoved, taskOverdue, mention)
+- [x] Integrations: status cards for Manus OAuth, SCIM, Stripe, Data API Hub, LLM, Google Maps
+- [x] Billing: seats-used + emails sent + LLM tokens for current month, invoice history placeholder
+- [~] Danger zone: section + buttons rendered, but transfer ownership + archive + export are UI placeholders only (toast "Coming soon") — not wired to backend yet
+- [ ] Danger zone: implement real workspace archive (soft-delete + 90-day retention)
+- [ ] Danger zone: implement real transfer-ownership mutation
+- [ ] Danger zone: implement real data-export job
+- [ ] Security: password-policy section (min length, complexity, rotation) — not yet wired, only session/IP/2FA shipped
+
+### Team page — all shipped
+- [x] Row-level role dropdown (role-rank guarded) with sole-super_admin protection
+- [x] Invite dialog (email + name + title + role + quota) with auto-create-or-link user
+- [x] Deactivate dialog with required reassign-to picker → reassigns all open leads/opps/tasks
+- [x] Reactivate button
+- [x] Columns: avatar, name, title, role, quota, last active, status
+- [x] Search + role filter + show-deactivated toggle
+- [x] Multi-select + bulk role change
+- [ ] Multi-select + bulk deactivate (single-row deactivate with reassignment works; bulk variant still TODO)
+- [ ] Deactivated-at column (currently surfaced as "deactivated" status pill + the row is dimmed; explicit timestamp column not yet added to the table header)
+
+### Schema additions — all migrated (0003_sturdy_fixer.sql)
+- [x] workspace_settings (PK workspaceId + brand + security + notify)
+- [x] workspace_members.deactivatedAt + lastActiveAt
+- [x] usage_counters (workspaceId, month, llmTokens, emailsSent)
+
+### vitest — 11 new pure-logic specs, 52/52 total passing
+- [x] role-rank guards (actor cannot assign higher than own)
+- [x] peer-protection guard (admin cannot touch other admin)
+- [x] super_admin bypasses peer guard
+- [x] sole super_admin cannot be demoted
+- [x] reassign target must be active member
+- [x] cannot deactivate self
+- [x] hex-color validator
+- [x] session timeout range check
+- [x] default notifyPolicy shape
+
+### vitest gaps (pure-logic only — no DB fixtures in this template)
+- [ ] DB-backed integration: settings.save round-trips through workspace_settings row
+- [ ] DB-backed integration: team.invite creates users row + workspace_members row
+- [ ] DB-backed integration: team.changeRole router throws FORBIDDEN when actor < target rank
+- [ ] DB-backed integration: team.deactivate sets deactivatedAt AND reassigns ownerUserId on leads/opportunities/tasks
+- [ ] (needs a test-container or mocked drizzle client — current test runner is pure-logic only)

@@ -55,6 +55,8 @@ export const workspaceMembers = mysqlTable(
     title: varchar("title", { length: 120 }),
     territoryId: int("territoryId"),
     quota: decimal("quota", { precision: 14, scale: 2 }),
+    deactivatedAt: timestamp("deactivatedAt"),
+    lastActiveAt: timestamp("lastActiveAt"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
   (t) => ({
@@ -930,3 +932,44 @@ export const leadRoutingRules = mysqlTable(
   }),
 );
 export type LeadRoutingRule = typeof leadRoutingRules.$inferSelect;
+
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Workspace Settings (branding, security, notification policy)
+   ────────────────────────────────────────────────────────────────────────── */
+
+export const workspaceSettings = mysqlTable("workspace_settings", {
+  workspaceId: int("workspaceId").primaryKey(),
+  timezone: varchar("timezone", { length: 64 }).default("UTC").notNull(),
+  brandPrimary: varchar("brandPrimary", { length: 16 }).default("#14B89A").notNull(),
+  brandAccent: varchar("brandAccent", { length: 16 }).default("#0F766E").notNull(),
+  emailFromName: varchar("emailFromName", { length: 120 }),
+  emailSignature: text("emailSignature"),
+  sessionTimeoutMin: int("sessionTimeoutMin").default(480).notNull(),
+  ipAllowlist: json("ipAllowlist"),
+  enforce2fa: boolean("enforce2fa").default(false).notNull(),
+  notifyPolicy: json("notifyPolicy"),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+export type WorkspaceSettings = typeof workspaceSettings.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Monthly usage counters (for Billing tab)
+   ────────────────────────────────────────────────────────────────────────── */
+
+export const usageCounters = mysqlTable(
+  "usage_counters",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    month: varchar("month", { length: 7 }).notNull(), // YYYY-MM
+    llmTokens: int("llmTokens").default(0).notNull(),
+    emailsSent: int("emailsSent").default(0).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    uq: uniqueIndex("uq_uc_ws_month").on(t.workspaceId, t.month),
+  }),
+);
+export type UsageCounter = typeof usageCounters.$inferSelect;

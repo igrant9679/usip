@@ -9,6 +9,7 @@ import { emailDraftsRouter, sequencesRouter } from "./routers/sequences";
 import { csRouter } from "./routers/cs";
 import { auditRouter, campaignsRouter, dashboardsRouter, notificationsRouter, quotesRouter, scimRouter, socialRouter, workflowsRouter } from "./routers/operations";
 import { leadRoutingRouter, leadScoringRouter } from "./routers/leadScoring";
+import { settingsRouter, teamRouter, usageRouter } from "./routers/admin";
 
 export const appRouter = router({
   system: systemRouter,
@@ -44,6 +45,9 @@ export const appRouter = router({
   scim: scimRouter,
   leadScoring: leadScoringRouter,
   leadRouting: leadRoutingRouter,
+  settings: settingsRouter,
+  team: teamRouter,
+  usage: usageRouter,
 });
 
 export type AppRouter = typeof appRouter;
