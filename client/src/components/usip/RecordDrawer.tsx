@@ -2,7 +2,7 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { trpc } from "@/lib/trpc";
 import { fmtDate, StatusPill } from "./Common";
-import { ChevronDown, Loader2, Paperclip, Phone, Calendar, MessageSquare, RefreshCw, Trash2 } from "lucide-react";
+import { Brain, ChevronDown, CheckCircle2, Clock, Loader2, Paperclip, Phone, Calendar, MessageSquare, RefreshCw, Trash2, Users, XCircle } from "lucide-react";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -79,6 +79,202 @@ function Accordion({ open, onToggle, title, value, max, reasons }: { open: boole
   );
 }
 
+function WinProbBadge({ prob }: { prob: number }) {
+  const cls = prob >= 70 ? "bg-emerald-100 text-emerald-800" : prob >= 40 ? "bg-amber-100 text-amber-800" : "bg-red-100 text-red-800";
+  return <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${cls}`}>{prob}% win prob</span>;
+}
+
+function OppIntelligencePanel({ opportunityId }: { opportunityId: number }) {
+  const utils = trpc.useUtils();
+  const { data: intel, isLoading } = trpc.oppIntelligence.getIntelligence.useQuery({ opportunityId });
+  const { data: history = [] } = trpc.oppIntelligence.getStageHistory.useQuery({ opportunityId });
+  const { data: coOwners = [] } = trpc.oppIntelligence.getCoOwners.useQuery({ opportunityId });
+  const { data: members = [] } = trpc.workspace.members.useQuery();
+  const generate = trpc.oppIntelligence.generateIntelligence.useMutation({
+    onSuccess: () => { utils.oppIntelligence.getIntelligence.invalidate({ opportunityId }); toast.success("Intelligence refreshed"); },
+    onError: (e) => toast.error(e.message),
+  });
+  const addCoOwner = trpc.oppIntelligence.addCoOwner.useMutation({
+    onSuccess: () => utils.oppIntelligence.getCoOwners.invalidate({ opportunityId }),
+  });
+  const removeCoOwner = trpc.oppIntelligence.removeCoOwner.useMutation({
+    onSuccess: () => utils.oppIntelligence.getCoOwners.invalidate({ opportunityId }),
+  });
+  const [section, setSection] = useState<"nba" | "signals" | "actions" | "email" | "history" | "owners">("nba");
+
+  if (isLoading) return <div className="flex items-center gap-2 text-sm text-muted-foreground py-8"><Loader2 className="size-4 animate-spin" /> Loading intelligence…</div>;
+
+  const nba: any[] = (intel?.nextBestActions as any) ?? [];
+  const signals: any[] = (intel?.conversationSignals as any) ?? [];
+  const actionItems: any[] = (intel?.actionItems as any) ?? [];
+  const altSubjects: any[] = (intel?.altSubjectLines as any) ?? [];
+  const winProb = Number(intel?.winProbability ?? 0);
+
+  return (
+    <div className="space-y-3">
+      {/* Header */}
+      <div className="rounded border bg-card p-3 flex items-start justify-between gap-3">
+        <div className="space-y-1">
+          {intel ? (
+            <>
+              <WinProbBadge prob={winProb} />
+              <p className="text-xs text-muted-foreground mt-1">{intel.winProbabilityRationale}</p>
+              <p className="text-[11px] text-muted-foreground">Last updated {fmtDate(intel.generatedAt)}</p>
+            </>
+          ) : (
+            <p className="text-sm text-muted-foreground">No intelligence snapshot yet. Click Analyze to generate one.</p>
+          )}
+        </div>
+        <Button size="sm" variant="outline" className="shrink-0" onClick={() => generate.mutate({ opportunityId })} disabled={generate.isPending}>
+          <Brain className={`size-3.5 mr-1 ${generate.isPending ? "animate-pulse" : ""}`} />
+          {generate.isPending ? "Analyzing…" : "Analyze"}
+        </Button>
+      </div>
+
+      {/* Section tabs */}
+      <div className="flex gap-1 flex-wrap text-xs">
+        {[
+          { k: "nba", label: `Next Actions (${nba.length})` },
+          { k: "signals", label: `Signals (${signals.length})` },
+          { k: "actions", label: `Action Items (${actionItems.length})` },
+          { k: "email", label: `Email Score` },
+          { k: "history", label: `Stage History (${history.length})` },
+          { k: "owners", label: `Co-Owners (${coOwners.length})` },
+        ].map((s) => (
+          <button key={s.k} onClick={() => setSection(s.k as any)}
+            className={`px-2.5 py-1 rounded-full border text-xs transition-colors ${
+              section === s.k ? "bg-[#14B89A] text-white border-[#14B89A]" : "text-muted-foreground hover:text-foreground"
+            }`}>
+            {s.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Next Best Actions */}
+      {section === "nba" && (
+        <div className="space-y-2">
+          {nba.length === 0 && <p className="text-sm text-muted-foreground">No actions yet — click Analyze.</p>}
+          {nba.map((a: any, i: number) => (
+            <div key={i} className="rounded border bg-card p-3 space-y-1">
+              <div className="flex items-center gap-2">
+                <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${
+                  a.priority === "high" ? "bg-red-100 text-red-700" : a.priority === "medium" ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-700"
+                }`}>{a.priority}</span>
+                <span className="text-sm font-medium">{a.action}</span>
+              </div>
+              <p className="text-xs text-muted-foreground">{a.rationale}</p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Conversation Signals */}
+      {section === "signals" && (
+        <div className="space-y-2">
+          {signals.length === 0 && <p className="text-sm text-muted-foreground">No signals detected yet.</p>}
+          {signals.map((s: any, i: number) => (
+            <div key={i} className="flex items-start gap-2 rounded border bg-card p-2.5">
+              {s.sentiment === "positive" ? <CheckCircle2 className="size-3.5 text-emerald-500 mt-0.5" /> : s.sentiment === "negative" ? <XCircle className="size-3.5 text-red-500 mt-0.5" /> : <Clock className="size-3.5 text-muted-foreground mt-0.5" />}
+              <span className="text-xs">{s.signal}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Action Items */}
+      {section === "actions" && (
+        <div className="space-y-2">
+          {actionItems.length === 0 && <p className="text-sm text-muted-foreground">No action items extracted yet.</p>}
+          {actionItems.map((a: any, i: number) => (
+            <div key={i} className="rounded border bg-card p-2.5 text-xs space-y-0.5">
+              <p className="font-medium">{a.item}</p>
+              <p className="text-muted-foreground">Owner: {a.owner} · Due: {a.dueDate}</p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Email Effectiveness */}
+      {section === "email" && (
+        <div className="space-y-3">
+          <div className="rounded border bg-card p-3">
+            <div className="text-xs text-muted-foreground mb-1">Email Effectiveness Score</div>
+            <div className="text-3xl font-mono tabular-nums">{Number(intel?.emailEffectivenessScore ?? 0).toFixed(0)}<span className="text-sm text-muted-foreground">/100</span></div>
+            <div className="h-2 bg-muted rounded mt-2 overflow-hidden">
+              <div className="h-full bg-[#14B89A]" style={{ width: `${Number(intel?.emailEffectivenessScore ?? 0)}%` }} />
+            </div>
+          </div>
+          {altSubjects.length > 0 && (
+            <div className="space-y-2">
+              <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Alternative Subject Lines</div>
+              {altSubjects.map((s: any, i: number) => (
+                <div key={i} className="rounded border bg-card p-2.5 text-xs space-y-0.5">
+                  <p className="font-medium">{s.subject}</p>
+                  <p className="text-muted-foreground">{s.rationale}</p>
+                </div>
+              ))}
+            </div>
+          )}
+          {intel?.winStory && (
+            <div className="rounded border bg-card p-3">
+              <div className="text-xs font-semibold mb-1">Win Story</div>
+              <p className="text-xs text-muted-foreground whitespace-pre-wrap">{intel.winStory}</p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Stage History */}
+      {section === "history" && (
+        <div className="space-y-2">
+          {history.length === 0 && <p className="text-sm text-muted-foreground">No stage changes recorded yet.</p>}
+          {(history as any[]).map((h: any, i: number) => (
+            <div key={i} className="flex items-start gap-2 text-xs">
+              <div className="mt-1 size-2 rounded-full bg-[#14B89A] shrink-0" />
+              <div>
+                <span className="font-medium capitalize">{h.fromStage ?? "created"}</span>
+                <span className="text-muted-foreground"> → </span>
+                <span className="font-medium capitalize">{h.toStage}</span>
+                {h.daysInPrevStage != null && <span className="text-muted-foreground"> ({h.daysInPrevStage}d)</span>}
+                <div className="text-muted-foreground">{fmtDate(h.createdAt)}{h.note ? ` · ${h.note}` : ""}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Co-Owners */}
+      {section === "owners" && (
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <Users className="size-3.5 text-muted-foreground" />
+            <span className="text-xs font-semibold">Co-Owners</span>
+          </div>
+          {(coOwners as any[]).map((m: any) => (
+            <div key={m.userId} className="flex items-center justify-between rounded border bg-card px-3 py-2">
+              <span className="text-sm">{m.name ?? m.email}</span>
+              <Button size="sm" variant="ghost" className="h-6 text-xs text-red-500" onClick={() => removeCoOwner.mutate({ opportunityId, userId: m.userId })}>Remove</Button>
+            </div>
+          ))}
+          {(members as any[]).filter((m: any) => !(coOwners as any[]).some((c: any) => c.userId === m.userId)).length > 0 && (
+            <div className="space-y-1">
+              <div className="text-[11px] text-muted-foreground">Add co-owner:</div>
+              <div className="flex flex-wrap gap-1">
+                {(members as any[]).filter((m: any) => !(coOwners as any[]).some((c: any) => c.userId === m.userId)).map((m: any) => (
+                  <button key={m.userId} onClick={() => addCoOwner.mutate({ opportunityId, userId: m.userId })}
+                    className="text-xs border rounded px-2 py-0.5 hover:bg-muted transition-colors">
+                    + {m.name ?? m.email}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function RecordDrawer({
   open,
   onOpenChange,
@@ -96,7 +292,7 @@ export function RecordDrawer({
   subtitle?: string;
   headerExtras?: React.ReactNode;
 }) {
-  const [tab, setTab] = useState<"timeline" | "call" | "meeting" | "note" | "files" | "score">("timeline");
+  const [tab, setTab] = useState<"timeline" | "call" | "meeting" | "note" | "files" | "score" | "intelligence">("timeline");
   const utils = trpc.useUtils();
   const enabled = !!relatedId;
   const acts = trpc.activities.list.useQuery(
@@ -155,6 +351,7 @@ export function RecordDrawer({
             { k: "note", label: "Add note" },
             { k: "files", label: `Files (${files.data?.length ?? 0})` },
             ...(relatedType === "lead" ? [{ k: "score", label: "Score" }] : []),
+            ...(relatedType === "opportunity" ? [{ k: "intelligence", label: "AI Intel" }] : []),
           ].map((t) => (
             <button
               key={t.k}
@@ -276,6 +473,10 @@ export function RecordDrawer({
 
           {tab === "score" && relatedType === "lead" && relatedId && (
             <LeadScorePanel leadId={relatedId} />
+          )}
+
+          {tab === "intelligence" && relatedType === "opportunity" && relatedId && (
+            <OppIntelligencePanel opportunityId={relatedId} />
           )}
 
           {tab === "files" && (

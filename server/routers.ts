@@ -16,6 +16,7 @@ import { subjectABRouter } from "./routers/subjectAB";
 import { customFieldsRouter } from "./routers/customFields";
 import { dashboardLayoutsRouter } from "./routers/dashboardLayouts";
 import { researchPipelineRouter } from "./routers/researchPipeline";
+import { opportunityIntelligenceRouter } from "./routers/opportunityIntelligence";
 
 export const appRouter = router({
   system: systemRouter,
@@ -60,6 +61,7 @@ export const appRouter = router({
   customFields: customFieldsRouter,
   dashboardLayouts: dashboardLayoutsRouter,
   researchPipeline: researchPipelineRouter,
+  oppIntelligence: opportunityIntelligenceRouter,
 });
 
 export type AppRouter = typeof appRouter;
