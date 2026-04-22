@@ -64,6 +64,7 @@ const NAV: NavGroup[] = [
     items: [
       { href: "/sequences", label: "Sequences", icon: Activity },
       { href: "/email-drafts", label: "Email Drafts", icon: FileText },
+      { href: "/research-pipeline", label: "AI Research Pipeline", icon: Sparkles },
       { href: "/social", label: "Social", icon: Share2 },
       { href: "/campaigns", label: "Campaigns", icon: Megaphone },
     ],
@@ -86,6 +87,7 @@ const NAV: NavGroup[] = [
       { href: "/quotes", label: "Quotes", icon: FileText },
       { href: "/territories", label: "Territories", icon: Network },
       { href: "/lead-routing", label: "Lead Routing", icon: Sparkles },
+      { href: "/quota", label: "Quota Management", icon: Target },
     ],
   },
   {
@@ -93,6 +95,7 @@ const NAV: NavGroup[] = [
     items: [
       { href: "/team", label: "Team", icon: Users },
       { href: "/lead-scoring", label: "Lead Scoring", icon: Target },
+      { href: "/custom-fields", label: "Custom Fields", icon: Database },
       { href: "/audit", label: "Audit Log", icon: Database },
       { href: "/scim", label: "SCIM", icon: Zap },
       { href: "/settings", label: "Settings", icon: Settings },

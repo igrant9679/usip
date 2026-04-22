@@ -104,6 +104,7 @@ export const accounts = mysqlTable(
     arr: decimal("arr", { precision: 14, scale: 2 }).default("0"),
     color: varchar("color", { length: 16 }),
     notes: text("notes"),
+    customFields: json("customFields"), // admin-defined custom field values
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
@@ -130,6 +131,7 @@ export const contacts = mysqlTable(
     seniority: varchar("seniority", { length: 32 }),
     isPrimary: boolean("isPrimary").default(false).notNull(),
     ownerUserId: int("ownerUserId"),
+    customFields: json("customFields"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
@@ -167,6 +169,7 @@ export const leads = mysqlTable(
     convertedAccountId: int("convertedAccountId"),
     convertedOpportunityId: int("convertedOpportunityId"),
     ownerUserId: int("ownerUserId"),
+    customFields: json("customFields"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
@@ -201,6 +204,7 @@ export const opportunities = mysqlTable(
     lostReason: varchar("lostReason", { length: 120 }),
     campaignId: int("campaignId"),
     ownerUserId: int("ownerUserId"),
+    customFields: json("customFields"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
@@ -1060,3 +1064,213 @@ export const dashboardLayouts = mysqlTable(
   }),
 );
 export type DashboardLayout = typeof dashboardLayouts.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Sprint 3 — AI Research-to-Draft Pipeline
+   ────────────────────────────────────────────────────────────────────────── */
+
+/** One pipeline run per email draft — tracks all 5 stages */
+export const researchPipelines = mysqlTable(
+  "research_pipelines",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    emailDraftId: int("emailDraftId"), // null until draft is created
+    createdByUserId: int("createdByUserId").notNull(),
+    toContactId: int("toContactId"),
+    toLeadId: int("toLeadId"),
+    toAccountId: int("toAccountId"),
+    // Stage outputs stored as JSON blobs
+    stage1_prospect: json("stage1_prospect"),   // company + person research
+    stage2_signals: json("stage2_signals"),     // recent news / triggers
+    stage3_angles: json("stage3_angles"),       // value-prop angles
+    stage4_draft: json("stage4_draft"),         // subject + body candidates
+    stage5_final: json("stage5_final"),         // chosen subject + body + personalization tokens
+    // Overall status
+    status: mysqlEnum("status", ["running", "complete", "failed"]).default("running").notNull(),
+    currentStage: int("currentStage").default(1).notNull(), // 1-5
+    errorMessage: text("errorMessage"),
+    completedAt: timestamp("completedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    byWs: index("ix_rp_ws").on(t.workspaceId),
+    byDraft: index("ix_rp_draft").on(t.emailDraftId),
+  }),
+);
+export type ResearchPipeline = typeof researchPipelines.$inferSelect;
+
+/** Prompt version history for A/B and audit */
+export const promptVersions = mysqlTable(
+  "prompt_versions",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    entityType: varchar("entityType", { length: 64 }).notNull(), // "email_draft" | "sequence_node"
+    entityId: int("entityId").notNull(),
+    version: int("version").default(1).notNull(),
+    subject: text("subject"),
+    body: text("body"),
+    promptUsed: text("promptUsed"),
+    toneUsed: varchar("toneUsed", { length: 32 }),
+    createdByUserId: int("createdByUserId").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    byEntity: index("ix_pv_entity").on(t.entityType, t.entityId),
+    byWs: index("ix_pv_ws").on(t.workspaceId),
+  }),
+);
+export type PromptVersion = typeof promptVersions.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Sprint 4 — Quota Management
+   ────────────────────────────────────────────────────────────────────────── */
+
+export const quotaTargets = mysqlTable(
+  "quota_targets",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    userId: int("userId").notNull(),
+    period: varchar("period", { length: 7 }).notNull(), // YYYY-MM or YYYY-QN
+    periodType: mysqlEnum("periodType", ["monthly", "quarterly", "annual"]).default("monthly").notNull(),
+    revenueTarget: decimal("revenueTarget", { precision: 14, scale: 2 }).default("0").notNull(),
+    dealsTarget: int("dealsTarget").default(0).notNull(),
+    activitiesTarget: int("activitiesTarget").default(0).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    uq: uniqueIndex("uq_qt_ws_user_period").on(t.workspaceId, t.userId, t.period),
+    byWs: index("ix_qt_ws").on(t.workspaceId),
+  }),
+);
+export type QuotaTarget = typeof quotaTargets.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Sprint 4 — Subject-Line A/B variants + spam analysis
+   ────────────────────────────────────────────────────────────────────────── */
+
+export const subjectVariants = mysqlTable(
+  "subject_variants",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    emailDraftId: int("emailDraftId").notNull(),
+    subject: text("subject").notNull(),
+    spamScore: decimal("spamScore", { precision: 5, scale: 2 }), // 0-100
+    spamFlags: json("spamFlags"), // [{rule, severity, description}]
+    aiRationale: text("aiRationale"),
+    isSelected: boolean("isSelected").default(false).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    byDraft: index("ix_sv_draft").on(t.emailDraftId),
+    byWs: index("ix_sv_ws").on(t.workspaceId),
+  }),
+);
+export type SubjectVariant = typeof subjectVariants.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Sprint 5 — Custom Fields framework
+   ────────────────────────────────────────────────────────────────────────── */
+
+export const customFieldDefs = mysqlTable(
+  "custom_field_defs",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    entityType: varchar("entityType", { length: 32 }).notNull(), // "lead" | "contact" | "account" | "opportunity"
+    fieldKey: varchar("fieldKey", { length: 64 }).notNull(), // snake_case key used in customFields JSON
+    label: varchar("label", { length: 120 }).notNull(),
+    fieldType: mysqlEnum("fieldType", ["text", "number", "date", "boolean", "select", "multiselect", "url"]).notNull(),
+    options: json("options"), // [{value, label}] for select/multiselect
+    required: boolean("required").default(false).notNull(),
+    showInList: boolean("showInList").default(false).notNull(),
+    sortOrder: int("sortOrder").default(0).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    uq: uniqueIndex("uq_cfd_ws_entity_key").on(t.workspaceId, t.entityType, t.fieldKey),
+    byWs: index("ix_cfd_ws").on(t.workspaceId),
+  }),
+);
+export type CustomFieldDef = typeof customFieldDefs.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Sprint 6 — Opportunity Intelligence
+   ────────────────────────────────────────────────────────────────────────── */
+
+/** Stage movement history for opportunities */
+export const opportunityStageHistory = mysqlTable(
+  "opportunity_stage_history",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    opportunityId: int("opportunityId").notNull(),
+    fromStage: varchar("fromStage", { length: 64 }),
+    toStage: varchar("toStage", { length: 64 }).notNull(),
+    changedByUserId: int("changedByUserId"),
+    daysInPrevStage: int("daysInPrevStage"),
+    note: text("note"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    byOpp: index("ix_osh_opp").on(t.opportunityId),
+    byWs: index("ix_osh_ws").on(t.workspaceId),
+  }),
+);
+export type OpportunityStageHistory = typeof opportunityStageHistory.$inferSelect;
+
+/** AI-generated intelligence snapshots per opportunity */
+export const opportunityIntelligence = mysqlTable(
+  "opportunity_intelligence",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    opportunityId: int("opportunityId").notNull(),
+    winProbability: decimal("winProbability", { precision: 5, scale: 2 }), // 0-100
+    winProbabilityRationale: text("winProbabilityRationale"),
+    nextBestActions: json("nextBestActions"), // [{action, priority, rationale}]
+    conversationSignals: json("conversationSignals"), // [{signal, sentiment, extractedAt}]
+    actionItems: json("actionItems"), // [{item, owner, dueDate}]
+    emailEffectivenessScore: decimal("emailEffectivenessScore", { precision: 5, scale: 2 }),
+    altSubjectLines: json("altSubjectLines"), // [{subject, rationale}]
+    winStory: text("winStory"),
+    outreachSequenceSuggestion: json("outreachSequenceSuggestion"),
+    generatedAt: timestamp("generatedAt").defaultNow().notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    byOpp: index("ix_oi_opp").on(t.opportunityId),
+    byWs: index("ix_oi_ws").on(t.workspaceId),
+  }),
+);
+export type OpportunityIntelligence = typeof opportunityIntelligence.$inferSelect;
+
+/** Stage-change approval requests */
+export const stageApprovals = mysqlTable(
+  "stage_approvals",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    opportunityId: int("opportunityId").notNull(),
+    requestedByUserId: int("requestedByUserId").notNull(),
+    approverUserId: int("approverUserId"),
+    fromStage: varchar("fromStage", { length: 64 }).notNull(),
+    toStage: varchar("toStage", { length: 64 }).notNull(),
+    status: mysqlEnum("status", ["pending", "approved", "rejected"]).default("pending").notNull(),
+    note: text("note"),
+    reviewNote: text("reviewNote"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    byOpp: index("ix_sa_opp").on(t.opportunityId),
+    byWs: index("ix_sa_ws").on(t.workspaceId),
+  }),
+);
+export type StageApproval = typeof stageApprovals.$inferSelect;

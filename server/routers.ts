@@ -11,7 +11,11 @@ import { auditRouter, campaignsRouter, dashboardsRouter, notificationsRouter, qu
 import { leadRoutingRouter, leadScoringRouter } from "./routers/leadScoring";
 import { settingsRouter, teamRouter, usageRouter } from "./routers/admin";
 import { integrationsRouter } from "./routers/integrations";
+import { quotaRouter } from "./routers/quota";
+import { subjectABRouter } from "./routers/subjectAB";
+import { customFieldsRouter } from "./routers/customFields";
 import { dashboardLayoutsRouter } from "./routers/dashboardLayouts";
+import { researchPipelineRouter } from "./routers/researchPipeline";
 
 export const appRouter = router({
   system: systemRouter,
@@ -51,7 +55,11 @@ export const appRouter = router({
   team: teamRouter,
   usage: usageRouter,
   integrations: integrationsRouter,
+  quota: quotaRouter,
+  subjectAB: subjectABRouter,
+  customFields: customFieldsRouter,
   dashboardLayouts: dashboardLayoutsRouter,
+  researchPipeline: researchPipelineRouter,
 });
 
 export type AppRouter = typeof appRouter;

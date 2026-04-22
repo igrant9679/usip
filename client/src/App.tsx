@@ -31,6 +31,9 @@ import Workflows from "@/pages/usip/Workflows";
 import LeadScoring from "@/pages/usip/LeadScoring";
 import LeadRouting from "@/pages/usip/LeadRouting";
 import SequenceCanvas from "@/pages/usip/SequenceCanvas";
+import ResearchPipeline from "@/pages/usip/ResearchPipeline";
+import Quota from "@/pages/usip/Quota";
+import CustomFields from "@/pages/usip/CustomFields";
 import { Loader2 } from "lucide-react";
 import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
@@ -86,6 +89,9 @@ function Router() {
       <Route path="/scim"><AuthGate><SCIM /></AuthGate></Route>
       <Route path="/lead-scoring"><AuthGate><LeadScoring /></AuthGate></Route>
       <Route path="/lead-routing"><AuthGate><LeadRouting /></AuthGate></Route>
+      <Route path="/research-pipeline"><AuthGate><ResearchPipeline /></AuthGate></Route>
+      <Route path="/quota"><AuthGate><Quota /></AuthGate></Route>
+      <Route path="/custom-fields"><AuthGate><CustomFields /></AuthGate></Route>
       <Route path="/settings"><AuthGate><Settings /></AuthGate></Route>
       <Route path="/404"><NotFound /></Route>
       <Route><NotFound /></Route>

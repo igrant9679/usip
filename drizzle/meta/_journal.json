@@ -36,6 +36,20 @@
       "when": 1776877203717,
       "tag": "0004_wooden_umar",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "5",
+      "when": 1776877880000,
+      "tag": "0005_premium_the_fury",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "5",
+      "when": 1776878335588,
+      "tag": "0006_perpetual_paibok",
+      "breakpoints": true
     }
   ]
 }
