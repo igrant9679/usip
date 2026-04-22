@@ -99,6 +99,13 @@
       "when": 1776898422173,
       "tag": "0013_opposite_thor",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "5",
+      "when": 1776899761680,
+      "tag": "0014_ancient_rogue",
+      "breakpoints": true
     }
   ]
 }

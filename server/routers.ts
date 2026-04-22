@@ -9,7 +9,7 @@ import { emailDraftsRouter, sequencesRouter } from "./routers/sequences";
 import { csRouter } from "./routers/cs";
 import { auditRouter, campaignsRouter, dashboardsRouter, notificationsRouter, quotesRouter, scimRouter, socialRouter, workflowsRouter } from "./routers/operations";
 import { leadRoutingRouter, leadScoringRouter } from "./routers/leadScoring";
-import { settingsRouter, teamRouter, usageRouter } from "./routers/admin";
+import { settingsRouter, teamRouter, usageRouter, dangerZoneRouter } from "./routers/admin";
 import { integrationsRouter } from "./routers/integrations";
 import { quotaRouter } from "./routers/quota";
 import { subjectABRouter } from "./routers/subjectAB";
@@ -65,6 +65,7 @@ export const appRouter = router({
   settings: settingsRouter,
   team: teamRouter,
   usage: usageRouter,
+  dangerZone: dangerZoneRouter,
   integrations: integrationsRouter,
   quota: quotaRouter,
   subjectAB: subjectABRouter,

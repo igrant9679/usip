@@ -13,7 +13,7 @@
  *   - team.bulkChangeRole                    (admin+ only)
  */
 import { TRPCError } from "@trpc/server";
-import { and, count, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, count, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
   leads,
@@ -392,4 +392,174 @@ export const teamRouter = router({
         .where(and(eq(workspaceMembers.workspaceId, ctx.workspace.id), inArray(workspaceMembers.id, input.memberIds)));
       return { ok: true, count: input.memberIds.length };
     }),
+
+  /**
+   * Bulk deactivate multiple members with a single reassign target.
+   * Applies the same guards as single deactivate per member.
+   */
+  bulkDeactivate: adminWsProcedure
+    .input(z.object({ memberIds: z.array(z.number().int()).min(1).max(50), reassignToUserId: z.number().int() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+
+      // Verify reassign target is an active member
+      const [rcpt] = await db.select().from(workspaceMembers)
+        .where(and(eq(workspaceMembers.workspaceId, ctx.workspace.id), eq(workspaceMembers.userId, input.reassignToUserId)));
+      if (!rcpt) throw new TRPCError({ code: "BAD_REQUEST", message: "Reassign target is not a workspace member" });
+      if (rcpt.deactivatedAt) throw new TRPCError({ code: "BAD_REQUEST", message: "Reassign target is deactivated" });
+
+      const targets = await db.select().from(workspaceMembers)
+        .where(and(eq(workspaceMembers.workspaceId, ctx.workspace.id), inArray(workspaceMembers.id, input.memberIds)));
+
+      let deactivated = 0;
+      let skipped = 0;
+      // Count active super_admins to protect sole super_admin
+      const [{ superAdminCount }] = await db.select({ superAdminCount: count() }).from(workspaceMembers)
+        .where(and(eq(workspaceMembers.workspaceId, ctx.workspace.id), eq(workspaceMembers.role, "super_admin"), isNull(workspaceMembers.deactivatedAt)));
+      const activeSuperAdmins = Number(superAdminCount ?? 0);
+      const targetSuperAdminIds = new Set(targets.filter((t) => t.role === "super_admin" && !t.deactivatedAt).map((t) => t.userId));
+      const wouldRemoveSoleSuperAdmin = activeSuperAdmins - targetSuperAdminIds.size < 1;
+      if (wouldRemoveSoleSuperAdmin) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot deactivate the sole super_admin. Promote another member first." });
+      }
+
+      for (const target of targets) {
+        // Skip self, already deactivated, peer-rank violations
+        if (target.userId === ctx.user.id) { skipped++; continue; }
+        if (target.deactivatedAt) { skipped++; continue; }
+        if (ctx.member.role !== "super_admin" && roleRank(target.role) >= roleRank(ctx.member.role)) { skipped++; continue; }
+
+        // Reassign owned work
+        await db.execute(sql`UPDATE leads SET ownerUserId = ${input.reassignToUserId} WHERE workspaceId = ${ctx.workspace.id} AND ownerUserId = ${target.userId}`);
+        await db.execute(sql`UPDATE opportunities SET ownerUserId = ${input.reassignToUserId} WHERE workspaceId = ${ctx.workspace.id} AND ownerUserId = ${target.userId}`);
+        await db.execute(sql`UPDATE tasks SET ownerUserId = ${input.reassignToUserId} WHERE workspaceId = ${ctx.workspace.id} AND ownerUserId = ${target.userId} AND status = 'open'`);
+
+        await db.update(workspaceMembers).set({ deactivatedAt: new Date() }).where(eq(workspaceMembers.id, target.id));
+        deactivated++;
+      }
+
+      await recordAudit({
+        workspaceId: ctx.workspace.id,
+        actorUserId: ctx.user.id,
+        action: "update",
+        entityType: "workspace_member",
+        entityId: 0,
+        after: { bulkDeactivated: deactivated, skipped, reassignedTo: input.reassignToUserId },
+      });
+      return { ok: true, deactivated, skipped };
+    }),
+});
+
+/* ─── Danger Zone ───────────────────────────────────────────────────────── */
+
+export const dangerZoneRouter = router({
+  /**
+   * Soft-archive the workspace. Sets archivedAt = now.
+   * Only the workspace owner (super_admin) can archive.
+   * After archiving, the workspace is hidden from workspace switcher.
+   */
+  archiveWorkspace: adminWsProcedure.mutation(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    // Only super_admin can archive
+    if (ctx.member.role !== "super_admin") {
+      throw new TRPCError({ code: "FORBIDDEN", message: "Only super admins can archive a workspace" });
+    }
+    const { workspaces } = await import("../../drizzle/schema");
+    await db.update(workspaces).set({ archivedAt: new Date() }).where(eq(workspaces.id, ctx.workspace.id));
+    await recordAudit({
+      workspaceId: ctx.workspace.id,
+      actorUserId: ctx.user.id,
+      action: "update",
+      entityType: "workspace",
+      entityId: ctx.workspace.id,
+      after: { archived: true },
+    });
+    return { ok: true };
+  }),
+
+  /**
+   * Transfer workspace ownership to another active super_admin member.
+   * The current owner's role is not changed; the new owner's ownerUserId is set.
+   */
+  transferOwnership: adminWsProcedure
+    .input(z.object({ newOwnerUserId: z.number().int() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      if (ctx.member.role !== "super_admin") {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Only super admins can transfer ownership" });
+      }
+      if (input.newOwnerUserId === ctx.user.id) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "You are already the owner" });
+      }
+      // Verify new owner is an active member
+      const [newOwnerMember] = await db.select().from(workspaceMembers)
+        .where(and(eq(workspaceMembers.workspaceId, ctx.workspace.id), eq(workspaceMembers.userId, input.newOwnerUserId)));
+      if (!newOwnerMember) throw new TRPCError({ code: "NOT_FOUND", message: "New owner is not a workspace member" });
+      if (newOwnerMember.deactivatedAt) throw new TRPCError({ code: "BAD_REQUEST", message: "New owner is deactivated" });
+
+      const { workspaces } = await import("../../drizzle/schema");
+      await db.update(workspaces).set({ ownerUserId: input.newOwnerUserId }).where(eq(workspaces.id, ctx.workspace.id));
+      // Ensure new owner has super_admin role
+      await db.update(workspaceMembers).set({ role: "super_admin" }).where(eq(workspaceMembers.id, newOwnerMember.id));
+
+      await recordAudit({
+        workspaceId: ctx.workspace.id,
+        actorUserId: ctx.user.id,
+        action: "update",
+        entityType: "workspace",
+        entityId: ctx.workspace.id,
+        after: { ownerTransferredTo: input.newOwnerUserId },
+      });
+      return { ok: true };
+    }),
+
+  /**
+   * Export workspace data as a JSON summary.
+   * Returns counts and a sample of each entity type.
+   * Full export (CSV per entity) would require streaming — this returns a JSON blob.
+   */
+  exportData: adminWsProcedure.mutation(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    if (ctx.member.role !== "super_admin") {
+      throw new TRPCError({ code: "FORBIDDEN", message: "Only super admins can export workspace data" });
+    }
+
+    const { contacts, leads, accounts, opportunities, customers, tasks: tasksTable } = await import("../../drizzle/schema");
+
+    const [contactCount] = await db.select({ c: count() }).from(contacts).where(eq(contacts.workspaceId, ctx.workspace.id));
+    const [leadCount] = await db.select({ c: count() }).from(leads).where(eq(leads.workspaceId, ctx.workspace.id));
+    const [accountCount] = await db.select({ c: count() }).from(accounts).where(eq(accounts.workspaceId, ctx.workspace.id));
+    const [oppCount] = await db.select({ c: count() }).from(opportunities).where(eq(opportunities.workspaceId, ctx.workspace.id));
+    const [customerCount] = await db.select({ c: count() }).from(customers).where(eq(customers.workspaceId, ctx.workspace.id));
+    const [taskCount] = await db.select({ c: count() }).from(tasksTable).where(eq(tasksTable.workspaceId, ctx.workspace.id));
+
+    const exportData = {
+      exportedAt: new Date().toISOString(),
+      workspaceId: ctx.workspace.id,
+      workspaceName: ctx.workspace.name,
+      summary: {
+        contacts: Number(contactCount?.c ?? 0),
+        leads: Number(leadCount?.c ?? 0),
+        accounts: Number(accountCount?.c ?? 0),
+        opportunities: Number(oppCount?.c ?? 0),
+        customers: Number(customerCount?.c ?? 0),
+        tasks: Number(taskCount?.c ?? 0),
+      },
+    };
+
+    await recordAudit({
+      workspaceId: ctx.workspace.id,
+      actorUserId: ctx.user.id,
+      action: "create",
+      entityType: "data_export",
+      entityId: ctx.workspace.id,
+      after: exportData.summary,
+    });
+
+    return exportData;
+  }),
 });

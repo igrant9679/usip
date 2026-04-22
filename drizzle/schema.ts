@@ -41,6 +41,7 @@ export const workspaces = mysqlTable("workspaces", {
   ownerUserId: int("ownerUserId").notNull(),
   logoUrl: text("logoUrl"),
   plan: mysqlEnum("plan", ["trial", "starter", "growth", "scale"]).default("trial").notNull(),
+  archivedAt: timestamp("archivedAt"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });

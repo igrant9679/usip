@@ -740,40 +740,128 @@ function BillingTab({ usage }: { usage: any }) {
 }
 
 function DangerTab({ canEdit }: { canEdit: boolean }) {
+  const [exportResult, setExportResult] = useState<Record<string, number> | null>(null);
+  const [transferUserId, setTransferUserId] = useState("");
+  const [archiveConfirm, setArchiveConfirm] = useState("");
+  const [showTransfer, setShowTransfer] = useState(false);
+  const [showArchive, setShowArchive] = useState(false);
+
+  const membersQ = trpc.team.list.useQuery();
+  const activeMembers = (membersQ.data ?? []).filter((m) => !m.deactivatedAt);
+
+  const exportMut = trpc.dangerZone.exportData.useMutation({
+    onSuccess: (data) => {
+      setExportResult(data.summary);
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `workspace-export-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success("Export downloaded");
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const transferMut = trpc.dangerZone.transferOwnership.useMutation({
+    onSuccess: () => { toast.success("Ownership transferred"); setShowTransfer(false); setTransferUserId(""); },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const archiveMut = trpc.dangerZone.archiveWorkspace.useMutation({
+    onSuccess: () => { toast.success("Workspace archived"); setShowArchive(false); },
+    onError: (e) => toast.error(e.message),
+  });
+
   return (
-    <Section title="Danger zone" description="Destructive actions. Admin role required.">
-      <div className="p-4 space-y-3">
-        <div className="flex items-center gap-3">
+    <Section title="Danger zone" description="Destructive actions. Super admin role required.">
+      <div className="p-4 space-y-4">
+        {/* Export */}
+        <div className="flex items-start gap-3">
           <div className="flex-1">
             <div className="text-sm font-medium">Export all workspace data</div>
-            <div className="text-xs text-muted-foreground">Download a ZIP with accounts, contacts, leads, opportunities, activities.</div>
+            <div className="text-xs text-muted-foreground">Downloads a JSON summary with record counts for all entity types.</div>
+            {exportResult && (
+              <div className="mt-1 text-xs text-emerald-600">
+                Exported: {Object.entries(exportResult).map(([k, v]) => `${v} ${k}`).join(" · ")}
+              </div>
+            )}
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={!canEdit}
-            onClick={() => toast.info("Export queued — you'll get an email when it's ready")}
-          >
-            <Download className="size-4" /> Export
+          <Button variant="outline" size="sm" disabled={!canEdit || exportMut.isPending} onClick={() => exportMut.mutate()}>
+            {exportMut.isPending ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
+            Export
           </Button>
         </div>
-        <div className="flex items-center gap-3">
-          <div className="flex-1">
-            <div className="text-sm font-medium">Transfer ownership</div>
-            <div className="text-xs text-muted-foreground">Move super_admin to another workspace member.</div>
+
+        {/* Transfer ownership */}
+        <div className="space-y-2">
+          <div className="flex items-start gap-3">
+            <div className="flex-1">
+              <div className="text-sm font-medium">Transfer ownership</div>
+              <div className="text-xs text-muted-foreground">Move super_admin to another active workspace member.</div>
+            </div>
+            <Button variant="outline" size="sm" disabled={!canEdit} onClick={() => setShowTransfer((v) => !v)}>
+              Transfer
+            </Button>
           </div>
-          <Button variant="outline" size="sm" disabled={!canEdit} onClick={() => toast.info("Coming soon")}>
-            Transfer
-          </Button>
+          {showTransfer && (
+            <div className="flex gap-2 pl-0">
+              <select
+                className="flex-1 border rounded-md px-2 py-1 text-sm bg-background"
+                value={transferUserId}
+                onChange={(e) => setTransferUserId(e.target.value)}
+              >
+                <option value="">Select new owner…</option>
+                {activeMembers.map((m) => (
+                  <option key={m.userId} value={String(m.userId)}>{m.name} ({m.role})</option>
+                ))}
+              </select>
+              <Button
+                size="sm"
+                disabled={!transferUserId || transferMut.isPending}
+                onClick={() => transferMut.mutate({ newOwnerUserId: Number(transferUserId) })}
+              >
+                {transferMut.isPending ? <Loader2 className="size-4 animate-spin" /> : "Confirm"}
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setShowTransfer(false)}>Cancel</Button>
+            </div>
+          )}
         </div>
-        <div className="flex items-center gap-3">
-          <div className="flex-1">
-            <div className="text-sm font-medium text-rose-700">Archive workspace</div>
-            <div className="text-xs text-muted-foreground">Members lose access. Data is retained for 90 days then purged.</div>
+
+        {/* Archive workspace */}
+        <div className="space-y-2">
+          <div className="flex items-start gap-3">
+            <div className="flex-1">
+              <div className="text-sm font-medium text-rose-700">Archive workspace</div>
+              <div className="text-xs text-muted-foreground">Members lose access. Data is retained for 90 days then purged.</div>
+            </div>
+            <Button variant="outline" size="sm" disabled={!canEdit} className="text-rose-700" onClick={() => setShowArchive((v) => !v)}>
+              Archive
+            </Button>
           </div>
-          <Button variant="outline" size="sm" disabled={!canEdit} className="text-rose-700" onClick={() => toast.info("Coming soon")}>
-            Archive
-          </Button>
+          {showArchive && (
+            <div className="space-y-2 border border-rose-200 rounded-md p-3 bg-rose-50 dark:bg-rose-950/20">
+              <p className="text-xs text-rose-700">Type <strong>ARCHIVE</strong> to confirm:</p>
+              <div className="flex gap-2">
+                <Input
+                  className="flex-1 text-sm"
+                  placeholder="ARCHIVE"
+                  value={archiveConfirm}
+                  onChange={(e) => setArchiveConfirm(e.target.value)}
+                />
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  disabled={archiveConfirm !== "ARCHIVE" || archiveMut.isPending}
+                  onClick={() => archiveMut.mutate()}
+                >
+                  {archiveMut.isPending ? <Loader2 className="size-4 animate-spin" /> : "Confirm archive"}
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => { setShowArchive(false); setArchiveConfirm(""); }}>Cancel</Button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </Section>

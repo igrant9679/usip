@@ -91,6 +91,21 @@ export default function Team() {
     onError: (e) => toast.error(e.message),
   });
 
+  const [bulkDeactivateOpen, setBulkDeactivateOpen] = useState(false);
+  const [bulkReassignTo, setBulkReassignTo] = useState<number | null>(null);
+  const allActiveOthers = (data ?? []).filter((m: any) => !m.deactivatedAt);
+
+  const bulkDeactivate = trpc.team.bulkDeactivate.useMutation({
+    onSuccess: (res) => {
+      utils.team.list.invalidate();
+      setSelected(new Set());
+      setBulkDeactivateOpen(false);
+      setBulkReassignTo(null);
+      toast.success(`Deactivated ${res.deactivated} member(s)${res.skipped ? `, skipped ${res.skipped}` : ""}`);
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
   const canChange = (targetRole: Role, targetUserId: number) => {
     if (!isAdmin) return false;
     if (myRole === "super_admin") return true;
@@ -164,6 +179,14 @@ export default function Team() {
                   {r}
                 </Button>
               ))}
+              <Button
+                size="sm"
+                variant="ghost"
+                className="text-rose-600 hover:text-rose-700"
+                onClick={() => setBulkDeactivateOpen(true)}
+              >
+                <UserMinus className="size-3.5" /> Deactivate
+              </Button>
               <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>
                 Clear
               </Button>
@@ -187,6 +210,7 @@ export default function Team() {
                     <th className="px-3 py-2">Role</th>
                     <th className="px-3 py-2">Quota</th>
                     <th className="px-3 py-2">Last active</th>
+                    <th className="px-3 py-2">Deactivated</th>
                     <th className="px-3 py-2">Status</th>
                     <th className="px-3 py-2 text-right">Actions</th>
                   </tr>
@@ -245,6 +269,9 @@ export default function Team() {
                         </td>
                         <td className="px-3 py-2 text-xs text-muted-foreground">
                           {m.lastActiveAt ? fmtDate(m.lastActiveAt) : "—"}
+                        </td>
+                        <td className="px-3 py-2 text-xs text-muted-foreground">
+                          {m.deactivatedAt ? fmtDate(m.deactivatedAt) : "—"}
                         </td>
                         <td className="px-3 py-2">
                           {isInactive ? (
@@ -361,6 +388,49 @@ export default function Team() {
               }}
             >
               <Mail className="size-4" /> Deactivate & reassign
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Bulk Deactivate Dialog */}
+      <Dialog open={bulkDeactivateOpen} onOpenChange={(v) => { if (!v) { setBulkDeactivateOpen(false); setBulkReassignTo(null); } }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Bulk deactivate {selected.size} member(s)</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <p className="text-sm text-muted-foreground">
+              All owned leads, opportunities, and open tasks will be reassigned to the selected member.
+              Members who are already deactivated, yourself, or peers above your rank will be skipped.
+            </p>
+            <div>
+              <label className="text-sm font-medium">Reassign work to</label>
+              <select
+                className="mt-1 w-full border rounded-md px-2 py-1.5 text-sm bg-background"
+                value={bulkReassignTo ?? ""}
+                onChange={(e) => setBulkReassignTo(Number(e.target.value) || null)}
+              >
+                <option value="">Select member…</option>
+                {allActiveOthers
+                  .filter((m: any) => !selected.has(m.memberId))
+                  .map((m: any) => (
+                    <option key={m.userId} value={m.userId}>{m.name ?? m.email} ({m.role})</option>
+                  ))}
+              </select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => { setBulkDeactivateOpen(false); setBulkReassignTo(null); }}>Cancel</Button>
+            <Button
+              variant="destructive"
+              disabled={!bulkReassignTo || bulkDeactivate.isPending}
+              onClick={() => {
+                if (!bulkReassignTo) return;
+                bulkDeactivate.mutate({ memberIds: Array.from(selected), reassignToUserId: bulkReassignTo });
+              }}
+            >
+              {bulkDeactivate.isPending ? "Deactivating…" : `Deactivate ${selected.size} member(s)`}
             </Button>
           </DialogFooter>
         </DialogContent>
