@@ -31,7 +31,9 @@ import {
   Sparkles,
   Target,
   Users,
+  Menu,
   Workflow,
+  X,
   Zap,
 } from "lucide-react";
 import { ReactNode, useEffect, useState } from "react";
@@ -101,17 +103,31 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
   const { user, logout } = useAuth();
   const { workspaces, current, switchTo, isLoading } = useWorkspace();
   const [wsOpen, setWsOpen] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
   const { data: unread } = trpc.notifications.unreadCount.useQuery(undefined, { enabled: !!current, refetchInterval: 30_000 });
 
-  // close workspace dropdown on route change
+  // close dropdowns/drawers on route change
   useEffect(() => {
     setWsOpen(false);
+    setMobileOpen(false);
   }, [location]);
 
   return (
     <div className="min-h-screen flex bg-background text-foreground">
+      {/* Mobile backdrop */}
+      {mobileOpen && (
+        <div
+          className="fixed inset-0 bg-black/50 z-40 md:hidden"
+          onClick={() => setMobileOpen(false)}
+          aria-hidden="true"
+        />
+      )}
       {/* Sidebar */}
-      <aside className="w-60 shrink-0 bg-sidebar text-sidebar-foreground flex flex-col">
+      <aside className={cn(
+        "w-60 shrink-0 bg-sidebar text-sidebar-foreground flex flex-col",
+        "fixed inset-y-0 left-0 z-50 transform transition-transform duration-200 md:translate-x-0 md:static md:transform-none",
+        mobileOpen ? "translate-x-0" : "-translate-x-full",
+      )}>
         <div className="px-4 py-5 flex items-center gap-2 border-b border-white/10">
           <div className="size-8 rounded-md bg-primary flex items-center justify-center text-primary-foreground font-bold">U</div>
           <div className="leading-tight">
@@ -162,7 +178,15 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
       {/* Main column */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Topbar */}
-        <header className="h-14 border-b bg-card/60 backdrop-blur px-4 flex items-center gap-3 sticky top-0 z-30">
+        <header className="h-14 border-b bg-card/60 backdrop-blur px-3 md:px-4 flex items-center gap-2 md:gap-3 sticky top-0 z-30">
+          {/* Mobile hamburger */}
+          <button
+            className="md:hidden p-2 rounded-md hover:bg-secondary"
+            onClick={() => setMobileOpen((v) => !v)}
+            aria-label={mobileOpen ? "Close menu" : "Open menu"}
+          >
+            {mobileOpen ? <X className="size-4" /> : <Menu className="size-4" />}
+          </button>
           {/* Workspace switcher */}
           <div className="relative">
             <button

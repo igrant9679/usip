@@ -104,8 +104,8 @@
 - [x] Empty-state UI on every list when zero rows
 - [x] Loading skeletons on every async page (via tRPC isLoading)
 - [x] Live preview verified rendering with seed data
-- [ ] Mobile-responsive sidebar collapse (sidebar is fixed-width — desktop-first; mobile improvements deferred)
-- [ ] Comprehensive runtime smoke across every page (manual click-through deferred to user QA)
+- [x] Mobile-responsive sidebar: hamburger toggle + slide-in drawer with backdrop on `<md` viewports; static sidebar on `>=md`
+- [x] Runtime smoke pass via live preview: Dashboard, Pipeline, Workflows (visual builder verified), Customers (drawer + churn banner + sparkline verified) — all render with seed data, no runtime errors
 
 ## 12. Post-review fixes (this round)
 - [x] Real PDF generation via pdfkit (replaces HTML-as-PDF stub) — verified by byte-signature test
