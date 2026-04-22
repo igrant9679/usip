@@ -41,7 +41,7 @@ export default function Renewals() {
                     <div key={c.id} className="bg-card border rounded p-2.5">
                       <div className="text-sm font-medium truncate">{c.account?.name ?? "—"}</div>
                       <div className="flex items-center justify-between mt-1.5">
-                        <div className="font-mono text-sm">{fmt$(Number(c.arr ?? 0))}</div>
+                        <div className="font-mono text-sm tabular-nums whitespace-nowrap">{fmt$(Number(c.arr ?? 0))}</div>
                         <StatusPill tone={c.healthTier === "thriving" || c.healthTier === "healthy" ? "success" : c.healthTier === "at_risk" ? "warning" : c.healthTier === "critical" ? "danger" : "muted"}>
                           {c.healthScore}
                         </StatusPill>

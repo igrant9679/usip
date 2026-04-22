@@ -29,10 +29,10 @@ export default function Products() {
                 <tbody>
                   {data!.map((p) => (
                     <tr key={p.id} className="border-t">
-                      <td className="p-2 font-mono text-xs">{p.sku}</td>
+                      <td className="p-2 font-mono text-xs whitespace-nowrap">{p.sku}</td>
                       <td className="p-2 font-medium">{p.name}</td>
                       <td className="p-2 text-muted-foreground">{p.category ?? "—"}</td>
-                      <td className="p-2 text-right font-mono">{fmt$(Number(p.listPrice))}</td>
+                      <td className="p-2 text-right font-mono tabular-nums whitespace-nowrap">{fmt$(Number(p.listPrice))}</td>
                       <td className="p-2 text-muted-foreground">{p.billingCycle}</td>
                       <td className="p-2"><StatusPill tone={p.active ? "success" : "muted"}>{p.active ? "active" : "inactive"}</StatusPill></td>
                       <td className="p-2 text-right"><Button size="sm" variant="ghost" onClick={() => del.mutate({ id: p.id })}><Trash2 className="size-3.5" /></Button></td>

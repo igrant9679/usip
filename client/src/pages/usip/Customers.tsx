@@ -35,7 +35,7 @@ export default function Customers() {
       <PageHeader title="Customers" description="Health, churn risk, expansion. Click a row for detail." />
       <div className="p-6 space-y-4">
         {kpis && (
-          <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
             <StatCard label="ARR" value={fmt$(kpis.arr)} />
             <StatCard label="Expansion" value={fmt$(kpis.expansion)} tone="success" />
             <StatCard label="At-risk" value={kpis.atRisk} tone={kpis.atRisk > 0 ? "warning" : "default"} />
@@ -60,9 +60,9 @@ export default function Customers() {
                       <tr key={c.id} onClick={() => setSelected(c.id)} className={`cursor-pointer hover:bg-secondary/30 ${selected === c.id ? "bg-secondary/40" : ""}`}>
                         <td className="px-3 py-2 font-medium">{c.account?.name ?? "—"}</td>
                         <td className="px-3 py-2"><StatusPill tone={TIER_TONE[c.healthTier] ?? "muted"}>{c.healthTier}</StatusPill></td>
-                        <td className="px-3 py-2 text-right font-mono">{c.healthScore}</td>
-                        <td className="px-3 py-2 text-right font-mono">{fmt$(Number(c.arr ?? 0))}</td>
-                        <td className="px-3 py-2 text-right font-mono">{c.npsScore}</td>
+                        <td className="px-3 py-2 text-right font-mono tabular-nums">{c.healthScore}</td>
+                        <td className="px-3 py-2 text-right font-mono tabular-nums whitespace-nowrap">{fmt$(Number(c.arr ?? 0))}</td>
+                        <td className="px-3 py-2 text-right font-mono tabular-nums">{c.npsScore}</td>
                         <td className="px-3 py-2 text-right text-xs text-muted-foreground">{fmtDate(c.renewalDate)}</td>
                       </tr>
                     ))}

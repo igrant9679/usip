@@ -36,8 +36,8 @@ export default function Accounts() {
                       <td className="px-3 py-2 font-medium"><span className="underline-offset-2 hover:underline">{a.name}</span> {a.parentAccountId && <StatusPill tone="muted">child</StatusPill>}</td>
                       <td className="px-3 py-2 text-muted-foreground">{a.industry ?? "—"}</td>
                       <td className="px-3 py-2 text-muted-foreground">{a.region ?? "—"}</td>
-                      <td className="px-3 py-2 text-right font-mono">{fmt$(Number(a.arr ?? 0))}</td>
-                      <td className="px-3 py-2 text-right font-mono">{a.employeeBand ?? "—"}</td>
+                      <td className="px-3 py-2 text-right font-mono tabular-nums whitespace-nowrap">{fmt$(Number(a.arr ?? 0))}</td>
+                      <td className="px-3 py-2 text-right font-mono tabular-nums whitespace-nowrap">{a.employeeBand ?? "—"}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -77,7 +77,7 @@ function Node({ node, depth }: { node: any; depth: number }) {
       <div className="flex items-center gap-1.5 text-sm py-1 hover:bg-secondary/30 rounded px-1" style={{ paddingLeft: depth * 16 + 4 }}>
         {node.children?.length ? <ChevronRight className="size-3.5 text-muted-foreground" /> : <span className="size-3.5" />}
         <span className="flex-1 truncate">{node.name}</span>
-        <span className="font-mono text-xs">{fmt$(Number(node.rolledArr ?? node.arr ?? 0))}</span>
+        <span className="font-mono tabular-nums text-xs whitespace-nowrap shrink-0">{fmt$(Number(node.rolledArr ?? node.arr ?? 0))}</span>
       </div>
       {node.children?.map((c: any) => <Node key={c.id} node={c} depth={depth + 1} />)}
     </div>

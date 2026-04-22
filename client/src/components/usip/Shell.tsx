@@ -188,15 +188,15 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
             {mobileOpen ? <X className="size-4" /> : <Menu className="size-4" />}
           </button>
           {/* Workspace switcher */}
-          <div className="relative">
+          <div className="relative min-w-0 max-w-[55vw] md:max-w-none">
             <button
               onClick={() => setWsOpen((v) => !v)}
-              className="flex items-center gap-2 px-2.5 py-1.5 rounded-md hover:bg-secondary text-sm"
+              className="flex items-center gap-2 px-2.5 py-1.5 rounded-md hover:bg-secondary text-sm min-w-0 max-w-full"
               disabled={isLoading || !current}
             >
-              <Building2 className="size-4 text-muted-foreground" />
-              <span className="font-medium">{current?.name ?? "Loading…"}</span>
-              <ChevronsUpDown className="size-3.5 text-muted-foreground" />
+              <Building2 className="size-4 text-muted-foreground shrink-0" />
+              <span className="font-medium truncate">{current?.name ?? "Loading…"}</span>
+              <ChevronsUpDown className="size-3.5 text-muted-foreground shrink-0" />
             </button>
             {wsOpen && (
               <div className="absolute top-full mt-1 left-0 w-64 bg-popover border rounded-md shadow-lg p-1 z-40">
@@ -217,7 +217,7 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
             )}
           </div>
 
-          {title && <div className="text-sm text-muted-foreground">/ {title}</div>}
+          {title && <div className="hidden sm:block text-sm text-muted-foreground truncate">/ {title}</div>}
           <div className="flex-1" />
 
           <div className="hidden md:flex items-center gap-2 px-2.5 py-1.5 rounded-md bg-secondary text-sm w-72">
@@ -244,12 +244,12 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
 
 export function PageHeader({ title, description, children }: { title: string; description?: string; children?: ReactNode }) {
   return (
-    <div className="px-6 py-5 border-b bg-card/30 flex items-center gap-4">
+    <div className="px-4 md:px-6 py-4 md:py-5 border-b bg-card/30 flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
       <div className="flex-1 min-w-0">
-        <h1 className="text-xl font-semibold tracking-tight">{title}</h1>
-        {description && <p className="text-sm text-muted-foreground mt-0.5">{description}</p>}
+        <h1 className="text-lg md:text-xl font-semibold tracking-tight truncate">{title}</h1>
+        {description && <p className="text-sm text-muted-foreground mt-0.5 line-clamp-2">{description}</p>}
       </div>
-      <div className="flex items-center gap-2">{children}</div>
+      {children && <div className="flex items-center gap-2 flex-wrap">{children}</div>}
     </div>
   );
 }
@@ -259,11 +259,17 @@ export function StatCard({ label, value, hint, tone }: { label: string; value: R
     : tone === "warning" ? "text-amber-800 bg-amber-50 border-amber-200"
     : tone === "danger" ? "text-rose-800 bg-rose-50 border-rose-200"
     : "";
+  const titleStr = typeof value === "string" || typeof value === "number" ? String(value) : undefined;
   return (
-    <div className={cn("rounded-lg border bg-card p-4", toneCls)}>
-      <div className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium">{label}</div>
-      <div className="text-2xl font-semibold font-mono mt-1">{value}</div>
-      {hint && <div className="text-xs text-muted-foreground mt-1">{hint}</div>}
+    <div className={cn("rounded-lg border bg-card p-4 min-w-0 overflow-hidden", toneCls)}>
+      <div className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium truncate">{label}</div>
+      <div
+        className="text-xl @[14rem]:text-2xl font-semibold font-mono mt-1 tabular-nums truncate"
+        title={titleStr}
+      >
+        {value}
+      </div>
+      {hint && <div className="text-[11px] text-muted-foreground mt-1 truncate" title={hint}>{hint}</div>}
     </div>
   );
 }

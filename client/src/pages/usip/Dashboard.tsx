@@ -20,29 +20,29 @@ export default function Dashboard() {
         {isLoading ? (
           <div className="flex items-center gap-2 text-muted-foreground"><Loader2 className="size-4 animate-spin" /> Loading workspace…</div>
         ) : (
-          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
-            <StatCard label="Pipeline value" value={fmt$(summary?.pipelineValue ?? 0)} hint={`${summary?.opportunities ?? 0} open opps`} />
-            <StatCard label="Closed-won" value={fmt$(summary?.closedWon ?? 0)} tone="success" />
-            <StatCard label="Open accounts" value={summary?.accounts ?? 0} hint={`${summary?.contacts ?? 0} contacts`} />
-            <StatCard label="Active leads" value={summary?.leads ?? 0} />
-            <StatCard label="Customers" value={kpis?.total ?? summary?.customers ?? 0} hint={kpis ? `${kpis.atRisk} at-risk` : undefined} tone={kpis && kpis.atRisk > 0 ? "warning" : undefined} />
-            <StatCard label="Open tasks" value={summary?.openTasks ?? 0} />
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 @container">
+            <div className="@container"><StatCard label="Pipeline value" value={fmt$(summary?.pipelineValue ?? 0)} hint={`${summary?.opportunities ?? 0} open opps`} /></div>
+            <div className="@container"><StatCard label="Closed-won" value={fmt$(summary?.closedWon ?? 0)} tone="success" /></div>
+            <div className="@container"><StatCard label="Open accounts" value={summary?.accounts ?? 0} hint={`${summary?.contacts ?? 0} contacts`} /></div>
+            <div className="@container"><StatCard label="Active leads" value={summary?.leads ?? 0} /></div>
+            <div className="@container"><StatCard label="Customers" value={kpis?.total ?? summary?.customers ?? 0} hint={kpis ? `${kpis.atRisk} at-risk` : undefined} tone={kpis && kpis.atRisk > 0 ? "warning" : undefined} /></div>
+            <div className="@container"><StatCard label="Open tasks" value={summary?.openTasks ?? 0} /></div>
           </div>
         )}
 
         {kpis && (
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <Card title="Recurring revenue">
-              <div className="text-3xl font-semibold font-mono">{fmt$(kpis.arr)}</div>
-              <div className="text-xs text-muted-foreground mt-1">Across {kpis.total} customers</div>
-              <div className="mt-3 text-sm flex items-center gap-1 text-emerald-700"><TrendingUp className="size-3.5" /> Expansion potential {fmt$(kpis.expansion)}</div>
+              <div className="text-2xl md:text-3xl font-semibold font-mono tabular-nums truncate" title={fmt$(kpis.arr)}>{fmt$(kpis.arr)}</div>
+              <div className="text-xs text-muted-foreground mt-1 truncate">Across {kpis.total} customers</div>
+              <div className="mt-3 text-sm flex items-center gap-1 text-emerald-700 truncate"><TrendingUp className="size-3.5 shrink-0" /> Expansion potential {fmt$(kpis.expansion)}</div>
             </Card>
             <Card title="NPS">
-              <div className="text-3xl font-semibold font-mono">{kpis.npsBand}</div>
+              <div className="text-2xl md:text-3xl font-semibold font-mono tabular-nums">{kpis.npsBand}</div>
               <div className="text-xs text-muted-foreground mt-1">Avg score {kpis.avgNps}</div>
             </Card>
             <Card title="Renewals next 90 days">
-              <div className="text-3xl font-semibold font-mono">{kpis.renewing90}</div>
+              <div className="text-2xl md:text-3xl font-semibold font-mono tabular-nums">{kpis.renewing90}</div>
               <div className="text-xs text-muted-foreground mt-1">Customers in active renewal motion</div>
               <Link href="/renewals" className="text-xs text-primary mt-3 inline-block">Open renewals board →</Link>
             </Card>
@@ -59,7 +59,7 @@ export default function Dashboard() {
                     <div className="text-sm font-medium truncate">{o.name}</div>
                     <div className="text-xs text-muted-foreground">{o.accountName} · {o.stage}</div>
                   </div>
-                  <div className="font-mono text-sm">{fmt$(Number(o.value))}</div>
+                  <div className="font-mono text-sm tabular-nums shrink-0">{fmt$(Number(o.value))}</div>
                 </Link>
               ))}
             </div>

@@ -52,7 +52,7 @@ export default function Social() {
       </PageHeader>
 
       <div className="p-6 space-y-4">
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <StatCard label="Connected" value={(accounts.data ?? []).filter((a) => a.connected).length} />
           <StatCard label="Published" value={analytics.data?.totalPosts ?? 0} />
           <StatCard label="Impressions" value={(analytics.data?.totalImpressions ?? 0).toLocaleString()} />
@@ -94,7 +94,7 @@ export default function Social() {
 
           <TabsContent value="calendar">
             <Section title="Next 30 days">
-              <div className="grid grid-cols-7 gap-1 p-3">
+              <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-1 p-3">
                 {last30Days.map((k) => {
                   const items = calendarMap[k] ?? [];
                   const d = new Date(k);
@@ -129,11 +129,11 @@ export default function Social() {
 
           <TabsContent value="analytics">
             <Section title="By platform">
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 p-3">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 p-3">
                 {Object.entries(analytics.data?.byPlatform ?? {}).map(([k, v]: any) => (
                   <div key={k} className="border rounded p-3 bg-card">
                     <div className="text-xs uppercase text-muted-foreground">{k}</div>
-                    <div className="font-mono text-lg mt-1">{v.posts} posts</div>
+                    <div className="font-mono text-lg mt-1 tabular-nums truncate">{v.posts} posts</div>
                     <div className="text-xs text-muted-foreground">{v.impressions.toLocaleString()} imp · {v.engagements.toLocaleString()} eng</div>
                   </div>
                 ))}

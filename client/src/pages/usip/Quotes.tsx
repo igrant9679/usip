@@ -43,14 +43,14 @@ export default function Quotes() {
               {list.data!.map((q) => {
                 const o = oppMap.get(q.opportunityId);
                 return (
-                  <li key={q.id} className="p-3 flex items-center text-sm gap-3">
-                    <div>
-                      <div className="font-mono text-xs text-muted-foreground">{q.quoteNumber}</div>
-                      <div className="font-medium">{o?.name ?? "—"}</div>
+                  <li key={q.id} className="p-3 flex items-center text-sm gap-3 min-w-0">
+                    <div className="min-w-0">
+                      <div className="font-mono tabular-nums text-xs text-muted-foreground">{q.quoteNumber}</div>
+                      <div className="font-medium truncate" title={o?.name ?? "—"}>{o?.name ?? "—"}</div>
                     </div>
                     <StatusPill tone={q.status === "accepted" ? "success" : q.status === "sent" ? "info" : q.status === "rejected" || q.status === "expired" ? "danger" : "muted"}>{q.status}</StatusPill>
-                    <div className="ml-auto font-mono">{fmt$(Number(q.total))}</div>
-                    <div className="text-xs text-muted-foreground">{fmtDate(q.expiresAt)}</div>
+                    <div className="ml-auto font-mono tabular-nums whitespace-nowrap shrink-0">{fmt$(Number(q.total))}</div>
+                    <div className="text-xs text-muted-foreground whitespace-nowrap shrink-0">{fmtDate(q.expiresAt)}</div>
                     <div className="flex gap-1">
                       {!q.pdfUrl && <Button size="sm" variant="ghost" onClick={() => genPdf.mutate({ id: q.id })}>Generate</Button>}
                       {q.pdfUrl && <Button size="sm" variant="ghost" onClick={() => window.open(q.pdfUrl!, "_blank")}><ExternalLink className="size-3.5" /></Button>}
@@ -109,7 +109,7 @@ export default function Quotes() {
             ))}
           </ul>
           <Button type="button" size="sm" variant="outline" className="mt-2" onClick={() => setLis((arr) => [...arr, { name: "", quantity: 1, unitPrice: 0, discountPct: 0 }])}>+ Line item</Button>
-          <div className="mt-3 text-sm font-mono flex justify-end gap-4">
+          <div className="mt-3 text-sm font-mono tabular-nums flex justify-end flex-wrap gap-4">
             <div>Subtotal: {fmt$(subtotal)}</div>
             <div>Discount: −{fmt$(discount)}</div>
             <div className="font-bold">Total: {fmt$(total)}</div>

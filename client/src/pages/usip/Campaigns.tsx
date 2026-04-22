@@ -45,7 +45,7 @@ export default function Campaigns() {
                     <div className="text-sm font-medium">{c.name}</div>
                     <div className="text-xs text-muted-foreground mt-0.5 flex gap-2 items-center">
                       <StatusPill tone={c.status === "live" ? "success" : c.status === "planning" ? "info" : "muted"}>{c.status}</StatusPill>
-                      <span className="font-mono">{fmt$(Number(c.budget))}</span>
+                      <span className="font-mono tabular-nums">{fmt$(Number(c.budget))}</span>
                     </div>
                   </li>
                 ))}
@@ -56,7 +56,7 @@ export default function Campaigns() {
         <div className="lg:col-span-2 space-y-4">
           {!selected ? <EmptyState icon={Megaphone} title="Select a campaign" /> : (
             <>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 <StatCard label="Pipeline" value={fmt$(analytics.data?.pipelineValue ?? 0)} />
                 <StatCard label="Won" value={fmt$(analytics.data?.wonValue ?? 0)} tone="success" />
                 <StatCard label="Posts" value={analytics.data?.socialPosts ?? 0} />

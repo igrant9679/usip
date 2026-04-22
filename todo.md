@@ -114,3 +114,10 @@
 - [x] RecordDrawer with timeline + call/meeting/note logging + S3 attachments + @mentions, wired into Leads / Contacts / Accounts / Customers / Pipeline
 - [x] Customer detail surfaces churn-risk banner, NPS sparkline, and expansion potential prominently
 - [x] Notification badge on topbar (refetches every 30s)
+
+## 13. Sizing / overflow fixes (post-delivery feedback)
+- [ ] KPI numerics shrink/wrap at narrow widths (Dashboard 6-col tile row overflows on `<lg`)
+- [ ] Customer detail health components stay on one line ($ amounts truncating)
+- [ ] Dashboard widget grid columns reflow at `<xl` instead of squeezing
+- [ ] Table headers (Tasks / Quotes / Sequences / Drafts) clip — add ellipsis + min-width
+- [ ] Topbar workspace switcher button doesn't truncate at `<md`

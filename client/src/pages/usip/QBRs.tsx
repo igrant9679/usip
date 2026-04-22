@@ -35,7 +35,7 @@ export default function QBRs() {
                 </div>
               }>
               {prep ? (
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 p-3 text-sm">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 p-3 text-sm">
                   {(["wins", "risks", "asks", "agenda"] as const).map((k) => (
                     <div key={k}>
                       <div className="text-[11px] uppercase font-semibold text-muted-foreground mb-1">{k}</div>

@@ -20,7 +20,7 @@ function WidgetCard({ widgetId, onRemove, onMove, onSwap, idx, total }: { widget
   if (!data) return <div className="border rounded-lg bg-card p-3 text-xs text-muted-foreground">Loading…</div>;
   return (
     <div
-      className={`border rounded-lg bg-card p-3 transition ${over ? "border-[#14B89A] ring-2 ring-[#14B89A]/40" : ""}`}
+      className={`@container border rounded-lg bg-card p-3 transition ${over ? "border-[#14B89A] ring-2 ring-[#14B89A]/40" : ""}`}
       draggable
       onDragStart={(e) => { e.dataTransfer.setData("text/plain", String(widgetId)); e.dataTransfer.effectAllowed = "move"; }}
       onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; setOver(true); }}
@@ -34,7 +34,7 @@ function WidgetCard({ widgetId, onRemove, onMove, onSwap, idx, total }: { widget
         <Button size="sm" variant="ghost" onClick={onRemove}><Trash2 className="size-3.5" /></Button>
       </div>
       {data.type === "kpi" && (
-        <div className="font-mono text-2xl">
+        <div className="font-mono tabular-nums text-xl @[14rem]:text-2xl truncate" title={String(data.value ?? "")}>
           {data.format === "currency" ? `$${Number(data.value ?? 0).toLocaleString()}` :
            data.format === "percent" ? `${data.value ?? 0}%` :
            Number(data.value ?? 0).toLocaleString()}
@@ -46,7 +46,7 @@ function WidgetCard({ widgetId, onRemove, onMove, onSwap, idx, total }: { widget
             <li key={s.stage} className="flex items-center gap-2">
               <span className="capitalize w-24">{s.stage}</span>
               <div className="flex-1 h-2 bg-secondary rounded"><div className="h-full bg-primary rounded" style={{ width: `${Math.min(100, (s.count / Math.max(...((data as any).series.map((x: any) => x.count) || [1]))) * 100)}%` }} /></div>
-              <span className="font-mono w-16 text-right">{s.count}</span>
+              <span className="font-mono tabular-nums w-16 text-right shrink-0">{s.count}</span>
             </li>
           ))}
         </ul>
@@ -65,7 +65,7 @@ function WidgetCard({ widgetId, onRemove, onMove, onSwap, idx, total }: { widget
       )}
       {data.type === "table" && (
         <ul className="text-xs divide-y">{((data as any).rows ?? []).map((r: any) => (
-          <li key={r.id} className="py-1 flex"><span className="flex-1">#{r.id}</span><span className="font-mono">${Number(r.value).toLocaleString()}</span></li>
+          <li key={r.id} className="py-1 flex gap-2 min-w-0"><span className="flex-1 truncate">#{r.id}</span><span className="font-mono tabular-nums whitespace-nowrap shrink-0">${Number(r.value).toLocaleString()}</span></li>
         ))}</ul>
       )}
     </div>

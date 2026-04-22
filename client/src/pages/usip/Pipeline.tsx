@@ -80,7 +80,7 @@ export default function Pipeline() {
                       <div className="text-sm font-medium truncate">{o.name}</div>
                       <div className="text-[11px] text-muted-foreground truncate">{o.accountName}</div>
                       <div className="flex items-center justify-between mt-1.5">
-                        <div className="font-mono text-sm">{fmt$(Number(o.value))}</div>
+                        <div className="font-mono text-sm tabular-nums whitespace-nowrap">{fmt$(Number(o.value))}</div>
                         <div className="text-[11px] text-muted-foreground">{o.winProb}%</div>
                       </div>
                     </div>
