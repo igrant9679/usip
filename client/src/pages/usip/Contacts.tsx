@@ -22,7 +22,13 @@ import {
   ListPlus,
   Send,
   Wand2,
+  MoreHorizontal,
+  Pencil,
+  Trash2,
+  Tag,
+  Megaphone,
 } from "lucide-react";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { toast } from "sonner";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
@@ -467,6 +473,92 @@ function SendEmailModal({
   );
 }
 
+/* ─── Add to Campaign Modal ────────────────────────────────────────────── */
+function AddToCampaignModal({ open, onOpenChange, contactIds, onComplete }: { open: boolean; onOpenChange: (v: boolean) => void; contactIds: number[]; onComplete: () => void }) {
+  const [campaignId, setCampaignId] = useState("");
+  const { data: campaigns } = trpc.campaigns.list.useQuery();
+  const addMut = trpc.campaigns.addAudience.useMutation({
+    onSuccess: (d) => { toast.success(`Added ${d.added} contact${d.added !== 1 ? "s" : ""} to campaign`); onComplete(); onOpenChange(false); },
+    onError: (e: any) => toast.error(e.message),
+  });
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader><DialogTitle className="flex items-center gap-2"><Megaphone className="size-4 text-orange-500" />Add to Campaign</DialogTitle></DialogHeader>
+        <div className="space-y-4 py-2">
+          <Select value={campaignId} onValueChange={setCampaignId}>
+            <SelectTrigger><SelectValue placeholder="Choose a campaign..." /></SelectTrigger>
+            <SelectContent>{(campaigns ?? []).map((c: any) => <SelectItem key={c.id} value={String(c.id)}>{c.name}</SelectItem>)}</SelectContent>
+          </Select>
+          <div className="flex gap-2 justify-end">
+            <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+            <Button onClick={() => addMut.mutate({ campaignId: Number(campaignId), contactIds })} disabled={!campaignId || addMut.isPending}>
+              {addMut.isPending ? <Loader2 className="size-4 animate-spin mr-1" /> : <Megaphone className="size-4 mr-1" />}
+              Add {contactIds.length}
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/* ─── Add to Segment Modal ─────────────────────────────────────────────── */
+function AddToSegmentModal({ open, onOpenChange, contactIds, onComplete }: { open: boolean; onOpenChange: (v: boolean) => void; contactIds: number[]; onComplete: () => void }) {
+  const [segmentId, setSegmentId] = useState("");
+  const { data: segments } = trpc.segments.list.useQuery();
+  const addMut = trpc.segments.addContacts.useMutation({
+    onSuccess: (d) => { toast.success(`Added ${d.added} contact${d.added !== 1 ? "s" : ""} to segment`); onComplete(); onOpenChange(false); },
+    onError: (e: any) => toast.error(e.message),
+  });
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader><DialogTitle className="flex items-center gap-2"><Tag className="size-4 text-violet-500" />Add to Segment</DialogTitle></DialogHeader>
+        <div className="space-y-4 py-2">
+          <Select value={segmentId} onValueChange={setSegmentId}>
+            <SelectTrigger><SelectValue placeholder="Choose a segment..." /></SelectTrigger>
+            <SelectContent>{(segments ?? []).map((s: any) => <SelectItem key={s.id} value={String(s.id)}>{s.name}</SelectItem>)}</SelectContent>
+          </Select>
+          <div className="flex gap-2 justify-end">
+            <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+            <Button onClick={() => addMut.mutate({ segmentId: Number(segmentId), contactIds })} disabled={!segmentId || addMut.isPending}>
+              {addMut.isPending ? <Loader2 className="size-4 animate-spin mr-1" /> : <Tag className="size-4 mr-1" />}
+              Add {contactIds.length}
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/* ─── Edit Contact Dialog ───────────────────────────────────────────────── */
+function EditContactDialog({ contact, open, onOpenChange, onSaved }: { contact: any; open: boolean; onOpenChange: (v: boolean) => void; onSaved: () => void }) {
+  const { data: accounts } = trpc.accounts.list.useQuery();
+  const updateMut = trpc.contacts.update.useMutation({
+    onSuccess: () => { toast.success("Contact updated"); onSaved(); onOpenChange(false); },
+    onError: (e: any) => toast.error(e.message),
+  });
+  const handleSubmit = (f: FormData) => updateMut.mutate({ id: contact.id, patch: {
+    firstName: String(f.get("firstName")), lastName: String(f.get("lastName")),
+    email: String(f.get("email") ?? "") || undefined, title: String(f.get("title") ?? "") || undefined,
+    phone: String(f.get("phone") ?? "") || undefined, accountId: Number(f.get("accountId")) || undefined,
+  }});
+  return (
+    <FormDialog open={open} onOpenChange={onOpenChange} title="Edit Contact" isPending={updateMut.isPending} onSubmit={handleSubmit}>
+      <div className="grid grid-cols-2 gap-3">
+        <Field name="firstName" label="First name" required defaultValue={contact?.firstName} />
+        <Field name="lastName" label="Last name" required defaultValue={contact?.lastName} />
+      </div>
+      <Field name="email" label="Email" type="email" defaultValue={contact?.email} />
+      <Field name="title" label="Title" defaultValue={contact?.title} />
+      <Field name="phone" label="Phone" defaultValue={contact?.phone} />
+      <SelectField name="accountId" label="Account" defaultValue={String(contact?.accountId ?? "")} options={[{ value: "", label: "—" }, ...((accounts ?? []).map((a: any) => ({ value: String(a.id), label: a.name })))]} />
+    </FormDialog>
+  );
+}
+
 /* ─── Main Contacts page ────────────────────────────────────────────────── */
 export default function Contacts() {
   const [search, setSearch] = useState("");
@@ -476,6 +568,9 @@ export default function Contacts() {
   const [bulkVerifyOpen, setBulkVerifyOpen] = useState(false);
   const [addToSeqOpen, setAddToSeqOpen] = useState(false);
   const [sendEmailOpen, setSendEmailOpen] = useState(false);
+  const [addToCampaignOpen, setAddToCampaignOpen] = useState(false);
+  const [addToSegmentOpen, setAddToSegmentOpen] = useState(false);
+  const [editContact, setEditContact] = useState<any | null>(null);
   const [verifFilter, setVerifFilter] = useState<VerifFilter>("all");
 
   const utils = trpc.useUtils();
@@ -494,6 +589,11 @@ export default function Contacts() {
       setOpen(false);
       toast.success("Contact added");
     },
+  });
+
+  const deleteMut = trpc.contacts.delete.useMutation({
+    onSuccess: () => { utils.contacts.list.invalidate(); toast.success("Contact deleted"); },
+    onError: (e: any) => toast.error(e.message),
   });
 
   const allIds = (data ?? []).map((c) => c.id);
@@ -589,6 +689,22 @@ export default function Contacts() {
               <Send className="h-4 w-4 text-blue-500" />
               Send Email ({selectedIds.size})
             </Button>
+            <Button
+              variant="outline"
+              onClick={() => setAddToCampaignOpen(true)}
+              className="gap-2"
+            >
+              <Megaphone className="h-4 w-4 text-orange-500" />
+              Add to Campaign ({selectedIds.size})
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => setAddToSegmentOpen(true)}
+              className="gap-2"
+            >
+              <Tag className="h-4 w-4 text-violet-500" />
+              Add to Segment ({selectedIds.size})
+            </Button>
           </>
         )}
         <Button onClick={() => setOpen(true)}>
@@ -619,6 +735,7 @@ export default function Contacts() {
                   <th className="text-left px-3 py-2">Email</th>
                   <th className="text-left px-3 py-2 w-28">Verified</th>
                   <th className="text-left px-3 py-2">Phone</th>
+                  <th className="px-3 py-2 w-10"></th>
                 </tr>
               </thead>
               <tbody className="divide-y">
@@ -644,7 +761,7 @@ export default function Contacts() {
                       <input
                         type="checkbox"
                         checked={selectedIds.has(c.id)}
-                        onChange={() => toggleOne(c.id)}
+                        readOnly
                         className="rounded border-gray-300 cursor-pointer"
                       />
                     </td>
@@ -667,6 +784,34 @@ export default function Contacts() {
                       )}
                     </td>
                     <td className="px-3 py-2 text-muted-foreground">{c.phone}</td>
+                    <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="ghost" size="icon" className="size-7">
+                            <MoreHorizontal className="size-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem onClick={() => setEditContact(c)}>
+                            <Pencil className="size-4 mr-2" />Edit
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => setDrawer({ id: c.id, name: `${c.firstName} ${c.lastName}`, subtitle: `${c.title ?? ""} · ${(c as any).accountName ?? ""}` })}>
+                            <Users className="size-4 mr-2" />View details
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem onClick={() => { setSelectedIds(new Set([c.id])); setAddToCampaignOpen(true); }}>
+                            <Megaphone className="size-4 mr-2" />Add to Campaign
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => { setSelectedIds(new Set([c.id])); setAddToSegmentOpen(true); }}>
+                            <Tag className="size-4 mr-2" />Add to Segment
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem className="text-destructive" onClick={() => { if (confirm(`Delete ${c.firstName} ${c.lastName}?`)) deleteMut.mutate({ id: c.id }); }}>
+                            <Trash2 className="size-4 mr-2" />Delete
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -743,6 +888,29 @@ export default function Contacts() {
         contactIds={Array.from(selectedIds)}
         onComplete={() => setSelectedIds(new Set())}
       />
+      {/* Add to Campaign modal */}
+      <AddToCampaignModal
+        open={addToCampaignOpen}
+        onOpenChange={setAddToCampaignOpen}
+        contactIds={Array.from(selectedIds)}
+        onComplete={() => setSelectedIds(new Set())}
+      />
+      {/* Add to Segment modal */}
+      <AddToSegmentModal
+        open={addToSegmentOpen}
+        onOpenChange={setAddToSegmentOpen}
+        contactIds={Array.from(selectedIds)}
+        onComplete={() => setSelectedIds(new Set())}
+      />
+      {/* Edit contact dialog */}
+      {editContact && (
+        <EditContactDialog
+          contact={editContact}
+          open={!!editContact}
+          onOpenChange={(v) => !v && setEditContact(null)}
+          onSaved={() => { utils.contacts.list.invalidate(); setEditContact(null); }}
+        />
+      )}
     </Shell>
   );
 }

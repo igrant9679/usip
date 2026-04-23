@@ -940,5 +940,15 @@
 - [x] Tests: 24 new Vitest tests (635 total passing)
 
 ## Bug Fixes (Apr 23)
-- [ ] BUG: Send Email button missing on Contact detail/drawer view — only exists on bulk-select list view
-- [ ] BUG: Campaign launch blocked by checklist — no UI to tick off checklist items (Budget approved, Creative reviewed, etc.)
+- [x] BUG: Send Email button missing on Contact detail/drawer view — only exists on bulk-select list view
+- [x] BUG: Campaign launch blocked by checklist — no UI to tick off checklist items (Budget approved, Creative reviewed, etc.)
+
+## Bugs & Features — Round 3
+
+- [ ] BUG: Ad-hoc email send does not log a Timeline activity on the contact or account record
+- [ ] BUG: Send Email tab missing from Leads drawer (only added to Contacts)
+- [ ] BUG: Checkboxes broken on Contacts, Leads, Accounts list views (multi-select not working)
+- [ ] BUG: No Edit or Delete on Contact, Lead, Account records (drawer + list)
+- [ ] FEATURE: Add-to-Campaign action from Contact, Lead, Account detail view and bulk-select toolbar
+- [ ] FEATURE: Add-to-Segment action from Contact, Lead, Account detail view and bulk-select toolbar
+- [ ] FEATURE: Add individual contacts when adding a Company (Account) to a campaign/segment

@@ -510,10 +510,28 @@ export const campaignsRouter = router({
     const clickRate = c.totalOpened > 0 ? Math.round((c.totalClicked / c.totalOpened) * 100) : 0;
     const replyRate = c.totalDelivered > 0 ? Math.round((c.totalReplied / c.totalDelivered) * 100) : 0;
     const bounceRate = c.totalSent > 0 ? Math.round((c.totalBounced / c.totalSent) * 100) : 0;
-    return { ...c, openRate, clickRate, replyRate, bounceRate };
+     return { ...c, openRate, clickRate, replyRate, bounceRate };
   }),
-});
 
+  /** Add contacts or leads to a campaign's audience list */
+  addAudience: workspaceProcedure
+    .input(z.object({
+      campaignId: z.number(),
+      contactIds: z.array(z.number()).optional(),
+      leadIds: z.array(z.number()).optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [c] = await db.select().from(campaigns).where(and(eq(campaigns.id, input.campaignId), eq(campaigns.workspaceId, ctx.workspace.id)));
+      if (!c) throw new TRPCError({ code: "NOT_FOUND" });
+      const existing: number[] = Array.isArray(c.audienceIds) ? (c.audienceIds as number[]) : [];
+      const newIds = [...(input.contactIds ?? []), ...(input.leadIds ?? [])];
+      const merged = Array.from(new Set([...existing, ...newIds]));
+      await db.update(campaigns).set({ audienceType: "contacts", audienceIds: merged }).where(eq(campaigns.id, input.campaignId));
+      return { added: merged.length - existing.length, total: merged.length };
+    }),
+});
 /* ───── Custom Dashboards ─────────────────────────────────────────── */
 
 export const dashboardsRouter = router({

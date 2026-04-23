@@ -196,6 +196,41 @@ export const segmentsRouter = router({
       return { refreshed: segs.length };
     }),
 
+  /** Manually add contacts to a segment by injecting a rule that matches their IDs */
+  addContacts: workspaceProcedure
+    .input(z.object({
+      segmentId: z.number(),
+      contactIds: z.array(z.number()).min(1),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new Error("Database unavailable");
+      const [seg] = await db.select().from(audienceSegments).where(and(
+        eq(audienceSegments.id, input.segmentId),
+        eq(audienceSegments.workspaceId, ctx.workspace.id),
+      ));
+      if (!seg) throw new Error("Segment not found");
+      // Add a rule for each contactId not already covered
+      const existingRules = (seg.rules as Rule[]) ?? [];
+      const existingIds = existingRules
+        .filter((r) => r.field === "email" && r.operator === "equals")
+        .map((r) => r.value);
+      // Fetch emails for the given contactIds
+      const { inArray } = await import("drizzle-orm");
+      const rows = await db.select({ id: contacts.id, email: contacts.email })
+        .from(contacts)
+        .where(and(eq(contacts.workspaceId, ctx.workspace.id), inArray(contacts.id, input.contactIds)));
+      const newRules: Rule[] = rows
+        .filter((r) => r.email && !existingIds.includes(r.email))
+        .map((r) => ({ id: `manual-${r.id}`, field: "email" as const, operator: "equals" as const, value: r.email! }));
+      const updatedRules = [...existingRules, ...newRules];
+      const allContacts = await db.select().from(contacts).where(eq(contacts.workspaceId, ctx.workspace.id));
+      const count = allContacts.filter((c) => evaluateRules(c as Record<string, any>, updatedRules, (seg.matchType ?? "all") as "all" | "any")).length;
+      await db.update(audienceSegments).set({ rules: updatedRules, contactCount: count, lastEvaluatedAt: new Date() })
+        .where(eq(audienceSegments.id, input.segmentId));
+      return { added: newRules.length, total: count };
+    }),
+
   getContacts: workspaceProcedure
     .input(z.object({ id: z.number() }))
     .query(async ({ ctx, input }) => {

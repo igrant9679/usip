@@ -3,6 +3,7 @@ import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
   accounts,
+  activities,
   contacts,
   dealLineItems,
   emailDrafts,
@@ -308,6 +309,17 @@ export const contactsRouter = router({
           createdByUserId: ctx.user.id,
           sentAt: new Date(),
         });
+        // Log a Timeline activity so the email appears in the contact's timeline
+        await db.insert(activities).values({
+          workspaceId: ctx.workspace.id,
+          type: "email",
+          relatedType: "contact",
+          relatedId: contact.id,
+          subject: input.subject,
+          body: input.body,
+          actorUserId: ctx.user.id,
+          occurredAt: new Date(),
+        });
         await recordAudit({
           workspaceId: ctx.workspace.id,
           actorUserId: ctx.user.id,
@@ -498,6 +510,54 @@ export const leadsRouter = router({
     await db.update(leads).set({ score, grade, scoreReasons: reasons }).where(eq(leads.id, lead.id));
     return { score, grade, reasons };
   }),
+
+  /** Send an ad-hoc email to a lead and log it in the timeline */
+  sendAdHocEmail: repProcedure
+    .input(
+      z.object({
+        leadId: z.number(),
+        subject: z.string().min(1),
+        body: z.string().min(1),
+        aiGenerated: z.boolean().default(false),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [lead] = await db.select().from(leads).where(and(eq(leads.id, input.leadId), eq(leads.workspaceId, ctx.workspace.id)));
+      if (!lead) throw new TRPCError({ code: "NOT_FOUND" });
+      if (!lead.email) throw new TRPCError({ code: "BAD_REQUEST", message: "Lead has no email address" });
+      // Create emailDraft record
+      await db.insert(emailDrafts).values({
+        workspaceId: ctx.workspace.id,
+        subject: input.subject,
+        body: input.body,
+        status: "sent",
+        aiGenerated: input.aiGenerated,
+        createdByUserId: ctx.user.id,
+        sentAt: new Date(),
+      });
+      // Log a Timeline activity on the lead record
+      await db.insert(activities).values({
+        workspaceId: ctx.workspace.id,
+        type: "email",
+        relatedType: "lead",
+        relatedId: input.leadId,
+        subject: input.subject,
+        body: input.body,
+        actorUserId: ctx.user.id,
+        occurredAt: new Date(),
+      });
+      await recordAudit({
+        workspaceId: ctx.workspace.id,
+        actorUserId: ctx.user.id,
+        action: "create",
+        entityType: "email_draft",
+        entityId: 0,
+        after: { leadId: input.leadId, subject: input.subject, aiGenerated: input.aiGenerated },
+      });
+      return { ok: true };
+    }),
 });
 
 /* ──────────────────────────────────────────────────────────────────────── */
