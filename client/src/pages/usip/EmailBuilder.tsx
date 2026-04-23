@@ -20,6 +20,7 @@ import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "sonner";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Switch } from "@/components/ui/switch";
 import {
   AlignCenter, AlignLeft, AlignRight,
   ArrowDown, ArrowUp, Bold,
@@ -29,7 +30,7 @@ import {
   Heading, Image, Info, LayoutTemplate, Link2, Minus,
   Monitor, Pencil, Plus, Save, Smartphone,
   Space, Square, Tag, Trash2, Type,
-  Wand2, X, Zap,
+  Wand2, X, Zap, Sparkles, Lightbulb,
 } from "lucide-react";
 
 /* ─── Types ─────────────────────────────────────────────────────────────── */
@@ -507,9 +508,92 @@ function CanvasBlock({
   );
 }
 
-/* ─── Template list (left panel) ─────────────────────────────────────────── */
+/* ─── AI Generate Template Dialog ────────────────────────────────────────────── */
+function AIGenerateDialog({
+  open, onClose, onGenerated,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onGenerated: (subject: string, blocks: any[]) => void;
+}) {
+  const [prompt, setPrompt] = useState("");
+  const [tone, setTone] = useState<"concise" | "warm" | "formal" | "punchy" | "storytelling">("concise");
+  const [includeHeader, setIncludeHeader] = useState(true);
+  const [includeCta, setIncludeCta] = useState(true);
+
+  const generate = trpc.emailTemplates.generateTemplate.useMutation({
+    onSuccess: (data) => {
+      onGenerated(data.subject, data.blocks);
+      toast.success("Template generated! Review and edit as needed.");
+      onClose();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Sparkles size={16} className="text-[#14B89A]" /> AI Generate Template
+          </DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4 py-2">
+          <div className="space-y-1.5">
+            <Label className="text-sm">Describe the email</Label>
+            <Textarea
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              rows={4}
+              placeholder="e.g. Follow up after a product demo, highlight 3 key benefits, end with a call to schedule a next step"
+              className="resize-none text-sm"
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label className="text-sm">Tone</Label>
+              <Select value={tone} onValueChange={(v) => setTone(v as any)}>
+                <SelectTrigger className="h-8 text-sm"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {(["concise", "warm", "formal", "punchy", "storytelling"] as const).map((t) => (
+                    <SelectItem key={t} value={t} className="capitalize">{t}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-3 pt-1">
+              <div className="flex items-center gap-2">
+                <Switch id="includeHeader" checked={includeHeader} onCheckedChange={setIncludeHeader} />
+                <Label htmlFor="includeHeader" className="text-sm cursor-pointer">Header block</Label>
+              </div>
+              <div className="flex items-center gap-2">
+                <Switch id="includeCta" checked={includeCta} onCheckedChange={setIncludeCta} />
+                <Label htmlFor="includeCta" className="text-sm cursor-pointer">CTA button</Label>
+              </div>
+            </div>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Merge variables <code>{{firstName}}</code>, <code>{{company}}</code>, <code>{{senderName}}</code> will be inserted automatically where appropriate.
+          </p>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button
+            onClick={() => generate.mutate({ prompt, tone, includeHeader, includeCta })}
+            disabled={generate.isPending || prompt.trim().length < 5}
+          >
+            {generate.isPending ? "Generating…" : <><Sparkles size={14} className="mr-1" /> Generate</>}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/* ─── Template list (left panel) ──────────────────────────────────────────────────── */
 function TemplateList({ onOpen }: { onOpen: (id: number) => void }) {
   const { data: templates } = trpc.emailTemplates.list.useQuery({ status: "all" });
+  const [showAIGenerate, setShowAIGenerate] = useState(false);
   const createMutation = trpc.emailTemplates.create.useMutation({
     onSuccess: (data) => onOpen(data.id),
   });
@@ -517,19 +601,38 @@ function TemplateList({ onOpen }: { onOpen: (id: number) => void }) {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="p-3 border-b flex items-center justify-between">
-        <span className="text-sm font-semibold">Templates</span>
+      <div className="p-3 border-b flex flex-col gap-2">
+        <div className="flex items-center justify-between">
+          <span className="text-sm font-semibold">Templates</span>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-7 px-2 text-xs"
+            onClick={() => createMutation.mutate({ name: "Untitled Template", designData: [] })}
+            disabled={createMutation.isPending}
+          >
+            <Plus size={12} className="mr-1" /> New
+          </Button>
+        </div>
         <Button
           size="sm"
-          variant="ghost"
-          className="h-7 px-2 text-xs"
-          onClick={() => createMutation.mutate({ name: "Untitled Template", designData: [] })}
-          disabled={createMutation.isPending}
+          variant="outline"
+          className="h-7 w-full text-xs text-[#14B89A] border-[#14B89A]/40 hover:bg-[#14B89A]/10"
+          onClick={() => setShowAIGenerate(true)}
         >
-          <Plus size={12} className="mr-1" /> New
+          <Sparkles size={11} className="mr-1" /> AI Generate
         </Button>
       </div>
-      <ScrollArea className="flex-1">
+      <AIGenerateDialog
+        open={showAIGenerate}
+        onClose={() => setShowAIGenerate(false)}
+        onGenerated={(subject, blocks) => {
+          createMutation.mutate(
+            { name: "AI Generated Template", subject, designData: blocks },
+            { onSuccess: (data) => { utils.emailTemplates.list.invalidate(); onOpen(data.id); } }
+          );
+        }}
+      />     <ScrollArea className="flex-1">
         <div className="p-2 space-y-1">
           {!templates?.length && (
             <p className="text-xs text-muted-foreground text-center py-6">No templates yet. Create one to get started.</p>
@@ -838,6 +941,9 @@ function Builder({ templateId }: { templateId: number }) {
     onSuccess: (data) => { toast.success("Duplicated"); navigate(`/email-builder/${data.id}`); },
   });
   const rewriteMutation = trpc.emailTemplates.rewriteBlock.useMutation();
+  const suggestSubjectsMutation = trpc.emailTemplates.suggestSubjects.useMutation({
+    onError: (e) => toast.error(e.message),
+  });
   const previewQuery = trpc.emailTemplates.renderPreview.useQuery(
     { id: templateId },
     { enabled: false }
@@ -846,6 +952,7 @@ function Builder({ templateId }: { templateId: number }) {
 
   const [blocks, setBlocks] = useState<Block[]>([]);
   const [subject, setSubject] = useState("");
+  const [showSubjectSuggestions, setShowSubjectSuggestions] = useState(false);
   const [templateName, setTemplateName] = useState("");
   const [editingName, setEditingName] = useState(false);
   const [showTipBanner, setShowTipBanner] = useState(() => {

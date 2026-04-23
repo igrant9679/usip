@@ -35,10 +35,47 @@ export const sequencesRouter = router({
     return { id: Number((r as any)[0]?.insertId ?? 0) };
   }),
 
-  update: repProcedure.input(z.object({ id: z.number(), patch: z.record(z.string(), z.any()) })).mutation(async ({ ctx, input }) => {
+  update: repProcedure.input(z.object({
+    id: z.number(),
+    patch: z.record(z.string(), z.any()),
+  })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     await db.update(sequences).set(input.patch).where(and(eq(sequences.id, input.id), eq(sequences.workspaceId, ctx.workspace.id)));
+    return { ok: true };
+  }),
+  updateMeta: repProcedure.input(z.object({
+    id: z.number(),
+    name: z.string().min(1).max(200).optional(),
+    description: z.string().optional(),
+    dailyCap: z.number().int().min(1).max(10000).nullable().optional(),
+    exitConditions: z.array(z.object({ type: z.enum(["reply","bounce","unsubscribe","goal_met","manual"]), enabled: z.boolean() })).optional(),
+    settings: z.object({
+      timezone: z.string().optional(),
+      sendWindowStart: z.string().optional(),
+      sendWindowEnd: z.string().optional(),
+      skipWeekends: z.boolean().optional(),
+      replyDetection: z.boolean().optional(),
+    }).optional(),
+  })).mutation(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    const { id, ...patch } = input;
+    await db.update(sequences).set(patch).where(and(eq(sequences.id, id), eq(sequences.workspaceId, ctx.workspace.id)));
+    return { ok: true };
+  }),
+  updateSteps: repProcedure.input(z.object({
+    id: z.number(),
+    steps: z.array(stepSchema),
+  })).mutation(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    const [seq] = await db.select().from(sequences).where(and(eq(sequences.id, input.id), eq(sequences.workspaceId, ctx.workspace.id)));
+    if (!seq) throw new TRPCError({ code: "NOT_FOUND" });
+    if (seq.status === "active" || seq.status === "paused") {
+      throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot edit steps of an active/paused sequence. Pause it first." });
+    }
+    await db.update(sequences).set({ steps: input.steps, updatedAt: new Date() }).where(and(eq(sequences.id, input.id), eq(sequences.workspaceId, ctx.workspace.id)));
     return { ok: true };
   }),
 

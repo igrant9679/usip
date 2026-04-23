@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Shell } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -401,7 +402,8 @@ export default function AIPipelineQueue() {
   const pendingDraftIds = drafts.map((d) => d.id);
 
   return (
-    <div className="space-y-6">
+    <Shell title="AI Pipeline">
+      <div className="p-6 space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -731,6 +733,7 @@ export default function AIPipelineQueue() {
           )}
         </div>
       </div>
-    </div>
+      </div>
+    </Shell>
   );
 }

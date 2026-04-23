@@ -960,9 +960,9 @@
 - [x] Log timeline activity on account + each selected contact when ad-hoc email is sent from Accounts
 
 ## Feature: IMAP fields in Sending Accounts form
-- [ ] Add IMAP host, port, SSL toggle, username, password fields to the Sending Accounts form (shown for all providers)
-- [ ] Pre-fill IMAP host/port hints based on selected provider (outlook_oauth → outlook.office365.com:993, gmail_oauth → imap.gmail.com:993)
-- [ ] Save IMAP fields via the existing sendingAccounts.create/update procedures
+- [x] Add IMAP host, port, SSL toggle, username, password fields to the Sending Accounts form (shown for all providers)
+- [x] Pre-fill IMAP host/port hints based on selected provider (outlook_oauth → outlook.office365.com:993, gmail_oauth → imap.gmail.com:993)
+- [x] Save IMAP fields via the existing sendingAccounts.create/update procedures
 
 ## Feature: Sending Accounts — Edit + IMAP fields
 - [x] Add Pencil edit button to each AccountCard
@@ -972,3 +972,22 @@
 - [x] Include IMAP fields in handleSubmit payload
 - [x] Add imapHost/imapPort/imapSecure/imapUsername/imapPassword to AccountCreateInput zod schema in server router
 - [x] Wire editId + setEditId state in the SendingAccounts page component
+
+## Feature: Full Sequence Editing
+- [ ] Add typed sequences.updateMeta procedure (name, description, dailyCap, exitConditions, settings)
+- [ ] Add sequences.updateSteps procedure (replace steps array atomically)
+- [ ] Build SequenceEditDialog with tabs: Settings (name/description/dailyCap/exitConditions/send window) and Steps (add/edit/delete/reorder email, wait, task steps)
+- [ ] Wire Edit button on sequence detail panel header to open SequenceEditDialog
+- [ ] Show step editor inline: email steps get subject+body fields, wait steps get days field, task steps get body field
+- [ ] Support drag-to-reorder steps (or up/down arrow buttons)
+- [ ] Disable step editing for active/paused sequences (show read-only warning)
+
+## Feature: Email Draft Editing
+- [ ] Add Edit (Pencil) button to each draft row/card in the Email Drafts page
+- [ ] Build EmailDraftEditDialog with subject and body fields, pre-filled from existing draft
+- [ ] Wire emailDrafts.update procedure (already exists in router) to the dialog save action
+- [ ] Show edit button only for drafts in pending_review or rejected status (not sent/approved)
+
+## Bug Fixes: Pipeline Navigation Issues
+- [x] Fix Research Pipeline page causing sidebar/navigation to disappear
+- [x] Fix AI Pipeline page rendering unexpected area instead of correct content

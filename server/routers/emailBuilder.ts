@@ -375,6 +375,95 @@ export const emailTemplatesRouter = router({
       const rewritten = (res as any).choices?.[0]?.message?.content ?? input.content;
       return { content: rewritten };
     }),
+
+  /** AI: generate a full template (blocks + subject) from a plain-English prompt */
+  generateTemplate: repProcedure
+    .input(
+      z.object({
+        prompt: z.string().min(5).max(1000),
+        tone: z.enum(["concise", "warm", "formal", "punchy", "storytelling"]).default("concise"),
+        includeHeader: z.boolean().default(true),
+        includeCta: z.boolean().default(true),
+      }),
+    )
+    .mutation(async ({ input }) => {
+      const systemPrompt = `You are an expert B2B email copywriter. The user will describe an email they want to write.
+Return a JSON object with this exact shape:
+{
+  "subject": "string - compelling subject line",
+  "blocks": [
+    { "type": "header", "props": { "headline": "string", "subheadline": "string", "bgColor": "#14B89A", "textColor": "#ffffff" } },
+    { "type": "text",   "props": { "content": "string - 2-4 paragraphs of HTML-safe plain text", "fontSize": 14, "color": "#1a1a1a" } },
+    { "type": "button", "props": { "label": "string", "url": "#", "bgColor": "#14B89A", "textColor": "#ffffff", "align": "center", "borderRadius": 4 } },
+    { "type": "footer", "props": { "content": "\u00a9 2025 {{senderCompany}}. All rights reserved.", "bgColor": "#f9fafb", "textColor": "#6b7280", "unsubscribeUrl": "" } }
+  ]
+}
+Rules:
+- Tone: ${input.tone}
+- Use {{firstName}}, {{company}}, {{senderName}} merge tags where natural
+- includeHeader: ${input.includeHeader} - if false, omit the header block
+- includeCta: ${input.includeCta} - if false, omit the button block
+- Return ONLY valid JSON, no markdown fences, no extra text`;
+
+      const res = await invokeLLM({
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: input.prompt },
+        ],
+      });
+      const raw = (res as any).choices?.[0]?.message?.content ?? "{}";
+      let parsed: { subject?: string; blocks?: any[] };
+      try {
+        // strip markdown fences if model wraps in ```json
+        const cleaned = raw.replace(/^```[\w]*\n?|\n?```$/g, "").trim();
+        parsed = JSON.parse(cleaned);
+      } catch { parsed = {}; }
+      return {
+        subject: parsed.subject ?? "",
+        blocks: (parsed.blocks ?? []).map((b: any, i: number) => ({
+          ...b,
+          id: `ai-${Date.now()}-${i}`,
+          sortOrder: i,
+        })),
+      };
+    }),
+
+  /** AI: suggest subject line variants for the current template content */
+  suggestSubjects: repProcedure
+    .input(
+      z.object({
+        bodyText: z.string().max(4000),
+        currentSubject: z.string().optional(),
+        count: z.number().min(1).max(8).default(5),
+      }),
+    )
+    .mutation(async ({ input }) => {
+      const res = await invokeLLM({
+        messages: [
+          {
+            role: "system",
+            content: `You are an expert email subject line writer. Given the email body, generate ${input.count} compelling subject line variants.
+Return a JSON object: {"suggestions":[{"subject":"string","rationale":"string (max 15 words)","spamRisk":"low"|"medium"|"high"}]}
+Return ONLY valid JSON, no markdown fences.`,
+          },
+          {
+            role: "user",
+            content: `Current subject: ${input.currentSubject ?? "(none)"}
+
+Email body:
+${input.bodyText.slice(0, 3000)}`,
+          },
+        ],
+      });
+      const raw = (res as any).choices?.[0]?.message?.content ?? "{}";
+      let parsed: { suggestions?: any[] };
+      try {
+        const cleaned = raw.replace(/^```[\w]*\n?|\n?```$/g, "").trim();
+        const obj = JSON.parse(cleaned);
+        parsed = Array.isArray(obj) ? { suggestions: obj } : obj;
+      } catch { parsed = { suggestions: [] }; }
+      return { suggestions: (parsed.suggestions ?? []) as { subject: string; rationale: string; spamRisk: string }[] };
+    }),
 });
 
 /* ─── snippetsRouter ─────────────────────────────────────────────────────── */

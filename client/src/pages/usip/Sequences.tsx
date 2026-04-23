@@ -1,13 +1,30 @@
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Switch } from "@/components/ui/switch";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Field, FormDialog, Section, SelectField, StatusPill, TextareaField } from "@/components/usip/Common";
 import { EmptyState, PageHeader, Shell } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
-import { Activity, GitBranch, Pause, Play, Plus, Power, Users, CheckCircle2, XCircle, Clock, BarChart3, RefreshCw } from "lucide-react";
-import { useState } from "react";
+import {
+  Activity, GitBranch, Pause, Play, Plus, Power, CheckCircle2, XCircle,
+  BarChart3, RefreshCw, Pencil, Trash2, ArrowUp, ArrowDown, Mail, Clock, ClipboardList,
+} from "lucide-react";
+import { useState, useEffect } from "react";
 import { Link } from "wouter";
 import { toast } from "sonner";
 import { Card, CardContent } from "@/components/ui/card";
 
+// ─── Types ───────────────────────────────────────────────────────────────────
+type StepType = "email" | "wait" | "task";
+interface EmailStep { type: "email"; subject: string; body?: string }
+interface WaitStep { type: "wait"; days: number }
+interface TaskStep { type: "task"; body: string }
+type Step = EmailStep | WaitStep | TaskStep;
+
+// ─── EnrollmentStatsPanel ────────────────────────────────────────────────────
 function EnrollmentStatsPanel({ sequenceId, steps }: { sequenceId: number; steps: any[] }) {
   const { data: stats, isLoading: statsLoading, refetch } = trpc.sequences.getEnrollmentStats.useQuery({ sequenceId });
   const { data: stepStats = [] } = trpc.sequences.getEnrollmentStepStats.useQuery({ sequenceId });
@@ -30,7 +47,6 @@ function EnrollmentStatsPanel({ sequenceId, steps }: { sequenceId: number; steps
 
   return (
     <div className="space-y-4">
-      {/* Status summary cards */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
         {[
           { label: "Active", value: stats?.active ?? 0, icon: Play, color: "text-emerald-600" },
@@ -50,7 +66,6 @@ function EnrollmentStatsPanel({ sequenceId, steps }: { sequenceId: number; steps
         ))}
       </div>
 
-      {/* Per-step funnel */}
       {steps.length > 0 && stepStats.length > 0 && (
         <Section title="Step Performance">
           <div className="p-3 space-y-2">
@@ -62,10 +77,7 @@ function EnrollmentStatsPanel({ sequenceId, steps }: { sequenceId: number; steps
                   <span className="w-16 text-xs text-muted-foreground font-mono shrink-0">Step {i + 1}</span>
                   <span className="w-14 text-xs capitalize text-muted-foreground shrink-0">{step.type}</span>
                   <div className="flex-1 bg-muted rounded-full h-2">
-                    <div
-                      className="h-2 rounded-full bg-[#14B89A] transition-all"
-                      style={{ width: `${pct}%` }}
-                    />
+                    <div className="h-2 rounded-full bg-[#14B89A] transition-all" style={{ width: `${pct}%` }} />
                   </div>
                   <span className="text-xs tabular-nums w-8 text-right">{count}</span>
                 </div>
@@ -75,11 +87,8 @@ function EnrollmentStatsPanel({ sequenceId, steps }: { sequenceId: number; steps
         </Section>
       )}
 
-      {/* Enrollment list */}
       <Section title={`Enrollments (${total})`} right={
-        <Button size="sm" variant="ghost" onClick={() => refetch()}>
-          <RefreshCw className="h-3 w-3 mr-1" /> Refresh
-        </Button>
+        <Button size="sm" variant="ghost" onClick={() => refetch()}><RefreshCw className="h-3 w-3 mr-1" /> Refresh</Button>
       }>
         {listLoading ? (
           <div className="p-3 text-sm text-muted-foreground">Loading…</div>
@@ -98,32 +107,16 @@ function EnrollmentStatsPanel({ sequenceId, steps }: { sequenceId: number; steps
                     </span>
                   )}
                 </div>
-                <StatusPill tone={
-                  e.status === "active" ? "success" :
-                  e.status === "paused" ? "warning" :
-                  e.status === "finished" ? "info" : "muted"
-                }>{e.status}</StatusPill>
+                <StatusPill tone={e.status === "active" ? "success" : e.status === "paused" ? "warning" : e.status === "finished" ? "info" : "muted"}>{e.status}</StatusPill>
                 <div className="flex gap-1 shrink-0">
                   {e.status === "paused" && (
-                    <Button size="sm" variant="ghost" className="h-6 text-xs px-2"
-                      onClick={() => resume.mutate({ id: e.id })}
-                      disabled={resume.isPending}>
-                      Resume
-                    </Button>
+                    <Button size="sm" variant="ghost" className="h-6 text-xs px-2" onClick={() => resume.mutate({ id: e.id })} disabled={resume.isPending}>Resume</Button>
                   )}
                   {e.status === "active" && (
-                    <Button size="sm" variant="ghost" className="h-6 text-xs px-2 text-amber-600"
-                      onClick={() => pauseOnReply.mutate({ enrollmentId: e.id })}
-                      disabled={pauseOnReply.isPending}>
-                      Reply
-                    </Button>
+                    <Button size="sm" variant="ghost" className="h-6 text-xs px-2 text-amber-600" onClick={() => pauseOnReply.mutate({ enrollmentId: e.id })} disabled={pauseOnReply.isPending}>Reply</Button>
                   )}
                   {(e.status === "active" || e.status === "paused") && (
-                    <Button size="sm" variant="ghost" className="h-6 text-xs px-2 text-muted-foreground"
-                      onClick={() => exit.mutate({ id: e.id })}
-                      disabled={exit.isPending}>
-                      Exit
-                    </Button>
+                    <Button size="sm" variant="ghost" className="h-6 text-xs px-2 text-muted-foreground" onClick={() => exit.mutate({ id: e.id })} disabled={exit.isPending}>Exit</Button>
                   )}
                 </div>
               </li>
@@ -135,8 +128,269 @@ function EnrollmentStatsPanel({ sequenceId, steps }: { sequenceId: number; steps
   );
 }
 
+// ─── StepEditor ──────────────────────────────────────────────────────────────
+function StepEditor({ steps, onChange, disabled }: { steps: Step[]; onChange: (s: Step[]) => void; disabled?: boolean }) {
+  function addStep(type: StepType) {
+    const newStep: Step =
+      type === "email" ? { type: "email", subject: "New email", body: "" } :
+      type === "wait"  ? { type: "wait", days: 1 } :
+                         { type: "task", body: "Follow up task" };
+    onChange([...steps, newStep]);
+  }
+
+  function removeStep(i: number) {
+    onChange(steps.filter((_, idx) => idx !== i));
+  }
+
+  function moveStep(i: number, dir: -1 | 1) {
+    const arr = [...steps];
+    const j = i + dir;
+    if (j < 0 || j >= arr.length) return;
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+    onChange(arr);
+  }
+
+  function updateStep(i: number, patch: Partial<Step>) {
+    const arr = [...steps];
+    arr[i] = { ...arr[i], ...patch } as Step;
+    onChange(arr);
+  }
+
+  return (
+    <div className="space-y-2">
+      {steps.length === 0 && (
+        <p className="text-sm text-muted-foreground text-center py-4">No steps yet. Add one below.</p>
+      )}
+      {steps.map((step, i) => (
+        <div key={i} className="border rounded-md p-3 bg-card space-y-2">
+          <div className="flex items-center gap-2">
+            {step.type === "email" && <Mail className="h-3.5 w-3.5 text-blue-500 shrink-0" />}
+            {step.type === "wait"  && <Clock className="h-3.5 w-3.5 text-amber-500 shrink-0" />}
+            {step.type === "task"  && <ClipboardList className="h-3.5 w-3.5 text-purple-500 shrink-0" />}
+            <span className="text-xs font-mono text-muted-foreground">Step {i + 1}</span>
+            <span className="text-xs capitalize text-muted-foreground">· {step.type}</span>
+            <div className="ml-auto flex gap-1">
+              <Button size="sm" variant="ghost" className="h-6 w-6 p-0" disabled={disabled || i === 0} onClick={() => moveStep(i, -1)}><ArrowUp className="h-3 w-3" /></Button>
+              <Button size="sm" variant="ghost" className="h-6 w-6 p-0" disabled={disabled || i === steps.length - 1} onClick={() => moveStep(i, 1)}><ArrowDown className="h-3 w-3" /></Button>
+              <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-destructive" disabled={disabled} onClick={() => removeStep(i)}><Trash2 className="h-3 w-3" /></Button>
+            </div>
+          </div>
+
+          {step.type === "email" && (
+            <div className="space-y-1.5">
+              <Input
+                placeholder="Subject"
+                value={step.subject}
+                disabled={disabled}
+                onChange={(e) => updateStep(i, { subject: e.target.value })}
+                className="h-7 text-sm"
+              />
+              <Textarea
+                placeholder="Body (optional — leave blank to compose with AI at send time)"
+                value={step.body ?? ""}
+                disabled={disabled}
+                onChange={(e) => updateStep(i, { body: e.target.value })}
+                rows={3}
+                className="text-sm resize-none"
+              />
+            </div>
+          )}
+
+          {step.type === "wait" && (
+            <div className="flex items-center gap-2">
+              <Label className="text-xs text-muted-foreground shrink-0">Wait days</Label>
+              <Input
+                type="number"
+                min={0}
+                max={60}
+                value={step.days}
+                disabled={disabled}
+                onChange={(e) => updateStep(i, { days: Math.max(0, Math.min(60, Number(e.target.value))) })}
+                className="h-7 w-20 text-sm"
+              />
+            </div>
+          )}
+
+          {step.type === "task" && (
+            <Textarea
+              placeholder="Task description"
+              value={step.body}
+              disabled={disabled}
+              onChange={(e) => updateStep(i, { body: e.target.value })}
+              rows={2}
+              className="text-sm resize-none"
+            />
+          )}
+        </div>
+      ))}
+
+      {!disabled && (
+        <div className="flex gap-2 pt-1">
+          <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => addStep("email")}><Mail className="h-3 w-3 mr-1" /> Email</Button>
+          <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => addStep("wait")}><Clock className="h-3 w-3 mr-1" /> Wait</Button>
+          <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => addStep("task")}><ClipboardList className="h-3 w-3 mr-1" /> Task</Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── SequenceEditDialog ───────────────────────────────────────────────────────
+function SequenceEditDialog({ seq, open, onClose }: { seq: any; open: boolean; onClose: () => void }) {
+  const utils = trpc.useUtils();
+  const [tab, setTab] = useState<"settings" | "steps">("settings");
+
+  // Settings state
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [dailyCap, setDailyCap] = useState<string>("");
+  const [skipWeekends, setSkipWeekends] = useState(false);
+  const [replyDetection, setReplyDetection] = useState(true);
+  const [sendWindowStart, setSendWindowStart] = useState("08:00");
+  const [sendWindowEnd, setSendWindowEnd] = useState("18:00");
+
+  // Steps state
+  const [steps, setSteps] = useState<Step[]>([]);
+
+  const isLocked = seq?.status === "active" || seq?.status === "paused";
+
+  // Pre-fill when dialog opens
+  useEffect(() => {
+    if (!seq || !open) return;
+    setName(seq.name ?? "");
+    setDescription(seq.description ?? "");
+    setDailyCap(seq.dailyCap != null ? String(seq.dailyCap) : "");
+    const s = seq.settings ?? {};
+    setSkipWeekends(s.skipWeekends ?? false);
+    setReplyDetection(s.replyDetection ?? true);
+    setSendWindowStart(s.sendWindowStart ?? "08:00");
+    setSendWindowEnd(s.sendWindowEnd ?? "18:00");
+    setSteps((seq.steps as Step[]) ?? []);
+    setTab("settings");
+  }, [seq, open]);
+
+  const updateMeta = trpc.sequences.updateMeta.useMutation({
+    onSuccess: () => {
+      utils.sequences.list.invalidate();
+      utils.sequences.get.invalidate({ id: seq.id });
+      toast.success("Sequence settings saved");
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const updateSteps = trpc.sequences.updateSteps.useMutation({
+    onSuccess: () => {
+      utils.sequences.list.invalidate();
+      utils.sequences.get.invalidate({ id: seq.id });
+      toast.success("Steps saved");
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  function handleSaveSettings() {
+    updateMeta.mutate({
+      id: seq.id,
+      name: name.trim() || undefined,
+      description: description.trim() || undefined,
+      dailyCap: dailyCap !== "" ? Number(dailyCap) : null,
+      settings: { skipWeekends, replyDetection, sendWindowStart, sendWindowEnd },
+    });
+  }
+
+  function handleSaveSteps() {
+    updateSteps.mutate({ id: seq.id, steps });
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
+      <DialogContent className="max-w-2xl max-h-[90vh] flex flex-col">
+        <DialogHeader>
+          <DialogTitle>Edit sequence — {seq?.name}</DialogTitle>
+        </DialogHeader>
+
+        {isLocked && (
+          <div className="rounded-md bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+            This sequence is <strong>{seq?.status}</strong>. Settings can be edited, but steps are read-only. Pause the sequence to edit steps.
+          </div>
+        )}
+
+        {/* Tab bar */}
+        <div className="flex border-b shrink-0">
+          {(["settings", "steps"] as const).map((t) => (
+            <button key={t} onClick={() => setTab(t)}
+              className={`px-4 py-2 text-sm capitalize ${tab === t ? "border-b-2 border-[#14B89A] font-semibold" : "text-muted-foreground"}`}>
+              {t}
+            </button>
+          ))}
+        </div>
+
+        <div className="overflow-y-auto flex-1 py-3 space-y-4">
+          {tab === "settings" && (
+            <>
+              <div className="space-y-1.5">
+                <Label className="text-sm">Name</Label>
+                <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Sequence name" />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-sm">Description</Label>
+                <Textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Optional description" rows={2} className="resize-none" />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-sm">Daily send cap</Label>
+                <Input type="number" min={1} max={10000} value={dailyCap} onChange={(e) => setDailyCap(e.target.value)} placeholder="Unlimited" className="w-36" />
+                <p className="text-xs text-muted-foreground">Maximum emails sent per day across all enrollments. Leave blank for unlimited.</p>
+              </div>
+              <div className="border rounded-md p-3 space-y-3">
+                <p className="text-sm font-medium">Send window</p>
+                <div className="flex items-center gap-3">
+                  <div className="space-y-1">
+                    <Label className="text-xs text-muted-foreground">Start</Label>
+                    <Input type="time" value={sendWindowStart} onChange={(e) => setSendWindowStart(e.target.value)} className="w-32 h-8 text-sm" />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs text-muted-foreground">End</Label>
+                    <Input type="time" value={sendWindowEnd} onChange={(e) => setSendWindowEnd(e.target.value)} className="w-32 h-8 text-sm" />
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Switch id="skipWeekends" checked={skipWeekends} onCheckedChange={setSkipWeekends} />
+                  <Label htmlFor="skipWeekends" className="text-sm cursor-pointer">Skip weekends</Label>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Switch id="replyDetection" checked={replyDetection} onCheckedChange={setReplyDetection} />
+                  <Label htmlFor="replyDetection" className="text-sm cursor-pointer">Pause enrollment on reply</Label>
+                </div>
+              </div>
+            </>
+          )}
+
+          {tab === "steps" && (
+            <StepEditor steps={steps} onChange={setSteps} disabled={isLocked} />
+          )}
+        </div>
+
+        <DialogFooter className="shrink-0 pt-2 border-t">
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          {tab === "settings" && (
+            <Button onClick={handleSaveSettings} disabled={updateMeta.isPending}>
+              {updateMeta.isPending ? "Saving…" : "Save settings"}
+            </Button>
+          )}
+          {tab === "steps" && (
+            <Button onClick={handleSaveSteps} disabled={updateSteps.isPending || isLocked}>
+              {updateSteps.isPending ? "Saving…" : "Save steps"}
+            </Button>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─── Main page ────────────────────────────────────────────────────────────────
 export default function Sequences() {
   const [open, setOpen] = useState(false);
+  const [editSeq, setEditSeq] = useState<any | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState<"steps" | "stats">("steps");
   const utils = trpc.useUtils();
@@ -182,6 +436,9 @@ export default function Sequences() {
               <Section title={detail.data.name} description={detail.data.description ?? ""}
                 right={
                   <div className="flex gap-1 flex-wrap">
+                    <Button size="sm" variant="outline" onClick={() => setEditSeq(detail.data)}>
+                      <Pencil className="size-3.5" /> Edit
+                    </Button>
                     <Link href={`/sequences/${detail.data.id}/canvas`}>
                       <Button size="sm" variant="outline"><GitBranch className="size-3.5" /> Canvas</Button>
                     </Link>
@@ -224,7 +481,7 @@ export default function Sequences() {
                     ))}
                     {((detail.data.steps as any[]) ?? []).length === 0 && (
                       <div className="text-sm text-muted-foreground py-4 text-center">
-                        No steps yet. Open the canvas to build your sequence.
+                        No steps yet. Click <strong>Edit</strong> to add steps, or open the Canvas.
                       </div>
                     )}
                   </ol>
@@ -244,6 +501,7 @@ export default function Sequences() {
         </div>
       </div>
 
+      {/* New sequence dialog */}
       <FormDialog open={open} onOpenChange={setOpen} title="New sequence" isPending={create.isPending}
         onSubmit={(f) => create.mutate({
           name: String(f.get("name")), description: String(f.get("description") ?? "") || undefined,
@@ -258,6 +516,15 @@ export default function Sequences() {
         <Field name="step1Subject" label="Step 1 subject" />
         <TextareaField name="step1Body" label="Step 1 body" />
       </FormDialog>
+
+      {/* Edit sequence dialog */}
+      {editSeq && (
+        <SequenceEditDialog
+          seq={editSeq}
+          open={!!editSeq}
+          onClose={() => setEditSeq(null)}
+        />
+      )}
     </Shell>
   );
 }

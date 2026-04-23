@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Shell } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -102,7 +103,8 @@ export default function ResearchPipeline() {
   const stage1 = activePipeline?.stage1_prospect as any;
 
   return (
-    <div className="p-6 max-w-5xl mx-auto space-y-6">
+    <Shell title="Research Pipeline">
+      <div className="p-6 max-w-5xl mx-auto space-y-6">
       {/* Header */}
       <div className="flex items-center gap-3">
         <Sparkles className="h-6 w-6 text-emerald-500" />
@@ -312,6 +314,7 @@ export default function ResearchPipeline() {
           )}
         </div>
       </div>
-    </div>
+      </div>
+    </Shell>
   );
 }

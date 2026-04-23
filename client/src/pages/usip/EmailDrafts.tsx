@@ -2,12 +2,15 @@ import { Button } from "@/components/ui/button";
 import { Field, FormDialog, SelectField, StatusPill, TextareaField } from "@/components/usip/Common";
 import { EmptyState, PageHeader, Shell } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
-import { BarChart2, Check, ChevronDown, ChevronRight, Eye, FileText, MousePointer, Send, Sparkles, Trash2, X, Zap, AlertTriangle, XCircle } from "lucide-react";
+import { BarChart2, Check, ChevronDown, ChevronRight, Eye, FileText, MousePointer, Pencil, Send, Sparkles, Trash2, X, Zap, AlertTriangle, XCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
 function SubjectABPanel({ draftId }: { draftId: number }) {
@@ -214,9 +217,65 @@ function PreviewResolvedModal({ draftId, open, onClose }: { draftId: number | nu
   );
 }
 
+// ─── EditDraftDialog ─────────────────────────────────────────────────────────
+function EditDraftDialog({ draft, open, onClose }: { draft: any | null; open: boolean; onClose: () => void }) {
+  const utils = trpc.useUtils();
+  const [subject, setSubject] = useState("");
+  const [body, setBody] = useState("");
+
+  useEffect(() => {
+    if (!draft || !open) return;
+    setSubject(draft.subject ?? "");
+    setBody(draft.body ?? "");
+  }, [draft, open]);
+
+  const update = trpc.emailDrafts.update.useMutation({
+    onSuccess: () => {
+      utils.emailDrafts.list.invalidate();
+      toast.success("Draft updated");
+      onClose();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Edit draft</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3 py-2">
+          <div className="space-y-1.5">
+            <Label className="text-sm">Subject</Label>
+            <Input value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="Email subject" />
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-sm">Body</Label>
+            <Textarea
+              value={body}
+              onChange={(e) => setBody(e.target.value)}
+              rows={12}
+              className="resize-y font-mono text-sm"
+              placeholder="Email body — use {{firstName}}, {{lastName}}, {{company}}, {{senderName}} as merge variables"
+            />
+            <p className="text-xs text-muted-foreground">Merge variables: <code>{{firstName}}</code> <code>{{lastName}}</code> <code>{{company}}</code> <code>{{senderName}}</code></p>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button onClick={() => update.mutate({ id: draft.id, subject, body })} disabled={update.isPending}>
+            {update.isPending ? "Saving…" : "Save changes"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export default function EmailDrafts() {
   const [composeOpen, setComposeOpen] = useState(false);
   const [previewDraftId, setPreviewDraftId] = useState<number | null>(null);
+  const [editDraft, setEditDraft] = useState<any | null>(null);
   const [filter, setFilter] = useState<"pending_review" | "approved" | "sent" | "rejected" | "all" | "bounced">("pending_review");
   const [location, setLocation] = useLocation();
   const utils = trpc.useUtils();
@@ -336,12 +395,16 @@ export default function EmailDrafts() {
               )}
               <div className="text-sm font-medium flex-1 truncate">{d.subject}</div>
               <div className="flex gap-1">
+                {(d.status === "pending_review" || d.status === "rejected") && (
+                  <Button size="sm" variant="ghost" onClick={() => setEditDraft(d)}><Pencil className="size-3.5" /> Edit</Button>
+                )}
                 {d.status === "pending_review" && <>
                   <Button size="sm" variant="ghost" onClick={() => approve.mutate({ id: d.id })}><Check className="size-3.5" /> Approve</Button>
                   <Button size="sm" variant="ghost" onClick={() => reject.mutate({ id: d.id })}><X className="size-3.5" /> Reject</Button>
                 </>}
                 {d.status === "approved" && (
                   <>
+                    <Button size="sm" variant="ghost" onClick={() => setEditDraft(d)}><Pencil className="size-3.5" /> Edit</Button>
                     <Button size="sm" variant="ghost" onClick={() => setPreviewDraftId(d.id)}><Eye className="size-3.5" /> Preview</Button>
                     <Button size="sm" onClick={() => sendViaSmtp.mutate({ draftId: d.id })} disabled={sendViaSmtp.isPending}><Send className="size-3.5" /> Send</Button>
                   </>
@@ -356,6 +419,7 @@ export default function EmailDrafts() {
       </div>
 
       <PreviewResolvedModal draftId={previewDraftId} open={previewDraftId != null} onClose={() => setPreviewDraftId(null)} />
+      <EditDraftDialog draft={editDraft} open={!!editDraft} onClose={() => setEditDraft(null)} />
 
       <FormDialog open={composeOpen} onOpenChange={setComposeOpen} title="AI compose email" isPending={compose.isPending}
         onSubmit={(f) => compose.mutate({
