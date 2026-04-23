@@ -881,17 +881,17 @@
 - [x] Vitest: 16 tests — context state management, serialization for LLM prompt, audience type validation
 
 ## 72. Custom Dashboards Expansion
-- [ ] Schema: extend dashboardWidgets.type enum; add filters JSON column; migration 0022
-- [ ] Backend: new KPIs (revenue, sales_cycle_length, activity_counts, response_rate, reply_rate, meetings_booked)
-- [ ] Backend: new widget types (leaderboard, activity_feed, goal_progress, comparison, pipeline_stage, rep_performance)
-- [ ] Backend: resolveWidget accepts optional filters (dateFrom, dateTo, ownerUserId, stage, source)
-- [ ] Frontend: DashboardChartRenderer component (11 chart types)
-- [ ] Frontend: DashboardFilterBar component (date presets, owner, stage, source filters)
-- [ ] Frontend: install react-grid-layout for drag-to-resize/reorder
-- [ ] Frontend: new widget display components (Leaderboard, ActivityFeed, GoalProgress, Comparison, PipelineStage, RepPerformance)
-- [ ] Frontend: rewrite Dashboards.tsx with react-grid-layout, filter bar, all new widget types
-- [ ] Frontend: expand Add Widget dialog with all new types and chart type selector
-- [ ] Vitest: tests for new widget data resolvers and filter logic
+- [x] Schema: extend dashboardWidgets.type enum; add filters JSON column; migration 0022
+- [x] Backend: new KPIs (revenue, sales_cycle_length, activity_counts, response_rate, reply_rate, meetings_booked)
+- [x] Backend: new widget types (leaderboard, activity_feed, goal_progress, comparison, pipeline_stage, rep_performance)
+- [x] Backend: resolveWidget accepts optional filters (dateFrom, dateTo, ownerUserId, stage, source)
+- [x] Frontend: DashboardChartRenderer component (11 chart types)
+- [x] Frontend: DashboardFilterBar component (date presets, owner, stage, source filters)
+- [x] Frontend: install react-grid-layout for drag-to-resize/reorder
+- [x] Frontend: new widget display components (Leaderboard, ActivityFeed, GoalProgress, Comparison, PipelineStage, RepPerformance)
+- [x] Frontend: rewrite Dashboards.tsx with react-grid-layout, filter bar, all new widget types
+- [x] Frontend: expand Add Widget dialog with all new types and chart type selector
+- [x] Vitest: tests for new widget data resolvers and filter logic
 
 ## 72. Custom Dashboards Expansion
 
@@ -938,3 +938,7 @@
 - [x] Navigation: My Mailbox and My Calendar in sidebar Overview section
 - [x] Routes: /mailbox and /calendar in App.tsx
 - [x] Tests: 24 new Vitest tests (635 total passing)
+
+## Bug Fixes (Apr 23)
+- [ ] BUG: Send Email button missing on Contact detail/drawer view — only exists on bulk-select list view
+- [ ] BUG: Campaign launch blocked by checklist — no UI to tick off checklist items (Budget approved, Creative reviewed, etc.)

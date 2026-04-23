@@ -20,7 +20,7 @@ import { Progress } from "@/components/ui/progress";
 import {
   Megaphone, Plus, Rocket, Pause, Trash2, Settings2,
   Mail, MousePointerClick, Reply, AlertTriangle,
-  BarChart3, Loader2, GitBranch, Users, Layers,
+  BarChart3, Loader2, GitBranch, Users, Layers, CheckSquare, Square, CheckCircle2,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -328,6 +328,7 @@ function CampaignDetail({ id, onEdit }: { id: number; onEdit: () => void }) {
           <TabsTrigger value="overview" className="text-xs">Overview</TabsTrigger>
           <TabsTrigger value="analytics" className="text-xs">Analytics</TabsTrigger>
           <TabsTrigger value="steps" className="text-xs">Step Stats</TabsTrigger>
+          <TabsTrigger value="checklist" className="text-xs">Checklist</TabsTrigger>
         </TabsList>
 
         {/* Overview tab */}
@@ -485,7 +486,93 @@ function CampaignDetail({ id, onEdit }: { id: number; onEdit: () => void }) {
             </div>
           )}
         </TabsContent>
+
+        {/* Checklist tab */}
+        <TabsContent value="checklist" className="mt-3">
+          <ChecklistTab
+            campaignId={id}
+            checklist={(c.checklist as any[]) ?? []}
+            onLaunch={() => launch.mutate({ id })}
+            launchPending={launch.isPending}
+            canLaunch={canLaunch}
+          />
+        </TabsContent>
       </Tabs>
+    </div>
+  );
+}
+
+/* ─── Checklist Tab ─────────────────────────────────────────────────── */
+function ChecklistTab({
+  campaignId,
+  checklist,
+  onLaunch,
+  launchPending,
+  canLaunch,
+}: {
+  campaignId: number;
+  checklist: Array<{ id: number; label: string; done: boolean }>;
+  onLaunch: () => void;
+  launchPending: boolean;
+  canLaunch: boolean;
+}) {
+  const utils = trpc.useUtils();
+  const toggle = trpc.campaigns.toggleChecklist.useMutation({
+    onSuccess: () => {
+      utils.campaigns.getWithDetails.invalidate();
+      utils.campaigns.list.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const allDone = checklist.length > 0 && checklist.every((x) => x.done);
+  const doneCount = checklist.filter((x) => x.done).length;
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader className="pb-2 pt-3 px-4">
+          <CardTitle className="text-sm flex items-center justify-between">
+            <span>Pre-launch Checklist</span>
+            <span className="text-xs font-normal text-muted-foreground">{doneCount}/{checklist.length} complete</span>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="px-4 pb-4 space-y-2">
+          {checklist.length === 0 && (
+            <p className="text-sm text-muted-foreground">No checklist items.</p>
+          )}
+          {checklist.map((item) => (
+            <button
+              key={item.id}
+              className="w-full flex items-center gap-3 p-3 rounded-lg border bg-card hover:bg-muted/40 transition-colors text-left"
+              onClick={() => toggle.mutate({ id: campaignId, itemId: item.id, done: !item.done })}
+              disabled={toggle.isPending}
+            >
+              {item.done
+                ? <CheckSquare className="size-5 text-emerald-500 shrink-0" />
+                : <Square className="size-5 text-muted-foreground shrink-0" />}
+              <span className={`text-sm flex-1 ${item.done ? 'line-through text-muted-foreground' : ''}`}>{item.label}</span>
+              {item.done && <CheckCircle2 className="size-4 text-emerald-500 shrink-0" />}
+            </button>
+          ))}
+        </CardContent>
+      </Card>
+      {canLaunch && (
+        <div className="flex flex-col gap-2">
+          {!allDone && (
+            <p className="text-xs text-amber-600 flex items-center gap-1.5">
+              <AlertTriangle className="size-3.5" />
+              Tick all checklist items to enable launch.
+            </p>
+          )}
+          <Button
+            className="bg-emerald-600 hover:bg-emerald-700 text-white w-full"
+            onClick={onLaunch}
+            disabled={launchPending || !allDone}
+          >
+            {launchPending ? <Loader2 className="size-4 animate-spin mr-1" /> : <Rocket className="size-4 mr-1" />}
+            Launch Campaign
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

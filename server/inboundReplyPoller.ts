@@ -63,7 +63,7 @@ async function pollAllAccounts() {
       .where(
         or(
           eq(sendingAccounts.provider, "gmail_oauth"),
-          eq(sendingAccounts.provider, "smtp"),
+          eq(sendingAccounts.provider, "generic_smtp"),
         )
       );
 
@@ -80,7 +80,7 @@ async function pollAllAccounts() {
           await pollImapAccount(account);
         }
       } catch (err: any) {
-        console.error(`[InboundPoller] Error polling account ${account.id} (${account.email}):`, err.message);
+        console.error(`[InboundPoller] Error polling account ${account.id} (${account.fromEmail}):`, err.message);
       }
     }
   } catch (err: any) {
