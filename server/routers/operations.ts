@@ -2,6 +2,8 @@ import { TRPCError } from "@trpc/server";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
+  accounts,
+  activities,
   audienceSegments,
   auditLog,
   campaignComponents,
@@ -23,8 +25,10 @@ import {
   scimProviders,
   socialAccounts,
   socialPosts,
+  users,
   workflowRules,
   workflowRuns,
+  workspaceMembers,
 } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
 import { getDb } from "../db";
@@ -552,9 +556,15 @@ export const dashboardsRouter = router({
 
   addWidget: workspaceProcedure.input(z.object({
     dashboardId: z.number(),
-    type: z.enum(["kpi", "bar", "line", "pie", "funnel", "table"]),
+    type: z.enum([
+      "kpi", "bar", "stacked_bar", "line", "area", "pie", "donut",
+      "funnel", "scatter", "heatmap", "gauge", "single_value",
+      "table", "leaderboard", "activity_feed", "goal_progress",
+      "comparison", "pipeline_stage", "rep_performance", "email_health",
+    ]),
     title: z.string().min(1),
     config: z.record(z.string(), z.any()),
+    filters: z.record(z.string(), z.any()).optional(),
     position: z.object({ x: z.number(), y: z.number(), w: z.number(), h: z.number() }).optional(),
   })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
@@ -587,12 +597,23 @@ export const dashboardsRouter = router({
   }),
 
   /** Resolve a widget config to data. Server computes the metrics. */
-  resolveWidget: workspaceProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {
+  resolveWidget: workspaceProcedure.input(z.object({
+    id: z.number(),
+    filters: z.object({
+      dateFrom: z.string().optional(),
+      dateTo: z.string().optional(),
+      ownerUserId: z.number().optional(),
+      stage: z.string().optional(),
+      source: z.string().optional(),
+    }).optional(),
+  })).query(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) return null;
     const [w] = await db.select().from(dashboardWidgets).where(and(eq(dashboardWidgets.id, input.id), eq(dashboardWidgets.workspaceId, ctx.workspace.id)));
     if (!w) return null;
-    return resolveWidgetData(ctx.workspace.id, w);
+    // Merge widget-level saved filters with per-query override filters
+    const mergedFilters = { ...(w.filters as any ?? {}), ...(input.filters ?? {}) };
+    return resolveWidgetData(ctx.workspace.id, w, mergedFilters);
   }),
 
   /** Schedules. */
@@ -636,42 +657,192 @@ export const dashboardsRouter = router({
   }),
 });
 
-async function resolveWidgetData(workspaceId: number, w: { type: string; config: any; title: string }) {
+type WidgetFilters = {
+  dateFrom?: string;
+  dateTo?: string;
+  ownerUserId?: number;
+  stage?: string;
+  source?: string;
+};
+
+/** Build a date range condition for opportunity.createdAt or closeDate */
+function dateRange(from?: string, to?: string) {
+  const conds: any[] = [];
+  if (from) conds.push(sql`created_at >= ${new Date(from)}`);
+  if (to) conds.push(sql`created_at <= ${new Date(to)}`);
+  return conds;
+}
+
+async function resolveWidgetData(
+  workspaceId: number,
+  w: { type: string; config: any; title: string },
+  filters: WidgetFilters = {},
+) {
   const db = await getDb();
   if (!db) return { type: w.type, title: w.title, value: null };
   const cfg = w.config ?? {};
-  switch (cfg.metric) {
-    case "pipeline_value": {
-      const [r] = await db.select({ s: sql<string>`COALESCE(SUM(${opportunities.value}),0)` }).from(opportunities).where(and(eq(opportunities.workspaceId, workspaceId), sql`${opportunities.stage} NOT IN ('won','lost')`));
-      return { type: w.type, title: w.title, value: Number(r?.s ?? 0), format: "currency" };
-    }
-    case "closed_won_qtr": {
-      const [r] = await db.select({ s: sql<string>`COALESCE(SUM(${opportunities.value}),0)` }).from(opportunities).where(and(eq(opportunities.workspaceId, workspaceId), eq(opportunities.stage, "won")));
-      return { type: w.type, title: w.title, value: Number(r?.s ?? 0), format: "currency" };
-    }
-    case "win_rate": {
-      const all = await db.select().from(opportunities).where(eq(opportunities.workspaceId, workspaceId));
-      const closed = all.filter((o) => o.stage === "won" || o.stage === "lost");
-      const wr = closed.length === 0 ? 0 : (closed.filter((o) => o.stage === "won").length / closed.length) * 100;
-      return { type: w.type, title: w.title, value: Math.round(wr), format: "percent" };
-    }
-    case "avg_deal": {
-      const won = await db.select().from(opportunities).where(and(eq(opportunities.workspaceId, workspaceId), eq(opportunities.stage, "won")));
-      const avg = won.length === 0 ? 0 : won.reduce((s, o) => s + Number(o.value), 0) / won.length;
-      return { type: w.type, title: w.title, value: Math.round(avg), format: "currency" };
+
+  /* ── Helper: build base opportunity conditions with filters ── */
+  const oppBase = () => {
+    const conds: any[] = [eq(opportunities.workspaceId, workspaceId)];
+    if (filters.ownerUserId) conds.push(eq(opportunities.ownerUserId, filters.ownerUserId));
+    if (filters.stage) conds.push(eq(opportunities.stage, filters.stage as any));
+    if (filters.dateFrom) conds.push(sql`${opportunities.createdAt} >= ${new Date(filters.dateFrom)}`);
+    if (filters.dateTo) conds.push(sql`${opportunities.createdAt} <= ${new Date(filters.dateTo)}`);
+    return and(...conds);
+  };
+
+  /* ── Helper: 6-month bucket array ── */
+  const sixMonths = () => Array.from({ length: 6 }, (_, i) => {
+    const d = new Date(); d.setMonth(d.getMonth() - (5 - i));
+    return { label: d.toLocaleString("default", { month: "short" }), key: `${d.getFullYear()}-${d.getMonth()}` };
+  });
+
+  /* ═══════════════════════════════════════════════════════════
+     KPI metrics (type = kpi | single_value | gauge)
+  ═══════════════════════════════════════════════════════════ */
+  if (w.type === "kpi" || w.type === "single_value" || w.type === "gauge") {
+    switch (cfg.metric) {
+      case "pipeline_value": {
+        const [r] = await db.select({ s: sql<string>`COALESCE(SUM(${opportunities.value}),0)` })
+          .from(opportunities).where(and(oppBase(), sql`${opportunities.stage} NOT IN ('won','lost')`));
+        return { type: w.type, title: w.title, value: Number(r?.s ?? 0), format: "currency" };
+      }
+      case "closed_won_qtr": {
+        const [r] = await db.select({ s: sql<string>`COALESCE(SUM(${opportunities.value}),0)` })
+          .from(opportunities).where(and(oppBase(), eq(opportunities.stage, "won")));
+        return { type: w.type, title: w.title, value: Number(r?.s ?? 0), format: "currency" };
+      }
+      case "revenue": {
+        const [r] = await db.select({ s: sql<string>`COALESCE(SUM(${opportunities.value}),0)` })
+          .from(opportunities).where(and(oppBase(), eq(opportunities.stage, "won")));
+        return { type: w.type, title: w.title, value: Number(r?.s ?? 0), format: "currency" };
+      }
+      case "win_rate": {
+        const all = await db.select().from(opportunities).where(oppBase());
+        const closed = all.filter((o) => o.stage === "won" || o.stage === "lost");
+        const wr = closed.length === 0 ? 0 : (closed.filter((o) => o.stage === "won").length / closed.length) * 100;
+        return { type: w.type, title: w.title, value: Math.round(wr), format: "percent" };
+      }
+      case "avg_deal": {
+        const won = await db.select().from(opportunities).where(and(oppBase(), eq(opportunities.stage, "won")));
+        const avg = won.length === 0 ? 0 : won.reduce((s, o) => s + Number(o.value), 0) / won.length;
+        return { type: w.type, title: w.title, value: Math.round(avg), format: "currency" };
+      }
+      case "sales_cycle_length": {
+        const won = await db.select().from(opportunities)
+          .where(and(oppBase(), eq(opportunities.stage, "won")));
+        const withDates = won.filter((o) => o.closeDate);
+        const avgDays = withDates.length === 0 ? 0 :
+          withDates.reduce((s, o) => s + Math.max(0, Math.round((o.closeDate!.getTime() - o.createdAt.getTime()) / 86400000)), 0) / withDates.length;
+        return { type: w.type, title: w.title, value: Math.round(avgDays), format: "days" };
+      }
+      case "activity_counts": {
+        const actConds: any[] = [eq(activities.workspaceId, workspaceId)];
+        if (filters.dateFrom) actConds.push(sql`${activities.occurredAt} >= ${new Date(filters.dateFrom)}`);
+        if (filters.dateTo) actConds.push(sql`${activities.occurredAt} <= ${new Date(filters.dateTo)}`);
+        const acts = await db.select().from(activities).where(and(...actConds));
+        const calls = acts.filter((a) => a.type === "call").length;
+        const emails = acts.filter((a) => a.type === "email").length;
+        const meetings = acts.filter((a) => a.type === "meeting").length;
+        return { type: w.type, title: w.title, value: acts.length, format: "number",
+          breakdown: { calls, emails, meetings } };
+      }
+      case "meetings_booked": {
+        const actConds: any[] = [eq(activities.workspaceId, workspaceId), eq(activities.type, "meeting")];
+        if (filters.dateFrom) actConds.push(sql`${activities.occurredAt} >= ${new Date(filters.dateFrom)}`);
+        if (filters.dateTo) actConds.push(sql`${activities.occurredAt} <= ${new Date(filters.dateTo)}`);
+        const [r] = await db.select({ c: sql<number>`COUNT(*)` }).from(activities).where(and(...actConds));
+        return { type: w.type, title: w.title, value: Number(r?.c ?? 0), format: "number" };
+      }
+      case "response_rate": {
+        // Ratio of opportunities with at least one activity to total opportunities
+        const all = await db.select().from(opportunities).where(oppBase());
+        const withActivity = await db.select({ oppId: activities.relatedId })
+          .from(activities)
+          .where(and(eq(activities.workspaceId, workspaceId), eq(activities.relatedType, "opportunity")))
+          .groupBy(activities.relatedId);
+        const rate = all.length === 0 ? 0 : (withActivity.length / all.length) * 100;
+        return { type: w.type, title: w.title, value: Math.round(rate), format: "percent" };
+      }
+      case "reply_rate": {
+        // Ratio of won+lost opps to all opps (proxy for reply/engagement)
+        const all = await db.select().from(opportunities).where(oppBase());
+        const engaged = all.filter((o) => o.stage === "won" || o.stage === "negotiation" || o.stage === "proposal").length;
+        const rate = all.length === 0 ? 0 : (engaged / all.length) * 100;
+        return { type: w.type, title: w.title, value: Math.round(rate), format: "percent" };
+      }
+      default: {
+        // Legacy fallback for old metrics
+        const [r] = await db.select({ s: sql<string>`COALESCE(SUM(${opportunities.value}),0)` })
+          .from(opportunities).where(and(oppBase(), sql`${opportunities.stage} NOT IN ('won','lost')`));
+        return { type: w.type, title: w.title, value: Number(r?.s ?? 0), format: "currency" };
+      }
     }
   }
-  if (w.type === "funnel") {
-    const all = await db.select().from(opportunities).where(eq(opportunities.workspaceId, workspaceId));
+
+  /* ═══════════════════════════════════════════════════════════
+     Funnel / Pipeline Stage
+  ═══════════════════════════════════════════════════════════ */
+  if (w.type === "funnel" || w.type === "pipeline_stage") {
+    const all = await db.select().from(opportunities).where(oppBase());
     const stages = ["discovery", "qualified", "proposal", "negotiation", "won"];
-    return { type: "funnel", title: w.title, series: stages.map((s) => ({ stage: s, count: all.filter((o) => o.stage === s).length, value: all.filter((o) => o.stage === s).reduce((sum, o) => sum + Number(o.value), 0) })) };
+    return {
+      type: w.type, title: w.title,
+      series: stages.map((s) => ({
+        stage: s,
+        count: all.filter((o) => o.stage === s).length,
+        value: all.filter((o) => o.stage === s).reduce((sum, o) => sum + Number(o.value), 0),
+      })),
+    };
   }
-  if (w.type === "bar" && cfg.metric === "closed_won") {
-    const won = await db.select().from(opportunities).where(and(eq(opportunities.workspaceId, workspaceId), eq(opportunities.stage, "won")));
-    const months = Array.from({ length: 6 }, (_, i) => {
-      const d = new Date(); d.setMonth(d.getMonth() - (5 - i));
-      return { label: d.toLocaleString("default", { month: "short" }), key: `${d.getFullYear()}-${d.getMonth()}` };
-    });
+
+  /* ═══════════════════════════════════════════════════════════
+     Bar / Line / Area / Stacked Bar (time-series)
+  ═══════════════════════════════════════════════════════════ */
+  if (["bar", "line", "area", "stacked_bar"].includes(w.type)) {
+    const months = sixMonths();
+    if (cfg.metric === "closed_won" || cfg.metric === "revenue") {
+      const won = await db.select().from(opportunities)
+        .where(and(oppBase(), eq(opportunities.stage, "won")));
+      const out = months.map((m) => ({ label: m.label, value: 0 }));
+      for (const o of won) {
+        if (!o.closeDate) continue;
+        const k = `${o.closeDate.getFullYear()}-${o.closeDate.getMonth()}`;
+        const idx = months.findIndex((m) => m.key === k);
+        if (idx >= 0) out[idx]!.value += Number(o.value);
+      }
+      return { type: w.type, title: w.title, series: out };
+    }
+    if (cfg.metric === "pipeline_created") {
+      const all = await db.select().from(opportunities).where(oppBase());
+      const out = months.map((m) => ({ label: m.label, value: 0 }));
+      for (const o of all) {
+        const k = `${o.createdAt.getFullYear()}-${o.createdAt.getMonth()}`;
+        const idx = months.findIndex((m) => m.key === k);
+        if (idx >= 0) out[idx]!.value += Number(o.value);
+      }
+      return { type: w.type, title: w.title, series: out };
+    }
+    if (cfg.metric === "activities") {
+      const actConds: any[] = [eq(activities.workspaceId, workspaceId)];
+      if (filters.dateFrom) actConds.push(sql`${activities.occurredAt} >= ${new Date(filters.dateFrom)}`);
+      if (filters.dateTo) actConds.push(sql`${activities.occurredAt} <= ${new Date(filters.dateTo)}`);
+      const acts = await db.select().from(activities).where(and(...actConds));
+      const out = months.map((m) => ({ label: m.label, calls: 0, emails: 0, meetings: 0 }));
+      for (const a of acts) {
+        const k = `${a.occurredAt.getFullYear()}-${a.occurredAt.getMonth()}`;
+        const idx = months.findIndex((m) => m.key === k);
+        if (idx < 0) continue;
+        if (a.type === "call") out[idx]!.calls++;
+        else if (a.type === "email") out[idx]!.emails++;
+        else if (a.type === "meeting") out[idx]!.meetings++;
+      }
+      return { type: w.type, title: w.title, series: out, keys: ["calls", "emails", "meetings"] };
+    }
+    // Default: closed-won by month
+    const won = await db.select().from(opportunities)
+      .where(and(oppBase(), eq(opportunities.stage, "won")));
     const out = months.map((m) => ({ label: m.label, value: 0 }));
     for (const o of won) {
       if (!o.closeDate) continue;
@@ -679,18 +850,191 @@ async function resolveWidgetData(workspaceId: number, w: { type: string; config:
       const idx = months.findIndex((m) => m.key === k);
       if (idx >= 0) out[idx]!.value += Number(o.value);
     }
-    return { type: "bar", title: w.title, series: out };
+    return { type: w.type, title: w.title, series: out };
   }
-  if (w.type === "table") {
-    if (cfg.entity === "accounts") {
-      const accs = await db.select().from(opportunities).where(eq(opportunities.workspaceId, workspaceId));
-      const map = new Map<number, number>();
-      for (const o of accs) map.set(o.accountId, (map.get(o.accountId) ?? 0) + Number(o.value));
-      const top = Array.from(map.entries()).sort((a, b) => b[1] - a[1]).slice(0, cfg.limit ?? 5);
-      return { type: "table", title: w.title, rows: top.map(([id, v]) => ({ id, value: v })) };
+
+  /* ═══════════════════════════════════════════════════════════
+     Pie / Donut
+  ═══════════════════════════════════════════════════════════ */
+  if (w.type === "pie" || w.type === "donut") {
+    if (cfg.metric === "stage_distribution") {
+      const all = await db.select().from(opportunities).where(oppBase());
+      const stages = ["discovery", "qualified", "proposal", "negotiation", "won", "lost"];
+      return {
+        type: w.type, title: w.title,
+        series: stages.map((s) => ({ name: s, value: all.filter((o) => o.stage === s).length })).filter((s) => s.value > 0),
+      };
     }
+    // Default: win/loss ratio
+    const all = await db.select().from(opportunities).where(oppBase());
+    const won = all.filter((o) => o.stage === "won").length;
+    const lost = all.filter((o) => o.stage === "lost").length;
+    const open = all.length - won - lost;
+    return { type: w.type, title: w.title, series: [{ name: "Won", value: won }, { name: "Lost", value: lost }, { name: "Open", value: open }].filter((s) => s.value > 0) };
   }
-  // Email Health widget
+
+  /* ═══════════════════════════════════════════════════════════
+     Scatter
+  ═══════════════════════════════════════════════════════════ */
+  if (w.type === "scatter") {
+    const all = await db.select().from(opportunities).where(oppBase());
+    return {
+      type: w.type, title: w.title,
+      series: all.slice(0, 50).map((o) => ({
+        x: o.daysInStage,
+        y: Number(o.value),
+        name: o.name,
+        stage: o.stage,
+      })),
+    };
+  }
+
+  /* ═══════════════════════════════════════════════════════════
+     Heatmap (activity by day-of-week × hour)
+  ═══════════════════════════════════════════════════════════ */
+  if (w.type === "heatmap") {
+    const actConds: any[] = [eq(activities.workspaceId, workspaceId)];
+    if (filters.dateFrom) actConds.push(sql`${activities.occurredAt} >= ${new Date(filters.dateFrom)}`);
+    if (filters.dateTo) actConds.push(sql`${activities.occurredAt} <= ${new Date(filters.dateTo)}`);
+    const acts = await db.select().from(activities).where(and(...actConds));
+    // Build 7×24 grid
+    const grid: number[][] = Array.from({ length: 7 }, () => Array(24).fill(0));
+    for (const a of acts) {
+      const day = a.occurredAt.getDay();
+      const hour = a.occurredAt.getHours();
+      grid[day]![hour]++;
+    }
+    const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const series = grid.flatMap((row, d) => row.map((count, h) => ({ day: days[d]!, hour: h, count })));
+    return { type: w.type, title: w.title, series };
+  }
+
+  /* ═══════════════════════════════════════════════════════════
+     Table (top accounts by pipeline)
+  ═══════════════════════════════════════════════════════════ */
+  if (w.type === "table") {
+    const accs = await db.select().from(opportunities).where(oppBase());
+    const map = new Map<number, number>();
+    for (const o of accs) map.set(o.accountId, (map.get(o.accountId) ?? 0) + Number(o.value));
+    const top = Array.from(map.entries()).sort((a, b) => b[1] - a[1]).slice(0, cfg.limit ?? 5);
+    // Fetch account names
+    const accRows = await db.select({ id: accounts.id, name: accounts.name })
+      .from(accounts).where(eq(accounts.workspaceId, workspaceId));
+    const nameMap = new Map(accRows.map((a) => [a.id, a.name]));
+    return { type: "table", title: w.title, rows: top.map(([id, v]) => ({ id, name: nameMap.get(id) ?? `Account #${id}`, value: v })) };
+  }
+
+  /* ═══════════════════════════════════════════════════════════
+     Leaderboard (top reps by deals closed)
+  ═══════════════════════════════════════════════════════════ */
+  if (w.type === "leaderboard") {
+    const won = await db.select().from(opportunities)
+      .where(and(oppBase(), eq(opportunities.stage, "won")));
+    const repMap = new Map<number, { count: number; value: number }>();
+    for (const o of won) {
+      if (!o.ownerUserId) continue;
+      const cur = repMap.get(o.ownerUserId) ?? { count: 0, value: 0 };
+      repMap.set(o.ownerUserId, { count: cur.count + 1, value: cur.value + Number(o.value) });
+    }
+    const memberRows = await db.select({ userId: workspaceMembers.userId, name: users.name })
+      .from(workspaceMembers)
+      .innerJoin(users, eq(users.id, workspaceMembers.userId))
+      .where(eq(workspaceMembers.workspaceId, workspaceId));
+    const nameMap = new Map(memberRows.map((m) => [m.userId, m.name ?? `User #${m.userId}`]));
+    const rows = Array.from(repMap.entries())
+      .sort((a, b) => b[1].value - a[1].value)
+      .slice(0, cfg.limit ?? 10)
+      .map(([uid, stats], rank) => ({ rank: rank + 1, name: nameMap.get(uid) ?? `Rep #${uid}`, ...stats }));
+    return { type: "leaderboard", title: w.title, rows };
+  }
+
+  /* ═══════════════════════════════════════════════════════════
+     Activity Feed (recent activities)
+  ═══════════════════════════════════════════════════════════ */
+  if (w.type === "activity_feed") {
+    const actConds: any[] = [eq(activities.workspaceId, workspaceId)];
+    if (filters.dateFrom) actConds.push(sql`${activities.occurredAt} >= ${new Date(filters.dateFrom)}`);
+    if (filters.dateTo) actConds.push(sql`${activities.occurredAt} <= ${new Date(filters.dateTo)}`);
+    const acts = await db.select().from(activities)
+      .where(and(...actConds))
+      .orderBy(desc(activities.occurredAt))
+      .limit(cfg.limit ?? 20);
+    return { type: "activity_feed", title: w.title, items: acts.map((a) => ({
+      id: a.id, type: a.type, subject: a.subject ?? a.type,
+      relatedType: a.relatedType, relatedId: a.relatedId,
+      occurredAt: a.occurredAt.toISOString(),
+    })) };
+  }
+
+  /* ═══════════════════════════════════════════════════════════
+     Goal Progress (pipeline value vs target)
+  ═══════════════════════════════════════════════════════════ */
+  if (w.type === "goal_progress") {
+    const target = Number(cfg.target ?? 1000000);
+    const [r] = await db.select({ s: sql<string>`COALESCE(SUM(${opportunities.value}),0)` })
+      .from(opportunities).where(and(oppBase(), sql`${opportunities.stage} NOT IN ('lost')`));
+    const current = Number(r?.s ?? 0);
+    return { type: "goal_progress", title: w.title, current, target, pct: Math.min(100, Math.round((current / target) * 100)) };
+  }
+
+  /* ═══════════════════════════════════════════════════════════
+     Comparison (period-over-period)
+  ═══════════════════════════════════════════════════════════ */
+  if (w.type === "comparison") {
+    const metric = cfg.metric ?? "revenue";
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const endOfLastMonth = new Date(now.getFullYear(), now.getMonth(), 0);
+
+    const getVal = async (from: Date, to: Date) => {
+      const conds: any[] = [
+        eq(opportunities.workspaceId, workspaceId),
+        eq(opportunities.stage, "won"),
+        sql`${opportunities.closeDate} >= ${from}`,
+        sql`${opportunities.closeDate} <= ${to}`,
+      ];
+      if (filters.ownerUserId) conds.push(eq(opportunities.ownerUserId, filters.ownerUserId));
+      const [r] = await db.select({ s: sql<string>`COALESCE(SUM(${opportunities.value}),0)` })
+        .from(opportunities).where(and(...conds));
+      return Number(r?.s ?? 0);
+    };
+
+    const current = await getVal(startOfMonth, now);
+    const previous = await getVal(startOfLastMonth, endOfLastMonth);
+    const changePct = previous === 0 ? 100 : Math.round(((current - previous) / previous) * 100);
+    return { type: "comparison", title: w.title, current, previous, changePct, metric, format: "currency" };
+  }
+
+  /* ═══════════════════════════════════════════════════════════
+     Rep Performance (table of rep KPIs)
+  ═══════════════════════════════════════════════════════════ */
+  if (w.type === "rep_performance") {
+    const allOpps = await db.select().from(opportunities).where(oppBase());
+    const allActs = await db.select().from(activities).where(eq(activities.workspaceId, workspaceId));
+    const memberRows = await db.select({ userId: workspaceMembers.userId, name: users.name })
+      .from(workspaceMembers)
+      .innerJoin(users, eq(users.id, workspaceMembers.userId))
+      .where(eq(workspaceMembers.workspaceId, workspaceId));
+
+    const rows = memberRows.map((m) => {
+      const myOpps = allOpps.filter((o) => o.ownerUserId === m.userId);
+      const myWon = myOpps.filter((o) => o.stage === "won");
+      const myClosed = myOpps.filter((o) => o.stage === "won" || o.stage === "lost");
+      const myActs = allActs.filter((a) => a.actorUserId === m.userId);
+      const winRate = myClosed.length === 0 ? 0 : Math.round((myWon.length / myClosed.length) * 100);
+      const revenue = myWon.reduce((s, o) => s + Number(o.value), 0);
+      const pipeline = myOpps.filter((o) => !(["won", "lost"].includes(o.stage))).reduce((s, o) => s + Number(o.value), 0);
+      return { name: m.name ?? `Rep #${m.userId}`, deals: myWon.length, revenue, pipeline, winRate, activities: myActs.length };
+    }).filter((r) => r.deals > 0 || r.pipeline > 0 || r.activities > 0)
+      .sort((a, b) => b.revenue - a.revenue)
+      .slice(0, cfg.limit ?? 10);
+    return { type: "rep_performance", title: w.title, rows };
+  }
+
+  /* ═══════════════════════════════════════════════════════════
+     Email Health widget
+  ═══════════════════════════════════════════════════════════ */
   if (w.type === "email_health") {
     const allContacts = await db.select().from(contacts).where(eq(contacts.workspaceId, workspaceId));
     const total = allContacts.length;
@@ -702,6 +1046,7 @@ async function resolveWidgetData(workspaceId: number, w: { type: string; config:
     const verifiedPct = total === 0 ? 0 : Math.round(((total - unknown) / total) * 100);
     return { type: "email_health", title: w.title, total, valid, acceptAll, risky, invalid, unknown, verifiedPct };
   }
+
   return { type: w.type, title: w.title, value: null };
 }
 

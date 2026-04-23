@@ -155,6 +155,13 @@
       "when": 1776922349866,
       "tag": "0021_omniscient_the_stranger",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "5",
+      "when": 1776923449167,
+      "tag": "0022_remarkable_beyonder",
+      "breakpoints": true
     }
   ]
 }

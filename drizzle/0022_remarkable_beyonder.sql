@@ -1,0 +1,2 @@
+ALTER TABLE `dashboard_widgets` MODIFY COLUMN `type` enum('kpi','bar','stacked_bar','line','area','pie','donut','funnel','scatter','heatmap','gauge','single_value','table','leaderboard','activity_feed','goal_progress','comparison','pipeline_stage','rep_performance','email_health') NOT NULL;--> statement-breakpoint
+ALTER TABLE `dashboard_widgets` ADD `filters` json;

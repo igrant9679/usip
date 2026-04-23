@@ -879,3 +879,34 @@
 - [x] Context count badge on panel header; "Clear all context" link
 - [x] Context state (ctxSegments, ctxSequences, ctxCampaigns) ready to pass to pipeline mutations
 - [x] Vitest: 16 tests — context state management, serialization for LLM prompt, audience type validation
+
+## 72. Custom Dashboards Expansion
+- [ ] Schema: extend dashboardWidgets.type enum; add filters JSON column; migration 0022
+- [ ] Backend: new KPIs (revenue, sales_cycle_length, activity_counts, response_rate, reply_rate, meetings_booked)
+- [ ] Backend: new widget types (leaderboard, activity_feed, goal_progress, comparison, pipeline_stage, rep_performance)
+- [ ] Backend: resolveWidget accepts optional filters (dateFrom, dateTo, ownerUserId, stage, source)
+- [ ] Frontend: DashboardChartRenderer component (11 chart types)
+- [ ] Frontend: DashboardFilterBar component (date presets, owner, stage, source filters)
+- [ ] Frontend: install react-grid-layout for drag-to-resize/reorder
+- [ ] Frontend: new widget display components (Leaderboard, ActivityFeed, GoalProgress, Comparison, PipelineStage, RepPerformance)
+- [ ] Frontend: rewrite Dashboards.tsx with react-grid-layout, filter bar, all new widget types
+- [ ] Frontend: expand Add Widget dialog with all new types and chart type selector
+- [ ] Vitest: tests for new widget data resolvers and filter logic
+
+## 72. Custom Dashboards Expansion
+
+- [x] Extend dashboardWidgets type enum in schema (line/bar/stacked_bar/area/pie/donut/funnel/scatter/heatmap/gauge/single_value/leaderboard/activity_feed/goal_progress/comparison/pipeline_stage/rep_performance)
+- [x] Add filters JSON column to dashboardWidgets table
+- [x] Generate and apply migration 0022
+- [x] Extend resolveWidget backend to accept optional filters (dateFrom, dateTo, ownerUserId, stage, source)
+- [x] Extend resolveWidgetData with new KPIs: revenue, win_rate, avg_deal, sales_cycle_length, activity_counts, meetings_booked, response_rate, reply_rate
+- [x] Extend resolveWidgetData with new widget types: leaderboard, activity_feed, goal_progress, comparison, pipeline_stage, rep_performance
+- [x] Extend addWidget to accept all new widget types
+- [x] Install react-grid-layout v2 for drag-to-resize/reorder
+- [x] Create DashboardChartRenderer component (11 chart types: line, bar, stacked_bar, area, pie, donut, funnel, scatter, heatmap, gauge, single_value)
+- [x] Create DashboardWidgets component (KpiCard, Leaderboard, ActivityFeed, GoalProgress, Comparison, PipelineStage, RepPerformance, EmailHealth, Table)
+- [x] Create DashboardFilterBar component (date presets, custom range, owner, stage, source filters)
+- [x] Rewrite Dashboards.tsx with react-grid-layout GridLayout (drag-to-resize, drag-to-reorder via drag-handle)
+- [x] Add expanded Add Widget dialog with chart/widget type groups and conditional metric selectors
+- [x] Wire global filter state to all WidgetCard resolveWidget queries
+- [x] Write 15 Vitest tests for dashboard utilities (all 611 tests pass)

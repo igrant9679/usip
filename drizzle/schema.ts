@@ -726,10 +726,16 @@ export const dashboardWidgets = mysqlTable(
     id: int("id").autoincrement().primaryKey(),
     workspaceId: int("workspaceId").notNull(),
     dashboardId: int("dashboardId").notNull(),
-    type: mysqlEnum("type", ["kpi", "bar", "line", "pie", "funnel", "table"]).notNull(),
+    type: mysqlEnum("type", [
+      "kpi", "bar", "stacked_bar", "line", "area", "pie", "donut",
+      "funnel", "scatter", "heatmap", "gauge", "single_value",
+      "table", "leaderboard", "activity_feed", "goal_progress",
+      "comparison", "pipeline_stage", "rep_performance", "email_health",
+    ]).notNull(),
     title: varchar("title", { length: 160 }).notNull(),
-    config: json("config").notNull(), // {metric, dimension, filters, ...}
-    position: json("position"), // {x,y,w,h}
+    config: json("config").notNull(), // {metric, dimension, chartType, ...}
+    filters: json("filters"), // {dateFrom, dateTo, ownerUserId, stage, source}
+    position: json("position"), // {x,y,w,h,i}
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
   (t) => ({ byDash: index("ix_dw_dash").on(t.dashboardId) }),
