@@ -474,24 +474,46 @@ export const smtpConfigRouter = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const since = Date.now() - input.days * 24 * 60 * 60 * 1000;
+
+      // Opens + clicks from tracking events
       const events = await db
         .select({ type: emailTrackingEvents.type, createdAt: emailTrackingEvents.createdAt })
         .from(emailTrackingEvents)
         .where(eq(emailTrackingEvents.workspaceId, ctx.workspace.id));
-      const dailyMap: Record<string, { date: string; opens: number; clicks: number }> = {};
+      const dailyMap: Record<string, { date: string; opens: number; clicks: number; bounces: number }> = {};
       for (const ev of events) {
         const ts = typeof ev.createdAt === "number" ? ev.createdAt : Number(ev.createdAt);
         if (ts < since) continue;
         const day = new Date(ts).toISOString().slice(0, 10);
-        if (!dailyMap[day]) dailyMap[day] = { date: day, opens: 0, clicks: 0 };
+        if (!dailyMap[day]) dailyMap[day] = { date: day, opens: 0, clicks: 0, bounces: 0 };
         if (ev.type === "open") dailyMap[day].opens++;
         else if (ev.type === "click") dailyMap[day].clicks++;
       }
+
+      // Daily bounces from emailDrafts.bouncedAt (Feature 59)
+      const bouncedDrafts = await db
+        .select({ bouncedAt: emailDrafts.bouncedAt })
+        .from(emailDrafts)
+        .where(
+          and(
+            eq(emailDrafts.workspaceId, ctx.workspace.id),
+            sql`${emailDrafts.bouncedAt} IS NOT NULL`,
+          ),
+        );
+      for (const d of bouncedDrafts) {
+        if (!d.bouncedAt) continue;
+        const ts = d.bouncedAt instanceof Date ? d.bouncedAt.getTime() : Number(d.bouncedAt);
+        if (ts < since) continue;
+        const day = new Date(ts).toISOString().slice(0, 10);
+        if (!dailyMap[day]) dailyMap[day] = { date: day, opens: 0, clicks: 0, bounces: 0 };
+        dailyMap[day].bounces++;
+      }
+
       // Fill missing days with zeros for a continuous x-axis
-      const result: { date: string; opens: number; clicks: number }[] = [];
+      const result: { date: string; opens: number; clicks: number; bounces: number }[] = [];
       for (let i = input.days - 1; i >= 0; i--) {
         const day = new Date(Date.now() - i * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-        result.push(dailyMap[day] ?? { date: day, opens: 0, clicks: 0 });
+        result.push(dailyMap[day] ?? { date: day, opens: 0, clicks: 0, bounces: 0 });
       }
       return result;
     }),

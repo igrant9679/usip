@@ -122,6 +122,23 @@ export const emailSuppressionsRouter = {
     for (const r of rows) counts[r.reason]++;
     return counts;
   }),
+
+  /** Remove ALL suppression records for a given email address (Feature 60) */
+  removeByEmail: adminWsProcedure
+    .input(z.object({ email: z.string().email() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      await db
+        .delete(emailSuppressions)
+        .where(
+          and(
+            eq(emailSuppressions.workspaceId, ctx.workspace.id),
+            eq(emailSuppressions.email, input.email.toLowerCase()),
+          )
+        );
+      return { ok: true, email: input.email.toLowerCase() };
+    }),
 };
 
 /**

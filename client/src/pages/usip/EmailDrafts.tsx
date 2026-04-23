@@ -2,8 +2,9 @@ import { Button } from "@/components/ui/button";
 import { Field, FormDialog, SelectField, StatusPill, TextareaField } from "@/components/usip/Common";
 import { EmptyState, PageHeader, Shell } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
-import { BarChart2, Check, ChevronDown, ChevronRight, Eye, FileText, MousePointer, Send, Sparkles, X, Zap, AlertTriangle, XCircle } from "lucide-react";
-import { useState } from "react";
+import { BarChart2, Check, ChevronDown, ChevronRight, Eye, FileText, MousePointer, Send, Sparkles, Trash2, X, Zap, AlertTriangle, XCircle } from "lucide-react";
+import { useEffect, useState } from "react";
+import { useLocation } from "wouter";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -216,9 +217,24 @@ function PreviewResolvedModal({ draftId, open, onClose }: { draftId: number | nu
 export default function EmailDrafts() {
   const [composeOpen, setComposeOpen] = useState(false);
   const [previewDraftId, setPreviewDraftId] = useState<number | null>(null);
-  const [filter, setFilter] = useState<"pending_review" | "approved" | "sent" | "rejected" | "all">("pending_review");
+  const [filter, setFilter] = useState<"pending_review" | "approved" | "sent" | "rejected" | "all" | "bounced">("pending_review");
+  const [location, setLocation] = useLocation();
   const utils = trpc.useUtils();
-  const { data } = trpc.emailDrafts.list.useQuery({ status: filter === "all" ? undefined : filter });
+
+  // Feature 58: read ?filter=bounced from URL on mount
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const f = params.get("filter");
+    if (f === "bounced") setFilter("bounced");
+  }, [location]);
+
+  // For bounced filter, fetch all sent emails then filter client-side (bouncedAt IS NOT NULL)
+  const { data: allData } = trpc.emailDrafts.list.useQuery(
+    { status: filter === "bounced" ? "sent" : filter === "all" ? undefined : filter as any },
+  );
+  const data = filter === "bounced"
+    ? (allData ?? []).filter((d) => d.bouncedAt != null)
+    : allData;
   const { data: contacts } = trpc.contacts.list.useQuery();
   const compose = trpc.emailDrafts.compose.useMutation({
     onSuccess: () => { utils.emailDrafts.list.invalidate(); setComposeOpen(false); toast.success("Draft created — review it below"); },
@@ -242,12 +258,35 @@ export default function EmailDrafts() {
     onError: (e) => toast.error(e.message),
   });
 
+  // Feature 60: remove from suppression by email
+  const removeSuppressionByEmail = trpc.emailSuppressions.removeByEmail.useMutation({
+    onSuccess: (_, vars) => {
+      utils.emailDrafts.list.invalidate();
+      utils.emailSuppressions.list.invalidate();
+      utils.emailSuppressions.summary.invalidate();
+      toast.success(`${vars.email} removed from suppression list. You can now send emails to this address.`);
+    },
+    onError: (e) => toast.error(`Failed to remove suppression: ${e.message}`),
+  });
+
   return (
     <Shell title="Email Drafts">
       <PageHeader title="Email Drafts" description="AI-generated outbound that requires human review before send.">
         <div className="flex items-center gap-1 bg-secondary rounded-md p-0.5">
-          {(["pending_review", "approved", "sent", "rejected", "all"] as const).map((f) => (
-            <button key={f} onClick={() => setFilter(f)} className={`px-2 py-1 text-xs rounded ${filter === f ? "bg-card shadow-sm" : "text-muted-foreground"}`}>{f.replace("_", " ")}</button>
+          {(["pending_review", "approved", "sent", "rejected", "all", "bounced"] as const).map((f) => (
+            <button
+              key={f}
+              onClick={() => {
+                setFilter(f);
+                if (f !== "bounced") setLocation("/email-drafts");
+              }}
+              className={`px-2 py-1 text-xs rounded flex items-center gap-1 ${
+                filter === f ? "bg-card shadow-sm" : "text-muted-foreground"
+              } ${f === "bounced" ? "text-red-500" : ""}`}
+            >
+              {f === "bounced" && <XCircle className="size-3" />}
+              {f.replace("_", " ")}
+            </button>
           ))}
         </div>
         {filter === "approved" && (
@@ -262,22 +301,38 @@ export default function EmailDrafts() {
           <div key={d.id} className={`rounded-lg border bg-card p-4 ${d.bouncedAt ? "border-red-500/30" : ""}`}>
             <div className="flex items-center gap-2 flex-wrap">
               <StatusPill tone={d.status === "pending_review" ? "warning" : d.status === "approved" ? "info" : d.status === "sent" ? "success" : "muted"}>{d.status}</StatusPill>
-              {/* Feature 57: Bounced badge */}
+              {/* Feature 57 + 60: Bounced badge + Remove from suppression */}
               {d.bouncedAt && (
-                <Badge
-                  variant="destructive"
-                  className="text-xs bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/30 shrink-0"
-                  title={d.bounceMessage ?? "Bounced"}
-                >
-                  <XCircle className="size-3 mr-1" />
-                  {d.bounceType === "hard"
-                    ? "Hard Bounce"
-                    : d.bounceType === "soft"
-                    ? "Soft Bounce"
-                    : d.bounceType === "spam"
-                    ? "Spam Complaint"
-                    : "Bounced"}
-                </Badge>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <Badge
+                    variant="destructive"
+                    className="text-xs bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/30"
+                    title={d.bounceMessage ?? "Bounced"}
+                  >
+                    <XCircle className="size-3 mr-1" />
+                    {d.bounceType === "hard"
+                      ? "Hard Bounce"
+                      : d.bounceType === "soft"
+                      ? "Soft Bounce"
+                      : d.bounceType === "spam"
+                      ? "Spam Complaint"
+                      : "Bounced"}
+                  </Badge>
+                  {/* Feature 60: Remove from suppression inline button */}
+                  {(d.toEmail) && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-6 px-2 text-xs text-muted-foreground hover:text-red-600"
+                      title={`Remove ${d.toEmail} from suppression list`}
+                      disabled={removeSuppressionByEmail.isPending}
+                      onClick={() => removeSuppressionByEmail.mutate({ email: d.toEmail! })}
+                    >
+                      <Trash2 className="size-3 mr-1" />
+                      Remove suppression
+                    </Button>
+                  )}
+                </div>
               )}
               <div className="text-sm font-medium flex-1 truncate">{d.subject}</div>
               <div className="flex gap-1">

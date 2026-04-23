@@ -5,6 +5,7 @@ import {
   AlertTriangle,
   BarChart2,
   ChevronDown,
+  ChevronRight,
   ChevronUp,
   Mail,
   MousePointer,
@@ -14,6 +15,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { useMemo, useState } from "react";
+import { useLocation } from "wouter";
 import {
   AreaChart,
   Area,
@@ -129,16 +131,18 @@ export default function EmailAnalytics() {
     );
   }
 
+  const [, setLocation] = useLocation();
+
   const periodTotals = useMemo(() => {
-    if (!timeSeriesData) return { opens: 0, clicks: 0 };
+    if (!timeSeriesData) return { opens: 0, clicks: 0, bounces: 0 };
     return timeSeriesData.reduce(
-      (acc, d) => ({ opens: acc.opens + d.opens, clicks: acc.clicks + d.clicks }),
-      { opens: 0, clicks: 0 },
+      (acc, d) => ({ opens: acc.opens + d.opens, clicks: acc.clicks + d.clicks, bounces: acc.bounces + (d.bounces ?? 0) }),
+      { opens: 0, clicks: 0, bounces: 0 },
     );
   }, [timeSeriesData]);
 
   const hasChartData =
-    timeSeriesData && timeSeriesData.some((d) => d.opens > 0 || d.clicks > 0);
+    timeSeriesData && timeSeriesData.some((d) => d.opens > 0 || d.clicks > 0 || (d.bounces ?? 0) > 0);
 
   const bounceRateWarn = (bounceStats?.bounceRate ?? 0) >= 5;
 
@@ -263,16 +267,27 @@ export default function EmailAnalytics() {
             </div>
           </div>
 
-          {/* Suppression note */}
-          {bounceStats && bounceStats.suppressedEmails > 0 && (
-            <div className="mt-3 text-xs text-muted-foreground border-t pt-3">
-              <span className="font-medium">{bounceStats.suppressedEmails}</span> email
-              {bounceStats.suppressedEmails !== 1 ? "s" : ""} are on the suppression list
-              (bounced, unsubscribed, or spam complaints). Manage them in{" "}
-              <a href="/email-suppressions" className="underline text-primary">
-                Opt-Out Management
-              </a>
-              .
+          {/* View bounced emails link (Feature 58) + Suppression note */}
+          {bounceStats && (bounceStats.totalBounced > 0 || bounceStats.suppressedEmails > 0) && (
+            <div className="mt-3 border-t pt-3 flex flex-wrap items-center justify-between gap-2">
+              {bounceStats.totalBounced > 0 && (
+                <button
+                  onClick={() => setLocation("/email-drafts?filter=bounced")}
+                  className="flex items-center gap-1 text-xs text-primary hover:underline"
+                >
+                  <ChevronRight className="size-3" />
+                  View {bounceStats.totalBounced} bounced email{bounceStats.totalBounced !== 1 ? "s" : ""}
+                </button>
+              )}
+              {bounceStats.suppressedEmails > 0 && (
+                <div className="text-xs text-muted-foreground">
+                  <span className="font-medium">{bounceStats.suppressedEmails}</span> email
+                  {bounceStats.suppressedEmails !== 1 ? "s" : ""} on suppression list.{" "}
+                  <a href="/email-suppressions" className="underline text-primary">
+                    Manage
+                  </a>
+                </div>
+              )}
             </div>
           )}
 
@@ -291,10 +306,10 @@ export default function EmailAnalytics() {
           <div className="flex items-center justify-between gap-2 mb-4 flex-wrap">
             <div className="flex items-center gap-2">
               <BarChart2 className="size-4 text-muted-foreground" />
-              <span className="text-sm font-medium">Opens &amp; Clicks Over Time</span>
+              <span className="text-sm font-medium">Opens, Clicks &amp; Bounces Over Time</span>
               {!timeSeriesLoading && hasChartData && (
                 <span className="text-xs text-muted-foreground ml-1">
-                  ({periodTotals.opens} opens · {periodTotals.clicks} clicks in period)
+                  ({periodTotals.opens} opens · {periodTotals.clicks} clicks{periodTotals.bounces > 0 ? ` · ${periodTotals.bounces} bounces` : ""} in period)
                 </span>
               )}
             </div>
@@ -333,15 +348,15 @@ export default function EmailAnalytics() {
                 <defs>
                   <linearGradient id="colorOpens" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%" stopColor="hsl(var(--primary))" stopOpacity={0.3} />
-                    <stop
-                      offset="95%"
-                      stopColor="hsl(var(--primary))"
-                      stopOpacity={0.02}
-                    />
+                    <stop offset="95%" stopColor="hsl(var(--primary))" stopOpacity={0.02} />
                   </linearGradient>
                   <linearGradient id="colorClicks" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%" stopColor="#22c55e" stopOpacity={0.3} />
                     <stop offset="95%" stopColor="#22c55e" stopOpacity={0.02} />
+                  </linearGradient>
+                  <linearGradient id="colorBounces" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#ef4444" stopOpacity={0.35} />
+                    <stop offset="95%" stopColor="#ef4444" stopOpacity={0.02} />
                   </linearGradient>
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
@@ -386,6 +401,16 @@ export default function EmailAnalytics() {
                   stroke="#22c55e"
                   strokeWidth={2}
                   fill="url(#colorClicks)"
+                  dot={false}
+                  activeDot={{ r: 4 }}
+                />
+                <Area
+                  type="monotone"
+                  dataKey="bounces"
+                  name="Bounces"
+                  stroke="#ef4444"
+                  strokeWidth={2}
+                  fill="url(#colorBounces)"
                   dot={false}
                   activeDot={{ r: 4 }}
                 />

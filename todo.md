@@ -771,3 +771,22 @@
 - [x] Frontend: draft card gets red border when bounced; badge has tooltip showing bounceMessage
 - [x] Backend: emailDrafts.list already returns full rows including bouncedAt/bounceType/bounceMessage (no change needed)
 - [x] Vitest: 13 tests — label resolution for all 3 types, fallback, visibility guard, border class
+
+## 58. View Bounced Emails Link ✅
+- [x] Frontend: Bounce Health card — "View {N} bounced email(s)" button navigates to /email-drafts?filter=bounced via setLocation
+- [x] Frontend: Email Drafts page — "bounced" filter tab (red XCircle icon) shows drafts where bouncedAt IS NOT NULL
+- [x] Frontend: useEffect reads ?filter=bounced from URL on mount and sets filter state
+- [x] Vitest: 14 tests — client-side filter logic, query status resolution, URL param detection
+
+## 59. Bounce Trend Line on Email Analytics Chart ✅
+- [x] Backend: getTrackingTimeSeries — adds daily bounces count from emailDrafts.bouncedAt; zero-filled continuous x-axis
+- [x] Frontend: EmailAnalytics AreaChart — third Area series for bounces (red #ef4444 with gradient fill)
+- [x] Frontend: period totals header includes bounce count (only shown when bounces > 0)
+- [x] Frontend: chart title updated to "Opens, Clicks & Bounces Over Time"
+- [x] Vitest: 10 tests — bounce aggregation, zero-fill, multi-day, coexistence with opens/clicks, period totals
+
+## 60. Remove from Suppression Button on Bounced Draft Badge ✅
+- [x] Backend: emailSuppressions.removeByEmail — deletes ALL suppression records for email+workspaceId (all reasons)
+- [x] Frontend: EmailDrafts.tsx — inline "Remove suppression" button (Trash2 icon) next to bounced badge
+- [x] Frontend: on success, invalidates emailDrafts.list + emailSuppressions.list + summary, shows toast
+- [x] Vitest: 11 tests — result shape, email normalization, toast message, scope safety
