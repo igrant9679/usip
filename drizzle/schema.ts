@@ -884,6 +884,7 @@ export const notifications = mysqlTable(
       "approval_request",
       "workflow_fired",
       "system",
+      "email_reply",
     ]).notNull(),
     title: varchar("title", { length: 240 }).notNull(),
     body: text("body"),
@@ -1863,6 +1864,12 @@ export const sendingAccounts = mysqlTable(
     smtpUsername: varchar("smtpUsername", { length: 255 }),
     smtpPassword: text("smtpPassword"),
     sesRegion: varchar("sesRegion", { length: 32 }),
+    /* IMAP fields (for reading inbox: Mailpool own SMTP/IMAP, generic IMAP) */
+    imapHost: varchar("imapHost", { length: 255 }),
+    imapPort: int("imapPort").default(993),
+    imapSecure: boolean("imapSecure").default(true),
+    imapUsername: varchar("imapUsername", { length: 255 }),
+    imapPassword: text("imapPassword"), // AES-256-GCM encrypted
     /* Limits */
     dailySendLimit: int("dailySendLimit").default(500).notNull(),
     warmupStatus: mysqlEnum("warmupStatus", [
@@ -1961,3 +1968,106 @@ export const senderPoolMembers = mysqlTable(
   }),
 );
 export type SenderPoolMember = typeof senderPoolMembers.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Rep Mailbox & Calendar (Feature 73)
+   ────────────────────────────────────────────────────────────────────────── */
+
+export const emailReplies = mysqlTable(
+  "email_replies",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    draftId: int("draftId"),
+    sendingAccountId: int("sendingAccountId").notNull(),
+    userId: int("userId"),
+    fromEmail: varchar("fromEmail", { length: 320 }).notNull(),
+    fromName: varchar("fromName", { length: 200 }),
+    subject: varchar("subject", { length: 500 }),
+    bodyText: text("bodyText"),
+    bodyHtml: text("bodyHtml"),
+    messageId: varchar("messageId", { length: 500 }),
+    inReplyTo: varchar("inReplyTo", { length: 500 }),
+    contactId: int("contactId"),
+    leadId: int("leadId"),
+    accountId: int("accountId"),
+    imapUid: bigint("imapUid", { mode: "number" }),
+    gmailMessageId: varchar("gmailMessageId", { length: 200 }),
+    receivedAt: timestamp("receivedAt").notNull(),
+    readAt: timestamp("readAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    byWs: index("ix_er_ws").on(t.workspaceId),
+    byAccount: index("ix_er_account").on(t.sendingAccountId),
+    byDraft: index("ix_er_draft").on(t.draftId),
+    byMsgId: index("ix_er_msgid").on(t.messageId),
+  }),
+);
+export type EmailReply = typeof emailReplies.$inferSelect;
+
+export const calendarAccounts = mysqlTable(
+  "calendar_accounts",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    userId: int("userId").notNull(),
+    provider: mysqlEnum("provider", [
+      "google",
+      "outlook_caldav",
+      "apple_caldav",
+      "generic_caldav",
+    ]).notNull(),
+    label: varchar("label", { length: 120 }),
+    email: varchar("email", { length: 320 }),
+    oauthAccessToken: text("oauthAccessToken"),
+    oauthRefreshToken: text("oauthRefreshToken"),
+    oauthTokenExpiry: timestamp("oauthTokenExpiry"),
+    oauthScope: text("oauthScope"),
+    caldavUrl: varchar("caldavUrl", { length: 500 }),
+    caldavUsername: varchar("caldavUsername", { length: 320 }),
+    caldavPassword: text("caldavPassword"),
+    calendarId: varchar("calendarId", { length: 500 }),
+    syncEnabled: boolean("syncEnabled").default(true).notNull(),
+    lastSyncAt: timestamp("lastSyncAt"),
+    lastSyncError: text("lastSyncError"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    byUser: index("ix_ca_user").on(t.workspaceId, t.userId),
+  }),
+);
+export type CalendarAccount = typeof calendarAccounts.$inferSelect;
+
+export const calendarEvents = mysqlTable(
+  "calendar_events",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    userId: int("userId").notNull(),
+    calendarAccountId: int("calendarAccountId").notNull(),
+    externalId: varchar("externalId", { length: 500 }).notNull(),
+    title: varchar("title", { length: 500 }).notNull(),
+    description: text("description"),
+    location: varchar("location", { length: 500 }),
+    meetingUrl: varchar("meetingUrl", { length: 1000 }),
+    startAt: timestamp("startAt").notNull(),
+    endAt: timestamp("endAt").notNull(),
+    allDay: boolean("allDay").default(false).notNull(),
+    attendees: json("attendees"),
+    relatedType: varchar("relatedType", { length: 30 }),
+    relatedId: int("relatedId"),
+    activityId: int("activityId"),
+    syncedAt: timestamp("syncedAt").defaultNow().notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    byUser: index("ix_ce_user").on(t.workspaceId, t.userId),
+    byAccount: index("ix_ce_account").on(t.calendarAccountId),
+    byExtId: index("ix_ce_extid").on(t.calendarAccountId, t.externalId),
+    byRange: index("ix_ce_range").on(t.workspaceId, t.userId, t.startAt, t.endAt),
+  }),
+);
+export type CalendarEvent = typeof calendarEvents.$inferSelect;

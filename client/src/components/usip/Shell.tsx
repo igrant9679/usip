@@ -47,6 +47,8 @@ import {
   Ban,
   Mail,
   Layers,
+  MailOpen,
+  CalendarDays,
 } from "lucide-react";
 import { ReactNode, useEffect, useState } from "react";
 import { Link, useLocation } from "wouter";
@@ -60,6 +62,8 @@ const NAV: NavGroup[] = [
     items: [
       { href: "/", label: "Dashboard", icon: LayoutDashboard },
       { href: "/inbox", label: "Inbox", icon: Inbox },
+      { href: "/mailbox", label: "My Mailbox", icon: MailOpen },
+      { href: "/calendar", label: "My Calendar", icon: CalendarDays },
     ],
   },
   {

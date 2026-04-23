@@ -910,3 +910,31 @@
 - [x] Add expanded Add Widget dialog with chart/widget type groups and conditional metric selectors
 - [x] Wire global filter state to all WidgetCard resolveWidget queries
 - [x] Write 15 Vitest tests for dashboard utilities (all 611 tests pass)
+
+## 73. Rep Mailbox & Calendar (Feature 73)
+- [x] Schema migration 0023: email_replies table, calendar_accounts table, calendar_events table, IMAP fields on sendingAccounts, email_reply notification kind
+- [x] EmailAdapter abstraction: GmailAdapter (Gmail API) + ImapSmtpAdapter (Mailpool/IMAP/SMTP)
+- [x] mailbox tRPC router: listAccounts, listThreads, getThread, sendNew, sendReply, markRead, moveToTrash, listFolders
+- [x] CalendarAdapter abstraction: GoogleCalendarAdapter + CalDAVAdapter (Outlook/Apple/generic)
+- [x] calendar tRPC router: listAccounts, connectCalDAV, disconnectAccount, listCalendars, listEvents, createEvent, updateEvent, deleteEvent, syncEvents
+- [x] Inbound reply poller: IMAP polling job, reply detection, CRM linkage (pause sequence, log activity, create notification)
+- [x] My Mailbox UI: account selector, folder list, thread list, thread view, inline reply/compose dialog, manager rep selector
+- [x] My Calendar UI: FullCalendar (month/week/day/agenda), event create/edit/delete dialog, CalDAV connect dialog, manager rep selector
+- [x] Inbox updated: unified feed with email_reply kind, filter tabs (All / Email Replies / Notifications), Open in Mailbox link
+- [x] Navigation: My Mailbox and My Calendar added to Overview section in sidebar
+- [x] Routes: /mailbox and /calendar registered in App.tsx
+- [x] Tests: 24 new Vitest tests for Feature 73 (635 total passing)
+
+## 73. Rep Mailbox and Calendar
+- [x] Schema migration 0023: email_replies, calendar_accounts, calendar_events tables, IMAP fields, email_reply notification kind
+- [x] EmailAdapter: GmailAdapter (Gmail API) + ImapSmtpAdapter (Mailpool/IMAP/SMTP)
+- [x] mailbox tRPC router: listAccounts, listThreads, getThread, sendNew, sendReply, markRead, moveToTrash, listFolders
+- [x] CalendarAdapter: GoogleCalendarAdapter + CalDAVAdapter (Outlook/Apple/generic)
+- [x] calendar tRPC router: listAccounts, connectCalDAV, disconnectAccount, listCalendars, listEvents, createEvent, updateEvent, deleteEvent, syncEvents
+- [x] Inbound reply poller: IMAP polling, reply detection, CRM linkage
+- [x] My Mailbox UI: account selector, folder list, thread list, thread view, compose/reply dialog, manager rep selector
+- [x] My Calendar UI: FullCalendar month/week/day/agenda, event CRUD, CalDAV connect, manager rep selector
+- [x] Inbox updated: unified feed with email_reply kind, filter tabs, Open in Mailbox link
+- [x] Navigation: My Mailbox and My Calendar in sidebar Overview section
+- [x] Routes: /mailbox and /calendar in App.tsx
+- [x] Tests: 24 new Vitest tests (635 total passing)

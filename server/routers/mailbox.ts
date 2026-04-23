@@ -1,0 +1,202 @@
+/**
+ * mailbox.ts — tRPC router for Rep Mailbox (Feature 73)
+ *
+ * Procedures:
+ *   mailbox.listAccounts  — list sending accounts with IMAP/Gmail configured for this rep
+ *   mailbox.listFolders   — list folders/labels for an account
+ *   mailbox.listThreads   — paginated thread list for a folder
+ *   mailbox.getThread     — full message list for a thread
+ *   mailbox.sendNew       — compose and send a new email
+ *   mailbox.sendReply     — reply to an existing thread
+ *   mailbox.markRead      — mark a message read/unread
+ *   mailbox.moveToTrash   — move a message to trash
+ *
+ * Manager access: managers/admins can pass repUserId to view another rep's mailbox.
+ */
+
+import { z } from "zod";
+import { router } from "../_core/trpc";
+import { workspaceProcedure, managerProcedure, roleRank } from "../_core/workspace";
+import { TRPCError } from "@trpc/server";
+import { getDb } from "../db";
+import { sendingAccounts } from "../../drizzle/schema";
+import { eq, and } from "drizzle-orm";
+import { createEmailAdapter } from "../emailAdapter";
+
+/** Resolve which userId to operate as (managers can view rep inboxes) */
+function resolveTargetUser(
+  ctx: { user: { id: number }; member: { role: string } },
+  repUserId?: number,
+): number {
+  if (!repUserId || repUserId === ctx.user.id) return ctx.user.id;
+  // Only managers/admins can view other reps
+  if (roleRank(ctx.member.role as any) < roleRank("manager")) {
+    throw new TRPCError({ code: "FORBIDDEN", message: "Only managers can view other reps' mailboxes" });
+  }
+  return repUserId;
+}
+
+/** Get a sending account by id, verifying it belongs to the workspace */
+async function getAccount(accountId: number, workspaceId: number) {
+  const db = await getDb();
+  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+  const [acc] = await db
+    .select()
+    .from(sendingAccounts)
+    .where(and(eq(sendingAccounts.id, accountId), eq(sendingAccounts.workspaceId, workspaceId)));
+  if (!acc) throw new TRPCError({ code: "NOT_FOUND", message: "Sending account not found" });
+  return acc;
+}
+
+export const mailboxRouter = router({
+  /** List sending accounts that have inbox access (Gmail OAuth or IMAP configured) */
+  listAccounts: workspaceProcedure
+    .input(z.object({ repUserId: z.number().optional() }))
+    .query(async ({ ctx, input }) => {
+      const targetUserId = resolveTargetUser(ctx, input.repUserId);
+      const db = await getDb();
+      if (!db) return [];
+      const accounts = await db
+        .select({
+          id: sendingAccounts.id,
+          name: sendingAccounts.name,
+          email: sendingAccounts.email,
+          provider: sendingAccounts.provider,
+          hasImap: sendingAccounts.imapHost,
+          hasOauth: sendingAccounts.oauthAccessToken,
+          userId: sendingAccounts.userId,
+        })
+        .from(sendingAccounts)
+        .where(
+          and(
+            eq(sendingAccounts.workspaceId, ctx.workspace.id),
+            eq(sendingAccounts.userId, targetUserId),
+          )
+        );
+      return accounts
+        .filter((a) => a.provider === "gmail_oauth" || !!a.hasImap)
+        .map((a) => ({
+          id: a.id,
+          name: a.name,
+          email: a.email,
+          provider: a.provider,
+          inboxEnabled: a.provider === "gmail_oauth" || !!a.hasImap,
+        }));
+    }),
+
+  /** List folders/labels for an account */
+  listFolders: workspaceProcedure
+    .input(z.object({ accountId: z.number(), repUserId: z.number().optional() }))
+    .query(async ({ ctx, input }) => {
+      resolveTargetUser(ctx, input.repUserId);
+      const acc = await getAccount(input.accountId, ctx.workspace.id);
+      const adapter = createEmailAdapter(acc);
+      return adapter.listFolders();
+    }),
+
+  /** List threads in a folder (paginated) */
+  listThreads: workspaceProcedure
+    .input(z.object({
+      accountId: z.number(),
+      folder: z.string().default("INBOX"),
+      pageToken: z.string().optional(),
+      maxResults: z.number().min(1).max(100).default(50),
+      repUserId: z.number().optional(),
+    }))
+    .query(async ({ ctx, input }) => {
+      resolveTargetUser(ctx, input.repUserId);
+      const acc = await getAccount(input.accountId, ctx.workspace.id);
+      const adapter = createEmailAdapter(acc);
+      return adapter.listThreads(input.folder, input.pageToken, input.maxResults);
+    }),
+
+  /** Get all messages in a thread */
+  getThread: workspaceProcedure
+    .input(z.object({
+      accountId: z.number(),
+      threadId: z.string(),
+      repUserId: z.number().optional(),
+    }))
+    .query(async ({ ctx, input }) => {
+      resolveTargetUser(ctx, input.repUserId);
+      const acc = await getAccount(input.accountId, ctx.workspace.id);
+      const adapter = createEmailAdapter(acc);
+      return adapter.getThread(input.threadId);
+    }),
+
+  /** Send a new email */
+  sendNew: workspaceProcedure
+    .input(z.object({
+      accountId: z.number(),
+      to: z.string().email(),
+      subject: z.string().min(1),
+      bodyHtml: z.string(),
+      bodyText: z.string().optional(),
+      cc: z.string().optional(),
+      bcc: z.string().optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const acc = await getAccount(input.accountId, ctx.workspace.id);
+      const adapter = createEmailAdapter(acc);
+      return adapter.sendEmail({
+        fromEmail: acc.email,
+        fromName: acc.name,
+        to: input.to,
+        subject: input.subject,
+        bodyHtml: input.bodyHtml,
+        bodyText: input.bodyText,
+        cc: input.cc,
+        bcc: input.bcc,
+      });
+    }),
+
+  /** Reply to an existing thread */
+  sendReply: workspaceProcedure
+    .input(z.object({
+      accountId: z.number(),
+      threadId: z.string(),
+      inReplyTo: z.string().optional(),
+      references: z.string().optional(),
+      to: z.string(),
+      subject: z.string(),
+      bodyHtml: z.string(),
+      bodyText: z.string().optional(),
+      cc: z.string().optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const acc = await getAccount(input.accountId, ctx.workspace.id);
+      const adapter = createEmailAdapter(acc);
+      return adapter.sendEmail({
+        fromEmail: acc.email,
+        fromName: acc.name,
+        to: input.to,
+        subject: input.subject,
+        bodyHtml: input.bodyHtml,
+        bodyText: input.bodyText,
+        cc: input.cc,
+        inReplyTo: input.inReplyTo,
+        references: input.references,
+        replyToThreadId: input.threadId,
+      });
+    }),
+
+  /** Mark a message read or unread */
+  markRead: workspaceProcedure
+    .input(z.object({ accountId: z.number(), messageId: z.string(), read: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      const acc = await getAccount(input.accountId, ctx.workspace.id);
+      const adapter = createEmailAdapter(acc);
+      await adapter.markRead(input.messageId, input.read);
+      return { ok: true };
+    }),
+
+  /** Move a message to trash */
+  moveToTrash: workspaceProcedure
+    .input(z.object({ accountId: z.number(), messageId: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const acc = await getAccount(input.accountId, ctx.workspace.id);
+      const adapter = createEmailAdapter(acc);
+      await adapter.moveToTrash(input.messageId);
+      return { ok: true };
+    }),
+});

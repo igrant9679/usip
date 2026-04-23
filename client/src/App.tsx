@@ -18,6 +18,8 @@ import { EmailSuppressions } from "@/pages/usip/EmailSuppressions";
 import SendingAccounts from "@/pages/usip/SendingAccounts";
 import SenderPools from "@/pages/usip/SenderPools";
 import Inbox from "@/pages/usip/Inbox";
+import Mailbox from "@/pages/usip/Mailbox";
+import CalendarPage from "@/pages/usip/Calendar";
 import Leads from "@/pages/usip/Leads";
 import Pipeline from "@/pages/usip/Pipeline";
 import Products from "@/pages/usip/Products";
@@ -81,6 +83,8 @@ function Router() {
       <Route path="/"><AuthGate><Dashboard /></AuthGate></Route>
       <Route path="/dashboard"><AuthGate><Dashboard /></AuthGate></Route>
       <Route path="/inbox"><AuthGate><Inbox /></AuthGate></Route>
+      <Route path="/mailbox"><AuthGate><Mailbox /></AuthGate></Route>
+      <Route path="/calendar"><AuthGate><CalendarPage /></AuthGate></Route>
       <Route path="/leads"><AuthGate><Leads /></AuthGate></Route>
       <Route path="/contacts"><AuthGate><Contacts /></AuthGate></Route>
       <Route path="/accounts"><AuthGate><Accounts /></AuthGate></Route>

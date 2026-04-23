@@ -31,6 +31,8 @@ import { smtpConfigRouter } from "./routers/smtpConfig";
 import { segmentRulesRouter } from "./routers/segmentRules";
 import { emailSuppressionsRouter } from "./routers/emailSuppressions";
 import { sendingAccountsRouter, senderPoolsRouter } from "./routers/sendingAccounts";
+import { mailboxRouter } from "./routers/mailbox";
+import { calendarRouter } from "./routers/calendar";
 
 export const appRouter = router({
   system: systemRouter,
@@ -95,6 +97,8 @@ export const appRouter = router({
   emailSuppressions: emailSuppressionsRouter,
   sendingAccounts: sendingAccountsRouter,
   senderPools: senderPoolsRouter,
+  mailbox: mailboxRouter,
+  calendar: calendarRouter,
 });
 
 export type AppRouter = typeof appRouter;

@@ -14,6 +14,7 @@ import { processEnrollments } from "../sequenceEngine";
 import { runNightlyBatch } from "../nightlyBatch";
 import { runSegmentEnrollmentForAllWorkspaces } from "../routers/segmentRules"; // eslint-disable-line
 import { registerEmailTrackingRoutes } from "../emailTracking";
+import { startInboundReplyPoller } from "../inboundReplyPoller";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -117,6 +118,9 @@ async function startServer() {
     console.log(`[NightlyBatch] Scheduled for midnight (~${Math.round(msUntilMidnight / 60000)} min away)`);
   };
   scheduleNightlyBatch();
+
+  // Inbound reply poller: check IMAP/Gmail inboxes every 60s for new replies
+  startInboundReplyPoller();
 }
 
 startServer().catch(console.error);
