@@ -44,6 +44,7 @@ import {
   BarChart3,
   Filter,
   AlertTriangle,
+  Ban,
 } from "lucide-react";
 import { ReactNode, useEffect, useState } from "react";
 import { Link, useLocation } from "wouter";
@@ -78,6 +79,8 @@ const NAV: NavGroup[] = [
       { href: "/segment-rules", label: "Segment Auto-Enroll", icon: Zap },
       { href: "/sequences", label: "Sequences", icon: Activity },
       { href: "/email-drafts", label: "Email Drafts", icon: FileText },
+      { href: "/email-analytics", label: "Email Analytics", icon: BarChart3 },
+      { href: "/email-suppressions", label: "Opt-Out Management", icon: Ban },
       { href: "/email-builder", label: "Email Builder", icon: LayoutTemplate },
       { href: "/snippets", label: "Snippet Library", icon: BookOpen },
       { href: "/research-pipeline", label: "AI Research Pipeline", icon: Sparkles },

@@ -120,6 +120,13 @@
       "when": 1776914737961,
       "tag": "0016_heavy_sasquatch",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "5",
+      "when": 1776915868156,
+      "tag": "0017_brief_ultragirl",
+      "breakpoints": true
     }
   ]
 }

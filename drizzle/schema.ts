@@ -1754,3 +1754,26 @@ export const emailTrackingEvents = mysqlTable(
   }),
 );
 export type EmailTrackingEvent = typeof emailTrackingEvents.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Email Suppressions — unsubscribes, bounces, spam complaints (Feature 51)
+   ────────────────────────────────────────────────────────────────────────── */
+export const emailSuppressions = mysqlTable(
+  "email_suppressions",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    email: varchar("email", { length: 320 }).notNull(),
+    reason: mysqlEnum("reason", ["unsubscribe", "bounce", "spam_complaint", "manual"]).notNull(),
+    draftId: int("draftId"), // the draft that triggered the suppression (if applicable)
+    contactId: int("contactId"), // linked contact (if found)
+    notes: text("notes"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    byWs: index("ix_sup_ws").on(t.workspaceId),
+    byEmail: index("ix_sup_email").on(t.email),
+    uniq: index("ix_sup_uniq").on(t.workspaceId, t.email, t.reason),
+  }),
+);
+export type EmailSuppression = typeof emailSuppressions.$inferSelect;

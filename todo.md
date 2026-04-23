@@ -701,3 +701,35 @@
 - [x] smtpConfig.sendBulkApproved wired: same pre-send pipeline per draft in the bulk loop
 - [~] tRPC emailDrafts.previewResolved — DEFERRED (preview modal is a future enhancement)
 - [x] Vitest: 30 tests for resolveMergeVars (fallbacks, custom fields, multi-var, edge cases), textToHtml (XSS, links, newlines), injectTracking (pixel, click wrapping, mailto skip)
+
+## 49. Preview Resolved Modal
+- [x] Backend: smtpConfig.previewResolved — loads draft + contact + account, resolves merge vars, returns {subject, body, resolvedCount, unresolvedTokens[]}
+- [x] Frontend: "Preview" button (Eye icon) on approved drafts in Email Drafts page
+- [x] Frontend: PreviewResolvedModal — shows resolved subject + HTML-rendered body in sandbox iframe, lists unresolved tokens as warnings
+- [x] Vitest: 6 tests for merge var substitution in preview context
+
+## 50. Email Analytics Dashboard
+- [x] Backend: smtpConfig.getAnalyticsSummary — 5 aggregate stats (sent, opens, clicks, open rate, click rate) + top clicked URLs
+- [x] Backend: smtpConfig.getTrackingOverview — per-draft stats sorted by open count with limit param
+- [x] Frontend: /email-analytics page — 5 KPI stat cards + sortable table of sent drafts
+- [x] Frontend: Date range filter (7d / 30d / 90d / all) + sort by open/click count
+- [x] Frontend: Sidebar nav: Email Analytics under Engage group
+- [x] Vitest: 7 tests for analytics aggregation (open rate, click rate, sorting, zero-state)
+
+## 51. Unsubscribe Endpoint + Suppression Logic
+- [x] DB schema: email_suppressions table (id, workspaceId, email, reason enum, source, draftId, notes, createdAt, removedAt)
+- [x] Migration: generated + applied (0017_brief_ultragirl.sql)
+- [x] Backend: GET /api/track/unsubscribe/:token — one-click unsubscribe, inserts suppression row, returns HTML confirmation page
+- [x] Backend: emailSuppressions.list — paginated list with search + reason filter
+- [x] Backend: emailSuppressions.add — manually add email to suppression list
+- [x] Backend: emailSuppressions.remove — remove suppression (re-enable sending)
+- [x] Backend: emailSuppressions.summary — counts by reason
+- [x] Backend: emailSuppressions.isEmailSuppressed — exported helper for pre-send check
+- [x] Backend: smtpConfig.sendDraft — checks suppression before sending, throws PRECONDITION_FAILED if suppressed
+- [x] Backend: smtpConfig.sendBulkApproved — skips suppressed emails in loop, reports skipped count
+- [x] Backend: injectUnsubscribeLink() — appends unsubscribe footer to every outbound email body
+- [x] Frontend: /email-suppressions page — search bar, reason filter, summary cards, paginated table, add/remove actions
+- [x] Sidebar nav: Opt-Out Management under Engage group
+- [~] POST /api/track/bounce — inbound SMTP bounce webhook — DEFERRED (requires external SMTP provider webhook)
+- [~] Settings → Email Delivery opt-out list section — DEFERRED (use /email-suppressions page instead)
+- [x] Vitest: 16 tests for suppression logic, token validation, bulk-skip counting, HTML page generation

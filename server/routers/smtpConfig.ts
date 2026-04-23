@@ -25,6 +25,7 @@ import { getDb } from "../db";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { router } from "../_core/trpc";
 import { buildMergeContextFromDb, resolveMergeVars, textToHtml, injectTracking } from "../mergeVars";
+import { isEmailSuppressed } from "./emailSuppressions";
 
 /* ─── AES-256-GCM helpers ─────────────────────────────────────────────── */
 function getEncKey(): Buffer {
@@ -216,6 +217,15 @@ export const smtpConfigRouter = router({
       }
       if (!toEmail) throw new TRPCError({ code: "BAD_REQUEST", message: "No recipient email address found for this draft" });
 
+      // Check suppression list before sending
+      const suppressed = await isEmailSuppressed(ctx.workspace.id, toEmail);
+      if (suppressed) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `${toEmail} is on the suppression list (unsubscribed or bounced). Remove them from the suppression list in Settings → Email Suppressions to re-enable sending.`,
+        });
+      }
+
       // Load SMTP config
       const [cfg] = await db.select().from(smtpConfigs)
         .where(and(eq(smtpConfigs.workspaceId, ctx.workspace.id), eq(smtpConfigs.enabled, true)));
@@ -306,7 +316,9 @@ export const smtpConfigRouter = router({
           null;
 
         if (!toEmail) { skipped++; continue; }
-
+        // Skip suppressed emails
+        const isSuppressed = await isEmailSuppressed(ctx.workspace.id, toEmail);
+        if (isSuppressed) { skipped++; continue; }
         try {
           // Pre-send: resolve merge vars
           const mergeCtx = await buildMergeContextFromDb(draft.toContactId ?? null);
@@ -410,4 +422,92 @@ export const smtpConfigRouter = router({
         .limit(input.limit);
       return drafts;
     }),
+  /** Preview a draft with merge vars resolved — no email is sent */
+  previewResolved: workspaceProcedure
+    .input(z.object({ draftId: z.number().int() }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [draft] = await db
+        .select()
+        .from(emailDrafts)
+        .where(and(eq(emailDrafts.id, input.draftId), eq(emailDrafts.workspaceId, ctx.workspace.id)))
+        .limit(1);
+      if (!draft) throw new TRPCError({ code: "NOT_FOUND" });
+
+      // Build merge context from DB
+      const mergeCtx = await buildMergeContextFromDb(draft.toContactId ?? undefined);
+      // Inject sender info into context
+      (mergeCtx as any).senderName = ctx.user.name ?? "";
+      (mergeCtx as any).senderEmail = ctx.user.email ?? "";
+
+      const resolvedSubject = resolveMergeVars(draft.subject ?? "", mergeCtx);
+      const resolvedBody = resolveMergeVars(draft.body ?? "", mergeCtx);
+
+      // Detect unresolved tokens (still contain {{...}})
+      const unresolvedPattern = /\{\{[^}]+\}\}/g;
+      const unresolvedInSubject = resolvedSubject.match(unresolvedPattern) ?? [];
+      const unresolvedInBody = resolvedBody.match(unresolvedPattern) ?? [];
+      const unresolvedTokens = Array.from(new Set([...unresolvedInSubject, ...unresolvedInBody]));
+
+      // Convert to HTML for rendering
+      const htmlBody = textToHtml(resolvedBody);
+
+      return {
+        draftId: draft.id,
+        originalSubject: draft.subject ?? "",
+        originalBody: draft.body ?? "",
+        resolvedSubject,
+        resolvedBody,
+        htmlBody,
+        unresolvedTokens,
+        contactId: draft.toContactId,
+        toEmail: draft.toEmail,
+      };
+    }),
+
+  /** Aggregate analytics summary for the workspace */
+  getAnalyticsSummary: workspaceProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    const allSent = await db
+      .select({
+        id: emailDrafts.id,
+        sentAt: emailDrafts.sentAt,
+        openCount: emailDrafts.openCount,
+        clickCount: emailDrafts.clickCount,
+      })
+      .from(emailDrafts)
+      .where(and(eq(emailDrafts.workspaceId, ctx.workspace.id), eq(emailDrafts.status, "sent")));
+
+    const totalSent = allSent.length;
+    const totalOpens = allSent.reduce((s, d) => s + (d.openCount ?? 0), 0);
+    const totalClicks = allSent.reduce((s, d) => s + (d.clickCount ?? 0), 0);
+    const uniqueOpened = allSent.filter((d) => (d.openCount ?? 0) > 0).length;
+    const uniqueClicked = allSent.filter((d) => (d.clickCount ?? 0) > 0).length;
+    const openRate = totalSent > 0 ? Math.round((uniqueOpened / totalSent) * 100) : 0;
+    const clickRate = totalSent > 0 ? Math.round((uniqueClicked / totalSent) * 100) : 0;
+
+    // Daily breakdown for last 30 days
+    const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
+    const recentEvents = await db
+      .select({ type: emailTrackingEvents.type, createdAt: emailTrackingEvents.createdAt })
+      .from(emailTrackingEvents)
+      .where(eq(emailTrackingEvents.workspaceId, ctx.workspace.id));
+
+    // Build daily buckets
+    const dailyMap: Record<string, { date: string; opens: number; clicks: number }> = {};
+    for (const ev of recentEvents) {
+      const ts = typeof ev.createdAt === "number" ? ev.createdAt : Number(ev.createdAt);
+      if (ts < thirtyDaysAgo) continue;
+      const day = new Date(ts).toISOString().slice(0, 10);
+      if (!dailyMap[day]) dailyMap[day] = { date: day, opens: 0, clicks: 0 };
+      if (ev.type === "open") dailyMap[day].opens++;
+      else if (ev.type === "click") dailyMap[day].clicks++;
+    }
+    const dailyBreakdown = Object.values(dailyMap).sort((a, b) => a.date.localeCompare(b.date));
+
+    return { totalSent, totalOpens, totalClicks, uniqueOpened, uniqueClicked, openRate, clickRate, dailyBreakdown };
+  }),
+
 });

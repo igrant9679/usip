@@ -2,10 +2,12 @@ import { Button } from "@/components/ui/button";
 import { Field, FormDialog, SelectField, StatusPill, TextareaField } from "@/components/usip/Common";
 import { EmptyState, PageHeader, Shell } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
-import { BarChart2, Check, ChevronDown, ChevronRight, Eye, FileText, MousePointer, Send, Sparkles, X, Zap } from "lucide-react";
+import { BarChart2, Check, ChevronDown, ChevronRight, Eye, FileText, MousePointer, Send, Sparkles, X, Zap, AlertTriangle } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { ScrollArea } from "@/components/ui/scroll-area";
 
 function SubjectABPanel({ draftId }: { draftId: number }) {
   const [open, setOpen] = useState(false);
@@ -164,8 +166,56 @@ function TrackingStatsPanel({ draftId, status }: { draftId: number; status: stri
   );
 }
 
+function PreviewResolvedModal({ draftId, open, onClose }: { draftId: number | null; open: boolean; onClose: () => void }) {
+  const { data, isLoading } = trpc.smtpConfig.previewResolved.useQuery(
+    { draftId: draftId! },
+    { enabled: open && draftId != null }
+  );
+  return (
+    <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Preview Resolved Email</DialogTitle>
+        </DialogHeader>
+        {isLoading ? (
+          <div className="py-8 text-center text-muted-foreground text-sm">Resolving merge variables…</div>
+        ) : data ? (
+          <div className="space-y-4">
+            {data.unresolvedTokens.length > 0 && (
+              <div className="flex items-start gap-2 rounded-md border border-yellow-500/30 bg-yellow-500/10 p-3 text-sm text-yellow-600 dark:text-yellow-400">
+                <AlertTriangle className="size-4 mt-0.5 shrink-0" />
+                <div>
+                  <span className="font-medium">Unresolved tokens: </span>
+                  {data.unresolvedTokens.join(", ")}
+                </div>
+              </div>
+            )}
+            <div className="space-y-1">
+              <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Subject</div>
+              <div className="rounded-md border bg-muted/40 px-3 py-2 text-sm font-medium">{data.resolvedSubject || <span className="text-muted-foreground italic">No subject</span>}</div>
+            </div>
+            <div className="space-y-1">
+              <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Body</div>
+              <ScrollArea className="h-80 rounded-md border bg-muted/40">
+                <div
+                  className="p-4 text-sm prose prose-sm dark:prose-invert max-w-none"
+                  dangerouslySetInnerHTML={{ __html: data.htmlBody }}
+                />
+              </ScrollArea>
+            </div>
+            {data.toEmail && (
+              <div className="text-xs text-muted-foreground">To: <span className="font-mono">{data.toEmail}</span></div>
+            )}
+          </div>
+        ) : null}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export default function EmailDrafts() {
   const [composeOpen, setComposeOpen] = useState(false);
+  const [previewDraftId, setPreviewDraftId] = useState<number | null>(null);
   const [filter, setFilter] = useState<"pending_review" | "approved" | "sent" | "rejected" | "all">("pending_review");
   const utils = trpc.useUtils();
   const { data } = trpc.emailDrafts.list.useQuery({ status: filter === "all" ? undefined : filter });
@@ -218,7 +268,12 @@ export default function EmailDrafts() {
                   <Button size="sm" variant="ghost" onClick={() => approve.mutate({ id: d.id })}><Check className="size-3.5" /> Approve</Button>
                   <Button size="sm" variant="ghost" onClick={() => reject.mutate({ id: d.id })}><X className="size-3.5" /> Reject</Button>
                 </>}
-                {d.status === "approved" && <Button size="sm" onClick={() => sendViaSmtp.mutate({ draftId: d.id })} disabled={sendViaSmtp.isPending}><Send className="size-3.5" /> Send</Button>}
+                {d.status === "approved" && (
+                  <>
+                    <Button size="sm" variant="ghost" onClick={() => setPreviewDraftId(d.id)}><Eye className="size-3.5" /> Preview</Button>
+                    <Button size="sm" onClick={() => sendViaSmtp.mutate({ draftId: d.id })} disabled={sendViaSmtp.isPending}><Send className="size-3.5" /> Send</Button>
+                  </>
+                )}
               </div>
             </div>
             <div className="text-sm whitespace-pre-wrap mt-3 text-muted-foreground">{d.body}</div>
@@ -227,6 +282,8 @@ export default function EmailDrafts() {
           </div>
         ))}
       </div>
+
+      <PreviewResolvedModal draftId={previewDraftId} open={previewDraftId != null} onClose={() => setPreviewDraftId(null)} />
 
       <FormDialog open={composeOpen} onOpenChange={setComposeOpen} title="AI compose email" isPending={compose.isPending}
         onSubmit={(f) => compose.mutate({

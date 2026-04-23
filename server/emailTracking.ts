@@ -139,4 +139,39 @@ export function registerEmailTrackingRoutes(app: Express) {
       console.error("[EmailTracking] click event failed:", e);
     }
   });
+
+  /**
+   * Unsubscribe — one-click opt-out via tracking token
+   * GET /api/track/unsubscribe/:token
+   */
+  app.get("/api/track/unsubscribe/:token", async (req: Request, res: Response) => {
+    const { token } = req.params;
+    if (!token) {
+      return res.status(400).send("<h2>Invalid unsubscribe link.</h2>");
+    }
+    try {
+      const { recordUnsubscribeByToken } = await import("./routers/emailSuppressions");
+      const result = await recordUnsubscribeByToken(token, req.headers["user-agent"]);
+      if (result.ok) {
+        return res.status(200).send(
+          `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Unsubscribed</title>
+          <style>body{font-family:sans-serif;max-width:480px;margin:80px auto;text-align:center;color:#333}
+          h1{color:#111}p{color:#666}</style></head>
+          <body><h1>You have been unsubscribed</h1>
+          <p>The address <strong>${result.email ?? ""}</strong> has been removed from our mailing list.</p>
+          <p>You will no longer receive emails from this sender.</p>
+          <p style="margin-top:40px;font-size:12px;color:#999">If this was a mistake, please contact the sender directly.</p>
+          </body></html>`
+        );
+      } else {
+        return res.status(400).send(
+          `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Error</title></head>
+          <body><h2>This unsubscribe link is invalid or has already been used.</h2></body></html>`
+        );
+      }
+    } catch (e) {
+      console.error("[EmailTracking] unsubscribe failed:", e);
+      return res.status(500).send("<h2>An error occurred. Please try again later.</h2>");
+    }
+  });
 }
