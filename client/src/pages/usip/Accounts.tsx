@@ -11,28 +11,56 @@ import { Building2, ChevronRight, Plus, MoreHorizontal, Pencil, Trash2, Tag, Meg
 import { useState } from "react";
 import { toast } from "sonner";
 
-/* ─── Add to Campaign Modal ─────────────────────────────────────────────── */
+/* ─── Add to Campaign Modal (with contact picker for accounts) ──────────── */
 function AddToCampaignModal({ open, onOpenChange, accountIds, onComplete }: { open: boolean; onOpenChange: (v: boolean) => void; accountIds: number[]; onComplete: () => void }) {
   const [campaignId, setCampaignId] = useState("");
+  const [selectedContactIds, setSelectedContactIds] = useState<Set<number>>(new Set());
   const { data: campaigns } = trpc.campaigns.list.useQuery();
+  // Load contacts for all selected accounts
+  const { data: accountContacts } = trpc.contacts.list.useQuery(
+    accountIds.length === 1 ? { accountId: accountIds[0] } : undefined,
+    { enabled: open && accountIds.length > 0 }
+  );
   const addMut = trpc.campaigns.addAudience.useMutation({
-    onSuccess: (d) => { toast.success(`Added ${d.added} account${d.added !== 1 ? "s" : ""} to campaign`); onComplete(); onOpenChange(false); },
+    onSuccess: (d) => { toast.success(`Added ${d.added} contact${d.added !== 1 ? "s" : ""} to campaign`); onComplete(); onOpenChange(false); setCampaignId(""); setSelectedContactIds(new Set()); },
     onError: (e: any) => toast.error(e.message),
   });
+  const contactsToAdd = selectedContactIds.size > 0 ? Array.from(selectedContactIds) : (accountContacts ?? []).map((c: any) => c.id);
+  function toggleContact(id: number) {
+    setSelectedContactIds((prev) => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; });
+  }
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-sm">
+      <DialogContent className="max-w-md">
         <DialogHeader><DialogTitle className="flex items-center gap-2"><Megaphone className="size-4 text-orange-500" />Add to Campaign</DialogTitle></DialogHeader>
         <div className="space-y-4 py-2">
           <Select value={campaignId} onValueChange={setCampaignId}>
             <SelectTrigger><SelectValue placeholder="Choose a campaign..." /></SelectTrigger>
             <SelectContent>{(campaigns ?? []).map((c: any) => <SelectItem key={c.id} value={String(c.id)}>{c.name}</SelectItem>)}</SelectContent>
           </Select>
+          {accountContacts && accountContacts.length > 0 && (
+            <div>
+              <p className="text-xs text-muted-foreground mb-2">Select individual contacts from this account (or leave all checked to add everyone):</p>
+              <div className="max-h-48 overflow-y-auto border rounded-md divide-y">
+                {accountContacts.map((c: any) => (
+                  <label key={c.id} className="flex items-center gap-2 px-3 py-2 hover:bg-secondary/30 cursor-pointer">
+                    <input type="checkbox" checked={selectedContactIds.size === 0 || selectedContactIds.has(c.id)} onChange={() => toggleContact(c.id)} className="rounded border-gray-300" />
+                    <span className="text-sm flex-1">{c.firstName} {c.lastName}</span>
+                    <span className="text-xs text-muted-foreground">{c.email}</span>
+                  </label>
+                ))}
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">{contactsToAdd.length} contact{contactsToAdd.length !== 1 ? "s" : ""} will be added</p>
+            </div>
+          )}
+          {accountContacts && accountContacts.length === 0 && (
+            <p className="text-sm text-muted-foreground">No contacts found for this account.</p>
+          )}
           <div className="flex gap-2 justify-end">
             <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-            <Button onClick={() => addMut.mutate({ campaignId: Number(campaignId), contactIds: accountIds })} disabled={!campaignId || addMut.isPending}>
+            <Button onClick={() => addMut.mutate({ campaignId: Number(campaignId), contactIds: contactsToAdd })} disabled={!campaignId || contactsToAdd.length === 0 || addMut.isPending}>
               {addMut.isPending ? <Loader2 className="size-4 animate-spin mr-1" /> : <Megaphone className="size-4 mr-1" />}
-              Add {accountIds.length}
+              Add {contactsToAdd.length}
             </Button>
           </div>
         </div>
@@ -41,28 +69,55 @@ function AddToCampaignModal({ open, onOpenChange, accountIds, onComplete }: { op
   );
 }
 
-/* ─── Add to Segment Modal ──────────────────────────────────────────────── */
+/* ─── Add to Segment Modal (with contact picker for accounts) ───────────── */
 function AddToSegmentModal({ open, onOpenChange, accountIds, onComplete }: { open: boolean; onOpenChange: (v: boolean) => void; accountIds: number[]; onComplete: () => void }) {
   const [segmentId, setSegmentId] = useState("");
+  const [selectedContactIds, setSelectedContactIds] = useState<Set<number>>(new Set());
   const { data: segments } = trpc.segments.list.useQuery();
+  const { data: accountContacts } = trpc.contacts.list.useQuery(
+    accountIds.length === 1 ? { accountId: accountIds[0] } : undefined,
+    { enabled: open && accountIds.length > 0 }
+  );
   const addMut = trpc.segments.addContacts.useMutation({
-    onSuccess: (d) => { toast.success(`Added ${d.added} account${d.added !== 1 ? "s" : ""} to segment`); onComplete(); onOpenChange(false); },
+    onSuccess: (d) => { toast.success(`Added ${d.added} contact${d.added !== 1 ? "s" : ""} to segment`); onComplete(); onOpenChange(false); setSegmentId(""); setSelectedContactIds(new Set()); },
     onError: (e: any) => toast.error(e.message),
   });
+  const contactsToAdd = selectedContactIds.size > 0 ? Array.from(selectedContactIds) : (accountContacts ?? []).map((c: any) => c.id);
+  function toggleContact(id: number) {
+    setSelectedContactIds((prev) => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; });
+  }
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-sm">
+      <DialogContent className="max-w-md">
         <DialogHeader><DialogTitle className="flex items-center gap-2"><Tag className="size-4 text-violet-500" />Add to Segment</DialogTitle></DialogHeader>
         <div className="space-y-4 py-2">
           <Select value={segmentId} onValueChange={setSegmentId}>
             <SelectTrigger><SelectValue placeholder="Choose a segment..." /></SelectTrigger>
             <SelectContent>{(segments ?? []).map((s: any) => <SelectItem key={s.id} value={String(s.id)}>{s.name}</SelectItem>)}</SelectContent>
           </Select>
+          {accountContacts && accountContacts.length > 0 && (
+            <div>
+              <p className="text-xs text-muted-foreground mb-2">Select individual contacts from this account (or leave all checked to add everyone):</p>
+              <div className="max-h-48 overflow-y-auto border rounded-md divide-y">
+                {accountContacts.map((c: any) => (
+                  <label key={c.id} className="flex items-center gap-2 px-3 py-2 hover:bg-secondary/30 cursor-pointer">
+                    <input type="checkbox" checked={selectedContactIds.size === 0 || selectedContactIds.has(c.id)} onChange={() => toggleContact(c.id)} className="rounded border-gray-300" />
+                    <span className="text-sm flex-1">{c.firstName} {c.lastName}</span>
+                    <span className="text-xs text-muted-foreground">{c.email}</span>
+                  </label>
+                ))}
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">{contactsToAdd.length} contact{contactsToAdd.length !== 1 ? "s" : ""} will be added</p>
+            </div>
+          )}
+          {accountContacts && accountContacts.length === 0 && (
+            <p className="text-sm text-muted-foreground">No contacts found for this account.</p>
+          )}
           <div className="flex gap-2 justify-end">
             <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-            <Button onClick={() => addMut.mutate({ segmentId: Number(segmentId), contactIds: accountIds })} disabled={!segmentId || addMut.isPending}>
+            <Button onClick={() => addMut.mutate({ segmentId: Number(segmentId), contactIds: contactsToAdd })} disabled={!segmentId || contactsToAdd.length === 0 || addMut.isPending}>
               {addMut.isPending ? <Loader2 className="size-4 animate-spin mr-1" /> : <Tag className="size-4 mr-1" />}
-              Add {accountIds.length}
+              Add {contactsToAdd.length}
             </Button>
           </div>
         </div>

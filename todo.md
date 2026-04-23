@@ -945,10 +945,10 @@
 
 ## Bugs & Features — Round 3
 
-- [ ] BUG: Ad-hoc email send does not log a Timeline activity on the contact or account record
-- [ ] BUG: Send Email tab missing from Leads drawer (only added to Contacts)
-- [ ] BUG: Checkboxes broken on Contacts, Leads, Accounts list views (multi-select not working)
-- [ ] BUG: No Edit or Delete on Contact, Lead, Account records (drawer + list)
-- [ ] FEATURE: Add-to-Campaign action from Contact, Lead, Account detail view and bulk-select toolbar
-- [ ] FEATURE: Add-to-Segment action from Contact, Lead, Account detail view and bulk-select toolbar
-- [ ] FEATURE: Add individual contacts when adding a Company (Account) to a campaign/segment
+- [x] BUG: Ad-hoc email send does not log a Timeline activity on the contact or account record
+- [x] BUG: Send Email tab missing from Leads drawer (only added to Contacts)
+- [x] BUG: Checkboxes broken on Contacts, Leads, Accounts list views (multi-select not working)
+- [x] BUG: No Edit or Delete on Contact, Lead, Account records (drawer + list)
+- [x] FEATURE: Add-to-Campaign action from Contact, Lead, Account detail view and bulk-select toolbar
+- [x] FEATURE: Add-to-Segment action from Contact, Lead, Account detail view and bulk-select toolbar
+- [x] FEATURE: Add individual contacts when adding a Company (Account) to a campaign/segment
