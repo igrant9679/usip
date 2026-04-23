@@ -409,6 +409,9 @@ export const emailDrafts = mysqlTable(
     clickCount: int("clickCount").default(0).notNull(),
     lastOpenedAt: timestamp("lastOpenedAt"),
     lastClickedAt: timestamp("lastClickedAt"),
+    bouncedAt: timestamp("bouncedAt"),
+    bounceType: mysqlEnum("bounceType", ["hard", "soft", "spam"]),
+    bounceMessage: varchar("bounceMessage", { length: 512 }),
   },
   (t) => ({
     byWs: index("ix_ed_ws").on(t.workspaceId, t.status),

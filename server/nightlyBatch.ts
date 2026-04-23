@@ -5,16 +5,23 @@
  * Finds leads with score >= nightlyScoreThreshold that haven't had a pipeline
  * job in the last 7 days, and triggers the 5-stage research-to-email pipeline
  * for up to 50 leads per workspace per night.
+ *
+ * Feature 54: After each run, sends an owner notification summarising the results.
  */
-import { and, eq, gte, isNull, lt, or, sql } from "drizzle-orm";
-import { aiPipelineJobs, leads, workspaceSettings, workspaces } from "../drizzle/schema";
+import { and, eq, gte, sql } from "drizzle-orm";
+import { aiPipelineJobs, leads, workspaceSettings } from "../drizzle/schema";
 import { getDb } from "./db";
 import { runPipelineForContact } from "./routers/aiPipeline";
+import { notifyOwner } from "./_core/notification";
 
 const MAX_PER_WORKSPACE = 50;
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 
-export async function runNightlyBatch(): Promise<{ workspacesProcessed: number; totalTriggered: number; totalSkipped: number }> {
+export async function runNightlyBatch(): Promise<{
+  workspacesProcessed: number;
+  totalTriggered: number;
+  totalSkipped: number;
+}> {
   const db = await getDb();
   if (!db) return { workspacesProcessed: 0, totalTriggered: 0, totalSkipped: 0 };
 
@@ -33,6 +40,7 @@ export async function runNightlyBatch(): Promise<{ workspacesProcessed: number; 
 
   let totalTriggered = 0;
   let totalSkipped = 0;
+  let totalErrors = 0;
   const sevenDaysAgo = new Date(Date.now() - SEVEN_DAYS_MS);
 
   for (const setting of enabledSettings) {
@@ -50,12 +58,14 @@ export async function runNightlyBatch(): Promise<{ workspacesProcessed: number; 
             gte(leads.score, scoreThreshold),
             // Only leads with an email address
             sql`${leads.email} IS NOT NULL AND ${leads.email} != ''`,
-          )
+          ),
         )
         .limit(MAX_PER_WORKSPACE * 3); // fetch more, filter by recent jobs below
 
       if (eligibleLeads.length === 0) {
-        console.log(`[NightlyBatch] Workspace ${workspaceId}: no eligible leads above score ${scoreThreshold}`);
+        console.log(
+          `[NightlyBatch] Workspace ${workspaceId}: no eligible leads above score ${scoreThreshold}`,
+        );
         continue;
       }
 
@@ -67,47 +77,97 @@ export async function runNightlyBatch(): Promise<{ workspacesProcessed: number; 
         .where(
           and(
             eq(aiPipelineJobs.workspaceId, workspaceId),
-            sql`${aiPipelineJobs.leadId} IN (${sql.join(eligibleLeadIds.map((id) => sql`${id}`), sql`, `)})`,
+            sql`${aiPipelineJobs.leadId} IN (${sql.join(
+              eligibleLeadIds.map((id) => sql`${id}`),
+              sql`, `,
+            )})`,
             gte(aiPipelineJobs.createdAt, sevenDaysAgo),
-          )
+          ),
         );
 
-      const recentLeadIds = new Set(recentJobs.map((j) => j.leadId).filter(Boolean) as number[]);
+      const recentLeadIds = new Set(
+        recentJobs.map((j) => j.leadId).filter(Boolean) as number[],
+      );
 
       // Filter out leads with recent jobs
       const toProcess = eligibleLeads
         .filter((l) => !recentLeadIds.has(l.id))
         .slice(0, MAX_PER_WORKSPACE);
 
-      console.log(`[NightlyBatch] Workspace ${workspaceId}: ${toProcess.length} leads to process (${eligibleLeads.length - toProcess.length} skipped — recent job or over cap)`);
+      console.log(
+        `[NightlyBatch] Workspace ${workspaceId}: ${toProcess.length} leads to process ` +
+          `(${eligibleLeads.length - toProcess.length} skipped — recent job or over cap)`,
+      );
 
       for (const lead of toProcess) {
         try {
           // Create a pipeline job record and trigger async (fire-and-forget per lead)
-          const [jobRow] = await db.insert(aiPipelineJobs).values({
-            workspaceId,
-            leadId: lead.id,
-            status: "queued",
-            triggeredByUserId: 0, // 0 = system-triggered
-          }).$returningId();
+          const [jobRow] = await db
+            .insert(aiPipelineJobs)
+            .values({
+              workspaceId,
+              leadId: lead.id,
+              status: "queued",
+              triggeredByUserId: 0, // 0 = system-triggered
+            })
+            .$returningId();
 
           // Run pipeline asynchronously (don't await — nightly batch is fire-and-forget)
-          runPipelineForContact(workspaceId, jobRow.id, null, lead.id, 0)
-            .catch((e: unknown) => console.error(`[NightlyBatch] Pipeline failed for lead ${lead.id}:`, e));
+          runPipelineForContact(workspaceId, jobRow.id, null, lead.id, 0).catch(
+            (e: unknown) =>
+              console.error(`[NightlyBatch] Pipeline failed for lead ${lead.id}:`, e),
+          );
 
           totalTriggered++;
         } catch (err) {
           console.error(`[NightlyBatch] Failed to queue lead ${lead.id}:`, err);
           totalSkipped++;
+          totalErrors++;
         }
       }
 
       totalSkipped += eligibleLeads.length - toProcess.length;
     } catch (err) {
       console.error(`[NightlyBatch] Error processing workspace ${workspaceId}:`, err);
+      totalErrors++;
     }
   }
 
-  console.log(`[NightlyBatch] Done. Workspaces: ${enabledSettings.length}, Triggered: ${totalTriggered}, Skipped: ${totalSkipped}`);
-  return { workspacesProcessed: enabledSettings.length, totalTriggered, totalSkipped };
+  const summary = {
+    workspacesProcessed: enabledSettings.length,
+    totalTriggered,
+    totalSkipped,
+  };
+
+  console.log(
+    `[NightlyBatch] Done. Workspaces: ${summary.workspacesProcessed}, ` +
+      `Triggered: ${totalTriggered}, Skipped: ${totalSkipped}, Errors: ${totalErrors}`,
+  );
+
+  // Feature 54: Notify the workspace owner with a batch summary
+  try {
+    const runDate = new Date().toLocaleDateString(undefined, {
+      weekday: "long",
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    });
+    const notificationContent =
+      `Nightly AI pipeline batch completed on ${runDate}.\n\n` +
+      `• Workspaces processed: ${summary.workspacesProcessed}\n` +
+      `• Leads queued for AI research: ${totalTriggered}\n` +
+      `• Leads skipped (recent job or over cap): ${totalSkipped}\n` +
+      (totalErrors > 0 ? `• Errors encountered: ${totalErrors}\n` : "") +
+      `\nEach queued lead will receive a personalised email draft in the AI Draft Queue (/ai-pipeline) for your review.`;
+
+    await notifyOwner({
+      title: `Nightly Batch: ${totalTriggered} lead${totalTriggered !== 1 ? "s" : ""} queued`,
+      content: notificationContent,
+    });
+  } catch (notifyErr) {
+    // Notification failure should not affect the batch result
+    console.warn("[NightlyBatch] Owner notification failed:", notifyErr);
+  }
+
+  return summary;
 }

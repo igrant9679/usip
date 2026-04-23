@@ -733,3 +733,23 @@
 - [~] POST /api/track/bounce — inbound SMTP bounce webhook — DEFERRED (requires external SMTP provider webhook)
 - [~] Settings → Email Delivery opt-out list section — DEFERRED (use /email-suppressions page instead)
 - [x] Vitest: 16 tests for suppression logic, token validation, bulk-skip counting, HTML page generation
+
+## 52. SMTP Bounce Webhook ✅
+- [x] Backend: POST /api/track/bounce — multi-provider payload parser (Mailgun, SendGrid, Postmark, generic)
+- [x] Backend: extract email + bounce type (hard/soft/spam) from each provider's format
+- [x] Backend: insert email_suppressions row with reason=bounce (dedup check, hard-delete model)
+- [x] Backend: update email_drafts.bouncedAt + bounceType + bounceMessage (migration 0018 applied)
+- [x] Backend: webhook signature verification (Mailgun HMAC-SHA256, Postmark HMAC-SHA256, SendGrid ECDSA skipped/IP allowlist)
+- [x] Backend: BOUNCE_WEBHOOK_SKIP_VERIFY=true env var for dev bypass
+- [x] Vitest: 35 tests — payload parsing for all 4 providers, dedup suppression, signature verification logic
+
+## 53. Email Analytics Time-Series Chart ✅
+- [x] Backend: smtpConfig.getTrackingTimeSeries — daily opens + clicks, configurable days (7/30/90), zero-filled continuous x-axis
+- [x] Frontend: /email-analytics — AreaChart (opens + clicks per day) with 7/30/90-day toggle
+- [x] Frontend: period totals shown in chart header (N opens · N clicks in period)
+- [x] Vitest: 8 tests — time-series aggregation, zero-fill, boundary inclusion, sort order
+
+## 54. Nightly Batch Owner Notification ✅
+- [x] Backend: nightlyBatch.ts — call notifyOwner at end of runNightlyBatch with summary
+- [x] Summary includes: workspaces processed, leads queued, leads skipped (recent job or over cap), errors
+- [x] Vitest: 9 tests — title singular/plural, error line conditional, all fields present, length within limits

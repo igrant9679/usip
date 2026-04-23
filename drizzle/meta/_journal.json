@@ -127,6 +127,13 @@
       "when": 1776915868156,
       "tag": "0017_brief_ultragirl",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "5",
+      "when": 1776916705251,
+      "tag": "0018_romantic_zaran",
+      "breakpoints": true
     }
   ]
 }
