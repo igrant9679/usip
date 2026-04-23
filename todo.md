@@ -753,3 +753,21 @@
 - [x] Backend: nightlyBatch.ts — call notifyOwner at end of runNightlyBatch with summary
 - [x] Summary includes: workspaces processed, leads queued, leads skipped (recent job or over cap), errors
 - [x] Vitest: 9 tests — title singular/plural, error line conditional, all fields present, length within limits
+
+## 55. Bounce Health Card on Email Analytics ✅
+- [x] Backend: smtpConfig.getBounceStats — counts hard/soft/spam bounces from emailDrafts.bounceType, total suppressions from email_suppressions, bounce rate KPI
+- [x] Frontend: /email-analytics — Bounce Health card: hard/soft/spam counts + bounce rate % + suppression note + healthy state message
+- [x] Frontend: red border + "High bounce rate" warning badge when bounceRate >= 5%
+- [x] Vitest: 25 tests — aggregation, rate calculation, threshold, null handling, suppression counts
+
+## 56. Segment Enrollment Cron Owner Notification ✅
+- [x] Backend: segmentRules.ts runSegmentEnrollmentForAllWorkspaces — calls notifyOwner() when totalEnrolled > 0
+- [x] Notification includes: workspaces with active rules, contacts enrolled, contacts skipped, link to /segment-auto-enroll
+- [x] Notification failure is caught and logged without affecting cron result
+- [x] Vitest: 11 tests — title singular/plural, content fields, guard logic, length limits
+
+## 57. Bounced Badge on Email Drafts Page ✅
+- [x] Frontend: EmailDrafts.tsx — Bounced badge (Hard Bounce / Soft Bounce / Spam Complaint) shown when bouncedAt is set
+- [x] Frontend: draft card gets red border when bounced; badge has tooltip showing bounceMessage
+- [x] Backend: emailDrafts.list already returns full rows including bouncedAt/bounceType/bounceMessage (no change needed)
+- [x] Vitest: 13 tests — label resolution for all 3 types, fallback, visibility guard, border class

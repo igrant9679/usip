@@ -2,7 +2,7 @@ import { Button } from "@/components/ui/button";
 import { Field, FormDialog, SelectField, StatusPill, TextareaField } from "@/components/usip/Common";
 import { EmptyState, PageHeader, Shell } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
-import { BarChart2, Check, ChevronDown, ChevronRight, Eye, FileText, MousePointer, Send, Sparkles, X, Zap, AlertTriangle } from "lucide-react";
+import { BarChart2, Check, ChevronDown, ChevronRight, Eye, FileText, MousePointer, Send, Sparkles, X, Zap, AlertTriangle, XCircle } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -259,9 +259,26 @@ export default function EmailDrafts() {
       </PageHeader>
       <div className="p-6 space-y-3">
         {(data ?? []).length === 0 ? <EmptyState icon={FileText} title="No drafts" /> : data!.map((d) => (
-          <div key={d.id} className="rounded-lg border bg-card p-4">
-            <div className="flex items-center gap-2">
+          <div key={d.id} className={`rounded-lg border bg-card p-4 ${d.bouncedAt ? "border-red-500/30" : ""}`}>
+            <div className="flex items-center gap-2 flex-wrap">
               <StatusPill tone={d.status === "pending_review" ? "warning" : d.status === "approved" ? "info" : d.status === "sent" ? "success" : "muted"}>{d.status}</StatusPill>
+              {/* Feature 57: Bounced badge */}
+              {d.bouncedAt && (
+                <Badge
+                  variant="destructive"
+                  className="text-xs bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/30 shrink-0"
+                  title={d.bounceMessage ?? "Bounced"}
+                >
+                  <XCircle className="size-3 mr-1" />
+                  {d.bounceType === "hard"
+                    ? "Hard Bounce"
+                    : d.bounceType === "soft"
+                    ? "Soft Bounce"
+                    : d.bounceType === "spam"
+                    ? "Spam Complaint"
+                    : "Bounced"}
+                </Badge>
+              )}
               <div className="text-sm font-medium flex-1 truncate">{d.subject}</div>
               <div className="flex gap-1">
                 {d.status === "pending_review" && <>

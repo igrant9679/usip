@@ -10,13 +10,14 @@
  */
 import { TRPCError } from "@trpc/server";
 import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from "crypto";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, count, desc, eq, inArray, sql } from "drizzle-orm";
 import nodemailer from "nodemailer";
 import { z } from "zod";
 import {
   activities,
   contacts,
   emailDrafts,
+  emailSuppressions,
   emailTrackingEvents,
   leads,
   smtpConfigs,
@@ -537,6 +538,48 @@ export const smtpConfigRouter = router({
     const dailyBreakdown = Object.values(dailyMap).sort((a, b) => a.date.localeCompare(b.date));
 
     return { totalSent, totalOpens, totalClicks, uniqueOpened, uniqueClicked, openRate, clickRate, dailyBreakdown };
+  }),
+
+  /** Bounce health stats for the workspace (Feature 55) */
+  getBounceStats: workspaceProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+
+    // Count bounced drafts by bounceType
+    const bounceTypeRows = await db
+      .select({ bounceType: emailDrafts.bounceType, cnt: count(emailDrafts.id) })
+      .from(emailDrafts)
+      .where(
+        and(
+          eq(emailDrafts.workspaceId, ctx.workspace.id),
+          sql`${emailDrafts.bouncedAt} IS NOT NULL`,
+        ),
+      )
+      .groupBy(emailDrafts.bounceType);
+
+    const byType = Object.fromEntries(bounceTypeRows.map((r) => [r.bounceType ?? "hard", r.cnt]));
+    const hardBounces = byType["hard"] ?? 0;
+    const softBounces = byType["soft"] ?? 0;
+    const spamComplaints = byType["spam"] ?? 0;
+    const totalBounced = hardBounces + softBounces + spamComplaints;
+
+    // Total suppressed emails (all reasons)
+    const suppressionRows = await db
+      .select({ reason: emailSuppressions.reason, cnt: count(emailSuppressions.id) })
+      .from(emailSuppressions)
+      .where(eq(emailSuppressions.workspaceId, ctx.workspace.id))
+      .groupBy(emailSuppressions.reason);
+    const suppressedEmails = suppressionRows.reduce((s, r) => s + r.cnt, 0);
+
+    // Total sent for bounce rate
+    const [sentRow] = await db
+      .select({ cnt: count(emailDrafts.id) })
+      .from(emailDrafts)
+      .where(and(eq(emailDrafts.workspaceId, ctx.workspace.id), eq(emailDrafts.status, "sent")));
+    const totalSent = sentRow?.cnt ?? 0;
+    const bounceRate = totalSent > 0 ? Math.round((totalBounced / totalSent) * 1000) / 10 : 0;
+
+    return { hardBounces, softBounces, spamComplaints, totalBounced, totalSent, bounceRate, suppressedEmails };
   }),
 
 });

@@ -1,15 +1,17 @@
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { EmptyState, PageHeader, Shell } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import {
+  AlertTriangle,
   BarChart2,
   ChevronDown,
   ChevronUp,
   Mail,
   MousePointer,
   Send,
+  ShieldAlert,
   TrendingUp,
+  XCircle,
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import {
@@ -38,20 +40,28 @@ function KpiCard({
   sub,
   icon: Icon,
   accent,
+  warn,
 }: {
   label: string;
   value: string | number;
   sub?: string;
   icon: React.ElementType;
   accent?: string;
+  warn?: boolean;
 }) {
   return (
-    <div className="rounded-xl border bg-card p-5 flex items-start gap-4">
+    <div
+      className={`rounded-xl border bg-card p-5 flex items-start gap-4 ${warn ? "border-red-500/40" : ""}`}
+    >
       <div className={`rounded-lg p-2.5 ${accent ?? "bg-primary/10"}`}>
-        <Icon className="size-5 text-primary" />
+        <Icon className={`size-5 ${warn ? "text-red-500" : "text-primary"}`} />
       </div>
       <div>
-        <div className="text-2xl font-bold tracking-tight">{value}</div>
+        <div
+          className={`text-2xl font-bold tracking-tight ${warn ? "text-red-500" : ""}`}
+        >
+          {value}
+        </div>
         <div className="text-sm font-medium text-foreground">{label}</div>
         {sub && <div className="text-xs text-muted-foreground mt-0.5">{sub}</div>}
       </div>
@@ -60,10 +70,10 @@ function KpiCard({
 }
 
 export default function EmailAnalytics() {
-  const { data: summary, isLoading: summaryLoading } =
-    trpc.smtpConfig.getAnalyticsSummary.useQuery();
+  const { data: summary } = trpc.smtpConfig.getAnalyticsSummary.useQuery();
   const { data: overview, isLoading: overviewLoading } =
     trpc.smtpConfig.getTrackingOverview.useQuery({ limit: 100 });
+  const { data: bounceStats } = trpc.smtpConfig.getBounceStats.useQuery();
 
   // Time-series chart state
   const [chartDays, setChartDays] = useState(30);
@@ -119,7 +129,6 @@ export default function EmailAnalytics() {
     );
   }
 
-  // Compute total opens/clicks for the selected period from time-series data
   const periodTotals = useMemo(() => {
     if (!timeSeriesData) return { opens: 0, clicks: 0 };
     return timeSeriesData.reduce(
@@ -128,9 +137,10 @@ export default function EmailAnalytics() {
     );
   }, [timeSeriesData]);
 
-  // Determine if there is any data in the selected range
   const hasChartData =
     timeSeriesData && timeSeriesData.some((d) => d.opens > 0 || d.clicks > 0);
+
+  const bounceRateWarn = (bounceStats?.bounceRate ?? 0) >= 5;
 
   return (
     <Shell title="Email Analytics">
@@ -158,19 +168,126 @@ export default function EmailAnalytics() {
         />
         <KpiCard
           label="Total Events"
-          value={
-            summary ? summary.totalOpens + summary.totalClicks : "—"
-          }
+          value={summary ? summary.totalOpens + summary.totalClicks : "—"}
           sub={`${summary?.totalOpens ?? 0} opens · ${summary?.totalClicks ?? 0} clicks`}
           icon={TrendingUp}
           accent="bg-purple-500/10"
         />
       </div>
 
+      {/* ── Bounce Health Card (Feature 55) ─────────────────────────────── */}
+      <div className="px-6 pt-4">
+        <div
+          className={`rounded-xl border bg-card p-5 ${bounceRateWarn ? "border-red-500/30" : ""}`}
+        >
+          {/* Header */}
+          <div className="flex items-center gap-2 mb-4">
+            <ShieldAlert
+              className={`size-4 ${bounceRateWarn ? "text-red-500" : "text-muted-foreground"}`}
+            />
+            <span className="text-sm font-medium">Bounce Health</span>
+            {bounceRateWarn && (
+              <Badge
+                variant="destructive"
+                className="text-xs ml-1 bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/30"
+              >
+                <AlertTriangle className="size-3 mr-1" />
+                High bounce rate
+              </Badge>
+            )}
+          </div>
+
+          {/* Stats grid */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            {/* Bounce Rate KPI */}
+            <div className="col-span-2 sm:col-span-1 flex flex-col gap-1">
+              <div
+                className={`text-3xl font-bold tabular-nums ${bounceRateWarn ? "text-red-500" : "text-foreground"}`}
+              >
+                {bounceStats ? `${bounceStats.bounceRate}%` : "—"}
+              </div>
+              <div className="text-xs text-muted-foreground">Bounce Rate</div>
+              {bounceStats && (
+                <div className="text-xs text-muted-foreground">
+                  {bounceStats.totalBounced} of {bounceStats.totalSent} sent
+                </div>
+              )}
+            </div>
+
+            {/* Hard Bounces */}
+            <div className="flex items-start gap-3 rounded-lg border bg-muted/20 p-3">
+              <div className="rounded-md p-1.5 bg-red-500/10">
+                <XCircle className="size-4 text-red-500" />
+              </div>
+              <div>
+                <div className="text-xl font-bold tabular-nums">
+                  {bounceStats?.hardBounces ?? "—"}
+                </div>
+                <div className="text-xs text-muted-foreground">Hard Bounces</div>
+                <div className="text-xs text-muted-foreground/60 mt-0.5">
+                  Invalid address
+                </div>
+              </div>
+            </div>
+
+            {/* Soft Bounces */}
+            <div className="flex items-start gap-3 rounded-lg border bg-muted/20 p-3">
+              <div className="rounded-md p-1.5 bg-amber-500/10">
+                <AlertTriangle className="size-4 text-amber-500" />
+              </div>
+              <div>
+                <div className="text-xl font-bold tabular-nums">
+                  {bounceStats?.softBounces ?? "—"}
+                </div>
+                <div className="text-xs text-muted-foreground">Soft Bounces</div>
+                <div className="text-xs text-muted-foreground/60 mt-0.5">
+                  Temporary failure
+                </div>
+              </div>
+            </div>
+
+            {/* Spam Complaints */}
+            <div className="flex items-start gap-3 rounded-lg border bg-muted/20 p-3">
+              <div className="rounded-md p-1.5 bg-orange-500/10">
+                <ShieldAlert className="size-4 text-orange-500" />
+              </div>
+              <div>
+                <div className="text-xl font-bold tabular-nums">
+                  {bounceStats?.spamComplaints ?? "—"}
+                </div>
+                <div className="text-xs text-muted-foreground">Spam Complaints</div>
+                <div className="text-xs text-muted-foreground/60 mt-0.5">
+                  Marked as spam
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Suppression note */}
+          {bounceStats && bounceStats.suppressedEmails > 0 && (
+            <div className="mt-3 text-xs text-muted-foreground border-t pt-3">
+              <span className="font-medium">{bounceStats.suppressedEmails}</span> email
+              {bounceStats.suppressedEmails !== 1 ? "s" : ""} are on the suppression list
+              (bounced, unsubscribed, or spam complaints). Manage them in{" "}
+              <a href="/email-suppressions" className="underline text-primary">
+                Opt-Out Management
+              </a>
+              .
+            </div>
+          )}
+
+          {/* Healthy state */}
+          {bounceStats && bounceStats.totalBounced === 0 && bounceStats.totalSent > 0 && (
+            <div className="mt-3 text-xs text-green-600 dark:text-green-400 border-t pt-3">
+              No bounces recorded. Your sender reputation looks healthy.
+            </div>
+          )}
+        </div>
+      </div>
+
       {/* Time-series chart */}
-      <div className="px-6 pt-6">
+      <div className="px-6 pt-4">
         <div className="rounded-xl border bg-card p-5">
-          {/* Chart header with date range selector */}
           <div className="flex items-center justify-between gap-2 mb-4 flex-wrap">
             <div className="flex items-center gap-2">
               <BarChart2 className="size-4 text-muted-foreground" />
@@ -181,7 +298,6 @@ export default function EmailAnalytics() {
                 </span>
               )}
             </div>
-            {/* Date range toggle */}
             <div className="flex items-center gap-1 rounded-lg border bg-muted/40 p-0.5">
               {DATE_RANGE_OPTIONS.map((opt) => (
                 <button
@@ -199,14 +315,14 @@ export default function EmailAnalytics() {
             </div>
           </div>
 
-          {/* Chart body */}
           {timeSeriesLoading ? (
             <div className="h-52 flex items-center justify-center text-sm text-muted-foreground">
               Loading chart data…
             </div>
           ) : !hasChartData ? (
             <div className="h-52 flex items-center justify-center text-sm text-muted-foreground">
-              No tracking events in the last {chartDays} days. Send some emails to see data here.
+              No tracking events in the last {chartDays} days. Send some emails to see
+              data here.
             </div>
           ) : (
             <ResponsiveContainer width="100%" height={220}>
@@ -217,7 +333,11 @@ export default function EmailAnalytics() {
                 <defs>
                   <linearGradient id="colorOpens" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%" stopColor="hsl(var(--primary))" stopOpacity={0.3} />
-                    <stop offset="95%" stopColor="hsl(var(--primary))" stopOpacity={0.02} />
+                    <stop
+                      offset="95%"
+                      stopColor="hsl(var(--primary))"
+                      stopOpacity={0.02}
+                    />
                   </linearGradient>
                   <linearGradient id="colorClicks" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%" stopColor="#22c55e" stopOpacity={0.3} />
@@ -229,10 +349,12 @@ export default function EmailAnalytics() {
                   dataKey="date"
                   tick={{ fontSize: 11 }}
                   tickFormatter={(v: string) => {
-                    // Show MM/DD for 30-day, show month name for 90-day
                     if (chartDays <= 30) return v.slice(5).replace("-", "/");
                     const d = new Date(v + "T00:00:00");
-                    return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+                    return d.toLocaleDateString(undefined, {
+                      month: "short",
+                      day: "numeric",
+                    });
                   }}
                   interval={chartDays <= 14 ? 0 : chartDays <= 30 ? 3 : 6}
                 />
@@ -274,7 +396,7 @@ export default function EmailAnalytics() {
       </div>
 
       {/* Sent drafts table */}
-      <div className="px-6 pt-6 pb-8">
+      <div className="px-6 pt-4 pb-8">
         <div className="rounded-xl border bg-card overflow-hidden">
           <div className="flex items-center gap-3 px-4 py-3 border-b bg-muted/30">
             <span className="text-sm font-medium flex-1">Sent Emails</span>

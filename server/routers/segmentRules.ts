@@ -11,6 +11,7 @@
  */
 import { TRPCError } from "@trpc/server";
 import { and, eq, inArray, isNull } from "drizzle-orm";
+import { notifyOwner } from "../_core/notification";
 import { z } from "zod";
 import {
   audienceSegments,
@@ -263,5 +264,31 @@ export async function runSegmentEnrollmentForAllWorkspaces(): Promise<{ workspac
   }
 
   console.log(`[SegmentEnroll] Done. Workspaces: ${workspaceIds.length}, Enrolled: ${totalEnrolled}, Skipped: ${totalSkipped}`);
+
+  // Feature 56: Notify owner when at least one contact was enrolled
+  if (totalEnrolled > 0) {
+    try {
+      const runDate = new Date().toLocaleDateString(undefined, {
+        weekday: "long",
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+      });
+      const runTime = new Date().toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+      await notifyOwner({
+        title: `Segment Auto-Enroll: ${totalEnrolled} contact${totalEnrolled !== 1 ? "s" : ""} enrolled`,
+        content:
+          `Hourly segment → sequence auto-enroll completed on ${runDate} at ${runTime}.\n\n` +
+          `• Workspaces with active rules: ${workspaceIds.length}\n` +
+          `• Contacts enrolled in sequences: ${totalEnrolled}\n` +
+          `• Contacts skipped (already enrolled): ${totalSkipped}\n` +
+          `\nView and manage enrollment rules in Settings → Segment Auto-Enroll (/segment-auto-enroll).`,
+      });
+    } catch (notifyErr) {
+      // Notification failure must not affect the cron result
+      console.warn("[SegmentEnroll] Owner notification failed:", notifyErr);
+    }
+  }
+
   return { workspaces: workspaceIds.length, enrolled: totalEnrolled, skipped: totalSkipped };
 }
