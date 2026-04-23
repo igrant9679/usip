@@ -790,3 +790,8 @@
 - [x] Frontend: EmailDrafts.tsx — inline "Remove suppression" button (Trash2 icon) next to bounced badge
 - [x] Frontend: on success, invalidates emailDrafts.list + emailSuppressions.list + summary, shows toast
 - [x] Vitest: 11 tests — result shape, email normalization, toast message, scope safety
+
+## Layout Bug Fixes ✅
+- [x] Bug: PipelineAlerts rendered without Shell wrapper → extra-wide layout + nav disappeared. Fix: wrap in `<Shell title="Pipeline Alerts">` + `<PageHeader>` matching all other pages.
+- [x] Bug: SequenceCanvas used `h-screen` inside Shell's `flex-1 overflow-auto` main → canvas overflowed viewport, pushing sidebar/header out of view. Fix: (1) changed `h-screen` → `h-full` in SequenceCanvas, (2) added `height: 100%` to `html, body, #root` in index.css so the h-full chain resolves, (3) changed Shell outer div from `min-h-screen` → `h-full` to complete the chain.
+- [x] 430/430 tests still passing, 0 TypeScript errors.

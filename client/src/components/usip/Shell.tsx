@@ -141,7 +141,7 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
   }, [location]);
 
   return (
-    <div className="min-h-screen flex bg-background text-foreground">
+    <div className="h-full flex bg-background text-foreground">
       {/* Mobile backdrop */}
       {mobileOpen && (
         <div

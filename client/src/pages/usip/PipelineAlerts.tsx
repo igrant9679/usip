@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { PageHeader, Shell } from "@/components/usip/Shell";
 import {
   AlertTriangle,
   Clock,
@@ -162,37 +163,25 @@ export default function PipelineAlerts() {
   const totalAlerts = summary?.total ?? 0;
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
-            <AlertTriangle className="h-6 w-6 text-orange-500" />
-            Pipeline Health Alerts
-          </h1>
-          <p className="text-muted-foreground text-sm mt-1">
-            Proactive alerts for at-risk opportunities — no activity, closing soon, missing contacts
-          </p>
-        </div>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={handleRefresh}>
-            <RefreshCw className="h-4 w-4 mr-1" />
-            Refresh
-          </Button>
-          <Button
-            size="sm"
-            onClick={() => scan.mutate()}
-            disabled={scan.isPending}
-          >
-            {scan.isPending ? (
-              <Loader2 className="h-4 w-4 animate-spin mr-1" />
-            ) : (
-              <Activity className="h-4 w-4 mr-1" />
-            )}
-            Run Health Scan
-          </Button>
-        </div>
-      </div>
+    <Shell title="Pipeline Alerts">
+      <PageHeader
+        title="Pipeline Health Alerts"
+        description="Proactive alerts for at-risk opportunities — no activity, closing soon, missing contacts"
+      >
+        <Button variant="outline" size="sm" onClick={handleRefresh}>
+          <RefreshCw className="h-4 w-4 mr-1" />
+          Refresh
+        </Button>
+        <Button size="sm" onClick={() => scan.mutate()} disabled={scan.isPending}>
+          {scan.isPending ? (
+            <Loader2 className="h-4 w-4 animate-spin mr-1" />
+          ) : (
+            <Activity className="h-4 w-4 mr-1" />
+          )}
+          Run Health Scan
+        </Button>
+      </PageHeader>
+      <div className="p-6 space-y-6">
 
       {/* Summary cards */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
@@ -274,6 +263,7 @@ export default function PipelineAlerts() {
           ))}
         </div>
       )}
-    </div>
+      </div>
+    </Shell>
   );
 }

@@ -138,6 +138,9 @@
   * {
     @apply border-border outline-ring/50;
   }
+  html, body, #root {
+    height: 100%;
+  }
   html, body {
     font-feature-settings: "cv11", "ss01", "ss03";
   }
