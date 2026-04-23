@@ -4,6 +4,9 @@ import { trpc } from "@/lib/trpc";
 import { fmtDate, StatusPill } from "./Common";
 import { Brain, ChevronDown, CheckCircle2, Clock, Loader2, Paperclip, Phone, Calendar, MessageSquare, RefreshCw, Trash2, Users, XCircle, ShieldCheck, FileText, Download } from "lucide-react";
 import { EmailVerificationBadge } from "./EmailVerificationBadge";
+import { ContactOverview } from "./detail/ContactOverview";
+import { AccountOverview } from "./detail/AccountOverview";
+import { OpportunityOverview } from "./detail/OpportunityOverview";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -492,10 +495,22 @@ export function RecordDrawer({
   subtitle?: string;
   headerExtras?: React.ReactNode;
 }) {
-  const [tab, setTab] = useState<"timeline" | "call" | "meeting" | "note" | "files" | "score" | "intelligence" | "verify" | "brief">("timeline");
+  const [tab, setTab] = useState<"overview" | "timeline" | "call" | "meeting" | "note" | "files" | "score" | "intelligence" | "verify" | "brief">("overview");
   const contactData = trpc.contacts.get.useQuery(
     { id: relatedId ?? 0 },
     { enabled: relatedType === "contact" && !!relatedId },
+  );
+  const contactWithAccount = trpc.contacts.getWithAccount.useQuery(
+    { id: relatedId ?? 0 },
+    { enabled: relatedType === "contact" && !!relatedId },
+  );
+  const accountWithContacts = trpc.accounts.getWithContacts.useQuery(
+    { id: relatedId ?? 0 },
+    { enabled: relatedType === "account" && !!relatedId },
+  );
+  const opportunityWithRelated = trpc.opportunities.getWithRelated.useQuery(
+    { id: relatedId ?? 0 },
+    { enabled: relatedType === "opportunity" && !!relatedId },
   );
   const verifySingle = trpc.emailVerification.verifySingle.useMutation({
     onSuccess: () => {
@@ -554,8 +569,9 @@ export function RecordDrawer({
           {subtitle && <div className="text-xs text-muted-foreground">{subtitle}</div>}
         </SheetHeader>
 
-        <div className="flex gap-1 border-b text-xs mt-2">
+        <div className="flex gap-1 border-b text-xs mt-2 overflow-x-auto">
           {[
+            ...(relatedType !== "lead" ? [{ k: "overview", label: "Overview" }] : []),
             { k: "timeline", label: "Timeline" },
             { k: "call", label: "Log call" },
             { k: "meeting", label: "Log meeting" },
@@ -682,6 +698,44 @@ export function RecordDrawer({
               <textarea name="body" required rows={6} placeholder="Quick update on this account…" className="w-full border rounded-md px-3 py-2 text-sm" />
               <Button type="submit" disabled={addNote.isPending}>{addNote.isPending ? "Saving…" : "Add note"}</Button>
             </form>
+          )}
+
+          {tab === "overview" && relatedType === "contact" && (
+            <ContactOverview
+              contact={contactWithAccount.data?.contact ?? contactData.data ?? { id: relatedId ?? 0, firstName: "", lastName: "" }}
+              account={contactWithAccount.data?.account ?? null}
+              isLoading={contactWithAccount.isLoading}
+              onAccountClick={(accountId) => {
+                // Navigate to account drawer — caller can handle via onOpenChange + re-open
+                toast.info(`Account ID ${accountId} — open from the Accounts list`);
+              }}
+            />
+          )}
+
+          {tab === "overview" && relatedType === "account" && (
+            <AccountOverview
+              account={accountWithContacts.data?.account ?? { id: relatedId ?? 0, name: title }}
+              contacts={accountWithContacts.data?.contacts ?? []}
+              isLoading={accountWithContacts.isLoading}
+              onContactClick={(contactId) => {
+                toast.info(`Contact ID ${contactId} — open from the Contacts list`);
+              }}
+            />
+          )}
+
+          {tab === "overview" && relatedType === "opportunity" && (
+            <OpportunityOverview
+              opportunity={opportunityWithRelated.data?.opportunity ?? { id: relatedId ?? 0, name: title, stage: "discovery", value: "0", winProb: 20 }}
+              account={opportunityWithRelated.data?.account ?? null}
+              contactRoles={opportunityWithRelated.data?.contactRoles ?? []}
+              isLoading={opportunityWithRelated.isLoading}
+              onAccountClick={(accountId) => {
+                toast.info(`Account ID ${accountId} — open from the Accounts list`);
+              }}
+              onContactClick={(contactId) => {
+                toast.info(`Contact ID ${contactId} — open from the Contacts list`);
+              }}
+            />
           )}
 
           {tab === "score" && relatedType === "lead" && relatedId && (

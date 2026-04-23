@@ -795,3 +795,20 @@
 - [x] Bug: PipelineAlerts rendered without Shell wrapper → extra-wide layout + nav disappeared. Fix: wrap in `<Shell title="Pipeline Alerts">` + `<PageHeader>` matching all other pages.
 - [x] Bug: SequenceCanvas used `h-screen` inside Shell's `flex-1 overflow-auto` main → canvas overflowed viewport, pushing sidebar/header out of view. Fix: (1) changed `h-screen` → `h-full` in SequenceCanvas, (2) added `height: 100%` to `html, body, #root` in index.css so the h-full chain resolves, (3) changed Shell outer div from `min-h-screen` → `h-full` to complete the chain.
 - [x] 430/430 tests still passing, 0 TypeScript errors.
+
+## 61. Apollo-style Contact Detail Panel ✅
+- [x] Shared components built: InfoPanel, SocialLinks, AssociatedEntitiesList, ActivityTimeline (in client/src/components/usip/detail/)
+- [x] ContactOverview component: avatar initials, name/title/company link, email/phone/social, enrichment fields, company info card
+- [x] Backend: contacts.getWithAccount — contact row + joined account row (workspace-scoped)
+- [x] RecordDrawer: Overview tab added as first tab for contact type; defaults to Overview on open
+
+## 62. Apollo-style Account Detail Panel ✅
+- [x] AccountOverview component: account initials, domain link, industry/region/employee band, associated contacts list (clickable)
+- [x] Backend: accounts.getWithContacts — account row + all associated contacts (workspace-scoped)
+- [x] RecordDrawer: Overview tab for account type shows AccountOverview
+
+## 63. Apollo/Salesforce-style Deal/Opportunity Detail Panel ✅
+- [x] OpportunityOverview component: stage badge, value/close date/win prob KPI row, deal info panel, account card, contact roles list
+- [x] Backend: opportunities.getWithRelated — opportunity + account + contactRoles with embedded contact objects
+- [x] RecordDrawer: Overview tab for opportunity type shows OpportunityOverview
+- [x] Vitest: 24 tests — getWithAccount/getWithContacts/getWithRelated shapes, InfoPanel filtering, AssociatedEntitiesList mapping, SocialLinks detection, fmtCurrency, WinProbBar thresholds, stage labels

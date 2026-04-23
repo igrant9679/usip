@@ -107,6 +107,18 @@ export const accountsRouter = router({
     await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "delete", entityType: "account", entityId: input.id, before });
     return { ok: true };
   }),
+
+  /** Detail view: account row + all associated contacts. */
+  getWithContacts: workspaceProcedure
+    .input(z.object({ id: z.number() }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [account] = await db.select().from(accounts).where(and(eq(accounts.id, input.id), eq(accounts.workspaceId, ctx.workspace.id)));
+      if (!account) return null;
+      const accountContacts = await db.select().from(contacts).where(and(eq(contacts.accountId, input.id), eq(contacts.workspaceId, ctx.workspace.id))).orderBy(contacts.firstName);
+      return { account, contacts: accountContacts };
+    }),
 });
 
 /* ──────────────────────────────────────────────────────────────────────── */
@@ -169,6 +181,20 @@ export const contactsRouter = router({
     await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "delete", entityType: "contact", entityId: input.id, before });
     return { ok: true };
   }),
+
+  /** Detail view: contact row + joined account row. */
+  getWithAccount: workspaceProcedure
+    .input(z.object({ id: z.number() }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [contact] = await db.select().from(contacts).where(and(eq(contacts.id, input.id), eq(contacts.workspaceId, ctx.workspace.id)));
+      if (!contact) return null;
+      const account = contact.accountId
+        ? (await db.select().from(accounts).where(and(eq(accounts.id, contact.accountId), eq(accounts.workspaceId, ctx.workspace.id))))[0] ?? null
+        : null;
+      return { contact, account };
+    }),
 
   /** Bulk enroll contacts into a sequence */
   bulkAddToSequence: repProcedure
@@ -636,6 +662,25 @@ export const opportunitiesRouter = router({
     await db.update(opportunities).set({ value: String(total) }).where(eq(opportunities.id, input.opportunityId));
     return { ok: true };
   }),
+
+  /** Detail view: opportunity + account + contact roles + recent activities. */
+  getWithRelated: workspaceProcedure
+    .input(z.object({ id: z.number() }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [opp] = await db.select().from(opportunities).where(and(eq(opportunities.id, input.id), eq(opportunities.workspaceId, ctx.workspace.id)));
+      if (!opp) return null;
+      const account = (await db.select().from(accounts).where(and(eq(accounts.id, opp.accountId), eq(accounts.workspaceId, ctx.workspace.id))))[0] ?? null;
+      const roles = await db.select().from(opportunityContactRoles).where(and(eq(opportunityContactRoles.opportunityId, input.id), eq(opportunityContactRoles.workspaceId, ctx.workspace.id)));
+      const contactIds = roles.map((r) => r.contactId);
+      const oppContacts = contactIds.length > 0
+        ? await db.select().from(contacts).where(and(eq(contacts.workspaceId, ctx.workspace.id), inArray(contacts.id, contactIds)))
+        : [];
+      const cMap = new Map(oppContacts.map((c) => [c.id, c]));
+      const contactRoles = roles.map((r) => ({ ...r, contact: cMap.get(r.contactId) ?? null }));
+      return { opportunity: opp, account, contactRoles };
+    }),
 });
 
 /* ──────────────────────────────────────────────────────────────────────── */
