@@ -838,3 +838,23 @@
 - [x] Frontend: /sender-pools — pool cards with member list, add/edit pool dialog, member management, weight controls
 - [x] Sidebar: "Sender Pools" nav item under Engage group
 - [x] Vitest: 72 tests — all three strategies, daily limit edge cases, empty pool, single-account pool, weight validation, provider/status enums, daily stats aggregation
+
+## 67. Fully Inline-Editable Sequence Canvas ✅
+- [x] Click any canvas node → NodeEditPanel slides in from right (320px), canvas shrinks to avoid overlap
+- [x] NodeEditPanel exposes all fields per node type: label, description, timing (wait), branch condition (condition), action type/value (action), goal type/value (goal)
+- [x] New nodes from palette auto-open NodeEditPanel immediately
+- [x] "Sequence settings" button in palette sidebar opens SequenceSettingsPanel
+- [x] SequenceSettingsPanel: name, description, exit conditions (5 toggles), send window, timezone, skip weekends, reply detection, max steps
+- [x] sequences.update called with exitConditions + settings JSON patch on settings save
+- [x] Schema: exitConditions and settings JSON columns added to sequences table (migration 0020 applied)
+- [x] readOnly guard: panels render in read-only mode when sequence is active/paused
+- [x] Canvas pane click closes any open panel
+
+## 68. Per-Step Email Generation Modes ✅
+- [x] Mode stored in sequenceNodes.data.emailMode (per-node, not per-sequence)
+- [x] Typed mode: staticSubject + staticBody fields with {{variable}} token support
+- [x] Template mode: staticTemplateId picker (queries emailTemplates.list with status=active)
+- [x] AI Dynamic mode: aiTone (5 options), aiLength (3 options), aiFocus (free text)
+- [x] Default mode for new email nodes: typed
+- [x] Mode badge on canvas node header: AI / TPL / TXT
+- [x] Vitest: 35 tests — email mode defaults, per-step independence, exit conditions, sequence settings, branch conditions, AI options, patch serialization, readOnly guard

@@ -141,6 +141,13 @@
       "when": 1776920490447,
       "tag": "0019_illegal_annihilus",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "5",
+      "when": 1776921624008,
+      "tag": "0020_naive_xorn",
+      "breakpoints": true
     }
   ]
 }

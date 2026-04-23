@@ -4,7 +4,11 @@
  * building multi-step, branching email sequences.
  *
  * Node types: start | email | wait | condition | action | goal
- * Features: palette sidebar, undo/redo (50 steps), 30-s autosave, lifecycle guard
+ * Features:
+ *   - Click any node to open NodeEditPanel (inline edit all fields)
+ *   - Email nodes: three-tab mode selector (Typed / Template / AI-dynamic)
+ *   - Settings button opens SequenceSettingsPanel (name, exit conditions, send window)
+ *   - Palette sidebar, undo/redo (50 steps), 30-s autosave, lifecycle guard
  */
 import "@xyflow/react/dist/style.css";
 import {
@@ -31,7 +35,6 @@ import {
   AlertTriangle,
   ArrowLeft,
   CheckCircle2,
-  ChevronDown,
   Clock,
   GitBranch,
   Mail,
@@ -43,6 +46,12 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams } from "wouter";
 import { toast } from "sonner";
+import { NodeEditPanel, type NodeData } from "@/components/usip/canvas/NodeEditPanel";
+import {
+  SequenceSettingsPanel,
+  type ExitCondition,
+  type SequenceSettings,
+} from "@/components/usip/canvas/SequenceSettingsPanel";
 
 /* ─── Node type colours ─────────────────────────────────────────────────── */
 const NODE_COLORS: Record<string, string> = {
@@ -64,16 +73,28 @@ const NODE_ICONS: Record<string, React.FC<any>> = {
 };
 
 /* ─── Custom node component ─────────────────────────────────────────────── */
-function CanvasNode({ data, type }: NodeProps) {
+function CanvasNode({ data, type, selected }: NodeProps) {
   const color = NODE_COLORS[type ?? "email"] ?? "#6B7280";
   const Icon = NODE_ICONS[type ?? "email"] ?? Mail;
   const isCondition = type === "condition";
   const isStart = type === "start";
 
+  // Show email mode badge on email nodes
+  const emailMode = (data as NodeData).emailMode;
+  const emailModeBadge: Record<string, { label: string; color: string }> = {
+    dynamic: { label: "AI", color: "#3B82F6" },
+    template: { label: "TPL", color: "#8B5CF6" },
+    typed: { label: "TXT", color: "#6B7280" },
+  };
+  const modeBadge = type === "email" && emailMode ? emailModeBadge[emailMode] : null;
+
   return (
     <div
-      className="rounded-lg border-2 bg-card shadow-md min-w-[160px] max-w-[220px]"
-      style={{ borderColor: color }}
+      className="rounded-lg border-2 bg-card shadow-md min-w-[160px] max-w-[220px] cursor-pointer transition-shadow"
+      style={{
+        borderColor: selected ? color : color + "88",
+        boxShadow: selected ? `0 0 0 2px ${color}44` : undefined,
+      }}
     >
       {/* Top handle (all except start) */}
       {!isStart && (
@@ -85,13 +106,21 @@ function CanvasNode({ data, type }: NodeProps) {
         <span className="text-xs font-semibold uppercase tracking-wide" style={{ color }}>
           {type}
         </span>
+        {modeBadge && (
+          <span
+            className="ml-auto text-[9px] font-bold px-1.5 py-0.5 rounded"
+            style={{ backgroundColor: modeBadge.color + "22", color: modeBadge.color }}
+          >
+            {modeBadge.label}
+          </span>
+        )}
       </div>
 
       <div className="px-3 py-2 text-xs text-foreground">
         {data.label ? (
           <span className="font-medium">{String(data.label)}</span>
         ) : (
-          <span className="text-muted-foreground italic">Configure…</span>
+          <span className="text-muted-foreground italic">Click to configure…</span>
         )}
         {Boolean(data.description) && (
           <div className="text-muted-foreground mt-0.5 truncate">{String(data.description as string)}</div>
@@ -177,7 +206,21 @@ function useHistory(initial: HistoryEntry) {
 }
 
 /* ─── Main canvas component ─────────────────────────────────────────────── */
-function CanvasInner({ sequenceId, seqStatus }: { sequenceId: number; seqStatus: string }) {
+function CanvasInner({
+  sequenceId,
+  seqStatus,
+  seqName,
+  seqDescription,
+  seqExitConditions,
+  seqSettings,
+}: {
+  sequenceId: number;
+  seqStatus: string;
+  seqName: string;
+  seqDescription?: string | null;
+  seqExitConditions: ExitCondition[];
+  seqSettings: SequenceSettings;
+}) {
   const readOnly = seqStatus === "active" || seqStatus === "paused";
   const { fitView } = useReactFlow();
 
@@ -187,11 +230,22 @@ function CanvasInner({ sequenceId, seqStatus }: { sequenceId: number; seqStatus:
   const autosaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const history = useHistory({ nodes: [], edges: [] });
 
+  // Panel state
+  const [selectedNode, setSelectedNode] = useState<Node<NodeData> | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
   const utils = trpc.useUtils();
   const canvasQ = trpc.sequences.getCanvas.useQuery({ id: sequenceId });
   const saveCanvas = trpc.sequences.saveCanvas.useMutation({
     onSuccess: () => setSaveState("saved"),
     onError: (e) => { setSaveState("unsaved"); toast.error(e.message); },
+  });
+  const updateSequence = trpc.sequences.update.useMutation({
+    onSuccess: () => {
+      utils.sequences.get.invalidate({ id: sequenceId });
+      toast.success("Sequence settings saved");
+    },
+    onError: (e) => toast.error(e.message),
   });
 
   // Hydrate from server
@@ -276,6 +330,27 @@ function CanvasInner({ sequenceId, seqStatus }: { sequenceId: number; seqStatus:
     });
   }, [readOnly, nodes, triggerAutosave]);
 
+  // Node click → open edit panel
+  const onNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
+    setSettingsOpen(false);
+    setSelectedNode(node as Node<NodeData>);
+  }, []);
+
+  // Close panel when clicking canvas background
+  const onPaneClick = useCallback(() => {
+    setSelectedNode(null);
+  }, []);
+
+  // Apply node data changes from the edit panel
+  const handleNodeSave = useCallback((nodeId: string, data: NodeData) => {
+    setNodes((nds) => {
+      const next = nds.map((n) => n.id === nodeId ? { ...n, data } : n);
+      triggerAutosave(next, edges);
+      return next;
+    });
+    toast.success("Step updated");
+  }, [edges, triggerAutosave]);
+
   const handleSaveNow = () => {
     if (readOnly) return;
     setSaveState("saving");
@@ -301,18 +376,47 @@ function CanvasInner({ sequenceId, seqStatus }: { sequenceId: number; seqStatus:
   const addNodeFromPalette = (type: string, label: string, description: string) => {
     if (readOnly) return;
     const id = `${type}-${Date.now()}`;
+    const defaultData: NodeData = {
+      label,
+      description,
+      ...(type === "email" ? { emailMode: "typed" } : {}),
+      ...(type === "wait" ? { delayDays: 1, delayHours: 0 } : {}),
+      ...(type === "condition" ? { branchOn: "email_opened", branchTrueLabel: "Yes", branchFalseLabel: "No" } : {}),
+    };
     const newNode: Node = {
       id,
       type,
       position: { x: 200 + Math.random() * 100, y: 200 + Math.random() * 100 },
-      data: { label, description },
+      data: defaultData,
     };
     setNodes((nds) => {
       const next = [...nds, newNode];
       triggerAutosave(next, edges);
       return next;
     });
+    // Immediately open the edit panel for the new node
+    setSelectedNode(newNode as Node<NodeData>);
+    setSettingsOpen(false);
   };
+
+  const handleSettingsSave = (patch: {
+    name: string;
+    description: string;
+    exitConditions: ExitCondition[];
+    settings: SequenceSettings;
+  }) => {
+    updateSequence.mutate({
+      id: sequenceId,
+      patch: {
+        name: patch.name,
+        description: patch.description,
+        exitConditions: patch.exitConditions,
+        settings: patch.settings,
+      },
+    });
+  };
+
+  const anyPanelOpen = selectedNode !== null || settingsOpen;
 
   return (
     <div className="flex h-full">
@@ -345,16 +449,29 @@ function CanvasInner({ sequenceId, seqStatus }: { sequenceId: number; seqStatus:
             Canvas is read-only while sequence is {seqStatus}.
           </div>
         )}
+
+        <div className="mt-auto pt-4">
+          <Button
+            size="sm"
+            variant="outline"
+            className="w-full gap-1.5 text-xs"
+            onClick={() => { setSettingsOpen(true); setSelectedNode(null); }}
+          >
+            <Settings2 className="size-3.5" /> Sequence settings
+          </Button>
+        </div>
       </div>
 
-      {/* Canvas */}
-      <div className="flex-1 relative">
+      {/* Canvas area — shrinks when a panel is open */}
+      <div className={`flex-1 relative overflow-hidden transition-all ${anyPanelOpen ? "mr-80" : ""}`}>
         <ReactFlow
           nodes={nodes}
           edges={edges}
           onNodesChange={readOnly ? undefined : onNodesChange}
           onEdgesChange={readOnly ? undefined : onEdgesChange}
           onConnect={readOnly ? undefined : onConnect}
+          onNodeClick={onNodeClick}
+          onPaneClick={onPaneClick}
           nodeTypes={nodeTypes}
           fitView
           minZoom={0.25}
@@ -374,6 +491,26 @@ function CanvasInner({ sequenceId, seqStatus }: { sequenceId: number; seqStatus:
             )}
           </Panel>
         </ReactFlow>
+
+        {/* Node edit panel — overlaid on right edge of canvas */}
+        <NodeEditPanel
+          node={selectedNode}
+          readOnly={readOnly}
+          onClose={() => setSelectedNode(null)}
+          onSave={handleNodeSave}
+        />
+
+        {/* Sequence settings panel — overlaid on right edge of canvas */}
+        <SequenceSettingsPanel
+          open={settingsOpen}
+          readOnly={readOnly}
+          name={seqName}
+          description={seqDescription}
+          exitConditions={seqExitConditions}
+          settings={seqSettings}
+          onClose={() => setSettingsOpen(false)}
+          onSave={handleSettingsSave}
+        />
       </div>
     </div>
   );
@@ -409,7 +546,7 @@ export default function SequenceCanvas() {
         <Link href="/sequences" className="text-muted-foreground hover:text-foreground transition">
           <ArrowLeft className="size-4" />
         </Link>
-        <div className="font-semibold text-sm truncate">{seq?.name ?? "Loading…"}</div>
+        <div className="font-semibold text-sm truncate max-w-xs">{seq?.name ?? "Loading…"}</div>
         {seq && (
           <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${statusColor[seq.status] ?? ""}`}>
             {seq.status}
@@ -447,7 +584,14 @@ export default function SequenceCanvas() {
           <div className="flex items-center justify-center h-full text-muted-foreground text-sm">Sequence not found.</div>
         ) : (
           <ReactFlowProvider>
-            <CanvasInner sequenceId={sequenceId} seqStatus={seq.status} />
+            <CanvasInner
+              sequenceId={sequenceId}
+              seqStatus={seq.status}
+              seqName={seq.name}
+              seqDescription={seq.description}
+              seqExitConditions={(seq.exitConditions as ExitCondition[] | null) ?? []}
+              seqSettings={(seq.settings as SequenceSettings | null) ?? {}}
+            />
           </ReactFlowProvider>
         )}
       </div>

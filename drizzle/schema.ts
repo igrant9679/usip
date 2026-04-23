@@ -361,6 +361,8 @@ export const sequences = mysqlTable(
     dailyCap: int("dailyCap"), // max emails per day for this sequence (null = unlimited)
     ownerUserId: int("ownerUserId"),
     enrolledCount: int("enrolledCount").default(0).notNull(),
+    exitConditions: json("exitConditions"), // [{type:'reply'|'bounce'|'unsubscribe'|'goal_met'|'manual', enabled:boolean}]
+    settings: json("settings"), // {timezone, sendWindowStart, sendWindowEnd, maxSteps, replyDetection, skipWeekends}
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
