@@ -45,6 +45,8 @@ import {
   Filter,
   AlertTriangle,
   Ban,
+  Mail,
+  Layers,
 } from "lucide-react";
 import { ReactNode, useEffect, useState } from "react";
 import { Link, useLocation } from "wouter";
@@ -81,6 +83,8 @@ const NAV: NavGroup[] = [
       { href: "/email-drafts", label: "Email Drafts", icon: FileText },
       { href: "/email-analytics", label: "Email Analytics", icon: BarChart3 },
       { href: "/email-suppressions", label: "Opt-Out Management", icon: Ban },
+      { href: "/sending-accounts", label: "Sending Accounts", icon: Mail },
+      { href: "/sender-pools", label: "Sender Pools", icon: Layers },
       { href: "/email-builder", label: "Email Builder", icon: LayoutTemplate },
       { href: "/snippets", label: "Snippet Library", icon: BookOpen },
       { href: "/research-pipeline", label: "AI Research Pipeline", icon: Sparkles },

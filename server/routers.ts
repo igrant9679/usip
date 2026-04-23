@@ -30,6 +30,7 @@ import { accountBriefsRouter } from "./routers/accountBriefs";
 import { smtpConfigRouter } from "./routers/smtpConfig";
 import { segmentRulesRouter } from "./routers/segmentRules";
 import { emailSuppressionsRouter } from "./routers/emailSuppressions";
+import { sendingAccountsRouter, senderPoolsRouter } from "./routers/sendingAccounts";
 
 export const appRouter = router({
   system: systemRouter,
@@ -92,6 +93,8 @@ export const appRouter = router({
   smtpConfig: smtpConfigRouter,
   segmentRules: segmentRulesRouter,
   emailSuppressions: emailSuppressionsRouter,
+  sendingAccounts: sendingAccountsRouter,
+  senderPools: senderPoolsRouter,
 });
 
 export type AppRouter = typeof appRouter;

@@ -812,3 +812,29 @@
 - [x] Backend: opportunities.getWithRelated — opportunity + account + contactRoles with embedded contact objects
 - [x] RecordDrawer: Overview tab for opportunity type shows OpportunityOverview
 - [x] Vitest: 24 tests — getWithAccount/getWithContacts/getWithRelated shapes, InfoPanel filtering, AssociatedEntitiesList mapping, SocialLinks detection, fmtCurrency, WinProbBar thresholds, stage labels
+
+## 64. Sending Accounts — Multi-Provider Email Sending Infrastructure ✅
+- [x] Schema: sending_accounts (provider, fromEmail, fromName, authType, encryptedCredentials, dailySendLimit, warmupStatus, connectionStatus, bounceRate, reputationTier, enabled, lastTestedAt)
+- [x] Schema: sending_account_daily_stats (accountId, date, sentCount, deliveredCount, bouncedCount, openCount, clickCount)
+- [x] Migration 0019 generated and applied
+- [x] Backend: sendingAccountsRouter — list, get, create, update, delete, testConnection, getDailyStats
+- [x] Frontend: /sending-accounts — health dashboard, per-account stat cards, connection status badges, add/edit/delete dialogs
+- [x] Sidebar: "Sending Accounts" nav item under Engage group
+
+## 65. Sending Account Health Dashboard ✅
+- [x] Per-account health card: provider icon, from email, daily sent/limit progress bar, reputation tier badge, warmup status, connection status, last tested timestamp
+- [x] "Test connection" button triggers testConnection mutation and shows result inline
+- [x] Reputation tier derived from bounce rate: <1% excellent, <3% good, <5% fair, ≥5% poor
+- [x] Vitest: 8 tests — reputation tier thresholds, boundary values
+
+## 66. Sender Pool Rotation Engine ✅
+- [x] Schema: sender_pools (name, description, rotationStrategy, lastUsedIndex), sender_pool_members (poolId, accountId, weight, position)
+- [x] Backend: senderPoolsRouter — list, create, update, delete, addMember, removeMember, updateMemberWeight, pickAccount, getWithMembers
+- [x] pickAccountFromPool() pure function — round_robin, weighted, random strategies with daily limit enforcement
+- [x] round_robin: advances by position, wraps around, skips disabled/maxed
+- [x] weighted: probability proportional to weight, skips disabled/maxed
+- [x] random: uniform random from non-maxed accounts
+- [x] Returns null when all accounts in pool are maxed or disabled
+- [x] Frontend: /sender-pools — pool cards with member list, add/edit pool dialog, member management, weight controls
+- [x] Sidebar: "Sender Pools" nav item under Engage group
+- [x] Vitest: 72 tests — all three strategies, daily limit edge cases, empty pool, single-account pool, weight validation, provider/status enums, daily stats aggregation

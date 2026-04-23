@@ -1780,3 +1780,133 @@ export const emailSuppressions = mysqlTable(
   }),
 );
 export type EmailSuppression = typeof emailSuppressions.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Sending Accounts — multi-provider email sending infrastructure (Feature 64)
+   Supports: gmail_oauth, outlook_oauth, amazon_ses, generic_smtp
+   ────────────────────────────────────────────────────────────────────────── */
+export const sendingAccounts = mysqlTable(
+  "sending_accounts",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    name: varchar("name", { length: 120 }).notNull(),
+    provider: mysqlEnum("provider", [
+      "gmail_oauth",
+      "outlook_oauth",
+      "amazon_ses",
+      "generic_smtp",
+    ]).notNull(),
+    fromEmail: varchar("fromEmail", { length: 320 }).notNull(),
+    fromName: varchar("fromName", { length: 120 }),
+    replyTo: varchar("replyTo", { length: 320 }),
+    /* OAuth fields */
+    oauthAccessToken: text("oauthAccessToken"),
+    oauthRefreshToken: text("oauthRefreshToken"),
+    oauthTokenExpiry: timestamp("oauthTokenExpiry"),
+    oauthScope: text("oauthScope"),
+    /* SMTP fields */
+    smtpHost: varchar("smtpHost", { length: 255 }),
+    smtpPort: int("smtpPort").default(587),
+    smtpSecure: boolean("smtpSecure").default(false),
+    smtpUsername: varchar("smtpUsername", { length: 255 }),
+    smtpPassword: text("smtpPassword"),
+    sesRegion: varchar("sesRegion", { length: 32 }),
+    /* Limits */
+    dailySendLimit: int("dailySendLimit").default(500).notNull(),
+    warmupStatus: mysqlEnum("warmupStatus", [
+      "not_started",
+      "in_progress",
+      "complete",
+    ]).default("not_started").notNull(),
+    /* Health */
+    bounceRate: varchar("bounceRate", { length: 10 }).default("0").notNull(),
+    spamRate: varchar("spamRate", { length: 10 }).default("0").notNull(),
+    reputationTier: mysqlEnum("reputationTier", [
+      "excellent",
+      "good",
+      "fair",
+      "poor",
+    ]).default("excellent").notNull(),
+    connectionStatus: mysqlEnum("connectionStatus", [
+      "connected",
+      "error",
+      "untested",
+    ]).default("untested").notNull(),
+    lastTestedAt: timestamp("lastTestedAt"),
+    lastTestError: text("lastTestError"),
+    enabled: boolean("enabled").default(true).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    byWs: index("ix_sa_ws").on(t.workspaceId),
+    byWsEmail: index("ix_sa_ws_email").on(t.workspaceId, t.fromEmail),
+  }),
+);
+export type SendingAccount = typeof sendingAccounts.$inferSelect;
+
+export const sendingAccountDailyStats = mysqlTable(
+  "sending_account_daily_stats",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    accountId: int("accountId").notNull(),
+    date: varchar("date", { length: 10 }).notNull(),
+    sentCount: int("sentCount").default(0).notNull(),
+    bounceCount: int("bounceCount").default(0).notNull(),
+    spamCount: int("spamCount").default(0).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    byAccount: index("ix_sads_acc").on(t.accountId),
+    byDate: index("ix_sads_date").on(t.accountId, t.date),
+  }),
+);
+export type SendingAccountDailyStat = typeof sendingAccountDailyStats.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Sender Pools — named groups of sending accounts with rotation strategy
+   ────────────────────────────────────────────────────────────────────────── */
+export const senderPools = mysqlTable(
+  "sender_pools",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    name: varchar("name", { length: 120 }).notNull(),
+    description: text("description"),
+    rotationStrategy: mysqlEnum("rotationStrategy", [
+      "round_robin",
+      "weighted",
+      "random",
+    ]).default("round_robin").notNull(),
+    lastUsedIndex: int("lastUsedIndex").default(0).notNull(),
+    enabled: boolean("enabled").default(true).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    byWs: index("ix_sp_ws").on(t.workspaceId),
+  }),
+);
+export type SenderPool = typeof senderPools.$inferSelect;
+
+export const senderPoolMembers = mysqlTable(
+  "sender_pool_members",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    poolId: int("poolId").notNull(),
+    accountId: int("accountId").notNull(),
+    weight: int("weight").default(10).notNull(),
+    position: int("position").default(0).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    byPool: index("ix_spm_pool").on(t.poolId),
+    byAccount: index("ix_spm_acc").on(t.accountId),
+    uniq: index("ix_spm_uniq").on(t.poolId, t.accountId),
+  }),
+);
+export type SenderPoolMember = typeof senderPoolMembers.$inferSelect;

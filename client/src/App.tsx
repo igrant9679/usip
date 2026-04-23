@@ -15,6 +15,8 @@ import Dashboards from "@/pages/usip/Dashboards";
 import EmailDrafts from "@/pages/usip/EmailDrafts";
 import EmailAnalytics from "@/pages/usip/EmailAnalytics";
 import { EmailSuppressions } from "@/pages/usip/EmailSuppressions";
+import SendingAccounts from "@/pages/usip/SendingAccounts";
+import SenderPools from "@/pages/usip/SenderPools";
 import Inbox from "@/pages/usip/Inbox";
 import Leads from "@/pages/usip/Leads";
 import Pipeline from "@/pages/usip/Pipeline";
@@ -88,6 +90,8 @@ function Router() {
       <Route path="/email-drafts"><AuthGate><EmailDrafts /></AuthGate></Route>
       <Route path="/email-analytics"><AuthGate><EmailAnalytics /></AuthGate></Route>
       <Route path="/email-suppressions"><AuthGate><EmailSuppressions /></AuthGate></Route>
+      <Route path="/sending-accounts"><AuthGate><SendingAccounts /></AuthGate></Route>
+      <Route path="/sender-pools"><AuthGate><SenderPools /></AuthGate></Route>
       <Route path="/social"><AuthGate><Social /></AuthGate></Route>
       <Route path="/campaigns"><AuthGate><Campaigns /></AuthGate></Route>
       <Route path="/customers"><AuthGate><Customers /></AuthGate></Route>
