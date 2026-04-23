@@ -2,7 +2,7 @@ import { Button } from "@/components/ui/button";
 import { Field, FormDialog, SelectField, StatusPill, TextareaField } from "@/components/usip/Common";
 import { EmptyState, PageHeader, Shell } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
-import { Check, ChevronDown, ChevronRight, FileText, Send, Sparkles, X, Zap } from "lucide-react";
+import { BarChart2, Check, ChevronDown, ChevronRight, Eye, FileText, MousePointer, Send, Sparkles, X, Zap } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -95,6 +95,75 @@ function SubjectABPanel({ draftId }: { draftId: number }) {
   );
 }
 
+function TrackingStatsPanel({ draftId, status }: { draftId: number; status: string }) {
+  const [open, setOpen] = useState(false);
+  const { data, isLoading } = trpc.smtpConfig.getTrackingStats.useQuery(
+    { draftId },
+    { enabled: open && status === "sent" }
+  );
+  if (status !== "sent") return null;
+  return (
+    <div className="mt-2 border-t pt-2">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+      >
+        {open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+        <BarChart2 className="h-3.5 w-3.5 text-blue-500" />
+        Delivery analytics
+      </button>
+      {open && (
+        <div className="mt-2 space-y-2">
+          {isLoading ? (
+            <div className="text-xs text-muted-foreground">Loading…</div>
+          ) : data ? (
+            <>
+              <div className="flex gap-4">
+                <div className="flex items-center gap-1.5 text-xs">
+                  <Eye className="h-3.5 w-3.5 text-emerald-500" />
+                  <span className="font-medium">{data.draft.openCount}</span>
+                  <span className="text-muted-foreground">open{data.draft.openCount !== 1 ? "s" : ""}</span>
+                  {data.draft.lastOpenedAt && (
+                    <span className="text-muted-foreground">· last {new Date(data.draft.lastOpenedAt).toLocaleString()}</span>
+                  )}
+                </div>
+                <div className="flex items-center gap-1.5 text-xs">
+                  <MousePointer className="h-3.5 w-3.5 text-violet-500" />
+                  <span className="font-medium">{data.draft.clickCount}</span>
+                  <span className="text-muted-foreground">click{data.draft.clickCount !== 1 ? "s" : ""}</span>
+                  {data.draft.lastClickedAt && (
+                    <span className="text-muted-foreground">· last {new Date(data.draft.lastClickedAt).toLocaleString()}</span>
+                  )}
+                </div>
+              </div>
+              {data.events.length > 0 && (
+                <div className="rounded-md border bg-muted/20 divide-y max-h-48 overflow-y-auto">
+                  {data.events.map((ev: any) => (
+                    <div key={ev.id} className="flex items-center gap-2 px-3 py-1.5 text-xs">
+                      {ev.type === "open" ? (
+                        <Eye className="h-3 w-3 text-emerald-500 shrink-0" />
+                      ) : (
+                        <MousePointer className="h-3 w-3 text-violet-500 shrink-0" />
+                      )}
+                      <span className="capitalize text-muted-foreground">{ev.type}</span>
+                      {ev.url && (
+                        <span className="truncate text-muted-foreground max-w-[200px]" title={ev.url}>{ev.url}</span>
+                      )}
+                      <span className="ml-auto text-muted-foreground shrink-0">
+                        {new Date(ev.createdAt).toLocaleTimeString()}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          ) : null}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function EmailDrafts() {
   const [composeOpen, setComposeOpen] = useState(false);
   const [filter, setFilter] = useState<"pending_review" | "approved" | "sent" | "rejected" | "all">("pending_review");
@@ -154,6 +223,7 @@ export default function EmailDrafts() {
             </div>
             <div className="text-sm whitespace-pre-wrap mt-3 text-muted-foreground">{d.body}</div>
             <SubjectABPanel draftId={d.id} />
+            <TrackingStatsPanel draftId={d.id} status={d.status} />
           </div>
         ))}
       </div>

@@ -9,20 +9,22 @@
  *   - smtpConfig.sendBulkApproved — send all approved drafts (rate-limited 1/sec, max 200)
  */
 import { TRPCError } from "@trpc/server";
-import { createCipheriv, createDecipheriv, randomBytes } from "crypto";
-import { and, eq, inArray } from "drizzle-orm";
+import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from "crypto";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import nodemailer from "nodemailer";
 import { z } from "zod";
 import {
   activities,
   contacts,
   emailDrafts,
+  emailTrackingEvents,
   leads,
   smtpConfigs,
 } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { router } from "../_core/trpc";
+import { buildMergeContextFromDb, resolveMergeVars, textToHtml, injectTracking } from "../mergeVars";
 
 /* ─── AES-256-GCM helpers ─────────────────────────────────────────────── */
 function getEncKey(): Buffer {
@@ -306,13 +308,27 @@ export const smtpConfigRouter = router({
         if (!toEmail) { skipped++; continue; }
 
         try {
+          // Pre-send: resolve merge vars
+          const mergeCtx = await buildMergeContextFromDb(draft.toContactId ?? null);
+          mergeCtx.sender = { name: cfg.fromName, email: cfg.fromEmail };
+          const resolvedSubject = resolveMergeVars(draft.subject, mergeCtx);
+          const resolvedBody = resolveMergeVars(draft.body, mergeCtx);
+          // Pre-send: tracking token + pixel injection
+          const token = draft.trackingToken ?? randomUUID().replace(/-/g, "");
+          if (!draft.trackingToken) {
+            await db.update(emailDrafts).set({ trackingToken: token }).where(eq(emailDrafts.id, draft.id));
+          }
+          const appBaseUrl = process.env.VITE_OAUTH_PORTAL_URL
+            ? new URL(process.env.VITE_OAUTH_PORTAL_URL).origin
+            : "http://localhost:3000";
+          const htmlBody = injectTracking(textToHtml(resolvedBody), token, appBaseUrl);
           await transporter.sendMail({
             from: cfg.fromName ? `"${cfg.fromName}" <${cfg.fromEmail}>` : cfg.fromEmail,
             to: toEmail,
             replyTo: cfg.replyTo ?? undefined,
-            subject: draft.subject,
-            text: draft.body,
-            html: draft.body.replace(/\n/g, "<br>"),
+            subject: resolvedSubject,
+            text: resolvedBody,
+            html: htmlBody,
           });
           await db.update(emailDrafts).set({ status: "sent", sentAt: new Date() }).where(eq(emailDrafts.id, draft.id));
           if (draft.toContactId || draft.toLeadId) {
@@ -321,8 +337,8 @@ export const smtpConfigRouter = router({
               type: "email",
               relatedType: draft.toContactId ? "contact" : "lead",
               relatedId: (draft.toContactId ?? draft.toLeadId)!,
-              subject: draft.subject,
-              body: draft.body,
+              subject: resolvedSubject,
+              body: resolvedBody,
               actorUserId: ctx.user.id,
             });
           }
@@ -336,5 +352,62 @@ export const smtpConfigRouter = router({
       }
 
       return { ok: true, sent, failed, skipped };
+    }),
+
+  /** Get tracking stats (open/click counts + recent events) for a sent draft */
+  getTrackingStats: workspaceProcedure
+    .input(z.object({ draftId: z.number().int() }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [draft] = await db
+        .select({
+          id: emailDrafts.id,
+          subject: emailDrafts.subject,
+          status: emailDrafts.status,
+          sentAt: emailDrafts.sentAt,
+          openCount: emailDrafts.openCount,
+          clickCount: emailDrafts.clickCount,
+          lastOpenedAt: emailDrafts.lastOpenedAt,
+          lastClickedAt: emailDrafts.lastClickedAt,
+          trackingToken: emailDrafts.trackingToken,
+        })
+        .from(emailDrafts)
+        .where(and(eq(emailDrafts.id, input.draftId), eq(emailDrafts.workspaceId, ctx.workspace.id)))
+        .limit(1);
+      if (!draft) throw new TRPCError({ code: "NOT_FOUND" });
+      // Fetch last 20 events
+      const events = await db
+        .select()
+        .from(emailTrackingEvents)
+        .where(eq(emailTrackingEvents.draftId, draft.id))
+        .orderBy(desc(emailTrackingEvents.createdAt))
+        .limit(20);
+      return { draft, events };
+    }),
+
+  /** Get aggregate tracking stats for all sent drafts in the workspace */
+  getTrackingOverview: workspaceProcedure
+    .input(z.object({ limit: z.number().int().min(1).max(100).default(50) }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const drafts = await db
+        .select({
+          id: emailDrafts.id,
+          subject: emailDrafts.subject,
+          toEmail: emailDrafts.toEmail,
+          toContactId: emailDrafts.toContactId,
+          sentAt: emailDrafts.sentAt,
+          openCount: emailDrafts.openCount,
+          clickCount: emailDrafts.clickCount,
+          lastOpenedAt: emailDrafts.lastOpenedAt,
+          lastClickedAt: emailDrafts.lastClickedAt,
+        })
+        .from(emailDrafts)
+        .where(and(eq(emailDrafts.workspaceId, ctx.workspace.id), eq(emailDrafts.status, "sent")))
+        .orderBy(desc(emailDrafts.sentAt))
+        .limit(input.limit);
+      return drafts;
     }),
 });

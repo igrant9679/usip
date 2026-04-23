@@ -113,6 +113,13 @@
       "when": 1776900858538,
       "tag": "0015_silky_kylun",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "5",
+      "when": 1776914737961,
+      "tag": "0016_heavy_sasquatch",
+      "breakpoints": true
     }
   ]
 }

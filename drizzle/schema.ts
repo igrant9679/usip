@@ -404,8 +404,16 @@ export const emailDrafts = mysqlTable(
     reviewedByUserId: int("reviewedByUserId"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     sentAt: timestamp("sentAt"),
+    trackingToken: varchar("trackingToken", { length: 64 }), // unique token for open/click tracking
+    openCount: int("openCount").default(0).notNull(),
+    clickCount: int("clickCount").default(0).notNull(),
+    lastOpenedAt: timestamp("lastOpenedAt"),
+    lastClickedAt: timestamp("lastClickedAt"),
   },
-  (t) => ({ byWs: index("ix_ed_ws").on(t.workspaceId, t.status) }),
+  (t) => ({
+    byWs: index("ix_ed_ws").on(t.workspaceId, t.status),
+    byToken: index("ix_ed_token").on(t.trackingToken),
+  }),
 );
 
 /* ──────────────────────────────────────────────────────────────────────────
@@ -1724,3 +1732,25 @@ export const segmentSequenceRules = mysqlTable(
   }),
 );
 export type SegmentSequenceRule = typeof segmentSequenceRules.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Email Tracking Events (Feature 47)
+   ────────────────────────────────────────────────────────────────────────── */
+export const emailTrackingEvents = mysqlTable(
+  "email_tracking_events",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    draftId: int("draftId").notNull(),
+    type: mysqlEnum("type", ["open", "click"]).notNull(),
+    url: varchar("url", { length: 2048 }), // for click events
+    userAgent: varchar("userAgent", { length: 512 }),
+    ip: varchar("ip", { length: 64 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    byDraft: index("ix_ete_draft").on(t.draftId),
+    byWs: index("ix_ete_ws").on(t.workspaceId),
+  }),
+);
+export type EmailTrackingEvent = typeof emailTrackingEvents.$inferSelect;

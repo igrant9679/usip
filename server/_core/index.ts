@@ -13,6 +13,7 @@ import { runDailyVerificationMaintenance } from "../routers/emailVerification";
 import { processEnrollments } from "../sequenceEngine";
 import { runNightlyBatch } from "../nightlyBatch";
 import { runSegmentEnrollmentForAllWorkspaces } from "../routers/segmentRules"; // eslint-disable-line
+import { registerEmailTrackingRoutes } from "../emailTracking";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -42,6 +43,7 @@ async function startServer() {
   registerStorageProxy(app);
   registerOAuthRoutes(app);
   registerScimRoutes(app);
+  registerEmailTrackingRoutes(app);
   // tRPC API
   app.use(
     "/api/trpc",

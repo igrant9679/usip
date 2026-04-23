@@ -676,3 +676,28 @@
 - [x] Frontend: Pause/Enable toggle per rule
 - [x] Frontend: Sidebar nav: Segment Auto-Enroll under Engage group
 - [x] Vitest: segment enrollment dedup logic (no double-enroll, email filter, cross-sequence independence)
+
+## 47. Email Open/Click Tracking
+- [x] DB schema: email_tracking_events table (id, workspaceId, draftId, type enum(open|click), url, userAgent, ip, createdAt)
+- [x] DB schema: add trackingToken varchar + openCount + clickCount + lastOpenedAt + lastClickedAt to email_drafts
+- [x] Migration: generated + applied (0016_heavy_sasquatch.sql)
+- [x] Backend: GET /api/track/open/:token — returns 1×1 transparent GIF, records open event async
+- [x] Backend: GET /api/track/click/:token?url=... — validates URL, redirects, records click event async
+- [x] Backend: smtpConfig.sendDraft — assigns tracking token, injects pixel + wraps links before sendMail
+- [x] Backend: smtpConfig.getTrackingStats — open/click counts + last 20 events for a draft
+- [x] Backend: smtpConfig.getTrackingOverview — aggregate stats for all sent drafts
+- [x] Frontend: Email Drafts page — collapsible Delivery Analytics panel per sent draft
+- [x] Frontend: shows open count, click count, last opened/clicked timestamps, scrollable event log
+- [x] Vitest: 18 tests for tracking pixel injection, click-link wrapping, dedup, edge cases
+
+## 48. Pre-send Merge Variable Resolution
+- [x] Backend: server/mergeVars.ts — resolveMergeVars(template, ctx) replaces {{var}} and {{var|fallback}} tokens
+- [x] Supported vars: firstName, lastName, fullName, title, email, phone, city, seniority, linkedinUrl (contact); company, domain, industry, employeeBand, revenueBand, region (account); senderName, senderEmail
+- [x] Custom field support: {{customField.anyKey}} reads from contact.customFields JSON
+- [x] textToHtml() — converts plain-text body to minimal HTML with XSS escaping + link detection
+- [x] injectTracking() — injects 1×1 pixel before </body> and wraps all http/https links with click-tracking redirect
+- [x] buildMergeContextFromDb() — loads contact + account from DB by contactId
+- [x] smtpConfig.sendDraft wired: resolve merge vars → assign tracking token → inject tracking → sendMail
+- [x] smtpConfig.sendBulkApproved wired: same pre-send pipeline per draft in the bulk loop
+- [~] tRPC emailDrafts.previewResolved — DEFERRED (preview modal is a future enhancement)
+- [x] Vitest: 30 tests for resolveMergeVars (fallbacks, custom fields, multi-var, edge cases), textToHtml (XSS, links, newlines), injectTracking (pixel, click wrapping, mailto skip)
