@@ -636,11 +636,54 @@ export const campaigns = mysqlTable(
     description: text("description"),
     checklist: json("checklist"),
     ownerUserId: int("ownerUserId"),
+    // Outreach campaign fields
+    audienceType: mysqlEnum("audienceType", ["contacts", "segment"]).default("contacts"),
+    audienceIds: json("audienceIds"), // int[] when audienceType=contacts
+    audienceSegmentId: int("audienceSegmentId"), // fk to audienceSegments when audienceType=segment
+    sequenceId: int("sequenceId"), // fk to sequences
+    senderType: mysqlEnum("senderType", ["account", "pool"]).default("account"),
+    sendingAccountId: int("sendingAccountId"), // fk to sending_accounts
+    senderPoolId: int("senderPoolId"), // fk to sender_pools
+    rotationStrategy: mysqlEnum("rotationStrategy", ["round_robin", "weighted", "random"]).default("round_robin"),
+    throttlePerHour: int("throttlePerHour").default(50),
+    throttlePerDay: int("throttlePerDay").default(500),
+    abVariants: json("abVariants"), // [{label, subjectLine, weight}]
+    totalSent: int("totalSent").default(0).notNull(),
+    totalDelivered: int("totalDelivered").default(0).notNull(),
+    totalOpened: int("totalOpened").default(0).notNull(),
+    totalClicked: int("totalClicked").default(0).notNull(),
+    totalReplied: int("totalReplied").default(0).notNull(),
+    totalBounced: int("totalBounced").default(0).notNull(),
+    totalUnsubscribed: int("totalUnsubscribed").default(0).notNull(),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
   (t) => ({ byWs: index("ix_camp_ws").on(t.workspaceId) }),
 );
+
+export const campaignStepStats = mysqlTable(
+  "campaign_step_stats",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    campaignId: int("campaignId").notNull(),
+    stepIndex: int("stepIndex").notNull(), // 0-based index into sequence.steps
+    stepLabel: varchar("stepLabel", { length: 200 }),
+    sent: int("sent").default(0).notNull(),
+    delivered: int("delivered").default(0).notNull(),
+    opened: int("opened").default(0).notNull(),
+    clicked: int("clicked").default(0).notNull(),
+    replied: int("replied").default(0).notNull(),
+    bounced: int("bounced").default(0).notNull(),
+    unsubscribed: int("unsubscribed").default(0).notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    byCamp: index("ix_css_camp").on(t.campaignId),
+    uniq: index("ix_css_uniq").on(t.workspaceId, t.campaignId, t.stepIndex),
+  }),
+);
+export type CampaignStepStats = typeof campaignStepStats.$inferSelect;
 
 export const campaignComponents = mysqlTable(
   "campaign_components",

@@ -148,6 +148,13 @@
       "when": 1776921624008,
       "tag": "0020_naive_xorn",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "5",
+      "when": 1776922349866,
+      "tag": "0021_omniscient_the_stranger",
+      "breakpoints": true
     }
   ]
 }

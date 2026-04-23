@@ -2,10 +2,16 @@ import { TRPCError } from "@trpc/server";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
+  audienceSegments,
   auditLog,
   campaignComponents,
+  campaignStepStats,
   campaigns,
   contacts,
+  emailDrafts,
+  sendingAccounts,
+  senderPools,
+  sequences,
   dashboardWidgets,
   dashboards,
   notifications,
@@ -427,6 +433,80 @@ export const campaignsRouter = router({
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     await db.delete(campaigns).where(and(eq(campaigns.id, input.id), eq(campaigns.workspaceId, ctx.workspace.id)));
     return { ok: true };
+  }),
+
+  /** Update outreach-specific fields (audience, sequence, sender, throttle, A/B) */
+  updateOutreach: workspaceProcedure.input(z.object({
+    id: z.number(),
+    audienceType: z.enum(["contacts", "segment"]).optional(),
+    audienceIds: z.array(z.number()).optional(),
+    audienceSegmentId: z.number().nullable().optional(),
+    sequenceId: z.number().nullable().optional(),
+    senderType: z.enum(["account", "pool"]).optional(),
+    sendingAccountId: z.number().nullable().optional(),
+    senderPoolId: z.number().nullable().optional(),
+    rotationStrategy: z.enum(["round_robin", "weighted", "random"]).optional(),
+    throttlePerHour: z.number().min(1).max(1000).optional(),
+    throttlePerDay: z.number().min(1).max(10000).optional(),
+    abVariants: z.array(z.object({ label: z.string(), subjectLine: z.string(), weight: z.number() })).optional(),
+  })).mutation(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    const { id, ...patch } = input;
+    await db.update(campaigns).set(patch as any).where(and(eq(campaigns.id, id), eq(campaigns.workspaceId, ctx.workspace.id)));
+    return { ok: true };
+  }),
+
+  /** Pause a live campaign */
+  pause: workspaceProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    await db.update(campaigns).set({ status: "paused" }).where(and(eq(campaigns.id, input.id), eq(campaigns.workspaceId, ctx.workspace.id)));
+    return { ok: true };
+  }),
+
+  /** Get per-step analytics for a campaign */
+  getStepStats: workspaceProcedure.input(z.object({ campaignId: z.number() })).query(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    const rows = await db.select().from(campaignStepStats)
+      .where(and(eq(campaignStepStats.campaignId, input.campaignId), eq(campaignStepStats.workspaceId, ctx.workspace.id)))
+      .orderBy(campaignStepStats.stepIndex);
+    return rows;
+  }),
+
+  /** Get campaign with related sequence, sender, and audience segment */
+  getWithDetails: workspaceProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    const [c] = await db.select().from(campaigns).where(and(eq(campaigns.id, input.id), eq(campaigns.workspaceId, ctx.workspace.id)));
+    if (!c) throw new TRPCError({ code: "NOT_FOUND" });
+    const [seq] = c.sequenceId ? await db.select({ id: sequences.id, name: sequences.name, status: sequences.status, enrolledCount: sequences.enrolledCount }).from(sequences).where(eq(sequences.id, c.sequenceId)) : [];
+    const [acct] = c.sendingAccountId ? await db.select({ id: sendingAccounts.id, fromEmail: sendingAccounts.fromEmail, provider: sendingAccounts.provider }).from(sendingAccounts).where(eq(sendingAccounts.id, c.sendingAccountId)) : [];
+    const [pool] = c.senderPoolId ? await db.select({ id: senderPools.id, name: senderPools.name, rotationStrategy: senderPools.rotationStrategy }).from(senderPools).where(eq(senderPools.id, c.senderPoolId)) : [];
+    const [seg] = c.audienceSegmentId ? await db.select({ id: audienceSegments.id, name: audienceSegments.name }).from(audienceSegments).where(eq(audienceSegments.id, c.audienceSegmentId)) : [];
+    return { ...c, sequence: seq ?? null, sendingAccount: acct ?? null, senderPool: pool ?? null, audienceSegment: seg ?? null };
+  }),
+
+  /** Overall analytics KPIs for a campaign (totals from the campaigns row) */
+  getAnalytics: workspaceProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    const [c] = await db.select({
+      totalSent: campaigns.totalSent,
+      totalDelivered: campaigns.totalDelivered,
+      totalOpened: campaigns.totalOpened,
+      totalClicked: campaigns.totalClicked,
+      totalReplied: campaigns.totalReplied,
+      totalBounced: campaigns.totalBounced,
+      totalUnsubscribed: campaigns.totalUnsubscribed,
+    }).from(campaigns).where(and(eq(campaigns.id, input.id), eq(campaigns.workspaceId, ctx.workspace.id)));
+    if (!c) throw new TRPCError({ code: "NOT_FOUND" });
+    const openRate = c.totalDelivered > 0 ? Math.round((c.totalOpened / c.totalDelivered) * 100) : 0;
+    const clickRate = c.totalOpened > 0 ? Math.round((c.totalClicked / c.totalOpened) * 100) : 0;
+    const replyRate = c.totalDelivered > 0 ? Math.round((c.totalReplied / c.totalDelivered) * 100) : 0;
+    const bounceRate = c.totalSent > 0 ? Math.round((c.totalBounced / c.totalSent) * 100) : 0;
+    return { ...c, openRate, clickRate, replyRate, bounceRate };
   }),
 });
 

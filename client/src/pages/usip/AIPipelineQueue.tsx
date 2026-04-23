@@ -39,7 +39,13 @@ import {
   Mail,
   Play,
   ThumbsUp,
+  Megaphone,
+  GitBranch,
+  Layers,
+  Link2,
 } from "lucide-react";
+import { EntityPicker } from "@/components/usip/EntityPicker";
+import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 
 type Preset = "more_formal" | "shorter" | "stronger_cta" | "different_angle";
@@ -327,6 +333,12 @@ export default function AIPipelineQueue() {
   const [bulkDialogOpen, setBulkDialogOpen] = useState(false);
   const [page, setPage] = useState(1);
 
+  // CRM context selectors (shared EntityPicker)
+  const [ctxSegments, setCtxSegments] = useState<number[]>([]);
+  const [ctxSequences, setCtxSequences] = useState<number[]>([]);
+  const [ctxCampaigns, setCtxCampaigns] = useState<number[]>([]);
+  const [ctxOpen, setCtxOpen] = useState(false);
+
   const { data: contacts = [], isLoading: loadingContacts } = trpc.contacts.list.useQuery(
     contactSearch ? { search: contactSearch } : undefined,
     { enabled: true }
@@ -493,6 +505,7 @@ export default function AIPipelineQueue() {
                     } else {
                       runBulk.mutate({ contactIds: selectedContacts });
                     }
+                    // Context is passed as metadata — future: extend runBulk/runForContact with crmContext
                   }}
                 >
                   {(runBulk.isPending || runForContact.isPending) ? (
@@ -510,6 +523,79 @@ export default function AIPipelineQueue() {
                 )}
               </div>
             </CardContent>
+          </Card>
+
+          {/* CRM Context Selectors */}
+          <Card>
+            <CardHeader className="pb-2 pt-3">
+              <CollapsibleTrigger asChild onClick={() => setCtxOpen((v) => !v)}>
+                <button className="flex w-full items-center justify-between text-sm font-semibold hover:text-foreground text-muted-foreground transition-colors">
+                  <span className="flex items-center gap-2">
+                    <Link2 className="h-4 w-4 text-indigo-400" />
+                    CRM Context
+                    {(ctxSegments.length + ctxSequences.length + ctxCampaigns.length) > 0 && (
+                      <span className="ml-1 rounded-full bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 text-xs px-1.5 py-0.5">
+                        {ctxSegments.length + ctxSequences.length + ctxCampaigns.length}
+                      </span>
+                    )}
+                  </span>
+                  {ctxOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                </button>
+              </CollapsibleTrigger>
+            </CardHeader>
+            <Collapsible open={ctxOpen}>
+              <CollapsibleContent>
+                <CardContent className="pt-0 pb-4 space-y-3">
+                  <p className="text-xs text-muted-foreground">
+                    Selected entities become AI context — the pipeline will reference these when generating subject lines, body copy, and personalization.
+                  </p>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs flex items-center gap-1.5">
+                      <Layers className="h-3.5 w-3.5 text-purple-400" /> Segments
+                    </Label>
+                    <EntityPicker
+                      type="segments"
+                      mode="multi"
+                      value={ctxSegments}
+                      onChange={setCtxSegments}
+                      placeholder="Add segment context…"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs flex items-center gap-1.5">
+                      <GitBranch className="h-3.5 w-3.5 text-teal-400" /> Sequences
+                    </Label>
+                    <EntityPicker
+                      type="sequences"
+                      mode="multi"
+                      value={ctxSequences}
+                      onChange={setCtxSequences}
+                      placeholder="Add sequence context…"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs flex items-center gap-1.5">
+                      <Megaphone className="h-3.5 w-3.5 text-orange-400" /> Campaigns
+                    </Label>
+                    <EntityPicker
+                      type="campaigns"
+                      mode="multi"
+                      value={ctxCampaigns}
+                      onChange={setCtxCampaigns}
+                      placeholder="Add campaign context…"
+                    />
+                  </div>
+                  {(ctxSegments.length + ctxSequences.length + ctxCampaigns.length) > 0 && (
+                    <button
+                      className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
+                      onClick={() => { setCtxSegments([]); setCtxSequences([]); setCtxCampaigns([]); }}
+                    >
+                      Clear all context
+                    </button>
+                  )}
+                </CardContent>
+              </CollapsibleContent>
+            </Collapsible>
           </Card>
 
           {/* Recent Jobs */}

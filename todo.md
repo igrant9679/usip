@@ -858,3 +858,24 @@
 - [x] Default mode for new email nodes: typed
 - [x] Mode badge on canvas node header: AI / TPL / TXT
 - [x] Vitest: 35 tests — email mode defaults, per-step independence, exit conditions, sequence settings, branch conditions, AI options, patch serialization, readOnly guard
+
+## 69. Outreach Campaigns — Full CRUD + Analytics ✅
+- [x] Schema: campaigns table extended with audienceType, audienceContactIds, audienceSegmentId, sequenceId, senderType, senderAccountId, senderPoolId, scheduleStart, scheduleEnd, throttlePerHour, throttlePerDay, abVariants (migration 0021 applied)
+- [x] Schema: campaign_step_stats table (campaignId, stepIndex, stepLabel, sent/delivered/opened/clicked/replied/bounced/unsubscribed)
+- [x] Backend: campaignsRouter extended with updateOutreach, pause, getStepStats, getWithDetails, getAnalytics procedures
+- [x] Frontend: /campaigns — full list view with status badges, KPI summary, create/edit dialog with EntityPicker for audience/sequence/sender
+- [x] Frontend: Campaign detail panel — Overview tab (config), Analytics tab (funnel KPIs), Step Stats tab (per-step table)
+- [x] Vitest: 25 tests — status transitions, rate calculations, throttle validation, A/B weight validation, step stats aggregation
+
+## 70. Shared EntityPicker Component ✅
+- [x] EntityPicker supports 6 types: contacts, segments, sequences, campaigns, sendingAccounts, senderPools
+- [x] Single and multi-select modes with search/filter
+- [x] Popover combobox with badge chips, checkbox selection, status badges, entity metadata
+- [x] Reused in Campaigns (audience, sequence, sender) and AI Compose (segments, sequences, campaigns)
+- [x] Vitest: 18 tests — type mapping, value toggle/single, search filtering, badge chip rendering
+
+## 71. AI Compose — CRM Entity Context Selectors ✅
+- [x] AIPipelineQueue: collapsible "CRM Context" panel with EntityPicker for Segments, Sequences, Campaigns
+- [x] Context count badge on panel header; "Clear all context" link
+- [x] Context state (ctxSegments, ctxSequences, ctxCampaigns) ready to pass to pipeline mutations
+- [x] Vitest: 16 tests — context state management, serialization for LLM prompt, audience type validation
