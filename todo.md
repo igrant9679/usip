@@ -991,3 +991,6 @@
 ## Bug Fixes: Pipeline Navigation Issues
 - [x] Fix Research Pipeline page causing sidebar/navigation to disappear
 - [x] Fix AI Pipeline page rendering unexpected area instead of correct content
+
+## Bug Fix: AI Draft Queue Error
+- [x] Fix "unexpected error" when navigating to AI Draft Queue page
