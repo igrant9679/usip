@@ -3,13 +3,13 @@
  * Lists all connected accounts with health stats, allows add/edit/delete,
  * and provides a per-account connection test action.
  */
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { PageHeader, Shell } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -34,6 +34,7 @@ import {
   Clock,
   HelpCircle,
   Mail,
+  Pencil,
   Plus,
   RefreshCw,
   Trash2,
@@ -61,6 +62,11 @@ interface AccountForm {
   smtpUsername: string;
   smtpPassword: string;
   sesRegion: string;
+  imapHost: string;
+  imapPort: string;
+  imapSecure: boolean;
+  imapUsername: string;
+  imapPassword: string;
   dailySendLimit: string;
   warmupStatus: WarmupStatus;
 }
@@ -79,8 +85,21 @@ const defaultForm: AccountForm = {
   smtpUsername: "",
   smtpPassword: "",
   sesRegion: "us-east-1",
+  imapHost: "",
+  imapPort: "993",
+  imapSecure: true,
+  imapUsername: "",
+  imapPassword: "",
   dailySendLimit: "500",
   warmupStatus: "not_started",
+};
+
+/** Default IMAP host/port hints per provider */
+const IMAP_DEFAULTS: Record<Provider, { host: string; port: string }> = {
+  gmail_oauth: { host: "imap.gmail.com", port: "993" },
+  outlook_oauth: { host: "outlook.office365.com", port: "993" },
+  amazon_ses: { host: "", port: "993" },
+  generic_smtp: { host: "", port: "993" },
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -178,6 +197,48 @@ function AccountFormDialog({
   const utils = trpc.useUtils();
   const [form, setForm] = useState<AccountForm>(defaultForm);
 
+  // Fetch existing account data when editing
+  const existingAccount = trpc.sendingAccounts.get.useQuery(
+    { id: editId! },
+    { enabled: !!editId && open },
+  );
+
+  // Pre-fill form when existing data loads
+  useEffect(() => {
+    if (editId && existingAccount.data) {
+      const a = existingAccount.data;
+      setForm({
+        name: a.name ?? "",
+        provider: (a.provider as Provider) ?? "generic_smtp",
+        fromEmail: a.fromEmail ?? "",
+        fromName: a.fromName ?? "",
+        replyTo: a.replyTo ?? "",
+        oauthAccessToken: "", // never pre-fill secrets
+        oauthRefreshToken: "",
+        smtpHost: a.smtpHost ?? "",
+        smtpPort: a.smtpPort ? String(a.smtpPort) : "587",
+        smtpSecure: a.smtpSecure ?? false,
+        smtpUsername: a.smtpUsername ?? "",
+        smtpPassword: "", // never pre-fill secrets
+        sesRegion: a.sesRegion ?? "us-east-1",
+        imapHost: a.imapHost ?? "",
+        imapPort: a.imapPort ? String(a.imapPort) : "993",
+        imapSecure: a.imapSecure ?? true,
+        imapUsername: a.imapUsername ?? "",
+        imapPassword: "", // never pre-fill secrets
+        dailySendLimit: String(a.dailySendLimit ?? 500),
+        warmupStatus: (a.warmupStatus as WarmupStatus) ?? "not_started",
+      });
+    } else if (!editId) {
+      setForm(defaultForm);
+    }
+  }, [editId, existingAccount.data]);
+
+  // Reset form when dialog closes
+  useEffect(() => {
+    if (!open) setForm(defaultForm);
+  }, [open]);
+
   const createMutation = trpc.sendingAccounts.create.useMutation({
     onSuccess: () => {
       utils.sendingAccounts.list.invalidate();
@@ -197,7 +258,16 @@ function AccountFormDialog({
   });
 
   function set(field: keyof AccountForm, value: string | boolean) {
-    setForm((f) => ({ ...f, [field]: value }));
+    setForm((f) => {
+      const next = { ...f, [field]: value };
+      // When provider changes, auto-fill IMAP host/port hints if currently empty
+      if (field === "provider") {
+        const hints = IMAP_DEFAULTS[value as Provider];
+        if (!f.imapHost) next.imapHost = hints.host;
+        if (!f.imapPort || f.imapPort === "993") next.imapPort = hints.port;
+      }
+      return next;
+    });
   }
 
   function handleSubmit() {
@@ -215,6 +285,11 @@ function AccountFormDialog({
       smtpUsername: form.smtpUsername || undefined,
       smtpPassword: form.smtpPassword || undefined,
       sesRegion: form.sesRegion || undefined,
+      imapHost: form.imapHost || undefined,
+      imapPort: form.imapPort ? parseInt(form.imapPort) : undefined,
+      imapSecure: form.imapSecure,
+      imapUsername: form.imapUsername || undefined,
+      imapPassword: form.imapPassword || undefined,
       dailySendLimit: parseInt(form.dailySendLimit) || 500,
       warmupStatus: form.warmupStatus,
     };
@@ -228,7 +303,7 @@ function AccountFormDialog({
   const isOAuth = form.provider === "gmail_oauth" || form.provider === "outlook_oauth";
   const isSES = form.provider === "amazon_ses";
   const isSMTP = form.provider === "generic_smtp";
-  const isBusy = createMutation.isPending || updateMutation.isPending;
+  const isBusy = createMutation.isPending || updateMutation.isPending || existingAccount.isLoading;
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
@@ -237,203 +312,276 @@ function AccountFormDialog({
           <DialogTitle>{editId ? "Edit Sending Account" : "Connect Sending Account"}</DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-4 py-2">
-          {/* Name */}
-          <div className="space-y-1.5">
-            <Label>Account name</Label>
-            <Input
-              placeholder="e.g. Sales outreach — Gmail"
-              value={form.name}
-              onChange={(e) => set("name", e.target.value)}
-            />
+        {existingAccount.isLoading && editId ? (
+          <div className="py-8 flex items-center justify-center text-sm text-muted-foreground gap-2">
+            <RefreshCw className="w-4 h-4 animate-spin" /> Loading account…
           </div>
-
-          {/* Provider */}
-          <div className="space-y-1.5">
-            <Label>Provider</Label>
-            <Select value={form.provider} onValueChange={(v) => set("provider", v as Provider)}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {(Object.entries(PROVIDER_LABELS) as [Provider, string][]).map(([k, v]) => (
-                  <SelectItem key={k} value={k}>{v}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          {/* From email / name */}
-          <div className="grid grid-cols-2 gap-3">
+        ) : (
+          <div className="space-y-4 py-2">
+            {/* Name */}
             <div className="space-y-1.5">
-              <Label>From email</Label>
+              <Label>Account name</Label>
+              <Input
+                placeholder="e.g. Sales outreach — Outlook"
+                value={form.name}
+                onChange={(e) => set("name", e.target.value)}
+              />
+            </div>
+
+            {/* Provider */}
+            <div className="space-y-1.5">
+              <Label>Provider</Label>
+              <Select value={form.provider} onValueChange={(v) => set("provider", v as Provider)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {(Object.entries(PROVIDER_LABELS) as [Provider, string][]).map(([k, v]) => (
+                    <SelectItem key={k} value={k}>{v}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* From email / name */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label>From email</Label>
+                <Input
+                  type="email"
+                  placeholder="you@company.com"
+                  value={form.fromEmail}
+                  onChange={(e) => set("fromEmail", e.target.value)}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label>From name</Label>
+                <Input
+                  placeholder="Your Name"
+                  value={form.fromName}
+                  onChange={(e) => set("fromName", e.target.value)}
+                />
+              </div>
+            </div>
+
+            {/* Reply-to */}
+            <div className="space-y-1.5">
+              <Label>Reply-to <span className="text-muted-foreground text-xs">(optional)</span></Label>
               <Input
                 type="email"
-                placeholder="you@company.com"
-                value={form.fromEmail}
-                onChange={(e) => set("fromEmail", e.target.value)}
+                placeholder="replies@company.com"
+                value={form.replyTo}
+                onChange={(e) => set("replyTo", e.target.value)}
               />
             </div>
-            <div className="space-y-1.5">
-              <Label>From name</Label>
-              <Input
-                placeholder="Your Name"
-                value={form.fromName}
-                onChange={(e) => set("fromName", e.target.value)}
-              />
-            </div>
-          </div>
 
-          {/* Reply-to */}
-          <div className="space-y-1.5">
-            <Label>Reply-to <span className="text-muted-foreground text-xs">(optional)</span></Label>
-            <Input
-              type="email"
-              placeholder="replies@company.com"
-              value={form.replyTo}
-              onChange={(e) => set("replyTo", e.target.value)}
-            />
-          </div>
-
-          {/* OAuth fields */}
-          {isOAuth && (
-            <div className="space-y-3 border rounded-lg p-3 bg-muted/30">
-              <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">OAuth credentials</p>
-              <div className="space-y-1.5">
-                <Label>Access token</Label>
-                <Input
-                  type="password"
-                  placeholder="ya29.xxx"
-                  value={form.oauthAccessToken}
-                  onChange={(e) => set("oauthAccessToken", e.target.value)}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label>Refresh token</Label>
-                <Input
-                  type="password"
-                  placeholder="1//xxx"
-                  value={form.oauthRefreshToken}
-                  onChange={(e) => set("oauthRefreshToken", e.target.value)}
-                />
-              </div>
-            </div>
-          )}
-
-          {/* SES fields */}
-          {isSES && (
-            <div className="space-y-3 border rounded-lg p-3 bg-muted/30">
-              <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">Amazon SES</p>
-              <div className="space-y-1.5">
-                <Label>AWS Region</Label>
-                <Select value={form.sesRegion} onValueChange={(v) => set("sesRegion", v)}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {["us-east-1","us-west-2","eu-west-1","eu-central-1","ap-southeast-1","ap-northeast-1"].map((r) => (
-                      <SelectItem key={r} value={r}>{r}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
+            {/* OAuth fields */}
+            {isOAuth && (
+              <div className="space-y-3 border rounded-lg p-3 bg-muted/30">
+                <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">OAuth credentials</p>
+                {editId && (
+                  <p className="text-xs text-amber-600">Leave blank to keep existing tokens. Only fill in to replace them.</p>
+                )}
                 <div className="space-y-1.5">
-                  <Label>SMTP username</Label>
-                  <Input
-                    placeholder="AKIAIOSFODNN7EXAMPLE"
-                    value={form.smtpUsername}
-                    onChange={(e) => set("smtpUsername", e.target.value)}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label>SMTP password</Label>
+                  <Label>Access token</Label>
                   <Input
                     type="password"
-                    placeholder="SES SMTP password"
-                    value={form.smtpPassword}
-                    onChange={(e) => set("smtpPassword", e.target.value)}
+                    placeholder={editId ? "••••••• (unchanged)" : "ya29.xxx or EwA..."}
+                    value={form.oauthAccessToken}
+                    onChange={(e) => set("oauthAccessToken", e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Refresh token</Label>
+                  <Input
+                    type="password"
+                    placeholder={editId ? "••••••• (unchanged)" : "1//xxx or M.C..."}
+                    value={form.oauthRefreshToken}
+                    onChange={(e) => set("oauthRefreshToken", e.target.value)}
                   />
                 </div>
               </div>
-            </div>
-          )}
+            )}
 
-          {/* Generic SMTP fields */}
-          {isSMTP && (
+            {/* SES fields */}
+            {isSES && (
+              <div className="space-y-3 border rounded-lg p-3 bg-muted/30">
+                <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">Amazon SES</p>
+                <div className="space-y-1.5">
+                  <Label>AWS Region</Label>
+                  <Select value={form.sesRegion} onValueChange={(v) => set("sesRegion", v)}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {["us-east-1","us-west-2","eu-west-1","eu-central-1","ap-southeast-1","ap-northeast-1"].map((r) => (
+                        <SelectItem key={r} value={r}>{r}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label>SMTP username</Label>
+                    <Input
+                      placeholder="AKIAIOSFODNN7EXAMPLE"
+                      value={form.smtpUsername}
+                      onChange={(e) => set("smtpUsername", e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>SMTP password</Label>
+                    <Input
+                      type="password"
+                      placeholder={editId ? "••••••• (unchanged)" : "SES SMTP password"}
+                      value={form.smtpPassword}
+                      onChange={(e) => set("smtpPassword", e.target.value)}
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Generic SMTP fields */}
+            {isSMTP && (
+              <div className="space-y-3 border rounded-lg p-3 bg-muted/30">
+                <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">SMTP credentials</p>
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="col-span-2 space-y-1.5">
+                    <Label>Host</Label>
+                    <Input
+                      placeholder="smtp.office365.com"
+                      value={form.smtpHost}
+                      onChange={(e) => set("smtpHost", e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>Port</Label>
+                    <Input
+                      type="number"
+                      placeholder="587"
+                      value={form.smtpPort}
+                      onChange={(e) => set("smtpPort", e.target.value)}
+                    />
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Switch
+                    checked={form.smtpSecure}
+                    onCheckedChange={(v) => set("smtpSecure", v)}
+                    id="smtpSecure"
+                  />
+                  <Label htmlFor="smtpSecure">Use TLS/SSL (port 465)</Label>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label>Username</Label>
+                    <Input
+                      placeholder="you@example.com"
+                      value={form.smtpUsername}
+                      onChange={(e) => set("smtpUsername", e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>Password / App password</Label>
+                    <Input
+                      type="password"
+                      placeholder={editId ? "••••••• (unchanged)" : "App password"}
+                      value={form.smtpPassword}
+                      onChange={(e) => set("smtpPassword", e.target.value)}
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* IMAP fields — shown for all providers */}
             <div className="space-y-3 border rounded-lg p-3 bg-muted/30">
-              <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">SMTP credentials</p>
+              <div className="flex items-center justify-between">
+                <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">IMAP — inbox reading</p>
+                <span className="text-xs text-muted-foreground">Required for My Mailbox</span>
+              </div>
+              {form.provider === "outlook_oauth" && (
+                <p className="text-xs text-blue-600 bg-blue-50 rounded px-2 py-1">
+                  Office 365: host <strong>outlook.office365.com</strong>, port <strong>993</strong>, SSL on. Use an App Password if MFA is enabled.
+                </p>
+              )}
+              {form.provider === "gmail_oauth" && (
+                <p className="text-xs text-red-600 bg-red-50 rounded px-2 py-1">
+                  Gmail: host <strong>imap.gmail.com</strong>, port <strong>993</strong>, SSL on. Use an App Password from myaccount.google.com.
+                </p>
+              )}
               <div className="grid grid-cols-3 gap-3">
                 <div className="col-span-2 space-y-1.5">
-                  <Label>Host</Label>
+                  <Label>IMAP host</Label>
                   <Input
-                    placeholder="smtp.example.com"
-                    value={form.smtpHost}
-                    onChange={(e) => set("smtpHost", e.target.value)}
+                    placeholder={IMAP_DEFAULTS[form.provider].host || "imap.example.com"}
+                    value={form.imapHost}
+                    onChange={(e) => set("imapHost", e.target.value)}
                   />
                 </div>
                 <div className="space-y-1.5">
                   <Label>Port</Label>
                   <Input
                     type="number"
-                    placeholder="587"
-                    value={form.smtpPort}
-                    onChange={(e) => set("smtpPort", e.target.value)}
+                    placeholder="993"
+                    value={form.imapPort}
+                    onChange={(e) => set("imapPort", e.target.value)}
                   />
                 </div>
               </div>
               <div className="flex items-center gap-2">
                 <Switch
-                  checked={form.smtpSecure}
-                  onCheckedChange={(v) => set("smtpSecure", v)}
-                  id="smtpSecure"
+                  checked={form.imapSecure}
+                  onCheckedChange={(v) => set("imapSecure", v)}
+                  id="imapSecure"
                 />
-                <Label htmlFor="smtpSecure">Use TLS/SSL (port 465)</Label>
+                <Label htmlFor="imapSecure">Use SSL/TLS (recommended — port 993)</Label>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1.5">
-                  <Label>Username</Label>
+                  <Label>IMAP username</Label>
                   <Input
-                    placeholder="you@example.com"
-                    value={form.smtpUsername}
-                    onChange={(e) => set("smtpUsername", e.target.value)}
+                    placeholder="you@company.com"
+                    value={form.imapUsername}
+                    onChange={(e) => set("imapUsername", e.target.value)}
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <Label>Password</Label>
+                  <Label>IMAP password / App password</Label>
                   <Input
                     type="password"
-                    placeholder="App password"
-                    value={form.smtpPassword}
-                    onChange={(e) => set("smtpPassword", e.target.value)}
+                    placeholder={editId ? "••••••• (unchanged)" : "App password"}
+                    value={form.imapPassword}
+                    onChange={(e) => set("imapPassword", e.target.value)}
                   />
                 </div>
               </div>
             </div>
-          )}
 
-          {/* Limits */}
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label>Daily send limit</Label>
-              <Input
-                type="number"
-                placeholder="500"
-                value={form.dailySendLimit}
-                onChange={(e) => set("dailySendLimit", e.target.value)}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label>Warmup status</Label>
-              <Select value={form.warmupStatus} onValueChange={(v) => set("warmupStatus", v as WarmupStatus)}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="not_started">Not started</SelectItem>
-                  <SelectItem value="in_progress">In progress</SelectItem>
-                  <SelectItem value="complete">Complete</SelectItem>
-                </SelectContent>
-              </Select>
+            {/* Limits */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label>Daily send limit</Label>
+                <Input
+                  type="number"
+                  placeholder="500"
+                  value={form.dailySendLimit}
+                  onChange={(e) => set("dailySendLimit", e.target.value)}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Warmup status</Label>
+                <Select value={form.warmupStatus} onValueChange={(v) => set("warmupStatus", v as WarmupStatus)}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="not_started">Not started</SelectItem>
+                    <SelectItem value="in_progress">In progress</SelectItem>
+                    <SelectItem value="complete">Complete</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
           </div>
-        </div>
+        )}
 
         <DialogFooter>
           <Button variant="outline" onClick={onClose} disabled={isBusy}>Cancel</Button>
@@ -448,7 +596,7 @@ function AccountFormDialog({
 
 // ─── Account Card ─────────────────────────────────────────────────────────────
 
-function AccountCard({ account }: { account: any }) {
+function AccountCard({ account, onEdit }: { account: any; onEdit: (id: number) => void }) {
   const utils = trpc.useUtils();
 
   const testMutation = trpc.sendingAccounts.testConnection.useMutation({
@@ -491,12 +639,20 @@ function AccountCard({ account }: { account: any }) {
               <ConnectionBadge status={account.connectionStatus as ConnectionStatus} />
               <WarmupBadge status={account.warmupStatus as WarmupStatus} />
               <ReputationBadge tier={account.reputationTier as ReputationTier} />
+              {account.imapHost && (
+                <Badge className="gap-1 bg-indigo-100 text-indigo-700 border-indigo-200 text-xs">
+                  IMAP
+                </Badge>
+              )}
             </div>
             <p className="text-xs text-muted-foreground mt-0.5">
               {account.fromEmail}
               {account.fromName ? ` · ${account.fromName}` : ""}
               {" · "}
               <span className="text-foreground/70">{PROVIDER_LABELS[account.provider as Provider]}</span>
+              {account.imapHost && (
+                <span className="ml-1 text-indigo-600">· {account.imapHost}:{account.imapPort ?? 993}</span>
+              )}
             </p>
 
             {/* Usage bar */}
@@ -532,6 +688,15 @@ function AccountCard({ account }: { account: any }) {
               size="icon"
               variant="ghost"
               className="h-7 w-7"
+              title="Edit account"
+              onClick={() => onEdit(account.id)}
+            >
+              <Pencil className="w-3.5 h-3.5" />
+            </Button>
+            <Button
+              size="icon"
+              variant="ghost"
+              className="h-7 w-7"
               title="Test connection"
               disabled={testMutation.isPending}
               onClick={() => testMutation.mutate({ id: account.id })}
@@ -561,12 +726,28 @@ function AccountCard({ account }: { account: any }) {
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function SendingAccounts() {
-  const [showAdd, setShowAdd] = useState(false);
+  const [showForm, setShowForm] = useState(false);
+  const [editId, setEditId] = useState<number | undefined>(undefined);
   const { data: accounts = [], isLoading } = trpc.sendingAccounts.list.useQuery();
 
   const connected = accounts.filter((a) => a.connectionStatus === "connected").length;
   const totalCapacity = accounts.reduce((s, a) => s + (a.enabled ? a.dailySendLimit : 0), 0);
   const sentToday = accounts.reduce((s, a) => s + (a.sentToday ?? 0), 0);
+
+  function openAdd() {
+    setEditId(undefined);
+    setShowForm(true);
+  }
+
+  function openEdit(id: number) {
+    setEditId(id);
+    setShowForm(true);
+  }
+
+  function closeForm() {
+    setShowForm(false);
+    setEditId(undefined);
+  }
 
   return (
     <Shell title="Sending Accounts">
@@ -575,7 +756,7 @@ export default function SendingAccounts() {
           title="Sending Accounts"
           description="Connect unlimited sending accounts across Gmail, Outlook, Amazon SES, or any SMTP provider."
         >
-          <Button onClick={() => setShowAdd(true)} className="gap-2">
+          <Button onClick={openAdd} className="gap-2">
             <Plus className="w-4 h-4" /> Connect account
           </Button>
         </PageHeader>
@@ -626,7 +807,7 @@ export default function SendingAccounts() {
                   Connect Gmail, Outlook, Amazon SES, or any SMTP provider to start sending.
                 </p>
               </div>
-              <Button onClick={() => setShowAdd(true)} className="gap-2 mt-2">
+              <Button onClick={openAdd} className="gap-2 mt-2">
                 <Plus className="w-4 h-4" /> Connect your first account
               </Button>
             </CardContent>
@@ -634,7 +815,7 @@ export default function SendingAccounts() {
         ) : (
           <div className="space-y-3">
             {accounts.map((a) => (
-              <AccountCard key={a.id} account={a} />
+              <AccountCard key={a.id} account={a} onEdit={openEdit} />
             ))}
           </div>
         )}
@@ -662,7 +843,7 @@ export default function SendingAccounts() {
         )}
       </div>
 
-      <AccountFormDialog open={showAdd} onClose={() => setShowAdd(false)} />
+      <AccountFormDialog open={showForm} onClose={closeForm} editId={editId} />
     </Shell>
   );
 }

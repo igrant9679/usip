@@ -161,6 +161,11 @@ const AccountCreateInput = z.object({
   smtpUsername: z.string().max(255).optional(),
   smtpPassword: z.string().optional(),
   sesRegion: z.string().max(32).optional(),
+  imapHost: z.string().max(255).optional(),
+  imapPort: z.number().int().min(1).max(65535).optional(),
+  imapSecure: z.boolean().optional(),
+  imapUsername: z.string().max(255).optional(),
+  imapPassword: z.string().optional(),
   dailySendLimit: z.number().int().min(1).max(10000).default(500),
   warmupStatus: z.enum(["not_started", "in_progress", "complete"]).default("not_started"),
 });

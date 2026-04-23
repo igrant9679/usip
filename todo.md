@@ -958,3 +958,17 @@
 - [x] Add Send Email tab to Leads RecordDrawer (mirrors Contacts drawer)
 - [x] Log timeline activity on lead record when ad-hoc email is sent from Leads
 - [x] Log timeline activity on account + each selected contact when ad-hoc email is sent from Accounts
+
+## Feature: IMAP fields in Sending Accounts form
+- [ ] Add IMAP host, port, SSL toggle, username, password fields to the Sending Accounts form (shown for all providers)
+- [ ] Pre-fill IMAP host/port hints based on selected provider (outlook_oauth → outlook.office365.com:993, gmail_oauth → imap.gmail.com:993)
+- [ ] Save IMAP fields via the existing sendingAccounts.create/update procedures
+
+## Feature: Sending Accounts — Edit + IMAP fields
+- [x] Add Pencil edit button to each AccountCard
+- [x] Pre-fill AccountFormDialog with existing account data when editing (fetch via sendingAccounts.get)
+- [x] Add IMAP fields (host, port, SSL, username, password) to AccountForm interface and defaultForm
+- [x] Show IMAP section in the form for all providers with provider-specific host/port hints
+- [x] Include IMAP fields in handleSubmit payload
+- [x] Add imapHost/imapPort/imapSecure/imapUsername/imapPassword to AccountCreateInput zod schema in server router
+- [x] Wire editId + setEditId state in the SendingAccounts page component
