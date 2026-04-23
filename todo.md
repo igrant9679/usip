@@ -952,3 +952,9 @@
 - [x] FEATURE: Add-to-Campaign action from Contact, Lead, Account detail view and bulk-select toolbar
 - [x] FEATURE: Add-to-Segment action from Contact, Lead, Account detail view and bulk-select toolbar
 - [x] FEATURE: Add individual contacts when adding a Company (Account) to a campaign/segment
+
+## Bug Fix: Ad-hoc Send Email missing from Accounts and Leads
+- [x] Add Send Email action to Accounts list (row Actions dropdown + bulk toolbar) with contact picker modal
+- [x] Add Send Email tab to Leads RecordDrawer (mirrors Contacts drawer)
+- [x] Log timeline activity on lead record when ad-hoc email is sent from Leads
+- [x] Log timeline activity on account + each selected contact when ad-hoc email is sent from Accounts

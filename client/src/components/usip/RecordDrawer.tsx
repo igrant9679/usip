@@ -586,7 +586,7 @@ export function RecordDrawer({
             { k: "files", label: `Files (${files.data?.length ?? 0})` },
             ...(relatedType === "lead" ? [{ k: "score", label: "Score" }] : []),
             ...(relatedType === "opportunity" ? [{ k: "intelligence", label: "AI Intel" }] : []),
-            ...(relatedType === "contact" ? [{ k: "email", label: "Send Email" }] : []),
+            ...((relatedType === "contact" || relatedType === "lead") ? [{ k: "email", label: "Send Email" }] : []),
             ...(relatedType === "contact" ? [{ k: "verify", label: "Email Verify" }] : []),
             ...(relatedType === "account" ? [{ k: "brief", label: "AI Brief" }] : []),
           ].map((t) => (
@@ -775,6 +775,23 @@ export function RecordDrawer({
             />
           )}
 
+          {tab === "email" && relatedType === "lead" && relatedId && (
+            <LeadEmailTab
+              leadId={relatedId}
+              subject={emailSubject}
+              body={emailBody}
+              aiPrompt={emailAiPrompt}
+              aiMode={emailAiMode}
+              sent={emailSent}
+              onSubjectChange={setEmailSubject}
+              onBodyChange={setEmailBody}
+              onAiPromptChange={setEmailAiPrompt}
+              onAiModeChange={setEmailAiMode}
+              onSent={() => { setEmailSent(true); refresh(); }}
+              onReset={() => { setEmailSubject(""); setEmailBody(""); setEmailAiPrompt(""); setEmailAiMode(false); setEmailSent(false); }}
+            />
+          )}
+
           {tab === "verify" && relatedType === "contact" && (
             <ContactVerifyPanel
               contact={contactData.data}
@@ -815,6 +832,99 @@ export function RecordDrawer({
         </div>
       </SheetContent>
     </Sheet>
+  );
+}
+
+/* ─── Lead Email Tab ──────────────────────────────────────────────────── */
+function LeadEmailTab({
+  leadId,
+  subject,
+  body,
+  aiPrompt,
+  aiMode,
+  sent,
+  onSubjectChange,
+  onBodyChange,
+  onAiPromptChange,
+  onAiModeChange,
+  onSent,
+  onReset,
+}: {
+  leadId: number;
+  subject: string;
+  body: string;
+  aiPrompt: string;
+  aiMode: boolean;
+  sent: boolean;
+  onSubjectChange: (v: string) => void;
+  onBodyChange: (v: string) => void;
+  onAiPromptChange: (v: string) => void;
+  onAiModeChange: (v: boolean) => void;
+  onSent: () => void;
+  onReset: () => void;
+}) {
+  const generate = trpc.emailDrafts.compose.useMutation({
+    onSuccess: (data) => {
+      onSubjectChange(data.subject ?? "");
+      onBodyChange(data.body ?? "");
+      onAiModeChange(false);
+      toast.success("AI email generated — review and send");
+    },
+    onError: (e: any) => toast.error(e.message),
+  });
+  const send = trpc.leads.sendAdHocEmail.useMutation({
+    onSuccess: () => { onSent(); toast.success("Email sent"); },
+    onError: (e: any) => toast.error(e.message),
+  });
+  if (sent) {
+    return (
+      <div className="flex flex-col items-center gap-3 py-8">
+        <CheckCircle2 className="size-10 text-emerald-500" />
+        <p className="text-sm font-medium">Email sent successfully</p>
+        <Button variant="outline" size="sm" onClick={onReset}>Send another</Button>
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2 p-3 rounded-lg border bg-muted/30">
+        <Wand2 className="size-4 text-violet-500 shrink-0" />
+        <div className="flex-1 text-sm">Generate with AI</div>
+        <Button size="sm" variant={aiMode ? "default" : "outline"} onClick={() => onAiModeChange(!aiMode)}>
+          {aiMode ? "Cancel" : "Use AI"}
+        </Button>
+      </div>
+      {aiMode && (
+        <div className="space-y-2">
+          <Textarea
+            placeholder="Describe the email (e.g. 'Follow up on our demo last week, offer a free trial')"
+            value={aiPrompt}
+            onChange={(e) => onAiPromptChange(e.target.value)}
+            rows={3}
+          />
+          <Button size="sm" className="w-full" onClick={() => generate.mutate({ prompt: aiPrompt })} disabled={!aiPrompt.trim() || generate.isPending}>
+            {generate.isPending ? <Loader2 className="size-4 animate-spin mr-1" /> : <Wand2 className="size-4 mr-1" />}
+            Generate Email
+          </Button>
+        </div>
+      )}
+      <div className="space-y-1.5">
+        <label className="text-xs font-medium text-muted-foreground">Subject</label>
+        <Input placeholder="Email subject…" value={subject} onChange={(e) => onSubjectChange(e.target.value)} />
+      </div>
+      <div className="space-y-1.5">
+        <label className="text-xs font-medium text-muted-foreground">Body</label>
+        <Textarea placeholder="Email body…" value={body} onChange={(e) => onBodyChange(e.target.value)} rows={10} />
+      </div>
+      <Button
+        className="w-full"
+        onClick={() => send.mutate({ leadId, subject, body, aiGenerated: generate.isSuccess })}
+        disabled={!subject.trim() || !body.trim() || send.isPending}
+      >
+        {send.isPending ? <Loader2 className="size-4 animate-spin mr-1" /> : <Send className="size-4 mr-1" />}
+        Send Email
+      </Button>
+    </div>
   );
 }
 
