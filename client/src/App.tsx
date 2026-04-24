@@ -53,6 +53,8 @@ import Segments from "@/pages/usip/Segments";
 import AIPipelineQueue from "@/pages/usip/AIPipelineQueue";
 import PipelineAlerts from "@/pages/usip/PipelineAlerts";
 import SegmentRules from "@/pages/usip/SegmentRules";
+import ConnectedAccounts from "@/pages/usip/ConnectedAccounts";
+import UnifiedInbox from "@/pages/usip/UnifiedInbox";
 import { Loader2 } from "lucide-react";
 import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
@@ -131,6 +133,8 @@ function Router() {
       <Route path="/prompt-templates"><AuthGate><PromptTemplates /></AuthGate></Route>
       <Route path="/import"><AuthGate><ImportContacts /></AuthGate></Route>
       <Route path="/my-linkedin"><AuthGate><MyLinkedIn /></AuthGate></Route>
+      <Route path="/connected-accounts"><AuthGate><ConnectedAccounts /></AuthGate></Route>
+      <Route path="/unified-inbox"><AuthGate><UnifiedInbox /></AuthGate></Route>
       <Route path="/data-health"><AuthGate><DataHealth /></AuthGate></Route>
       <Route path="/segments"><AuthGate><Segments /></AuthGate></Route>
       <Route path="/segments/:id"><AuthGate><Segments /></AuthGate></Route>

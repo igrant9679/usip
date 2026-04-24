@@ -49,6 +49,8 @@ import {
   Layers,
   MailOpen,
   CalendarDays,
+  Plug,
+  MessageSquare,
 } from "lucide-react";
 import { ReactNode, useEffect, useState, createContext, useContext } from "react";
 import { Link, useLocation } from "wouter";
@@ -109,6 +111,8 @@ const NAV: NavGroup[] = [
       { href: "/snippets", label: "Snippet Library", icon: BookOpen },
       { href: "/research-pipeline", label: "AI Research Pipeline", icon: Sparkles },
       { href: "/ai-pipeline", label: "AI Draft Queue", icon: Sparkles },
+      { href: "/unified-inbox", label: "Unified Inbox", icon: MessageSquare },
+      { href: "/connected-accounts", label: "Connected Accounts", icon: Plug },
       { href: "/social", label: "Social", icon: Share2 },
       { href: "/campaigns", label: "Campaigns", icon: Megaphone },
     ],

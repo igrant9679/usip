@@ -2,7 +2,7 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { trpc } from "@/lib/trpc";
 import { fmtDate, StatusPill } from "./Common";
-import { Brain, ChevronDown, CheckCircle2, Clock, Loader2, Paperclip, Phone, Calendar, MessageSquare, RefreshCw, Sparkles, Trash2, Users, XCircle, ShieldCheck, FileText, Download, Send, Wand2, Sparkle } from "lucide-react";
+import { Brain, ChevronDown, CheckCircle2, Clock, Loader2, Paperclip, Phone, Calendar, MessageSquare, RefreshCw, Sparkles, Trash2, Users, XCircle, ShieldCheck, FileText, Download, Send, Wand2, Sparkle, Linkedin, UserPlus } from "lucide-react";
 import { EmailVerificationBadge } from "./EmailVerificationBadge";
 import { ContactOverview } from "./detail/ContactOverview";
 import { AccountOverview } from "./detail/AccountOverview";
@@ -701,6 +701,7 @@ export function RecordDrawer({
             ...(relatedType === "opportunity" ? [{ k: "opp-timeline", label: "Timeline" }] : []),
             ...(relatedType === "opportunity" ? [{ k: "intelligence", label: "AI Intel" }] : []),
             ...((relatedType === "contact" || relatedType === "lead") ? [{ k: "email", label: "Send Email" }] : []),
+            ...((relatedType === "contact" || relatedType === "lead") ? [{ k: "linkedin", label: "LinkedIn" }] : []),
             ...(relatedType === "contact" ? [{ k: "verify", label: "Email Verify" }] : []),
             ...(relatedType === "contact" ? [{ k: "enrich", label: "AI Enrich" }] : []),
             ...(relatedType === "account" ? [{ k: "brief", label: "AI Brief" }] : []),
@@ -951,6 +952,15 @@ export function RecordDrawer({
             <ContactEnrichPanel contactId={relatedId} onEnriched={() => { contactData.refetch(); contactWithAccount.refetch(); }} />
           )}
 
+          {tab === "linkedin" && (relatedType === "contact" || relatedType === "lead") && (
+            <LinkedInActionsPanel
+              relatedType={relatedType}
+              relatedId={relatedId ?? 0}
+              linkedinUrl={(contactData.data as any)?.linkedinUrl ?? (contactData.data as any)?.linkedin_url ?? ""}
+              name={title}
+            />
+          )}
+
           {tab === "files" && (
             <>
               <div className="flex items-center gap-2">
@@ -1163,6 +1173,155 @@ function ContactEmailTab({
         {send.isPending ? <Loader2 className="size-4 animate-spin mr-1" /> : <Send className="size-4 mr-1" />}
         Send Email
       </Button>
+    </div>
+  );
+}
+
+/* ─── LinkedIn Actions Panel ─────────────────────────────────────────────── */
+function LinkedInActionsPanel({
+  relatedType,
+  relatedId,
+  linkedinUrl,
+  name,
+}: {
+  relatedType: string;
+  relatedId: number;
+  linkedinUrl?: string;
+  name: string;
+}) {
+  const utils = trpc.useUtils();
+  const { data: accounts = [] } = trpc.unipile.listConnectedAccounts.useQuery();
+  const linkedInAccounts = accounts.filter((a: any) => a.provider === "LINKEDIN");
+
+  const [selectedAccountId, setSelectedAccountId] = useState<string>(linkedInAccounts[0]?.unipileAccountId ?? "");
+  const [inviteMessage, setInviteMessage] = useState("");
+  const [dmText, setDmText] = useState("");
+  const [profileId, setProfileId] = useState(linkedinUrl ?? "");
+
+  const sendInvite = trpc.unipile.sendLinkedInInvite.useMutation({
+    onSuccess: () => {
+      toast.success("Connection request sent!");
+      setInviteMessage("");
+      utils.activities.list.invalidate({ relatedType: relatedType as any, relatedId });
+    },
+    onError: (err) => toast.error("Failed to send invite", { description: err.message }),
+  });
+
+  const sendDm = trpc.unipile.sendMessage.useMutation({
+    onSuccess: () => {
+      toast.success("Direct message sent!");
+      setDmText("");
+      utils.activities.list.invalidate({ relatedType: relatedType as any, relatedId });
+    },
+    onError: (err) => toast.error("Failed to send DM", { description: err.message }),
+  });
+
+  if (linkedInAccounts.length === 0) {
+    return (
+      <div className="rounded-md border border-dashed p-6 text-center space-y-2">
+        <Linkedin className="size-8 mx-auto text-[#0A66C2]" />
+        <p className="text-sm font-medium">No LinkedIn account connected</p>
+        <p className="text-xs text-muted-foreground">Go to <strong>Engage → Connected Accounts</strong> to link your LinkedIn account via Unipile.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Account selector */}
+      <div className="space-y-1.5">
+        <label className="text-xs font-medium text-muted-foreground">Send from LinkedIn account</label>
+        <select
+          className="w-full border rounded-md px-3 py-2 text-sm h-10 bg-background"
+          value={selectedAccountId}
+          onChange={(e) => setSelectedAccountId(e.target.value)}
+        >
+          {linkedInAccounts.map((a: any) => (
+            <option key={a.unipileAccountId} value={a.unipileAccountId}>
+              {a.accountName ?? a.unipileAccountId}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {/* Profile ID / URL */}
+      <div className="space-y-1.5">
+        <label className="text-xs font-medium text-muted-foreground">LinkedIn Profile URL or ID</label>
+        <input
+          className="w-full border rounded-md px-3 py-2 text-sm h-10 bg-background"
+          placeholder="https://linkedin.com/in/username or profile_id"
+          value={profileId}
+          onChange={(e) => setProfileId(e.target.value)}
+        />
+        <p className="text-[11px] text-muted-foreground">Pre-filled from contact's LinkedIn URL if available.</p>
+      </div>
+
+      {/* Send Connection Request */}
+      <div className="rounded-md border bg-card p-3 space-y-2">
+        <div className="flex items-center gap-2 text-sm font-semibold">
+          <UserPlus className="size-4 text-[#0A66C2]" />
+          Send Connection Request
+        </div>
+        <Textarea
+          placeholder="Add a personal note (optional, max 300 chars)…"
+          value={inviteMessage}
+          onChange={(e) => setInviteMessage(e.target.value.slice(0, 300))}
+          rows={3}
+        />
+        <div className="flex items-center justify-between">
+          <span className="text-[11px] text-muted-foreground">{inviteMessage.length}/300</span>
+          <Button
+            size="sm"
+            className="bg-[#0A66C2] hover:bg-[#0856a8] text-white"
+            disabled={!selectedAccountId || !profileId.trim() || sendInvite.isPending}
+            onClick={() => sendInvite.mutate({
+              accountId: selectedAccountId,
+              linkedinProfileId: profileId.trim(),
+              message: inviteMessage || undefined,
+              relatedType: relatedType as any,
+              relatedId,
+            })}
+          >
+            {sendInvite.isPending ? <Loader2 className="size-3.5 animate-spin mr-1" /> : <UserPlus className="size-3.5 mr-1" />}
+            Send Request
+          </Button>
+        </div>
+      </div>
+
+      {/* Send Direct Message */}
+      <div className="rounded-md border bg-card p-3 space-y-2">
+        <div className="flex items-center gap-2 text-sm font-semibold">
+          <MessageSquare className="size-4 text-[#0A66C2]" />
+          Send Direct Message
+        </div>
+        <Textarea
+          placeholder={`Write a message to ${name}…`}
+          value={dmText}
+          onChange={(e) => setDmText(e.target.value)}
+          rows={4}
+        />
+        <div className="flex justify-end">
+          <Button
+            size="sm"
+            className="bg-[#0A66C2] hover:bg-[#0856a8] text-white"
+            disabled={!selectedAccountId || !profileId.trim() || !dmText.trim() || sendDm.isPending}
+            onClick={() => sendDm.mutate({
+              accountId: selectedAccountId,
+              chatId: profileId.trim(),
+              text: dmText.trim(),
+              relatedType: relatedType as any,
+              relatedId,
+            })}
+          >
+            {sendDm.isPending ? <Loader2 className="size-3.5 animate-spin mr-1" /> : <Send className="size-3.5 mr-1" />}
+            Send DM
+          </Button>
+        </div>
+      </div>
+
+      <p className="text-[11px] text-muted-foreground">
+        LinkedIn actions are tracked as activities on this record and appear in the Timeline tab.
+      </p>
     </div>
   );
 }

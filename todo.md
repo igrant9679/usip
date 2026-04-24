@@ -1146,3 +1146,20 @@
 - [x] Top Reps leaderboard rows clickable: clicking a rep navigates to /pipeline?owner=<userId> with filtered view showing only that rep's open deals; amber banner + Clear filter button on Pipeline page
 - [x] Last Refreshed timestamp + Refresh button in Dashboard header: shows relative time since last data fetch; clicking Refresh invalidates all dashboard queries and updates timestamp
 - [x] Pipeline board query extended to accept optional ownerUserId filter for rep drill-down
+
+## Batch Q — Unipile Multichannel Integration (DONE)
+
+- [x] DB: add `unipileAccounts` table (id, workspaceId, userId, unipileAccountId, provider, displayName, status, connectedAt, metadata)
+- [x] DB: add `unipileMessages` table (id, workspaceId, unipileAccountId, chatId, messageId, direction, provider, senderName, senderProviderId, text, attachmentUrl, linkedContactId, linkedLeadId, linkedOpportunityId, createdAt)
+- [x] DB: add `unipileInvites` table (id, workspaceId, unipileAccountId, recipientProviderId, recipientName, status, sentAt, acceptedAt)
+- [x] Migration: generated (0028_classy_mulholland_black.sql) + applied via direct DB connection
+- [x] Server: `server/routers/unipile.ts` tRPC router with: generateConnectLink, listConnectedAccounts, disconnectAccount, getInbox, getChatMessages, sendMessage, sendLinkedInInvite, getLinkedInProfile
+- [x] Server: `/api/unipile/webhook` Express route to receive Unipile webhook events (new messages, account status, new relation) → store in DB + create activity
+- [x] Server: `server/lib/unipile.ts` helper wrapping Unipile REST API calls (uses UNIPILE_API_KEY + UNIPILE_DSN env vars; DSN origin extracted from full URL automatically)
+- [x] Frontend: `Connected Accounts` page at `/connected-accounts` — shows all connected provider accounts per user with status badges; "Connect Account" button triggers Hosted Auth Wizard flow; disconnect button
+- [x] Frontend: `Unified Inbox` page at `/inbox` — shows all messages across all connected channels; left sidebar filters by provider/account; message thread view with reply composer; send button calls sendMessage tRPC
+- [x] Frontend: LinkedIn actions on Contact/Lead RecordDrawer — "Send Connection Request" button (calls sendLinkedInInvite); "Send LinkedIn DM" button (opens compose modal, calls sendMessage)
+- [x] Frontend: Multichannel activity feed — all Unipile messages appear in the Timeline tab of linked contacts/leads/opportunities with provider icon badge
+- [x] Frontend: Engage nav section — "Unified Inbox" and "Connected Accounts" nav items added to sidebar
+- [x] Secrets: UNIPILE_API_KEY and UNIPILE_DSN added via webdev_request_secrets; DSN corrected to https://api26.unipile.com:15619
+- [x] Vitest: Unipile credentials smoke test passes (2/2); full suite 680/680 passing

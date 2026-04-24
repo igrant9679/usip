@@ -2120,3 +2120,88 @@ export const calendarEvents = mysqlTable(
   }),
 );
 export type CalendarEvent = typeof calendarEvents.$inferSelect;
+
+// ─── Unipile Multichannel Tables ─────────────────────────────────────────────
+
+export const unipileAccounts = mysqlTable(
+  "unipile_accounts",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    userId: int("userId").notNull(),
+    unipileAccountId: varchar("unipileAccountId", { length: 200 }).notNull(),
+    provider: varchar("provider", { length: 30 }).notNull(),
+    displayName: varchar("displayName", { length: 200 }),
+    profilePicture: varchar("profilePicture", { length: 1000 }),
+    status: varchar("status", { length: 30 }).default("CONNECTING").notNull(),
+    connectedAt: timestamp("connectedAt"),
+    lastSyncAt: timestamp("lastSyncAt"),
+    metadata: json("metadata"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    byUser: index("ix_ua_user").on(t.workspaceId, t.userId),
+    byUnipileId: index("ix_ua_unipile_id").on(t.unipileAccountId),
+  }),
+);
+export type UnipileAccount = typeof unipileAccounts.$inferSelect;
+
+export const unipileMessages = mysqlTable(
+  "unipile_messages",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    unipileAccountId: varchar("unipileAccountId", { length: 200 }).notNull(),
+    provider: varchar("provider", { length: 30 }).notNull(),
+    chatId: varchar("chatId", { length: 500 }).notNull(),
+    messageId: varchar("messageId", { length: 500 }).notNull(),
+    direction: varchar("direction", { length: 10 }).notNull(),
+    senderName: varchar("senderName", { length: 200 }),
+    senderProviderId: varchar("senderProviderId", { length: 500 }),
+    recipientName: varchar("recipientName", { length: 200 }),
+    recipientProviderId: varchar("recipientProviderId", { length: 500 }),
+    text: text("text"),
+    attachmentUrl: varchar("attachmentUrl", { length: 1000 }),
+    linkedContactId: int("linkedContactId"),
+    linkedLeadId: int("linkedLeadId"),
+    linkedOpportunityId: int("linkedOpportunityId"),
+    activityId: int("activityId"),
+    readAt: timestamp("readAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    byAccount: index("ix_um_account").on(t.workspaceId, t.unipileAccountId),
+    byChat: index("ix_um_chat").on(t.chatId),
+    byContact: index("ix_um_contact").on(t.linkedContactId),
+    byLead: index("ix_um_lead").on(t.linkedLeadId),
+    byMsgId: index("ix_um_msgid").on(t.messageId),
+  }),
+);
+export type UnipileMessage = typeof unipileMessages.$inferSelect;
+
+export const unipileInvites = mysqlTable(
+  "unipile_invites",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    userId: int("userId").notNull(),
+    unipileAccountId: varchar("unipileAccountId", { length: 200 }).notNull(),
+    recipientProviderId: varchar("recipientProviderId", { length: 500 }).notNull(),
+    recipientName: varchar("recipientName", { length: 200 }),
+    message: text("message"),
+    status: varchar("status", { length: 20 }).default("pending").notNull(),
+    linkedContactId: int("linkedContactId"),
+    linkedLeadId: int("linkedLeadId"),
+    activityId: int("activityId"),
+    sentAt: timestamp("sentAt").defaultNow().notNull(),
+    acceptedAt: timestamp("acceptedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    byUser: index("ix_ui_user").on(t.workspaceId, t.userId),
+    byAccount: index("ix_ui_account").on(t.unipileAccountId),
+    byContact: index("ix_ui_contact").on(t.linkedContactId),
+  }),
+);
+export type UnipileInvite = typeof unipileInvites.$inferSelect;
