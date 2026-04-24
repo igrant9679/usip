@@ -86,10 +86,11 @@ export interface SendEmailInput {
 
 export interface EmailAdapter {
   listThreads(folder: string, pageToken?: string, maxResults?: number): Promise<{ threads: EmailThread[]; nextPageToken?: string }>;
-  getThread(threadId: string): Promise<EmailMessage[]>;
+  getThread(threadId: string, folder?: string): Promise<EmailMessage[]>;
   sendEmail(input: SendEmailInput): Promise<{ messageId: string; threadId?: string }>;
   markRead(messageId: string, read: boolean): Promise<void>;
   moveToTrash(messageId: string): Promise<void>;
+  moveToFolder(messageId: string, destFolder: string, currentFolder?: string): Promise<void>;
   listFolders(): Promise<EmailFolder[]>;
 }
 
@@ -197,6 +198,17 @@ export class GmailAdapter implements EmailAdapter {
     await this.gmail.users.messages.trash({ userId: "me", id: messageId });
   }
 
+  async moveToFolder(messageId: string, destFolder: string, _currentFolder?: string): Promise<void> {
+    // Map common folder names to Gmail label IDs
+    const labelMap: Record<string, string> = { INBOX: "INBOX", SENT: "SENT", DRAFTS: "DRAFT", TRASH: "TRASH", SPAM: "SPAM" };
+    const destLabel = labelMap[destFolder.toUpperCase()] ?? destFolder;
+    const removeLabels = ["INBOX", "TRASH", "SPAM"].filter((l) => l !== destLabel);
+    await this.gmail.users.messages.modify({
+      userId: "me", id: messageId,
+      requestBody: { addLabelIds: destLabel ? [destLabel] : [], removeLabelIds: removeLabels },
+    });
+  }
+
   async listFolders(): Promise<EmailFolder[]> {
     const res = await this.gmail.users.labels.list({ userId: "me" });
     return (res.data.labels ?? []).map((l) => ({
@@ -282,9 +294,9 @@ export class ImapSmtpAdapter implements EmailAdapter {
     });
   }
 
-  async getThread(threadId: string): Promise<EmailMessage[]> {
-    return this.withImap("INBOX", async (client) => {
-      const lock = await client.getMailboxLock("INBOX");
+  async getThread(threadId: string, folder = "INBOX"): Promise<EmailMessage[]> {
+    return this.withImap(folder, async (client) => {
+      const lock = await client.getMailboxLock(folder);
       try {
         const msgs: EmailMessage[] = [];
         for await (const msg of client.fetch(threadId, { uid: true, flags: true, envelope: true, source: true }, { uid: true })) {
@@ -343,6 +355,14 @@ export class ImapSmtpAdapter implements EmailAdapter {
     return this.withImap("INBOX", async (client) => {
       const lock = await client.getMailboxLock("INBOX");
       try { await client.messageMove(messageId, "Trash", { uid: true }); }
+      finally { lock.release(); }
+    });
+  }
+
+  async moveToFolder(messageId: string, destFolder: string, currentFolder = "INBOX"): Promise<void> {
+    return this.withImap(currentFolder, async (client) => {
+      const lock = await client.getMailboxLock(currentFolder);
+      try { await client.messageMove(messageId, destFolder, { uid: true }); }
       finally { lock.release(); }
     });
   }

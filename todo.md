@@ -974,19 +974,17 @@
 - [x] Wire editId + setEditId state in the SendingAccounts page component
 
 ## Feature: Full Sequence Editing
-- [ ] Add typed sequences.updateMeta procedure (name, description, dailyCap, exitConditions, settings)
-- [ ] Add sequences.updateSteps procedure (replace steps array atomically)
-- [ ] Build SequenceEditDialog with tabs: Settings (name/description/dailyCap/exitConditions/send window) and Steps (add/edit/delete/reorder email, wait, task steps)
-- [ ] Wire Edit button on sequence detail panel header to open SequenceEditDialog
-- [ ] Show step editor inline: email steps get subject+body fields, wait steps get days field, task steps get body field
-- [ ] Support drag-to-reorder steps (or up/down arrow buttons)
-- [ ] Disable step editing for active/paused sequences (show read-only warning)
-
-## Feature: Email Draft Editing
-- [ ] Add Edit (Pencil) button to each draft row/card in the Email Drafts page
-- [ ] Build EmailDraftEditDialog with subject and body fields, pre-filled from existing draft
-- [ ] Wire emailDrafts.update procedure (already exists in router) to the dialog save action
-- [ ] Show edit button only for drafts in pending_review or rejected status (not sent/approved)
+- [x] Add typed sequences.updateMeta procedure (name, description, dailyCap, exitConditions, settings)
+- [x] Add sequences.updateSteps procedure (replace steps array atomically)
+- [x] Build SequenceEditDialog with tabs: Settings (name/description/dailyCap/exitConditions/send window) and Steps (add/edit/delete/reorder email, wait, task steps)
+- [x] Wire Edit button on sequence detail panel header to open SequenceEditDialog
+- [x] Show step editor inline: email steps get subject+body fields, wait steps get days field, task steps get body field
+- [x] Support drag-to-reorder steps (or up/down arrow buttons)
+- [x] Disable step editing for active/paused sequences (show read-only warning)
+- [x] Add Edit (Pencil) button to each draft row/card in the Email Drafts page
+- [x] Build EmailDraftEditDialog with subject and body fields, pre-filled from existing draft
+- [x] Wire emailDrafts.update procedure (already exists in router) to the dialog save action
+- [x] Show edit button only for drafts in pending_review or rejected status (not sent/approved) sent/approved)
 
 ## Bug Fixes: Pipeline Navigation Issues
 - [x] Fix Research Pipeline page causing sidebar/navigation to disappear
@@ -1021,3 +1019,15 @@
 - [x] Wire Email Builder subject suggestions lightbulb button (Popover with 5 AI suggestions, spam risk badge, rationale, click-to-apply, refresh button)
 - [x] Fix Sequences editing: SequenceEditDialog with Settings tab + Step editor, typed updateMeta/updateSteps tRPC procedures
 - [x] Fix Email Drafts editing: EditDraftDialog with subject/body editing, Pencil button on each draft row
+
+## Bug Fix + Feature: My Mailbox Improvements (Apr 24 round 2)
+- [ ] Fix message reading pane: clicking a thread in the list must load and display the full message body (HTML rendered in an iframe/div)
+- [ ] Add Central Inbox view: aggregate threads from all sender accounts into a single unified list, with an "Account" badge per thread showing which mailbox it came from
+- [ ] Add per-account inbox views: sidebar lets user switch between Central Inbox and each individual sender account
+- [ ] Add delete (move-to-trash) action on each thread row and in the reading pane toolbar
+- [ ] Add move-to-folder action: dropdown on each thread row and in the reading pane toolbar to move message to any folder (Inbox, Sent, Archive, Trash, etc.)
+- [ ] Add Reply action in reading pane toolbar (pre-fills To, Subject Re:, thread context)
+- [ ] Add Forward action in reading pane toolbar (pre-fills Subject Fwd:, original body quoted)
+- [ ] Add mailbox.aiDraftReply tRPC procedure: takes thread messages + user context, returns AI-drafted reply body
+- [ ] Add mailbox.aiDraftForward tRPC procedure: takes original message, returns AI-drafted forward intro
+- [ ] In compose dialog: when opened as Reply or Forward, auto-call AI draft and pre-populate body; show loading spinner while generating; body remains fully editable
