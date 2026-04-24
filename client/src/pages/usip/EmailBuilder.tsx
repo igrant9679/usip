@@ -573,7 +573,7 @@ function AIGenerateDialog({
             </div>
           </div>
           <p className="text-xs text-muted-foreground">
-            Merge variables <code>{{firstName}}</code>, <code>{{company}}</code>, <code>{{senderName}}</code> will be inserted automatically where appropriate.
+            Merge variables <code>{"{{firstName}}"}</code>, <code>{"{{company}}"}</code>, <code>{"{{senderName}}"}</code> will be inserted automatically where appropriate.
           </p>
         </div>
         <DialogFooter>

@@ -1008,3 +1008,6 @@
 - [x] Add spinner to contact list while contacts are loading (upgraded to skeleton rows)
 - [x] Add loading state to Trigger Pipeline button while runForContact/runBulk mutation is in-flight (already existed)
 - [x] Add loading state to Approve/Reject/Regenerate buttons on each draft card (already existed via DraftCard component)
+
+## Bug Fix: Email Builder Unexpected Error
+- [x] Fix "unexpected error" when navigating to Email Builder page
