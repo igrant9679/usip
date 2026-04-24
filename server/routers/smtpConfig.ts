@@ -29,7 +29,7 @@ import { buildMergeContextFromDb, resolveMergeVars, textToHtml, injectTracking }
 import { isEmailSuppressed } from "./emailSuppressions";
 
 /* ─── AES-256-GCM helpers ─────────────────────────────────────────────── */
-function getEncKey(): Buffer {
+export function getEncKey(): Buffer {
   const secret = process.env.JWT_SECRET ?? "fallback-dev-secret-32-bytes!!!";
   return Buffer.from(secret.padEnd(32, "0").slice(0, 32));
 }
@@ -40,7 +40,7 @@ function encrypt(plaintext: string): string {
   const tag = cipher.getAuthTag();
   return `${iv.toString("hex")}:${tag.toString("hex")}:${encrypted.toString("hex")}`;
 }
-function decrypt(ciphertext: string): string {
+export function decrypt(ciphertext: string): string {
   const [ivHex, tagHex, encHex] = ciphertext.split(":");
   if (!ivHex || !tagHex || !encHex) throw new Error("Invalid ciphertext format");
   const decipher = createDecipheriv("aes-256-gcm", getEncKey(), Buffer.from(ivHex, "hex"));
@@ -49,7 +49,7 @@ function decrypt(ciphertext: string): string {
 }
 
 /* ─── Nodemailer transporter factory ─────────────────────────────────── */
-function buildTransporter(cfg: {
+export function buildTransporter(cfg: {
   host: string;
   port: number;
   secure: boolean;

@@ -1021,13 +1021,48 @@
 - [x] Fix Email Drafts editing: EditDraftDialog with subject/body editing, Pencil button on each draft row
 
 ## Bug Fix + Feature: My Mailbox Improvements (Apr 24 round 2)
-- [ ] Fix message reading pane: clicking a thread in the list must load and display the full message body (HTML rendered in an iframe/div)
-- [ ] Add Central Inbox view: aggregate threads from all sender accounts into a single unified list, with an "Account" badge per thread showing which mailbox it came from
-- [ ] Add per-account inbox views: sidebar lets user switch between Central Inbox and each individual sender account
-- [ ] Add delete (move-to-trash) action on each thread row and in the reading pane toolbar
-- [ ] Add move-to-folder action: dropdown on each thread row and in the reading pane toolbar to move message to any folder (Inbox, Sent, Archive, Trash, etc.)
-- [ ] Add Reply action in reading pane toolbar (pre-fills To, Subject Re:, thread context)
-- [ ] Add Forward action in reading pane toolbar (pre-fills Subject Fwd:, original body quoted)
-- [ ] Add mailbox.aiDraftReply tRPC procedure: takes thread messages + user context, returns AI-drafted reply body
-- [ ] Add mailbox.aiDraftForward tRPC procedure: takes original message, returns AI-drafted forward intro
-- [ ] In compose dialog: when opened as Reply or Forward, auto-call AI draft and pre-populate body; show loading spinner while generating; body remains fully editable
+- [x] Fix message reading pane: clicking a thread in the list must load and display the full message body (HTML rendered in an iframe/div)
+- [x] Add Central Inbox view: aggregate threads from all sender accounts into a single unified list, with an "Account" badge per thread showing which mailbox it came from
+- [x] Add per-account inbox views: sidebar lets user switch between Central Inbox and each individual sender account
+- [x] Add delete (move-to-trash) action on each thread row and in the reading pane toolbar
+- [x] Add move-to-folder action: dropdown on each thread row and in the reading pane toolbar to move message to any folder (Inbox, Sent, Archive, Trash, etc.)
+- [x] Add Reply action in reading pane toolbar (pre-fills To, Subject Re:, thread context)
+- [x] Add Forward action in reading pane toolbar (pre-fills Subject Fwd:, original body quoted)
+- [x] Add mailbox.aiDraftReply tRPC procedure: takes thread messages + user context, returns AI-drafted reply body
+- [x] Add mailbox.aiDraftForward tRPC procedure: takes original message, returns AI-drafted forward intro
+- [x] In compose dialog: when opened as Reply or Forward, auto-call AI draft and pre-populate body; show loading spinner while generating; body remains fully editable
+
+## Gap Closure Sprint — Batch A (Backend/Admin features)
+- [ ] Nightly batch UI: Settings page toggle to enable/disable nightly AI pipeline per workspace + score threshold slider (writes nightlyPipelineEnabled + nightlyScoreThreshold to workspaceSettings)
+- [ ] Recurring dashboard delivery: server-side cron (Manus scheduled task) that reads dashboardSchedules, resolves each widget, and POSTs a formatted summary to the recipient list via the designated system sender
+- [ ] Workflow rule webhook execution: when a rule fires (testFire + real trigger), actually fetch() the webhook URL with the configured body; log success/failure to workflowRuns
+- [ ] Audit log CSV export: Download button on Audit page that streams all audit rows to a CSV file
+- [ ] Data export CSV: Export button on Contacts, Leads, Accounts, and Pipeline (Opportunities) list pages
+
+## Gap Closure Sprint — Batch B (Mailbox enhancements)
+- [ ] Mailbox search: search bar in thread list panel; new mailbox.searchThreads tRPC procedure (IMAP SEARCH / Gmail messages.list q= param)
+- [ ] Unread count badges: aggregate unread counts per account and per folder shown in left sidebar
+- [ ] Mark as unread: toolbar button in reading pane; new mailbox.markUnread tRPC procedure
+- [ ] Snooze / remind me: snooze button in reading pane toolbar; snooze dialog (pick date/time); creates a task or notification at the chosen time
+- [ ] Email templates in compose: "Insert template" button in compose/reply/forward dialog; lists saved email templates; clicking one populates subject+body
+- [ ] Attachment download: make attachment badges in reading pane clickable; new mailbox.getAttachmentUrl tRPC procedure returns a presigned/proxy URL
+
+## Gap Closure Sprint — Batch C (CRM analytics)
+- [ ] Pipeline forecast view: weighted forecast chart (probability × deal value by close date) as a tab or panel alongside the Kanban on the Pipeline page
+- [ ] Duplicate detection: fuzzy-match check (name + email) when creating or importing leads/contacts; surface warning banner with merge option
+- [ ] Contact enrichment: Enrich button on contact/lead detail that calls an enrichment procedure (uses LLM + web search to fill missing firmographic fields)
+- [ ] Sequence performance analytics: per-sequence stats tab showing open rate, reply rate, opt-out rate, and step-by-step drop-off funnel
+
+## Gap Closure Sprint — Batch D (Social publishing + integrations)
+- [ ] Live social publishing: real OAuth connection flow for LinkedIn, Twitter/X, Facebook, Instagram with credential slots (API key/secret/access token per platform)
+- [ ] Social post scheduling: full scheduling UI with repeat/recurrence options (daily, weekly, custom interval), post queue management
+- [ ] Slack / Teams notification integration: workspace settings to configure Slack webhook URL and/or Teams webhook URL; workflow rule action type "notify_slack" and "notify_teams" that actually POSTs to the configured URL
+
+## Gap Closure Sprint — Batch E (Calendar sync)
+- [ ] Two-way Google Calendar sync: OAuth connect flow + sync meetings logged in USIP to/from Google Calendar (credential slots for Google OAuth client ID/secret)
+- [ ] Two-way Outlook Calendar sync: OAuth connect flow + sync meetings to/from Outlook/Microsoft 365 (credential slots for Azure app client ID/secret)
+
+## Gap Closure Sprint — Batch F (Notifications + invitations)
+- [ ] Workspace system sender: Settings page section to designate one sending account as the system sender for invitation emails, dashboard delivery, and general notifications
+- [ ] User invitation email: when team.invite is called, send an actual invitation email via the designated system sender with a magic link
+- [ ] Team member notification email preferences: profile/settings page where each member can add a personal notification email address (separate from login) and choose which notification types to receive (sequence replies, social post responses, workflow alerts, etc.)

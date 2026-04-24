@@ -27,6 +27,7 @@ import {
   Trash2,
   Tag,
   Megaphone,
+  Download,
 } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { toast } from "sonner";
@@ -707,6 +708,16 @@ export default function Contacts() {
             </Button>
           </>
         )}
+        <Button variant="outline" onClick={() => {
+          const rows = data ?? [];
+          if (!rows.length) return;
+          const cols = ["id", "firstName", "lastName", "email", "phone", "title", "company", "city", "state", "country", "linkedinUrl", "createdAt"];
+          const lines = [cols.join(","), ...rows.map((r: any) => cols.map((c) => JSON.stringify(r[c] ?? "")).join(","))];
+          const blob = new Blob([lines.join("\n")], { type: "text/csv" });
+          const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `contacts-${Date.now()}.csv`; a.click();
+        }} disabled={!data?.length}>
+          <Download className="size-4" /> Export CSV
+        </Button>
         <Button onClick={() => setOpen(true)}>
           <Plus className="size-4" /> New contact
         </Button>

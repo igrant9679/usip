@@ -5,7 +5,7 @@ import { Field, fmt$, FormDialog, SelectField } from "@/components/usip/Common";
 import { PageHeader, Shell } from "@/components/usip/Shell";
 import { RecordDrawer } from "@/components/usip/RecordDrawer";
 import { trpc } from "@/lib/trpc";
-import { Brain, Loader2, Plus, Zap } from "lucide-react";
+import { Brain, Download, Loader2, Plus, Zap } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 
@@ -171,6 +171,16 @@ export default function Pipeline() {
   return (
     <Shell title="Pipeline">
       <PageHeader title="Pipeline" description="Drag cards between stages. Hover a card and click the brain icon to run AI analysis.">
+        <Button variant="outline" onClick={() => {
+          const rows = data ?? [];
+          if (!rows.length) return;
+          const cols = ["id", "name", "stage", "value", "winProb", "closeDate", "accountName", "createdAt"];
+          const lines = [cols.join(","), ...rows.map((r: any) => cols.map((c) => JSON.stringify(r[c] ?? "")).join(","))];
+          const blob = new Blob([lines.join("\n")], { type: "text/csv" });
+          const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `pipeline-${Date.now()}.csv`; a.click();
+        }} disabled={!data?.length}>
+          <Download className="size-4" /> Export CSV
+        </Button>
         <Button onClick={() => setAddOpen(true)}><Plus className="size-4" /> New opportunity</Button>
       </PageHeader>
 

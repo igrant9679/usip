@@ -8,7 +8,7 @@ import { EmptyState, PageHeader, Shell } from "@/components/usip/Shell";
 import { RecordDrawer } from "@/components/usip/RecordDrawer";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { trpc } from "@/lib/trpc";
-import { Building2, ChevronRight, Plus, MoreHorizontal, Pencil, Trash2, Tag, Megaphone, Loader2, Send, Wand2, CheckCircle2 } from "lucide-react";
+import { Building2, ChevronRight, Plus, MoreHorizontal, Pencil, Trash2, Tag, Megaphone, Loader2, Send, Wand2, CheckCircle2, Download } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -327,6 +327,16 @@ export default function Accounts() {
             </Button>
           </>
         )}
+        <Button variant="outline" onClick={() => {
+          const rows = list ?? [];
+          if (!rows.length) return;
+          const cols = ["id", "name", "domain", "industry", "employees", "annualRevenue", "city", "state", "country", "website", "createdAt"];
+          const lines = [cols.join(","), ...rows.map((r: any) => cols.map((c) => JSON.stringify(r[c] ?? "")).join(","))];
+          const blob = new Blob([lines.join("\n")], { type: "text/csv" });
+          const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `accounts-${Date.now()}.csv`; a.click();
+        }} disabled={!list?.length}>
+          <Download className="size-4" /> Export CSV
+        </Button>
         <Button onClick={() => setOpen(true)}><Plus className="size-4" /> New account</Button>
       </PageHeader>
       <div className="p-6 grid grid-cols-1 lg:grid-cols-3 gap-4">

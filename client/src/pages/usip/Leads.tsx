@@ -10,7 +10,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { trpc } from "@/lib/trpc";
 import {
   Loader2, Plus, Sparkles, Target, UserCheck,
-  MoreHorizontal, Pencil, Trash2, Send, Tag, Megaphone, Wand2,
+  MoreHorizontal, Pencil, Trash2, Send, Tag, Megaphone, Wand2, Download,
 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -250,6 +250,16 @@ export default function Leads() {
             </Button>
           </>
         )}
+        <Button variant="outline" onClick={() => {
+          const rows = data ?? [];
+          if (!rows.length) return;
+          const cols = ["id", "firstName", "lastName", "email", "phone", "company", "title", "source", "score", "status", "createdAt"];
+          const lines = [cols.join(","), ...rows.map((r: any) => cols.map((c) => JSON.stringify(r[c] ?? "")).join(","))];
+          const blob = new Blob([lines.join("\n")], { type: "text/csv" });
+          const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `leads-${Date.now()}.csv`; a.click();
+        }} disabled={!data?.length}>
+          <Download className="size-4" /> Export CSV
+        </Button>
         <Button onClick={() => setCreateOpen(true)}><Plus className="size-4" /> New lead</Button>
       </PageHeader>
       <div className="p-6">

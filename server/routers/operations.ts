@@ -23,6 +23,7 @@ import {
   reportSchedules,
   scimEvents,
   scimProviders,
+  smtpConfigs,
   socialAccounts,
   socialPosts,
   users,
@@ -36,6 +37,7 @@ import { invokeLLM } from "../_core/llm";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, repProcedure, workspaceProcedure } from "../_core/workspace";
 import { storagePut } from "../storage";
+import { buildTransporter, decrypt } from "./smtpConfig";
 
 /* ----- Pure helpers (exported for tests) ----- */
 
@@ -139,22 +141,40 @@ export const workflowsRouter = router({
     return rows;
   }),
 
-  /** Manually fire a rule for demo / testing. */
+  /** Manually fire a rule for demo / testing — executes real webhook actions. */
   testFire: workspaceProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const [rule] = await db.select().from(workflowRules).where(and(eq(workflowRules.id, input.id), eq(workflowRules.workspaceId, ctx.workspace.id)));
     if (!rule) throw new TRPCError({ code: "NOT_FOUND" });
+    const actions = Array.isArray(rule.actions) ? rule.actions as Array<{ type: string; params: Record<string, any> }> : [];
+    const errors: string[] = [];
+    for (const action of actions) {
+      if (action.type === "webhook") {
+        const url = action.params?.url;
+        if (url) {
+          try {
+            const body = action.params?.body ? JSON.stringify(action.params.body) : JSON.stringify({ event: "workflow_fired", ruleId: rule.id, ruleName: rule.name, firedAt: new Date().toISOString() });
+            const resp = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", ...(action.params?.headers ?? {}) }, body, signal: AbortSignal.timeout(10_000) });
+            if (!resp.ok) errors.push(`Webhook ${url} returned ${resp.status}`);
+          } catch (e: any) {
+            errors.push(`Webhook ${url} failed: ${e?.message ?? "unknown error"}`);
+          }
+        }
+      }
+    }
     await db.insert(workflowRuns).values({
       workspaceId: ctx.workspace.id, ruleId: rule.id, triggeredBy: "manual_test",
-      status: "success", actionsRun: rule.actions,
+      status: errors.length === 0 ? "success" : "error",
+      actionsRun: rule.actions,
+      errorMessage: errors.length > 0 ? errors.join("; ") : null,
     });
     await db.update(workflowRules).set({ fireCount: rule.fireCount + 1, lastFiredAt: new Date() }).where(eq(workflowRules.id, rule.id));
     await db.insert(notifications).values({
       workspaceId: ctx.workspace.id, userId: ctx.user.id, kind: "workflow_fired",
-      title: `Rule fired: ${rule.name}`, body: "Manual test run completed.",
+      title: `Rule fired: ${rule.name}`, body: errors.length === 0 ? "Manual test run completed." : `Completed with errors: ${errors.join("; ")}`,
     });
-    return { ok: true };
+    return { ok: true, errors };
   }),
 });
 
@@ -659,12 +679,44 @@ export const dashboardsRouter = router({
     return { ok: true };
   }),
 
-  /** Stub send-now. Marks lastSentAt. */
+  /** Send dashboard report now via SMTP. */
   sendScheduleNow: workspaceProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    await db.update(reportSchedules).set({ lastSentAt: new Date() }).where(and(eq(reportSchedules.id, input.id), eq(reportSchedules.workspaceId, ctx.workspace.id)));
-    return { ok: true, sentAt: new Date() };
+    const [sched] = await db.select().from(reportSchedules).where(and(eq(reportSchedules.id, input.id), eq(reportSchedules.workspaceId, ctx.workspace.id)));
+    if (!sched) throw new TRPCError({ code: "NOT_FOUND" });
+    const recipients: string[] = Array.isArray(sched.recipients) ? (sched.recipients as string[]) : [];
+    if (recipients.length === 0) throw new TRPCError({ code: "BAD_REQUEST", message: "No recipients configured for this schedule. Edit the schedule to add recipients." });
+    const [dash] = await db.select().from(dashboards).where(and(eq(dashboards.id, sched.dashboardId), eq(dashboards.workspaceId, ctx.workspace.id)));
+    if (!dash) throw new TRPCError({ code: "NOT_FOUND", message: "Dashboard not found." });
+    const widgets = await db.select().from(dashboardWidgets).where(eq(dashboardWidgets.dashboardId, sched.dashboardId));
+    const resolved = await Promise.all(widgets.map((w) => resolveWidgetData(ctx.workspace.id, w, {})));
+    const sentAt = new Date();
+    const widgetHtml = resolved.map((r: any) => {
+      const val = r?.value;
+      let valStr = "\u2014";
+      if (val !== null && val !== undefined) {
+        if (typeof val === "object" && "formatted" in val) valStr = String(val.formatted);
+        else if (typeof val === "number") valStr = val.toLocaleString();
+        else valStr = JSON.stringify(val);
+      }
+      return `<tr><td style="padding:8px 12px;border-bottom:1px solid #eee;font-size:14px;color:#555">${r?.title ?? "Widget"}</td><td style="padding:8px 12px;border-bottom:1px solid #eee;font-size:14px;font-weight:600;text-align:right">${valStr}</td></tr>`;
+    }).join("");
+    const html = `<!DOCTYPE html><html><body style="font-family:sans-serif;background:#f9f9f9;padding:24px"><div style="max-width:600px;margin:0 auto;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08)"><div style="background:#14B89A;padding:20px 24px"><h2 style="margin:0;color:#fff;font-size:18px">${dash.name} \u2014 Dashboard Report</h2><p style="margin:4px 0 0;color:rgba(255,255,255,.8);font-size:13px">${sentAt.toLocaleDateString("en-US",{weekday:"long",year:"numeric",month:"long",day:"numeric"})}</p></div><table style="width:100%;border-collapse:collapse">${widgetHtml}</table><p style="padding:16px 24px;font-size:12px;color:#aaa;margin:0">Sent by USIP Sales Intelligence Platform</p></div></body></html>`;
+    const [cfg] = await db.select().from(smtpConfigs).where(and(eq(smtpConfigs.workspaceId, ctx.workspace.id), eq(smtpConfigs.enabled, true)));
+    if (!cfg) throw new TRPCError({ code: "NOT_FOUND", message: "No active SMTP config. Configure SMTP in Settings \u2192 Email Delivery." });
+    let password: string;
+    try { password = decrypt(cfg.encryptedPassword); }
+    catch { throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Failed to decrypt SMTP password" }); }
+    const transporter = buildTransporter({ host: cfg.host, port: cfg.port, secure: cfg.secure, username: cfg.username, password });
+    await transporter.sendMail({
+      from: cfg.fromName ? `"${cfg.fromName}" <${cfg.fromEmail}>` : cfg.fromEmail,
+      to: recipients.join(", "),
+      subject: `${dash.name} \u2014 Dashboard Report (${sentAt.toLocaleDateString()})`,
+      html,
+    });
+    await db.update(reportSchedules).set({ lastSentAt: sentAt }).where(eq(reportSchedules.id, sched.id));
+    return { ok: true, sentAt };
   }),
 
   deleteSchedule: workspaceProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {

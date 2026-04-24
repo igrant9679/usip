@@ -1,6 +1,8 @@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Slider } from "@/components/ui/slider";
+import { Switch } from "@/components/ui/switch";
 import { Section, StatusPill, fmt$ } from "@/components/usip/Common";
 import { PageHeader, Shell, StatCard } from "@/components/usip/Shell";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
@@ -252,9 +254,13 @@ function GeneralTab({
   summary: any;
 }) {
   const [timezone, setTimezone] = useState<string>("UTC");
+  const [nightlyEnabled, setNightlyEnabled] = useState(false);
+  const [nightlyThreshold, setNightlyThreshold] = useState(60);
   useEffect(() => {
     if (settings?.timezone) setTimezone(settings.timezone);
-  }, [settings?.timezone]);
+    if (settings?.nightlyPipelineEnabled !== undefined) setNightlyEnabled(!!settings.nightlyPipelineEnabled);
+    if (settings?.nightlyScoreThreshold !== undefined) setNightlyThreshold(Number(settings.nightlyScoreThreshold));
+  }, [settings?.timezone, settings?.nightlyPipelineEnabled, settings?.nightlyScoreThreshold]);
 
   return (
     <>
@@ -274,6 +280,47 @@ function GeneralTab({
             <Label>Timezone</Label>
             <Input value={timezone} onChange={(e) => setTimezone(e.target.value)} disabled={!canEdit} placeholder="UTC" />
             <div className="text-xs text-muted-foreground">Use an IANA zone (e.g. UTC, America/New_York, Europe/London).</div>
+          </div>
+        </div>
+      </Section>
+
+      <Section
+        title="AI Nightly Pipeline"
+        description="Automatically run the AI Research-to-Email pipeline each night for leads above a score threshold."
+        right={
+          canEdit ? (
+            <Button size="sm" onClick={() => save({ nightlyPipelineEnabled: nightlyEnabled, nightlyScoreThreshold: nightlyThreshold })}>
+              Save
+            </Button>
+          ) : null
+        }
+      >
+        <div className="p-4 space-y-5">
+          <div className="flex items-center gap-3">
+            <Switch
+              id="nightly-enabled"
+              checked={nightlyEnabled}
+              onCheckedChange={(v) => { if (canEdit) setNightlyEnabled(v); }}
+              disabled={!canEdit}
+            />
+            <Label htmlFor="nightly-enabled" className="cursor-pointer">
+              {nightlyEnabled ? "Enabled — runs every night at midnight (workspace timezone)" : "Disabled"}
+            </Label>
+          </div>
+          <div className="space-y-2 max-w-sm">
+            <div className="flex items-center justify-between">
+              <Label>Minimum lead score to include</Label>
+              <span className="text-sm font-semibold tabular-nums">{nightlyThreshold}</span>
+            </div>
+            <Slider
+              min={0}
+              max={100}
+              step={5}
+              value={[nightlyThreshold]}
+              onValueChange={([v]) => setNightlyThreshold(v)}
+              disabled={!canEdit || !nightlyEnabled}
+            />
+            <div className="text-xs text-muted-foreground">Only leads with a score ≥ {nightlyThreshold} will be included in the nightly batch.</div>
           </div>
         </div>
       </Section>
