@@ -2,9 +2,9 @@
  * Dashboard — Velocity Home Screen (Mockup B+)
  *
  * Layout:
- *   Row 1: 4 live stat cards with MoM delta badges
+ *   Row 1: 4 live stat cards with MoM delta badges + goal progress bars
  *   Row 2: Revenue area chart (period dropdown) | Win/Loss donut
- *   Row 3: Stage Funnel bar chart | Top Reps leaderboard
+ *   Row 3: Stage Funnel bar chart | Top Reps leaderboard (clickable → filtered Pipeline)
  *   Row 4: Recent Opportunities table | AI Drafts Awaiting Review
  */
 import { PageHeader, Shell, useAccentColor } from "@/components/usip/Shell";
@@ -30,9 +30,12 @@ import {
   Target,
   TrendingUp,
   Zap,
+  RefreshCw,
+  Pencil,
+  Check,
 } from "lucide-react";
-import { useState } from "react";
-import { Link } from "wouter";
+import { useState, useCallback, useRef } from "react";
+import { Link, useLocation } from "wouter";
 import {
   Area,
   AreaChart,
@@ -49,6 +52,16 @@ import {
   YAxis,
 } from "recharts";
 
+/* ─── constants ───────────────────────────────────────────────────────────── */
+const GOALS_KEY = "velocity_dashboard_goals";
+
+const DEFAULT_GOALS: Record<string, number> = {
+  pipelineValue: 5_000_000,
+  closedWon:     20,
+  activeLeads:   100,
+  customers:     50,
+};
+
 /* ─── helpers ─────────────────────────────────────────────────────────────── */
 const fmt$ = (n: number) => {
   if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
@@ -60,6 +73,15 @@ const fmtAxis = (n: number) => {
   if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `$${(n / 1_000).toFixed(0)}K`;
   return `$${n}`;
+};
+
+const fmtRelative = (d: Date) => {
+  const secs = Math.floor((Date.now() - d.getTime()) / 1000);
+  if (secs < 5)  return "just now";
+  if (secs < 60) return `${secs}s ago`;
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `${mins}m ago`;
+  return `${Math.floor(mins / 60)}h ago`;
 };
 
 const PERIOD_OPTIONS = [
@@ -78,23 +100,105 @@ const STAGE_COLORS: Record<string, string> = {
   Closing:     "#2DD4BF",
 };
 
+/* ─── Goal progress bar ───────────────────────────────────────────────────── */
+function GoalBar({
+  goalKey,
+  current,
+  goals,
+  onGoalChange,
+  isMoney,
+}: {
+  goalKey: string;
+  current: number;
+  goals: Record<string, number>;
+  onGoalChange: (key: string, val: number) => void;
+  isMoney?: boolean;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+  const goal = goals[goalKey] ?? DEFAULT_GOALS[goalKey] ?? 100;
+  const pct = Math.min(Math.round((current / goal) * 100), 100);
+  const over = current >= goal;
+
+  const startEdit = () => {
+    setDraft(String(goal));
+    setEditing(true);
+    setTimeout(() => inputRef.current?.select(), 0);
+  };
+
+  const commitEdit = () => {
+    const v = Number(draft.replace(/[^0-9.]/g, ""));
+    if (v > 0) onGoalChange(goalKey, v);
+    setEditing(false);
+  };
+
+  return (
+    <div className="mt-2 space-y-1">
+      <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+        <span className={over ? "text-emerald-500 font-semibold" : ""}>
+          {pct}% of goal
+        </span>
+        {editing ? (
+          <div className="flex items-center gap-1">
+            <input
+              ref={inputRef}
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") commitEdit(); if (e.key === "Escape") setEditing(false); }}
+              className="w-20 border rounded px-1 py-0 text-[10px] bg-background text-foreground"
+            />
+            <button onClick={commitEdit} className="text-emerald-500 hover:text-emerald-600">
+              <Check className="size-3" />
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={startEdit}
+            className="flex items-center gap-0.5 hover:text-foreground transition-colors"
+          >
+            Goal: {isMoney ? fmt$(goal) : goal.toLocaleString()}
+            <Pencil className="size-2.5 ml-0.5" />
+          </button>
+        )}
+      </div>
+      <div className="h-1.5 rounded-full bg-secondary overflow-hidden">
+        <div
+          className="h-full rounded-full transition-all duration-700"
+          style={{
+            width: `${pct}%`,
+            background: over ? "#34D399" : pct >= 70 ? "#FCD34D" : "#60A5FA",
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
 /* ─── Stat card ───────────────────────────────────────────────────────────── */
 interface StatProps {
   label: string;
   value: string | number;
+  rawValue: number;
   hint?: string;
   delta?: number;
   icon: React.ElementType;
   iconColor: string;
   loading?: boolean;
+  goalKey: string;
+  goals: Record<string, number>;
+  onGoalChange: (key: string, val: number) => void;
+  isMoney?: boolean;
 }
 
-function MBStatCard({ label, value, hint, delta, icon: Icon, iconColor, loading }: StatProps) {
-  const accent = useAccentColor();
+function MBStatCard({
+  label, value, rawValue, hint, delta, icon: Icon, iconColor, loading,
+  goalKey, goals, onGoalChange, isMoney,
+}: StatProps) {
   const trend = delta === undefined ? "flat" : delta > 0 ? "up" : delta < 0 ? "down" : "flat";
   return (
     <div
-      className="rounded-xl border bg-card p-5 flex flex-col gap-3 hover:shadow-md transition-shadow"
+      className="rounded-xl border bg-card p-5 flex flex-col gap-2 hover:shadow-md transition-shadow"
       style={{ borderLeftWidth: 3, borderLeftColor: iconColor }}
     >
       <div className="flex items-center justify-between">
@@ -125,6 +229,15 @@ function MBStatCard({ label, value, hint, delta, icon: Icon, iconColor, loading 
         )}
         {hint && <span className="text-muted-foreground ml-1">· {hint}</span>}
       </div>
+      {!loading && (
+        <GoalBar
+          goalKey={goalKey}
+          current={rawValue}
+          goals={goals}
+          onGoalChange={onGoalChange}
+          isMoney={isMoney}
+        />
+      )}
     </div>
   );
 }
@@ -170,8 +283,43 @@ function WinLossTooltip({ active, payload }: any) {
 
 /* ─── Main page ───────────────────────────────────────────────────────────── */
 export default function Dashboard() {
+  const [, navigate] = useLocation();
   const [period, setPeriod] = useState<string>("6");
   const months = PERIOD_OPTIONS.find((o) => o.value === period)?.months ?? 6;
+
+  // Goals stored in localStorage
+  const [goals, setGoals] = useState<Record<string, number>>(() => {
+    try {
+      return { ...DEFAULT_GOALS, ...JSON.parse(localStorage.getItem(GOALS_KEY) ?? "{}") };
+    } catch {
+      return { ...DEFAULT_GOALS };
+    }
+  });
+
+  const handleGoalChange = useCallback((key: string, val: number) => {
+    setGoals((prev) => {
+      const next = { ...prev, [key]: val };
+      localStorage.setItem(GOALS_KEY, JSON.stringify(next));
+      return next;
+    });
+  }, []);
+
+  // Last refreshed timestamp
+  const [lastRefreshed, setLastRefreshed] = useState(() => new Date());
+  const [refreshTick, setRefreshTick] = useState(0);
+
+  const utils = trpc.useUtils();
+  const handleRefresh = useCallback(() => {
+    utils.opportunities.dashboardStats.invalidate();
+    utils.opportunities.revenueChart.invalidate();
+    utils.opportunities.stageFunnel.invalidate();
+    utils.opportunities.topReps.invalidate();
+    utils.opportunities.winLoss.invalidate();
+    utils.emailDrafts.list.invalidate();
+    utils.opportunities.board.invalidate();
+    setLastRefreshed(new Date());
+    setRefreshTick((t) => t + 1);
+  }, [utils]);
 
   const { data: stats, isLoading: statsLoading } = trpc.opportunities.dashboardStats.useQuery();
   const { data: chartData, isLoading: chartLoading } = trpc.opportunities.revenueChart.useQuery({ months });
@@ -195,44 +343,72 @@ export default function Dashboard() {
 
   return (
     <Shell title="Dashboard">
-      <PageHeader title="Dashboard" description="Your unified revenue intelligence overview." />
+      <PageHeader title="Dashboard" description="Your unified revenue intelligence overview.">
+        {/* Last refreshed + Refresh button */}
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <span>Updated {fmtRelative(lastRefreshed)}</span>
+          <button
+            onClick={handleRefresh}
+            className="flex items-center gap-1 rounded-md border px-2.5 py-1.5 text-xs hover:bg-secondary transition-colors"
+          >
+            <RefreshCw className="size-3" /> Refresh
+          </button>
+        </div>
+      </PageHeader>
       <div className="p-6 space-y-6">
 
-        {/* ── Row 1: Live stat cards ── */}
+        {/* ── Row 1: Live stat cards with goal progress ── */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <MBStatCard
             label="Pipeline Value"
             value={fmt$(stats?.pipelineValue ?? 0)}
+            rawValue={stats?.pipelineValue ?? 0}
             hint={`${stats?.openOppsCount ?? 0} open opps`}
             delta={stats?.pipelineDelta}
             icon={BarChart2}
             iconColor="#60A5FA"
             loading={statsLoading}
+            goalKey="pipelineValue"
+            goals={goals}
+            onGoalChange={handleGoalChange}
+            isMoney
           />
           <MBStatCard
             label="Closed-Won"
             value={`${stats?.closedWonCount ?? 0} deals`}
+            rawValue={stats?.closedWonCount ?? 0}
             hint={fmt$(stats?.totalWonValue ?? 0)}
             delta={stats?.closedWonDelta}
             icon={Briefcase}
             iconColor="#34D399"
             loading={statsLoading}
+            goalKey="closedWon"
+            goals={goals}
+            onGoalChange={handleGoalChange}
           />
           <MBStatCard
             label="Active Leads"
             value={(stats?.activeLeads ?? 0).toLocaleString()}
+            rawValue={stats?.activeLeads ?? 0}
             delta={stats?.leadsDelta}
             icon={Users}
             iconColor="#C084FC"
             loading={statsLoading}
+            goalKey="activeLeads"
+            goals={goals}
+            onGoalChange={handleGoalChange}
           />
           <MBStatCard
             label="Customers"
             value={stats?.customerCount ?? 0}
+            rawValue={stats?.customerCount ?? 0}
             delta={stats?.customerDelta}
             icon={UserCheck}
             iconColor="#F87171"
             loading={statsLoading}
+            goalKey="customers"
+            goals={goals}
+            onGoalChange={handleGoalChange}
           />
         </div>
 
@@ -276,8 +452,8 @@ export default function Dashboard() {
                         <stop offset="95%" stopColor="#C084FC" stopOpacity={0.02} />
                       </linearGradient>
                     </defs>
-                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
-                    <XAxis dataKey="label" tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
+                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                    <XAxis dataKey="month" tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
                     <YAxis tickFormatter={fmtAxis} tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} width={56} />
                     <Tooltip content={<RevenueTooltip />} />
                     <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 12, paddingTop: 12 }} />
@@ -367,12 +543,12 @@ export default function Dashboard() {
             </div>
           </div>
 
-          {/* Top Reps leaderboard */}
+          {/* Top Reps leaderboard — rows are clickable → /pipeline?owner=<userId> */}
           <div className="rounded-xl border bg-card">
             <div className="px-5 py-4 border-b flex items-center gap-2">
               <Trophy className="size-4 text-amber-400" />
               <span className="text-base font-semibold">Top Reps</span>
-              <span className="ml-auto text-xs text-muted-foreground">Closed-Won value</span>
+              <span className="ml-auto text-xs text-muted-foreground">Closed-Won value · click to drill down</span>
             </div>
             <div className="p-4 space-y-3">
               {(topReps ?? []).length === 0 ? (
@@ -383,17 +559,23 @@ export default function Dashboard() {
                   const medalColors = ["#FCD34D", "#94A3B8", "#CD7F32"];
                   const barColor = i < 3 ? medalColors[i] : accent;
                   return (
-                    <div key={rep.userId} className="space-y-1">
+                    <button
+                      key={rep.userId}
+                      className="w-full space-y-1 text-left group rounded-lg px-2 py-1 hover:bg-secondary/60 transition-colors cursor-pointer"
+                      onClick={() => navigate(`/pipeline?owner=${rep.userId}`)}
+                      title={`View ${rep.name}'s open deals`}
+                    >
                       <div className="flex items-center justify-between text-sm">
                         <div className="flex items-center gap-2">
                           <span className="text-xs font-bold w-4 text-center" style={{ color: barColor }}>
                             {i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : `#${i + 1}`}
                           </span>
-                          <span className="font-medium truncate max-w-[120px]">{rep.name}</span>
+                          <span className="font-medium truncate max-w-[120px] group-hover:underline">{rep.name}</span>
                         </div>
-                        <div className="text-right">
+                        <div className="text-right flex items-center gap-1">
                           <span className="font-mono font-semibold text-xs">{fmt$(rep.value)}</span>
-                          <span className="text-muted-foreground text-xs ml-1">· {rep.count} deals</span>
+                          <span className="text-muted-foreground text-xs">· {rep.count} deals</span>
+                          <ArrowRight className="size-3 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
                         </div>
                       </div>
                       <div className="h-1.5 rounded-full bg-secondary overflow-hidden">
@@ -402,7 +584,7 @@ export default function Dashboard() {
                           style={{ width: `${pct}%`, background: barColor }}
                         />
                       </div>
-                    </div>
+                    </button>
                   );
                 })
               )}

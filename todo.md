@@ -1139,3 +1139,10 @@
 - [x] Rebuild Dashboard.tsx: live MoM delta stat cards (sky blue/green/violet/red), Revenue area chart with period dropdown, Win/Loss donut, Pipeline Funnel bar chart, Top Reps leaderboard with medal icons, Recent Opps table, AI Drafts panel
 - [x] Add "Set as Home" button (Home icon, appears on hover) to Dashboards section sidebar for each system dashboard entry
 - [x] Persist homeDashboard preference in localStorage; Shell nav Dashboard link respects it; amber Home icon marks current selection
+
+## Batch P — Dashboard Interactivity
+
+- [x] Goal progress bars on Dashboard stat cards: per-card monthly target stored in localStorage; inline click-to-edit target; thin colored progress bar below value; % label
+- [x] Top Reps leaderboard rows clickable: clicking a rep navigates to /pipeline?owner=<userId> with filtered view showing only that rep's open deals; amber banner + Clear filter button on Pipeline page
+- [x] Last Refreshed timestamp + Refresh button in Dashboard header: shows relative time since last data fetch; clicking Refresh invalidates all dashboard queries and updates timestamp
+- [x] Pipeline board query extended to accept optional ownerUserId filter for rep drill-down

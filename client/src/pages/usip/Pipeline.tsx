@@ -7,9 +7,10 @@ import { Field, fmt$, FormDialog, SelectField } from "@/components/usip/Common";
 import { PageHeader, Shell } from "@/components/usip/Shell";
 import { RecordDrawer } from "@/components/usip/RecordDrawer";
 import { trpc } from "@/lib/trpc";
-import { Brain, Download, Loader2, Plus, TrendingUp, Zap, Filter, X } from "lucide-react";
+import { Brain, Download, Loader2, Plus, TrendingUp, Zap, Filter, X, User } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
+import { useLocation } from "wouter";
 
 const STAGES = [
   { id: "discovery", label: "Discovery" },
@@ -286,7 +287,14 @@ function ForecastView() {
 /* ─── Main Page ─────────────────────────────────────────────────────────── */
 export default function Pipeline() {
   const utils = trpc.useUtils();
-  const { data } = trpc.opportunities.board.useQuery();
+  const [location, navigate] = useLocation();
+  // Parse optional ?owner=<userId> from the URL for rep drill-down from Dashboard
+  const ownerUserId = useMemo(() => {
+    const params = new URLSearchParams(window.location.search);
+    const v = params.get("owner");
+    return v ? Number(v) : undefined;
+  }, [location]);
+  const { data } = trpc.opportunities.board.useQuery(ownerUserId ? { ownerUserId } : undefined);
   const { data: accounts } = trpc.accounts.list.useQuery();
   const { data: boardIntel = [] } = trpc.oppIntelligence.getIntelligenceForBoard.useQuery();
 
@@ -345,6 +353,18 @@ export default function Pipeline() {
 
   return (
     <Shell title="Pipeline">
+      {ownerUserId && (
+        <div className="mx-6 mt-4 flex items-center gap-2 rounded-lg border border-amber-400/30 bg-amber-500/10 px-4 py-2 text-sm">
+          <User className="size-4 text-amber-400" />
+          <span className="text-amber-700 dark:text-amber-300 font-medium">Showing deals for one rep.</span>
+          <button
+            onClick={() => navigate("/pipeline")}
+            className="ml-auto flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400 hover:underline"
+          >
+            <X className="size-3" /> Clear filter
+          </button>
+        </div>
+      )}
       <PageHeader title="Pipeline" description="Drag cards between stages. Hover a card and click the brain icon to run AI analysis.">
         {/* View toggle */}
         <div className="flex items-center border rounded-md overflow-hidden text-sm">

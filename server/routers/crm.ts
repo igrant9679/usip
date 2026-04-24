@@ -657,10 +657,13 @@ export const opportunitiesRouter = router({
     }),
 
   /** Kanban board grouped by stage. */
-  board: workspaceProcedure.query(async ({ ctx }) => {
+  board: workspaceProcedure.input(z.object({ ownerUserId: z.number().optional() }).optional()).query(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) return [];
-    const rows = await db.select().from(opportunities).where(eq(opportunities.workspaceId, ctx.workspace.id));
+    const where = input?.ownerUserId
+      ? and(eq(opportunities.workspaceId, ctx.workspace.id), eq(opportunities.ownerUserId, input.ownerUserId))
+      : eq(opportunities.workspaceId, ctx.workspace.id);
+    const rows = await db.select().from(opportunities).where(where);
     const acctRows = await db.select().from(accounts).where(eq(accounts.workspaceId, ctx.workspace.id));
     const accMap = new Map(acctRows.map((a) => [a.id, a.name]));
     return rows.map((r) => ({ ...r, accountName: accMap.get(r.accountId) ?? "?" }));
