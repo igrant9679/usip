@@ -59,22 +59,20 @@ async function pollAllAccounts() {
     if (!db) return;
     const accounts = await db
       .select()
-      .from(sendingAccounts)
-      .where(
-        or(
-          eq(sendingAccounts.provider, "gmail_oauth"),
-          eq(sendingAccounts.provider, "generic_smtp"),
-        )
-      );
-
-    // Filter to accounts that have IMAP configured
+      .from(sendingAccounts);
     const imapAccounts = accounts.filter(
-      (a) => a.provider === "gmail_oauth" || (a.imapHost && a.imapUsername && a.imapPassword)
+      (a) =>
+        // Has explicit IMAP credentials (any provider) — prefer IMAP path
+        (a.imapHost && a.imapUsername && a.imapPassword) ||
+        // Gmail OAuth without IMAP override — use Gmail API path
+        (a.provider === "gmail_oauth" && a.oauthAccessToken && a.oauthRefreshToken)
     );
 
     for (const account of imapAccounts) {
       try {
-        if (account.provider === "gmail_oauth") {
+        // If IMAP credentials are set, always use IMAP (even for gmail_oauth)
+        const useImap = !!(account.imapHost && account.imapUsername && account.imapPassword);
+        if (!useImap && account.provider === "gmail_oauth") {
           await pollGmailAccount(account);
         } else {
           await pollImapAccount(account);

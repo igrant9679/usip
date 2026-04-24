@@ -258,7 +258,7 @@ function EditDraftDialog({ draft, open, onClose }: { draft: any | null; open: bo
               className="resize-y font-mono text-sm"
               placeholder="Email body — use {{firstName}}, {{lastName}}, {{company}}, {{senderName}} as merge variables"
             />
-            <p className="text-xs text-muted-foreground">Merge variables: <code>{{firstName}}</code> <code>{{lastName}}</code> <code>{{company}}</code> <code>{{senderName}}</code></p>
+            <p className="text-xs text-muted-foreground">Merge variables: <code>{"{{firstName}}"}</code> <code>{"{{lastName}}"}</code> <code>{"{{company}}"}</code> <code>{"{{senderName}}"}</code></p>
           </div>
         </div>
         <DialogFooter>

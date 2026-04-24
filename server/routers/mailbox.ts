@@ -53,25 +53,23 @@ export const mailboxRouter = router({
   listAccounts: workspaceProcedure
     .input(z.object({ repUserId: z.number().optional() }))
     .query(async ({ ctx, input }) => {
-      const targetUserId = resolveTargetUser(ctx, input.repUserId);
+      // repUserId is accepted for API compatibility but sending_accounts has no userId column;
+      // all accounts in the workspace are shown (filtered by IMAP/OAuth capability below).
+      resolveTargetUser(ctx, input.repUserId); // permission check only
       const db = await getDb();
       if (!db) return [];
       const accounts = await db
         .select({
           id: sendingAccounts.id,
           name: sendingAccounts.name,
-          email: sendingAccounts.email,
+          email: sendingAccounts.fromEmail,
           provider: sendingAccounts.provider,
           hasImap: sendingAccounts.imapHost,
           hasOauth: sendingAccounts.oauthAccessToken,
-          userId: sendingAccounts.userId,
         })
         .from(sendingAccounts)
         .where(
-          and(
-            eq(sendingAccounts.workspaceId, ctx.workspace.id),
-            eq(sendingAccounts.userId, targetUserId),
-          )
+          eq(sendingAccounts.workspaceId, ctx.workspace.id)
         );
       return accounts
         .filter((a) => a.provider === "gmail_oauth" || !!a.hasImap)
@@ -139,8 +137,8 @@ export const mailboxRouter = router({
       const acc = await getAccount(input.accountId, ctx.workspace.id);
       const adapter = createEmailAdapter(acc);
       return adapter.sendEmail({
-        fromEmail: acc.email,
-        fromName: acc.name,
+        fromEmail: acc.fromEmail,
+        fromName: acc.fromName ?? acc.name,
         to: input.to,
         subject: input.subject,
         bodyHtml: input.bodyHtml,
@@ -167,8 +165,8 @@ export const mailboxRouter = router({
       const acc = await getAccount(input.accountId, ctx.workspace.id);
       const adapter = createEmailAdapter(acc);
       return adapter.sendEmail({
-        fromEmail: acc.email,
-        fromName: acc.name,
+        fromEmail: acc.fromEmail,
+        fromName: acc.fromName ?? acc.name,
         to: input.to,
         subject: input.subject,
         bodyHtml: input.bodyHtml,

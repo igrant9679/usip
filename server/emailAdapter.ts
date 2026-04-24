@@ -351,6 +351,11 @@ export class ImapSmtpAdapter implements EmailAdapter {
 /* ─── Factory ────────────────────────────────────────────────────────────── */
 
 export function createEmailAdapter(account: SendingAccount): EmailAdapter {
+  // If explicit IMAP credentials are set, always use IMAP (even for gmail_oauth accounts
+  // where the user has configured IMAP instead of relying on the OAuth token).
+  if (account.imapHost && account.imapUsername && account.imapPassword) {
+    return new ImapSmtpAdapter(account);
+  }
   if (account.provider === "gmail_oauth") return new GmailAdapter(account);
   return new ImapSmtpAdapter(account);
 }

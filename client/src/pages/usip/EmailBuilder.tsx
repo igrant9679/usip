@@ -20,6 +20,7 @@ import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "sonner";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Switch } from "@/components/ui/switch";
 import {
   AlignCenter, AlignLeft, AlignRight,
@@ -31,6 +32,7 @@ import {
   Monitor, Pencil, Plus, Save, Smartphone,
   Space, Square, Tag, Trash2, Type,
   Wand2, X, Zap, Sparkles, Lightbulb,
+  Loader2, RefreshCw,
 } from "lucide-react";
 
 /* ─── Types ─────────────────────────────────────────────────────────────── */
@@ -1177,6 +1179,94 @@ function Builder({ templateId }: { templateId: number }) {
             placeholder="Email subject line with {{firstName}} support"
             disabled={isReadOnly}
           />
+          {!isReadOnly && (
+            <Popover open={showSubjectSuggestions} onOpenChange={setShowSubjectSuggestions}>
+              <PopoverTrigger asChild>
+                <Button
+                  size="icon"
+                  variant="outline"
+                  className="h-8 w-8 shrink-0"
+                  title="AI subject line suggestions"
+                  onClick={() => {
+                    if (!showSubjectSuggestions) {
+                      // Extract plain text from blocks for context
+                      const bodyText = blocks
+                        .map((b) => {
+                          if (b.type === "text" || b.type === "footer") return String(b.props.content ?? "").replace(/<[^>]+>/g, " ");
+                          if (b.type === "header") return `${b.props.headline ?? ""} ${b.props.subheadline ?? ""}`;
+                          if (b.type === "button") return String(b.props.label ?? "");
+                          if (b.type === "two_column") return `${String(b.props.leftContent ?? "").replace(/<[^>]+>/g, " ")} ${String(b.props.rightContent ?? "").replace(/<[^>]+>/g, " ")}`;
+                          return "";
+                        })
+                        .join(" ")
+                        .replace(/\s+/g, " ")
+                        .trim()
+                        .slice(0, 2000);
+                      suggestSubjectsMutation.mutate({ bodyText, currentSubject: subject || undefined, count: 5 });
+                    }
+                    setShowSubjectSuggestions(!showSubjectSuggestions);
+                  }}
+                  disabled={suggestSubjectsMutation.isPending}
+                >
+                  {suggestSubjectsMutation.isPending
+                    ? <Loader2 size={13} className="animate-spin" />
+                    : <Lightbulb size={13} />}
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent align="end" className="w-[420px] p-0">
+                <div className="p-3 border-b flex items-center justify-between">
+                  <span className="text-sm font-medium">AI Subject Suggestions</span>
+                  <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => {
+                    const bodyText = blocks
+                      .map((b) => {
+                        if (b.type === "text" || b.type === "footer") return String(b.props.content ?? "").replace(/<[^>]+>/g, " ");
+                        if (b.type === "header") return `${b.props.headline ?? ""} ${b.props.subheadline ?? ""}`;
+                        if (b.type === "button") return String(b.props.label ?? "");
+                        if (b.type === "two_column") return `${String(b.props.leftContent ?? "").replace(/<[^>]+>/g, " ")} ${String(b.props.rightContent ?? "").replace(/<[^>]+>/g, " ")}`;
+                        return "";
+                      })
+                      .join(" ")
+                      .replace(/\s+/g, " ")
+                      .trim()
+                      .slice(0, 2000);
+                    suggestSubjectsMutation.mutate({ bodyText, currentSubject: subject || undefined, count: 5 });
+                  }}>
+                    <RefreshCw size={11} />
+                  </Button>
+                </div>
+                <div className="divide-y max-h-[320px] overflow-y-auto">
+                  {suggestSubjectsMutation.isPending ? (
+                    <div className="flex items-center justify-center py-8 gap-2 text-muted-foreground text-sm">
+                      <Loader2 size={14} className="animate-spin" /> Generating suggestions…
+                    </div>
+                  ) : suggestSubjectsMutation.data?.suggestions?.length ? (
+                    suggestSubjectsMutation.data.suggestions.map((s, i) => (
+                      <button
+                        key={i}
+                        className="w-full text-left px-3 py-2.5 hover:bg-muted/50 transition-colors group"
+                        onClick={() => { setSubject(s.subject); markDirty(); setShowSubjectSuggestions(false); }}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <span className="text-sm font-medium group-hover:text-primary transition-colors">{s.subject}</span>
+                          <Badge
+                            variant={s.spamRisk === "low" ? "secondary" : s.spamRisk === "medium" ? "outline" : "destructive"}
+                            className="text-[10px] h-4 shrink-0 mt-0.5"
+                          >
+                            {s.spamRisk} risk
+                          </Badge>
+                        </div>
+                        {s.rationale && <p className="text-xs text-muted-foreground mt-0.5">{s.rationale}</p>}
+                      </button>
+                    ))
+                  ) : (
+                    <div className="text-center py-6 text-sm text-muted-foreground">
+                      Click the refresh button to generate suggestions
+                    </div>
+                  )}
+                </div>
+              </PopoverContent>
+            </Popover>
+          )}
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
           {/* Multi-select mode controls */}

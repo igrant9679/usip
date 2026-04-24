@@ -1011,3 +1011,13 @@
 
 ## Bug Fix: Email Builder Unexpected Error
 - [x] Fix "unexpected error" when navigating to Email Builder page
+
+## Bug Fixes: Email Drafts / Dashboards / Mailbox (Apr 24)
+- [x] Fix "unexpected error" on Email Drafts page (unescaped JSX {{firstName}} in EditDraftDialog)
+- [x] Fix "unexpected error" on Dashboards page (memberOptions mapped m.userId → m.id; m.userId undefined)
+- [x] Fix My Mailbox showing "No inbox-enabled accounts" (mailbox.ts used non-existent .email/.userId columns on sendingAccounts; fixed to .fromEmail + removed userId filter)
+- [x] Fix My Mailbox IMAP routing: emailAdapter.ts always routed gmail_oauth to GmailAdapter even when IMAP creds set; now prefers IMAP when imapHost+imapUsername+imapPassword are present
+- [x] Fix InboundPoller IMAP routing: same fix applied to inboundReplyPoller.ts
+- [x] Wire Email Builder subject suggestions lightbulb button (Popover with 5 AI suggestions, spam risk badge, rationale, click-to-apply, refresh button)
+- [x] Fix Sequences editing: SequenceEditDialog with Settings tab + Step editor, typed updateMeta/updateSteps tRPC procedures
+- [x] Fix Email Drafts editing: EditDraftDialog with subject/body editing, Pencil button on each draft row

@@ -370,7 +370,7 @@ export default function Dashboards() {
   );
 
   const memberOptions = useMemo(() =>
-    (members.data ?? []).map((m: any) => ({ userId: m.userId, name: m.name ?? `User #${m.userId}` })),
+    (members.data ?? []).map((m: any) => ({ userId: m.id, name: m.name ?? `User #${m.id}` })),
     [members.data],
   );
 
