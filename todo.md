@@ -1048,10 +1048,10 @@
 - [x] Attachment download: make attachment badges in reading pane clickable; new mailbox.getAttachment tRPC procedure decodes base64 and triggers browser download
 
 ## Gap Closure Sprint — Batch C (CRM analytics)
-- [ ] Pipeline forecast view: weighted forecast chart (probability × deal value by close date) as a tab or panel alongside the Kanban on the Pipeline page
-- [ ] Duplicate detection: fuzzy-match check (name + email) when creating or importing leads/contacts; surface warning banner with merge option
-- [ ] Contact enrichment: Enrich button on contact/lead detail that calls an enrichment procedure (uses LLM + web search to fill missing firmographic fields)
-- [ ] Sequence performance analytics: per-sequence stats tab showing open rate, reply rate, opt-out rate, and step-by-step drop-off funnel
+- [x] Pipeline forecast view: weighted forecast chart (probability × deal value by close date) as a tab or panel alongside the Kanban on the Pipeline page
+- [x] Duplicate detection: fuzzy-match check (name + email) when creating or importing leads/contacts; surface warning banner with merge option
+- [x] Contact enrichment: Enrich button on contact/lead detail that calls an enrichment procedure (uses LLM + web search to fill missing firmographic fields)
+- [x] Sequence performance analytics: per-sequence stats tab showing open rate, reply rate, opt-out rate, and step-by-step drop-off funnel
 
 ## Gap Closure Sprint — Batch D (Social publishing + integrations)
 - [ ] Live social publishing: real OAuth connection flow for LinkedIn, Twitter/X, Facebook, Instagram with credential slots (API key/secret/access token per platform)

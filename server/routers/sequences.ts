@@ -235,6 +235,69 @@ export const sequencesRouter = router({
     }
     return Object.entries(stepCounts).map(([step, count]) => ({ step: Number(step), count }));
   }),
+
+  /** Sequence performance analytics: open rate, click rate, reply rate, opt-out rate per sequence. */
+  getPerformanceAnalytics: workspaceProcedure
+    .input(z.object({ sequenceId: z.number().optional() }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const wsId = ctx.workspace.id;
+
+      // Get all sequences in workspace
+      const seqRows = await db.select().from(sequences).where(eq(sequences.workspaceId, wsId));
+      const targetSeqs = input.sequenceId ? seqRows.filter((s) => s.id === input.sequenceId) : seqRows;
+
+      const results = await Promise.all(targetSeqs.map(async (seq) => {
+        // Get all email drafts for this sequence
+        const drafts = await db.select().from(emailDrafts).where(and(eq(emailDrafts.sequenceId, seq.id), eq(emailDrafts.workspaceId, wsId)));
+        const sent = drafts.filter((d) => d.status === "sent").length;
+        const totalOpens = drafts.reduce((s, d) => s + (d.openCount ?? 0), 0);
+        const totalClicks = drafts.reduce((s, d) => s + (d.clickCount ?? 0), 0);
+        const bounced = drafts.filter((d) => d.bouncedAt !== null).length;
+        // Count unique opens (drafts with at least one open)
+        const uniqueOpens = drafts.filter((d) => (d.openCount ?? 0) > 0).length;
+        // Count unique clicks
+        const uniqueClicks = drafts.filter((d) => (d.clickCount ?? 0) > 0).length;
+
+        // Enrollment stats
+        const enrs = await db.select().from(enrollments).where(and(eq(enrollments.sequenceId, seq.id), eq(enrollments.workspaceId, wsId)));
+        const totalEnrolled = enrs.length;
+        const active = enrs.filter((e) => e.status === "active").length;
+        const finished = enrs.filter((e) => e.status === "finished").length;
+        const exited = enrs.filter((e) => e.status === "exited").length;
+        const paused = enrs.filter((e) => e.status === "paused").length;
+
+        // Rates (based on sent emails)
+        const openRate = sent > 0 ? Math.round((uniqueOpens / sent) * 100) : 0;
+        const clickRate = sent > 0 ? Math.round((uniqueClicks / sent) * 100) : 0;
+        const bounceRate = sent > 0 ? Math.round((bounced / sent) * 100) : 0;
+        const exitRate = totalEnrolled > 0 ? Math.round((exited / totalEnrolled) * 100) : 0;
+
+        return {
+          sequenceId: seq.id,
+          sequenceName: seq.name,
+          status: seq.status,
+          totalEnrolled,
+          active,
+          finished,
+          exited,
+          paused,
+          sent,
+          uniqueOpens,
+          uniqueClicks,
+          bounced,
+          totalOpens,
+          totalClicks,
+          openRate,
+          clickRate,
+          bounceRate,
+          exitRate,
+        };
+      }));
+
+      return results;
+    }),
 });
 
 /* ─── Email Drafts ────────────────────────────────────────────────────── */

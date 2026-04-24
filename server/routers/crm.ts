@@ -1,6 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
+import { invokeLLM } from "../_core/llm";
 import {
   accounts,
   activities,
@@ -334,6 +335,84 @@ export const contactsRouter = router({
       const sent = results.filter((r) => r.status === "sent").length;
       const skipped = results.filter((r) => r.status === "skipped").length;
       return { sent, skipped, results };
+    }),
+
+  /** AI-powered contact enrichment: suggest missing firmographic fields using LLM. */
+  enrich: repProcedure
+    .input(z.object({ id: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [contact] = await db.select().from(contacts).where(and(eq(contacts.id, input.id), eq(contacts.workspaceId, ctx.workspace.id)));
+      if (!contact) throw new TRPCError({ code: "NOT_FOUND" });
+
+      // Get account name if linked
+      let accountName = "";
+      if (contact.accountId) {
+        const [acct] = await db.select({ name: accounts.name }).from(accounts).where(and(eq(accounts.id, contact.accountId), eq(accounts.workspaceId, ctx.workspace.id)));
+        accountName = acct?.name ?? "";
+      }
+
+      const prompt = `You are a B2B sales data enrichment assistant. Based on the following contact information, suggest likely values for any missing fields. Return ONLY a JSON object with the fields listed in the schema — do not include fields that are already filled in or that you cannot reasonably infer.
+
+Contact:
+- Name: ${contact.firstName} ${contact.lastName}
+- Email: ${contact.email ?? "unknown"}
+- Current title: ${contact.title ?? "unknown"}
+- Phone: ${contact.phone ?? "unknown"}
+- Company: ${accountName || "unknown"}
+- LinkedIn: ${contact.linkedinUrl ?? "unknown"}
+- City: ${contact.city ?? "unknown"}
+- Seniority: ${contact.seniority ?? "unknown"}
+
+Return a JSON object with ONLY the fields you can reasonably suggest from this information. Possible fields: title, phone, linkedinUrl, city, seniority. For seniority use one of: c_suite, vp, director, manager, individual_contributor. Do not hallucinate — only suggest values you are reasonably confident about based on the name, email domain, and company.`;
+
+      const response = await invokeLLM({
+        messages: [
+          { role: "system", content: "You are a B2B data enrichment assistant. Return only valid JSON." },
+          { role: "user", content: prompt },
+        ],
+        response_format: {
+          type: "json_schema",
+          json_schema: {
+            name: "enrichment",
+            strict: true,
+            schema: {
+              type: "object",
+              properties: {
+                title: { type: "string" },
+                phone: { type: "string" },
+                linkedinUrl: { type: "string" },
+                city: { type: "string" },
+                seniority: { type: "string" },
+              },
+              required: [],
+              additionalProperties: false,
+            },
+          },
+        },
+      });
+
+      const raw = response?.choices?.[0]?.message?.content ?? "{}";
+      let suggestions: Record<string, string> = {};
+      try { suggestions = JSON.parse(typeof raw === "string" ? raw : JSON.stringify(raw)); } catch { suggestions = {}; }
+
+      // Only apply non-empty suggestions to fields that are currently empty
+      const patch: Record<string, any> = {};
+      for (const [field, value] of Object.entries(suggestions)) {
+        if (!value || typeof value !== "string") continue;
+        const current = (contact as any)[field];
+        if (current === null || current === undefined || current === "") {
+          patch[field] = value;
+        }
+      }
+
+      if (Object.keys(patch).length > 0) {
+        await db.update(contacts).set(patch).where(eq(contacts.id, input.id));
+        await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "contact", entityId: input.id, before: contact, after: patch });
+      }
+
+      return { suggestions, applied: patch, fieldsUpdated: Object.keys(patch) };
     }),
 });
 
@@ -721,6 +800,41 @@ export const opportunitiesRouter = router({
     const total = items.reduce((s, i) => s + Number(i.lineTotal), 0);
     await db.update(opportunities).set({ value: String(total) }).where(eq(opportunities.id, input.opportunityId));
     return { ok: true };
+  }),
+
+  /** Weighted pipeline forecast grouped by close month. */
+  forecast: workspaceProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    const rows = await db.select().from(opportunities).where(eq(opportunities.workspaceId, ctx.workspace.id));
+    const byMonth: Record<string, { month: string; total: number; weighted: number; count: number; stages: Record<string, number> }> = {};
+    const byStage: Record<string, { stage: string; total: number; weighted: number; count: number }> = {};
+    let grandTotal = 0;
+    let grandWeighted = 0;
+    for (const opp of rows) {
+      if (opp.stage === "lost") continue;
+      const val = Number(opp.value ?? 0);
+      const prob = opp.winProb ?? 20;
+      const weighted = val * (prob / 100);
+      grandTotal += val;
+      grandWeighted += weighted;
+      if (!byStage[opp.stage]) byStage[opp.stage] = { stage: opp.stage, total: 0, weighted: 0, count: 0 };
+      byStage[opp.stage].total += val;
+      byStage[opp.stage].weighted += weighted;
+      byStage[opp.stage].count++;
+      const closeDate = opp.closeDate ? new Date(opp.closeDate) : null;
+      const monthKey = closeDate
+        ? `${closeDate.getFullYear()}-${String(closeDate.getMonth() + 1).padStart(2, "0")}`
+        : "no-date";
+      if (!byMonth[monthKey]) byMonth[monthKey] = { month: monthKey, total: 0, weighted: 0, count: 0, stages: {} };
+      byMonth[monthKey].total += val;
+      byMonth[monthKey].weighted += weighted;
+      byMonth[monthKey].count++;
+      byMonth[monthKey].stages[opp.stage] = (byMonth[monthKey].stages[opp.stage] ?? 0) + val;
+    }
+    const months = Object.values(byMonth).sort((a, b) => a.month.localeCompare(b.month));
+    const stages = Object.values(byStage);
+    return { grandTotal, grandWeighted, months, stages };
   }),
 
   /** Detail view: opportunity + account + contact roles + recent activities. */

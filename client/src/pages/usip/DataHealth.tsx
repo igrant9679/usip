@@ -3,19 +3,22 @@ import { trpc } from "@/lib/trpc";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useLocation } from "wouter";
+import { useState } from "react";
+import { toast } from "sonner";
 import {
   AlertTriangle,
-  BarChart3,
   CheckCircle2,
   Copy,
   ExternalLink,
+  GitMerge,
+  Loader2,
   Mail,
   Phone,
   RefreshCw,
-  ShieldAlert,
   Users,
   XCircle,
 } from "lucide-react";
@@ -97,9 +100,164 @@ function FieldCoverageBar({ label, pct }: { label: string; pct: number }) {
   );
 }
 
+/* ─── Merge Dialog ──────────────────────────────────────────────────────── */
+type DupeGroup = { type: "email" | "name"; key: string; ids: string[]; names: string[]; count: number };
+
+function MergeDialog({
+  group,
+  open,
+  onClose,
+  onMerged,
+}: {
+  group: DupeGroup;
+  open: boolean;
+  onClose: () => void;
+  onMerged: () => void;
+}) {
+  const utils = trpc.useUtils();
+  // Load the first two contacts for side-by-side comparison
+  const primaryId = Number(group.ids[0]);
+  const secondaryId = Number(group.ids[1]);
+  const { data: primary, isLoading: pLoading } = trpc.contacts.get.useQuery(
+    { id: primaryId },
+    { enabled: open && !!primaryId },
+  );
+  const { data: secondary, isLoading: sLoading } = trpc.contacts.get.useQuery(
+    { id: secondaryId },
+    { enabled: open && !!secondaryId },
+  );
+
+  const [overrideFields, setOverrideFields] = useState<string[]>([]);
+  const merge = trpc.dataHealth.mergeContacts.useMutation({
+    onSuccess: (res) => {
+      toast.success(`Merged successfully. ${res.mergedFields.length > 0 ? `Copied fields: ${res.mergedFields.join(", ")}` : "No field updates needed."}`);
+      utils.dataHealth.getDuplicateGroups.invalidate();
+      utils.dataHealth.getMetrics.invalidate();
+      onMerged();
+      onClose();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const FIELDS: { key: string; label: string }[] = [
+    { key: "title", label: "Title" },
+    { key: "phone", label: "Phone" },
+    { key: "linkedinUrl", label: "LinkedIn URL" },
+    { key: "city", label: "City" },
+    { key: "seniority", label: "Seniority" },
+    { key: "accountId", label: "Account" },
+  ];
+
+  const toggleOverride = (field: string) => {
+    setOverrideFields((prev) =>
+      prev.includes(field) ? prev.filter((f) => f !== field) : [...prev, field],
+    );
+  };
+
+  const isLoading = pLoading || sLoading;
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <GitMerge className="size-4 text-[#14B89A]" />
+            Merge Duplicate Contacts
+          </DialogTitle>
+        </DialogHeader>
+
+        {isLoading ? (
+          <div className="space-y-3 py-4">
+            {[1, 2, 3].map((i) => <Skeleton key={i} className="h-8 rounded" />)}
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              The <strong>primary</strong> (left) contact will be kept. The secondary will be deleted and its activity history merged into the primary. Check a field to use the secondary's value instead.
+            </p>
+
+            {/* Side-by-side header */}
+            <div className="grid grid-cols-3 gap-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+              <span>Field</span>
+              <span className="text-center">Primary (kept)</span>
+              <span className="text-center">Secondary (deleted)</span>
+            </div>
+
+            {/* Name row (read-only) */}
+            <div className="grid grid-cols-3 gap-2 items-center text-sm border-b pb-2">
+              <span className="text-muted-foreground">Name</span>
+              <span className="text-center font-medium">{primary?.firstName} {primary?.lastName}</span>
+              <span className="text-center text-muted-foreground">{secondary?.firstName} {secondary?.lastName}</span>
+            </div>
+            <div className="grid grid-cols-3 gap-2 items-center text-sm border-b pb-2">
+              <span className="text-muted-foreground">Email</span>
+              <span className="text-center font-medium">{primary?.email ?? "—"}</span>
+              <span className="text-center text-muted-foreground">{secondary?.email ?? "—"}</span>
+            </div>
+
+            {/* Overrideable fields */}
+            {FIELDS.map(({ key, label }) => {
+              const pVal = (primary as any)?.[key];
+              const sVal = (secondary as any)?.[key];
+              const isOverriding = overrideFields.includes(key);
+              const hasSecondaryVal = sVal !== null && sVal !== undefined && sVal !== "";
+              return (
+                <div key={key} className="grid grid-cols-3 gap-2 items-center text-sm">
+                  <span className="text-muted-foreground">{label}</span>
+                  <span className={`text-center ${isOverriding ? "text-muted-foreground line-through" : "font-medium"}`}>
+                    {String(pVal ?? "—")}
+                  </span>
+                  <div className="flex items-center justify-center gap-2">
+                    <span className={`${isOverriding ? "font-medium text-[#14B89A]" : "text-muted-foreground"}`}>
+                      {String(sVal ?? "—")}
+                    </span>
+                    {hasSecondaryVal && (
+                      <button
+                        onClick={() => toggleOverride(key)}
+                        className={`text-[10px] px-1.5 py-0.5 rounded border transition-colors ${
+                          isOverriding
+                            ? "bg-[#14B89A] text-white border-[#14B89A]"
+                            : "border-muted-foreground text-muted-foreground hover:border-[#14B89A] hover:text-[#14B89A]"
+                        }`}
+                      >
+                        {isOverriding ? "✓ Use this" : "Use this"}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+
+            {group.count > 2 && (
+              <p className="text-xs text-amber-600 flex items-center gap-1">
+                <AlertTriangle className="size-3" />
+                This group has {group.count} duplicates. Only the first two are shown. Merge again to handle remaining duplicates.
+              </p>
+            )}
+          </div>
+        )}
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button
+            onClick={() => merge.mutate({ primaryId, secondaryId, overrideFields })}
+            disabled={merge.isPending || isLoading}
+            className="bg-[#14B89A] hover:bg-[#12a589] text-white"
+          >
+            {merge.isPending ? <><Loader2 className="size-3 animate-spin mr-1" /> Merging…</> : <><GitMerge className="size-3 mr-1" /> Merge Contacts</>}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/* ─── Main Page ─────────────────────────────────────────────────────────── */
 export default function DataHealth() {
   const { data: metrics, isLoading: metricsLoading, refetch } = trpc.dataHealth.getMetrics.useQuery();
-  const { data: dupes, isLoading: dupesLoading } = trpc.dataHealth.getDuplicateGroups.useQuery();
+  const { data: dupes, isLoading: dupesLoading, refetch: refetchDupes } = trpc.dataHealth.getDuplicateGroups.useQuery();
+
+  const [mergeGroup, setMergeGroup] = useState<DupeGroup | null>(null);
 
   const total = metrics?.total ?? 0;
 
@@ -109,7 +267,7 @@ export default function DataHealth() {
         title="Data Health"
         description="Monitor the quality and completeness of your contact database."
       >
-        <Button variant="outline" size="sm" onClick={() => refetch()}>
+        <Button variant="outline" size="sm" onClick={() => { refetch(); refetchDupes(); }}>
           <RefreshCw className="size-3.5 mr-1.5" />
           Refresh
         </Button>
@@ -129,24 +287,13 @@ export default function DataHealth() {
             </div>
           ) : (
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-              <MetricCard
-                label="Total Contacts"
-                value={total}
-                icon={Users}
-                tone="default"
-              />
+              <MetricCard label="Total Contacts" value={total} icon={Users} tone="default" />
               <MetricCard
                 label="With Email"
                 value={metrics?.withEmail ?? 0}
                 pct={metrics?.pctWithEmail}
                 icon={Mail}
-                tone={
-                  (metrics?.pctWithEmail ?? 0) >= 80
-                    ? "success"
-                    : (metrics?.pctWithEmail ?? 0) >= 50
-                    ? "warning"
-                    : "danger"
-                }
+                tone={(metrics?.pctWithEmail ?? 0) >= 80 ? "success" : (metrics?.pctWithEmail ?? 0) >= 50 ? "warning" : "danger"}
                 fixHref="/contacts?missingEmail=1"
                 fixLabel="Fix Now"
               />
@@ -155,31 +302,14 @@ export default function DataHealth() {
                 value={metrics?.withPhone ?? 0}
                 pct={metrics?.pctWithPhone}
                 icon={Phone}
-                tone={
-                  (metrics?.pctWithPhone ?? 0) >= 60
-                    ? "success"
-                    : (metrics?.pctWithPhone ?? 0) >= 30
-                    ? "warning"
-                    : "danger"
-                }
+                tone={(metrics?.pctWithPhone ?? 0) >= 60 ? "success" : (metrics?.pctWithPhone ?? 0) >= 30 ? "warning" : "danger"}
               />
               <MetricCard
                 label="Verified Emails"
-                value={
-                  (metrics?.verifiedValid ?? 0) +
-                  (metrics?.verifiedAcceptAll ?? 0) +
-                  (metrics?.verifiedRisky ?? 0) +
-                  (metrics?.verifiedInvalid ?? 0)
-                }
+                value={(metrics?.verifiedValid ?? 0) + (metrics?.verifiedAcceptAll ?? 0) + (metrics?.verifiedRisky ?? 0) + (metrics?.verifiedInvalid ?? 0)}
                 pct={metrics?.pctVerified}
                 icon={CheckCircle2}
-                tone={
-                  (metrics?.pctVerified ?? 0) >= 80
-                    ? "success"
-                    : (metrics?.pctVerified ?? 0) >= 40
-                    ? "warning"
-                    : "danger"
-                }
+                tone={(metrics?.pctVerified ?? 0) >= 80 ? "success" : (metrics?.pctVerified ?? 0) >= 40 ? "warning" : "danger"}
                 fixHref="/contacts?verif=unknown"
                 fixLabel="Verify Now"
               />
@@ -213,11 +343,11 @@ export default function DataHealth() {
               <CardContent className="pt-5 pb-4">
                 <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
                   {[
-                    { label: "Valid", value: metrics?.verifiedValid ?? 0, color: "bg-emerald-500", href: "/contacts?verif=valid" },
-                    { label: "Accept-All", value: metrics?.verifiedAcceptAll ?? 0, color: "bg-yellow-500", href: "/contacts?verif=accept_all" },
-                    { label: "Risky", value: metrics?.verifiedRisky ?? 0, color: "bg-orange-500", href: "/contacts?verif=risky" },
-                    { label: "Invalid", value: metrics?.verifiedInvalid ?? 0, color: "bg-rose-500", href: "/contacts?verif=invalid" },
-                    { label: "Not Verified", value: metrics?.verifiedUnknown ?? 0, color: "bg-gray-400", href: "/contacts?verif=unknown" },
+                    { label: "Valid", value: metrics?.verifiedValid ?? 0, color: "bg-emerald-500" },
+                    { label: "Accept-All", value: metrics?.verifiedAcceptAll ?? 0, color: "bg-yellow-500" },
+                    { label: "Risky", value: metrics?.verifiedRisky ?? 0, color: "bg-orange-500" },
+                    { label: "Invalid", value: metrics?.verifiedInvalid ?? 0, color: "bg-rose-500" },
+                    { label: "Not Verified", value: metrics?.verifiedUnknown ?? 0, color: "bg-gray-400" },
                   ].map((item) => {
                     const pct = total > 0 ? Math.round((item.value / total) * 100) : 0;
                     return (
@@ -226,14 +356,6 @@ export default function DataHealth() {
                         <div className="text-xl font-bold tabular-nums">{item.value.toLocaleString()}</div>
                         <div className="text-xs text-muted-foreground">{item.label}</div>
                         <div className="text-xs font-mono text-muted-foreground">{pct}%</div>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-6 text-[11px] px-2"
-                          onClick={() => {}}
-                        >
-                          View
-                        </Button>
                       </div>
                     );
                   })}
@@ -270,18 +392,9 @@ export default function DataHealth() {
               <CardContent className="pt-5 pb-4 space-y-3">
                 <FieldCoverageBar label="Email" pct={metrics?.pctWithEmail ?? 0} />
                 <FieldCoverageBar label="Phone" pct={metrics?.pctWithPhone ?? 0} />
-                <FieldCoverageBar
-                  label="Account"
-                  pct={total > 0 ? Math.round(((metrics?.withCompany ?? 0) / total) * 100) : 0}
-                />
-                <FieldCoverageBar
-                  label="Title"
-                  pct={total > 0 ? Math.round(((metrics?.withTitle ?? 0) / total) * 100) : 0}
-                />
-                <FieldCoverageBar
-                  label="LinkedIn URL"
-                  pct={total > 0 ? Math.round(((metrics?.withLinkedIn ?? 0) / total) * 100) : 0}
-                />
+                <FieldCoverageBar label="Account" pct={total > 0 ? Math.round(((metrics?.withCompany ?? 0) / total) * 100) : 0} />
+                <FieldCoverageBar label="Title" pct={total > 0 ? Math.round(((metrics?.withTitle ?? 0) / total) * 100) : 0} />
+                <FieldCoverageBar label="LinkedIn URL" pct={total > 0 ? Math.round(((metrics?.withLinkedIn ?? 0) / total) * 100) : 0} />
                 <FieldCoverageBar label="Enriched (90d)" pct={metrics?.pctEnriched ?? 0} />
               </CardContent>
             </Card>
@@ -330,9 +443,18 @@ export default function DataHealth() {
                           {group.names.length > 3 ? ` +${group.names.length - 3} more` : ""}
                         </div>
                       </div>
-                      <Badge variant="outline" className="shrink-0">
-                        {group.count}×
-                      </Badge>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <Badge variant="outline">{group.count}×</Badge>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 text-xs px-2"
+                          onClick={() => setMergeGroup(group as DupeGroup)}
+                        >
+                          <GitMerge className="size-3 mr-1" />
+                          Merge
+                        </Button>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -341,6 +463,15 @@ export default function DataHealth() {
           )}
         </section>
       </div>
+
+      {mergeGroup && (
+        <MergeDialog
+          group={mergeGroup}
+          open={!!mergeGroup}
+          onClose={() => setMergeGroup(null)}
+          onMerged={() => { refetch(); refetchDupes(); }}
+        />
+      )}
     </Shell>
   );
 }

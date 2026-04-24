@@ -1,11 +1,13 @@
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Card, CardContent } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Field, fmt$, FormDialog, SelectField } from "@/components/usip/Common";
 import { PageHeader, Shell } from "@/components/usip/Shell";
 import { RecordDrawer } from "@/components/usip/RecordDrawer";
 import { trpc } from "@/lib/trpc";
-import { Brain, Download, Loader2, Plus, Zap } from "lucide-react";
+import { Brain, Download, Loader2, Plus, TrendingUp, Zap } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 
@@ -17,6 +19,15 @@ const STAGES = [
   { id: "won", label: "Won" },
   { id: "lost", label: "Lost" },
 ] as const;
+
+const STAGE_COLORS: Record<string, string> = {
+  discovery: "bg-slate-400",
+  qualified: "bg-blue-400",
+  proposal: "bg-violet-400",
+  negotiation: "bg-amber-400",
+  won: "bg-emerald-500",
+  lost: "bg-red-400",
+};
 
 function WinProbBadge({ prob, aiGenerated }: { prob: number; aiGenerated?: boolean }) {
   const color =
@@ -110,6 +121,118 @@ function DealCard({
   );
 }
 
+/* ─── Forecast View ─────────────────────────────────────────────────────── */
+function ForecastView() {
+  const { data: fc, isLoading } = trpc.opportunities.forecast.useQuery();
+
+  if (isLoading) {
+    return (
+      <div className="p-6 space-y-6">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+          {[1, 2, 3, 4].map((i) => <Skeleton key={i} className="h-24 rounded-xl" />)}
+        </div>
+        <Skeleton className="h-64 rounded-xl" />
+      </div>
+    );
+  }
+
+  if (!fc) return null;
+
+  const { grandTotal, grandWeighted, months, stages } = fc;
+  const coverageRatio = grandTotal > 0 ? Math.round((grandWeighted / grandTotal) * 100) : 0;
+  const maxMonthWeighted = Math.max(...months.map((m) => m.weighted), 1);
+
+  const fmtMonth = (key: string) => {
+    if (key === "no-date") return "No close date";
+    const [y, m] = key.split("-");
+    return new Date(Number(y), Number(m) - 1, 1).toLocaleString("default", { month: "short", year: "numeric" });
+  };
+
+  return (
+    <div className="p-6 space-y-6">
+      {/* KPI row */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        {[
+          { label: "Total Pipeline", value: fmt$(grandTotal), sub: "excl. lost" },
+          { label: "Weighted Forecast", value: fmt$(grandWeighted), sub: "probability-adjusted" },
+          { label: "Coverage Ratio", value: `${coverageRatio}%`, sub: "weighted / total" },
+          { label: "Open Deals", value: String(stages.reduce((s, st) => s + st.count, 0)), sub: "across all stages" },
+        ].map(({ label, value, sub }) => (
+          <Card key={label}>
+            <CardContent className="p-4">
+              <p className="text-xs text-muted-foreground uppercase tracking-wide">{label}</p>
+              <p className="text-2xl font-bold tabular-nums mt-1">{value}</p>
+              <p className="text-[11px] text-muted-foreground mt-0.5">{sub}</p>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
+      {/* Stage funnel */}
+      <div>
+        <h3 className="text-sm font-semibold mb-3">Stage Funnel</h3>
+        <div className="space-y-2">
+          {STAGES.filter((s) => s.id !== "lost").map((s) => {
+            const st = stages.find((x) => x.stage === s.id);
+            if (!st) return null;
+            const pct = grandTotal > 0 ? Math.round((st.total / grandTotal) * 100) : 0;
+            return (
+              <div key={s.id} className="flex items-center gap-3 text-sm">
+                <span className="w-28 text-xs text-muted-foreground shrink-0">{s.label}</span>
+                <div className="flex-1 bg-muted rounded-full h-3 overflow-hidden">
+                  <div
+                    className={`h-3 rounded-full transition-all ${STAGE_COLORS[s.id] ?? "bg-primary"}`}
+                    style={{ width: `${pct}%` }}
+                  />
+                </div>
+                <span className="w-20 text-xs tabular-nums text-right shrink-0">{fmt$(st.total)}</span>
+                <span className="w-12 text-xs tabular-nums text-right text-muted-foreground shrink-0">{pct}%</span>
+                <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 shrink-0">{st.count}</Badge>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Monthly close projection */}
+      {months.length > 0 && (
+        <div>
+          <h3 className="text-sm font-semibold mb-3">Monthly Close Projection (weighted)</h3>
+          <div className="space-y-2">
+            {months.map((m) => {
+              const barPct = Math.round((m.weighted / maxMonthWeighted) * 100);
+              return (
+                <div key={m.month} className="flex items-center gap-3 text-sm">
+                  <span className="w-28 text-xs text-muted-foreground shrink-0 font-mono">{fmtMonth(m.month)}</span>
+                  <div className="flex-1 bg-muted rounded-full h-3 overflow-hidden">
+                    <div
+                      className="h-3 rounded-full bg-[#14B89A] transition-all"
+                      style={{ width: `${barPct}%` }}
+                    />
+                  </div>
+                  <span className="w-24 text-xs tabular-nums text-right shrink-0">{fmt$(m.weighted)}</span>
+                  <span className="w-16 text-xs tabular-nums text-right text-muted-foreground shrink-0">
+                    total {fmt$(m.total)}
+                  </span>
+                  <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 shrink-0">{m.count}</Badge>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {months.length === 0 && stages.length === 0 && (
+        <div className="text-center py-16 text-muted-foreground text-sm">
+          <TrendingUp className="size-10 mx-auto mb-3 opacity-30" />
+          No open opportunities to forecast. Add deals with close dates to see projections.
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ─── Main Page ─────────────────────────────────────────────────────────── */
 export default function Pipeline() {
   const utils = trpc.useUtils();
   const { data } = trpc.opportunities.board.useQuery();
@@ -123,6 +246,7 @@ export default function Pipeline() {
   }, [boardIntel]);
 
   const [analyzingIds, setAnalyzingIds] = useState<Set<number>>(new Set());
+  const [view, setView] = useState<"board" | "forecast">("board");
 
   const generateIntel = trpc.oppIntelligence.generateIntelligence.useMutation({
     onSuccess: (_data, vars) => {
@@ -171,6 +295,22 @@ export default function Pipeline() {
   return (
     <Shell title="Pipeline">
       <PageHeader title="Pipeline" description="Drag cards between stages. Hover a card and click the brain icon to run AI analysis.">
+        {/* View toggle */}
+        <div className="flex items-center border rounded-md overflow-hidden text-sm">
+          {(["board", "forecast"] as const).map((v) => (
+            <button
+              key={v}
+              onClick={() => setView(v)}
+              className={`px-3 py-1.5 capitalize transition-colors ${
+                view === v
+                  ? "bg-[#14B89A] text-white font-semibold"
+                  : "text-muted-foreground hover:bg-muted"
+              }`}
+            >
+              {v === "forecast" ? <><TrendingUp className="size-3 inline mr-1" />Forecast</> : "Board"}
+            </button>
+          ))}
+        </div>
         <Button variant="outline" onClick={() => {
           const rows = data ?? [];
           if (!rows.length) return;
@@ -184,61 +324,65 @@ export default function Pipeline() {
         <Button onClick={() => setAddOpen(true)}><Plus className="size-4" /> New opportunity</Button>
       </PageHeader>
 
-      <div className="p-4 overflow-x-auto">
-        <div className="flex gap-3 min-w-max">
-          {STAGES.map((s) => {
-            const items = grouped[s.id] ?? [];
-            const total = items.reduce((sum, o) => sum + Number(o.value ?? 0), 0);
-            const avgProb = items.length > 0
-              ? Math.round(items.reduce((sum, o) => {
-                  const intel = intelMap.get(o.id);
-                  return sum + (intel ? Math.round(Number(intel.winProbability)) : o.winProb);
-                }, 0) / items.length)
-              : null;
-            return (
-              <div
-                key={s.id}
-                className="w-72 shrink-0 bg-secondary/40 border rounded-lg flex flex-col"
-                onDragOver={(e) => e.preventDefault()}
-                onDrop={(e) => {
-                  const id = Number(e.dataTransfer.getData("text/plain"));
-                  if (id) setStage.mutate({ id, stage: s.id });
-                }}
-              >
-                <div className="px-3 py-2 border-b flex items-center gap-2">
-                  <div className="text-sm font-medium">{s.label}</div>
-                  <div className="ml-auto flex items-center gap-2 text-[11px] text-muted-foreground">
-                    <span>{items.length} · {fmt$(total)}</span>
-                    {avgProb !== null && (
-                      <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4">avg {avgProb}%</Badge>
-                    )}
+      {view === "forecast" ? (
+        <ForecastView />
+      ) : (
+        <div className="p-4 overflow-x-auto">
+          <div className="flex gap-3 min-w-max">
+            {STAGES.map((s) => {
+              const items = grouped[s.id] ?? [];
+              const total = items.reduce((sum, o) => sum + Number(o.value ?? 0), 0);
+              const avgProb = items.length > 0
+                ? Math.round(items.reduce((sum, o) => {
+                    const intel = intelMap.get(o.id);
+                    return sum + (intel ? Math.round(Number(intel.winProbability)) : o.winProb);
+                  }, 0) / items.length)
+                : null;
+              return (
+                <div
+                  key={s.id}
+                  className="w-72 shrink-0 bg-secondary/40 border rounded-lg flex flex-col"
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={(e) => {
+                    const id = Number(e.dataTransfer.getData("text/plain"));
+                    if (id) setStage.mutate({ id, stage: s.id });
+                  }}
+                >
+                  <div className="px-3 py-2 border-b flex items-center gap-2">
+                    <div className="text-sm font-medium">{s.label}</div>
+                    <div className="ml-auto flex items-center gap-2 text-[11px] text-muted-foreground">
+                      <span>{items.length} · {fmt$(total)}</span>
+                      {avgProb !== null && (
+                        <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4">avg {avgProb}%</Badge>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex-1 p-2 space-y-2 min-h-[60vh]">
+                    {items.map((o) => (
+                      <DealCard
+                        key={o.id}
+                        opp={o}
+                        intel={intelMap.get(o.id) ?? null}
+                        onOpen={() => setDrawer({
+                          id: o.id,
+                          name: o.name,
+                          subtitle: `${o.accountName} · ${fmt$(Number(o.value))} · ${
+                            intelMap.get(o.id)
+                              ? `${Math.round(Number(intelMap.get(o.id)!.winProbability))}% (AI)`
+                              : `${o.winProb}%`
+                          }`,
+                        })}
+                        onAnalyze={(e) => handleAnalyze(e, o.id)}
+                        isAnalyzing={analyzingIds.has(o.id)}
+                      />
+                    ))}
                   </div>
                 </div>
-                <div className="flex-1 p-2 space-y-2 min-h-[60vh]">
-                  {items.map((o) => (
-                    <DealCard
-                      key={o.id}
-                      opp={o}
-                      intel={intelMap.get(o.id) ?? null}
-                      onOpen={() => setDrawer({
-                        id: o.id,
-                        name: o.name,
-                        subtitle: `${o.accountName} · ${fmt$(Number(o.value))} · ${
-                          intelMap.get(o.id)
-                            ? `${Math.round(Number(intelMap.get(o.id)!.winProbability))}% (AI)`
-                            : `${o.winProb}%`
-                        }`,
-                      })}
-                      onAnalyze={(e) => handleAnalyze(e, o.id)}
-                      isAnalyzing={analyzingIds.has(o.id)}
-                    />
-                  ))}
-                </div>
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
         </div>
-      </div>
+      )}
 
       <FormDialog
         open={addOpen}

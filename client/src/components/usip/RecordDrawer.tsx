@@ -2,7 +2,7 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { trpc } from "@/lib/trpc";
 import { fmtDate, StatusPill } from "./Common";
-import { Brain, ChevronDown, CheckCircle2, Clock, Loader2, Paperclip, Phone, Calendar, MessageSquare, RefreshCw, Trash2, Users, XCircle, ShieldCheck, FileText, Download, Send, Wand2 } from "lucide-react";
+import { Brain, ChevronDown, CheckCircle2, Clock, Loader2, Paperclip, Phone, Calendar, MessageSquare, RefreshCw, Sparkles, Trash2, Users, XCircle, ShieldCheck, FileText, Download, Send, Wand2 } from "lucide-react";
 import { EmailVerificationBadge } from "./EmailVerificationBadge";
 import { ContactOverview } from "./detail/ContactOverview";
 import { AccountOverview } from "./detail/AccountOverview";
@@ -480,6 +480,113 @@ function ContactVerifyPanel({
   );
 }
 
+/* ─── Contact Enrich Panel ──────────────────────────────────────────────── */
+function ContactEnrichPanel({ contactId, onEnriched }: { contactId: number; onEnriched: () => void }) {
+  const utils = trpc.useUtils();
+  const { data: contact, isLoading } = trpc.contacts.get.useQuery({ id: contactId });
+  const [result, setResult] = useState<{ fieldsUpdated: string[]; suggestions: Record<string, string> } | null>(null);
+
+  const enrich = trpc.contacts.enrich.useMutation({
+    onSuccess: (data) => {
+      setResult(data);
+      utils.contacts.get.invalidate({ id: contactId });
+      utils.contacts.getWithAccount.invalidate({ id: contactId });
+      onEnriched();
+      if (data.fieldsUpdated.length > 0) {
+        toast.success(`Enriched ${data.fieldsUpdated.length} field${data.fieldsUpdated.length > 1 ? "s" : ""}: ${data.fieldsUpdated.join(", ")}`);
+      } else {
+        toast.info("No new fields to enrich — contact already has all available data.");
+      }
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  if (isLoading) {
+    return <div className="flex items-center gap-2 text-sm text-muted-foreground py-6"><Loader2 className="size-3 animate-spin" /> Loading…</div>;
+  }
+
+  const FIELD_LABELS: Record<string, string> = {
+    title: "Job Title",
+    phone: "Phone",
+    linkedinUrl: "LinkedIn URL",
+    city: "City",
+    seniority: "Seniority",
+  };
+
+  const missingFields = Object.keys(FIELD_LABELS).filter((f) => {
+    const v = (contact as any)?.[f];
+    return v === null || v === undefined || v === "";
+  });
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-lg border bg-card p-4 space-y-3">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-sm font-semibold">{contact?.firstName} {contact?.lastName}</p>
+            <p className="text-xs text-muted-foreground">{contact?.email ?? "No email"}</p>
+          </div>
+          <Button
+            size="sm"
+            onClick={() => enrich.mutate({ id: contactId })}
+            disabled={enrich.isPending}
+            className="bg-[#14B89A] hover:bg-[#12a589] text-white shrink-0"
+          >
+            {enrich.isPending ? <><Loader2 className="size-3 animate-spin mr-1" /> Enriching…</> : <><Sparkles className="size-3 mr-1" /> AI Enrich</>}
+          </Button>
+        </div>
+
+        <p className="text-xs text-muted-foreground">
+          AI enrichment uses the contact's name, email domain, and company to suggest missing firmographic fields. Only empty fields are updated.
+        </p>
+
+        {missingFields.length > 0 ? (
+          <div className="space-y-1">
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Missing Fields</p>
+            <div className="flex flex-wrap gap-1.5">
+              {missingFields.map((f) => (
+                <span key={f} className="text-[11px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">{FIELD_LABELS[f]}</span>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-center gap-1.5 text-xs text-emerald-600">
+            <CheckCircle2 className="size-3" /> All enrichable fields are already filled.
+          </div>
+        )}
+      </div>
+
+      {result && (
+        <div className="rounded-lg border bg-card p-4 space-y-3">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Last Enrichment Result</p>
+          {Object.keys(result.suggestions).length === 0 ? (
+            <p className="text-sm text-muted-foreground">No suggestions returned by AI.</p>
+          ) : (
+            <div className="space-y-2">
+              {Object.entries(result.suggestions).map(([field, value]) => {
+                const applied = result.fieldsUpdated.includes(field);
+                return (
+                  <div key={field} className="flex items-center justify-between text-sm">
+                    <span className="text-muted-foreground">{FIELD_LABELS[field] ?? field}</span>
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium">{String(value)}</span>
+                      {applied ? (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700">Applied</span>
+                      ) : (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground">Already set</span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function RecordDrawer({
   open,
   onOpenChange,
@@ -497,7 +604,7 @@ export function RecordDrawer({
   subtitle?: string;
   headerExtras?: React.ReactNode;
 }) {
-  const [tab, setTab] = useState<"overview" | "timeline" | "call" | "meeting" | "note" | "files" | "score" | "intelligence" | "verify" | "brief" | "email">("overview");
+  const [tab, setTab] = useState<"overview" | "timeline" | "call" | "meeting" | "note" | "files" | "score" | "intelligence" | "verify" | "brief" | "email" | "enrich">("overview");
   const [emailSubject, setEmailSubject] = useState("");
   const [emailBody, setEmailBody] = useState("");
   const [emailAiPrompt, setEmailAiPrompt] = useState("");
@@ -588,6 +695,7 @@ export function RecordDrawer({
             ...(relatedType === "opportunity" ? [{ k: "intelligence", label: "AI Intel" }] : []),
             ...((relatedType === "contact" || relatedType === "lead") ? [{ k: "email", label: "Send Email" }] : []),
             ...(relatedType === "contact" ? [{ k: "verify", label: "Email Verify" }] : []),
+            ...(relatedType === "contact" ? [{ k: "enrich", label: "AI Enrich" }] : []),
             ...(relatedType === "account" ? [{ k: "brief", label: "AI Brief" }] : []),
           ].map((t) => (
             <button
@@ -803,6 +911,10 @@ export function RecordDrawer({
                 }
               }}
             />
+          )}
+
+          {tab === "enrich" && relatedType === "contact" && relatedId && (
+            <ContactEnrichPanel contactId={relatedId} onEnriched={() => { contactData.refetch(); contactWithAccount.refetch(); }} />
           )}
 
           {tab === "files" && (

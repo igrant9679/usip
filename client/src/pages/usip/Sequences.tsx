@@ -10,7 +10,7 @@ import { EmptyState, PageHeader, Shell } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import {
   Activity, GitBranch, Pause, Play, Plus, Power, CheckCircle2, XCircle,
-  BarChart3, RefreshCw, Pencil, Trash2, ArrowUp, ArrowDown, Mail, Clock, ClipboardList,
+  BarChart3, RefreshCw, Pencil, Trash2, ArrowUp, ArrowDown, Mail, Clock, ClipboardList, TrendingUp,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { Link } from "wouter";
@@ -388,11 +388,97 @@ function SequenceEditDialog({ seq, open, onClose }: { seq: any; open: boolean; o
 }
 
 // ─── Main page ────────────────────────────────────────────────────────────────
+// ─── SequencePerformancePanel ───────────────────────────────────────────────
+function SequencePerformancePanel({ sequenceId }: { sequenceId: number }) {
+  const { data, isLoading } = trpc.sequences.getPerformanceAnalytics.useQuery({ sequenceId });
+  const row = data?.[0];
+
+  if (isLoading) {
+    return <div className="flex items-center gap-2 text-sm text-muted-foreground py-6"><RefreshCw className="size-3 animate-spin" /> Loading analytics…</div>;
+  }
+
+  if (!row) {
+    return <div className="text-sm text-muted-foreground py-8 text-center">No analytics data yet. Send emails through this sequence to see performance metrics.</div>;
+  }
+
+  const metrics = [
+    { label: "Emails Sent", value: row.sent, sub: "total sent", color: "text-foreground" },
+    { label: "Open Rate", value: `${row.openRate}%`, sub: `${row.uniqueOpens} unique opens`, color: row.openRate >= 30 ? "text-emerald-600" : row.openRate >= 15 ? "text-amber-600" : "text-muted-foreground" },
+    { label: "Click Rate", value: `${row.clickRate}%`, sub: `${row.uniqueClicks} unique clicks`, color: row.clickRate >= 5 ? "text-emerald-600" : row.clickRate >= 2 ? "text-amber-600" : "text-muted-foreground" },
+    { label: "Bounce Rate", value: `${row.bounceRate}%`, sub: `${row.bounced} bounced`, color: row.bounceRate > 5 ? "text-rose-600" : row.bounceRate > 2 ? "text-amber-600" : "text-emerald-600" },
+    { label: "Exit Rate", value: `${row.exitRate}%`, sub: `${row.exited} exited`, color: row.exitRate > 20 ? "text-rose-600" : "text-muted-foreground" },
+  ];
+
+  const enrollment = [
+    { label: "Total Enrolled", value: row.totalEnrolled },
+    { label: "Active", value: row.active },
+    { label: "Finished", value: row.finished },
+    { label: "Paused", value: row.paused },
+    { label: "Exited", value: row.exited },
+  ];
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+        {metrics.map(({ label, value, sub, color }) => (
+          <Card key={label} className="border">
+            <CardContent className="p-3">
+              <p className="text-xs text-muted-foreground">{label}</p>
+              <p className={`text-2xl font-bold tabular-nums ${color}`}>{value}</p>
+              <p className="text-[11px] text-muted-foreground">{sub}</p>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
+      <Section title="Enrollment Funnel">
+        <div className="p-3 space-y-2">
+          {enrollment.map(({ label, value }) => {
+            const pct = row.totalEnrolled > 0 ? Math.round((value / row.totalEnrolled) * 100) : 0;
+            return (
+              <div key={label} className="flex items-center gap-3 text-sm">
+                <span className="w-28 text-xs text-muted-foreground shrink-0">{label}</span>
+                <div className="flex-1 bg-muted rounded-full h-2">
+                  <div className="h-2 rounded-full bg-[#14B89A] transition-all" style={{ width: `${pct}%` }} />
+                </div>
+                <span className="text-xs tabular-nums w-10 text-right font-mono">{value}</span>
+                <span className="text-[11px] text-muted-foreground w-8 text-right">{pct}%</span>
+              </div>
+            );
+          })}
+        </div>
+      </Section>
+
+      {row.sent > 0 && (
+        <Section title="Email Engagement Funnel">
+          <div className="p-3 space-y-2">
+            {[
+              { label: "Sent", value: row.sent, pct: 100 },
+              { label: "Opened (unique)", value: row.uniqueOpens, pct: row.openRate },
+              { label: "Clicked (unique)", value: row.uniqueClicks, pct: row.clickRate },
+              { label: "Bounced", value: row.bounced, pct: row.bounceRate },
+            ].map(({ label, value, pct }) => (
+              <div key={label} className="flex items-center gap-3 text-sm">
+                <span className="w-32 text-xs text-muted-foreground shrink-0">{label}</span>
+                <div className="flex-1 bg-muted rounded-full h-2">
+                  <div className="h-2 rounded-full bg-[#14B89A] transition-all" style={{ width: `${pct}%` }} />
+                </div>
+                <span className="text-xs tabular-nums w-10 text-right font-mono">{value}</span>
+                <span className="text-[11px] text-muted-foreground w-8 text-right">{pct}%</span>
+              </div>
+            ))}
+          </div>
+        </Section>
+      )}
+    </div>
+  );
+}
+
 export default function Sequences() {
   const [open, setOpen] = useState(false);
   const [editSeq, setEditSeq] = useState<any | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
-  const [activeTab, setActiveTab] = useState<"steps" | "stats">("steps");
+  const [activeTab, setActiveTab] = useState<"steps" | "stats" | "analytics">("steps");
   const utils = trpc.useUtils();
   const { data } = trpc.sequences.list.useQuery();
   const create = trpc.sequences.create.useMutation({
@@ -457,6 +543,7 @@ export default function Sequences() {
                   {[
                     { k: "steps", label: "Steps", icon: Activity },
                     { k: "stats", label: "Stats & Enrollments", icon: BarChart3 },
+                    { k: "analytics", label: "Performance", icon: TrendingUp },
                   ].map(({ k, label, icon: Icon }) => (
                     <button key={k}
                       onClick={() => setActiveTab(k as any)}
@@ -493,6 +580,12 @@ export default function Sequences() {
                       sequenceId={detail.data.id}
                       steps={(detail.data.steps as any[]) ?? []}
                     />
+                  </div>
+                )}
+
+                {activeTab === "analytics" && (
+                  <div className="p-3">
+                    <SequencePerformancePanel sequenceId={detail.data.id} />
                   </div>
                 )}
               </Section>

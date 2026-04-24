@@ -1,9 +1,10 @@
-import { and, count, eq, isNotNull, isNull, lt, or, sql } from "drizzle-orm";
+import { TRPCError } from "@trpc/server";
+import { and, count, eq, sql } from "drizzle-orm";
 import { z } from "zod";
-import { contacts } from "../../drizzle/schema";
+import { activities, contacts, emailDrafts, enrollments, opportunityContactRoles } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { router } from "../_core/trpc";
-import { workspaceProcedure } from "../_core/workspace";
+import { repProcedure, workspaceProcedure } from "../_core/workspace";
 
 export const dataHealthRouter = router({
   getMetrics: workspaceProcedure.query(async ({ ctx }) => {
@@ -71,6 +72,60 @@ export const dataHealthRouter = router({
       pctVerified: total > 0 ? Math.round(((Number(t.verifiedValid) + Number(t.verifiedAcceptAll) + Number(t.verifiedRisky) + Number(t.verifiedInvalid)) / total) * 100) : 0,
     };
   }),
+
+  /** Merge duplicate contacts: keep primary, copy missing fields from secondary, re-point FK references, delete secondary. */
+  mergeContacts: repProcedure
+    .input(z.object({
+      primaryId: z.number(),
+      secondaryId: z.number(),
+      /** Which fields to take from secondary (overrides primary's empty/null value). */
+      overrideFields: z.array(z.string()).default([]),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const wsId = ctx.workspace.id;
+
+      const [primary] = await db.select().from(contacts).where(and(eq(contacts.id, input.primaryId), eq(contacts.workspaceId, wsId)));
+      const [secondary] = await db.select().from(contacts).where(and(eq(contacts.id, input.secondaryId), eq(contacts.workspaceId, wsId)));
+      if (!primary || !secondary) throw new TRPCError({ code: "NOT_FOUND", message: "One or both contacts not found" });
+
+      // Build patch: fill empty primary fields from secondary, or use overrideFields
+      const fillable: (keyof typeof primary)[] = ["title", "phone", "linkedinUrl", "city", "seniority", "accountId"];
+      const patch: Record<string, any> = {};
+      for (const field of fillable) {
+        const pVal = primary[field];
+        const sVal = secondary[field];
+        if (input.overrideFields.includes(field)) {
+          if (sVal !== null && sVal !== undefined && sVal !== "") patch[field] = sVal;
+        } else if ((pVal === null || pVal === undefined || pVal === "") && sVal !== null && sVal !== undefined && sVal !== "") {
+          patch[field] = sVal;
+        }
+      }
+      if (Object.keys(patch).length > 0) {
+        await db.update(contacts).set(patch).where(eq(contacts.id, input.primaryId));
+      }
+
+      // Re-point FK references from secondary → primary
+      await db.update(activities).set({ relatedId: input.primaryId }).where(and(eq(activities.relatedType, "contact"), eq(activities.relatedId, input.secondaryId)));
+      await db.update(emailDrafts).set({ toContactId: input.primaryId }).where(eq(emailDrafts.toContactId, input.secondaryId));
+      await db.update(enrollments).set({ contactId: input.primaryId }).where(eq(enrollments.contactId, input.secondaryId));
+      // For opportunity contact roles, delete the secondary's role if primary already has one on the same opp
+      const secRoles = await db.select().from(opportunityContactRoles).where(and(eq(opportunityContactRoles.contactId, input.secondaryId), eq(opportunityContactRoles.workspaceId, wsId)));
+      for (const role of secRoles) {
+        const existing = await db.select().from(opportunityContactRoles).where(and(eq(opportunityContactRoles.opportunityId, role.opportunityId), eq(opportunityContactRoles.contactId, input.primaryId), eq(opportunityContactRoles.workspaceId, wsId)));
+        if (existing.length > 0) {
+          await db.delete(opportunityContactRoles).where(eq(opportunityContactRoles.id, role.id));
+        } else {
+          await db.update(opportunityContactRoles).set({ contactId: input.primaryId }).where(eq(opportunityContactRoles.id, role.id));
+        }
+      }
+
+      // Delete the secondary contact
+      await db.delete(contacts).where(and(eq(contacts.id, input.secondaryId), eq(contacts.workspaceId, wsId)));
+
+      return { ok: true, primaryId: input.primaryId, mergedFields: Object.keys(patch) };
+    }),
 
   getDuplicateGroups: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
