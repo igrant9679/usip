@@ -2028,6 +2028,7 @@ export const calendarAccounts = mysqlTable(
     userId: int("userId").notNull(),
     provider: mysqlEnum("provider", [
       "google",
+      "outlook_oauth",
       "outlook_caldav",
       "apple_caldav",
       "generic_caldav",

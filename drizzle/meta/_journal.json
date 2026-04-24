@@ -176,6 +176,13 @@
       "when": 1777060673871,
       "tag": "0024_concerned_hobgoblin",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "5",
+      "when": 1777061385158,
+      "tag": "0025_slimy_jack_power",
+      "breakpoints": true
     }
   ]
 }

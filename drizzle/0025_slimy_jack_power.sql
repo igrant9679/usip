@@ -1,0 +1,1 @@
+ALTER TABLE `calendar_accounts` MODIFY COLUMN `provider` enum('google','outlook_oauth','outlook_caldav','apple_caldav','generic_caldav') NOT NULL;

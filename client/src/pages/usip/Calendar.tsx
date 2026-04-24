@@ -31,16 +31,31 @@ import {
 
 // ─── Connect Calendar Dialog ───────────────────────────────────────────────────
 
+type CalendarProvider = "google" | "outlook_oauth" | "outlook_caldav" | "apple_caldav" | "generic_caldav";
+
 function ConnectCalendarDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const [provider, setProvider] = useState<"google" | "outlook_caldav" | "apple_caldav" | "generic_caldav">("outlook_caldav");
+  const [provider, setProvider] = useState<CalendarProvider>("google");
   const [label, setLabel] = useState("");
   const [email, setEmail] = useState("");
+  // CalDAV fields
   const [caldavUrl, setCaldavUrl] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  // OAuth token fields (Google + Outlook OAuth)
+  const [accessToken, setAccessToken] = useState("");
+  const [refreshToken, setRefreshToken] = useState("");
+  const [calendarId, setCalendarId] = useState("primary");
 
   const connectCalDAV = trpc.calendar.connectCalDAV.useMutation({
     onSuccess: () => { toast.success("Calendar connected"); onClose(); },
+    onError: (e) => toast.error(e.message),
+  });
+  const connectGoogle = trpc.calendar.connectGoogle.useMutation({
+    onSuccess: () => { toast.success("Google Calendar connected"); onClose(); },
+    onError: (e) => toast.error(e.message),
+  });
+  const connectOutlookOAuth = trpc.calendar.connectOutlookOAuth.useMutation({
+    onSuccess: () => { toast.success("Outlook Calendar connected"); onClose(); },
     onError: (e) => toast.error(e.message),
   });
 
@@ -50,12 +65,28 @@ function ConnectCalendarDialog({ open, onClose }: { open: boolean; onClose: () =
     generic_caldav: "",
   };
 
+  const isOAuth = provider === "google" || provider === "outlook_oauth";
+  const isCalDAV = !isOAuth;
+  const isPending = connectCalDAV.isPending || connectGoogle.isPending || connectOutlookOAuth.isPending;
+
   function handleConnect() {
-    if (!caldavUrl.trim() || !username.trim() || !password.trim()) {
-      toast.error("CalDAV URL, username, and password are required");
-      return;
+    if (isOAuth) {
+      if (!accessToken.trim() || !refreshToken.trim()) {
+        toast.error("Access token and refresh token are required");
+        return;
+      }
+      if (provider === "google") {
+        connectGoogle.mutate({ label: label || undefined, email: email || undefined, oauthAccessToken: accessToken, oauthRefreshToken: refreshToken, calendarId: calendarId || "primary" });
+      } else {
+        connectOutlookOAuth.mutate({ label: label || undefined, email: email || undefined, oauthAccessToken: accessToken, oauthRefreshToken: refreshToken, calendarId: calendarId || "primary" });
+      }
+    } else {
+      if (!caldavUrl.trim() || !username.trim() || !password.trim()) {
+        toast.error("CalDAV URL, username, and password are required");
+        return;
+      }
+      connectCalDAV.mutate({ provider: provider as any, label: label || undefined, email: email || undefined, caldavUrl, caldavUsername: username, caldavPassword: password });
     }
-    connectCalDAV.mutate({ provider, label: label || undefined, email: email || undefined, caldavUrl, caldavUsername: username, caldavPassword: password });
   }
 
   return (
@@ -67,13 +98,15 @@ function ConnectCalendarDialog({ open, onClose }: { open: boolean; onClose: () =
         <div className="space-y-3 py-2">
           <div className="space-y-1">
             <Label>Provider</Label>
-            <Select value={provider} onValueChange={(v: any) => { setProvider(v); setCaldavUrl(providerUrls[v] ?? ""); }}>
+            <Select value={provider} onValueChange={(v: CalendarProvider) => { setProvider(v); if (!isOAuth) setCaldavUrl(providerUrls[v] ?? ""); }}>
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
+                <SelectItem value="google">Google Calendar (OAuth)</SelectItem>
+                <SelectItem value="outlook_oauth">Microsoft 365 / Outlook (OAuth)</SelectItem>
                 <SelectItem value="outlook_caldav">Microsoft Outlook (CalDAV)</SelectItem>
-                <SelectItem value="apple_caldav">Apple Calendar (iCloud)</SelectItem>
+                <SelectItem value="apple_caldav">Apple Calendar (iCloud CalDAV)</SelectItem>
                 <SelectItem value="generic_caldav">Generic CalDAV</SelectItem>
               </SelectContent>
             </Select>
@@ -86,29 +119,59 @@ function ConnectCalendarDialog({ open, onClose }: { open: boolean; onClose: () =
             <Label>Email (optional)</Label>
             <Input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" />
           </div>
-          <div className="space-y-1">
-            <Label>CalDAV URL</Label>
-            <Input value={caldavUrl} onChange={(e) => setCaldavUrl(e.target.value)} placeholder="https://..." />
-            {provider === "outlook_caldav" && (
-              <p className="text-xs text-muted-foreground">For Outlook: use your full calendar URL from Outlook Web App → Settings → Calendar → Shared calendars → Publish</p>
-            )}
-            {provider === "apple_caldav" && (
-              <p className="text-xs text-muted-foreground">For iCloud: use an app-specific password from appleid.apple.com</p>
-            )}
-          </div>
-          <div className="space-y-1">
-            <Label>Username</Label>
-            <Input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="your@email.com" />
-          </div>
-          <div className="space-y-1">
-            <Label>Password / App Password</Label>
-            <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
-          </div>
+
+          {isOAuth && (
+            <>
+              <div className="rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground space-y-1">
+                {provider === "google" ? (
+                  <p>Obtain tokens from the <strong>Google OAuth 2.0 Playground</strong> (oauth2.googleapis.com/tokeninfo) or your Google Cloud Console app. Required scope: <code>https://www.googleapis.com/auth/calendar</code></p>
+                ) : (
+                  <p>Obtain tokens from the <strong>Microsoft Azure Portal</strong> (portal.azure.com) or Microsoft OAuth 2.0 Playground. Required scope: <code>Calendars.ReadWrite offline_access</code></p>
+                )}
+              </div>
+              <div className="space-y-1">
+                <Label>Access Token</Label>
+                <Input value={accessToken} onChange={(e) => setAccessToken(e.target.value)} placeholder="ya29.a0AfH6SMB..." />
+              </div>
+              <div className="space-y-1">
+                <Label>Refresh Token</Label>
+                <Input value={refreshToken} onChange={(e) => setRefreshToken(e.target.value)} placeholder="1//0gLd..." />
+              </div>
+              <div className="space-y-1">
+                <Label>Calendar ID (optional)</Label>
+                <Input value={calendarId} onChange={(e) => setCalendarId(e.target.value)} placeholder="primary" />
+                <p className="text-xs text-muted-foreground">Use &quot;primary&quot; for the default calendar, or a specific calendar ID from your provider.</p>
+              </div>
+            </>
+          )}
+
+          {isCalDAV && (
+            <>
+              <div className="space-y-1">
+                <Label>CalDAV URL</Label>
+                <Input value={caldavUrl} onChange={(e) => setCaldavUrl(e.target.value)} placeholder="https://..." />
+                {provider === "outlook_caldav" && (
+                  <p className="text-xs text-muted-foreground">Outlook Web App → Settings → Calendar → Shared calendars → Publish a calendar → copy the ICS/CalDAV URL</p>
+                )}
+                {provider === "apple_caldav" && (
+                  <p className="text-xs text-muted-foreground">Use an app-specific password from appleid.apple.com</p>
+                )}
+              </div>
+              <div className="space-y-1">
+                <Label>Username</Label>
+                <Input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="your@email.com" />
+              </div>
+              <div className="space-y-1">
+                <Label>Password / App Password</Label>
+                <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
+              </div>
+            </>
+          )}
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Cancel</Button>
-          <Button onClick={handleConnect} disabled={connectCalDAV.isPending}>
-            {connectCalDAV.isPending && <Loader2 className="size-4 animate-spin mr-2" />}
+          <Button onClick={handleConnect} disabled={isPending}>
+            {isPending && <Loader2 className="size-4 animate-spin mr-2" />}
             Connect
           </Button>
         </DialogFooter>
