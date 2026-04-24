@@ -5,7 +5,7 @@ import { publicProcedure, router } from "./_core/trpc";
 import { workspaceRouter } from "./routers/workspace";
 import { accountsRouter, contactsRouter, leadsRouter, opportunitiesRouter, productsRouter, territoriesRouter } from "./routers/crm";
 import { activitiesRouter, attachmentsRouter, tasksRouter } from "./routers/activities";
-import { emailDraftsRouter, sequencesRouter } from "./routers/sequences";
+import { emailDraftsRouter, sequencesRouter, sequenceAbRouter } from "./routers/sequences";
 import { csRouter } from "./routers/cs";
 import { auditRouter, campaignsRouter, dashboardsRouter, notificationsRouter, quotesRouter, scimRouter, socialRouter, workflowsRouter } from "./routers/operations";
 import { leadRoutingRouter, leadScoringRouter } from "./routers/leadScoring";
@@ -57,6 +57,7 @@ export const appRouter = router({
   attachments: attachmentsRouter,
   sequences: sequencesRouter,
   emailDrafts: emailDraftsRouter,
+  sequenceAb: sequenceAbRouter,
   cs: csRouter,
   workflows: workflowsRouter,
   social: socialRouter,

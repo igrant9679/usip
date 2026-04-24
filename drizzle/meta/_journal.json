@@ -183,6 +183,13 @@
       "when": 1777061385158,
       "tag": "0025_slimy_jack_power",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "5",
+      "when": 1777062020194,
+      "tag": "0026_clumsy_texas_twister",
+      "breakpoints": true
     }
   ]
 }

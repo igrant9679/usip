@@ -534,6 +534,7 @@ export const workflowRules = mysqlTable(
       "signal_received",
       "field_equals",
       "schedule",
+      "deal_stuck",
     ]).notNull(),
     triggerConfig: json("triggerConfig").notNull(),
     conditions: json("conditions").notNull(), // [{field, op, value}]
@@ -1264,6 +1265,34 @@ export const subjectVariants = mysqlTable(
   }),
 );
 export type SubjectVariant = typeof subjectVariants.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Sequence A/B Variants
+   ────────────────────────────────────────────────────────────────────────── */
+
+export const sequenceAbVariants = mysqlTable(
+  "sequence_ab_variants",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    sequenceId: int("sequenceId").notNull(),
+    stepIndex: int("stepIndex").notNull(), // 0-based index into sequences.steps JSON
+    variantLabel: varchar("variantLabel", { length: 32 }).notNull(), // "A", "B", "C"…
+    subject: varchar("subject", { length: 240 }).notNull(),
+    body: text("body").notNull(),
+    splitPct: int("splitPct").default(50).notNull(), // 0-100 percentage of enrollments to receive this variant
+    sentCount: int("sentCount").default(0).notNull(),
+    openCount: int("openCount").default(0).notNull(),
+    replyCount: int("replyCount").default(0).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    bySeq: index("ix_sav_seq").on(t.sequenceId, t.stepIndex),
+    byWs: index("ix_sav_ws").on(t.workspaceId),
+  }),
+);
+export type SequenceAbVariant = typeof sequenceAbVariants.$inferSelect;
 
 /* ──────────────────────────────────────────────────────────────────────────
    Sprint 5 — Custom Fields framework
@@ -2074,6 +2103,8 @@ export const calendarEvents = mysqlTable(
     relatedType: varchar("relatedType", { length: 30 }),
     relatedId: int("relatedId"),
     activityId: int("activityId"),
+    aiSummary: text("aiSummary"),
+    aiSummarizedAt: timestamp("aiSummarizedAt"),
     syncedAt: timestamp("syncedAt").defaultNow().notNull(),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),

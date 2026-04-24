@@ -40,6 +40,92 @@ import { adminWsProcedure, repProcedure, workspaceProcedure } from "../_core/wor
 import { storagePut } from "../storage";
 import { buildTransporter, decrypt } from "./smtpConfig";
 
+/* ----- Standalone async helpers (exported for nightly batch) ----- */
+
+export async function checkDealAging(): Promise<{ rulesChecked: number; dealsMatched: number; actionsTriggered: number }> {
+  const db = await getDb();
+  if (!db) return { rulesChecked: 0, dealsMatched: 0, actionsTriggered: 0 };
+
+  const rules = await db.select().from(workflowRules)
+    .where(and(
+      eq(workflowRules.enabled, true),
+      eq(workflowRules.triggerType, "deal_stuck"),
+    ));
+
+  if (rules.length === 0) return { rulesChecked: 0, dealsMatched: 0, actionsTriggered: 0 };
+
+  let dealsMatched = 0;
+  let actionsTriggered = 0;
+
+  for (const rule of rules) {
+    const cfg = (rule.triggerConfig ?? {}) as { stage?: string; days?: number };
+    const minDays = cfg.days ?? 7;
+    const targetStage = cfg.stage ?? null;
+
+    const [settings] = await db.select().from(workspaceSettings)
+      .where(eq(workspaceSettings.workspaceId, rule.workspaceId));
+
+    const stuckDeals = await db.select({
+      id: opportunities.id,
+      name: opportunities.name,
+      stage: opportunities.stage,
+      daysInStage: opportunities.daysInStage,
+      ownerId: opportunities.ownerId,
+    }).from(opportunities)
+      .where(and(
+        eq(opportunities.workspaceId, rule.workspaceId),
+        sql`${opportunities.stage} NOT IN ('closed_won', 'closed_lost')`,
+        sql`${opportunities.daysInStage} >= ${minDays}`,
+        ...(targetStage ? [eq(opportunities.stage, targetStage)] : []),
+      ));
+
+    for (const deal of stuckDeals) {
+      const errors: string[] = [];
+      for (const action of (rule.actions as Array<{ type: string; params: Record<string, any> }>)) {
+        if (action.type === "notify_slack" || action.type === "post_slack") {
+          const webhookUrl = (action.params?.webhookUrl as string) || (settings as any)?.slackWebhookUrl;
+          if (webhookUrl) {
+            try {
+              const resp = await fetch(webhookUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: `⚠️ Deal stuck: *${deal.name}* has been in stage *${deal.stage}* for ${deal.daysInStage} day(s). Rule: ${rule.name}` }), signal: AbortSignal.timeout(10_000) });
+              if (!resp.ok) errors.push(`Slack webhook returned ${resp.status}`);
+            } catch (e: any) { errors.push(`Slack webhook failed: ${e?.message}`) }
+          }
+        } else if (action.type === "notify_teams") {
+          const webhookUrl = (action.params?.webhookUrl as string) || (settings as any)?.teamsWebhookUrl;
+          if (webhookUrl) {
+            try {
+              const resp = await fetch(webhookUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: `⚠️ Deal stuck: **${deal.name}** has been in stage **${deal.stage}** for ${deal.daysInStage} day(s). Rule: ${rule.name}` }), signal: AbortSignal.timeout(10_000) });
+              if (!resp.ok) errors.push(`Teams webhook returned ${resp.status}`);
+            } catch (e: any) { errors.push(`Teams webhook failed: ${e?.message}`) }
+          }
+        } else if (action.type === "create_notification") {
+          await db.insert(notifications).values({
+            workspaceId: rule.workspaceId,
+            userId: deal.ownerId ?? 0,
+            kind: "deal_stuck",
+            title: `Deal stuck: ${deal.name}`,
+            body: `${deal.name} has been in stage "${deal.stage}" for ${deal.daysInStage} day(s). (Rule: ${rule.name})`,
+          });
+        }
+        actionsTriggered++;
+      }
+      await db.insert(workflowRuns).values({
+        workspaceId: rule.workspaceId, ruleId: rule.id, triggeredBy: "deal_stuck_nightly",
+        status: errors.length === 0 ? "success" : "error",
+        actionsRun: rule.actions,
+        errorMessage: errors.length > 0 ? errors.join("; ") : null,
+      });
+      dealsMatched++;
+    }
+
+    if (stuckDeals.length > 0) {
+      await db.update(workflowRules).set({ fireCount: rule.fireCount + stuckDeals.length, lastFiredAt: new Date() }).where(eq(workflowRules.id, rule.id));
+    }
+  }
+
+  return { rulesChecked: rules.length, dealsMatched, actionsTriggered };
+}
+
 /* ----- Pure helpers (exported for tests) ----- */
 
 export function computeQuoteTotals(
@@ -100,7 +186,7 @@ export const workflowsRouter = router({
       name: z.string().min(1),
       description: z.string().optional(),
       enabled: z.boolean().default(true),
-      triggerType: z.enum(["record_created", "record_updated", "stage_changed", "task_overdue", "nps_submitted", "signal_received", "field_equals", "schedule"]),
+      triggerType: z.enum(["record_created", "record_updated", "stage_changed", "task_overdue", "nps_submitted", "signal_received", "field_equals", "schedule", "deal_stuck"]),
       triggerConfig: z.record(z.string(), z.any()),
       conditions: z.array(z.object({ field: z.string(), op: z.string(), value: z.any() })).default([]),
       actions: z.array(z.object({ type: z.string(), params: z.record(z.string(), z.any()) })).default([]),
@@ -220,6 +306,112 @@ export const workflowsRouter = router({
     });
     return { ok: true, errors };
   }),
+
+  /**
+   * Check all deal_stuck workflow rules for a workspace and fire any that match.
+   * Called by the nightly batch job (or manually from admin panel).
+   */
+  checkDealAging: workspaceProcedure
+    .input(z.object({ workspaceId: z.number().optional() }))
+    .mutation(async ({ ctx }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+
+      // Fetch all enabled deal_stuck rules for this workspace
+      const rules = await db.select().from(workflowRules)
+        .where(and(
+          eq(workflowRules.workspaceId, ctx.workspace.id),
+          eq(workflowRules.enabled, true),
+          eq(workflowRules.triggerType, "deal_stuck"),
+        ));
+
+      if (rules.length === 0) return { fired: 0, details: [] };
+
+      // Fetch workspace settings for Slack/Teams webhooks
+      const [settings] = await db.select().from(workspaceSettings)
+        .where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
+
+      const details: Array<{ ruleId: number; ruleName: string; dealId: number; dealName: string; daysInStage: number }> = [];
+      let totalFired = 0;
+
+      for (const rule of rules) {
+        const cfg = (rule.triggerConfig ?? {}) as { stage?: string; days?: number };
+        const minDays = cfg.days ?? 7;
+        const targetStage = cfg.stage ?? null;
+
+        // Find deals stuck in stage for >= minDays
+        const stuckDeals = await db.select({
+          id: opportunities.id,
+          name: opportunities.name,
+          stage: opportunities.stage,
+          daysInStage: opportunities.daysInStage,
+          ownerId: opportunities.ownerId,
+        }).from(opportunities)
+          .where(and(
+            eq(opportunities.workspaceId, ctx.workspace.id),
+            sql`${opportunities.stage} NOT IN ('closed_won', 'closed_lost')`,
+            sql`${opportunities.daysInStage} >= ${minDays}`,
+            ...(targetStage ? [eq(opportunities.stage, targetStage)] : []),
+          ));
+
+        for (const deal of stuckDeals) {
+          const errors: string[] = [];
+          const payload = {
+            event: "deal_stuck",
+            deal: { id: deal.id, name: deal.name, stage: deal.stage, daysInStage: deal.daysInStage },
+            rule: { id: rule.id, name: rule.name },
+            workspace: ctx.workspace.id,
+          };
+
+          // Execute each action
+          for (const action of (rule.actions as Array<{ type: string; params: Record<string, any> }>)) {
+            if (action.type === "notify_slack" || action.type === "post_slack") {
+              const webhookUrl = (action.params?.webhookUrl as string) || (settings as any)?.slackWebhookUrl;
+              if (webhookUrl) {
+                try {
+                  const resp = await fetch(webhookUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: `⚠️ Deal stuck: *${deal.name}* has been in stage *${deal.stage}* for ${deal.daysInStage} day(s). Rule: ${rule.name}` }), signal: AbortSignal.timeout(10_000) });
+                  if (!resp.ok) errors.push(`Slack webhook returned ${resp.status}`);
+                } catch (e: any) { errors.push(`Slack webhook failed: ${e?.message}`) }
+              }
+            } else if (action.type === "notify_teams") {
+              const webhookUrl = (action.params?.webhookUrl as string) || (settings as any)?.teamsWebhookUrl;
+              if (webhookUrl) {
+                try {
+                  const resp = await fetch(webhookUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: `⚠️ Deal stuck: **${deal.name}** has been in stage **${deal.stage}** for ${deal.daysInStage} day(s). Rule: ${rule.name}` }), signal: AbortSignal.timeout(10_000) });
+                  if (!resp.ok) errors.push(`Teams webhook returned ${resp.status}`);
+                } catch (e: any) { errors.push(`Teams webhook failed: ${e?.message}`) }
+              }
+            } else if (action.type === "create_notification") {
+              await db.insert(notifications).values({
+                workspaceId: ctx.workspace.id,
+                userId: deal.ownerId ?? ctx.user.id,
+                kind: "deal_stuck",
+                title: `Deal stuck: ${deal.name}`,
+                body: `${deal.name} has been in stage "${deal.stage}" for ${deal.daysInStage} day(s). (Rule: ${rule.name})`,
+              });
+            }
+          }
+
+          // Log the workflow run
+          await db.insert(workflowRuns).values({
+            workspaceId: ctx.workspace.id, ruleId: rule.id, triggeredBy: "deal_stuck_check",
+            status: errors.length === 0 ? "success" : "error",
+            actionsRun: rule.actions,
+            errorMessage: errors.length > 0 ? errors.join("; ") : null,
+          });
+
+          details.push({ ruleId: rule.id, ruleName: rule.name, dealId: deal.id, dealName: deal.name, daysInStage: deal.daysInStage ?? 0 });
+          totalFired++;
+        }
+
+        // Update fireCount for the rule
+        if (stuckDeals.length > 0) {
+          await db.update(workflowRules).set({ fireCount: rule.fireCount + stuckDeals.length, lastFiredAt: new Date() }).where(eq(workflowRules.id, rule.id));
+        }
+      }
+
+      return { fired: totalFired, details };
+    }),
 });
 
 /* ───── Social Publishing ───────────────────────────────────────────── */

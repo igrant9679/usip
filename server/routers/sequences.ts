@@ -1,7 +1,7 @@
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq } from "drizzle-orm";
+import { and, count, desc, eq, sql } from "drizzle-orm";
 import { z } from "zod";
-import { contacts, emailDrafts, enrollments, leads, sequenceEdges, sequenceNodes, sequences, workspaceSettings } from "../../drizzle/schema";
+import { contacts, emailDrafts, enrollments, leads, sequenceAbVariants, sequenceEdges, sequenceNodes, sequences, workspaceSettings } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
 import { getDb } from "../db";
 import { invokeLLM } from "../_core/llm";
@@ -431,4 +431,112 @@ export const emailDraftsRouter = router({
     await db.delete(emailDrafts).where(and(eq(emailDrafts.id, input.id), eq(emailDrafts.workspaceId, ctx.workspace.id)));
     return { ok: true };
   }),
+});
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Sequence A/B Variants Router
+   ───────────────────────────────────────────────────────────────────────── */
+
+export const sequenceAbRouter = router({
+  /** List all variants for a sequence (optionally filtered by stepIndex) */
+  list: workspaceProcedure
+    .input(z.object({ sequenceId: z.number(), stepIndex: z.number().optional() }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) return [];
+      const conds: any[] = [
+        eq(sequenceAbVariants.workspaceId, ctx.workspace.id),
+        eq(sequenceAbVariants.sequenceId, input.sequenceId),
+      ];
+      if (input.stepIndex !== undefined) conds.push(eq(sequenceAbVariants.stepIndex, input.stepIndex));
+      return db.select().from(sequenceAbVariants).where(and(...conds)).orderBy(sequenceAbVariants.stepIndex, sequenceAbVariants.variantLabel);
+    }),
+
+  /** Create a new A/B variant for a step */
+  create: workspaceProcedure
+    .input(z.object({
+      sequenceId: z.number(),
+      stepIndex: z.number().int().min(0),
+      variantLabel: z.string().min(1).max(32),
+      subject: z.string().min(1),
+      body: z.string(),
+      splitPct: z.number().int().min(1).max(99).default(50),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // Verify sequence belongs to workspace
+      const [seq] = await db.select({ id: sequences.id }).from(sequences)
+        .where(and(eq(sequences.id, input.sequenceId), eq(sequences.workspaceId, ctx.workspace.id)));
+      if (!seq) throw new TRPCError({ code: "NOT_FOUND", message: "Sequence not found" });
+      const [inserted] = await db.insert(sequenceAbVariants).values({
+        workspaceId: ctx.workspace.id,
+        sequenceId: input.sequenceId,
+        stepIndex: input.stepIndex,
+        variantLabel: input.variantLabel,
+        subject: input.subject,
+        body: input.body,
+        splitPct: input.splitPct,
+      });
+      return { id: (inserted as any).insertId };
+    }),
+
+  /** Update an existing variant */
+  update: workspaceProcedure
+    .input(z.object({
+      id: z.number(),
+      subject: z.string().optional(),
+      body: z.string().optional(),
+      splitPct: z.number().int().min(1).max(99).optional(),
+      variantLabel: z.string().optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const { id, ...rest } = input;
+      const patch = Object.fromEntries(Object.entries(rest).filter(([, v]) => v !== undefined));
+      if (Object.keys(patch).length > 0) {
+        await db.update(sequenceAbVariants).set(patch)
+          .where(and(eq(sequenceAbVariants.id, id), eq(sequenceAbVariants.workspaceId, ctx.workspace.id)));
+      }
+      return { ok: true };
+    }),
+
+  /** Delete a variant */
+  delete: workspaceProcedure
+    .input(z.object({ id: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      await db.delete(sequenceAbVariants)
+        .where(and(eq(sequenceAbVariants.id, input.id), eq(sequenceAbVariants.workspaceId, ctx.workspace.id)));
+      return { ok: true };
+    }),
+
+  /** Get per-variant stats for a sequence step */
+  getStats: workspaceProcedure
+    .input(z.object({ sequenceId: z.number(), stepIndex: z.number().int().min(0) }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) return [];
+      const variants = await db.select().from(sequenceAbVariants)
+        .where(and(
+          eq(sequenceAbVariants.workspaceId, ctx.workspace.id),
+          eq(sequenceAbVariants.sequenceId, input.sequenceId),
+          eq(sequenceAbVariants.stepIndex, input.stepIndex),
+        ));
+      return variants.map((v) => ({
+        id: v.id,
+        variantLabel: v.variantLabel,
+        subject: v.subject,
+        splitPct: v.splitPct,
+        sentCount: v.sentCount,
+        openCount: v.openCount,
+        replyCount: v.replyCount,
+        openRate: v.sentCount > 0 ? Math.round((v.openCount / v.sentCount) * 100) : 0,
+        replyRate: v.sentCount > 0 ? Math.round((v.replyCount / v.sentCount) * 100) : 0,
+        // Winner = highest reply rate (or open rate as tiebreaker)
+        score: v.sentCount > 0 ? (v.replyCount / v.sentCount) * 100 + (v.openCount / v.sentCount) * 10 : 0,
+      }));
+    }),
 });

@@ -16,6 +16,7 @@ const TRIGGERS = [
   ["signal_received", "When a buying signal fires"],
   ["field_equals", "When a field equals a value"],
   ["schedule", "On a schedule (cron)"],
+  ["deal_stuck", "When a deal is stuck in a stage"],
 ] as const;
 
 const OPS = [
@@ -131,17 +132,20 @@ function RuleEditor({ rule, onSave, onTest, isSaving }: { rule: any; onSave: (pa
   const [trigger, setTrigger] = useState<string>(rule.triggerType);
   const [conds, setConds] = useState<Cond[]>(((rule.conditions as Cond[]) ?? []).length ? (rule.conditions as Cond[]) : []);
   const [acts, setActs] = useState<Act[]>(((rule.actions as Act[]) ?? []).length ? (rule.actions as Act[]) : [{ type: "create_task", params: { title: "Follow up" } }]);
+  const [triggerConfig, setTriggerConfig] = useState<Record<string, string>>((rule.triggerConfig as Record<string, string>) ?? {});
 
   useEffect(() => {
     setTrigger(rule.triggerType);
     setConds((rule.conditions as Cond[]) ?? []);
     setActs((rule.actions as Act[]) ?? [{ type: "create_task", params: { title: "Follow up" } }]);
+    setTriggerConfig((rule.triggerConfig as Record<string, string>) ?? {});
   }, [rule.id]);
 
   const dirty =
     trigger !== rule.triggerType ||
     JSON.stringify(conds) !== JSON.stringify(rule.conditions ?? []) ||
-    JSON.stringify(acts) !== JSON.stringify(rule.actions ?? []);
+    JSON.stringify(acts) !== JSON.stringify(rule.actions ?? []) ||
+    JSON.stringify(triggerConfig) !== JSON.stringify(rule.triggerConfig ?? {});
 
   return (
     <Section
@@ -150,7 +154,7 @@ function RuleEditor({ rule, onSave, onTest, isSaving }: { rule: any; onSave: (pa
       right={
         <div className="flex gap-2">
           <Button size="sm" variant="ghost" onClick={onTest}><Play className="size-3.5" /> Test fire</Button>
-          <Button size="sm" disabled={!dirty || isSaving} onClick={() => onSave({ triggerType: trigger, conditions: conds, actions: acts })}>
+          <Button size="sm" disabled={!dirty || isSaving} onClick={() => onSave({ triggerType: trigger, triggerConfig, conditions: conds, actions: acts })}>
             <Save className="size-3.5" /> {isSaving ? "Saving…" : "Save"}
           </Button>
         </div>
@@ -159,9 +163,32 @@ function RuleEditor({ rule, onSave, onTest, isSaving }: { rule: any; onSave: (pa
       <div className="p-4 space-y-5 text-sm">
         <div>
           <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-1.5">When</div>
-          <select value={trigger} onChange={(e) => setTrigger(e.target.value)} className="w-full border rounded-md px-3 py-2 h-10 text-sm bg-card">
+          <select value={trigger} onChange={(e) => { setTrigger(e.target.value); setTriggerConfig({}); }} className="w-full border rounded-md px-3 py-2 h-10 text-sm bg-card">
             {TRIGGERS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
           </select>
+          {trigger === "deal_stuck" && (
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              <div className="space-y-1">
+                <label className="text-xs text-muted-foreground">Stage (leave blank for any)</label>
+                <input
+                  value={triggerConfig.stage ?? ""}
+                  onChange={(e) => setTriggerConfig({ ...triggerConfig, stage: e.target.value })}
+                  placeholder="e.g. Proposal"
+                  className="w-full border rounded px-2 py-1.5 text-xs bg-card"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs text-muted-foreground">Days stuck (minimum)</label>
+                <input
+                  type="number"
+                  value={triggerConfig.days ?? "7"}
+                  onChange={(e) => setTriggerConfig({ ...triggerConfig, days: e.target.value })}
+                  placeholder="7"
+                  className="w-full border rounded px-2 py-1.5 text-xs bg-card"
+                />
+              </div>
+            </div>
+          )}
         </div>
 
         <div>

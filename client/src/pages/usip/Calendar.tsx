@@ -26,8 +26,9 @@ import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {
-  CalendarDays, Plus, RefreshCw, Settings, Loader2, Users, Trash2, Link2
+  CalendarDays, Plus, RefreshCw, Settings, Loader2, Users, Trash2, Link2, Sparkles
 } from "lucide-react";
+import { Streamdown } from "streamdown";
 
 // ─── Connect Calendar Dialog ───────────────────────────────────────────────────
 
@@ -208,6 +209,8 @@ function EventDialog({
     event?.attendees ? JSON.parse(event.attendees).map((a: any) => a.email).join(", ") : ""
   );
 
+  const [aiSummary, setAiSummary] = useState<string | null>(event?.aiSummary ?? null);
+
   const createEvent = trpc.calendar.createEvent.useMutation({
     onSuccess: () => { toast.success("Event created"); onClose(); },
     onError: (e) => toast.error(e.message),
@@ -218,6 +221,10 @@ function EventDialog({
   });
   const deleteEvent = trpc.calendar.deleteEvent.useMutation({
     onSuccess: () => { toast.success("Event deleted"); onClose(); },
+    onError: (e) => toast.error(e.message),
+  });
+  const summarizeMeeting = trpc.calendar.summarizeMeeting.useMutation({
+    onSuccess: (data) => { setAiSummary(data.summary); toast.success("Meeting summary generated"); },
     onError: (e) => toast.error(e.message),
   });
 
@@ -283,6 +290,27 @@ function EventDialog({
             <Label>Description</Label>
             <Textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={3} />
           </div>
+
+          {/* AI Meeting Summary panel — only shown for existing events */}
+          {event?.id && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label className="flex items-center gap-1.5"><Sparkles className="size-3.5 text-violet-500" /> AI Meeting Summary</Label>
+                <Button
+                  variant="outline" size="sm"
+                  onClick={() => summarizeMeeting.mutate({ eventId: event.id })}
+                  disabled={summarizeMeeting.isPending}
+                >
+                  {summarizeMeeting.isPending ? <><Loader2 className="size-3.5 animate-spin mr-1" />Generating…</> : <><Sparkles className="size-3.5 mr-1" />{aiSummary ? "Re-summarize" : "Summarize"}</>}
+                </Button>
+              </div>
+              {aiSummary && (
+                <div className="rounded-md border bg-muted/40 p-3 text-sm max-h-48 overflow-y-auto">
+                  <Streamdown>{aiSummary}</Streamdown>
+                </div>
+              )}
+            </div>
+          )}
         </div>
         <DialogFooter className="gap-2">
           {event && (

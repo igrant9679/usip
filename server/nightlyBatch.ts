@@ -13,6 +13,7 @@ import { aiPipelineJobs, leads, workspaceSettings } from "../drizzle/schema";
 import { getDb } from "./db";
 import { runPipelineForContact } from "./routers/aiPipeline";
 import { notifyOwner } from "./_core/notification";
+import { checkDealAging } from "./routers/operations";
 
 const MAX_PER_WORKSPACE = 50;
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
@@ -143,6 +144,14 @@ export async function runNightlyBatch(): Promise<{
     `[NightlyBatch] Done. Workspaces: ${summary.workspacesProcessed}, ` +
       `Triggered: ${totalTriggered}, Skipped: ${totalSkipped}, Errors: ${totalErrors}`,
   );
+
+  // Feature Batch G: Check for deals stuck in a stage and fire deal_stuck workflow rules
+  try {
+    const agingResult = await checkDealAging();
+    console.log(`[NightlyBatch] Deal aging check: ${agingResult.rulesChecked} rules, ${agingResult.dealsMatched} deals matched, ${agingResult.actionsTriggered} actions triggered`);
+  } catch (agingErr) {
+    console.warn("[NightlyBatch] Deal aging check failed:", agingErr);
+  }
 
   // Feature 54: Notify the workspace owner with a batch summary
   try {

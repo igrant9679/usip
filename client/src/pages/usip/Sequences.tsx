@@ -11,6 +11,7 @@ import { trpc } from "@/lib/trpc";
 import {
   Activity, GitBranch, Pause, Play, Plus, Power, CheckCircle2, XCircle,
   BarChart3, RefreshCw, Pencil, Trash2, ArrowUp, ArrowDown, Mail, Clock, ClipboardList, TrendingUp,
+  FlaskConical, Trophy, Loader2,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { Link } from "wouter";
@@ -387,6 +388,164 @@ function SequenceEditDialog({ seq, open, onClose }: { seq: any; open: boolean; o
   );
 }
 
+// ─── SequenceAbPanel ────────────────────────────────────────────────────────
+function SequenceAbPanel({ sequenceId, steps }: { sequenceId: number; steps: any[] }) {
+  const [selectedStep, setSelectedStep] = useState(0);
+  const [addOpen, setAddOpen] = useState(false);
+  const [editVariant, setEditVariant] = useState<any | null>(null);
+  const utils = trpc.useUtils();
+
+  const emailSteps = steps
+    .map((s, i) => ({ ...s, index: i }))
+    .filter((s) => s.type === "email");
+
+  const { data: variants, isLoading } = trpc.sequenceAb.list.useQuery(
+    { sequenceId, stepIndex: selectedStep },
+    { enabled: emailSteps.length > 0 },
+  );
+  const { data: stats } = trpc.sequenceAb.getStats.useQuery(
+    { sequenceId, stepIndex: selectedStep },
+    { enabled: emailSteps.length > 0 },
+  );
+
+  const createVariant = trpc.sequenceAb.create.useMutation({
+    onSuccess: () => { utils.sequenceAb.list.invalidate(); utils.sequenceAb.getStats.invalidate(); setAddOpen(false); toast.success("Variant added"); },
+    onError: (e) => toast.error(e.message),
+  });
+  const updateVariant = trpc.sequenceAb.update.useMutation({
+    onSuccess: () => { utils.sequenceAb.list.invalidate(); utils.sequenceAb.getStats.invalidate(); setEditVariant(null); toast.success("Variant updated"); },
+    onError: (e) => toast.error(e.message),
+  });
+  const deleteVariant = trpc.sequenceAb.delete.useMutation({
+    onSuccess: () => { utils.sequenceAb.list.invalidate(); utils.sequenceAb.getStats.invalidate(); toast.success("Variant deleted"); },
+    onError: (e) => toast.error(e.message),
+  });
+
+  if (emailSteps.length === 0) {
+    return <div className="text-sm text-muted-foreground py-6 text-center">No email steps in this sequence. Add an email step first.</div>;
+  }
+
+  const topVariant = stats && stats.length > 0 ? stats.reduce((a, b) => a.score > b.score ? a : b) : null;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Label className="text-xs text-muted-foreground">Email step:</Label>
+          <select
+            className="text-sm border rounded px-2 py-1 bg-background"
+            value={selectedStep}
+            onChange={(e) => setSelectedStep(Number(e.target.value))}
+          >
+            {emailSteps.map((s) => (
+              <option key={s.index} value={s.index}>Step {s.index + 1}: {s.subject || "(no subject)"}</option>
+            ))}
+          </select>
+        </div>
+        <Button size="sm" onClick={() => setAddOpen(true)}><Plus className="size-3.5 mr-1" /> Add variant</Button>
+      </div>
+
+      {isLoading && <div className="flex justify-center py-6"><Loader2 className="size-5 animate-spin text-muted-foreground" /></div>}
+
+      {!isLoading && (variants ?? []).length === 0 && (
+        <div className="text-sm text-muted-foreground py-6 text-center border rounded-md">
+          No A/B variants for this step yet. Add a variant to start testing.
+        </div>
+      )}
+
+      {(variants ?? []).length > 0 && (
+        <div className="space-y-2">
+          {/* Stats comparison table */}
+          {stats && stats.length > 0 && (
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b">
+                    <th className="text-left py-1.5 px-2">Variant</th>
+                    <th className="text-left py-1.5 px-2">Subject</th>
+                    <th className="text-right py-1.5 px-2">Split</th>
+                    <th className="text-right py-1.5 px-2">Sent</th>
+                    <th className="text-right py-1.5 px-2">Open %</th>
+                    <th className="text-right py-1.5 px-2">Reply %</th>
+                    <th className="py-1.5 px-2"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {stats.map((v) => (
+                    <tr key={v.id} className="border-b hover:bg-muted/30">
+                      <td className="py-1.5 px-2">
+                        <span className="font-mono font-semibold">{v.variantLabel}</span>
+                        {topVariant?.id === v.id && v.sentCount > 0 && (
+                          <Trophy className="size-3 text-amber-500 inline ml-1" />
+                        )}
+                      </td>
+                      <td className="py-1.5 px-2 max-w-[180px] truncate">{v.subject}</td>
+                      <td className="py-1.5 px-2 text-right">{v.splitPct}%</td>
+                      <td className="py-1.5 px-2 text-right">{v.sentCount}</td>
+                      <td className={`py-1.5 px-2 text-right font-medium ${v.openRate >= 30 ? "text-emerald-600" : v.openRate >= 15 ? "text-amber-600" : "text-muted-foreground"}`}>{v.openRate}%</td>
+                      <td className={`py-1.5 px-2 text-right font-medium ${v.replyRate >= 10 ? "text-emerald-600" : v.replyRate >= 5 ? "text-amber-600" : "text-muted-foreground"}`}>{v.replyRate}%</td>
+                      <td className="py-1.5 px-2">
+                        <div className="flex gap-1 justify-end">
+                          <Button size="sm" variant="ghost" className="h-6 px-1.5" onClick={() => setEditVariant(variants!.find((vv) => vv.id === v.id))}><Pencil className="size-3" /></Button>
+                          <Button size="sm" variant="ghost" className="h-6 px-1.5 text-destructive" onClick={() => deleteVariant.mutate({ id: v.id })}><Trash2 className="size-3" /></Button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Add variant dialog */}
+      <FormDialog open={addOpen} onOpenChange={setAddOpen} title="Add A/B Variant" isPending={createVariant.isPending}
+        onSubmit={(f) => createVariant.mutate({
+          sequenceId,
+          stepIndex: selectedStep,
+          variantLabel: String(f.get("variantLabel") ?? ""),
+          subject: String(f.get("subject") ?? ""),
+          body: String(f.get("body") ?? ""),
+          splitPct: Number(f.get("splitPct") ?? 50),
+        })}>
+        <Field label="Variant label (e.g. A, B, C)" name="variantLabel" placeholder="B" required />
+        <Field label="Subject line" name="subject" placeholder="Alternative subject..." required />
+        <TextareaField label="Body" name="body" placeholder="Email body for this variant..." />
+        <Field label="Split %" name="splitPct" type="number" placeholder="50" />
+      </FormDialog>
+
+      {/* Edit variant dialog */}
+      {editVariant && (
+        <Dialog open={!!editVariant} onOpenChange={(v) => !v && setEditVariant(null)}>
+          <DialogContent className="max-w-md">
+            <DialogHeader><DialogTitle>Edit Variant {editVariant.variantLabel}</DialogTitle></DialogHeader>
+            <div className="space-y-3 py-2">
+              <div className="space-y-1"><Label>Subject</Label><Input defaultValue={editVariant.subject} id="ev-subject" /></div>
+              <div className="space-y-1"><Label>Body</Label><Textarea defaultValue={editVariant.body} id="ev-body" rows={5} /></div>
+              <div className="space-y-1"><Label>Split %</Label><Input type="number" defaultValue={editVariant.splitPct} id="ev-split" /></div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setEditVariant(null)}>Cancel</Button>
+              <Button
+                onClick={() => updateVariant.mutate({
+                  id: editVariant.id,
+                  subject: (document.getElementById("ev-subject") as HTMLInputElement)?.value,
+                  body: (document.getElementById("ev-body") as HTMLTextAreaElement)?.value,
+                  splitPct: Number((document.getElementById("ev-split") as HTMLInputElement)?.value),
+                })}
+                disabled={updateVariant.isPending}
+              >
+                {updateVariant.isPending && <Loader2 className="size-4 animate-spin mr-1" />}Save
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
+    </div>
+  );
+}
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 // ─── SequencePerformancePanel ───────────────────────────────────────────────
 function SequencePerformancePanel({ sequenceId }: { sequenceId: number }) {
@@ -518,7 +677,7 @@ export default function Sequences() {
   const [open, setOpen] = useState(false);
   const [editSeq, setEditSeq] = useState<any | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
-  const [activeTab, setActiveTab] = useState<"steps" | "stats" | "analytics">("steps");
+  const [activeTab, setActiveTab] = useState<"steps" | "stats" | "analytics" | "ab">("steps");
   const utils = trpc.useUtils();
   const { data } = trpc.sequences.list.useQuery();
   const create = trpc.sequences.create.useMutation({
@@ -584,6 +743,7 @@ export default function Sequences() {
                     { k: "steps", label: "Steps", icon: Activity },
                     { k: "stats", label: "Stats & Enrollments", icon: BarChart3 },
                     { k: "analytics", label: "Performance", icon: TrendingUp },
+                    { k: "ab", label: "A/B Testing", icon: FlaskConical },
                   ].map(({ k, label, icon: Icon }) => (
                     <button key={k}
                       onClick={() => setActiveTab(k as any)}
@@ -626,6 +786,15 @@ export default function Sequences() {
                 {activeTab === "analytics" && (
                   <div className="p-3">
                     <SequencePerformancePanel sequenceId={detail.data.id} />
+                  </div>
+                )}
+
+                {activeTab === "ab" && (
+                  <div className="p-3">
+                    <SequenceAbPanel
+                      sequenceId={detail.data.id}
+                      steps={(detail.data.steps as any[]) ?? []}
+                    />
                   </div>
                 )}
               </Section>

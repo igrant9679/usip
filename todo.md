@@ -1076,3 +1076,9 @@
 - [x] Pipeline Forecast: add stage filter dropdown so user can narrow forecast to deals in specific stage(s)
 - [x] Duplicate Merge: replace auto-fill logic with per-field checkbox selector — user picks which fields to copy from secondary before confirming merge
 - [x] Sequence Performance Analytics: add date range filter (from/to date pickers) so analytics are scoped to emails sent within a chosen period
+
+## Batch G — AI Meeting Summary, Sequence A/B Testing, Deal Aging Alerts
+
+- [x] AI Meeting Summary: "Summarize" button on calendar event detail that calls LLM with event title, attendees, description, and linked opportunity notes; saves result as an activity record; displayed in event detail panel
+- [x] Sequence A/B Testing: schema migration to add variantLabel + variantGroup to sequenceSteps; server procedures to create/update variants and get per-variant stats; sequence canvas UI to add/remove variants per step; Performance tab A/B comparison table showing open rate, reply rate, and winner badge per variant
+- [x] Deal Aging Workflow Trigger: new workflow trigger type "deal_stuck" with configurable stage + days threshold; nightly check procedure that scans open opportunities for daysInStage >= threshold and fires matching workflow rules (notify_slack, notify_teams, create_task); workflow builder UI to configure the trigger

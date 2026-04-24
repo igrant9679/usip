@@ -7,10 +7,11 @@ import { router } from "../_core/trpc";
 import { workspaceProcedure, roleRank } from "../_core/workspace";
 import { TRPCError } from "@trpc/server";
 import { getDb } from "../db";
-import { calendarAccounts, calendarEvents } from "../../drizzle/schema";
+import { calendarAccounts, calendarEvents, activities, opportunities } from "../../drizzle/schema";
 import { eq, and, gte, lte, desc } from "drizzle-orm";
 import { createCalendarAdapter } from "../calendarAdapter";
 import { encryptField } from "../emailAdapter";
+import { invokeLLM } from "../_core/llm";
 
 function resolveTargetUser(
   ctx: { user: { id: number }; member: { role: string } },
@@ -344,5 +345,84 @@ export const calendarRouter = router({
       }
       await db.update(calendarAccounts).set({ lastSyncAt: new Date(), lastSyncError: null }).where(eq(calendarAccounts.id, input.accountId));
       return { synced: upserted };
+    }),
+
+  /** Generate an AI meeting summary and save it as an activity record */
+  summarizeMeeting: workspaceProcedure
+    .input(z.object({ eventId: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+
+      // Fetch the calendar event
+      const [event] = await db.select().from(calendarEvents)
+        .where(and(eq(calendarEvents.id, input.eventId), eq(calendarEvents.workspaceId, ctx.workspace.id)));
+      if (!event) throw new TRPCError({ code: "NOT_FOUND", message: "Event not found" });
+
+      // Fetch linked opportunity notes if any
+      let opportunityContext = "";
+      if (event.relatedType === "opportunity" && event.relatedId) {
+        const [opp] = await db.select({ name: opportunities.name, stage: opportunities.stage, aiNote: opportunities.aiNote, nextStep: opportunities.nextStep })
+          .from(opportunities).where(eq(opportunities.id, event.relatedId));
+        if (opp) {
+          opportunityContext = `\n\nLinked opportunity: "${opp.name}" (stage: ${opp.stage})${opp.aiNote ? `\nAI notes: ${opp.aiNote}` : ""}${opp.nextStep ? `\nNext step: ${opp.nextStep}` : ""}`;
+        }
+      }
+
+      // Parse attendees
+      let attendeeList = "";
+      try {
+        const att = event.attendees ? JSON.parse(event.attendees as string) : [];
+        attendeeList = att.map((a: any) => a.email || a.name || "").filter(Boolean).join(", ");
+      } catch {}
+
+      const prompt = `You are a sales CRM assistant. Generate a concise post-meeting summary for the following calendar event.
+
+Event: ${event.title}
+Date: ${event.startAt.toISOString().slice(0, 10)}
+Attendees: ${attendeeList || "(none listed)"}
+Description: ${event.description || "(none)"}
+Location: ${event.location || "(none)"}${opportunityContext}
+
+Provide a structured summary with these sections:
+1. **Key Discussion Points** (2-4 bullet points)
+2. **Decisions Made** (if any)
+3. **Action Items** (owner + task, if any)
+4. **Next Steps** (what happens next)
+
+Be concise and professional. Use markdown formatting.`;
+
+      const llmResult = await invokeLLM({
+        messages: [
+          { role: "system", content: "You are a sales CRM assistant that generates concise, actionable meeting summaries." },
+          { role: "user", content: prompt },
+        ],
+      });
+      const summary = llmResult.choices?.[0]?.message?.content ?? "(no summary generated)";
+
+      // Save summary to calendarEvents row
+      await db.update(calendarEvents).set({ aiSummary: summary, aiSummarizedAt: new Date() })
+        .where(eq(calendarEvents.id, input.eventId));
+
+      // Save as a meeting activity record linked to the related entity (or the event itself)
+      const relatedType = event.relatedType ?? "opportunity";
+      const relatedId = event.relatedId ?? 0;
+      if (relatedId > 0) {
+        await db.insert(activities).values({
+          workspaceId: ctx.workspace.id,
+          type: "meeting",
+          relatedType,
+          relatedId,
+          subject: `Meeting summary: ${event.title}`,
+          body: summary,
+          meetingStartedAt: event.startAt,
+          meetingEndedAt: event.endAt,
+          meetingAttendees: event.attendees,
+          occurredAt: event.startAt,
+          actorUserId: ctx.user.id,
+        });
+      }
+
+      return { summary };
     }),
 });
