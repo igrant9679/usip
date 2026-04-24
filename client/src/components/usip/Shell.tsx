@@ -50,8 +50,14 @@ import {
   MailOpen,
   CalendarDays,
 } from "lucide-react";
-import { ReactNode, useEffect, useState } from "react";
+import { ReactNode, useEffect, useState, createContext, useContext } from "react";
 import { Link, useLocation } from "wouter";
+import { useTheme } from "@/contexts/ThemeContext";
+import { Moon, Sun } from "lucide-react";
+
+// ── Accent colour context ────────────────────────────────────────────────────
+const AccentContext = createContext<string>("#60A5FA");
+export function useAccentColor() { return useContext(AccentContext); }
 
 type NavItem = { href: string; label: string; icon: any };
 type NavGroup = { label: string; items: NavItem[]; color: string; activeColor: string; activeBg: string };
@@ -159,14 +165,19 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
   const [wsOpen, setWsOpen] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const { data: unread } = trpc.notifications.unreadCount.useQuery(undefined, { enabled: !!current, refetchInterval: 30_000 });
+  const { theme, toggleTheme } = useTheme();
+
+  // Derive current category accent from active route
+  const activeGroup = NAV.find(g => g.items.some(i => i.href === location || (i.href !== "/" && location.startsWith(i.href))));
+  const accentColor = activeGroup?.color ?? "#60A5FA";
 
   // close dropdowns/drawers on route change
   useEffect(() => {
     setWsOpen(false);
     setMobileOpen(false);
   }, [location]);
-
   return (
+    <AccentContext.Provider value={accentColor}>
     <div className="h-full flex bg-background text-foreground">
       {/* Mobile backdrop */}
       {mobileOpen && (
@@ -304,6 +315,17 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
 
           {actions}
 
+          {/* Dark / light mode toggle */}
+          {toggleTheme && (
+            <button
+              onClick={toggleTheme}
+              className="p-2 rounded-md hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
+              title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+            >
+              {theme === "dark" ? <Sun className="size-4" /> : <Moon className="size-4" />}
+            </button>
+          )}
+
           <Link href="/inbox" className="relative p-2 rounded-md hover:bg-secondary" title="Notifications">
             <Bell className="size-4" />
             {unread && unread > 0 ? (
@@ -315,14 +337,24 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
         <main className="flex-1 overflow-auto bg-background">{children}</main>
       </div>
     </div>
+    </AccentContext.Provider>
   );
 }
 
 export function PageHeader({ title, description, children }: { title: string; description?: string; children?: ReactNode }) {
+  const accent = useAccentColor();
   return (
-    <div className="px-4 md:px-6 py-4 md:py-5 border-b bg-card/30 flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
+    <div
+      className="px-4 md:px-6 py-4 md:py-5 border-b flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4"
+      style={{
+        borderLeftWidth: '4px',
+        borderLeftStyle: 'solid',
+        borderLeftColor: accent,
+        background: `linear-gradient(to right, ${accent}12 0%, transparent 60%)`,
+      }}
+    >
       <div className="flex-1 min-w-0">
-        <h1 className="text-lg md:text-xl font-semibold tracking-tight truncate">{title}</h1>
+        <h1 className="text-lg md:text-xl font-semibold tracking-tight truncate" style={{ color: accent }}>{title}</h1>
         {description && <p className="text-sm text-muted-foreground mt-0.5 line-clamp-2">{description}</p>}
       </div>
       {children && <div className="flex items-center gap-2 flex-wrap">{children}</div>}

@@ -1102,3 +1102,9 @@
 - [x] Color palette: Overview=sky blue (#60A5FA), Acquire=amber (#FCD34D), Engage=hot purple (#C084FC), Retain=vivid red (#F87171), Operate=teal (#2DD4BF), Admin=slate (#94A3B8)
 - [x] Active nav item: colored glow background matching section color
 - [x] Update page title and any in-app "USIP" references to "Velocity"
+
+## Batch K — Accent Colors, Favicon, Dark Mode Toggle
+
+- [x] Apply category accent colors to main content page headers: each page's PageHeader gets a subtle left-border accent + tinted background matching its nav category color
+- [x] Generate Velocity lightning bolt favicon and deploy it to the app
+- [x] Add dark/light mode toggle button to the topbar (sun/moon icon), wired to ThemeProvider
