@@ -34,6 +34,7 @@ import Tasks from "@/pages/usip/Tasks";
 import Team from "@/pages/usip/Team";
 import Territories from "@/pages/usip/Territories";
 import Workflows from "@/pages/usip/Workflows";
+import NotificationPrefs from "@/pages/usip/NotificationPrefs";
 import LeadScoring from "@/pages/usip/LeadScoring";
 import LeadRouting from "@/pages/usip/LeadRouting";
 import SequenceCanvas from "@/pages/usip/SequenceCanvas";
@@ -129,6 +130,7 @@ function Router() {
       <Route path="/segments/:id"><AuthGate><Segments /></AuthGate></Route>
       <Route path="/segment-rules"><AuthGate><SegmentRules /></AuthGate></Route>
       <Route path="/settings"><AuthGate><Settings /></AuthGate></Route>
+      <Route path="/notification-prefs"><AuthGate><NotificationPrefs /></AuthGate></Route>
       <Route path="/404"><NotFound /></Route>
       <Route><NotFound /></Route>
     </Switch>

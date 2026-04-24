@@ -34,6 +34,7 @@ const ACTION_TYPES = [
   ["update_field", "Update field"],
   ["enroll_sequence", "Enroll in sequence"],
   ["post_slack", "Post to Slack"],
+  ["notify_teams", "Notify Teams"],
   ["webhook", "Call webhook"],
 ] as const;
 
@@ -222,6 +223,7 @@ function defaultParams(actionType: string): Record<string, string> {
     case "update_field": return { field: "", value: "" };
     case "enroll_sequence": return { sequenceId: "" };
     case "post_slack": return { channel: "#sales", message: "" };
+    case "notify_teams": return { message: "" };
     case "webhook": return { url: "", body: "{}" };
     default: return {};
   }

@@ -390,8 +390,14 @@ function SequenceEditDialog({ seq, open, onClose }: { seq: any; open: boolean; o
 // ─── Main page ────────────────────────────────────────────────────────────────
 // ─── SequencePerformancePanel ───────────────────────────────────────────────
 function SequencePerformancePanel({ sequenceId }: { sequenceId: number }) {
-  const { data, isLoading } = trpc.sequences.getPerformanceAnalytics.useQuery({ sequenceId });
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const queryInput: { sequenceId: number; dateFrom?: string; dateTo?: string } = { sequenceId };
+  if (dateFrom) queryInput.dateFrom = dateFrom;
+  if (dateTo) queryInput.dateTo = dateTo;
+  const { data, isLoading } = trpc.sequences.getPerformanceAnalytics.useQuery(queryInput);
   const row = data?.[0];
+  const hasDateFilter = !!dateFrom || !!dateTo;
 
   if (isLoading) {
     return <div className="flex items-center gap-2 text-sm text-muted-foreground py-6"><RefreshCw className="size-3 animate-spin" /> Loading analytics…</div>;
@@ -419,6 +425,40 @@ function SequencePerformancePanel({ sequenceId }: { sequenceId: number }) {
 
   return (
     <div className="space-y-4">
+      {/* Date range filter */}
+      <div className="flex flex-wrap items-end gap-3 p-3 bg-muted/40 rounded-lg border">
+        <div className="flex flex-col gap-1">
+          <label className="text-xs text-muted-foreground font-medium">From</label>
+          <input
+            type="date"
+            value={dateFrom}
+            onChange={(e) => setDateFrom(e.target.value)}
+            className="h-8 rounded-md border border-input bg-background px-2 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-[#14B89A]"
+          />
+        </div>
+        <div className="flex flex-col gap-1">
+          <label className="text-xs text-muted-foreground font-medium">To</label>
+          <input
+            type="date"
+            value={dateTo}
+            onChange={(e) => setDateTo(e.target.value)}
+            className="h-8 rounded-md border border-input bg-background px-2 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-[#14B89A]"
+          />
+        </div>
+        {hasDateFilter && (
+          <button
+            onClick={() => { setDateFrom(""); setDateTo(""); }}
+            className="h-8 px-3 rounded-md text-xs border border-border text-muted-foreground hover:text-foreground hover:border-[#14B89A] transition-colors"
+          >
+            Clear filter
+          </button>
+        )}
+        {hasDateFilter && (
+          <span className="text-xs text-[#14B89A] font-medium self-end pb-1">
+            Filtered: {dateFrom || "…"} → {dateTo || "…"}
+          </span>
+        )}
+      </div>
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
         {metrics.map(({ label, value, sub, color }) => (
           <Card key={label} className="border">

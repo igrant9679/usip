@@ -30,6 +30,7 @@ import {
   workflowRules,
   workflowRuns,
   workspaceMembers,
+  workspaceSettings,
 } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
 import { getDb } from "../db";
@@ -149,6 +150,8 @@ export const workflowsRouter = router({
     if (!rule) throw new TRPCError({ code: "NOT_FOUND" });
     const actions = Array.isArray(rule.actions) ? rule.actions as Array<{ type: string; params: Record<string, any> }> : [];
     const errors: string[] = [];
+    // Load workspace settings once for Slack/Teams webhook URLs
+    const [wsSettings] = await db.select({ slackWebhookUrl: workspaceSettings.slackWebhookUrl, teamsWebhookUrl: workspaceSettings.teamsWebhookUrl }).from(workspaceSettings).where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
     for (const action of actions) {
       if (action.type === "webhook") {
         const url = action.params?.url;
@@ -159,6 +162,47 @@ export const workflowsRouter = router({
             if (!resp.ok) errors.push(`Webhook ${url} returned ${resp.status}`);
           } catch (e: any) {
             errors.push(`Webhook ${url} failed: ${e?.message ?? "unknown error"}`);
+          }
+        }
+      } else if (action.type === "post_slack") {
+        const webhookUrl = wsSettings?.slackWebhookUrl;
+        if (!webhookUrl) {
+          errors.push("post_slack: No Slack webhook URL configured in workspace settings");
+        } else {
+          const message = action.params?.message ?? `Workflow rule fired: ${rule.name}`;
+          const channel = action.params?.channel;
+          const payload: Record<string, any> = { text: message };
+          if (channel) payload.channel = channel;
+          try {
+            const resp = await fetch(webhookUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), signal: AbortSignal.timeout(10_000) });
+            if (!resp.ok) errors.push(`Slack webhook returned ${resp.status}`);
+          } catch (e: any) {
+            errors.push(`Slack webhook failed: ${e?.message ?? "unknown error"}`);
+          }
+        }
+      } else if (action.type === "notify_teams") {
+        const webhookUrl = wsSettings?.teamsWebhookUrl;
+        if (!webhookUrl) {
+          errors.push("notify_teams: No Teams webhook URL configured in workspace settings");
+        } else {
+          const message = action.params?.message ?? `Workflow rule fired: ${rule.name}`;
+          const payload = {
+            type: "message",
+            attachments: [{
+              contentType: "application/vnd.microsoft.card.adaptive",
+              content: {
+                type: "AdaptiveCard",
+                body: [{ type: "TextBlock", text: message, wrap: true }],
+                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                version: "1.4",
+              },
+            }],
+          };
+          try {
+            const resp = await fetch(webhookUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), signal: AbortSignal.timeout(10_000) });
+            if (!resp.ok) errors.push(`Teams webhook returned ${resp.status}`);
+          } catch (e: any) {
+            errors.push(`Teams webhook failed: ${e?.message ?? "unknown error"}`);
           }
         }
       }
@@ -304,6 +348,32 @@ export const socialRouter = router({
     }
     return { variants };
   }),
+
+  /** Set or update recurrence config for a post. When recurrence is set and post is scheduled,
+   *  future occurrences are automatically spawned on publish. */
+  setRecurrence: repProcedure
+    .input(
+      z.object({
+        id: z.number(),
+        recurrence: z
+          .object({
+            type: z.enum(["daily", "weekly", "custom"]),
+            interval: z.number().int().min(1).max(365).optional(),
+            daysOfWeek: z.array(z.number().int().min(0).max(6)).optional(),
+            endDate: z.string().optional(), // ISO date string
+          })
+          .nullable(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      await db
+        .update(socialPosts)
+        .set({ recurrence: input.recurrence })
+        .where(and(eq(socialPosts.id, input.id), eq(socialPosts.workspaceId, ctx.workspace.id)));
+      return { ok: true };
+    }),
 
   /** Aggregate analytics. */
   analytics: workspaceProcedure.query(async ({ ctx }) => {

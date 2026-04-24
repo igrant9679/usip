@@ -238,19 +238,29 @@ export const sequencesRouter = router({
 
   /** Sequence performance analytics: open rate, click rate, reply rate, opt-out rate per sequence. */
   getPerformanceAnalytics: workspaceProcedure
-    .input(z.object({ sequenceId: z.number().optional() }))
+    .input(z.object({
+      sequenceId: z.number().optional(),
+      /** ISO date string YYYY-MM-DD — filter emails sent on or after this date */
+      dateFrom: z.string().optional(),
+      /** ISO date string YYYY-MM-DD — filter emails sent on or before this date */
+      dateTo: z.string().optional(),
+    }))
     .query(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const wsId = ctx.workspace.id;
+      const fromTs = input.dateFrom ? new Date(input.dateFrom).getTime() : null;
+      const toTs = input.dateTo ? new Date(input.dateTo + "T23:59:59Z").getTime() : null;
 
       // Get all sequences in workspace
       const seqRows = await db.select().from(sequences).where(eq(sequences.workspaceId, wsId));
       const targetSeqs = input.sequenceId ? seqRows.filter((s) => s.id === input.sequenceId) : seqRows;
 
       const results = await Promise.all(targetSeqs.map(async (seq) => {
-        // Get all email drafts for this sequence
-        const drafts = await db.select().from(emailDrafts).where(and(eq(emailDrafts.sequenceId, seq.id), eq(emailDrafts.workspaceId, wsId)));
+        // Get all email drafts for this sequence, filtered by sent date range if provided
+        let drafts = await db.select().from(emailDrafts).where(and(eq(emailDrafts.sequenceId, seq.id), eq(emailDrafts.workspaceId, wsId)));
+        if (fromTs !== null) drafts = drafts.filter((d) => d.sentAt !== null && new Date(d.sentAt).getTime() >= fromTs);
+        if (toTs !== null) drafts = drafts.filter((d) => d.sentAt !== null && new Date(d.sentAt).getTime() <= toTs);
         const sent = drafts.filter((d) => d.status === "sent").length;
         const totalOpens = drafts.reduce((s, d) => s + (d.openCount ?? 0), 0);
         const totalClicks = drafts.reduce((s, d) => s + (d.clickCount ?? 0), 0);

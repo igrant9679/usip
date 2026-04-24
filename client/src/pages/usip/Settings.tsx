@@ -709,7 +709,98 @@ function IntegrationsTab() {
       </Section>
       {/* Email Verification Settings */}
       <EmailVerificationSettingsSection isAdmin={isAdmin} />
+      {/* Slack / Teams / System Sender */}
+      <WorkspaceMessagingSection isAdmin={isAdmin} />
     </>
+  );
+}
+
+function WorkspaceMessagingSection({ isAdmin }: { isAdmin: boolean }) {
+  const utils = trpc.useUtils();
+  const settingsQ = trpc.settings.get.useQuery();
+  const sendingAccountsQ = trpc.sendingAccounts.list.useQuery();
+  const saveMut = trpc.settings.save.useMutation({
+    onSuccess: () => { utils.settings.get.invalidate(); toast.success("Messaging settings saved"); },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const [slackUrl, setSlackUrl] = useState("");
+  const [teamsUrl, setTeamsUrl] = useState("");
+  const [systemSenderId, setSystemSenderId] = useState<string>("");
+
+  useEffect(() => {
+    if (!settingsQ.data) return;
+    const s = settingsQ.data as any;
+    setSlackUrl(s.slackWebhookUrl ?? "");
+    setTeamsUrl(s.teamsWebhookUrl ?? "");
+    setSystemSenderId(s.systemSenderAccountId ? String(s.systemSenderAccountId) : "");
+  }, [settingsQ.data]);
+
+  const handleSave = () => {
+    saveMut.mutate({
+      slackWebhookUrl: slackUrl || null,
+      teamsWebhookUrl: teamsUrl || null,
+      systemSenderAccountId: systemSenderId ? Number(systemSenderId) : null,
+    } as any);
+  };
+
+  const accounts = (sendingAccountsQ.data ?? []) as any[];
+
+  return (
+    <Section
+      title="Messaging & Notifications"
+      description="Configure Slack and Microsoft Teams webhook URLs for workflow actions, and designate a system sending account for invitation emails."
+      right={
+        isAdmin ? (
+          <Button size="sm" onClick={handleSave} disabled={saveMut.isPending}>
+            {saveMut.isPending ? <Loader2 className="size-3.5 animate-spin mr-1" /> : null}
+            Save
+          </Button>
+        ) : null
+      }
+    >
+      <div className="p-4 space-y-5">
+        <div className="space-y-1">
+          <Label>Slack Incoming Webhook URL</Label>
+          <Input
+            value={slackUrl}
+            onChange={(e) => setSlackUrl(e.target.value)}
+            disabled={!isAdmin}
+            placeholder="https://hooks.slack.com/services/..."
+            type="url"
+          />
+          <p className="text-xs text-muted-foreground">Used by workflow &quot;Post to Slack&quot; actions. Create one in your Slack app&apos;s Incoming Webhooks settings.</p>
+        </div>
+        <div className="space-y-1">
+          <Label>Microsoft Teams Incoming Webhook URL</Label>
+          <Input
+            value={teamsUrl}
+            onChange={(e) => setTeamsUrl(e.target.value)}
+            disabled={!isAdmin}
+            placeholder="https://outlook.office.com/webhook/..."
+            type="url"
+          />
+          <p className="text-xs text-muted-foreground">Used by workflow &quot;Notify Teams&quot; actions. Create one via Connectors in your Teams channel settings.</p>
+        </div>
+        <div className="space-y-1">
+          <Label>System Sender Account</Label>
+          <select
+            className="w-full rounded-md border bg-transparent px-3 py-2 text-sm"
+            value={systemSenderId}
+            onChange={(e) => setSystemSenderId(e.target.value)}
+            disabled={!isAdmin}
+          >
+            <option value="">— None (invitation emails disabled) —</option>
+            {accounts.map((a: any) => (
+              <option key={a.id} value={String(a.id)}>
+                {a.name} ({a.fromEmail})
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-muted-foreground">When set, team invitation emails are sent from this account using its SMTP credentials.</p>
+        </div>
+      </div>
+    </Section>
   );
 }
 

@@ -59,6 +59,10 @@ export const workspaceMembers = mysqlTable(
     quota: decimal("quota", { precision: 14, scale: 2 }),
     deactivatedAt: timestamp("deactivatedAt"),
     lastActiveAt: timestamp("lastActiveAt"),
+    /** Personal notification email (may differ from login email) */
+    notifEmail: varchar("notifEmail", { length: 320 }),
+    /** JSON: { sequence_reply: bool, social_response: bool, workflow_alert: bool, system: bool } */
+    notifPrefs: json("notifPrefs"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
   (t) => ({
@@ -608,6 +612,10 @@ export const socialPosts = mysqlTable(
     aiVariants: json("aiVariants"),
     authorUserId: int("authorUserId"),
     approverUserId: int("approverUserId"),
+    /** Recurrence config: { type: 'daily'|'weekly'|'custom', interval?: number, daysOfWeek?: number[], endDate?: string } */
+    recurrence: json("recurrence"),
+    /** ID of the parent post this was spawned from (for recurrence chains) */
+    parentPostId: int("parentPostId"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
@@ -1031,6 +1039,12 @@ export const workspaceSettings = mysqlTable("workspace_settings", {
   reverifyStatuses: json("reverifyStatuses"), // string[] e.g. ["risky","accept_all"]
   nightlyPipelineEnabled: boolean("nightlyPipelineEnabled").default(false).notNull(),
   nightlyScoreThreshold: int("nightlyScoreThreshold").default(60).notNull(),
+  /** Slack incoming webhook URL for workflow notify_slack actions */
+  slackWebhookUrl: text("slackWebhookUrl"),
+  /** Microsoft Teams incoming webhook URL for workflow notify_teams actions */
+  teamsWebhookUrl: text("teamsWebhookUrl"),
+  /** Sending account ID to use as the system sender for invitation/notification emails */
+  systemSenderAccountId: int("systemSenderAccountId"),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
 export type WorkspaceSettings = typeof workspaceSettings.$inferSelect;

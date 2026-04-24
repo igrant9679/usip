@@ -7,7 +7,7 @@ import { Field, fmt$, FormDialog, SelectField } from "@/components/usip/Common";
 import { PageHeader, Shell } from "@/components/usip/Shell";
 import { RecordDrawer } from "@/components/usip/RecordDrawer";
 import { trpc } from "@/lib/trpc";
-import { Brain, Download, Loader2, Plus, TrendingUp, Zap } from "lucide-react";
+import { Brain, Download, Loader2, Plus, TrendingUp, Zap, Filter, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 
@@ -123,7 +123,20 @@ function DealCard({
 
 /* ─── Forecast View ─────────────────────────────────────────────────────── */
 function ForecastView() {
-  const { data: fc, isLoading } = trpc.opportunities.forecast.useQuery();
+  const [selectedStages, setSelectedStages] = useState<string[]>([]);
+  // Unfiltered query to always have the full availableStages list for the filter UI
+  const { data: allFc } = trpc.opportunities.forecast.useQuery(undefined);
+  const availableStages = allFc?.availableStages ?? [];
+  // Filtered query — passes selectedStages only when at least one is chosen
+  const { data: fc, isLoading } = trpc.opportunities.forecast.useQuery(
+    selectedStages.length > 0 ? { stages: selectedStages } : undefined
+  );
+
+  function toggleStage(stage: string) {
+    setSelectedStages((prev) =>
+      prev.includes(stage) ? prev.filter((s) => s !== stage) : [...prev, stage]
+    );
+  }
 
   if (isLoading) {
     return (
@@ -148,8 +161,46 @@ function ForecastView() {
     return new Date(Number(y), Number(m) - 1, 1).toLocaleString("default", { month: "short", year: "numeric" });
   };
 
+  const stageLabel = (id: string) => STAGES.find((s) => s.id === id)?.label ?? id;
+
   return (
     <div className="p-6 space-y-6">
+      {/* Stage filter toolbar */}
+      {availableStages.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="flex items-center gap-1 text-xs text-muted-foreground shrink-0">
+            <Filter className="size-3" /> Filter by stage:
+          </span>
+          {availableStages.map((stage) => {
+            const active = selectedStages.includes(stage);
+            return (
+              <button
+                key={stage}
+                onClick={() => toggleStage(stage)}
+                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium border transition-all ${
+                  active
+                    ? "bg-[#14B89A] text-white border-[#14B89A]"
+                    : "bg-background border-border text-muted-foreground hover:border-[#14B89A] hover:text-foreground"
+                }`}
+              >
+                <span
+                  className={`size-2 rounded-full inline-block ${STAGE_COLORS[stage] ?? "bg-muted"}`}
+                />
+                {stageLabel(stage)}
+                {active && <X className="size-2.5 ml-0.5" />}
+              </button>
+            );
+          })}
+          {selectedStages.length > 0 && (
+            <button
+              onClick={() => setSelectedStages([])}
+              className="text-xs text-muted-foreground hover:text-foreground underline ml-1"
+            >
+              Clear all
+            </button>
+          )}
+        </div>
+      )}
       {/* KPI row */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         {[

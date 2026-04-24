@@ -3,11 +3,12 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Field, fmtDate, FormDialog, Section, SelectField, StatusPill, TextareaField } from "@/components/usip/Common";
 import { EmptyState, PageHeader, Shell, StatCard } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
-import { Calendar, ExternalLink, Plus, Send, Share2, Sparkles, Trash2 } from "lucide-react";
+import { Calendar, ExternalLink, Plus, RefreshCw, Send, Share2, Sparkles, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 
 const PLATFORMS = ["linkedin", "twitter", "facebook", "instagram"] as const;
+const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 export default function Social() {
   const utils = trpc.useUtils();
@@ -21,6 +22,13 @@ export default function Social() {
   const [topic, setTopic] = useState("");
   const [body, setBody] = useState("");
 
+  // Recurrence state
+  const [recurrencePostId, setRecurrencePostId] = useState<number | null>(null);
+  const [recurrenceType, setRecurrenceType] = useState<"" | "daily" | "weekly" | "custom">("");
+  const [recurrenceInterval, setRecurrenceInterval] = useState("7");
+  const [recurrenceDays, setRecurrenceDays] = useState<number[]>([]);
+  const [recurrenceEndDate, setRecurrenceEndDate] = useState("");
+
   const connect = trpc.social.connectAccount.useMutation({ onSuccess: () => { utils.social.listAccounts.invalidate(); setConnectOpen(false); toast.success("Connected (stub)"); } });
   const disconnect = trpc.social.disconnectAccount.useMutation({ onSuccess: () => utils.social.listAccounts.invalidate() });
   const create = trpc.social.createPost.useMutation({ onSuccess: () => { utils.social.listPosts.invalidate(); setComposeOpen(false); setBody(""); setVariants([]); toast.success("Saved"); } });
@@ -29,6 +37,35 @@ export default function Social() {
   const pub = trpc.social.publishNowStub.useMutation({ onSuccess: () => { utils.social.listPosts.invalidate(); utils.social.analytics.invalidate(); toast.success("Published (stub)"); } });
   const del = trpc.social.deletePost.useMutation({ onSuccess: () => utils.social.listPosts.invalidate() });
   const genVariants = trpc.social.generateVariants.useMutation({ onSuccess: (r) => { setVariants(r.variants); toast.success("Variants generated"); } });
+  const setRecurrence = trpc.social.setRecurrence.useMutation({
+    onSuccess: () => { utils.social.listPosts.invalidate(); setRecurrencePostId(null); toast.success("Recurrence saved"); },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const openRecurrenceDialog = (postId: number) => {
+    const post = posts.data?.find((p) => p.id === postId);
+    const rec = (post as any)?.recurrence as any;
+    setRecurrenceType(rec?.type ?? "");
+    setRecurrenceInterval(rec?.interval ? String(rec.interval) : "7");
+    setRecurrenceDays(rec?.daysOfWeek ?? []);
+    setRecurrenceEndDate(rec?.endDate ?? "");
+    setRecurrencePostId(postId);
+  };
+
+  const handleSaveRecurrence = () => {
+    if (!recurrencePostId) return;
+    setRecurrence.mutate({
+      id: recurrencePostId,
+      recurrence: recurrenceType
+        ? {
+            type: recurrenceType as any,
+            interval: recurrenceType === "custom" ? Number(recurrenceInterval) : undefined,
+            daysOfWeek: recurrenceType === "weekly" ? recurrenceDays : undefined,
+            endDate: recurrenceEndDate || undefined,
+          }
+        : null,
+    });
+  };
 
   const calendarMap = useMemo(() => {
     const map: Record<string, any[]> = {};
@@ -70,23 +107,32 @@ export default function Social() {
             <Section title={`All posts (${posts.data?.length ?? 0})`}>
               {(posts.data ?? []).length === 0 ? <EmptyState icon={Share2} title="No posts" /> : (
                 <ul className="divide-y">
-                  {posts.data!.map((p) => (
-                    <li key={p.id} className="p-3 text-sm">
-                      <div className="flex items-center gap-2 mb-1">
-                        <StatusPill tone="info">{p.platform}</StatusPill>
-                        <StatusPill tone={p.status === "published" ? "success" : p.status === "scheduled" ? "info" : p.status === "approved" ? "success" : "muted"}>{p.status}</StatusPill>
-                        <div className="ml-auto text-xs text-muted-foreground">{p.scheduledFor ? fmtDate(p.scheduledFor) : "—"}</div>
-                      </div>
-                      <div className="text-sm whitespace-pre-wrap line-clamp-3">{p.body}</div>
-                      {p.status === "published" && <div className="mt-1 text-xs text-muted-foreground font-mono">{p.impressions.toLocaleString()} imp · {p.engagements.toLocaleString()} eng · {p.clicks} clicks</div>}
-                      <div className="mt-2 flex gap-1">
-                        {p.status !== "approved" && p.status !== "published" && <Button size="sm" variant="ghost" onClick={() => approve.mutate({ id: p.id })}>Approve</Button>}
-                        {p.status === "approved" && <Button size="sm" variant="ghost" onClick={() => sched.mutate({ id: p.id, scheduledFor: new Date(Date.now() + 3600000).toISOString() })}>Schedule +1h</Button>}
-                        {p.status !== "published" && <Button size="sm" variant="ghost" onClick={() => pub.mutate({ id: p.id })}><Send className="size-3.5" /> Publish now (stub)</Button>}
-                        <Button size="sm" variant="ghost" onClick={() => del.mutate({ id: p.id })}><Trash2 className="size-3.5" /></Button>
-                      </div>
-                    </li>
-                  ))}
+                  {posts.data!.map((p) => {
+                    const rec = (p as any).recurrence as any;
+                    return (
+                      <li key={p.id} className="p-3 text-sm">
+                        <div className="flex items-center gap-2 mb-1">
+                          <StatusPill tone="info">{p.platform}</StatusPill>
+                          <StatusPill tone={p.status === "published" ? "success" : p.status === "scheduled" ? "info" : p.status === "approved" ? "success" : "muted"}>{p.status}</StatusPill>
+                          {rec?.type && (
+                            <span className="text-[10px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full capitalize">
+                              ↻ {rec.type}
+                            </span>
+                          )}
+                          <div className="ml-auto text-xs text-muted-foreground">{p.scheduledFor ? fmtDate(p.scheduledFor) : "—"}</div>
+                        </div>
+                        <div className="text-sm whitespace-pre-wrap line-clamp-3">{p.body}</div>
+                        {p.status === "published" && <div className="mt-1 text-xs text-muted-foreground font-mono">{p.impressions.toLocaleString()} imp · {p.engagements.toLocaleString()} eng · {p.clicks} clicks</div>}
+                        <div className="mt-2 flex gap-1 flex-wrap">
+                          {p.status !== "approved" && p.status !== "published" && <Button size="sm" variant="ghost" onClick={() => approve.mutate({ id: p.id })}>Approve</Button>}
+                          {p.status === "approved" && <Button size="sm" variant="ghost" onClick={() => sched.mutate({ id: p.id, scheduledFor: new Date(Date.now() + 3600000).toISOString() })}>Schedule +1h</Button>}
+                          {p.status !== "published" && <Button size="sm" variant="ghost" onClick={() => pub.mutate({ id: p.id })}><Send className="size-3.5" /> Publish now (stub)</Button>}
+                          <Button size="sm" variant="ghost" onClick={() => openRecurrenceDialog(p.id)} title="Set recurrence"><RefreshCw className="size-3.5" /></Button>
+                          <Button size="sm" variant="ghost" onClick={() => del.mutate({ id: p.id })}><Trash2 className="size-3.5" /></Button>
+                        </div>
+                      </li>
+                    );
+                  })}
                 </ul>
               )}
             </Section>
@@ -142,6 +188,70 @@ export default function Social() {
           </TabsContent>
         </Tabs>
       </div>
+
+      {/* Recurrence dialog */}
+      <FormDialog
+        open={recurrencePostId !== null}
+        onOpenChange={(o) => { if (!o) setRecurrencePostId(null); }}
+        title="Set post recurrence"
+        isPending={setRecurrence.isPending}
+        onSubmit={handleSaveRecurrence}
+      >
+        <div className="space-y-4">
+          <div className="space-y-1">
+            <label className="text-sm font-medium">Repeat schedule</label>
+            <select
+              className="w-full rounded-md border bg-transparent px-3 py-2 text-sm"
+              value={recurrenceType}
+              onChange={(e) => setRecurrenceType(e.target.value as any)}
+            >
+              <option value="">No repeat</option>
+              <option value="daily">Daily</option>
+              <option value="weekly">Weekly (select days)</option>
+              <option value="custom">Custom interval (every N days)</option>
+            </select>
+          </div>
+          {recurrenceType === "custom" && (
+            <div className="space-y-1">
+              <label className="text-sm font-medium">Interval (days)</label>
+              <input
+                type="number" min="1" max="365"
+                value={recurrenceInterval}
+                onChange={(e) => setRecurrenceInterval(e.target.value)}
+                className="w-full rounded-md border bg-transparent px-3 py-2 text-sm"
+              />
+            </div>
+          )}
+          {recurrenceType === "weekly" && (
+            <div className="space-y-1">
+              <label className="text-sm font-medium">Days of week</label>
+              <div className="flex gap-1 flex-wrap">
+                {DAY_LABELS.map((d, i) => (
+                  <button
+                    type="button" key={d}
+                    className={`px-2 py-1 text-xs rounded border transition ${recurrenceDays.includes(i) ? "bg-primary text-primary-foreground border-primary" : "bg-transparent hover:bg-secondary"}`}
+                    onClick={() => setRecurrenceDays((prev) => prev.includes(i) ? prev.filter((x) => x !== i) : [...prev, i])}
+                  >
+                    {d}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          {recurrenceType && (
+            <div className="space-y-1">
+              <label className="text-sm font-medium">End date (optional)</label>
+              <input
+                type="date"
+                value={recurrenceEndDate}
+                onChange={(e) => setRecurrenceEndDate(e.target.value)}
+                className="w-full rounded-md border bg-transparent px-3 py-2 text-sm"
+              />
+              <p className="text-xs text-muted-foreground">Leave blank for no end date.</p>
+            </div>
+          )}
+        </div>
+      </FormDialog>
 
       <FormDialog open={connectOpen} onOpenChange={setConnectOpen} title="Connect social account (stub OAuth)" isPending={connect.isPending}
         onSubmit={(f) => connect.mutate({ platform: f.get("platform") as any, handle: String(f.get("handle")), displayName: String(f.get("displayName") ?? "") || undefined })}>

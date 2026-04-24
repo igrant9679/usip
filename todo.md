@@ -1054,20 +1054,25 @@
 - [x] Sequence performance analytics: per-sequence stats tab showing open rate, reply rate, opt-out rate, and step-by-step drop-off funnel
 
 ## Gap Closure Sprint — Batch D (Social publishing + integrations)
-- [ ] Live social publishing: real OAuth connection flow for LinkedIn, Twitter/X, Facebook, Instagram with credential slots (API key/secret/access token per platform)
-- [ ] Social post scheduling: full scheduling UI with repeat/recurrence options (daily, weekly, custom interval), post queue management
-- [ ] Slack / Teams notification integration: workspace settings to configure Slack webhook URL and/or Teams webhook URL; workflow rule action type "notify_slack" and "notify_teams" that actually POSTs to the configured URL
+- [x] Live social publishing: real OAuth connection flow for LinkedIn, Twitter/X, Facebook, Instagram with credential slots (API key/secret/access token per platform)
+- [x] Social post scheduling: full scheduling UI with repeat/recurrence options (daily, weekly, custom interval), post queue management
+- [x] Slack / Teams notification integration: workspace settings to configure Slack webhook URL and/or Teams webhook URL; workflow rule action type "notify_slack" and "notify_teams" that actually POSTs to the configured URL
 
 ## Gap Closure Sprint — Batch E (Calendar sync)
 - [ ] Two-way Google Calendar sync: OAuth connect flow + sync meetings logged in USIP to/from Google Calendar (credential slots for Google OAuth client ID/secret)
 - [ ] Two-way Outlook Calendar sync: OAuth connect flow + sync meetings to/from Outlook/Microsoft 365 (credential slots for Azure app client ID/secret)
 
 ## Gap Closure Sprint — Batch F (Notifications + invitations)
-- [ ] Workspace system sender: Settings page section to designate one sending account as the system sender for invitation emails, dashboard delivery, and general notifications
-- [ ] User invitation email: when team.invite is called, send an actual invitation email via the designated system sender with a magic link
-- [ ] Team member notification email preferences: profile/settings page where each member can add a personal notification email address (separate from login) and choose which notification types to receive (sequence replies, social post responses, workflow alerts, etc.)
+- [x] Workspace system sender: Settings page section to designate one sending account as the system sender for invitation emails, dashboard delivery, and general notifications
+- [x] User invitation email: when team.invite is called, send an actual invitation email via the designated system sender with a magic link
+- [x] Team member notification email preferences: profile/settings page where each member can add a personal notification email address (separate from login) and choose which notification types to receive (sequence replies, social post responses, workflow alerts, etc.)
 
 ## Bug Fixes + Features: Mailbox Compose & Logo (Apr 24 round 3)
 - [ ] Fix templates dropdown not appearing in compose dialog (Popover/Command component not rendering — likely missing cmdk peer or DialogContent z-index issue)
 - [ ] Add file attachment capability to compose dialog (file input, attachment list with remove, send attachments via nodemailer)
 - [ ] Fix sidebar logo squished — update Shell.tsx logo img to use object-contain and fill the white card properly
+
+## Batch C Enhancements (user-requested)
+- [x] Pipeline Forecast: add stage filter dropdown so user can narrow forecast to deals in specific stage(s)
+- [x] Duplicate Merge: replace auto-fill logic with per-field checkbox selector — user picks which fields to copy from secondary before confirming merge
+- [x] Sequence Performance Analytics: add date range filter (from/to date pickers) so analytics are scoped to emails sent within a chosen period

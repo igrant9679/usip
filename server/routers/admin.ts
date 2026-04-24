@@ -87,6 +87,9 @@ export const settingsRouter = router({
             z.object({ inApp: z.boolean(), email: z.boolean() }),
           )
           .optional(),
+        slackWebhookUrl: z.string().url().nullable().optional(),
+        teamsWebhookUrl: z.string().url().nullable().optional(),
+        systemSenderAccountId: z.number().int().nullable().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -221,6 +224,42 @@ export const teamRouter = router({
         entityId: userId,
         after: { email: input.email, role: input.role },
       });
+      // Send invitation email using system sender if configured
+      try {
+        const [settings] = await db
+          .select({ systemSenderAccountId: workspaceSettings.systemSenderAccountId })
+          .from(workspaceSettings)
+          .where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
+        if (settings?.systemSenderAccountId) {
+          const { sendingAccounts } = await import("../../drizzle/schema");
+          const { buildTransporter, decrypt } = await import("./smtpConfig");
+          const [sender] = await db
+            .select()
+            .from(sendingAccounts)
+            .where(eq(sendingAccounts.id, settings.systemSenderAccountId));
+          if (sender?.smtpHost && sender?.smtpUsername && sender?.smtpPassword) {
+            const password = decrypt(sender.smtpPassword);
+            const transporter = buildTransporter({
+              host: sender.smtpHost,
+              port: sender.smtpPort ?? 587,
+              secure: sender.smtpSecure ?? false,
+              username: sender.smtpUsername,
+              password,
+            });
+            await transporter.sendMail({
+              from: `"${sender.fromName ?? ctx.workspace.name}" <${sender.fromEmail}>`,
+              to: input.email,
+              subject: `You've been invited to ${ctx.workspace.name} on USIP`,
+              html: `<p>Hi ${input.name ?? input.email.split("@")[0]},</p>
+<p>You have been invited to join <strong>${ctx.workspace.name}</strong> on USIP as a <strong>${input.role}</strong>.</p>
+<p>Sign in at <a href="${process.env.VITE_OAUTH_PORTAL_URL ?? "https://manus.im"}">USIP</a> with this email address to accept your invitation.</p>
+<p>If you did not expect this invitation, you can safely ignore this email.</p>`,
+            });
+          }
+        }
+      } catch (_e) {
+        // Non-fatal: invitation email failure should not block the invite
+      }
       return { ok: true, userId };
     }),
 
@@ -447,10 +486,63 @@ export const teamRouter = router({
         entityId: 0,
         after: { bulkDeactivated: deactivated, skipped, reassignedTo: input.reassignToUserId },
       });
-      return { ok: true, deactivated, skipped };
+       return { ok: true, deactivated, skipped };
     }),
-});
 
+  /** Update the calling member's notification email and preferences. */
+  updateNotifPrefs: workspaceProcedure
+    .input(
+      z.object({
+        notifEmail: z.string().email().nullable().optional(),
+        notifPrefs: z
+          .object({
+            sequence_reply: z.boolean().optional(),
+            social_response: z.boolean().optional(),
+            workflow_alert: z.boolean().optional(),
+            system: z.boolean().optional(),
+          })
+          .optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const patch: Record<string, unknown> = {};
+      if (input.notifEmail !== undefined) patch.notifEmail = input.notifEmail;
+      if (input.notifPrefs !== undefined) patch.notifPrefs = input.notifPrefs;
+      if (Object.keys(patch).length === 0) return { ok: true };
+      await db
+        .update(workspaceMembers)
+        .set(patch)
+        .where(
+          and(
+            eq(workspaceMembers.workspaceId, ctx.workspace.id),
+            eq(workspaceMembers.userId, ctx.user.id),
+          ),
+        );
+      return { ok: true };
+    }),
+
+  /** Return the calling member's notification prefs. */
+  getNotifPrefs: workspaceProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    const [row] = await db
+      .select({ notifEmail: workspaceMembers.notifEmail, notifPrefs: workspaceMembers.notifPrefs })
+      .from(workspaceMembers)
+      .where(
+        and(
+          eq(workspaceMembers.workspaceId, ctx.workspace.id),
+          eq(workspaceMembers.userId, ctx.user.id),
+        ),
+      );
+    const DEFAULT_PREFS = { sequence_reply: true, social_response: true, workflow_alert: true, system: true };
+    return {
+      notifEmail: row?.notifEmail ?? null,
+      notifPrefs: (row?.notifPrefs as Record<string, boolean> | null) ?? DEFAULT_PREFS,
+    };
+  }),
+});
 /* ─── Danger Zone ───────────────────────────────────────────────────────── */
 
 export const dangerZoneRouter = router({

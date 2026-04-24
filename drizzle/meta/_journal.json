@@ -169,6 +169,13 @@
       "when": 1776927548437,
       "tag": "0023_cheerful_the_liberteens",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "5",
+      "when": 1777060673871,
+      "tag": "0024_concerned_hobgoblin",
+      "breakpoints": true
     }
   ]
 }

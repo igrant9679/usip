@@ -803,10 +803,16 @@ export const opportunitiesRouter = router({
   }),
 
   /** Weighted pipeline forecast grouped by close month. */
-  forecast: workspaceProcedure.query(async ({ ctx }) => {
+  forecast: workspaceProcedure
+    .input(z.object({ stages: z.array(z.string()).optional() }).optional())
+    .query(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    const rows = await db.select().from(opportunities).where(eq(opportunities.workspaceId, ctx.workspace.id));
+    const allRows = await db.select().from(opportunities).where(eq(opportunities.workspaceId, ctx.workspace.id));
+    // Collect all available stages (excluding lost) for the filter dropdown
+    const availableStages = [...new Set(allRows.filter((o) => o.stage !== "lost").map((o) => o.stage))].sort();
+    const filterStages = input?.stages && input.stages.length > 0 ? input.stages : null;
+    const rows = filterStages ? allRows.filter((o) => filterStages.includes(o.stage)) : allRows;
     const byMonth: Record<string, { month: string; total: number; weighted: number; count: number; stages: Record<string, number> }> = {};
     const byStage: Record<string, { stage: string; total: number; weighted: number; count: number }> = {};
     let grandTotal = 0;
@@ -834,7 +840,7 @@ export const opportunitiesRouter = router({
     }
     const months = Object.values(byMonth).sort((a, b) => a.month.localeCompare(b.month));
     const stages = Object.values(byStage);
-    return { grandTotal, grandWeighted, months, stages };
+    return { grandTotal, grandWeighted, months, stages, availableStages };
   }),
 
   /** Detail view: opportunity + account + contact roles + recent activities. */
