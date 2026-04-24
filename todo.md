@@ -994,3 +994,9 @@
 
 ## Bug Fix: AI Draft Queue Error
 - [x] Fix "unexpected error" when navigating to AI Draft Queue page
+
+## Bug Fix: Radix UI Nesting Audit
+- [x] Audit all pages/components for CollapsibleTrigger outside Collapsible
+- [x] Audit all pages/components for AccordionTrigger outside Accordion
+- [x] Audit all pages/components for TabsTrigger outside Tabs
+- [x] Fix all violations found (only one genuine violation existed: CollapsibleTrigger in AIPipelineQueue.tsx, already fixed)
