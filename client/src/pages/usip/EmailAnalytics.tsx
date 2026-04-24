@@ -1,5 +1,5 @@
 import { Badge } from "@/components/ui/badge";
-import { EmptyState, PageHeader, Shell } from "@/components/usip/Shell";
+import { EmptyState, PageHeader, Shell, useAccentColor } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import {
   AlertTriangle,
@@ -77,6 +77,7 @@ export default function EmailAnalytics() {
     trpc.smtpConfig.getTrackingOverview.useQuery({ limit: 100 });
   const { data: bounceStats } = trpc.smtpConfig.getBounceStats.useQuery();
 
+  const accent = useAccentColor();
   // Time-series chart state
   const [chartDays, setChartDays] = useState(30);
   const { data: timeSeriesData, isLoading: timeSeriesLoading } =
@@ -347,8 +348,8 @@ export default function EmailAnalytics() {
               >
                 <defs>
                   <linearGradient id="colorOpens" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="hsl(var(--primary))" stopOpacity={0.3} />
-                    <stop offset="95%" stopColor="hsl(var(--primary))" stopOpacity={0.02} />
+                    <stop offset="5%" stopColor={accent} stopOpacity={0.3} />
+                    <stop offset="95%" stopColor={accent} stopOpacity={0.02} />
                   </linearGradient>
                   <linearGradient id="colorClicks" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%" stopColor="#22c55e" stopOpacity={0.3} />
@@ -388,7 +389,7 @@ export default function EmailAnalytics() {
                   type="monotone"
                   dataKey="opens"
                   name="Opens"
-                  stroke="hsl(var(--primary))"
+                  stroke={accent}
                   strokeWidth={2}
                   fill="url(#colorOpens)"
                   dot={false}

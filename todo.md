@@ -1114,3 +1114,9 @@
 - [x] Apply category accent color left-border stripe to StatCard components via AccentContext
 - [x] Add animated page transitions (fade + slight slide-up) to Router in App.tsx using CSS/framer-motion or CSS transitions
 - [x] Improve dark-mode sidebar: lighter charcoal background, stronger stripe glow, better contrast vs dark main canvas
+
+## Batch M — Chart Accents, Topbar Underline, Reduce Motion
+
+- [x] Apply category accent color to chart lines/bars on Dashboard and EmailAnalytics pages
+- [x] Add 2px accent-colored underline to the topbar header in Shell.tsx (visible even when page header is scrolled away)
+- [x] Add "Reduce motion" toggle in Settings page; persist to localStorage; PageTransition respects it by skipping animation

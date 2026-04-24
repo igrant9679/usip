@@ -7,7 +7,8 @@ import { Section, StatusPill, fmt$ } from "@/components/usip/Common";
 import { PageHeader, Shell, StatCard } from "@/components/usip/Shell";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { trpc } from "@/lib/trpc";
-import { AlertTriangle, Bell, Building2, CheckCircle2, CreditCard, Download, ExternalLink, Loader2, Mail, Palette, Plug, ShieldCheck, TestTube2, Trash2, XCircle } from "lucide-react";
+import { AlertTriangle, Bell, Building2, CheckCircle2, CreditCard, Download, ExternalLink, Loader2, Mail, Palette, Plug, ShieldCheck, TestTube2, Trash2, XCircle, Zap } from "lucide-react";
+import { useReduceMotion } from "@/components/PageTransition";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
@@ -256,6 +257,7 @@ function GeneralTab({
   const [timezone, setTimezone] = useState<string>("UTC");
   const [nightlyEnabled, setNightlyEnabled] = useState(false);
   const [nightlyThreshold, setNightlyThreshold] = useState(60);
+  const [reduceMotion, setReduceMotionPref] = useReduceMotion();
   useEffect(() => {
     if (settings?.timezone) setTimezone(settings.timezone);
     if (settings?.nightlyPipelineEnabled !== undefined) setNightlyEnabled(!!settings.nightlyPipelineEnabled);
@@ -325,6 +327,29 @@ function GeneralTab({
         </div>
       </Section>
 
+      <Section
+        title="Appearance"
+        description="Visual preferences stored locally in your browser — not synced across devices."
+      >
+        <div className="p-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="rounded-lg p-2 bg-violet-500/10">
+                <Zap className="size-4 text-violet-500" />
+              </div>
+              <div>
+                <Label htmlFor="reduce-motion" className="cursor-pointer font-medium">Reduce motion</Label>
+                <div className="text-xs text-muted-foreground mt-0.5">Disables page transition animations for a snappier feel or accessibility needs.</div>
+              </div>
+            </div>
+            <Switch
+              id="reduce-motion"
+              checked={reduceMotion}
+              onCheckedChange={setReduceMotionPref}
+            />
+          </div>
+        </div>
+      </Section>
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
         <StatCard label="Accounts" value={summary?.accounts ?? 0} />
         <StatCard label="Contacts" value={summary?.contacts ?? 0} />

@@ -33,6 +33,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { useAccentColor } from "@/components/usip/Shell";
 
 /* ─── Shared palette ─────────────────────────────────────────────────────── */
 const COLORS = [
@@ -93,10 +94,10 @@ function LineChartWidget({ data, height = 160 }: { data: any; height?: number })
         <Tooltip {...tooltipStyle} />
         {keys ? (
           keys.map((k, i) => (
-            <Line key={k} type="monotone" dataKey={k} stroke={COLORS[i % COLORS.length]} dot={false} strokeWidth={2} name={k} />
+            <Line key={k} type="monotone" dataKey={k} stroke={PALETTE[i % PALETTE.length]} dot={false} strokeWidth={2} name={k} />
           ))
         ) : (
-          <Line type="monotone" dataKey="value" stroke={COLORS[0]} dot={false} strokeWidth={2} name="Value" />
+          <Line type="monotone" dataKey="value" stroke={PALETTE[0]} dot={false} strokeWidth={2} name="Value" />
         )}
       </LineChart>
     </ResponsiveContainer>
@@ -119,10 +120,10 @@ function BarChartWidget({ data, height = 160 }: { data: any; height?: number }) 
         <Tooltip {...tooltipStyle} />
         {keys ? (
           keys.map((k, i) => (
-            <Bar key={k} dataKey={k} fill={COLORS[i % COLORS.length]} name={k} radius={[2, 2, 0, 0]} />
+            <Bar key={k} dataKey={k} fill={PALETTE[i % PALETTE.length]} name={k} radius={[2, 2, 0, 0]} />
           ))
         ) : (
-          <Bar dataKey="value" fill={COLORS[0]} radius={[2, 2, 0, 0]} />
+          <Bar dataKey="value" fill={PALETTE[0]} radius={[2, 2, 0, 0]} />
         )}
       </BarChart>
     </ResponsiveContainer>
@@ -145,7 +146,7 @@ function StackedBarChartWidget({ data, height = 160 }: { data: any; height?: num
         <Tooltip {...tooltipStyle} />
         <Legend wrapperStyle={{ fontSize: 10 }} />
         {keys.map((k, i) => (
-          <Bar key={k} dataKey={k} stackId="a" fill={COLORS[i % COLORS.length]} name={k} />
+          <Bar key={k} dataKey={k} stackId="a" fill={PALETTE[i % PALETTE.length]} name={k} />
         ))}
       </BarChart>
     </ResponsiveContainer>
@@ -165,8 +166,8 @@ function AreaChartWidget({ data, height = 160 }: { data: any; height?: number })
         <defs>
           {(keys ?? ["value"]).map((k, i) => (
             <linearGradient key={k} id={`grad-${k}`} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="5%" stopColor={COLORS[i % COLORS.length]} stopOpacity={0.3} />
-              <stop offset="95%" stopColor={COLORS[i % COLORS.length]} stopOpacity={0} />
+              <stop offset="5%" stopColor={PALETTE[i % PALETTE.length]} stopOpacity={0.3} />
+              <stop offset="95%" stopColor={PALETTE[i % PALETTE.length]} stopOpacity={0} />
             </linearGradient>
           ))}
         </defs>
@@ -176,10 +177,10 @@ function AreaChartWidget({ data, height = 160 }: { data: any; height?: number })
         <Tooltip {...tooltipStyle} />
         {keys ? (
           keys.map((k, i) => (
-            <Area key={k} type="monotone" dataKey={k} stroke={COLORS[i % COLORS.length]} fill={`url(#grad-${k})`} strokeWidth={2} name={k} />
+            <Area key={k} type="monotone" dataKey={k} stroke={PALETTE[i % PALETTE.length]} fill={`url(#grad-${k})`} strokeWidth={2} name={k} />
           ))
         ) : (
-          <Area type="monotone" dataKey="value" stroke={COLORS[0]} fill="url(#grad-value)" strokeWidth={2} name="Value" />
+          <Area type="monotone" dataKey="value" stroke={PALETTE[0]} fill="url(#grad-value)" strokeWidth={2} name="Value" />
         )}
       </AreaChart>
     </ResponsiveContainer>
@@ -196,7 +197,7 @@ function PieChartWidget({ data, height = 180 }: { data: any; height?: number }) 
     <ResponsiveContainer width="100%" height={height}>
       <PieChart>
         <Pie data={series} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius="70%" label={({ name, percent }) => `${name} ${Math.round(percent * 100)}%`} labelLine={false}>
-          {series.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
+          {series.map((_, i) => <Cell key={i} fill={PALETTE[i % PALETTE.length]} />)}
         </Pie>
         <Tooltip {...tooltipStyle} />
       </PieChart>
@@ -216,7 +217,7 @@ function DonutChartWidget({ data, height = 180 }: { data: any; height?: number }
       <ResponsiveContainer width="100%" height={height}>
         <PieChart>
           <Pie data={series} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius="50%" outerRadius="70%">
-            {series.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
+            {series.map((_, i) => <Cell key={i} fill={PALETTE[i % PALETTE.length]} />)}
           </Pie>
           <Tooltip {...tooltipStyle} />
           <Legend wrapperStyle={{ fontSize: 10 }} />
@@ -244,7 +245,7 @@ function FunnelChartWidget({ data, height = 180 }: { data: any; height?: number 
           <div className="flex-1 h-2.5 bg-secondary rounded-full overflow-hidden">
             <div
               className="h-full rounded-full transition-all"
-              style={{ width: `${(s.count / maxCount) * 100}%`, background: COLORS[i % COLORS.length] }}
+              style={{ width: `${(s.count / maxCount) * 100}%`, background: PALETTE[i % PALETTE.length] }}
             />
           </div>
           <span className="font-mono tabular-nums w-8 text-right shrink-0">{s.count}</span>
@@ -284,11 +285,11 @@ function ScatterChartWidget({ data, height = 160 }: { data: any; height?: number
         />
         <Scatter
           data={series}
-          fill={COLORS[0]}
+          fill={PALETTE[0]}
           opacity={0.7}
         >
           {series.map((s, i) => (
-            <Cell key={i} fill={STAGE_COLORS[s.stage] ?? COLORS[i % COLORS.length]} />
+            <Cell key={i} fill={STAGE_PALETTE[s.stage] ?? PALETTE[i % PALETTE.length]} />
           ))}
         </Scatter>
       </ScatterChart>
@@ -416,6 +417,9 @@ export interface DashboardChartRendererProps {
 }
 
 export function DashboardChartRenderer({ data, height }: DashboardChartRendererProps) {
+  const accent = useAccentColor();
+  // Build a palette where the primary series uses the category accent color
+  const PALETTE = [accent, "#3B82F6", "#F59E0B", "#EF4444", "#8B5CF6", "#EC4899", "#10B981", "#F97316", "#06B6D4", "#84CC16"];
   if (!data) return <EmptyChart />;
   const type = data.type as string;
 
