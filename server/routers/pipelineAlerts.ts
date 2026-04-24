@@ -7,12 +7,14 @@ import { router } from "../_core/trpc";
 import { workspaceProcedure } from "../_core/workspace";
 import { getDb } from "../db";
 import { TRPCError } from "@trpc/server";
-import { eq, and, isNull, desc, lt, gte } from "drizzle-orm";
+import { eq, and, isNull, desc, lt, gte, sql } from "drizzle-orm";
 import {
   pipelineAlerts,
   opportunities,
   activities,
   opportunityContactRoles,
+  workflowRules,
+  users,
 } from "../../drizzle/schema";
 
 const ALERT_THRESHOLDS = {
@@ -254,4 +256,125 @@ export const pipelineAlertsRouter = router({
     }
     return { total: alerts.length, byType: counts };
   }),
+
+  /**
+   * Return all open deals stuck in a stage for longer than the configured threshold.
+   * Uses deal_stuck workflow rules as the source of thresholds; falls back to 7 days.
+   */
+  getStuckDeals: workspaceProcedure
+    .input(z.object({ minDays: z.number().optional() }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+
+      // Gather all deal_stuck rules to determine the lowest threshold
+      const rules = await db
+        .select()
+        .from(workflowRules)
+        .where(
+          and(
+            eq(workflowRules.workspaceId, ctx.workspace.id),
+            eq(workflowRules.enabled, true),
+            eq(workflowRules.triggerType, "deal_stuck"),
+          )
+        );
+
+      // Build per-stage thresholds from rules; default to input.minDays ?? 7
+      const defaultMinDays = input.minDays ?? 7;
+      const stageThresholds: Record<string, number> = {};
+      for (const rule of rules) {
+        const cfg = (rule.triggerConfig ?? {}) as { stage?: string; days?: number };
+        const days = cfg.days ?? defaultMinDays;
+        if (cfg.stage) {
+          stageThresholds[cfg.stage] = Math.min(stageThresholds[cfg.stage] ?? Infinity, days);
+        }
+      }
+      const globalMin = rules.length > 0
+        ? Math.min(...rules.map((r) => ((r.triggerConfig ?? {}) as { days?: number }).days ?? defaultMinDays))
+        : defaultMinDays;
+
+      // Fetch all open opportunities
+      const openOpps = await db
+        .select({
+          id: opportunities.id,
+          name: opportunities.name,
+          stage: opportunities.stage,
+          value: opportunities.value,
+          winProb: opportunities.winProb,
+          closeDate: opportunities.closeDate,
+          daysInStage: opportunities.daysInStage,
+          ownerId: opportunities.ownerId,
+        })
+        .from(opportunities)
+        .where(
+          and(
+            eq(opportunities.workspaceId, ctx.workspace.id),
+            sql`${opportunities.stage} NOT IN ('closed_won', 'closed_lost')`,
+          )
+        );
+
+      // Filter to stuck deals
+      const stuckDeals = openOpps.filter((opp) => {
+        const days = opp.daysInStage ?? 0;
+        const threshold = opp.stage && stageThresholds[opp.stage] !== undefined
+          ? stageThresholds[opp.stage]!
+          : globalMin;
+        return days >= threshold;
+      });
+
+      // Attach owner names
+      const ownerIds = Array.from(new Set(stuckDeals.map((d) => d.ownerId).filter(Boolean) as number[]));
+      const owners = ownerIds.length > 0
+        ? await db.select({ id: users.id, name: users.name }).from(users).where(sql`${users.id} IN (${sql.join(ownerIds.map((id) => sql`${id}`), sql`, `)})`)
+        : [];
+      const ownerMap = Object.fromEntries(owners.map((u) => [u.id, u.name]));
+
+      return stuckDeals.map((d) => ({
+        ...d,
+        ownerName: d.ownerId ? (ownerMap[d.ownerId] ?? null) : null,
+        threshold: d.stage && stageThresholds[d.stage] !== undefined
+          ? stageThresholds[d.stage]!
+          : globalMin,
+      }));
+    }),
+
+  /** Log a quick activity note on an opportunity from the alerts page */
+  logActivityOnDeal: workspaceProcedure
+    .input(z.object({
+      opportunityId: z.number(),
+      note: z.string().min(1),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      await db.insert(activities).values({
+        workspaceId: ctx.workspace.id,
+        opportunityId: input.opportunityId,
+        type: "note",
+        body: input.note,
+        createdByUserId: ctx.user.id,
+      });
+      return { ok: true };
+    }),
+
+  /** Move a deal to a new stage from the alerts page */
+  moveDealStage: workspaceProcedure
+    .input(z.object({
+      opportunityId: z.number(),
+      newStage: z.string().min(1),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      await db
+        .update(opportunities)
+        .set({ stage: input.newStage, daysInStage: 0 })
+        .where(
+          and(
+            eq(opportunities.id, input.opportunityId),
+            eq(opportunities.workspaceId, ctx.workspace.id),
+          )
+        );
+      return { ok: true };
+    }),
 });

@@ -20,6 +20,7 @@ import {
   enrollments,
   leads,
   sequences,
+  sequenceAbVariants,
   tasks,
 } from "../drizzle/schema";
 import { getDb } from "./db";
@@ -166,11 +167,40 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
         }
 
         if (toEmail) {
+          // A/B variant assignment: pick a variant for this step if any exist
+          let draftSubject = step.subject ?? "Follow-up";
+          let draftBody = step.body ?? "";
+          const variants = await db
+            .select()
+            .from(sequenceAbVariants)
+            .where(
+              and(
+                eq(sequenceAbVariants.sequenceId, enrollment.sequenceId),
+                eq(sequenceAbVariants.stepIndex, stepIndex),
+              ),
+            );
+          if (variants.length > 0) {
+            // Weighted random selection based on splitPct
+            const totalWeight = variants.reduce((s, v) => s + v.splitPct, 0);
+            let rand = Math.random() * totalWeight;
+            let chosen = variants[0];
+            for (const v of variants) {
+              rand -= v.splitPct;
+              if (rand <= 0) { chosen = v; break; }
+            }
+            draftSubject = chosen.subject;
+            draftBody = chosen.body;
+            // Increment sentCount on the chosen variant
+            await db
+              .update(sequenceAbVariants)
+              .set({ sentCount: chosen.sentCount + 1 })
+              .where(eq(sequenceAbVariants.id, chosen.id));
+          }
           // Create email draft for review
           await db.insert(emailDrafts).values({
             workspaceId: enrollment.workspaceId,
-            subject: step.subject ?? "Follow-up",
-            body: step.body ?? "",
+            subject: draftSubject,
+            body: draftBody,
             toContactId,
             toLeadId,
             toEmail,

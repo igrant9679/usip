@@ -425,4 +425,36 @@ Be concise and professional. Use markdown formatting.`;
 
       return { summary };
     }),
+
+  pushSummaryToOpportunity: workspaceProcedure
+    .input(z.object({ eventId: z.number(), opportunityId: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // Fetch the event to get its AI summary
+      const [event] = await db.select().from(calendarEvents)
+        .where(and(eq(calendarEvents.id, input.eventId), eq(calendarEvents.workspaceId, ctx.workspace.id)));
+      if (!event) throw new TRPCError({ code: "NOT_FOUND", message: "Event not found" });
+      if (!event.aiSummary) throw new TRPCError({ code: "BAD_REQUEST", message: "No AI summary exists for this event. Run Summarize first." });
+      // Verify the opportunity belongs to this workspace
+      const [opp] = await db.select({ id: opportunities.id, name: opportunities.name })
+        .from(opportunities)
+        .where(and(eq(opportunities.id, input.opportunityId), eq(opportunities.workspaceId, ctx.workspace.id)));
+      if (!opp) throw new TRPCError({ code: "NOT_FOUND", message: "Opportunity not found" });
+      // Insert a meeting activity on the opportunity
+      await db.insert(activities).values({
+        workspaceId: ctx.workspace.id,
+        type: "meeting",
+        relatedType: "opportunity",
+        relatedId: input.opportunityId,
+        subject: `Meeting summary pushed: ${event.title}`,
+        body: event.aiSummary,
+        meetingStartedAt: event.startAt,
+        meetingEndedAt: event.endAt ?? undefined,
+        meetingAttendees: event.attendees,
+        occurredAt: event.startAt,
+        actorUserId: ctx.user.id,
+      });
+      return { ok: true, opportunityName: opp.name };
+    }),
 });

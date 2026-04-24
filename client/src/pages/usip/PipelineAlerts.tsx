@@ -1,9 +1,23 @@
 import { useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 import { PageHeader, Shell } from "@/components/usip/Shell";
 import {
   AlertTriangle,
@@ -16,9 +30,21 @@ import {
   Loader2,
   Activity,
   XCircle,
+  Timer,
+  MessageSquarePlus,
+  ArrowRightCircle,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Link } from "wouter";
+
+const PIPELINE_STAGES = [
+  "prospecting",
+  "qualification",
+  "proposal",
+  "negotiation",
+  "closed_won",
+  "closed_lost",
+];
 
 const ALERT_CONFIG: Record<
   string,
@@ -57,6 +83,115 @@ const ALERT_CONFIG: Record<
     description: (d) => `No contact roles linked to this ${d?.stage ?? ""} opportunity`,
   },
 };
+
+// ─── Log Activity Dialog ──────────────────────────────────────────────────────
+function LogActivityDialog({
+  deal, open, onClose, onSuccess,
+}: { deal: any; open: boolean; onClose: () => void; onSuccess: () => void }) {
+  const [note, setNote] = useState("");
+  const logActivity = trpc.pipelineAlerts.logActivityOnDeal.useMutation({
+    onSuccess: () => { toast.success("Activity logged"); setNote(""); onSuccess(); onClose(); },
+    onError: (e) => toast.error(e.message),
+  });
+  return (
+    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="max-w-md">
+        <DialogHeader><DialogTitle>Log Activity — {deal?.name}</DialogTitle></DialogHeader>
+        <div className="space-y-3 py-2">
+          <p className="text-sm text-muted-foreground">Add a note to this deal's activity timeline.</p>
+          <Textarea placeholder="e.g. Called prospect — left voicemail" value={note} onChange={(e) => setNote(e.target.value)} rows={3} />
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button onClick={() => logActivity.mutate({ opportunityId: deal.id, note })} disabled={!note.trim() || logActivity.isPending}>
+            {logActivity.isPending && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
+            Log Activity
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─── Move Stage Dialog ────────────────────────────────────────────────────────
+function MoveStageDialog({
+  deal, open, onClose, onSuccess,
+}: { deal: any; open: boolean; onClose: () => void; onSuccess: () => void }) {
+  const [newStage, setNewStage] = useState("");
+  const moveStage = trpc.pipelineAlerts.moveDealStage.useMutation({
+    onSuccess: () => { toast.success(`Deal moved to ${newStage}`); setNewStage(""); onSuccess(); onClose(); },
+    onError: (e) => toast.error(e.message),
+  });
+  return (
+    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader><DialogTitle>Move Stage — {deal?.name}</DialogTitle></DialogHeader>
+        <div className="space-y-3 py-2">
+          <p className="text-sm text-muted-foreground">Current: <span className="font-medium capitalize">{deal?.stage}</span> ({deal?.daysInStage ?? 0} days)</p>
+          <Select value={newStage} onValueChange={setNewStage}>
+            <SelectTrigger><SelectValue placeholder="Select new stage…" /></SelectTrigger>
+            <SelectContent>
+              {PIPELINE_STAGES.filter((s) => s !== deal?.stage).map((s) => (
+                <SelectItem key={s} value={s}><span className="capitalize">{s.replace(/_/g, " ")}</span></SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button onClick={() => moveStage.mutate({ opportunityId: deal.id, newStage })} disabled={!newStage || moveStage.isPending}>
+            {moveStage.isPending && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
+            Move Stage
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─── Stuck Deal Card ──────────────────────────────────────────────────────────
+function StuckDealCard({ deal, onAction }: { deal: any; onAction: () => void }) {
+  const [logOpen, setLogOpen] = useState(false);
+  const [moveOpen, setMoveOpen] = useState(false);
+  return (
+    <>
+      <div className="flex items-start gap-3 p-3 rounded-lg border bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800">
+        <Timer className="h-5 w-5 mt-0.5 shrink-0 text-amber-600" />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <p className="text-sm font-semibold">{deal.name}</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Stuck in <span className="font-medium capitalize">{deal.stage?.replace(/_/g, " ")}</span> for{" "}
+                <span className="font-semibold text-amber-700 dark:text-amber-400">{deal.daysInStage ?? 0} days</span>
+                {" "}(threshold: {deal.threshold} days)
+              </p>
+            </div>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <Badge variant="outline" className="text-xs text-amber-600 border-amber-400">Stuck Deal</Badge>
+              <Badge variant="secondary" className="text-xs capitalize">{deal.stage?.replace(/_/g, " ")}</Badge>
+            </div>
+          </div>
+          <div className="flex items-center gap-3 mt-2">
+            {deal.value && <span className="text-xs text-muted-foreground">${Number(deal.value).toLocaleString()}</span>}
+            {deal.ownerName && <span className="text-xs text-muted-foreground">Owner: {deal.ownerName}</span>}
+            <div className="ml-auto flex gap-2">
+              <Button size="sm" variant="ghost" className="h-6 text-xs px-2 text-blue-600 hover:text-blue-700" onClick={() => setLogOpen(true)}>
+                <MessageSquarePlus className="h-3 w-3 mr-1" />Log Activity
+              </Button>
+              <Button size="sm" variant="ghost" className="h-6 text-xs px-2 text-emerald-600 hover:text-emerald-700" onClick={() => setMoveOpen(true)}>
+                <ArrowRightCircle className="h-3 w-3 mr-1" />Move Stage
+              </Button>
+              <Link href="/pipeline"><Button size="sm" variant="ghost" className="h-6 text-xs px-2">View</Button></Link>
+            </div>
+          </div>
+        </div>
+      </div>
+      <LogActivityDialog deal={deal} open={logOpen} onClose={() => setLogOpen(false)} onSuccess={onAction} />
+      <MoveStageDialog deal={deal} open={moveOpen} onClose={() => setMoveOpen(false)} onSuccess={onAction} />
+    </>
+  );
+}
 
 function AlertCard({ alert, onDismiss }: { alert: any; onDismiss: () => void }) {
   const config = ALERT_CONFIG[alert.alertType] ?? {
@@ -142,12 +277,15 @@ export default function PipelineAlerts() {
     { limit: 100 },
     { refetchInterval: 30000 }
   );
+  const { data: stuckDeals = [], isLoading: stuckLoading, refetch: refetchStuck } =
+    trpc.pipelineAlerts.getStuckDeals.useQuery({}, { refetchInterval: 60000 });
 
   const scan = trpc.pipelineAlerts.scan.useMutation({
     onSuccess: (data) => {
       toast.success(`Scan complete — ${data.created} new alerts created (${data.scanned} opportunities checked)`);
       refetch();
       refetchSummary();
+      refetchStuck();
     },
     onError: (e) => toast.error(e.message),
   });
@@ -155,12 +293,14 @@ export default function PipelineAlerts() {
   const handleRefresh = () => {
     refetch();
     refetchSummary();
+    refetchStuck();
   };
 
   const filteredAlerts =
     filterType === "all" ? alerts : alerts.filter((a: any) => a.alertType === filterType);
 
   const totalAlerts = summary?.total ?? 0;
+  const filterTypes = ["all", "no_activity", "closing_soon_regression", "amount_change", "no_champion", "deal_stuck"];
 
   return (
     <Shell title="Pipeline Alerts">
@@ -183,14 +323,15 @@ export default function PipelineAlerts() {
       </PageHeader>
       <div className="p-6 space-y-6">
 
-      {/* Summary cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+      {/* Summary KPI row */}
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
         {[
           { type: "no_activity", label: "No Activity", icon: Clock, color: "text-orange-600" },
           { type: "closing_soon_regression", label: "Closing Soon", icon: TrendingDown, color: "text-red-600" },
           { type: "no_champion", label: "No Champion", icon: UserX, color: "text-purple-600" },
           { type: "amount_change", label: "Amount Changed", icon: DollarSign, color: "text-yellow-600" },
-        ].map(({ type, label, icon: Icon, color }) => (
+          { type: "deal_stuck", label: "Stuck Deals", icon: Timer, color: "text-amber-600", stuckCount: true },
+        ].map(({ type, label, icon: Icon, color, stuckCount }) => (
           <Card
             key={type}
             className={`cursor-pointer transition-all ${filterType === type ? "ring-2 ring-primary" : "hover:shadow-md"}`}
@@ -200,7 +341,7 @@ export default function PipelineAlerts() {
               <Icon className={`h-8 w-8 ${color} shrink-0`} />
               <div>
                 <p className="text-2xl font-bold tabular-nums">
-                  {summary?.byType?.[type] ?? 0}
+                  {stuckCount ? (stuckDeals as any[]).length : (summary?.byType?.[type] ?? 0)}
                 </p>
                 <p className="text-xs text-muted-foreground">{label}</p>
               </div>
@@ -212,7 +353,7 @@ export default function PipelineAlerts() {
       {/* Filter bar */}
       <div className="flex items-center gap-2 flex-wrap">
         <span className="text-sm text-muted-foreground">Filter:</span>
-        {["all", "no_activity", "closing_soon_regression", "no_champion", "amount_change"].map((t) => (
+        {filterTypes.map((t) => (
           <Button
             key={t}
             size="sm"
@@ -220,47 +361,90 @@ export default function PipelineAlerts() {
             onClick={() => setFilterType(t)}
             className="capitalize text-xs"
           >
-            {t === "all" ? `All (${totalAlerts})` : ALERT_CONFIG[t]?.label ?? t}
+            {t === "all"
+              ? `All (${totalAlerts + (stuckDeals as any[]).length})`
+              : t === "deal_stuck"
+              ? `Stuck Deals (${(stuckDeals as any[]).length})`
+              : ALERT_CONFIG[t]?.label ?? t}
           </Button>
         ))}
       </div>
 
-      {/* Alert list */}
-      {isLoading ? (
-        <div className="flex items-center justify-center py-12 text-muted-foreground gap-2">
-          <Loader2 className="h-5 w-5 animate-spin" />
-          Loading alerts...
+      {/* Stuck Deals section */}
+      {(filterType === "all" || filterType === "deal_stuck") && (
+        <div>
+          <h3 className="text-sm font-semibold text-muted-foreground mb-2 flex items-center gap-2">
+            <Timer className="h-4 w-4 text-amber-500" />
+            Stuck Deals ({(stuckDeals as any[]).length})
+          </h3>
+          {stuckLoading ? (
+            <div className="flex items-center gap-2 text-muted-foreground text-sm py-4">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Loading stuck deals…
+            </div>
+          ) : (stuckDeals as any[]).length === 0 ? (
+            <Card>
+              <CardContent className="flex items-center justify-center py-6 text-center">
+                <div>
+                  <CheckCircle className="h-8 w-8 text-emerald-500/40 mx-auto mb-2" />
+                  <p className="text-sm text-muted-foreground">No stuck deals detected</p>
+                  <p className="text-xs text-muted-foreground/70 mt-1">
+                    Configure deal-stuck workflow rules to set stage thresholds
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="space-y-2">
+              {(stuckDeals as any[]).map((deal) => (
+                <StuckDealCard key={deal.id} deal={deal} onAction={handleRefresh} />
+              ))}
+            </div>
+          )}
         </div>
-      ) : filteredAlerts.length === 0 ? (
-        <Card>
-          <CardContent className="flex flex-col items-center justify-center py-12 text-center">
-            <CheckCircle className="h-12 w-12 text-emerald-500/40 mb-3" />
-            <p className="font-medium text-muted-foreground">
-              {filterType === "all" ? "No active alerts" : `No ${ALERT_CONFIG[filterType]?.label ?? filterType} alerts`}
-            </p>
-            <p className="text-sm text-muted-foreground/70 mt-1">
-              {totalAlerts === 0
-                ? "Run a health scan to detect at-risk opportunities"
-                : "All alerts in this category have been dismissed"}
-            </p>
-            {totalAlerts === 0 && (
-              <Button
-                className="mt-4"
-                size="sm"
-                onClick={() => scan.mutate()}
-                disabled={scan.isPending}
-              >
-                {scan.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Activity className="h-4 w-4 mr-1" />}
-                Run Health Scan
-              </Button>
-            )}
-          </CardContent>
-        </Card>
-      ) : (
-        <div className="space-y-2">
-          {filteredAlerts.map((alert: any) => (
-            <AlertCard key={alert.id} alert={alert} onDismiss={handleRefresh} />
-          ))}
+      )}
+
+      {/* Health Alerts section */}
+      {filterType !== "deal_stuck" && (
+        <div>
+          {filterType !== "all" && (
+            <h3 className="text-sm font-semibold text-muted-foreground mb-2 flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4 text-orange-500" />
+              Health Alerts ({filteredAlerts.length})
+            </h3>
+          )}
+          {isLoading ? (
+            <div className="flex items-center justify-center py-12 text-muted-foreground gap-2">
+              <Loader2 className="h-5 w-5 animate-spin" />
+              Loading alerts…
+            </div>
+          ) : filteredAlerts.length === 0 ? (
+            <Card>
+              <CardContent className="flex flex-col items-center justify-center py-12 text-center">
+                <CheckCircle className="h-12 w-12 text-emerald-500/40 mb-3" />
+                <p className="font-medium text-muted-foreground">
+                  {filterType === "all" ? "No active health alerts" : `No ${ALERT_CONFIG[filterType]?.label ?? filterType} alerts`}
+                </p>
+                <p className="text-sm text-muted-foreground/70 mt-1">
+                  {totalAlerts === 0
+                    ? "Run a health scan to detect at-risk opportunities"
+                    : "All alerts in this category have been dismissed"}
+                </p>
+                {totalAlerts === 0 && (
+                  <Button className="mt-4" size="sm" onClick={() => scan.mutate()} disabled={scan.isPending}>
+                    {scan.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Activity className="h-4 w-4 mr-1" />}
+                    Run Health Scan
+                  </Button>
+                )}
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="space-y-2">
+              {filteredAlerts.map((alert: any) => (
+                <AlertCard key={alert.id} alert={alert} onDismiss={handleRefresh} />
+              ))}
+            </div>
+          )}
         </div>
       )}
       </div>

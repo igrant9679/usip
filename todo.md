@@ -1082,3 +1082,9 @@
 - [x] AI Meeting Summary: "Summarize" button on calendar event detail that calls LLM with event title, attendees, description, and linked opportunity notes; saves result as an activity record; displayed in event detail panel
 - [x] Sequence A/B Testing: schema migration to add variantLabel + variantGroup to sequenceSteps; server procedures to create/update variants and get per-variant stats; sequence canvas UI to add/remove variants per step; Performance tab A/B comparison table showing open rate, reply rate, and winner badge per variant
 - [x] Deal Aging Workflow Trigger: new workflow trigger type "deal_stuck" with configurable stage + days threshold; nightly check procedure that scans open opportunities for daysInStage >= threshold and fires matching workflow rules (notify_slack, notify_teams, create_task); workflow builder UI to configure the trigger
+
+## Batch H — Pipeline Alerts, A/B Auto-Assignment, Meeting Summary Push
+
+- [x] Pipeline Alerts page: wire the "Pipeline Alerts" nav item to a live list of stuck deals (from checkDealAging), with one-click "Log activity" and "Move stage" actions per deal row
+- [x] A/B variant auto-assignment: extend sequence enrollment engine to read sequenceAbVariants and assign each enrollee to a variant based on splitPct; use variant subject/body in generated email drafts
+- [x] Meeting summary push-to-opportunity: after AI summary is generated on a calendar event, show a "Push to opportunity" button that appends key points and action items as an activity record on the linked opportunity

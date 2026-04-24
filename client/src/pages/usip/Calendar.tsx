@@ -26,7 +26,7 @@ import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {
-  CalendarDays, Plus, RefreshCw, Settings, Loader2, Users, Trash2, Link2, Sparkles
+  CalendarDays, Plus, RefreshCw, Settings, Loader2, Users, Trash2, Link2, Sparkles, ArrowUpRight
 } from "lucide-react";
 import { Streamdown } from "streamdown";
 
@@ -223,8 +223,22 @@ function EventDialog({
     onSuccess: () => { toast.success("Event deleted"); onClose(); },
     onError: (e) => toast.error(e.message),
   });
+  const [showOppPicker, setShowOppPicker] = useState(false);
+  const [selectedOppId, setSelectedOppId] = useState<number | null>(null);
+  const { data: opportunitiesList = [] } = trpc.opportunities.list.useQuery(
+    { limit: 100 },
+    { enabled: showOppPicker }
+  );
   const summarizeMeeting = trpc.calendar.summarizeMeeting.useMutation({
     onSuccess: (data) => { setAiSummary(data.summary); toast.success("Meeting summary generated"); },
+    onError: (e) => toast.error(e.message),
+  });
+  const pushSummary = trpc.calendar.pushSummaryToOpportunity.useMutation({
+    onSuccess: (data) => {
+      toast.success(`Summary pushed to "${data.opportunityName}"`);
+      setShowOppPicker(false);
+      setSelectedOppId(null);
+    },
     onError: (e) => toast.error(e.message),
   });
 
@@ -305,8 +319,41 @@ function EventDialog({
                 </Button>
               </div>
               {aiSummary && (
-                <div className="rounded-md border bg-muted/40 p-3 text-sm max-h-48 overflow-y-auto">
-                  <Streamdown>{aiSummary}</Streamdown>
+                <div className="space-y-2">
+                  <div className="rounded-md border bg-muted/40 p-3 text-sm max-h-48 overflow-y-auto">
+                    <Streamdown>{aiSummary}</Streamdown>
+                  </div>
+                  {!showOppPicker ? (
+                    <Button variant="outline" size="sm" className="w-full" onClick={() => setShowOppPicker(true)}>
+                      <ArrowUpRight className="size-3.5 mr-1" /> Push to Opportunity
+                    </Button>
+                  ) : (
+                    <div className="flex gap-2">
+                      <Select
+                        value={selectedOppId ? String(selectedOppId) : ""}
+                        onValueChange={(v) => setSelectedOppId(Number(v))}
+                      >
+                        <SelectTrigger className="flex-1 text-xs h-8">
+                          <SelectValue placeholder="Select opportunity…" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {(opportunitiesList as any[]).map((opp: any) => (
+                            <SelectItem key={opp.id} value={String(opp.id)}>
+                              {opp.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <Button
+                        size="sm"
+                        disabled={!selectedOppId || pushSummary.isPending}
+                        onClick={() => selectedOppId && pushSummary.mutate({ eventId: event!.id, opportunityId: selectedOppId })}
+                      >
+                        {pushSummary.isPending ? <Loader2 className="size-3.5 animate-spin" /> : "Push"}
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => setShowOppPicker(false)}>Cancel</Button>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
