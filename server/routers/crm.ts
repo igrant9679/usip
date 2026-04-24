@@ -903,6 +903,47 @@ export const opportunitiesRouter = router({
         isMeetingSummary: a.type === "note" && typeof a.subject === "string" && a.subject.startsWith("Meeting Summary:"),
       }));
     }),
+
+  /**
+   * Revenue chart data: closed-won value and weighted pipeline forecast
+   * grouped by month, for the Mockup B Dashboard home screen.
+   */
+  revenueChart: workspaceProcedure
+    .input(z.object({ months: z.number().int().min(1).max(24).default(6) }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const rows = await db
+        .select()
+        .from(opportunities)
+        .where(eq(opportunities.workspaceId, ctx.workspace.id));
+
+      // Build month buckets for the last N months
+      const buckets: Record<string, { label: string; revenue: number; forecast: number }> = {};
+      for (let i = input.months - 1; i >= 0; i--) {
+        const d = new Date();
+        d.setMonth(d.getMonth() - i);
+        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+        const label = d.toLocaleString("en-US", { month: "short" });
+        buckets[key] = { label, revenue: 0, forecast: 0 };
+      }
+
+      for (const opp of rows) {
+        const val = Number(opp.value ?? 0);
+        const prob = opp.winProb ?? 20;
+        const closeDate = opp.closeDate ? new Date(opp.closeDate) : null;
+        if (!closeDate) continue;
+        const key = `${closeDate.getFullYear()}-${String(closeDate.getMonth() + 1).padStart(2, "0")}`;
+        if (!buckets[key]) continue;
+        if (opp.stage === "won") {
+          buckets[key].revenue += val;
+        } else if (opp.stage !== "lost") {
+          buckets[key].forecast += val * (prob / 100);
+        }
+      }
+
+      return Object.values(buckets);
+    }),
 });
 
 /* ──────────────────────────────────────────────────────────────────────── */

@@ -46,6 +46,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { GridLayout } from "react-grid-layout";
 import type { Layout, LayoutItem } from "react-grid-layout";
 import { toast } from "sonner";
+import { Link } from "wouter";
 
 /* ─── Constants ──────────────────────────────────────────────────────────── */
 
@@ -403,6 +404,20 @@ export default function Dashboards() {
             right={<Button size="sm" variant="ghost" onClick={() => setOpenNew(true)}><Plus className="h-3.5 w-3.5" /></Button>}
           >
             <ul className="space-y-0.5">
+              {/* Pinned system dashboards */}
+              {[{ label: "Home", href: "/dashboard" }, { label: "Home 2", href: "/dashboard-home2" }].map((p) => (
+                <li key={p.href}>
+                  <Link
+                    href={p.href}
+                    className="w-full text-left text-xs px-2 py-1.5 rounded-md transition-colors flex items-center gap-2 text-muted-foreground hover:text-foreground hover:bg-secondary"
+                  >
+                    <LayoutDashboard className="h-3 w-3 shrink-0 text-primary" />
+                    <span className="truncate">{p.label}</span>
+                    <span className="ml-auto text-[10px] text-muted-foreground/60">System</span>
+                  </Link>
+                </li>
+              ))}
+              {(list.data ?? []).length > 0 && <li className="border-t my-1" />}
               {(list.data ?? []).map((d: any) => (
                 <li key={d.id}>
                   <button
@@ -419,7 +434,7 @@ export default function Dashboards() {
                 </li>
               ))}
               {list.data?.length === 0 && (
-                <li className="text-xs text-muted-foreground px-2 py-1">No dashboards yet</li>
+                <li className="text-xs text-muted-foreground px-2 py-1">No custom dashboards yet</li>
               )}
             </ul>
           </Section>

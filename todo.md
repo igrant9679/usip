@@ -1120,3 +1120,11 @@
 - [x] Apply category accent color to chart lines/bars on Dashboard and EmailAnalytics pages
 - [x] Add 2px accent-colored underline to the topbar header in Shell.tsx (visible even when page header is scrolled away)
 - [x] Add "Reduce motion" toggle in Settings page; persist to localStorage; PageTransition respects it by skipping animation
+
+## Batch N — Mockup B Dashboard as Home Screen
+
+- [x] Save current Dashboard.tsx content as "Home 2" component and register it in Dashboards section
+- [x] Build Mockup B layout in Dashboard.tsx: 4 stat cards (Pipeline Value, Closed-Won, Active Leads, Customers) with trend indicators, Revenue area chart with period dropdown (30d/3m/6m/12m/24m), Recent Opportunities table, AI Drafts Awaiting Review panel
+- [x] Register Mockup B dashboard in Dashboards section as editable pinned entry named "Home"
+- [x] Both "Home" and "Home 2" appear in Dashboards section and are editable
+- [x] Add revenueChart procedure to opportunitiesRouter returning monthly revenue + weighted forecast buckets
