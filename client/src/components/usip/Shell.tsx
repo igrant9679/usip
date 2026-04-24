@@ -164,9 +164,9 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
         "fixed inset-y-0 left-0 z-50 transform transition-transform duration-200 md:translate-x-0 md:static md:transform-none",
         mobileOpen ? "translate-x-0" : "-translate-x-full",
       )}>
-        <div className="px-4 py-4 border-b border-white/10">
-          <img src="/manus-storage/lsi-media-logo-v2_ffe68b5e.png" alt="LSI Media" className="w-full h-auto block" style={{maxHeight: '64px', objectFit: 'contain', objectPosition: 'left center'}} />
-          <div className="text-[10px] text-white/55 tracking-wider uppercase mt-2 text-center">USIP · Sales Intelligence</div>
+        <div className="px-3 py-4 border-b border-white/10 flex flex-col items-center">
+          <img src="/manus-storage/LSILogoNew3_797d12c3.jpg" alt="LSI Media" className="block mx-auto" style={{width: '100%', maxWidth: '196px', height: '72px', objectFit: 'contain', objectPosition: 'center'}} />
+          <div className="text-[10px] text-white/55 tracking-wider uppercase mt-1.5 text-center">USIP · Sales Intelligence</div>
         </div>
 
         <nav className="flex-1 overflow-y-auto py-3 px-2 space-y-3">
