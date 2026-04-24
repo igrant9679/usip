@@ -1094,3 +1094,11 @@
 - [x] A/B variant winner auto-promotion: after configurable min-sends threshold, compute reply rate per variant; promote winner as default (isWinner flag); show winner banner in A/B tab with "Promote" button; nightly batch runs promotion check
 - [x] Pipeline Alerts digest email: "Send Digest" button on Pipeline Alerts page that emails the current stuck-deals list to the workspace owner via the system sender; server procedure builds HTML email with deal table
 - [x] Opportunity Timeline tab: dedicated "Timeline" tab in the opportunity RecordDrawer showing all activities (meetings, calls, notes, emails) in reverse-chronological order; meeting summaries highlighted with a distinct badge
+
+## Batch J — Velocity Rebrand + Neon Stripe Navigation
+
+- [x] Rename app to "Velocity" with tagline "The Unified Revenue Intelligence Platform" in sidebar header
+- [x] Implement Option B Neon Stripe: each nav section gets a 3px left-border stripe + colored section label + colored icons in its category hue
+- [x] Color palette: Overview=sky blue (#60A5FA), Acquire=amber (#FCD34D), Engage=hot purple (#C084FC), Retain=vivid red (#F87171), Operate=teal (#2DD4BF), Admin=slate (#94A3B8)
+- [x] Active nav item: colored glow background matching section color
+- [x] Update page title and any in-app "USIP" references to "Velocity"

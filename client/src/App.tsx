@@ -61,8 +61,12 @@ function Landing() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-[#0F1F1B] text-[#FAF8F2] px-6">
       <div className="max-w-xl space-y-6">
-        <div className="text-xs uppercase tracking-[0.2em] text-[#14B89A]">USIP</div>
-        <h1 className="font-serif text-5xl leading-tight">Unified sales intelligence for the full revenue lifecycle.</h1>
+        <div className="flex items-center gap-2 mb-1">
+          <svg className="size-6 text-[#60A5FA] shrink-0" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2L4.09 12.97 12 12l-1 9 8.91-10.97L12 11l1-9z"/></svg>
+          <span className="text-3xl font-bold tracking-tight text-white">Velocity</span>
+        </div>
+        <p className="text-[#A5B4FC] text-sm tracking-wide">The Unified Revenue Intelligence Platform</p>
+        <h1 className="font-serif text-4xl leading-tight">Full-lifecycle revenue intelligence, from first touch to renewal.</h1>
         <p className="text-[#FAF8F2]/70 text-sm leading-relaxed">CRM, sequences, customer success, social, campaigns, custom dashboards, workflow automation, and CPQ. Multi-workspace, role-aware, AI-native.</p>
         <Button onClick={() => (window.location.href = getLoginUrl())} className="bg-[#14B89A] hover:bg-[#0FA086] text-black">Sign in</Button>
         <p className="text-[#FAF8F2]/40 text-xs">A demo workspace is provisioned automatically on first sign-in.</p>

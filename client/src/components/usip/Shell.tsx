@@ -54,11 +54,14 @@ import { ReactNode, useEffect, useState } from "react";
 import { Link, useLocation } from "wouter";
 
 type NavItem = { href: string; label: string; icon: any };
-type NavGroup = { label: string; items: NavItem[] };
+type NavGroup = { label: string; items: NavItem[]; color: string; activeColor: string; activeBg: string };
 
 const NAV: NavGroup[] = [
   {
     label: "Overview",
+    color: "#60A5FA",
+    activeColor: "#60A5FA",
+    activeBg: "rgba(96,165,250,0.12)",
     items: [
       { href: "/", label: "Dashboard", icon: LayoutDashboard },
       { href: "/inbox", label: "Inbox", icon: Inbox },
@@ -68,6 +71,9 @@ const NAV: NavGroup[] = [
   },
   {
     label: "Acquire",
+    color: "#FCD34D",
+    activeColor: "#FCD34D",
+    activeBg: "rgba(252,211,77,0.12)",
     items: [
       { href: "/leads", label: "Leads", icon: Target },
       { href: "/contacts", label: "Contacts", icon: Users },
@@ -80,6 +86,9 @@ const NAV: NavGroup[] = [
   },
   {
     label: "Engage",
+    color: "#C084FC",
+    activeColor: "#C084FC",
+    activeBg: "rgba(192,132,252,0.12)",
     items: [
       { href: "/segments", label: "Segments", icon: Filter },
       { href: "/segment-rules", label: "Segment Auto-Enroll", icon: Zap },
@@ -99,6 +108,9 @@ const NAV: NavGroup[] = [
   },
   {
     label: "Retain",
+    color: "#F87171",
+    activeColor: "#F87171",
+    activeBg: "rgba(248,113,113,0.12)",
     items: [
       { href: "/customers", label: "Customers", icon: Heart },
       { href: "/renewals", label: "Renewals", icon: CalendarClock },
@@ -107,6 +119,9 @@ const NAV: NavGroup[] = [
   },
   {
     label: "Operate",
+    color: "#2DD4BF",
+    activeColor: "#2DD4BF",
+    activeBg: "rgba(45,212,191,0.12)",
     items: [
       { href: "/tasks", label: "Tasks", icon: ListChecks },
       { href: "/workflows", label: "Workflows", icon: Workflow },
@@ -120,6 +135,9 @@ const NAV: NavGroup[] = [
   },
   {
     label: "Admin",
+    color: "#94A3B8",
+    activeColor: "#94A3B8",
+    activeBg: "rgba(148,163,184,0.12)",
     items: [
       { href: "/team", label: "Team", icon: Users },
       { href: "/lead-scoring", label: "Lead Scoring", icon: Target },
@@ -164,16 +182,30 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
         "fixed inset-y-0 left-0 z-50 transform transition-transform duration-200 md:translate-x-0 md:static md:transform-none",
         mobileOpen ? "translate-x-0" : "-translate-x-full",
       )}>
-        <div className="px-3 py-4 border-b border-white/10 flex flex-col items-center">
-          <img src="/manus-storage/LSILogoNew3_797d12c3.jpg" alt="LSI Media" className="block mx-auto" style={{width: '100%', maxWidth: '196px', height: '72px', objectFit: 'contain', objectPosition: 'center'}} />
-          <div className="text-[10px] text-white/55 tracking-wider uppercase mt-1.5 text-center">USIP · Sales Intelligence</div>
+        <div className="px-4 pt-4 pb-3 border-b border-white/10">
+          <div className="flex items-center gap-2 mb-1">
+            <svg className="size-5 text-[#60A5FA] shrink-0" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2L4.09 12.97 12 12l-1 9 8.91-10.97L12 11l1-9z"/></svg>
+            <span className="text-[18px] font-bold tracking-tight text-white">Velocity</span>
+          </div>
+          <div className="text-[9.5px] text-[#A5B4FC] leading-tight pl-0.5">The Unified Revenue Intelligence Platform</div>
         </div>
 
-        <nav className="flex-1 overflow-y-auto py-3 px-2 space-y-3">
+        <nav className="flex-1 overflow-y-auto py-3 px-0 space-y-2">
           {NAV.map((group) => (
             <div key={group.label}>
-              <div className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-white/40">{group.label}</div>
-              <div className="space-y-0.5">
+              {/* Section header with left stripe */}
+              <div
+                className="flex items-center gap-1.5 pl-3 pr-2 pb-1 pt-0.5"
+                style={{ borderLeft: `3px solid ${group.color}` }}
+              >
+                <span
+                  className="text-[10px] font-bold uppercase tracking-widest"
+                  style={{ color: group.color }}
+                >
+                  {group.label}
+                </span>
+              </div>
+              <div className="space-y-0.5 pl-0">
                 {group.items.map((item) => {
                   const active = location === item.href || (item.href !== "/" && location.startsWith(item.href));
                   const Icon = item.icon;
@@ -182,11 +214,22 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
                       key={item.href}
                       href={item.href}
                       className={cn(
-                        "flex items-center gap-2.5 px-2 py-1.5 rounded-md text-[13px] transition-colors",
-                        active ? "bg-primary/15 text-primary" : "text-white/75 hover:bg-white/5 hover:text-white",
+                        "flex items-center gap-2.5 pl-3 pr-2 py-1.5 text-[13px] transition-all duration-150",
+                        active ? "text-white" : "text-white/60 hover:text-white/90",
                       )}
+                      style={active ? {
+                        borderLeft: `3px solid ${group.color}`,
+                        backgroundColor: group.activeBg,
+                        paddingLeft: '12px',
+                      } : {
+                        borderLeft: '3px solid transparent',
+                        paddingLeft: '12px',
+                      }}
                     >
-                      <Icon className="size-4 shrink-0" />
+                      <Icon
+                        className="size-4 shrink-0 transition-colors"
+                        style={{ color: active ? group.color : group.color + 'aa' }}
+                      />
                       <span className="truncate">{item.label}</span>
                     </Link>
                   );

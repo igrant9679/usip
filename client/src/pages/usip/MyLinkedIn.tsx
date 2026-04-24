@@ -245,7 +245,7 @@ export default function MyLinkedIn() {
         {/* How outreach works */}
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">How LinkedIn Outreach Works in USIP</CardTitle>
+            <CardTitle className="text-base">How LinkedIn Outreach Works in Velocity</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3 text-sm text-muted-foreground">
             <div className="flex gap-3">
@@ -265,7 +265,7 @@ export default function MyLinkedIn() {
               <AlertDescription className="text-xs">
                 LinkedIn's API does not permit third-party apps to send messages or InMails
                 programmatically without Sales Navigator partner approval. This is a LinkedIn
-                platform restriction, not a USIP limitation.
+                platform restriction, not a Velocity limitation.
               </AlertDescription>
             </Alert>
           </CardContent>

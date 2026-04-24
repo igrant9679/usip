@@ -328,7 +328,7 @@ export default function ImportContacts() {
             <CardHeader>
               <CardTitle>Map CSV Columns to Contact Fields</CardTitle>
               <CardDescription>
-                Match each column in your CSV to a USIP contact field. Required fields are marked
+                Match each column in your CSV to a Velocity contact field. Required fields are marked
                 with *.
               </CardDescription>
             </CardHeader>
@@ -338,7 +338,7 @@ export default function ImportContacts() {
                   <thead className="bg-muted/50">
                     <tr>
                       <th className="text-left px-4 py-2 font-medium">CSV Column</th>
-                      <th className="text-left px-4 py-2 font-medium">Maps to USIP Field</th>
+                      <th className="text-left px-4 py-2 font-medium">Maps to Velocity Field</th>
                     </tr>
                   </thead>
                   <tbody>

@@ -161,7 +161,7 @@ export default function SegmentRules() {
 
         <div className="border border-border rounded-lg p-4 bg-muted/30 text-sm text-muted-foreground space-y-1">
           <p className="font-medium text-foreground">How it works</p>
-          <p>Every hour, USIP evaluates all enabled rules. Contacts matching the segment's filter criteria that are not already enrolled in the linked sequence are automatically enrolled.</p>
+          <p>Every hour, Velocity evaluates all enabled rules. Contacts matching the segment's filter criteria that are not already enrolled in the linked sequence are automatically enrolled.</p>
           <p>Use <strong>Run now</strong> to trigger an immediate evaluation without waiting for the next hourly cycle.</p>
         </div>
       </div>
