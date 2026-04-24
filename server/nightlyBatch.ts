@@ -14,6 +14,7 @@ import { getDb } from "./db";
 import { runPipelineForContact } from "./routers/aiPipeline";
 import { notifyOwner } from "./_core/notification";
 import { checkDealAging } from "./routers/operations";
+import { checkAndPromoteAbVariants } from "./routers/sequences";
 
 const MAX_PER_WORKSPACE = 50;
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
@@ -151,6 +152,16 @@ export async function runNightlyBatch(): Promise<{
     console.log(`[NightlyBatch] Deal aging check: ${agingResult.rulesChecked} rules, ${agingResult.dealsMatched} deals matched, ${agingResult.actionsTriggered} actions triggered`);
   } catch (agingErr) {
     console.warn("[NightlyBatch] Deal aging check failed:", agingErr);
+  }
+
+  // Feature Batch I: Auto-promote A/B test winners when threshold is met
+  try {
+    const abResult = await checkAndPromoteAbVariants();
+    if (abResult.promoted > 0) {
+      console.log(`[NightlyBatch] A/B auto-promotion: ${abResult.promoted} variant(s) promoted to winner`);
+    }
+  } catch (abErr) {
+    console.warn("[NightlyBatch] A/B auto-promotion check failed:", abErr);
   }
 
   // Feature 54: Notify the workspace owner with a batch summary

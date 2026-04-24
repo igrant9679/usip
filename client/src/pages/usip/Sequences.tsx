@@ -393,6 +393,8 @@ function SequenceAbPanel({ sequenceId, steps }: { sequenceId: number; steps: any
   const [selectedStep, setSelectedStep] = useState(0);
   const [addOpen, setAddOpen] = useState(false);
   const [editVariant, setEditVariant] = useState<any | null>(null);
+  const [minSendsEditing, setMinSendsEditing] = useState<number | null>(null);
+  const [minSendsValue, setMinSendsValue] = useState<number>(100);
   const utils = trpc.useUtils();
 
   const emailSteps = steps
@@ -420,12 +422,21 @@ function SequenceAbPanel({ sequenceId, steps }: { sequenceId: number; steps: any
     onSuccess: () => { utils.sequenceAb.list.invalidate(); utils.sequenceAb.getStats.invalidate(); toast.success("Variant deleted"); },
     onError: (e) => toast.error(e.message),
   });
+  const promoteWinner = trpc.sequenceAb.promoteWinner.useMutation({
+    onSuccess: () => { utils.sequenceAb.list.invalidate(); utils.sequenceAb.getStats.invalidate(); toast.success("Winner promoted!"); },
+    onError: (e) => toast.error(e.message),
+  });
+  const setMinSends = trpc.sequenceAb.setMinSends.useMutation({
+    onSuccess: () => { utils.sequenceAb.list.invalidate(); utils.sequenceAb.getStats.invalidate(); setMinSendsEditing(null); toast.success("Min-sends threshold saved"); },
+    onError: (e) => toast.error(e.message),
+  });
 
   if (emailSteps.length === 0) {
     return <div className="text-sm text-muted-foreground py-6 text-center">No email steps in this sequence. Add an email step first.</div>;
   }
 
   const topVariant = stats && stats.length > 0 ? stats.reduce((a, b) => a.score > b.score ? a : b) : null;
+  const promotedVariant = stats?.find((v) => v.isWinner);
 
   return (
     <div className="space-y-4">
@@ -444,6 +455,25 @@ function SequenceAbPanel({ sequenceId, steps }: { sequenceId: number; steps: any
         </div>
         <Button size="sm" onClick={() => setAddOpen(true)}><Plus className="size-3.5 mr-1" /> Add variant</Button>
       </div>
+
+      {/* Winner / auto-promotion status banner */}
+      {promotedVariant && (
+        <div className="flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800 px-3 py-2 text-sm">
+          <Trophy className="size-4 text-amber-500 shrink-0" />
+          <span className="font-medium text-amber-800 dark:text-amber-300">Variant {promotedVariant.variantLabel} is the winner</span>
+          {promotedVariant.promotedAt && (
+            <span className="text-xs text-muted-foreground ml-1">
+              — promoted {new Date(promotedVariant.promotedAt).toLocaleDateString()}
+            </span>
+          )}
+        </div>
+      )}
+      {!promotedVariant && stats && stats.length >= 2 && (
+        <div className="flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 dark:bg-blue-950/30 dark:border-blue-800 px-3 py-2 text-sm text-blue-700 dark:text-blue-300">
+          <Activity className="size-4 shrink-0" />
+          <span>Testing in progress — winner will be auto-promoted once all variants reach their min-sends threshold.</span>
+        </div>
+      )}
 
       {isLoading && <div className="flex justify-center py-6"><Loader2 className="size-5 animate-spin text-muted-foreground" /></div>}
 
@@ -467,25 +497,68 @@ function SequenceAbPanel({ sequenceId, steps }: { sequenceId: number; steps: any
                     <th className="text-right py-1.5 px-2">Sent</th>
                     <th className="text-right py-1.5 px-2">Open %</th>
                     <th className="text-right py-1.5 px-2">Reply %</th>
+                    <th className="text-right py-1.5 px-2">Min Sends</th>
                     <th className="py-1.5 px-2"></th>
                   </tr>
                 </thead>
                 <tbody>
                   {stats.map((v) => (
-                    <tr key={v.id} className="border-b hover:bg-muted/30">
+                    <tr key={v.id} className={`border-b hover:bg-muted/30 ${v.isWinner ? "bg-amber-50/50 dark:bg-amber-950/20" : ""}`}>
                       <td className="py-1.5 px-2">
                         <span className="font-mono font-semibold">{v.variantLabel}</span>
-                        {topVariant?.id === v.id && v.sentCount > 0 && (
-                          <Trophy className="size-3 text-amber-500 inline ml-1" />
+                        {v.isWinner && (
+                          <span className="inline-flex items-center gap-0.5 ml-1.5 text-amber-600 dark:text-amber-400">
+                            <Trophy className="size-3" />
+                            <span className="text-[10px] font-medium">Winner</span>
+                          </span>
+                        )}
+                        {!v.isWinner && topVariant?.id === v.id && v.sentCount > 0 && !promotedVariant && (
+                          <span className="inline-flex items-center gap-0.5 ml-1.5 text-blue-500">
+                            <TrendingUp className="size-3" />
+                            <span className="text-[10px]">Leading</span>
+                          </span>
                         )}
                       </td>
-                      <td className="py-1.5 px-2 max-w-[180px] truncate">{v.subject}</td>
+                      <td className="py-1.5 px-2 max-w-[160px] truncate">{v.subject}</td>
                       <td className="py-1.5 px-2 text-right">{v.splitPct}%</td>
                       <td className="py-1.5 px-2 text-right">{v.sentCount}</td>
                       <td className={`py-1.5 px-2 text-right font-medium ${v.openRate >= 30 ? "text-emerald-600" : v.openRate >= 15 ? "text-amber-600" : "text-muted-foreground"}`}>{v.openRate}%</td>
                       <td className={`py-1.5 px-2 text-right font-medium ${v.replyRate >= 10 ? "text-emerald-600" : v.replyRate >= 5 ? "text-amber-600" : "text-muted-foreground"}`}>{v.replyRate}%</td>
+                      <td className="py-1.5 px-2 text-right">
+                        {minSendsEditing === v.id ? (
+                          <div className="flex items-center gap-1 justify-end">
+                            <Input
+                              type="number"
+                              className="h-5 w-16 text-xs px-1"
+                              value={minSendsValue}
+                              min={1}
+                              onChange={(e) => setMinSendsValue(Number(e.target.value))}
+                            />
+                            <Button size="sm" className="h-5 px-1.5 text-[10px]" onClick={() => setMinSends.mutate({ id: v.id, minSendsForPromotion: minSendsValue })} disabled={setMinSends.isPending}>Save</Button>
+                            <Button size="sm" variant="ghost" className="h-5 px-1" onClick={() => setMinSendsEditing(null)}>✕</Button>
+                          </div>
+                        ) : (
+                          <button
+                            className="text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
+                            onClick={() => { setMinSendsEditing(v.id); setMinSendsValue(v.minSendsForPromotion ?? 100); }}
+                          >
+                            {v.minSendsForPromotion ?? 100}
+                          </button>
+                        )}
+                      </td>
                       <td className="py-1.5 px-2">
                         <div className="flex gap-1 justify-end">
+                          {!v.isWinner && (
+                            <Button
+                              size="sm" variant="outline"
+                              className="h-6 px-1.5 text-[10px] text-amber-700 border-amber-300 hover:bg-amber-50"
+                              onClick={() => promoteWinner.mutate({ sequenceId, stepIndex: selectedStep, winnerId: v.id })}
+                              disabled={promoteWinner.isPending}
+                              title="Promote as winner"
+                            >
+                              <Trophy className="size-3 mr-0.5" />Promote
+                            </Button>
+                          )}
                           <Button size="sm" variant="ghost" className="h-6 px-1.5" onClick={() => setEditVariant(variants!.find((vv) => vv.id === v.id))}><Pencil className="size-3" /></Button>
                           <Button size="sm" variant="ghost" className="h-6 px-1.5 text-destructive" onClick={() => deleteVariant.mutate({ id: v.id })}><Trash2 className="size-3" /></Button>
                         </div>

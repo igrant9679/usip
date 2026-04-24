@@ -2,11 +2,12 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { trpc } from "@/lib/trpc";
 import { fmtDate, StatusPill } from "./Common";
-import { Brain, ChevronDown, CheckCircle2, Clock, Loader2, Paperclip, Phone, Calendar, MessageSquare, RefreshCw, Sparkles, Trash2, Users, XCircle, ShieldCheck, FileText, Download, Send, Wand2 } from "lucide-react";
+import { Brain, ChevronDown, CheckCircle2, Clock, Loader2, Paperclip, Phone, Calendar, MessageSquare, RefreshCw, Sparkles, Trash2, Users, XCircle, ShieldCheck, FileText, Download, Send, Wand2, Sparkle } from "lucide-react";
 import { EmailVerificationBadge } from "./EmailVerificationBadge";
 import { ContactOverview } from "./detail/ContactOverview";
 import { AccountOverview } from "./detail/AccountOverview";
 import { OpportunityOverview } from "./detail/OpportunityOverview";
+import { ActivityTimeline } from "./detail/ActivityTimeline";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { useRef, useState } from "react";
@@ -604,7 +605,7 @@ export function RecordDrawer({
   subtitle?: string;
   headerExtras?: React.ReactNode;
 }) {
-  const [tab, setTab] = useState<"overview" | "timeline" | "call" | "meeting" | "note" | "files" | "score" | "intelligence" | "verify" | "brief" | "email" | "enrich">("overview");
+  const [tab, setTab] = useState<"overview" | "timeline" | "opp-timeline" | "call" | "meeting" | "note" | "files" | "score" | "intelligence" | "verify" | "brief" | "email" | "enrich">("overview");
   const [emailSubject, setEmailSubject] = useState("");
   const [emailBody, setEmailBody] = useState("");
   const [emailAiPrompt, setEmailAiPrompt] = useState("");
@@ -639,6 +640,10 @@ export function RecordDrawer({
     { relatedType, relatedId: relatedId ?? 0 },
     { enabled },
   );
+  const oppTimeline = trpc.opportunities.getTimeline.useQuery(
+    { id: relatedId ?? 0 },
+    { enabled: relatedType === "opportunity" && !!relatedId },
+  );
   const files = trpc.attachments.list.useQuery(
     { relatedType, relatedId: relatedId ?? 0 },
     { enabled },
@@ -649,6 +654,7 @@ export function RecordDrawer({
     utils.activities.list.invalidate({ relatedType, relatedId });
     utils.attachments.list.invalidate({ relatedType, relatedId });
     utils.notifications.list.invalidate();
+    if (relatedType === "opportunity") utils.opportunities.getTimeline.invalidate({ id: relatedId });
   };
 
   const logCall = trpc.activities.logCall.useMutation({ onSuccess: () => { refresh(); toast.success("Call logged"); setTab("timeline"); } });
@@ -692,6 +698,7 @@ export function RecordDrawer({
             { k: "note", label: "Add note" },
             { k: "files", label: `Files (${files.data?.length ?? 0})` },
             ...(relatedType === "lead" ? [{ k: "score", label: "Score" }] : []),
+            ...(relatedType === "opportunity" ? [{ k: "opp-timeline", label: "Timeline" }] : []),
             ...(relatedType === "opportunity" ? [{ k: "intelligence", label: "AI Intel" }] : []),
             ...((relatedType === "contact" || relatedType === "lead") ? [{ k: "email", label: "Send Email" }] : []),
             ...(relatedType === "contact" ? [{ k: "verify", label: "Email Verify" }] : []),
@@ -729,6 +736,33 @@ export function RecordDrawer({
                 </div>
               ))}
             </>
+          )}
+
+          {tab === "opp-timeline" && relatedType === "opportunity" && (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <p className="text-xs text-muted-foreground">All activities for this opportunity in chronological order, including pushed AI meeting summaries.</p>
+              </div>
+              <ActivityTimeline
+                isLoading={oppTimeline.isLoading}
+                emptyMessage="No activities yet. Log a call, meeting, or note, or push an AI meeting summary to this opportunity."
+                activities={(oppTimeline.data ?? []).map((a) => ({
+                  id: a.id,
+                  kind: a.isMeetingSummary ? "meeting" : (a.type ?? "note"),
+                  subject: a.isMeetingSummary ? a.subject : (a.subject ?? undefined),
+                  notes: a.body ?? undefined,
+                  disposition: a.disposition ?? undefined,
+                  createdAt: a.createdAt,
+                }))}
+              />
+              {/* Meeting summary highlight strip */}
+              {(oppTimeline.data ?? []).some((a) => a.isMeetingSummary) && (
+                <div className="mt-2 rounded-md border border-violet-200 bg-violet-50 dark:bg-violet-950/30 dark:border-violet-800 px-3 py-2 flex items-center gap-2 text-xs text-violet-700 dark:text-violet-300">
+                  <Sparkle className="size-3.5 shrink-0" />
+                  <span>AI meeting summaries are highlighted in this timeline. Push more from the Calendar page.</span>
+                </div>
+              )}
+            </div>
           )}
 
           {tab === "call" && (

@@ -1088,3 +1088,9 @@
 - [x] Pipeline Alerts page: wire the "Pipeline Alerts" nav item to a live list of stuck deals (from checkDealAging), with one-click "Log activity" and "Move stage" actions per deal row
 - [x] A/B variant auto-assignment: extend sequence enrollment engine to read sequenceAbVariants and assign each enrollee to a variant based on splitPct; use variant subject/body in generated email drafts
 - [x] Meeting summary push-to-opportunity: after AI summary is generated on a calendar event, show a "Push to opportunity" button that appends key points and action items as an activity record on the linked opportunity
+
+## Batch I — A/B Winner Promotion, Digest Email, Opportunity Timeline
+
+- [x] A/B variant winner auto-promotion: after configurable min-sends threshold, compute reply rate per variant; promote winner as default (isWinner flag); show winner banner in A/B tab with "Promote" button; nightly batch runs promotion check
+- [x] Pipeline Alerts digest email: "Send Digest" button on Pipeline Alerts page that emails the current stuck-deals list to the workspace owner via the system sender; server procedure builds HTML email with deal table
+- [x] Opportunity Timeline tab: dedicated "Timeline" tab in the opportunity RecordDrawer showing all activities (meetings, calls, notes, emails) in reverse-chronological order; meeting summaries highlighted with a distinct badge

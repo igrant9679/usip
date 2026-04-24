@@ -377,4 +377,105 @@ export const pipelineAlertsRouter = router({
         );
       return { ok: true };
     }),
+
+  /**
+   * Send a digest email of stuck deals to the workspace owner (or configured notif email).
+   * Uses the workspace system sender account if configured.
+   */
+  sendDigest: workspaceProcedure.mutation(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+
+    const wsId = ctx.workspace.id;
+
+    // Gather stuck deals (reuse same logic as getStuckDeals)
+    const rules = await db
+      .select()
+      .from(workflowRules)
+      .where(and(eq(workflowRules.workspaceId, wsId), eq(workflowRules.enabled, true), eq(workflowRules.triggerType, "deal_stuck")));
+
+    const defaultMinDays = 7;
+    const stageThresholds: Record<string, number> = {};
+    for (const rule of rules) {
+      const cfg = (rule.triggerConfig ?? {}) as { stage?: string; days?: number };
+      const days = cfg.days ?? defaultMinDays;
+      if (cfg.stage) stageThresholds[cfg.stage] = Math.min(stageThresholds[cfg.stage] ?? Infinity, days);
+    }
+    const globalMin = rules.length > 0
+      ? Math.min(...rules.map((r) => ((r.triggerConfig ?? {}) as { days?: number }).days ?? defaultMinDays))
+      : defaultMinDays;
+
+    const openOpps = await db
+      .select({ id: opportunities.id, name: opportunities.name, stage: opportunities.stage, value: opportunities.value, daysInStage: opportunities.daysInStage, ownerId: opportunities.ownerId })
+      .from(opportunities)
+      .where(and(eq(opportunities.workspaceId, wsId), sql`${opportunities.stage} NOT IN ('closed_won', 'closed_lost')`));
+
+    const stuckDeals = openOpps.filter((opp) => {
+      const days = opp.daysInStage ?? 0;
+      const threshold = opp.stage && stageThresholds[opp.stage] !== undefined ? stageThresholds[opp.stage]! : globalMin;
+      return days >= threshold;
+    });
+
+    if (stuckDeals.length === 0) {
+      return { ok: true, sent: false, reason: "No stuck deals found" };
+    }
+
+    // Find the workspace owner's email (user with ownerOpenId or the calling user)
+    const { ENV } = await import("../_core/env");
+    const [ownerUser] = await db
+      .select({ id: users.id, email: users.email, name: users.name })
+      .from(users)
+      .where(sql`${users.openId} = ${ENV.ownerOpenId}`);
+    const recipientEmail = ownerUser?.email ?? ctx.user.email;
+    if (!recipientEmail) {
+      throw new TRPCError({ code: "PRECONDITION_FAILED", message: "No recipient email found for workspace owner" });
+    }
+
+    // Build email HTML
+    const rows = stuckDeals
+      .map((d) => `<tr><td style="padding:4px 8px;border-bottom:1px solid #eee">${d.name}</td><td style="padding:4px 8px;border-bottom:1px solid #eee">${d.stage}</td><td style="padding:4px 8px;border-bottom:1px solid #eee;text-align:right">${d.daysInStage ?? 0} days</td><td style="padding:4px 8px;border-bottom:1px solid #eee;text-align:right">$${Number(d.value ?? 0).toLocaleString()}</td></tr>`)
+      .join("");
+    const html = `<h2 style="font-family:sans-serif">Pipeline Alerts Digest</h2>
+<p style="font-family:sans-serif">${stuckDeals.length} deal${stuckDeals.length !== 1 ? "s" : ""} are stuck in their current stage as of ${new Date().toLocaleDateString()}.</p>
+<table style="border-collapse:collapse;font-family:sans-serif;font-size:14px;width:100%">
+  <thead><tr style="background:#f5f5f5"><th style="padding:6px 8px;text-align:left">Deal</th><th style="padding:6px 8px;text-align:left">Stage</th><th style="padding:6px 8px;text-align:right">Days Stuck</th><th style="padding:6px 8px;text-align:right">Value</th></tr></thead>
+  <tbody>${rows}</tbody>
+</table>
+<p style="font-family:sans-serif;color:#666;font-size:12px;margin-top:16px">Sent by USIP Pipeline Alerts</p>`;
+
+    // Get system sender
+    const [settings] = await db
+      .select({ systemSenderAccountId: workspaceSettings.systemSenderAccountId })
+      .from(workspaceSettings)
+      .where(eq(workspaceSettings.workspaceId, wsId));
+
+    if (!settings?.systemSenderAccountId) {
+      throw new TRPCError({ code: "PRECONDITION_FAILED", message: "No system sender configured. Please set a system sender in Settings → General." });
+    }
+
+    const { sendingAccounts } = await import("../../drizzle/schema");
+    const { buildTransporter, decrypt } = await import("./smtpConfig");
+    const [sender] = await db.select().from(sendingAccounts).where(eq(sendingAccounts.id, settings.systemSenderAccountId));
+    if (!sender?.smtpHost || !sender?.smtpUsername || !sender?.smtpPassword) {
+      throw new TRPCError({ code: "PRECONDITION_FAILED", message: "System sender is not fully configured (missing SMTP credentials)." });
+    }
+
+    const password = decrypt(sender.smtpPassword);
+    const transporter = buildTransporter({
+      host: sender.smtpHost,
+      port: sender.smtpPort ?? 587,
+      secure: sender.smtpSecure ?? false,
+      username: sender.smtpUsername,
+      password,
+    });
+
+    await transporter.sendMail({
+      from: `"${sender.fromName ?? ctx.workspace.name}" <${sender.fromEmail}>`,
+      to: recipientEmail,
+      subject: `Pipeline Digest: ${stuckDeals.length} stuck deal${stuckDeals.length !== 1 ? "s" : ""} — ${new Date().toLocaleDateString()}`,
+      html,
+    });
+
+    return { ok: true, sent: true, count: stuckDeals.length, recipient: recipientEmail };
+  }),
 });

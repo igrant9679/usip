@@ -861,6 +861,48 @@ export const opportunitiesRouter = router({
       const contactRoles = roles.map((r) => ({ ...r, contact: cMap.get(r.contactId) ?? null }));
       return { opportunity: opp, account, contactRoles };
     }),
+
+  /**
+   * Chronological timeline of all activities for an opportunity.
+   * Includes calls, meetings, notes, and AI meeting summaries pushed to the opportunity.
+   */
+  getTimeline: workspaceProcedure
+    .input(z.object({ id: z.number() }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // Verify opportunity belongs to workspace
+      const [opp] = await db
+        .select({ id: opportunities.id })
+        .from(opportunities)
+        .where(and(eq(opportunities.id, input.id), eq(opportunities.workspaceId, ctx.workspace.id)));
+      if (!opp) throw new TRPCError({ code: "NOT_FOUND", message: "Opportunity not found" });
+      // Fetch all activities linked to this opportunity
+      const rows = await db
+        .select()
+        .from(activities)
+        .where(
+          and(
+            eq(activities.workspaceId, ctx.workspace.id),
+            eq(activities.relatedType, "opportunity"),
+            eq(activities.relatedId, input.id),
+          )
+        )
+        .orderBy(desc(activities.createdAt))
+        .limit(200);
+      return rows.map((a) => ({
+        id: a.id,
+        type: a.type,
+        subject: a.subject ?? null,
+        body: a.body ?? null,
+        disposition: a.disposition ?? null,
+        occurredAt: a.occurredAt ?? a.createdAt,
+        createdAt: a.createdAt,
+        createdByUserId: a.createdByUserId ?? null,
+        // Flag activities that are pushed AI meeting summaries
+        isMeetingSummary: a.type === "note" && typeof a.subject === "string" && a.subject.startsWith("Meeting Summary:"),
+      }));
+    }),
 });
 
 /* ──────────────────────────────────────────────────────────────────────── */

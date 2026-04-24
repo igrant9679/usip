@@ -533,10 +533,101 @@ export const sequenceAbRouter = router({
         sentCount: v.sentCount,
         openCount: v.openCount,
         replyCount: v.replyCount,
+        isWinner: v.isWinner,
+        promotedAt: v.promotedAt,
+        minSendsForPromotion: v.minSendsForPromotion,
         openRate: v.sentCount > 0 ? Math.round((v.openCount / v.sentCount) * 100) : 0,
         replyRate: v.sentCount > 0 ? Math.round((v.replyCount / v.sentCount) * 100) : 0,
-        // Winner = highest reply rate (or open rate as tiebreaker)
         score: v.sentCount > 0 ? (v.replyCount / v.sentCount) * 100 + (v.openCount / v.sentCount) * 10 : 0,
       }));
     }),
+
+  /** Manually promote a variant as winner for a step */
+  promoteWinner: workspaceProcedure
+    .input(z.object({ sequenceId: z.number(), stepIndex: z.number().int().min(0), winnerId: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // Clear existing winner flags for this step
+      await db.update(sequenceAbVariants)
+        .set({ isWinner: false, promotedAt: null })
+        .where(and(
+          eq(sequenceAbVariants.workspaceId, ctx.workspace.id),
+          eq(sequenceAbVariants.sequenceId, input.sequenceId),
+          eq(sequenceAbVariants.stepIndex, input.stepIndex),
+        ));
+      // Set the new winner
+      await db.update(sequenceAbVariants)
+        .set({ isWinner: true, promotedAt: new Date() })
+        .where(and(
+          eq(sequenceAbVariants.id, input.winnerId),
+          eq(sequenceAbVariants.workspaceId, ctx.workspace.id),
+        ));
+      return { ok: true };
+    }),
+
+  /** Update min-sends threshold for auto-promotion on a variant */
+  setMinSends: workspaceProcedure
+    .input(z.object({ id: z.number(), minSendsForPromotion: z.number().int().min(1).max(10000) }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      await db.update(sequenceAbVariants)
+        .set({ minSendsForPromotion: input.minSendsForPromotion })
+        .where(and(eq(sequenceAbVariants.id, input.id), eq(sequenceAbVariants.workspaceId, ctx.workspace.id)));
+      return { ok: true };
+    }),
 });
+
+/**
+ * Standalone function called by the nightly batch to auto-promote A/B winners.
+ * For each (sequenceId, stepIndex) group: if all variants meet their minSendsForPromotion
+ * threshold and no winner has been set yet, promote the variant with the highest reply rate.
+ */
+export async function checkAndPromoteAbVariants(): Promise<{ promoted: number }> {
+  const db = await getDb();
+  if (!db) return { promoted: 0 };
+  // Get all variants that haven't been promoted yet
+  const variants = await db.select().from(sequenceAbVariants)
+    .where(eq(sequenceAbVariants.isWinner, false));
+  // Group by (sequenceId, stepIndex)
+  const groups = new Map<string, typeof variants>();
+  for (const v of variants) {
+    const key = `${v.sequenceId}:${v.stepIndex}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(v);
+  }
+  let promoted = 0;
+  for (const [, group] of groups) {
+    // Skip if any variant in the group hasn't reached its min-sends threshold
+    const allMeetThreshold = group.every(v => v.sentCount >= v.minSendsForPromotion);
+    if (!allMeetThreshold || group.length < 2) continue;
+    // Check if a winner already exists for this group
+    const [existing] = await db.select({ id: sequenceAbVariants.id })
+      .from(sequenceAbVariants)
+      .where(and(
+        eq(sequenceAbVariants.sequenceId, group[0].sequenceId),
+        eq(sequenceAbVariants.stepIndex, group[0].stepIndex),
+        eq(sequenceAbVariants.isWinner, true),
+      ));
+    if (existing) continue; // already promoted
+    // Find the variant with the highest reply rate (open rate as tiebreaker)
+    const winner = group.reduce((best, v) => {
+      const score = v.sentCount > 0 ? (v.replyCount / v.sentCount) * 100 + (v.openCount / v.sentCount) * 10 : 0;
+      const bestScore = best.sentCount > 0 ? (best.replyCount / best.sentCount) * 100 + (best.openCount / best.sentCount) * 10 : 0;
+      return score > bestScore ? v : best;
+    });
+    // Clear all winner flags for this step then set the winner
+    await db.update(sequenceAbVariants)
+      .set({ isWinner: false, promotedAt: null })
+      .where(and(
+        eq(sequenceAbVariants.sequenceId, group[0].sequenceId),
+        eq(sequenceAbVariants.stepIndex, group[0].stepIndex),
+      ));
+    await db.update(sequenceAbVariants)
+      .set({ isWinner: true, promotedAt: new Date() })
+      .where(eq(sequenceAbVariants.id, winner.id));
+    promoted++;
+  }
+  return { promoted };
+}

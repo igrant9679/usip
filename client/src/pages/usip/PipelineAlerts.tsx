@@ -33,6 +33,7 @@ import {
   Timer,
   MessageSquarePlus,
   ArrowRightCircle,
+  Mail,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Link } from "wouter";
@@ -290,6 +291,17 @@ export default function PipelineAlerts() {
     onError: (e) => toast.error(e.message),
   });
 
+  const sendDigest = trpc.pipelineAlerts.sendDigest.useMutation({
+    onSuccess: (data) => {
+      if (data.sent) {
+        toast.success(`Digest sent to ${data.recipient} — ${data.count} stuck deal${data.count !== 1 ? "s" : ""} included`);
+      } else {
+        toast.info(data.reason ?? "No stuck deals to include in digest");
+      }
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
   const handleRefresh = () => {
     refetch();
     refetchSummary();
@@ -311,6 +323,20 @@ export default function PipelineAlerts() {
         <Button variant="outline" size="sm" onClick={handleRefresh}>
           <RefreshCw className="h-4 w-4 mr-1" />
           Refresh
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => sendDigest.mutate()}
+          disabled={sendDigest.isPending}
+          title="Email a digest of stuck deals to the workspace owner"
+        >
+          {sendDigest.isPending ? (
+            <Loader2 className="h-4 w-4 animate-spin mr-1" />
+          ) : (
+            <Mail className="h-4 w-4 mr-1" />
+          )}
+          Send Digest
         </Button>
         <Button size="sm" onClick={() => scan.mutate()} disabled={scan.isPending}>
           {scan.isPending ? (

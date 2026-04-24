@@ -190,6 +190,13 @@
       "when": 1777062020194,
       "tag": "0026_clumsy_texas_twister",
       "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "5",
+      "when": 1777064021913,
+      "tag": "0027_chunky_jack_power",
+      "breakpoints": true
     }
   ]
 }
