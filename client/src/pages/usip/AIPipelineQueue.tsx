@@ -529,8 +529,9 @@ export default function AIPipelineQueue() {
 
           {/* CRM Context Selectors */}
           <Card>
+            <Collapsible open={ctxOpen} onOpenChange={setCtxOpen}>
             <CardHeader className="pb-2 pt-3">
-              <CollapsibleTrigger asChild onClick={() => setCtxOpen((v) => !v)}>
+              <CollapsibleTrigger asChild>
                 <button className="flex w-full items-center justify-between text-sm font-semibold hover:text-foreground text-muted-foreground transition-colors">
                   <span className="flex items-center gap-2">
                     <Link2 className="h-4 w-4 text-indigo-400" />
@@ -545,7 +546,6 @@ export default function AIPipelineQueue() {
                 </button>
               </CollapsibleTrigger>
             </CardHeader>
-            <Collapsible open={ctxOpen}>
               <CollapsibleContent>
                 <CardContent className="pt-0 pb-4 space-y-3">
                   <p className="text-xs text-muted-foreground">
@@ -598,7 +598,7 @@ export default function AIPipelineQueue() {
                 </CardContent>
               </CollapsibleContent>
             </Collapsible>
-          </Card>
+            </Card>
 
           {/* Recent Jobs */}
           <Card>
