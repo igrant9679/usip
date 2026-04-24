@@ -86,7 +86,9 @@ export interface SendEmailInput {
 
 export interface EmailAdapter {
   listThreads(folder: string, pageToken?: string, maxResults?: number): Promise<{ threads: EmailThread[]; nextPageToken?: string }>;
+  searchThreads(query: string, folder?: string, maxResults?: number): Promise<{ threads: EmailThread[] }>;
   getThread(threadId: string, folder?: string): Promise<EmailMessage[]>;
+  getAttachment(messageId: string, attachmentId: string): Promise<{ data: Buffer; contentType: string; filename: string }>;
   sendEmail(input: SendEmailInput): Promise<{ messageId: string; threadId?: string }>;
   markRead(messageId: string, read: boolean): Promise<void>;
   moveToTrash(messageId: string): Promise<void>;
@@ -207,6 +209,50 @@ export class GmailAdapter implements EmailAdapter {
       userId: "me", id: messageId,
       requestBody: { addLabelIds: destLabel ? [destLabel] : [], removeLabelIds: removeLabels },
     });
+  }
+
+  async searchThreads(query: string, _folder?: string, maxResults = 20): Promise<{ threads: EmailThread[] }> {
+    const res = await this.gmail.users.threads.list({ userId: "me", q: query, maxResults });
+    const threadList = res.data.threads ?? [];
+    const threads: EmailThread[] = [];
+    await Promise.all(
+      threadList.slice(0, maxResults).map(async (t) => {
+        try {
+          const detail = await this.gmail.users.threads.get({ userId: "me", id: t.id!, format: "METADATA", metadataHeaders: ["Subject", "From", "Date"] });
+          const msgs = detail.data.messages ?? [];
+          const last = msgs[msgs.length - 1];
+          const headers = last?.payload?.headers ?? [];
+          const getH = (n: string) => headers.find((h) => h.name?.toLowerCase() === n.toLowerCase())?.value ?? "";
+          const fromRaw = getH("From");
+          const fromMatch = fromRaw.match(/^"?([^"<]*)"?\s*<?([^>]*)>?$/);
+          threads.push({
+            threadId: t.id!, subject: getH("Subject") || "(no subject)", snippet: detail.data.snippet ?? "",
+            fromEmail: fromMatch?.[2]?.trim() ?? fromRaw, fromName: fromMatch?.[1]?.trim() ?? "",
+            date: new Date(parseInt(last?.internalDate ?? "0")), unread: (last?.labelIds ?? []).includes("UNREAD"),
+            messageCount: msgs.length, labels: last?.labelIds ?? [],
+          });
+        } catch { /* skip */ }
+      })
+    );
+    return { threads };
+  }
+
+  async getAttachment(messageId: string, attachmentId: string): Promise<{ data: Buffer; contentType: string; filename: string }> {
+    const res = await this.gmail.users.messages.attachments.get({ userId: "me", messageId, id: attachmentId });
+    const data = Buffer.from(res.data.data ?? "", "base64url");
+    const msgRes = await this.gmail.users.messages.get({ userId: "me", id: messageId, format: "FULL" });
+    const filename = this._findAttachmentFilename(msgRes.data.payload, attachmentId) ?? "attachment";
+    return { data, contentType: "application/octet-stream", filename };
+  }
+
+  private _findAttachmentFilename(payload: any, attachmentId: string): string | null {
+    if (!payload) return null;
+    for (const part of payload.parts ?? []) {
+      if (part.body?.attachmentId === attachmentId) return part.filename ?? null;
+      const found = this._findAttachmentFilename(part, attachmentId);
+      if (found) return found;
+    }
+    return null;
   }
 
   async listFolders(): Promise<EmailFolder[]> {
@@ -364,6 +410,45 @@ export class ImapSmtpAdapter implements EmailAdapter {
       const lock = await client.getMailboxLock(currentFolder);
       try { await client.messageMove(messageId, destFolder, { uid: true }); }
       finally { lock.release(); }
+    });
+  }
+
+  async searchThreads(query: string, folder = "INBOX", maxResults = 20): Promise<{ threads: EmailThread[] }> {
+    return this.withImap(folder, async (client) => {
+      const lock = await client.getMailboxLock(folder);
+      try {
+        const uids = await client.search({ text: query }, { uid: true });
+        const recent = uids.slice(-maxResults).reverse();
+        if (recent.length === 0) return { threads: [] };
+        const threads: EmailThread[] = [];
+        for await (const msg of client.fetch(recent.join(","), { uid: true, flags: true, envelope: true }, { uid: true })) {
+          const env = msg.envelope;
+          const from = env?.from?.[0];
+          threads.push({
+            threadId: String(msg.uid), subject: env?.subject ?? "(no subject)", snippet: "",
+            fromEmail: from?.address ?? "", fromName: from?.name ?? "",
+            date: env?.date ?? new Date(), unread: !msg.flags.has("\\Seen"),
+            messageCount: 1, labels: [...msg.flags],
+          });
+        }
+        return { threads };
+      } finally { lock.release(); }
+    });
+  }
+
+  async getAttachment(messageId: string, attachmentIndex: string): Promise<{ data: Buffer; contentType: string; filename: string }> {
+    return this.withImap("INBOX", async (client) => {
+      const lock = await client.getMailboxLock("INBOX");
+      try {
+        let result: { data: Buffer; contentType: string; filename: string } | null = null;
+        for await (const msg of client.fetch(messageId, { source: true }, { uid: true })) {
+          const parsed = await simpleParser(msg.source);
+          const idx = parseInt(attachmentIndex, 10);
+          const att = parsed.attachments?.[isNaN(idx) ? 0 : idx];
+          if (att) result = { data: att.content as Buffer, contentType: att.contentType, filename: att.filename ?? "attachment" };
+        }
+        return result ?? { data: Buffer.alloc(0), contentType: "application/octet-stream", filename: "attachment" };
+      } finally { lock.release(); }
     });
   }
 }

@@ -14,7 +14,7 @@
  *   - Delete (move to trash) and Move-to-folder
  *   - Compose new email
  */
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Shell } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
@@ -26,6 +26,8 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -33,6 +35,7 @@ import {
   Mail, MailOpen, RefreshCw, Trash2, Reply, Send, Pencil,
   ChevronLeft, Inbox, AlertCircle, Loader2, Users,
   Forward, FolderInput, Archive, ChevronDown, Sparkles,
+  Clock, Search, FileText, Download,
 } from "lucide-react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -90,6 +93,71 @@ interface ComposeState {
   references?: string;
   originalMessage?: EmailMessage;
   threadMessages?: EmailMessage[];
+}
+
+// ─── Snooze Popover ───────────────────────────────────────────────────────────
+
+function SnoozePopover({ accountId, thread, onSnoozed }: {
+  accountId: number;
+  thread: { threadId: string; subject: string };
+  onSnoozed: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [customDate, setCustomDate] = useState("");
+  const createTask = trpc.tasks.create.useMutation({
+    onSuccess: () => { toast.success("Snoozed — a follow-up task has been created"); setOpen(false); onSnoozed(); },
+    onError: (e) => toast.error("Snooze failed: " + e.message),
+  });
+
+  function snooze(dueAt: Date) {
+    createTask.mutate({
+      title: `Follow up: ${thread.subject}`,
+      type: "follow_up",
+      dueAt: dueAt.toISOString(),
+      relatedType: "mailbox_thread",
+      relatedId: accountId,
+    });
+  }
+
+  const tomorrow = () => { const d = new Date(); d.setDate(d.getDate() + 1); d.setHours(9, 0, 0, 0); return d; };
+  const in3Days = () => { const d = new Date(); d.setDate(d.getDate() + 3); d.setHours(9, 0, 0, 0); return d; };
+  const nextWeek = () => { const d = new Date(); d.setDate(d.getDate() + 7); d.setHours(9, 0, 0, 0); return d; };
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button variant="ghost" size="sm" className="gap-1.5 text-xs">
+          <Clock className="size-3.5" />
+          <span className="hidden sm:inline">Snooze</span>
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-52 p-2" align="end">
+        <p className="text-xs font-medium text-muted-foreground mb-2 px-1">Remind me…</p>
+        <div className="space-y-0.5">
+          {[
+            { label: "Tomorrow (9am)", fn: tomorrow },
+            { label: "In 3 days", fn: in3Days },
+            { label: "Next week", fn: nextWeek },
+          ].map(({ label, fn }) => (
+            <button key={label}
+              className="w-full text-left text-xs px-2 py-1.5 rounded hover:bg-muted transition-colors"
+              onClick={() => snooze(fn())}>
+              {label}
+            </button>
+          ))}
+          <div className="pt-1 border-t mt-1">
+            <p className="text-[10px] text-muted-foreground px-1 mb-1">Custom date</p>
+            <input type="datetime-local" value={customDate} onChange={(e) => setCustomDate(e.target.value)}
+              className="w-full text-xs border rounded px-2 py-1 bg-background" />
+            <Button size="sm" className="w-full mt-1.5" disabled={!customDate || createTask.isPending}
+              onClick={() => customDate && snooze(new Date(customDate))}>
+              {createTask.isPending ? <Loader2 className="size-3 animate-spin" /> : "Set reminder"}
+            </Button>
+          </div>
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
 }
 
 // ─── Compose / Reply / Forward Dialog ─────────────────────────────────────────
@@ -185,6 +253,18 @@ function ComposeDialog({ state, onClose }: { state: ComposeState; onClose: () =>
     }
   }
 
+  const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
+  const { data: templatesData } = trpc.emailTemplates.list.useQuery({ status: "active" });
+  const templates = (templatesData as any[]) ?? [];
+
+  function applyTemplate(tpl: any) {
+    if (tpl.subject) setSubject(tpl.subject);
+    if (tpl.plainOutput) setBody(tpl.plainOutput);
+    else if (tpl.htmlOutput) setBody(tpl.htmlOutput.replace(/<[^>]+>/g, ""));
+    setTemplatePickerOpen(false);
+    toast.success(`Template "${tpl.name}" applied`);
+  }
+
   const modeLabel = state.mode === "reply" ? "Reply" : state.mode === "forward" ? "Forward" : "New Email";
   const ModeIcon = state.mode === "reply" ? Reply : state.mode === "forward" ? Forward : Pencil;
 
@@ -192,8 +272,33 @@ function ComposeDialog({ state, onClose }: { state: ComposeState; onClose: () =>
     <Dialog open onOpenChange={onClose}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <ModeIcon className="size-4" /> {modeLabel}
+          <DialogTitle className="flex items-center gap-2 justify-between">
+            <span className="flex items-center gap-2"><ModeIcon className="size-4" /> {modeLabel}</span>
+            {templates.length > 0 && (
+              <Popover open={templatePickerOpen} onOpenChange={setTemplatePickerOpen}>
+                <PopoverTrigger asChild>
+                  <Button variant="outline" size="sm" className="gap-1.5 text-xs h-7">
+                    <FileText className="size-3.5" /> Use template
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-72 p-0" align="end">
+                  <Command>
+                    <CommandInput placeholder="Search templates..." />
+                    <CommandList>
+                      <CommandEmpty>No templates found.</CommandEmpty>
+                      <CommandGroup heading="Active templates">
+                        {templates.map((tpl: any) => (
+                          <CommandItem key={tpl.id} value={tpl.name} onSelect={() => applyTemplate(tpl)}>
+                            <FileText className="size-3.5 mr-2 text-muted-foreground" />
+                            <span className="text-sm">{tpl.name}</span>
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    </CommandList>
+                  </Command>
+                </PopoverContent>
+              </Popover>
+            )}
           </DialogTitle>
         </DialogHeader>
         <div className="space-y-3">
@@ -251,6 +356,48 @@ function ComposeDialog({ state, onClose }: { state: ComposeState; onClose: () =>
   );
 }
 
+// ─── Attachment Badge (clickable download) ────────────────────────────────────
+
+function AttachmentBadge({ accountId, messageId, attachment, index }: {
+  accountId: number;
+  messageId: string;
+  attachment: { filename: string; contentType: string; size: number; attachmentId?: string };
+  index: number;
+}) {
+  const [loading, setLoading] = useState(false);
+  const utils = trpc.useUtils();
+
+  async function handleDownload() {
+    const attId = (attachment as any).attachmentId ?? String(index);
+    setLoading(true);
+    try {
+      const result = await utils.client.mailbox.getAttachment.query({ accountId, messageId, attachmentId: attId });
+      const bytes = Uint8Array.from(atob(result.dataBase64), (c) => c.charCodeAt(0));
+      const blob = new Blob([bytes], { type: result.contentType });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = result.filename; a.click();
+      URL.revokeObjectURL(url);
+    } catch (e: any) {
+      toast.error("Download failed: " + e.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <Badge
+      variant="secondary"
+      className="gap-1 text-xs cursor-pointer hover:bg-secondary/80 transition-colors"
+      onClick={handleDownload}
+      title="Click to download">
+      {loading ? <Loader2 className="size-3 animate-spin" /> : <Download className="size-3" />}
+      {attachment.filename}
+      {attachment.size > 0 && <span className="text-muted-foreground ml-1">({Math.round(attachment.size / 1024)}KB)</span>}
+    </Badge>
+  );
+}
+
 // ─── Thread Reading Pane ───────────────────────────────────────────────────────
 
 function ThreadView({
@@ -265,7 +412,9 @@ function ThreadView({
     { accountId, threadId, folder },
     { enabled: !!accountId && !!threadId }
   );
-  const markRead = trpc.mailbox.markRead.useMutation();
+  const markRead = trpc.mailbox.markRead.useMutation({
+    onSuccess: () => utils.mailbox.getThread.invalidate({ accountId, threadId, folder }),
+  });
   const moveToTrash = trpc.mailbox.moveToTrash.useMutation({
     onSuccess: () => { toast.success("Moved to trash"); onDeleted(); },
     onError: (e) => toast.error(e.message),
@@ -274,6 +423,7 @@ function ThreadView({
     onSuccess: () => { toast.success("Message moved"); onMoved(); },
     onError: (e) => toast.error(e.message),
   });
+  const utils = trpc.useUtils();
 
   useEffect(() => {
     if ((data as EmailMessage[])?.length) {
@@ -357,6 +507,13 @@ function ThreadView({
               </DropdownMenuContent>
             </DropdownMenu>
           )}
+          <Button variant="ghost" size="sm" className="gap-1.5 text-xs"
+            title={lastMsg.unread ? "Mark as read" : "Mark as unread"}
+            onClick={() => markRead.mutate({ accountId, messageId: lastMsg.messageId, read: !!lastMsg.unread })}>
+            {lastMsg.unread ? <MailOpen className="size-3.5" /> : <Mail className="size-3.5" />}
+            <span className="hidden sm:inline">{lastMsg.unread ? "Mark read" : "Mark unread"}</span>
+          </Button>
+          <SnoozePopover accountId={accountId} thread={{ threadId, subject: firstMsg.subject }} onSnoozed={() => {}} />
           <Button variant="ghost" size="sm"
             className="gap-1.5 text-xs text-destructive hover:text-destructive"
             onClick={() => moveToTrash.mutate({ accountId, messageId: lastMsg.messageId })}
@@ -397,10 +554,7 @@ function ThreadView({
                 {msg.attachments?.length > 0 && (
                   <div className="mt-3 pt-3 border-t flex flex-wrap gap-2">
                     {msg.attachments.map((att, i) => (
-                      <Badge key={i} variant="secondary" className="gap-1 text-xs">
-                        <Mail className="size-3" /> {att.filename}
-                        {att.size > 0 && <span className="text-muted-foreground ml-1">({Math.round(att.size / 1024)}KB)</span>}
-                      </Badge>
+                      <AttachmentBadge key={i} accountId={accountId} messageId={msg.messageId} attachment={att} index={i} />
                     ))}
                   </div>
                 )}
@@ -449,22 +603,48 @@ function SingleAccountThreadList({ accountId, folder, selectedId, onSelect }: {
   accountId: number; folder: string; selectedId?: string; onSelect: (id: string) => void;
 }) {
   const [pageToken, setPageToken] = useState<string | undefined>();
+  const [searchQuery, setSearchQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function handleSearch(q: string) {
+    setSearchQuery(q);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => setDebouncedQuery(q), 400);
+  }
+
   const { data, isLoading, refetch } = trpc.mailbox.listThreads.useQuery(
-    { accountId, folder, pageToken, maxResults: 50 }, { enabled: !!accountId }
+    { accountId, folder, pageToken, maxResults: 50 }, { enabled: !!accountId && !debouncedQuery }
   );
-  const threads: EmailThread[] = (data?.threads ?? []) as EmailThread[];
+  const { data: searchData, isLoading: searchLoading } = trpc.mailbox.searchThreads.useQuery(
+    { accountId, query: debouncedQuery, folder, maxResults: 30 },
+    { enabled: !!accountId && !!debouncedQuery }
+  );
+
+  const threads: EmailThread[] = debouncedQuery
+    ? ((searchData?.threads ?? []) as EmailThread[])
+    : ((data?.threads ?? []) as EmailThread[]);
+  const loading = debouncedQuery ? searchLoading : isLoading;
+
   return (
     <div className="flex flex-col h-full overflow-hidden">
-      <div className="px-3 py-2 border-b flex items-center justify-between shrink-0">
-        <span className="text-xs text-muted-foreground">{threads.length} thread{threads.length !== 1 ? "s" : ""}</span>
-        <Button variant="ghost" size="icon" onClick={() => refetch()} className="size-7"><RefreshCw className="size-3.5" /></Button>
+      <div className="px-3 py-2 border-b space-y-2 shrink-0">
+        <div className="flex items-center justify-between">
+          <span className="text-xs text-muted-foreground">{threads.length} thread{threads.length !== 1 ? "s" : ""}</span>
+          <Button variant="ghost" size="icon" onClick={() => refetch()} className="size-7"><RefreshCw className="size-3.5" /></Button>
+        </div>
+        <div className="relative">
+          <Search className="absolute left-2 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
+          <Input value={searchQuery} onChange={(e) => handleSearch(e.target.value)}
+            placeholder="Search messages..." className="pl-7 h-7 text-xs" />
+        </div>
       </div>
-      {isLoading ? (
+      {loading ? (
         <div className="flex-1 flex items-center justify-center"><Loader2 className="size-5 animate-spin text-muted-foreground" /></div>
       ) : !threads.length ? (
         <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground gap-2 p-4">
           <MailOpen className="size-8 opacity-30" />
-          <p className="text-xs text-center">{folder} is empty.</p>
+          <p className="text-xs text-center">{debouncedQuery ? `No results for "${debouncedQuery}"` : `${folder} is empty.`}</p>
         </div>
       ) : (
         <ScrollArea className="flex-1">
@@ -472,7 +652,7 @@ function SingleAccountThreadList({ accountId, folder, selectedId, onSelect }: {
             <ThreadRow key={t.threadId} thread={t} selected={selectedId === t.threadId}
               showAccountBadge={false} onSelect={() => onSelect(t.threadId)} />
           ))}
-          {data?.nextPageToken && (
+          {!debouncedQuery && data?.nextPageToken && (
             <div className="p-2">
               <Button variant="outline" size="sm" className="w-full" onClick={() => setPageToken(data.nextPageToken)}>Load more</Button>
             </div>
@@ -488,22 +668,47 @@ function SingleAccountThreadList({ accountId, folder, selectedId, onSelect }: {
 function CentralInboxThreadList({ accounts, selectedId, onSelect }: {
   accounts: Account[]; selectedId?: string; onSelect: (threadId: string, accountId: number) => void;
 }) {
-  const q0 = trpc.mailbox.listThreads.useQuery({ accountId: accounts[0]?.id ?? 0, folder: "INBOX", maxResults: 30 }, { enabled: !!accounts[0] });
-  const q1 = trpc.mailbox.listThreads.useQuery({ accountId: accounts[1]?.id ?? 0, folder: "INBOX", maxResults: 30 }, { enabled: !!accounts[1] });
-  const q2 = trpc.mailbox.listThreads.useQuery({ accountId: accounts[2]?.id ?? 0, folder: "INBOX", maxResults: 30 }, { enabled: !!accounts[2] });
-  const q3 = trpc.mailbox.listThreads.useQuery({ accountId: accounts[3]?.id ?? 0, folder: "INBOX", maxResults: 30 }, { enabled: !!accounts[3] });
-  const q4 = trpc.mailbox.listThreads.useQuery({ accountId: accounts[4]?.id ?? 0, folder: "INBOX", maxResults: 30 }, { enabled: !!accounts[4] });
+  const [searchQuery, setSearchQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function handleSearch(q: string) {
+    setSearchQuery(q);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => setDebouncedQuery(q), 400);
+  }
+
+  const q0 = trpc.mailbox.listThreads.useQuery({ accountId: accounts[0]?.id ?? 0, folder: "INBOX", maxResults: 30 }, { enabled: !!accounts[0] && !debouncedQuery });
+  const q1 = trpc.mailbox.listThreads.useQuery({ accountId: accounts[1]?.id ?? 0, folder: "INBOX", maxResults: 30 }, { enabled: !!accounts[1] && !debouncedQuery });
+  const q2 = trpc.mailbox.listThreads.useQuery({ accountId: accounts[2]?.id ?? 0, folder: "INBOX", maxResults: 30 }, { enabled: !!accounts[2] && !debouncedQuery });
+  const q3 = trpc.mailbox.listThreads.useQuery({ accountId: accounts[3]?.id ?? 0, folder: "INBOX", maxResults: 30 }, { enabled: !!accounts[3] && !debouncedQuery });
+  const q4 = trpc.mailbox.listThreads.useQuery({ accountId: accounts[4]?.id ?? 0, folder: "INBOX", maxResults: 30 }, { enabled: !!accounts[4] && !debouncedQuery });
+  const s0 = trpc.mailbox.searchThreads.useQuery({ accountId: accounts[0]?.id ?? 0, query: debouncedQuery, folder: "INBOX" }, { enabled: !!accounts[0] && !!debouncedQuery });
+  const s1 = trpc.mailbox.searchThreads.useQuery({ accountId: accounts[1]?.id ?? 0, query: debouncedQuery, folder: "INBOX" }, { enabled: !!accounts[1] && !!debouncedQuery });
+  const s2 = trpc.mailbox.searchThreads.useQuery({ accountId: accounts[2]?.id ?? 0, query: debouncedQuery, folder: "INBOX" }, { enabled: !!accounts[2] && !!debouncedQuery });
+  const s3 = trpc.mailbox.searchThreads.useQuery({ accountId: accounts[3]?.id ?? 0, query: debouncedQuery, folder: "INBOX" }, { enabled: !!accounts[3] && !!debouncedQuery });
+  const s4 = trpc.mailbox.searchThreads.useQuery({ accountId: accounts[4]?.id ?? 0, query: debouncedQuery, folder: "INBOX" }, { enabled: !!accounts[4] && !!debouncedQuery });
   const qs = [q0, q1, q2, q3, q4].slice(0, accounts.length);
-  const isLoading = qs.some((q) => q.isLoading);
-  const allThreads: EmailThread[] = qs.flatMap((q, i) =>
-    ((q.data?.threads ?? []) as EmailThread[]).map((t) => ({ ...t, accountId: accounts[i].id, accountEmail: accounts[i].email }))
-  ).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  const ss = [s0, s1, s2, s3, s4].slice(0, accounts.length);
+  const isLoading = debouncedQuery ? ss.some((q) => q.isLoading) : qs.some((q) => q.isLoading);
+  const allThreads: EmailThread[] = debouncedQuery
+    ? ss.flatMap((q, i) => ((q.data?.threads ?? []) as EmailThread[]).map((t) => ({ ...t, accountId: accounts[i].id, accountEmail: accounts[i].email })))
+        .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+    : qs.flatMap((q, i) => ((q.data?.threads ?? []) as EmailThread[]).map((t) => ({ ...t, accountId: accounts[i].id, accountEmail: accounts[i].email })))
+        .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
-      <div className="px-3 py-2 border-b flex items-center justify-between shrink-0">
-        <span className="text-xs text-muted-foreground">{allThreads.length} thread{allThreads.length !== 1 ? "s" : ""}</span>
-        <Button variant="ghost" size="icon" onClick={() => qs.forEach((q) => q.refetch())} className="size-7"><RefreshCw className="size-3.5" /></Button>
+      <div className="px-3 py-2 border-b space-y-2 shrink-0">
+        <div className="flex items-center justify-between">
+          <span className="text-xs text-muted-foreground">{allThreads.length} thread{allThreads.length !== 1 ? "s" : ""}</span>
+          <Button variant="ghost" size="icon" onClick={() => qs.forEach((q) => q.refetch())} className="size-7"><RefreshCw className="size-3.5" /></Button>
+        </div>
+        <div className="relative">
+          <Search className="absolute left-2 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
+          <Input value={searchQuery} onChange={(e) => handleSearch(e.target.value)}
+            placeholder="Search all inboxes..." className="pl-7 h-7 text-xs" />
+        </div>
       </div>
       {isLoading ? (
         <div className="flex-1 flex items-center justify-center"><Loader2 className="size-5 animate-spin text-muted-foreground" /></div>
@@ -626,7 +831,7 @@ export default function MailboxPage() {
                           ? "bg-primary/10 text-primary" : "hover:bg-muted text-muted-foreground"
                       )}>
                       <Mail className="size-3 shrink-0" />
-                      <span className="truncate">{acc.email}</span>
+                      <span className="truncate flex-1">{acc.email}</span>
                     </button>
                   ))}
                 </>

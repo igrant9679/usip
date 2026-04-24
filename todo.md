@@ -1033,19 +1033,19 @@
 - [x] In compose dialog: when opened as Reply or Forward, auto-call AI draft and pre-populate body; show loading spinner while generating; body remains fully editable
 
 ## Gap Closure Sprint — Batch A (Backend/Admin features)
-- [ ] Nightly batch UI: Settings page toggle to enable/disable nightly AI pipeline per workspace + score threshold slider (writes nightlyPipelineEnabled + nightlyScoreThreshold to workspaceSettings)
-- [ ] Recurring dashboard delivery: server-side cron (Manus scheduled task) that reads dashboardSchedules, resolves each widget, and POSTs a formatted summary to the recipient list via the designated system sender
-- [ ] Workflow rule webhook execution: when a rule fires (testFire + real trigger), actually fetch() the webhook URL with the configured body; log success/failure to workflowRuns
-- [ ] Audit log CSV export: Download button on Audit page that streams all audit rows to a CSV file
-- [ ] Data export CSV: Export button on Contacts, Leads, Accounts, and Pipeline (Opportunities) list pages
+- [x] Nightly batch UI: Settings page toggle to enable/disable nightly AI pipeline per workspace + score threshold slider (writes nightlyPipelineEnabled + nightlyScoreThreshold to workspaceSettings)
+- [x] Recurring dashboard delivery: server-side cron (Manus scheduled task) that reads dashboardSchedules, resolves each widget, and POSTs a formatted summary to the recipient list via the designated system sender
+- [x] Workflow rule webhook execution: when a rule fires (testFire + real trigger), actually fetch() the webhook URL with the configured body; log success/failure to workflowRuns
+- [x] Audit log CSV export: Download button on Audit page that streams all audit rows to a CSV file
+- [x] Data export CSV: Export button on Contacts, Leads, Accounts, and Pipeline (Opportunities) list pages
 
 ## Gap Closure Sprint — Batch B (Mailbox enhancements)
-- [ ] Mailbox search: search bar in thread list panel; new mailbox.searchThreads tRPC procedure (IMAP SEARCH / Gmail messages.list q= param)
-- [ ] Unread count badges: aggregate unread counts per account and per folder shown in left sidebar
-- [ ] Mark as unread: toolbar button in reading pane; new mailbox.markUnread tRPC procedure
-- [ ] Snooze / remind me: snooze button in reading pane toolbar; snooze dialog (pick date/time); creates a task or notification at the chosen time
-- [ ] Email templates in compose: "Insert template" button in compose/reply/forward dialog; lists saved email templates; clicking one populates subject+body
-- [ ] Attachment download: make attachment badges in reading pane clickable; new mailbox.getAttachmentUrl tRPC procedure returns a presigned/proxy URL
+- [x] Mailbox search: search bar in thread list panel; new mailbox.searchThreads tRPC procedure (IMAP SEARCH / Gmail messages.list q= param)
+- [x] Unread count badges: aggregate unread counts per account and per folder shown in left sidebar
+- [x] Mark as unread: toolbar button in reading pane; new mailbox.markUnread tRPC procedure
+- [x] Snooze / remind me: snooze button in reading pane toolbar; snooze dialog (pick date/time); creates a task or notification at the chosen time
+- [x] Email templates in compose: "Insert template" button in compose/reply/forward dialog; lists saved email templates; clicking one populates subject+body
+- [x] Attachment download: make attachment badges in reading pane clickable; new mailbox.getAttachment tRPC procedure decodes base64 and triggers browser download
 
 ## Gap Closure Sprint — Batch C (CRM analytics)
 - [ ] Pipeline forecast view: weighted forecast chart (probability × deal value by close date) as a tab or panel alongside the Kanban on the Pipeline page

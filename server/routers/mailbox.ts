@@ -282,4 +282,33 @@ export const mailboxRouter = router({
       const body = (res as any)?.choices?.[0]?.message?.content ?? "";
       return { body };
     }),
+
+  /** Search threads across a folder */
+  searchThreads: workspaceProcedure
+    .input(z.object({
+      accountId: z.number(),
+      query: z.string().min(1),
+      folder: z.string().default("INBOX"),
+      maxResults: z.number().int().min(1).max(50).default(20),
+    }))
+    .query(async ({ ctx, input }) => {
+      const acc = await getAccount(input.accountId, ctx.workspace.id);
+      const adapter = createEmailAdapter(acc);
+      return adapter.searchThreads(input.query, input.folder, input.maxResults);
+    }),
+
+  /** Download an attachment by messageId + attachmentId */
+  getAttachment: workspaceProcedure
+    .input(z.object({
+      accountId: z.number(),
+      messageId: z.string(),
+      attachmentId: z.string(),
+    }))
+    .query(async ({ ctx, input }) => {
+      const acc = await getAccount(input.accountId, ctx.workspace.id);
+      const adapter = createEmailAdapter(acc);
+      const { data, contentType, filename } = await adapter.getAttachment(input.messageId, input.attachmentId);
+      // Return as base64 so it can be decoded in the browser
+      return { dataBase64: data.toString("base64"), contentType, filename };
+    }),
 });

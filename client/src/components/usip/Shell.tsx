@@ -166,7 +166,7 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
       )}>
         <div className="px-4 py-4 border-b border-white/10">
           <div className="bg-white rounded-md px-3 py-2 flex items-center justify-center">
-            <img src="/manus-storage/LSiMediaBadge180x48_fdf5dbe6.png" alt="LSI Media" className="h-7 w-auto max-w-full" />
+            <img src="/manus-storage/lsi-media-logo-v2_ffe68b5e.png" alt="LSI Media" className="h-9 w-auto max-w-full object-contain" />
           </div>
           <div className="text-[10px] text-white/55 tracking-wider uppercase mt-2 text-center">USIP · Sales Intelligence</div>
         </div>
