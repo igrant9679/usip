@@ -47,6 +47,7 @@ import {
 } from "lucide-react";
 import { EntityPicker } from "@/components/usip/EntityPicker";
 import { Label } from "@/components/ui/label";
+import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
 
 type Preset = "more_formal" | "shorter" | "stronger_cta" | "different_angle";
@@ -344,14 +345,14 @@ export default function AIPipelineQueue() {
     contactSearch ? { search: contactSearch } : undefined,
     { enabled: true }
   );
-  const { data: stats, refetch: refetchStats } = trpc.aiPipeline.getQueueStats.useQuery(undefined, {
+  const { data: stats, isLoading: loadingStats, refetch: refetchStats } = trpc.aiPipeline.getQueueStats.useQuery(undefined, {
     refetchInterval: 10000,
   });
   const { data: drafts = [], isLoading: loadingDrafts, refetch: refetchDrafts } = trpc.aiPipeline.getDraftQueue.useQuery(
     { page, pageSize: 20 },
     { refetchInterval: 15000 }
   );
-  const { data: jobs = [], refetch: refetchJobs } = trpc.aiPipeline.getJobs.useQuery(
+  const { data: jobs = [], isLoading: loadingJobs, refetch: refetchJobs } = trpc.aiPipeline.getJobs.useQuery(
     { limit: 10 },
     { refetchInterval: 10000 }
   );
@@ -423,22 +424,36 @@ export default function AIPipelineQueue() {
 
       {/* Stats row */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        {[
-          { label: "Pending Review", value: stats?.pending_review ?? 0, color: "text-yellow-600", icon: Mail },
-          { label: "Approved", value: stats?.approved ?? 0, color: "text-emerald-600", icon: CheckCircle },
-          { label: "Rejected", value: stats?.rejected ?? 0, color: "text-red-500", icon: XCircle },
-          { label: "Sent", value: stats?.sent ?? 0, color: "text-blue-600", icon: ThumbsUp },
-        ].map(({ label, value, color, icon: Icon }) => (
-          <Card key={label}>
-            <CardContent className="p-4 flex items-center gap-3">
-              <Icon className={`h-8 w-8 ${color} shrink-0`} />
-              <div>
-                <p className="text-2xl font-bold tabular-nums">{value}</p>
-                <p className="text-xs text-muted-foreground">{label}</p>
-              </div>
-            </CardContent>
-          </Card>
-        ))}
+        {loadingStats ? (
+          Array.from({ length: 4 }).map((_, i) => (
+            <Card key={i}>
+              <CardContent className="p-4 flex items-center gap-3">
+                <Skeleton className="h-8 w-8 rounded-full shrink-0" />
+                <div className="space-y-2 flex-1">
+                  <Skeleton className="h-6 w-12" />
+                  <Skeleton className="h-3 w-20" />
+                </div>
+              </CardContent>
+            </Card>
+          ))
+        ) : (
+          [
+            { label: "Pending Review", value: stats?.pending_review ?? 0, color: "text-yellow-600", icon: Mail },
+            { label: "Approved", value: stats?.approved ?? 0, color: "text-emerald-600", icon: CheckCircle },
+            { label: "Rejected", value: stats?.rejected ?? 0, color: "text-red-500", icon: XCircle },
+            { label: "Sent", value: stats?.sent ?? 0, color: "text-blue-600", icon: ThumbsUp },
+          ].map(({ label, value, color, icon: Icon }) => (
+            <Card key={label}>
+              <CardContent className="p-4 flex items-center gap-3">
+                <Icon className={`h-8 w-8 ${color} shrink-0`} />
+                <div>
+                  <p className="text-2xl font-bold tabular-nums">{value}</p>
+                  <p className="text-xs text-muted-foreground">{label}</p>
+                </div>
+              </CardContent>
+            </Card>
+          ))
+        )}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -462,9 +477,16 @@ export default function AIPipelineQueue() {
                 />
               </div>
               {loadingContacts ? (
-                <div className="flex items-center gap-2 text-muted-foreground text-sm py-2">
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Loading...
+                <div className="max-h-52 overflow-y-auto space-y-1 border rounded-md p-2">
+                  {Array.from({ length: 5 }).map((_, i) => (
+                    <div key={i} className="flex items-center gap-2 p-2">
+                      <Skeleton className="h-4 w-4 rounded" />
+                      <div className="space-y-1.5 flex-1">
+                        <Skeleton className="h-3.5 w-28" />
+                        <Skeleton className="h-3 w-40" />
+                      </div>
+                    </div>
+                  ))}
                 </div>
               ) : (
                 <div className="max-h-52 overflow-y-auto space-y-1 border rounded-md p-1">
@@ -609,7 +631,17 @@ export default function AIPipelineQueue() {
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-2">
-              {jobs.length === 0 ? (
+              {loadingJobs ? (
+                Array.from({ length: 4 }).map((_, i) => (
+                  <div key={i} className="flex items-center justify-between py-1.5 border-b last:border-0">
+                    <div className="space-y-1.5">
+                      <Skeleton className="h-3.5 w-24" />
+                      <Skeleton className="h-3 w-32" />
+                    </div>
+                    <Skeleton className="h-5 w-16 rounded-full" />
+                  </div>
+                ))
+              ) : jobs.length === 0 ? (
                 <p className="text-xs text-muted-foreground text-center py-3">No jobs yet</p>
               ) : (
                 jobs.map((job: any) => (
@@ -691,9 +723,34 @@ export default function AIPipelineQueue() {
           </div>
 
           {loadingDrafts ? (
-            <div className="flex items-center justify-center py-12 text-muted-foreground gap-2">
-              <Loader2 className="h-5 w-5 animate-spin" />
-              Loading drafts...
+            <div className="space-y-3">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <Card key={i}>
+                  <CardContent className="p-4 space-y-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="space-y-2 flex-1">
+                        <div className="flex items-center gap-2">
+                          <Skeleton className="h-5 w-20 rounded-full" />
+                          <Skeleton className="h-5 w-16 rounded-full" />
+                        </div>
+                        <Skeleton className="h-4 w-48" />
+                        <Skeleton className="h-3 w-32" />
+                      </div>
+                      <Skeleton className="h-8 w-8 rounded" />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Skeleton className="h-3.5 w-full" />
+                      <Skeleton className="h-3.5 w-5/6" />
+                      <Skeleton className="h-3.5 w-4/6" />
+                    </div>
+                    <div className="flex gap-2 pt-1">
+                      <Skeleton className="h-8 w-20 rounded" />
+                      <Skeleton className="h-8 w-20 rounded" />
+                      <Skeleton className="h-8 w-24 rounded" />
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
             </div>
           ) : drafts.length === 0 ? (
             <Card>

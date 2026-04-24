@@ -1000,3 +1000,11 @@
 - [x] Audit all pages/components for AccordionTrigger outside Accordion
 - [x] Audit all pages/components for TabsTrigger outside Tabs
 - [x] Fix all violations found (only one genuine violation existed: CollapsibleTrigger in AIPipelineQueue.tsx, already fixed)
+
+## Feature: AI Draft Queue Loading Indicators
+- [x] Add skeleton loaders to stats cards while getQueueStats is loading
+- [x] Add skeleton rows to Draft Review Queue while getDraftQueue is loading
+- [x] Add skeleton rows to Recent Jobs while getJobs is loading
+- [x] Add spinner to contact list while contacts are loading (upgraded to skeleton rows)
+- [x] Add loading state to Trigger Pipeline button while runForContact/runBulk mutation is in-flight (already existed)
+- [x] Add loading state to Approve/Reject/Regenerate buttons on each draft card (already existed via DraftCard component)
