@@ -1128,3 +1128,14 @@
 - [x] Register Mockup B dashboard in Dashboards section as editable pinned entry named "Home"
 - [x] Both "Home" and "Home 2" appear in Dashboards section and are editable
 - [x] Add revenueChart procedure to opportunitiesRouter returning monthly revenue + weighted forecast buckets
+
+## Batch O — Dashboard Supercharge
+
+- [x] Extend revenueChart to return MoM delta % for each stat card (pipeline, closed-won, leads, customers)
+- [x] Add dashboardStats procedure returning live stat card values with MoM deltas
+- [x] Add stageFunnel procedure returning stage counts for funnel chart
+- [x] Add topReps procedure returning top 5 reps by closed-won value
+- [x] Add winLoss procedure returning won/lost deal counts and values
+- [x] Rebuild Dashboard.tsx: live MoM delta stat cards (sky blue/green/violet/red), Revenue area chart with period dropdown, Win/Loss donut, Pipeline Funnel bar chart, Top Reps leaderboard with medal icons, Recent Opps table, AI Drafts panel
+- [x] Add "Set as Home" button (Home icon, appears on hover) to Dashboards section sidebar for each system dashboard entry
+- [x] Persist homeDashboard preference in localStorage; Shell nav Dashboard link respects it; amber Home icon marks current selection

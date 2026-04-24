@@ -6,6 +6,7 @@ import {
   accounts,
   activities,
   contacts,
+  customers,
   dealLineItems,
   emailDrafts,
   leads,
@@ -15,6 +16,8 @@ import {
   enrollments,
   sequences,
   territories,
+  users,
+  workspaceMembers,
   workspaceSettings,
 } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
@@ -944,6 +947,87 @@ export const opportunitiesRouter = router({
 
       return Object.values(buckets);
     }),
+
+  /** Live stat-card deltas: current vs previous month for pipeline, closed-won, leads, customers. */
+  dashboardStats: workspaceProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    const wid = ctx.workspace.id;
+    const now = new Date();
+    const thisMonthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+    const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1).getTime();
+    const lastMonthEnd = thisMonthStart - 1;
+    const allOpps = await db.select().from(opportunities).where(eq(opportunities.workspaceId, wid));
+    const allLeads = await db.select({ id: leads.id, createdAt: leads.createdAt }).from(leads).where(eq(leads.workspaceId, wid));
+    const allCustomers = await db.select({ id: customers.id, createdAt: customers.createdAt }).from(customers).where(eq(customers.workspaceId, wid));
+    const openOpps = allOpps.filter((o) => o.stage !== "won" && o.stage !== "lost");
+    const wonOpps = allOpps.filter((o) => o.stage === "won");
+    const pipelineNow = openOpps.reduce((s, o) => s + Number(o.value ?? 0), 0);
+    const pipelinePrev = allOpps.filter((o) => o.stage !== "won" && o.stage !== "lost" && (o.updatedAt ?? 0) >= lastMonthStart && (o.updatedAt ?? 0) <= lastMonthEnd).reduce((s, o) => s + Number(o.value ?? 0), 0);
+    const closedWonNow = wonOpps.filter((o) => (o.updatedAt ?? 0) >= thisMonthStart).length;
+    const closedWonPrev = wonOpps.filter((o) => (o.updatedAt ?? 0) >= lastMonthStart && (o.updatedAt ?? 0) <= lastMonthEnd).length;
+    const leadsNow = allLeads.filter((l) => (l.createdAt ?? 0) >= thisMonthStart).length;
+    const leadsPrev = allLeads.filter((l) => (l.createdAt ?? 0) >= lastMonthStart && (l.createdAt ?? 0) <= lastMonthEnd).length;
+    const custNow = allCustomers.length;
+    const custPrev = allCustomers.filter((c) => (c.createdAt ?? 0) < thisMonthStart).length;
+    const delta = (a: number, b: number) => b === 0 ? (a > 0 ? 100 : 0) : Math.round(((a - b) / b) * 100);
+    return {
+      pipelineValue: pipelineNow,
+      pipelineDelta: delta(pipelineNow, pipelinePrev),
+      closedWonCount: closedWonNow,
+      closedWonDelta: delta(closedWonNow, closedWonPrev),
+      activeLeads: allLeads.length,
+      leadsDelta: delta(leadsNow, leadsPrev),
+      customerCount: custNow,
+      customerDelta: delta(custNow, custPrev),
+      openOppsCount: openOpps.length,
+      totalWonValue: wonOpps.reduce((s, o) => s + Number(o.value ?? 0), 0),
+    };
+  }),
+
+  /** Stage funnel: count + value per open pipeline stage. */
+  stageFunnel: workspaceProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) return [];
+    const rows = await db.select().from(opportunities).where(and(eq(opportunities.workspaceId, ctx.workspace.id), sql`${opportunities.stage} NOT IN ('won','lost')`))
+    const stageOrder = ["prospect", "qualified", "proposal", "negotiation", "closing"];
+    const map: Record<string, { count: number; value: number }> = {};
+    for (const o of rows) {
+      const s = o.stage ?? "prospect";
+      if (!map[s]) map[s] = { count: 0, value: 0 };
+      map[s].count++;
+      map[s].value += Number(o.value ?? 0);
+    }
+    return stageOrder.filter((s) => map[s]).map((s) => ({ stage: s.charAt(0).toUpperCase() + s.slice(1), count: map[s].count, value: map[s].value }));
+  }),
+
+  /** Top 5 reps by closed-won value (this month, fallback to all-time). */
+  topReps: workspaceProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) return [];
+    const thisMonthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1).getTime();
+    const rows = await db.select().from(opportunities).where(and(eq(opportunities.workspaceId, ctx.workspace.id), eq(opportunities.stage, "won")));
+    const thisMonth = rows.filter((o) => (o.updatedAt ?? 0) >= thisMonthStart);
+    const buildMap = (src: typeof rows) => {
+      const m: Record<number, { value: number; count: number }> = {};
+      for (const o of src) { const uid = o.ownerUserId ?? 0; if (!m[uid]) m[uid] = { value: 0, count: 0 }; m[uid].value += Number(o.value ?? 0); m[uid].count++; }
+      return m;
+    };
+    const source = Object.keys(buildMap(thisMonth)).length > 0 ? buildMap(thisMonth) : buildMap(rows);
+    const memberRows = await db.select({ userId: workspaceMembers.userId, name: users.name }).from(workspaceMembers).leftJoin(users, eq(users.id, workspaceMembers.userId)).where(eq(workspaceMembers.workspaceId, ctx.workspace.id));
+    const nameMap = Object.fromEntries(memberRows.map((m) => [m.userId, m.name ?? "Rep"]));
+    return Object.entries(source).map(([uid, v]) => ({ userId: Number(uid), name: nameMap[Number(uid)] ?? "Rep", value: v.value, count: v.count })).sort((a, b) => b.value - a.value).slice(0, 5);
+  }),
+
+  /** Win/loss ratio for the last 90 days. */
+  winLoss: workspaceProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) return { won: 0, lost: 0, wonValue: 0, lostValue: 0 };
+    const cutoff = Date.now() - 90 * 24 * 60 * 60 * 1000;
+    const rows = await db.select().from(opportunities).where(and(eq(opportunities.workspaceId, ctx.workspace.id), sql`${opportunities.stage} IN ('won','lost')`));
+    const recent = rows.filter((o) => (o.updatedAt ?? 0) >= cutoff);
+    return { won: recent.filter((o) => o.stage === "won").length, lost: recent.filter((o) => o.stage === "lost").length, wonValue: recent.filter((o) => o.stage === "won").reduce((s, o) => s + Number(o.value ?? 0), 0), lostValue: recent.filter((o) => o.stage === "lost").reduce((s, o) => s + Number(o.value ?? 0), 0) };
+  }),
 });
 
 /* ──────────────────────────────────────────────────────────────────────── */

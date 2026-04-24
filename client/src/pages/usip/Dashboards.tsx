@@ -30,10 +30,11 @@ import {
 } from "@/components/usip/DashboardFilterBar";
 import { WidgetDataRenderer } from "@/components/usip/DashboardWidgets";
 import { Field, FormDialog, Section, SelectField } from "@/components/usip/Common";
-import { EmptyState, PageHeader, Shell } from "@/components/usip/Shell";
+import { EmptyState, PageHeader, Shell, HOME_DASHBOARD_KEY } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import {
   BarChart2,
+  Home,
   LayoutDashboard,
   Pencil,
   Plus,
@@ -313,6 +314,9 @@ export default function Dashboards() {
   const [openRename, setOpenRename] = useState(false);
   const [customizeMode, setCustomizeMode] = useState(false);
   const [filters, setFilters] = useState<DashboardFilters>({ preset: "all" });
+  const [homeDashboard, setHomeDashboard] = useState<string>(
+    () => (typeof window !== "undefined" ? localStorage.getItem(HOME_DASHBOARD_KEY) : null) ?? "/"
+  );
 
   const gridRef = useRef<HTMLDivElement>(null);
   const [gridWidth, setGridWidth] = useState(900);
@@ -405,18 +409,39 @@ export default function Dashboards() {
           >
             <ul className="space-y-0.5">
               {/* Pinned system dashboards */}
-              {[{ label: "Home", href: "/dashboard" }, { label: "Home 2", href: "/dashboard-home2" }].map((p) => (
-                <li key={p.href}>
-                  <Link
-                    href={p.href}
-                    className="w-full text-left text-xs px-2 py-1.5 rounded-md transition-colors flex items-center gap-2 text-muted-foreground hover:text-foreground hover:bg-secondary"
-                  >
-                    <LayoutDashboard className="h-3 w-3 shrink-0 text-primary" />
-                    <span className="truncate">{p.label}</span>
-                    <span className="ml-auto text-[10px] text-muted-foreground/60">System</span>
-                  </Link>
-                </li>
-              ))}
+              {[{ label: "Home", href: "/dashboard" }, { label: "Home 2", href: "/dashboard-home2" }].map((p) => {
+                const isCurrentHome = homeDashboard === p.href || (p.href === "/dashboard" && homeDashboard === "/");
+                return (
+                  <li key={p.href} className="group">
+                    <div className="flex items-center gap-1">
+                      <Link
+                        href={p.href}
+                        className="flex-1 text-left text-xs px-2 py-1.5 rounded-md transition-colors flex items-center gap-2 text-muted-foreground hover:text-foreground hover:bg-secondary"
+                      >
+                        <LayoutDashboard className="h-3 w-3 shrink-0 text-primary" />
+                        <span className="truncate">{p.label}</span>
+                        {isCurrentHome
+                          ? <Home className="h-3 w-3 ml-auto text-amber-400" title="Your home dashboard" />
+                          : <span className="ml-auto text-[10px] text-muted-foreground/60">System</span>
+                        }
+                      </Link>
+                      {!isCurrentHome && (
+                        <button
+                          title="Set as home"
+                          className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-secondary text-muted-foreground hover:text-amber-400"
+                          onClick={() => {
+                            localStorage.setItem(HOME_DASHBOARD_KEY, p.href);
+                            setHomeDashboard(p.href);
+                            toast.success(`"${p.label}" is now your home dashboard`);
+                          }}
+                        >
+                          <Home className="h-3 w-3" />
+                        </button>
+                      )}
+                    </div>
+                  </li>
+                );
+              })}
               {(list.data ?? []).length > 0 && <li className="border-t my-1" />}
               {(list.data ?? []).map((d: any) => (
                 <li key={d.id}>

@@ -1,10 +1,11 @@
 /**
- * Dashboard — Velocity Mockup B Home Screen
+ * Dashboard — Velocity Home Screen (Mockup B+)
  *
  * Layout:
- *   Row 1: 4 stat cards — Pipeline Value, Closed-Won, Active Leads, Customers
- *   Row 2: Revenue area chart (Total Revenue + Forecasted Revenue) with period dropdown
- *   Row 3: Recent Opportunities table (left) + AI Drafts Awaiting Review (right)
+ *   Row 1: 4 live stat cards with MoM delta badges
+ *   Row 2: Revenue area chart (period dropdown) | Win/Loss donut
+ *   Row 3: Stage Funnel bar chart | Top Reps leaderboard
+ *   Row 4: Recent Opportunities table | AI Drafts Awaiting Review
  */
 import { PageHeader, Shell, useAccentColor } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
@@ -25,14 +26,23 @@ import {
   Users,
   UserCheck,
   Loader2,
+  Trophy,
+  Target,
+  TrendingUp,
+  Zap,
 } from "lucide-react";
 import { useState } from "react";
 import { Link } from "wouter";
 import {
   Area,
   AreaChart,
+  Bar,
+  BarChart,
   CartesianGrid,
+  Cell,
   Legend,
+  Pie,
+  PieChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -60,51 +70,66 @@ const PERIOD_OPTIONS = [
   { value: "24", label: "Past 24 months", months: 24 },
 ] as const;
 
+const STAGE_COLORS: Record<string, string> = {
+  Prospect:    "#60A5FA",
+  Qualified:   "#FCD34D",
+  Proposal:    "#C084FC",
+  Negotiation: "#F87171",
+  Closing:     "#2DD4BF",
+};
+
 /* ─── Stat card ───────────────────────────────────────────────────────────── */
 interface StatProps {
   label: string;
   value: string | number;
   hint?: string;
-  trend?: "up" | "down" | "flat";
-  trendLabel?: string;
+  delta?: number;
   icon: React.ElementType;
   iconColor: string;
+  loading?: boolean;
 }
 
-function MBStatCard({ label, value, hint, trend, trendLabel, icon: Icon, iconColor }: StatProps) {
+function MBStatCard({ label, value, hint, delta, icon: Icon, iconColor, loading }: StatProps) {
   const accent = useAccentColor();
+  const trend = delta === undefined ? "flat" : delta > 0 ? "up" : delta < 0 ? "down" : "flat";
   return (
     <div
-      className="rounded-xl border bg-card p-5 flex flex-col gap-3"
-      style={{ borderLeftWidth: 3, borderLeftColor: accent }}
+      className="rounded-xl border bg-card p-5 flex flex-col gap-3 hover:shadow-md transition-shadow"
+      style={{ borderLeftWidth: 3, borderLeftColor: iconColor }}
     >
       <div className="flex items-center justify-between">
         <span className="text-sm text-muted-foreground font-medium">{label}</span>
-        <div className="rounded-lg p-2" style={{ background: `${iconColor}18` }}>
+        <div className="rounded-lg p-2" style={{ background: `${iconColor}22` }}>
           <Icon className="size-4" style={{ color: iconColor }} />
         </div>
       </div>
-      <div className="text-2xl font-bold font-mono tabular-nums" style={{ color: accent }}>
-        {value}
-      </div>
-      {(hint || trendLabel) && (
-        <div className="flex items-center gap-1.5 text-xs">
-          {trend === "up" && <ArrowUp className="size-3 text-emerald-500" />}
-          {trend === "down" && <ArrowDown className="size-3 text-red-500" />}
-          {trend === "flat" && <Minus className="size-3 text-muted-foreground" />}
-          {trendLabel && (
-            <span className={trend === "up" ? "text-emerald-600" : trend === "down" ? "text-red-500" : "text-muted-foreground"}>
-              {trendLabel}
-            </span>
-          )}
-          {hint && <span className="text-muted-foreground">{trendLabel ? "· " : ""}{hint}</span>}
+      {loading ? (
+        <div className="h-8 flex items-center"><Loader2 className="size-4 animate-spin text-muted-foreground" /></div>
+      ) : (
+        <div className="text-2xl font-bold font-mono tabular-nums" style={{ color: iconColor }}>
+          {value}
         </div>
       )}
+      <div className="flex items-center gap-1.5 text-xs">
+        {trend === "up"   && <ArrowUp   className="size-3 text-emerald-500" />}
+        {trend === "down" && <ArrowDown className="size-3 text-red-500" />}
+        {trend === "flat" && <Minus     className="size-3 text-muted-foreground" />}
+        {delta !== undefined && (
+          <span className={
+            trend === "up" ? "text-emerald-600 font-semibold" :
+            trend === "down" ? "text-red-500 font-semibold" :
+            "text-muted-foreground"
+          }>
+            {delta > 0 ? "+" : ""}{delta}% vs last month
+          </span>
+        )}
+        {hint && <span className="text-muted-foreground ml-1">· {hint}</span>}
+      </div>
     </div>
   );
 }
 
-/* ─── Custom tooltip ──────────────────────────────────────────────────────── */
+/* ─── Custom tooltips ─────────────────────────────────────────────────────── */
 function RevenueTooltip({ active, payload, label }: any) {
   if (!active || !payload?.length) return null;
   return (
@@ -121,153 +146,271 @@ function RevenueTooltip({ active, payload, label }: any) {
   );
 }
 
+function FunnelTooltip({ active, payload }: any) {
+  if (!active || !payload?.length) return null;
+  const d = payload[0].payload;
+  return (
+    <div className="rounded-lg border bg-popover text-popover-foreground shadow-lg px-3 py-2 text-xs space-y-1">
+      <div className="font-semibold">{d.stage}</div>
+      <div className="text-muted-foreground">{d.count} deals · {fmt$(d.value)}</div>
+    </div>
+  );
+}
+
+function WinLossTooltip({ active, payload }: any) {
+  if (!active || !payload?.length) return null;
+  const d = payload[0];
+  return (
+    <div className="rounded-lg border bg-popover text-popover-foreground shadow-lg px-3 py-2 text-xs">
+      <span className="font-semibold" style={{ color: d.payload.fill }}>{d.name}</span>
+      <span className="ml-2 text-muted-foreground">{d.value} deals</span>
+    </div>
+  );
+}
+
 /* ─── Main page ───────────────────────────────────────────────────────────── */
 export default function Dashboard() {
   const [period, setPeriod] = useState<string>("6");
   const months = PERIOD_OPTIONS.find((o) => o.value === period)?.months ?? 6;
 
-  const { data: summary, isLoading } = trpc.workspace.summary.useQuery();
-  const { data: kpis } = trpc.cs.kpis.useQuery();
+  const { data: stats, isLoading: statsLoading } = trpc.opportunities.dashboardStats.useQuery();
   const { data: chartData, isLoading: chartLoading } = trpc.opportunities.revenueChart.useQuery({ months });
+  const { data: funnel } = trpc.opportunities.stageFunnel.useQuery();
+  const { data: topReps } = trpc.opportunities.topReps.useQuery();
+  const { data: winLoss } = trpc.opportunities.winLoss.useQuery();
   const { data: drafts } = trpc.emailDrafts.list.useQuery({ status: "pending_review" });
   const { data: opps } = trpc.opportunities.board.useQuery();
 
   const recentOpps = (opps ?? []).slice(0, 6);
   const accent = useAccentColor();
 
+  const winLossData = winLoss
+    ? [
+        { name: "Won",  value: winLoss.won,  fill: "#34D399" },
+        { name: "Lost", value: winLoss.lost, fill: "#F87171" },
+      ]
+    : [];
+
+  const maxRepValue = Math.max(...(topReps ?? []).map((r) => r.value), 1);
+
   return (
     <Shell title="Dashboard">
       <PageHeader title="Dashboard" description="Your unified revenue intelligence overview." />
       <div className="p-6 space-y-6">
 
-        {/* ── Row 1: Stat cards ── */}
-        {isLoading ? (
-          <div className="flex items-center gap-2 text-muted-foreground text-sm">
-            <Loader2 className="size-4 animate-spin" /> Loading…
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            <MBStatCard
-              label="Pipeline Value"
-              value={fmt$(summary?.pipelineValue ?? 0)}
-              hint={`${summary?.opportunities ?? 0} open opps`}
-              trend="up"
-              trendLabel="+15% vs last month"
-              icon={BarChart2}
-              iconColor="#60A5FA"
-            />
-            <MBStatCard
-              label="Closed-Won"
-              value={`${summary?.closedWon ? Math.round(summary.closedWon / 1000) : 0} deals`}
-              hint={fmt$(summary?.closedWon ?? 0)}
-              trend="up"
-              trendLabel="+10% vs last month"
-              icon={Briefcase}
-              iconColor="#34D399"
-            />
-            <MBStatCard
-              label="Active Leads"
-              value={(summary?.leads ?? 0).toLocaleString()}
-              trend="flat"
-              trendLabel="No change"
-              icon={Users}
-              iconColor="#C084FC"
-            />
-            <MBStatCard
-              label="Customers"
-              value={kpis?.total ?? summary?.customers ?? 0}
-              hint={kpis && kpis.atRisk > 0 ? `${kpis.atRisk} at-risk` : undefined}
-              trend="up"
-              trendLabel="+5% vs last month"
-              icon={UserCheck}
-              iconColor="#F87171"
-            />
-          </div>
-        )}
+        {/* ── Row 1: Live stat cards ── */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <MBStatCard
+            label="Pipeline Value"
+            value={fmt$(stats?.pipelineValue ?? 0)}
+            hint={`${stats?.openOppsCount ?? 0} open opps`}
+            delta={stats?.pipelineDelta}
+            icon={BarChart2}
+            iconColor="#60A5FA"
+            loading={statsLoading}
+          />
+          <MBStatCard
+            label="Closed-Won"
+            value={`${stats?.closedWonCount ?? 0} deals`}
+            hint={fmt$(stats?.totalWonValue ?? 0)}
+            delta={stats?.closedWonDelta}
+            icon={Briefcase}
+            iconColor="#34D399"
+            loading={statsLoading}
+          />
+          <MBStatCard
+            label="Active Leads"
+            value={(stats?.activeLeads ?? 0).toLocaleString()}
+            delta={stats?.leadsDelta}
+            icon={Users}
+            iconColor="#C084FC"
+            loading={statsLoading}
+          />
+          <MBStatCard
+            label="Customers"
+            value={stats?.customerCount ?? 0}
+            delta={stats?.customerDelta}
+            icon={UserCheck}
+            iconColor="#F87171"
+            loading={statsLoading}
+          />
+        </div>
 
-        {/* ── Row 2: Revenue chart ── */}
-        <div className="rounded-xl border bg-card">
-          <div className="px-5 py-4 border-b flex items-center justify-between">
-            <div className="text-base font-semibold">Revenue</div>
-            <Select value={period} onValueChange={setPeriod}>
-              <SelectTrigger className="w-40 h-8 text-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {PERIOD_OPTIONS.map((o) => (
-                  <SelectItem key={o.value} value={o.value} className="text-xs">
-                    {o.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="p-5">
-            {chartLoading ? (
-              <div className="h-64 flex items-center justify-center text-muted-foreground text-sm">
-                <Loader2 className="size-4 animate-spin mr-2" /> Loading chart…
+        {/* ── Row 2: Revenue chart + Win/Loss donut ── */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          {/* Revenue chart — 2/3 width */}
+          <div className="lg:col-span-2 rounded-xl border bg-card">
+            <div className="px-5 py-4 border-b flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <TrendingUp className="size-4" style={{ color: accent }} />
+                <span className="text-base font-semibold">Revenue</span>
               </div>
-            ) : (
-              <ResponsiveContainer width="100%" height={280}>
-                <AreaChart data={chartData ?? []} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
-                  <defs>
-                    <linearGradient id="gradRevenue" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor={accent} stopOpacity={0.25} />
-                      <stop offset="95%" stopColor={accent} stopOpacity={0.02} />
-                    </linearGradient>
-                    <linearGradient id="gradForecast" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#C084FC" stopOpacity={0.25} />
-                      <stop offset="95%" stopColor="#C084FC" stopOpacity={0.02} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
-                  <XAxis
-                    dataKey="label"
-                    tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
-                    axisLine={false}
-                    tickLine={false}
-                  />
-                  <YAxis
-                    tickFormatter={fmtAxis}
-                    tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
-                    axisLine={false}
-                    tickLine={false}
-                    width={56}
-                  />
-                  <Tooltip content={<RevenueTooltip />} />
-                  <Legend
-                    iconType="circle"
-                    iconSize={8}
-                    wrapperStyle={{ fontSize: 12, paddingTop: 12 }}
-                  />
-                  <Area
-                    type="monotone"
-                    dataKey="revenue"
-                    name="Total Revenue"
-                    stroke={accent}
-                    strokeWidth={2}
-                    fill="url(#gradRevenue)"
-                    dot={false}
-                    activeDot={{ r: 4 }}
-                  />
-                  <Area
-                    type="monotone"
-                    dataKey="forecast"
-                    name="Forecasted Revenue"
-                    stroke="#C084FC"
-                    strokeWidth={2}
-                    strokeDasharray="5 3"
-                    fill="url(#gradForecast)"
-                    dot={false}
-                    activeDot={{ r: 4 }}
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
-            )}
+              <Select value={period} onValueChange={setPeriod}>
+                <SelectTrigger className="w-40 h-8 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {PERIOD_OPTIONS.map((o) => (
+                    <SelectItem key={o.value} value={o.value} className="text-xs">
+                      {o.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="p-5">
+              {chartLoading ? (
+                <div className="h-64 flex items-center justify-center text-muted-foreground text-sm">
+                  <Loader2 className="size-4 animate-spin mr-2" /> Loading chart…
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height={260}>
+                  <AreaChart data={chartData ?? []} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                    <defs>
+                      <linearGradient id="gradRevenue" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%"  stopColor={accent}    stopOpacity={0.3} />
+                        <stop offset="95%" stopColor={accent}    stopOpacity={0.02} />
+                      </linearGradient>
+                      <linearGradient id="gradForecast" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%"  stopColor="#C084FC" stopOpacity={0.3} />
+                        <stop offset="95%" stopColor="#C084FC" stopOpacity={0.02} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
+                    <XAxis dataKey="label" tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
+                    <YAxis tickFormatter={fmtAxis} tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} width={56} />
+                    <Tooltip content={<RevenueTooltip />} />
+                    <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 12, paddingTop: 12 }} />
+                    <Area type="monotone" dataKey="revenue"  name="Total Revenue"      stroke={accent}    strokeWidth={2.5} fill="url(#gradRevenue)"  dot={false} activeDot={{ r: 4 }} />
+                    <Area type="monotone" dataKey="forecast" name="Forecasted Revenue" stroke="#C084FC" strokeWidth={2} strokeDasharray="5 3" fill="url(#gradForecast)" dot={false} activeDot={{ r: 4 }} />
+                  </AreaChart>
+                </ResponsiveContainer>
+              )}
+            </div>
+          </div>
+
+          {/* Win/Loss donut — 1/3 width */}
+          <div className="rounded-xl border bg-card">
+            <div className="px-5 py-4 border-b flex items-center gap-2">
+              <Target className="size-4 text-amber-400" />
+              <span className="text-base font-semibold">Win / Loss</span>
+              <span className="ml-auto text-xs text-muted-foreground">Last 90 days</span>
+            </div>
+            <div className="p-5 flex flex-col items-center gap-4">
+              {winLossData.every((d) => d.value === 0) ? (
+                <div className="text-sm text-muted-foreground py-8">No closed deals yet.</div>
+              ) : (
+                <>
+                  <ResponsiveContainer width="100%" height={180}>
+                    <PieChart>
+                      <Pie
+                        data={winLossData}
+                        cx="50%"
+                        cy="50%"
+                        innerRadius={52}
+                        outerRadius={78}
+                        paddingAngle={3}
+                        dataKey="value"
+                        strokeWidth={0}
+                      >
+                        {winLossData.map((entry, i) => (
+                          <Cell key={i} fill={entry.fill} />
+                        ))}
+                      </Pie>
+                      <Tooltip content={<WinLossTooltip />} />
+                    </PieChart>
+                  </ResponsiveContainer>
+                  <div className="grid grid-cols-2 gap-3 w-full text-center">
+                    <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/20 py-2">
+                      <div className="text-xl font-bold text-emerald-500">{winLoss?.won ?? 0}</div>
+                      <div className="text-xs text-muted-foreground">Won</div>
+                      <div className="text-xs font-mono text-emerald-600">{fmt$(winLoss?.wonValue ?? 0)}</div>
+                    </div>
+                    <div className="rounded-lg bg-red-500/10 border border-red-500/20 py-2">
+                      <div className="text-xl font-bold text-red-500">{winLoss?.lost ?? 0}</div>
+                      <div className="text-xs text-muted-foreground">Lost</div>
+                      <div className="text-xs font-mono text-red-600">{fmt$(winLoss?.lostValue ?? 0)}</div>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
           </div>
         </div>
 
-        {/* ── Row 3: Recent Opps + AI Drafts ── */}
+        {/* ── Row 3: Stage Funnel + Top Reps ── */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {/* Stage Funnel */}
+          <div className="rounded-xl border bg-card">
+            <div className="px-5 py-4 border-b flex items-center gap-2">
+              <Zap className="size-4 text-yellow-400" />
+              <span className="text-base font-semibold">Pipeline Funnel</span>
+            </div>
+            <div className="p-5">
+              {(funnel ?? []).length === 0 ? (
+                <div className="text-sm text-muted-foreground py-4">No open pipeline data.</div>
+              ) : (
+                <ResponsiveContainer width="100%" height={200}>
+                  <BarChart data={funnel ?? []} layout="vertical" margin={{ top: 0, right: 16, left: 0, bottom: 0 }}>
+                    <XAxis type="number" tickFormatter={fmtAxis} tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
+                    <YAxis type="category" dataKey="stage" tick={{ fontSize: 12, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} width={80} />
+                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" horizontal={false} />
+                    <Tooltip content={<FunnelTooltip />} cursor={{ fill: "hsl(var(--muted))", opacity: 0.3 }} />
+                    <Bar dataKey="value" radius={[0, 4, 4, 0]} maxBarSize={22}>
+                      {(funnel ?? []).map((entry, i) => (
+                        <Cell key={i} fill={STAGE_COLORS[entry.stage] ?? accent} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              )}
+            </div>
+          </div>
+
+          {/* Top Reps leaderboard */}
+          <div className="rounded-xl border bg-card">
+            <div className="px-5 py-4 border-b flex items-center gap-2">
+              <Trophy className="size-4 text-amber-400" />
+              <span className="text-base font-semibold">Top Reps</span>
+              <span className="ml-auto text-xs text-muted-foreground">Closed-Won value</span>
+            </div>
+            <div className="p-4 space-y-3">
+              {(topReps ?? []).length === 0 ? (
+                <div className="text-sm text-muted-foreground py-4">No rep data yet.</div>
+              ) : (
+                (topReps ?? []).map((rep, i) => {
+                  const pct = Math.round((rep.value / maxRepValue) * 100);
+                  const medalColors = ["#FCD34D", "#94A3B8", "#CD7F32"];
+                  const barColor = i < 3 ? medalColors[i] : accent;
+                  return (
+                    <div key={rep.userId} className="space-y-1">
+                      <div className="flex items-center justify-between text-sm">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-bold w-4 text-center" style={{ color: barColor }}>
+                            {i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : `#${i + 1}`}
+                          </span>
+                          <span className="font-medium truncate max-w-[120px]">{rep.name}</span>
+                        </div>
+                        <div className="text-right">
+                          <span className="font-mono font-semibold text-xs">{fmt$(rep.value)}</span>
+                          <span className="text-muted-foreground text-xs ml-1">· {rep.count} deals</span>
+                        </div>
+                      </div>
+                      <div className="h-1.5 rounded-full bg-secondary overflow-hidden">
+                        <div
+                          className="h-full rounded-full transition-all duration-700"
+                          style={{ width: `${pct}%`, background: barColor }}
+                        />
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* ── Row 4: Recent Opps + AI Drafts ── */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           {/* Recent Opportunities */}
           <div className="rounded-xl border bg-card">
@@ -281,39 +424,62 @@ export default function Dashboard() {
               {recentOpps.length === 0 && (
                 <div className="text-sm text-muted-foreground p-5">No opportunities yet.</div>
               )}
-              {recentOpps.map((o) => (
-                <Link
-                  key={o.id}
-                  href="/pipeline"
-                  className="flex items-center gap-3 px-5 py-3 hover:bg-secondary/50 transition-colors"
-                >
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium truncate">{o.name}</div>
-                    <div className="text-xs text-muted-foreground truncate">{o.accountName} · {o.stage}</div>
-                  </div>
-                  <div className="font-mono text-sm tabular-nums shrink-0 font-semibold">
-                    {fmt$(Number(o.value ?? 0))}
-                  </div>
-                </Link>
-              ))}
+              {recentOpps.map((o) => {
+                const stageColor = STAGE_COLORS[o.stage ? o.stage.charAt(0).toUpperCase() + o.stage.slice(1) : ""] ?? accent;
+                return (
+                  <Link
+                    key={o.id}
+                    href="/pipeline"
+                    className="flex items-center gap-3 px-5 py-3 hover:bg-secondary/50 transition-colors"
+                  >
+                    <div
+                      className="size-2 rounded-full shrink-0"
+                      style={{ background: stageColor }}
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium truncate">{o.name}</div>
+                      <div className="text-xs text-muted-foreground truncate">{o.accountName} ·{" "}
+                        <span style={{ color: stageColor }}>{o.stage}</span>
+                      </div>
+                    </div>
+                    <div className="font-mono text-sm tabular-nums shrink-0 font-semibold" style={{ color: stageColor }}>
+                      {fmt$(Number(o.value ?? 0))}
+                    </div>
+                  </Link>
+                );
+              })}
             </div>
           </div>
 
           {/* AI Drafts */}
           <div className="rounded-xl border bg-card">
             <div className="px-5 py-3.5 border-b flex items-center">
-              <div className="text-sm font-semibold">AI Drafts Awaiting Review</div>
+              <div className="flex items-center gap-2">
+                <Zap className="size-3.5 text-violet-400" />
+                <div className="text-sm font-semibold">AI Drafts Awaiting Review</div>
+                {(drafts ?? []).length > 0 && (
+                  <span className="ml-1 rounded-full bg-violet-500/20 text-violet-400 text-xs font-bold px-2 py-0.5">
+                    {(drafts ?? []).length}
+                  </span>
+                )}
+              </div>
               <Link href="/email-drafts" className="ml-auto text-xs flex items-center gap-1" style={{ color: accent }}>
                 Review queue <ArrowRight className="size-3" />
               </Link>
             </div>
             <div className="p-4">
               {(drafts ?? []).length === 0 ? (
-                <div className="text-sm text-muted-foreground py-2">No drafts in the queue.</div>
+                <div className="text-sm text-muted-foreground py-2 flex items-center gap-2">
+                  <span className="text-emerald-500">✓</span> No drafts in the queue — you're all caught up!
+                </div>
               ) : (
                 <div className="space-y-2">
                   {(drafts ?? []).slice(0, 5).map((d) => (
-                    <div key={d.id} className="rounded-lg border bg-secondary/30 px-3 py-2.5">
+                    <div
+                      key={d.id}
+                      className="rounded-lg border bg-secondary/30 px-3 py-2.5 hover:bg-secondary/60 transition-colors cursor-pointer"
+                      style={{ borderLeftWidth: 3, borderLeftColor: "#C084FC" }}
+                    >
                       <div className="text-sm font-medium truncate">{d.subject}</div>
                       <div className="text-xs text-muted-foreground line-clamp-2 mt-0.5">{d.body}</div>
                     </div>

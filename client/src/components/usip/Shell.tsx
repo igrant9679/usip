@@ -159,6 +159,9 @@ const NAV: NavGroup[] = [
   },
 ];
 
+/** Key used by Dashboards.tsx to persist the user's chosen home dashboard. */
+export const HOME_DASHBOARD_KEY = "velocity_home_dashboard";
+
 export function Shell({ children, title, actions }: { children: ReactNode; title?: string; actions?: ReactNode }) {
   const [location] = useLocation();
   const { user, logout } = useAuth();
@@ -168,8 +171,17 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
   const { data: unread } = trpc.notifications.unreadCount.useQuery(undefined, { enabled: !!current, refetchInterval: 30_000 });
   const { theme, toggleTheme } = useTheme();
 
+  // Respect the user's "Set as Home" preference for the Dashboard nav link
+  const homeDashboardHref = (typeof window !== "undefined" ? localStorage.getItem(HOME_DASHBOARD_KEY) : null) ?? "/";
+
+  // Build effective nav with the resolved home href
+  const effectiveNav = NAV.map((g) => ({
+    ...g,
+    items: g.items.map((i) => i.href === "/" ? { ...i, href: homeDashboardHref } : i),
+  }));
+
   // Derive current category accent from active route
-  const activeGroup = NAV.find(g => g.items.some(i => i.href === location || (i.href !== "/" && location.startsWith(i.href))));
+  const activeGroup = effectiveNav.find(g => g.items.some(i => i.href === location || (i.href !== "/" && i.href !== homeDashboardHref && location.startsWith(i.href)) || i.href === location));
   const accentColor = activeGroup?.color ?? "#60A5FA";
 
   // close dropdowns/drawers on route change
@@ -203,7 +215,7 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
         </div>
 
         <nav className="flex-1 overflow-y-auto py-3 px-0 space-y-2">
-          {NAV.map((group) => (
+          {effectiveNav.map((group) => (
             <div key={group.label}>
               {/* Section header with left stripe */}
               <div
