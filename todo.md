@@ -1066,3 +1066,8 @@
 - [ ] Workspace system sender: Settings page section to designate one sending account as the system sender for invitation emails, dashboard delivery, and general notifications
 - [ ] User invitation email: when team.invite is called, send an actual invitation email via the designated system sender with a magic link
 - [ ] Team member notification email preferences: profile/settings page where each member can add a personal notification email address (separate from login) and choose which notification types to receive (sequence replies, social post responses, workflow alerts, etc.)
+
+## Bug Fixes + Features: Mailbox Compose & Logo (Apr 24 round 3)
+- [ ] Fix templates dropdown not appearing in compose dialog (Popover/Command component not rendering — likely missing cmdk peer or DialogContent z-index issue)
+- [ ] Add file attachment capability to compose dialog (file input, attachment list with remove, send attachments via nodemailer)
+- [ ] Fix sidebar logo squished — update Shell.tsx logo img to use object-contain and fill the white card properly

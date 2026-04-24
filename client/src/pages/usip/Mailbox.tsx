@@ -35,7 +35,7 @@ import {
   Mail, MailOpen, RefreshCw, Trash2, Reply, Send, Pencil,
   ChevronLeft, Inbox, AlertCircle, Loader2, Users,
   Forward, FolderInput, Archive, ChevronDown, Sparkles,
-  Clock, Search, FileText, Download,
+  Clock, Search, FileText, Download, Paperclip, X,
 } from "lucide-react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -219,13 +219,15 @@ function ComposeDialog({ state, onClose }: { state: ComposeState; onClose: () =>
     if (!to.trim()) { toast.error("Recipient required"); return; }
     if (!subject.trim()) { toast.error("Subject required"); return; }
     const bodyHtml = body.replace(/\n/g, "<br/>");
+    const atts = attachments.length > 0 ? attachments.map(({ filename, contentType, content }) => ({ filename, contentType, content })) : undefined;
     if (state.mode === "new") {
-      sendNew.mutate({ accountId: state.accountId, to, subject, bodyHtml, bodyText: body, cc: cc || undefined });
+      sendNew.mutate({ accountId: state.accountId, to, subject, bodyHtml, bodyText: body, cc: cc || undefined, attachments: atts });
     } else {
       sendReply.mutate({
         accountId: state.accountId, threadId: state.threadId ?? "",
         to, subject, bodyHtml, bodyText: body, cc: cc || undefined,
         inReplyTo: state.inReplyTo, references: state.references,
+        attachments: atts,
       });
     }
   }
@@ -257,6 +259,28 @@ function ComposeDialog({ state, onClose }: { state: ComposeState; onClose: () =>
   const { data: templatesData } = trpc.emailTemplates.list.useQuery({ status: "active" });
   const templates = (templatesData as any[]) ?? [];
 
+  // File attachments
+  const [attachments, setAttachments] = useState<Array<{ filename: string; contentType: string; content: string; size: number }>>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files ?? []);
+    files.forEach((file) => {
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const base64 = (ev.target?.result as string).split(",")[1];
+        setAttachments((prev) => [...prev, { filename: file.name, contentType: file.type || "application/octet-stream", content: base64, size: file.size }]);
+      };
+      reader.readAsDataURL(file);
+    });
+    // Reset so same file can be re-selected
+    e.target.value = "";
+  }
+
+  function removeAttachment(idx: number) {
+    setAttachments((prev) => prev.filter((_, i) => i !== idx));
+  }
+
   function applyTemplate(tpl: any) {
     if (tpl.subject) setSubject(tpl.subject);
     if (tpl.plainOutput) setBody(tpl.plainOutput);
@@ -274,31 +298,29 @@ function ComposeDialog({ state, onClose }: { state: ComposeState; onClose: () =>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 justify-between">
             <span className="flex items-center gap-2"><ModeIcon className="size-4" /> {modeLabel}</span>
-            {templates.length > 0 && (
-              <Popover open={templatePickerOpen} onOpenChange={setTemplatePickerOpen}>
-                <PopoverTrigger asChild>
-                  <Button variant="outline" size="sm" className="gap-1.5 text-xs h-7">
-                    <FileText className="size-3.5" /> Use template
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-72 p-0" align="end">
-                  <Command>
-                    <CommandInput placeholder="Search templates..." />
-                    <CommandList>
-                      <CommandEmpty>No templates found.</CommandEmpty>
-                      <CommandGroup heading="Active templates">
-                        {templates.map((tpl: any) => (
-                          <CommandItem key={tpl.id} value={tpl.name} onSelect={() => applyTemplate(tpl)}>
-                            <FileText className="size-3.5 mr-2 text-muted-foreground" />
-                            <span className="text-sm">{tpl.name}</span>
-                          </CommandItem>
-                        ))}
-                      </CommandGroup>
-                    </CommandList>
-                  </Command>
-                </PopoverContent>
-              </Popover>
-            )}
+            <Popover open={templatePickerOpen} onOpenChange={setTemplatePickerOpen}>
+              <PopoverTrigger asChild>
+                <Button variant="outline" size="sm" className="gap-1.5 text-xs h-7">
+                  <FileText className="size-3.5" /> Use template
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-72 p-0" align="end">
+                <Command>
+                  <CommandInput placeholder="Search templates..." />
+                  <CommandList>
+                    <CommandEmpty>{templates.length === 0 ? "No active templates saved yet." : "No templates found."}</CommandEmpty>
+                    <CommandGroup heading="Active templates">
+                      {templates.map((tpl: any) => (
+                        <CommandItem key={tpl.id} value={tpl.name} onSelect={() => applyTemplate(tpl)}>
+                          <FileText className="size-3.5 mr-2 text-muted-foreground" />
+                          <span className="text-sm">{tpl.name}</span>
+                        </CommandItem>
+                      ))}
+                    </CommandGroup>
+                  </CommandList>
+                </Command>
+              </PopoverContent>
+            </Popover>
           </DialogTitle>
         </DialogHeader>
         <div className="space-y-3">
@@ -335,6 +357,30 @@ function ComposeDialog({ state, onClose }: { state: ComposeState; onClose: () =>
               <Sparkles className="size-3.5" /> Regenerate AI draft
             </Button>
           )}
+
+          {/* File attachments */}
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="sm" className="gap-1.5 text-xs h-7" onClick={() => fileInputRef.current?.click()}>
+                <Paperclip className="size-3.5" /> Attach file
+              </Button>
+              <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleFileSelect} />
+            </div>
+            {attachments.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {attachments.map((att, idx) => (
+                  <div key={idx} className="flex items-center gap-1 bg-muted rounded-md px-2 py-1 text-xs">
+                    <Paperclip className="size-3 text-muted-foreground" />
+                    <span className="max-w-[140px] truncate">{att.filename}</span>
+                    <span className="text-muted-foreground">({Math.round(att.size / 1024)}KB)</span>
+                    <button onClick={() => removeAttachment(idx)} className="ml-1 text-muted-foreground hover:text-destructive">
+                      <X className="size-3" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
           {state.mode === "forward" && state.originalMessage && (
             <div className="border rounded-md p-3 bg-muted/30 text-xs text-muted-foreground space-y-1">
               <div className="font-medium text-foreground">Forwarded message</div>

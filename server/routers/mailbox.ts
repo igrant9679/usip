@@ -134,6 +134,11 @@ export const mailboxRouter = router({
       bodyText: z.string().optional(),
       cc: z.string().optional(),
       bcc: z.string().optional(),
+      attachments: z.array(z.object({
+        filename: z.string(),
+        contentType: z.string(),
+        content: z.string(), // base64
+      })).optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       const acc = await getAccount(input.accountId, ctx.workspace.id);
@@ -147,6 +152,7 @@ export const mailboxRouter = router({
         bodyText: input.bodyText,
         cc: input.cc,
         bcc: input.bcc,
+        attachments: input.attachments,
       });
     }),
 
@@ -162,6 +168,11 @@ export const mailboxRouter = router({
       bodyHtml: z.string(),
       bodyText: z.string().optional(),
       cc: z.string().optional(),
+      attachments: z.array(z.object({
+        filename: z.string(),
+        contentType: z.string(),
+        content: z.string(), // base64
+      })).optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       const acc = await getAccount(input.accountId, ctx.workspace.id);
@@ -177,6 +188,7 @@ export const mailboxRouter = router({
         inReplyTo: input.inReplyTo,
         references: input.references,
         replyToThreadId: input.threadId,
+        attachments: input.attachments,
       });
     }),
 

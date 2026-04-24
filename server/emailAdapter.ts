@@ -82,6 +82,8 @@ export interface SendEmailInput {
   replyToThreadId?: string;
   fromName?: string;
   fromEmail: string;
+  /** Base64-encoded file attachments */
+  attachments?: Array<{ filename: string; contentType: string; content: string }>;
 }
 
 export interface EmailAdapter {
@@ -174,17 +176,41 @@ export class GmailAdapter implements EmailAdapter {
   }
 
   async sendEmail(input: SendEmailInput): Promise<{ messageId: string; threadId?: string }> {
-    const headers = [
-      `From: ${input.fromName ? `"${input.fromName}" <${input.fromEmail}>` : input.fromEmail}`,
-      `To: ${input.to}`,
-      `Subject: ${input.subject}`,
-      `Content-Type: text/html; charset=utf-8`,
-      `MIME-Version: 1.0`,
-    ];
-    if (input.cc) headers.push(`Cc: ${input.cc}`);
-    if (input.inReplyTo) headers.push(`In-Reply-To: ${input.inReplyTo}`);
-    if (input.references) headers.push(`References: ${input.references}`);
-    const raw = Buffer.from(headers.join("\r\n") + "\r\n\r\n" + input.bodyHtml).toString("base64url");
+    let rawBody: string;
+    const boundary = `boundary_${Date.now()}`;
+    if (input.attachments?.length) {
+      const parts = [
+        `--${boundary}\r\nContent-Type: text/html; charset=utf-8\r\n\r\n${input.bodyHtml}`,
+        ...input.attachments.map((a) =>
+          `--${boundary}\r\nContent-Type: ${a.contentType}; name="${a.filename}"\r\nContent-Disposition: attachment; filename="${a.filename}"\r\nContent-Transfer-Encoding: base64\r\n\r\n${a.content}`
+        ),
+        `--${boundary}--`,
+      ];
+      const headers = [
+        `From: ${input.fromName ? `"${input.fromName}" <${input.fromEmail}>` : input.fromEmail}`,
+        `To: ${input.to}`,
+        `Subject: ${input.subject}`,
+        `MIME-Version: 1.0`,
+        `Content-Type: multipart/mixed; boundary="${boundary}"`,
+      ];
+      if (input.cc) headers.push(`Cc: ${input.cc}`);
+      if (input.inReplyTo) headers.push(`In-Reply-To: ${input.inReplyTo}`);
+      if (input.references) headers.push(`References: ${input.references}`);
+      rawBody = headers.join("\r\n") + "\r\n\r\n" + parts.join("\r\n");
+    } else {
+      const headers = [
+        `From: ${input.fromName ? `"${input.fromName}" <${input.fromEmail}>` : input.fromEmail}`,
+        `To: ${input.to}`,
+        `Subject: ${input.subject}`,
+        `Content-Type: text/html; charset=utf-8`,
+        `MIME-Version: 1.0`,
+      ];
+      if (input.cc) headers.push(`Cc: ${input.cc}`);
+      if (input.inReplyTo) headers.push(`In-Reply-To: ${input.inReplyTo}`);
+      if (input.references) headers.push(`References: ${input.references}`);
+      rawBody = headers.join("\r\n") + "\r\n\r\n" + input.bodyHtml;
+    }
+    const raw = Buffer.from(rawBody).toString("base64url");
     const res = await this.gmail.users.messages.send({ userId: "me", requestBody: { raw, threadId: input.replyToThreadId } });
     return { messageId: res.data.id!, threadId: res.data.threadId ?? undefined };
   }
@@ -383,6 +409,11 @@ export class ImapSmtpAdapter implements EmailAdapter {
       to: input.to, cc: input.cc, bcc: input.bcc,
       subject: input.subject, text: input.bodyText, html: input.bodyHtml,
       inReplyTo: input.inReplyTo, references: input.references,
+      attachments: input.attachments?.map((a) => ({
+        filename: a.filename,
+        content: Buffer.from(a.content, "base64"),
+        contentType: a.contentType,
+      })),
     });
     return { messageId: info.messageId };
   }
