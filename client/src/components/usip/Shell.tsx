@@ -165,7 +165,7 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
         mobileOpen ? "translate-x-0" : "-translate-x-full",
       )}>
         <div className="px-4 py-4 border-b border-white/10">
-          <img src="/manus-storage/lsi-media-logo-v2_ffe68b5e.png" alt="LSI Media" className="w-full h-auto block" />
+          <img src="/manus-storage/lsi-media-logo-v2_ffe68b5e.png" alt="LSI Media" className="w-full h-auto block" style={{maxHeight: '64px', objectFit: 'contain', objectPosition: 'left center'}} />
           <div className="text-[10px] text-white/55 tracking-wider uppercase mt-2 text-center">USIP · Sales Intelligence</div>
         </div>
 
