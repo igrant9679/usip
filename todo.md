@@ -1108,3 +1108,9 @@
 - [x] Apply category accent colors to main content page headers: each page's PageHeader gets a subtle left-border accent + tinted background matching its nav category color
 - [x] Generate Velocity lightning bolt favicon and deploy it to the app
 - [x] Add dark/light mode toggle button to the topbar (sun/moon icon), wired to ThemeProvider
+
+## Batch L — Stat Card Accents, Page Transitions, Dark Sidebar Contrast
+
+- [x] Apply category accent color left-border stripe to StatCard components via AccentContext
+- [x] Add animated page transitions (fade + slight slide-up) to Router in App.tsx using CSS/framer-motion or CSS transitions
+- [x] Improve dark-mode sidebar: lighter charcoal background, stronger stripe glow, better contrast vs dark main canvas

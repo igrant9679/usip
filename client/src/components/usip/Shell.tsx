@@ -52,6 +52,7 @@ import {
 } from "lucide-react";
 import { ReactNode, useEffect, useState, createContext, useContext } from "react";
 import { Link, useLocation } from "wouter";
+import { PageTransition } from "@/components/PageTransition";
 import { useTheme } from "@/contexts/ThemeContext";
 import { Moon, Sun } from "lucide-react";
 
@@ -334,7 +335,9 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
           </Link>
         </header>
 
-        <main className="flex-1 overflow-auto bg-background">{children}</main>
+        <main className="flex-1 overflow-auto bg-background">
+          <PageTransition>{children}</PageTransition>
+        </main>
       </div>
     </div>
     </AccentContext.Provider>
@@ -363,17 +366,26 @@ export function PageHeader({ title, description, children }: { title: string; de
 }
 
 export function StatCard({ label, value, hint, tone }: { label: string; value: ReactNode; hint?: string; tone?: "default" | "success" | "warning" | "danger" }) {
+  const accent = useAccentColor();
   const toneCls = tone === "success" ? "text-emerald-700 bg-emerald-50 border-emerald-200"
     : tone === "warning" ? "text-amber-800 bg-amber-50 border-amber-200"
     : tone === "danger" ? "text-rose-800 bg-rose-50 border-rose-200"
     : "";
   const titleStr = typeof value === "string" || typeof value === "number" ? String(value) : undefined;
   return (
-    <div className={cn("rounded-lg border bg-card p-4 min-w-0 overflow-hidden", toneCls)}>
+    <div
+      className={cn("rounded-lg border bg-card p-4 min-w-0 overflow-hidden", toneCls)}
+      style={!tone ? {
+        borderLeftWidth: "3px",
+        borderLeftStyle: "solid",
+        borderLeftColor: accent,
+      } : undefined}
+    >
       <div className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium truncate">{label}</div>
       <div
         className="text-xl @[14rem]:text-2xl font-semibold font-mono mt-1 tabular-nums truncate"
         title={titleStr}
+        style={!tone ? { color: accent } : undefined}
       >
         {value}
       </div>

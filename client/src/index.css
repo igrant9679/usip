@@ -124,14 +124,15 @@
   --chart-3: oklch(0.75 0.16 60);
   --chart-4: oklch(0.66 0.22 28);
   --chart-5: oklch(0.6 0.14 300);
-  --sidebar: oklch(0.18 0.022 195);
-  --sidebar-foreground: oklch(0.92 0.008 95);
-  --sidebar-primary: oklch(0.7 0.14 170);
-  --sidebar-primary-foreground: oklch(0.15 0.04 195);
-  --sidebar-accent: oklch(0.24 0.022 195);
-  --sidebar-accent-foreground: oklch(0.98 0.008 95);
-  --sidebar-border: oklch(0.3 0.022 195);
-  --sidebar-ring: oklch(0.7 0.14 170);
+  /* Dark mode sidebar — lighter charcoal to contrast against dark canvas */
+  --sidebar: oklch(0.26 0.018 240);
+  --sidebar-foreground: oklch(0.95 0.006 95);
+  --sidebar-primary: oklch(0.75 0.16 170);
+  --sidebar-primary-foreground: oklch(0.12 0.04 195);
+  --sidebar-accent: oklch(0.32 0.018 240);
+  --sidebar-accent-foreground: oklch(0.98 0.006 95);
+  --sidebar-border: oklch(0.38 0.018 240);
+  --sidebar-ring: oklch(0.75 0.16 170);
 }
 
 @layer base {
