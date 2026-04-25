@@ -675,8 +675,11 @@ export const teamRouter = router({
       if (row.deactivatedAt) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot send password setup to a deactivated member" });
       }
-      if (row.loginMethod !== "oauth") {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "Member has not yet accepted their invitation via OAuth" });
+      // Allow any real loginMethod ("oauth", "google", "facebook", "microsoft", "apple", "email", etc.)
+      // Pending invite methods ("invite", "expired_invite") mean the member hasn't signed in yet.
+      const pendingInviteMethods = ["invite", "expired_invite"];
+      if (pendingInviteMethods.includes(row.loginMethod ?? "")) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Member has not yet accepted their invitation. Use \"Resend Invite\" instead." });
       }
       if (row.passwordHash) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Member has already set a password" });
@@ -850,12 +853,12 @@ export const teamRouter = router({
         .innerJoin(workspaces, eq(workspaceMembers.workspaceId, workspaces.id))
         .where(eq(workspaceMembers.inviteToken, input.token));
       if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Invite link is invalid or has already been used." });
-      // Allow "oauth" members with a valid token — this handles the password-setup resend flow
-      // where an admin sends a fresh token to a member who already accepted via OAuth but skipped
-      // the password-creation step.
-      if (row.loginMethod !== "invite" && row.loginMethod !== "expired_invite" && row.loginMethod !== "oauth") {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "This invitation has already been accepted." });
-      }
+      // "invite" / "expired_invite" = pending invite, needs full acceptance flow.
+      // Any other loginMethod = member already accepted (via OAuth merge or resendPasswordSetup);
+      // the token was re-issued by an admin so the member can set a password — treat as
+      // password-setup-only (skip finaliseAcceptance, just set password then go to dashboard).
+      const pendingMethods = ["invite", "expired_invite"];
+      const passwordSetupOnly = !pendingMethods.includes(row.loginMethod ?? "");
       const now = new Date();
       if (row.inviteExpiresAt && row.inviteExpiresAt <= now) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "This invitation link has expired. Please ask an admin to resend your invitation." });
@@ -867,7 +870,7 @@ export const teamRouter = router({
         userEmail: row.userEmail,
         expiresAt: row.inviteExpiresAt,
         // Signal to the client that this is a password-setup-only flow
-        passwordSetupOnly: row.loginMethod === "oauth",
+        passwordSetupOnly,
       };
     }),
 
@@ -897,9 +900,6 @@ export const teamRouter = router({
         .innerJoin(workspaces, eq(workspaceMembers.workspaceId, workspaces.id))
         .where(eq(workspaceMembers.inviteToken, input.token));
       if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Invite link is invalid or has already been used." });
-      if (row.loginMethod !== "invite" && row.loginMethod !== "expired_invite") {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "This invitation has already been accepted." });
-      }
       const now = new Date();
       if (row.inviteExpiresAt && row.inviteExpiresAt <= now) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "This invitation link has expired. Please ask an admin to resend your invitation." });
@@ -910,6 +910,18 @@ export const teamRouter = router({
           code: "FORBIDDEN",
           message: `This invite was sent to ${row.userEmail}. Please sign in with that email address.`,
         });
+      }
+      // If the member's loginMethod is already a real method (oauth, google, etc.),
+      // the OAuth merge already handled the acceptance — just clear the token and return.
+      // This covers: (a) the invite-placeholder merge in the OAuth callback, and
+      // (b) the resendPasswordSetup flow where loginMethod is already "oauth".
+      const pendingMethods = ["invite", "expired_invite"];
+      if (!pendingMethods.includes(row.loginMethod ?? "")) {
+        // Already accepted — just clear the token if it's still set
+        await db.update(workspaceMembers)
+          .set({ inviteToken: null, inviteExpiresAt: null })
+          .where(eq(workspaceMembers.id, row.memberId));
+        return { ok: true, workspaceName: row.workspaceName, role: row.role };
       }
       // Mark accepted: update users.loginMethod, clear invite token
       await db.update(users)
@@ -966,11 +978,9 @@ export const teamRouter = router({
         .innerJoin(workspaces, eq(workspaceMembers.workspaceId, workspaces.id))
         .where(eq(workspaceMembers.inviteToken, input.token));
       if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Invite link is invalid or has already been used." });
-      // Also allow "oauth" members — this handles the password-setup resend flow where the member
-      // already accepted via OAuth but skipped the password-creation step.
-      if (row.loginMethod !== "invite" && row.loginMethod !== "expired_invite" && row.loginMethod !== "oauth") {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "This invitation has already been accepted." });
-      }
+      // Any loginMethod is allowed here: "invite", "expired_invite", "oauth", "google", etc.
+      // The token was issued by an admin specifically to let this member set a password.
+      // No loginMethod guard needed — the token itself is the authorisation.
       const now = new Date();
       if (row.inviteExpiresAt && row.inviteExpiresAt <= now) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "This invitation link has expired." });

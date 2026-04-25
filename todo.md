@@ -1400,3 +1400,12 @@
 - [x] Team.tsx: add `missedPasswordStep` flag (oauth + no password + not deactivated); show "No password" badge in name column
 - [x] Team.tsx: show "Send Password Setup" action button for missedPasswordStep members (calls resendPasswordSetup mutation)
 - [x] Vitest: batch-ac.test.ts — 15 tests covering rate-limit config, resendPasswordSetup guards, acceptInvitePreview flag, setInvitePassword guard
+
+## Bug Fix — Password setup flow not working for oauth members
+- [x] Diagnose: invite placeholder users (openId = "invite:<email>") were not merged with real OAuth users on first sign-in, causing finaliseAcceptance to fail with "already accepted"
+- [x] Fix: OAuth callback now merges invite placeholder rows into the real user row (re-points workspace_members.userId, deletes placeholder)
+- [x] Fix: finaliseAcceptance now allows any non-pending loginMethod (no-op acceptance, just clears token)
+- [x] Fix: acceptInvitePreview now allows any non-pending loginMethod and returns passwordSetupOnly=true for them
+- [x] Fix: setInvitePassword now allows any loginMethod (token is the authorisation)
+- [x] Fix: resendPasswordSetup guard updated to allow any non-pending loginMethod (google, facebook, etc.)
+- [x] Fix: Team.tsx missedPasswordStep flag updated to check any non-pending loginMethod

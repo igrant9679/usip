@@ -459,8 +459,9 @@ export default function Team() {
                       const editable = canChange(m.role, m.userId);
                       const isPendingInvite = m.loginMethod === "invite";
                       const isExpiredInvite = m.loginMethod === "expired_invite";
-                      // oauth member who never set a password — eligible for password-setup resend
-                      const missedPasswordStep = m.loginMethod === "oauth" && !m.hasPassword && !isInactive;
+                      // member who signed in via any real OAuth method but never set a password — eligible for password-setup resend
+                      const pendingInviteMethods = ["invite", "expired_invite"];
+                      const missedPasswordStep = !pendingInviteMethods.includes(m.loginMethod ?? "") && !m.hasPassword && !isInactive;
                       return (
                         <tr key={m.memberId} className={`border-b ${isInactive ? "opacity-60" : ""}`}>
                           {isAdmin && (
