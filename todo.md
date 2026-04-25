@@ -1176,11 +1176,11 @@
 
 ## Batch S — Team Member Password & Resend Invitation
 
-- [ ] Server: add `team.setMemberPassword` protected procedure (admin only) — hashes new password with bcrypt, updates user record, logs audit entry
-- [ ] Server: add `team.resendInvitation` protected procedure (admin only) — re-sends invitation email with existing or freshly-generated invite token
-- [ ] UI: "Set Password" action in Team Members row actions — opens a dialog with new-password + confirm fields, validates match + min-length, calls procedure
-- [ ] UI: "Resend Invite" action in Team Members row actions — visible only for members whose invite is pending/not-yet-accepted, calls procedure with toast feedback
-- [ ] Vitest: cover setMemberPassword (success, wrong role, mismatch) and resendInvitation (success, already-accepted guard)
+- [x] Server: add `team.setMemberPassword` protected procedure (admin only) — hashes new password with bcrypt, updates user record, logs audit entry
+- [x] Server: add `team.resendInvitation` protected procedure (admin only) — re-sends invitation email with existing or freshly-generated invite token
+- [x] UI: "Set Password" action in Team Members row actions — opens a dialog with new-password + confirm fields, validates match + min-length, calls procedure
+- [x] UI: "Resend Invite" action in Team Members row actions — visible only for members whose invite is pending/not-yet-accepted, calls procedure with toast feedback
+- [x] Vitest: cover setMemberPassword (success, wrong role, mismatch) and resendInvitation (success, already-accepted guard)
 
 ## Batch S — Team Member Password & Resend Invitation
 
@@ -1201,3 +1201,41 @@
 - [x] UI: Set Password button in each active member row actions opens dialog with New Password + Confirm Password fields, validation (min 8, match), bcrypt stored on save
 - [x] UI: Resend Invite button visible only for members with loginMethod=invite (pending badge shown in name column)
 - [x] Tests: 9 new vitest tests covering setMemberPassword and resendInvitation guards (all 689 pass)
+
+## Batch T — Invite Expiry, Login History, Copy Invite Link
+
+- [ ] Schema: add inviteToken (varchar 64, nullable, unique) and inviteExpiresAt (timestamp, nullable) to workspaceMembers
+- [ ] Schema: add inviteExpiryDays (int, default 7, nullable) to workspaceSettings
+- [ ] Schema: add loginHistory table (id, userId, workspaceId, ipAddress, userAgent, outcome enum, createdAt)
+- [ ] Migration: generate and apply via drizzle-kit + webdev_execute_sql
+- [ ] Server: invite procedure generates inviteToken + sets inviteExpiresAt; includes token link in email
+- [ ] Server: resendInvitation regenerates token + resets expiry
+- [ ] Server: team.copyInviteLink procedure returns invite URL for pending member (regenerates if expired)
+- [ ] Server: team.getLoginHistory procedure returns recent login events for a member
+- [ ] Server: team.updateInviteExpiry procedure saves inviteExpiryDays to workspaceSettings
+- [ ] Server: expireInvitations cron job (nightly) marks expired pending invites
+- [ ] Server: OAuth callback records loginHistory row on every sign-in
+- [ ] UI: Copy Invite Link button next to Resend Invite for pending members
+- [ ] UI: Login History tab on Team Members page showing per-member sign-in log
+- [ ] UI: Invitation expiry config field in workspace settings
+- [ ] Tests: cover invite expiry logic, copyInviteLink, getLoginHistory guards
+
+## Batch T — Invite Expiry, Login History, Copy Invite Link
+
+- [x] Schema: add inviteToken and inviteExpiresAt columns to workspaceMembers
+- [x] Schema: add inviteExpiryDays column to workspaceSettings
+- [x] Schema: add loginHistory table (userId, workspaceId, ipAddress, userAgent, outcome, createdAt)
+- [x] Migration: generate and apply Drizzle migration for all schema changes
+- [x] Server: update invite procedure to generate inviteToken and set inviteExpiresAt on new members
+- [x] Server: update resendInvitation to regenerate inviteToken and reset inviteExpiresAt
+- [x] Server: add team.copyInviteLink procedure (returns invite URL, regenerates token if expired)
+- [x] Server: add team.getLoginHistory procedure (returns last 50 login events for a member)
+- [x] Server: add team.updateInviteExpiry procedure (saves inviteExpiryDays to workspace_settings)
+- [x] Server: create inviteExpiry.ts nightly job (marks expired pending invitations as expired_invite)
+- [x] Server: wire expireInvitations into the nightly batch cron in index.ts
+- [x] Server: record login history in OAuth callback (non-fatal, captures IP, user agent, outcome)
+- [x] UI: add Copy Invite Link button next to Resend Invite for pending/expired members
+- [x] UI: add Login History tab on Team Members page (table of sign-in events per member)
+- [x] UI: add Settings tab on Team Members page with invitation expiry days config
+- [x] UI: show Expired badge on members with loginMethod = expired_invite
+- [x] Tests: invite.expiry.test.ts covering schema fields, procedure existence, and expireInvitations import

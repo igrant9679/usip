@@ -64,6 +64,10 @@ export const workspaceMembers = mysqlTable(
     notifEmail: varchar("notifEmail", { length: 320 }),
     /** JSON: { sequence_reply: bool, social_response: bool, workflow_alert: bool, system: bool } */
     notifPrefs: json("notifPrefs"),
+    /** Secure random token for invite-link acceptance */
+    inviteToken: varchar("inviteToken", { length: 64 }),
+    /** When the invite token expires (null = no expiry) */
+    inviteExpiresAt: timestamp("inviteExpiresAt"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
   (t) => ({
@@ -1047,9 +1051,33 @@ export const workspaceSettings = mysqlTable("workspace_settings", {
   teamsWebhookUrl: text("teamsWebhookUrl"),
   /** Sending account ID to use as the system sender for invitation/notification emails */
   systemSenderAccountId: int("systemSenderAccountId"),
+  /** How many days before a pending invitation expires (null = never) */
+  inviteExpiryDays: int("inviteExpiryDays").default(7),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
 export type WorkspaceSettings = typeof workspaceSettings.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Login History
+   ────────────────────────────────────────────────────────────────────────── */
+export const loginHistory = mysqlTable(
+  "login_history",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    userId: int("userId").notNull(),
+    workspaceId: int("workspaceId"),
+    ipAddress: varchar("ipAddress", { length: 64 }),
+    userAgent: text("userAgent"),
+    /** success | failed | expired_invite */
+    outcome: mysqlEnum("outcome", ["success", "failed", "expired_invite"]).default("success").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    byUser: index("ix_lh_user").on(t.userId),
+    byWs: index("ix_lh_ws").on(t.workspaceId),
+  }),
+);
+export type LoginHistory = typeof loginHistory.$inferSelect;
 
 /* ──────────────────────────────────────────────────────────────────────────
    Monthly usage counters (for Billing tab)

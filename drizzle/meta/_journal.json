@@ -218,6 +218,13 @@
       "when": 1777133174267,
       "tag": "0030_yielding_black_bird",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "5",
+      "when": 1777133954445,
+      "tag": "0031_heavy_amphibian",
+      "breakpoints": true
     }
   ]
 }

@@ -1,6 +1,7 @@
 import { COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
 import type { Express, Request, Response } from "express";
 import * as db from "../db";
+import { getDb } from "../db";
 import { getSessionCookieOptions } from "./cookies";
 import { sdk } from "./sdk";
 
@@ -35,6 +36,26 @@ export function registerOAuthRoutes(app: Express) {
         loginMethod: userInfo.loginMethod ?? userInfo.platform ?? null,
         lastSignedIn: new Date(),
       });
+
+      // Record login history (non-fatal)
+      try {
+        const dbConn = await getDb();
+        if (dbConn) {
+          const { loginHistory, users: usersTable, workspaceMembers } = await import("../../drizzle/schema");
+          const { eq } = await import("drizzle-orm");
+          const [user] = await dbConn.select({ id: usersTable.id }).from(usersTable).where(eq(usersTable.openId, userInfo.openId));
+          if (user) {
+            const [member] = await dbConn.select({ workspaceId: workspaceMembers.workspaceId }).from(workspaceMembers).where(eq(workspaceMembers.userId, user.id)).limit(1);
+            await dbConn.insert(loginHistory).values({
+              userId: user.id,
+              workspaceId: member?.workspaceId ?? null,
+              ipAddress: ((req.headers["x-forwarded-for"] as string) ?? req.socket?.remoteAddress ?? "").slice(0, 64),
+              userAgent: (req.headers["user-agent"] ?? "").slice(0, 500),
+              outcome: "success",
+            });
+          }
+        }
+      } catch (_e) { /* Non-fatal */ }
 
       const sessionToken = await sdk.createSessionToken(userInfo.openId, {
         name: userInfo.name || "",

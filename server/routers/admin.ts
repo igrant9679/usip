@@ -13,11 +13,13 @@
  *   - team.bulkChangeRole                    (admin+ only)
  */
 import { TRPCError } from "@trpc/server";
-import { and, count, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, count, desc, eq, inArray, isNull, lte, sql } from "drizzle-orm";
 import { z } from "zod";
 import bcrypt from "bcryptjs";
+import crypto from "crypto";
 import {
   leads,
+  loginHistory,
   opportunities,
   tasks,
   usageCounters,
@@ -210,12 +212,24 @@ export const teamRouter = router({
         throw new TRPCError({ code: "CONFLICT", message: "User is already a member of this workspace" });
       }
 
+      // Generate invite token and expiry
+      const inviteToken = crypto.randomBytes(32).toString("hex");
+      const [wsSettings] = await db
+        .select({ inviteExpiryDays: workspaceSettings.inviteExpiryDays })
+        .from(workspaceSettings)
+        .where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
+      const expiryDays = wsSettings?.inviteExpiryDays ?? 7;
+      const inviteExpiresAt = expiryDays && expiryDays > 0
+        ? new Date(Date.now() + expiryDays * 86400_000)
+        : null;
       await db.insert(workspaceMembers).values({
         workspaceId: ctx.workspace.id,
         userId,
         role: input.role,
         title: input.title ?? null,
         quota: input.quota !== undefined ? String(input.quota) : null,
+        inviteToken,
+        inviteExpiresAt,
       });
 
       await recordAudit({
@@ -589,6 +603,19 @@ export const teamRouter = router({
       if (row.deactivatedAt) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot resend invitation to a deactivated member" });
       }
+      // Regenerate invite token and reset expiry
+      const newToken = crypto.randomBytes(32).toString("hex");
+      const [wsSettings2] = await db
+        .select({ inviteExpiryDays: workspaceSettings.inviteExpiryDays })
+        .from(workspaceSettings)
+        .where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
+      const expiryDays2 = wsSettings2?.inviteExpiryDays ?? 7;
+      const newExpiresAt = expiryDays2 && expiryDays2 > 0
+        ? new Date(Date.now() + expiryDays2 * 86400_000)
+        : null;
+      await db.update(workspaceMembers)
+        .set({ inviteToken: newToken, inviteExpiresAt: newExpiresAt })
+        .where(eq(workspaceMembers.id, input.memberId));
       try {
         const [settings] = await db
           .select({ systemSenderAccountId: workspaceSettings.systemSenderAccountId })
@@ -629,6 +656,99 @@ export const teamRouter = router({
         entityType: "workspace_member",
         entityId: row.userId,
         after: { action: "invitation_resent", email: row.email },
+      });
+      return { ok: true };
+    }),
+
+  /**
+   * Return the invite link URL for a pending member.
+   * Regenerates the token if it is expired or missing.
+   * Guard: member must still have loginMethod = "invite".
+   */
+  copyInviteLink: adminWsProcedure
+    .input(z.object({ memberId: z.number().int(), origin: z.string().url() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [row] = await db
+        .select({
+          userId: workspaceMembers.userId,
+          loginMethod: users.loginMethod,
+          deactivatedAt: workspaceMembers.deactivatedAt,
+          inviteToken: workspaceMembers.inviteToken,
+          inviteExpiresAt: workspaceMembers.inviteExpiresAt,
+        })
+        .from(workspaceMembers)
+        .innerJoin(users, eq(workspaceMembers.userId, users.id))
+        .where(and(eq(workspaceMembers.id, input.memberId), eq(workspaceMembers.workspaceId, ctx.workspace.id)));
+      if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Member not found" });
+      if (row.loginMethod !== "invite") {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Member has already accepted their invitation" });
+      }
+      if (row.deactivatedAt) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot get invite link for a deactivated member" });
+      }
+      // Regenerate token if missing or expired
+      const now = new Date();
+      let token = row.inviteToken;
+      if (!token || (row.inviteExpiresAt && row.inviteExpiresAt <= now)) {
+        token = crypto.randomBytes(32).toString("hex");
+        const [settings] = await db
+          .select({ inviteExpiryDays: workspaceSettings.inviteExpiryDays })
+          .from(workspaceSettings)
+          .where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
+        const expiryDays = settings?.inviteExpiryDays ?? 7;
+        const expiresAt = expiryDays > 0 ? new Date(now.getTime() + expiryDays * 86400_000) : null;
+        await db.update(workspaceMembers)
+          .set({ inviteToken: token, inviteExpiresAt: expiresAt })
+          .where(eq(workspaceMembers.id, input.memberId));
+      }
+      return { url: `${input.origin}/invite/accept?token=${token}` };
+    }),
+
+  /**
+   * Return recent login history for a specific workspace member.
+   * Returns up to 50 most recent entries.
+   */
+  getLoginHistory: adminWsProcedure
+    .input(z.object({ memberId: z.number().int() }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // Resolve userId from memberId
+      const [member] = await db
+        .select({ userId: workspaceMembers.userId })
+        .from(workspaceMembers)
+        .where(and(eq(workspaceMembers.id, input.memberId), eq(workspaceMembers.workspaceId, ctx.workspace.id)));
+      if (!member) throw new TRPCError({ code: "NOT_FOUND", message: "Member not found" });
+      return db
+        .select()
+        .from(loginHistory)
+        .where(eq(loginHistory.userId, member.userId))
+        .orderBy(desc(loginHistory.createdAt))
+        .limit(50);
+    }),
+
+  /**
+   * Update the invitation expiry days setting for this workspace.
+   * 0 = no expiry.
+   */
+  updateInviteExpiry: adminWsProcedure
+    .input(z.object({ days: z.number().int().min(0).max(365) }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      await getOrSeedSettings(ctx.workspace.id);
+      await db.update(workspaceSettings)
+        .set({ inviteExpiryDays: input.days === 0 ? null : input.days })
+        .where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
+      await recordAudit({
+        workspaceId: ctx.workspace.id,
+        actorUserId: ctx.user.id,
+        action: "update",
+        entityType: "workspace_settings",
+        entityId: ctx.workspace.id,
+        after: { inviteExpiryDays: input.days },
       });
       return { ok: true };
     }),

@@ -6,7 +6,22 @@ import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { trpc } from "@/lib/trpc";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
-import { KeyRound, Mail, RefreshCw, Shield, UserMinus, UserPlus, Users } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import {
+  CheckCircle2,
+  Clock,
+  Copy,
+  KeyRound,
+  Link2,
+  LogIn,
+  Mail,
+  RefreshCw,
+  Shield,
+  UserMinus,
+  UserPlus,
+  Users,
+  XCircle,
+} from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 
@@ -18,6 +33,8 @@ function roleTone(r: Role) {
   return r === "super_admin" ? "danger" : r === "admin" ? "warning" : r === "manager" ? "info" : "muted";
 }
 
+type Tab = "members" | "login_history" | "settings";
+
 export default function Team() {
   const { current } = useWorkspace();
   const myRole = (current?.role as Role) ?? "rep";
@@ -26,6 +43,7 @@ export default function Team() {
   const utils = trpc.useUtils();
   const { data, isLoading } = trpc.team.list.useQuery();
 
+  const [activeTab, setActiveTab] = useState<Tab>("members");
   const [filter, setFilter] = useState("");
   const [roleFilter, setRoleFilter] = useState<"all" | Role>("all");
   const [showInactive, setShowInactive] = useState(false);
@@ -39,6 +57,22 @@ export default function Team() {
   const [pwTarget, setPwTarget] = useState<any | null>(null);
   const [pwValue, setPwValue] = useState("");
   const [pwConfirm, setPwConfirm] = useState("");
+
+  // Login History
+  const [historyTarget, setHistoryTarget] = useState<any | null>(null);
+  const { data: loginHistoryData, isLoading: historyLoading } = trpc.team.getLoginHistory.useQuery(
+    { memberId: historyTarget?.memberId ?? 0 },
+    { enabled: !!historyTarget }
+  );
+
+  // Invite expiry settings
+  const [expiryDays, setExpiryDays] = useState<string>("7");
+  const { data: wsSettings } = trpc.settings.get.useQuery(undefined, {
+    onSuccess: (d: any) => {
+      if (d?.inviteExpiryDays != null) setExpiryDays(String(d.inviteExpiryDays));
+      else setExpiryDays("7");
+    },
+  } as any);
 
   const filtered = useMemo(() => {
     const rows = data ?? [];
@@ -126,6 +160,25 @@ export default function Team() {
     onError: (e) => toast.error(e.message),
   });
 
+  const copyInviteLink = trpc.team.copyInviteLink.useMutation({
+    onSuccess: (res) => {
+      navigator.clipboard.writeText(res.url).then(() => {
+        toast.success("Invite link copied to clipboard");
+      }).catch(() => {
+        toast.success(`Invite link: ${res.url}`);
+      });
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const updateInviteExpiry = trpc.team.updateInviteExpiry.useMutation({
+    onSuccess: () => {
+      utils.settings.get.invalidate();
+      toast.success("Invitation expiry updated");
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
   const pwMismatch = pwValue.length > 0 && pwConfirm.length > 0 && pwValue !== pwConfirm;
   const pwTooShort = pwValue.length > 0 && pwValue.length < 8;
 
@@ -146,6 +199,18 @@ export default function Team() {
 
   const activeOthers = (data ?? []).filter((m: any) => !m.deactivatedAt && m.userId !== deactivateTarget?.userId);
 
+  const TABS: { id: Tab; label: string }[] = [
+    { id: "members", label: "Members" },
+    { id: "login_history", label: "Login History" },
+    ...(isAdmin ? [{ id: "settings" as Tab, label: "Settings" }] : []),
+  ];
+
+  function outcomeIcon(outcome: string) {
+    if (outcome === "success") return <CheckCircle2 className="size-3.5 text-emerald-500" />;
+    if (outcome === "failed") return <XCircle className="size-3.5 text-rose-500" />;
+    return <Clock className="size-3.5 text-amber-500" />;
+  }
+
   return (
     <Shell title="Team">
       <PageHeader title="Workspace team" description="Members, roles, quotas, and access controls.">
@@ -156,221 +221,379 @@ export default function Team() {
         )}
       </PageHeader>
 
-      <div className="p-6 space-y-4">
-        {/* Filter bar */}
-        <div className="flex items-center gap-2 flex-wrap">
-          <Input
-            placeholder="Search name, email, title…"
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            className="max-w-xs"
-          />
-          <div className="flex items-center gap-1 bg-secondary rounded-md p-0.5">
-            {(["all", ...ROLES] as const).map((r) => (
-              <button
-                key={r}
-                onClick={() => setRoleFilter(r)}
-                className={`px-2 py-1 text-xs rounded ${roleFilter === r ? "bg-card shadow-sm" : "text-muted-foreground"}`}
-              >
-                {r}
-              </button>
-            ))}
-          </div>
-          <label className="flex items-center gap-1.5 text-xs text-muted-foreground ml-1">
-            <input type="checkbox" checked={showInactive} onChange={(e) => setShowInactive(e.target.checked)} />
-            Show deactivated
-          </label>
-          <div className="ml-auto text-xs text-muted-foreground">
-            {filtered.length} of {data?.length ?? 0} members
-          </div>
-        </div>
+      {/* Tab bar */}
+      <div className="px-6 border-b flex items-center gap-1">
+        {TABS.map((t) => (
+          <button
+            key={t.id}
+            onClick={() => setActiveTab(t.id)}
+            className={`px-3 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+              activeTab === t.id
+                ? "border-primary text-foreground"
+                : "border-transparent text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
 
-        {/* Bulk bar */}
-        {isAdmin && selected.size > 0 && (
-          <div className="flex items-center gap-2 rounded-md border bg-card p-2">
-            <Shield className="size-4 text-muted-foreground" />
-            <div className="text-sm">{selected.size} selected</div>
-            <div className="ml-auto flex items-center gap-1">
-              <span className="text-xs text-muted-foreground mr-1">Change role to:</span>
-              {ROLES.filter((r) => ROLE_RANK[r] <= ROLE_RANK[myRole]).map((r) => (
-                <Button
+      {/* ── Members tab ── */}
+      {activeTab === "members" && (
+        <div className="p-6 space-y-4">
+          {/* Filter bar */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <Input
+              placeholder="Search name, email, title…"
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              className="max-w-xs"
+            />
+            <div className="flex items-center gap-1 bg-secondary rounded-md p-0.5">
+              {(["all", ...ROLES] as const).map((r) => (
+                <button
                   key={r}
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => bulkChange.mutate({ memberIds: Array.from(selected), role: r })}
+                  onClick={() => setRoleFilter(r)}
+                  className={`px-2 py-1 text-xs rounded ${roleFilter === r ? "bg-card shadow-sm" : "text-muted-foreground"}`}
                 >
                   {r}
-                </Button>
+                </button>
               ))}
-              <Button
-                size="sm"
-                variant="ghost"
-                className="text-rose-600 hover:text-rose-700"
-                onClick={() => setBulkDeactivateOpen(true)}
-              >
-                <UserMinus className="size-3.5" /> Deactivate
-              </Button>
-              <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>
-                Clear
-              </Button>
+            </div>
+            <label className="flex items-center gap-1.5 text-xs text-muted-foreground ml-1">
+              <input type="checkbox" checked={showInactive} onChange={(e) => setShowInactive(e.target.checked)} />
+              Show deactivated
+            </label>
+            <div className="ml-auto text-xs text-muted-foreground">
+              {filtered.length} of {data?.length ?? 0} members
             </div>
           </div>
-        )}
 
-        <Section title={`Members (${filtered.length})`}>
-          {isLoading ? (
-            <div className="p-4 text-sm text-muted-foreground">Loading…</div>
-          ) : filtered.length === 0 ? (
-            <EmptyState icon={Users} title="No members match" />
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="text-xs text-muted-foreground border-b">
-                  <tr className="text-left">
-                    {isAdmin && <th className="w-8 px-3 py-2" />}
-                    <th className="px-3 py-2">Member</th>
-                    <th className="px-3 py-2">Title</th>
-                    <th className="px-3 py-2">Role</th>
-                    <th className="px-3 py-2">Quota</th>
-                    <th className="px-3 py-2">Last active</th>
-                    <th className="px-3 py-2">Deactivated</th>
-                    <th className="px-3 py-2">Status</th>
-                    <th className="px-3 py-2 text-right">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filtered.map((m: any) => {
-                    const isInactive = Boolean(m.deactivatedAt);
-                    const editable = canChange(m.role, m.userId);
-                    const isPendingInvite = m.loginMethod === "invite";
-                    return (
-                      <tr key={m.memberId} className={`border-b ${isInactive ? "opacity-60" : ""}`}>
-                        {isAdmin && (
-                          <td className="px-3 py-2">
-                            <input
-                              type="checkbox"
-                              checked={selected.has(m.memberId)}
-                              onChange={() => toggleSelect(m.memberId)}
-                              disabled={isInactive}
-                            />
-                          </td>
-                        )}
-                        <td className="px-3 py-2">
-                          <div className="flex items-center gap-2 min-w-0">
-                            <div className="size-8 rounded-full bg-secondary flex items-center justify-center text-xs font-medium overflow-hidden">
-                              {m.avatarUrl ? (
-                                <img src={m.avatarUrl} alt="" className="size-8 object-cover" />
-                              ) : (
-                                (m.name ?? m.email ?? "?").slice(0, 1).toUpperCase()
-                              )}
-                            </div>
-                            <div className="min-w-0">
-                              <div className="font-medium truncate flex items-center gap-1.5">
-                                {m.name ?? m.email}
-                                {isPendingInvite && (
-                                  <span className="inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
-                                    <Mail className="size-2.5" /> Pending
-                                  </span>
-                                )}
-                              </div>
-                              <div className="text-xs text-muted-foreground truncate">{m.email}</div>
-                            </div>
-                          </div>
-                        </td>
-                        <td className="px-3 py-2 text-xs text-muted-foreground">{m.title ?? "—"}</td>
-                        <td className="px-3 py-2">
-                          {editable ? (
-                            <select
-                              className="text-xs border rounded px-1.5 py-1 bg-background"
-                              value={m.role}
-                              onChange={(e) => changeRole.mutate({ memberId: m.memberId, role: e.target.value as Role })}
-                            >
-                              {ROLES.filter((r) => ROLE_RANK[r] <= ROLE_RANK[myRole] || r === m.role).map((r) => (
-                                <option key={r} value={r}>
-                                  {r}
-                                </option>
-                              ))}
-                            </select>
-                          ) : (
-                            <StatusPill tone={roleTone(m.role)}>{m.role}</StatusPill>
-                          )}
-                        </td>
-                        <td className="px-3 py-2 tabular-nums text-xs">
-                          {m.quota ? `$${Number(m.quota).toLocaleString()}` : "—"}
-                        </td>
-                        <td className="px-3 py-2 text-xs text-muted-foreground">
-                          {m.lastActiveAt ? fmtDate(m.lastActiveAt) : "—"}
-                        </td>
-                        <td className="px-3 py-2 text-xs text-muted-foreground">
-                          {m.deactivatedAt ? fmtDate(m.deactivatedAt) : "—"}
-                        </td>
-                        <td className="px-3 py-2">
-                          {isInactive ? (
-                            <StatusPill tone="muted">deactivated</StatusPill>
-                          ) : (
-                            <StatusPill tone="success">active</StatusPill>
-                          )}
-                        </td>
-                        <td className="px-3 py-2 text-right">
-                          {isAdmin && (
-                            <div className="flex items-center gap-1 justify-end">
-                              {isInactive ? (
-                                <Button
-                                  size="sm"
-                                  variant="ghost"
-                                  onClick={() => reactivate.mutate({ memberId: m.memberId })}
-                                >
-                                  Reactivate
-                                </Button>
-                              ) : (
-                                <>
-                                  {editable && (
-                                    <Button
-                                      size="sm"
-                                      variant="ghost"
-                                      title="Set password"
-                                      onClick={() => { setPwTarget(m); setPwValue(""); setPwConfirm(""); }}
-                                    >
-                                      <KeyRound className="size-3.5" />
-                                      <span className="hidden sm:inline ml-1">Set Password</span>
-                                    </Button>
-                                  )}
-                                  {isPendingInvite && editable && (
-                                    <Button
-                                      size="sm"
-                                      variant="ghost"
-                                      title="Resend invitation email"
-                                      disabled={resendInvitation.isPending}
-                                      onClick={() => resendInvitation.mutate({ memberId: m.memberId })}
-                                    >
-                                      <RefreshCw className="size-3.5" />
-                                      <span className="hidden sm:inline ml-1">Resend Invite</span>
-                                    </Button>
-                                  )}
-                                  {editable && (
-                                    <Button
-                                      size="sm"
-                                      variant="ghost"
-                                      className="text-rose-600"
-                                      onClick={() => { setDeactivateTarget(m); setReassignTo(null); }}
-                                    >
-                                      <UserMinus className="size-3.5" /> Deactivate
-                                    </Button>
-                                  )}
-                                </>
-                              )}
-                            </div>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+          {/* Bulk bar */}
+          {isAdmin && selected.size > 0 && (
+            <div className="flex items-center gap-2 rounded-md border bg-card p-2">
+              <Shield className="size-4 text-muted-foreground" />
+              <div className="text-sm">{selected.size} selected</div>
+              <div className="ml-auto flex items-center gap-1">
+                <span className="text-xs text-muted-foreground mr-1">Change role to:</span>
+                {ROLES.filter((r) => ROLE_RANK[r] <= ROLE_RANK[myRole]).map((r) => (
+                  <Button
+                    key={r}
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => bulkChange.mutate({ memberIds: Array.from(selected), role: r })}
+                  >
+                    {r}
+                  </Button>
+                ))}
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="text-rose-600 hover:text-rose-700"
+                  onClick={() => setBulkDeactivateOpen(true)}
+                >
+                  <UserMinus className="size-3.5" /> Deactivate
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>
+                  Clear
+                </Button>
+              </div>
             </div>
           )}
-        </Section>
-      </div>
+
+          <Section title={`Members (${filtered.length})`}>
+            {isLoading ? (
+              <div className="p-4 text-sm text-muted-foreground">Loading…</div>
+            ) : filtered.length === 0 ? (
+              <EmptyState icon={Users} title="No members match" />
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="text-xs text-muted-foreground border-b">
+                    <tr className="text-left">
+                      {isAdmin && <th className="w-8 px-3 py-2" />}
+                      <th className="px-3 py-2">Member</th>
+                      <th className="px-3 py-2">Title</th>
+                      <th className="px-3 py-2">Role</th>
+                      <th className="px-3 py-2">Quota</th>
+                      <th className="px-3 py-2">Last active</th>
+                      <th className="px-3 py-2">Deactivated</th>
+                      <th className="px-3 py-2">Status</th>
+                      <th className="px-3 py-2 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filtered.map((m: any) => {
+                      const isInactive = Boolean(m.deactivatedAt);
+                      const editable = canChange(m.role, m.userId);
+                      const isPendingInvite = m.loginMethod === "invite";
+                      const isExpiredInvite = m.loginMethod === "expired_invite";
+                      return (
+                        <tr key={m.memberId} className={`border-b ${isInactive ? "opacity-60" : ""}`}>
+                          {isAdmin && (
+                            <td className="px-3 py-2">
+                              <input
+                                type="checkbox"
+                                checked={selected.has(m.memberId)}
+                                onChange={() => toggleSelect(m.memberId)}
+                                disabled={isInactive}
+                              />
+                            </td>
+                          )}
+                          <td className="px-3 py-2">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <div className="size-8 rounded-full bg-secondary flex items-center justify-center text-xs font-medium shrink-0 overflow-hidden">
+                                {m.avatarUrl ? (
+                                  <img src={m.avatarUrl} alt="" className="size-8 object-cover" />
+                                ) : (
+                                  (m.name ?? m.email ?? "?").slice(0, 1).toUpperCase()
+                                )}
+                              </div>
+                              <div className="min-w-0">
+                                <div className="font-medium truncate flex items-center gap-1.5">
+                                  {m.name ?? m.email}
+                                  {isPendingInvite && (
+                                    <span className="inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
+                                      <Mail className="size-2.5" /> Pending
+                                    </span>
+                                  )}
+                                  {isExpiredInvite && (
+                                    <span className="inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400">
+                                      <Clock className="size-2.5" /> Expired
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="text-xs text-muted-foreground truncate">{m.email}</div>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-3 py-2 text-xs text-muted-foreground">{m.title ?? "—"}</td>
+                          <td className="px-3 py-2">
+                            {editable ? (
+                              <select
+                                className="text-xs border rounded px-1.5 py-1 bg-background"
+                                value={m.role}
+                                onChange={(e) => changeRole.mutate({ memberId: m.memberId, role: e.target.value as Role })}
+                              >
+                                {ROLES.filter((r) => ROLE_RANK[r] <= ROLE_RANK[myRole] || r === m.role).map((r) => (
+                                  <option key={r} value={r}>
+                                    {r}
+                                  </option>
+                                ))}
+                              </select>
+                            ) : (
+                              <StatusPill tone={roleTone(m.role)}>{m.role}</StatusPill>
+                            )}
+                          </td>
+                          <td className="px-3 py-2 tabular-nums text-xs">
+                            {m.quota ? `$${Number(m.quota).toLocaleString()}` : "—"}
+                          </td>
+                          <td className="px-3 py-2 text-xs text-muted-foreground">
+                            {m.lastActiveAt ? fmtDate(m.lastActiveAt) : "—"}
+                          </td>
+                          <td className="px-3 py-2 text-xs text-muted-foreground">
+                            {m.deactivatedAt ? fmtDate(m.deactivatedAt) : "—"}
+                          </td>
+                          <td className="px-3 py-2">
+                            {isInactive ? (
+                              <StatusPill tone="muted">deactivated</StatusPill>
+                            ) : (
+                              <StatusPill tone="success">active</StatusPill>
+                            )}
+                          </td>
+                          <td className="px-3 py-2 text-right">
+                            {isAdmin && (
+                              <div className="flex items-center gap-1 justify-end flex-wrap">
+                                {isInactive ? (
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={() => reactivate.mutate({ memberId: m.memberId })}
+                                  >
+                                    Reactivate
+                                  </Button>
+                                ) : (
+                                  <>
+                                    {editable && (
+                                      <Button
+                                        size="sm"
+                                        variant="ghost"
+                                        title="Set password"
+                                        onClick={() => { setPwTarget(m); setPwValue(""); setPwConfirm(""); }}
+                                      >
+                                        <KeyRound className="size-3.5" />
+                                        <span className="hidden sm:inline ml-1">Set Password</span>
+                                      </Button>
+                                    )}
+                                    {(isPendingInvite || isExpiredInvite) && editable && (
+                                      <>
+                                        <Button
+                                          size="sm"
+                                          variant="ghost"
+                                          title="Resend invitation email"
+                                          disabled={resendInvitation.isPending}
+                                          onClick={() => resendInvitation.mutate({ memberId: m.memberId })}
+                                        >
+                                          <RefreshCw className="size-3.5" />
+                                          <span className="hidden sm:inline ml-1">Resend</span>
+                                        </Button>
+                                        <Button
+                                          size="sm"
+                                          variant="ghost"
+                                          title="Copy invite link"
+                                          disabled={copyInviteLink.isPending}
+                                          onClick={() => copyInviteLink.mutate({ memberId: m.memberId, origin: window.location.origin })}
+                                        >
+                                          <Link2 className="size-3.5" />
+                                          <span className="hidden sm:inline ml-1">Copy Link</span>
+                                        </Button>
+                                      </>
+                                    )}
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      title="View login history"
+                                      onClick={() => { setHistoryTarget(m); setActiveTab("login_history"); }}
+                                    >
+                                      <LogIn className="size-3.5" />
+                                    </Button>
+                                    {editable && (
+                                      <Button
+                                        size="sm"
+                                        variant="ghost"
+                                        className="text-rose-600"
+                                        onClick={() => { setDeactivateTarget(m); setReassignTo(null); }}
+                                      >
+                                        <UserMinus className="size-3.5" /> Deactivate
+                                      </Button>
+                                    )}
+                                  </>
+                                )}
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Section>
+        </div>
+      )}
+
+      {/* ── Login History tab ── */}
+      {activeTab === "login_history" && (
+        <div className="p-6 space-y-4">
+          <div className="flex items-center gap-3">
+            <div className="text-sm text-muted-foreground">
+              {historyTarget
+                ? `Showing sign-in history for ${historyTarget.name ?? historyTarget.email}`
+                : "Select a member from the Members tab to view their login history, or browse all recent events below."}
+            </div>
+            {historyTarget && (
+              <Button size="sm" variant="ghost" onClick={() => setHistoryTarget(null)}>
+                Clear filter
+              </Button>
+            )}
+          </div>
+          <Section title="Recent sign-in events">
+            {historyLoading ? (
+              <div className="p-4 text-sm text-muted-foreground">Loading…</div>
+            ) : !historyTarget ? (
+              <EmptyState icon={LogIn} title="Select a member to view their login history" description="Click the login history icon on any member row." />
+            ) : !loginHistoryData || loginHistoryData.length === 0 ? (
+              <EmptyState icon={LogIn} title="No login events found" description="This member has not signed in yet." />
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="text-xs text-muted-foreground border-b">
+                    <tr className="text-left">
+                      <th className="px-3 py-2">Date / Time</th>
+                      <th className="px-3 py-2">Outcome</th>
+                      <th className="px-3 py-2">IP Address</th>
+                      <th className="px-3 py-2">User Agent</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {loginHistoryData.map((row: any) => (
+                      <tr key={row.id} className="border-b">
+                        <td className="px-3 py-2 text-xs tabular-nums whitespace-nowrap">
+                          {new Date(row.createdAt).toLocaleString()}
+                        </td>
+                        <td className="px-3 py-2">
+                          <div className="flex items-center gap-1.5">
+                            {outcomeIcon(row.outcome)}
+                            <span className={`text-xs font-medium ${
+                              row.outcome === "success" ? "text-emerald-600" :
+                              row.outcome === "failed" ? "text-rose-600" : "text-amber-600"
+                            }`}>
+                              {row.outcome}
+                            </span>
+                          </div>
+                        </td>
+                        <td className="px-3 py-2 text-xs text-muted-foreground font-mono">
+                          {row.ipAddress || "—"}
+                        </td>
+                        <td className="px-3 py-2 text-xs text-muted-foreground max-w-xs truncate" title={row.userAgent}>
+                          {row.userAgent || "—"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Section>
+        </div>
+      )}
+
+      {/* ── Settings tab ── */}
+      {activeTab === "settings" && isAdmin && (
+        <div className="p-6 max-w-lg space-y-6">
+          <Section title="Invitation expiry">
+            <div className="p-4 space-y-4">
+              <p className="text-sm text-muted-foreground">
+                Pending invitations will automatically expire after the configured number of days. Set to <strong>0</strong> to disable expiry (invitations never expire).
+              </p>
+              <div className="flex items-end gap-3">
+                <div className="space-y-1 flex-1">
+                  <Label htmlFor="expiry-days">Expiry (days)</Label>
+                  <Input
+                    id="expiry-days"
+                    type="number"
+                    min={0}
+                    max={365}
+                    placeholder="7"
+                    value={expiryDays}
+                    onChange={(e) => setExpiryDays(e.target.value)}
+                    className="max-w-xs"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Current: {wsSettings && (wsSettings as any).inviteExpiryDays != null
+                      ? `${(wsSettings as any).inviteExpiryDays} days`
+                      : "7 days (default)"}
+                  </p>
+                </div>
+                <Button
+                  disabled={updateInviteExpiry.isPending || expiryDays === ""}
+                  onClick={() => {
+                    const days = parseInt(expiryDays, 10);
+                    if (isNaN(days) || days < 0 || days > 365) {
+                      toast.error("Enter a number between 0 and 365");
+                      return;
+                    }
+                    updateInviteExpiry.mutate({ days });
+                  }}
+                >
+                  {updateInviteExpiry.isPending ? "Saving…" : "Save"}
+                </Button>
+              </div>
+            </div>
+          </Section>
+        </div>
+      )}
 
       {/* Invite dialog */}
       <FormDialog

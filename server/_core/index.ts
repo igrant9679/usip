@@ -15,6 +15,7 @@ import { runNightlyBatch } from "../nightlyBatch";
 import { runSegmentEnrollmentForAllWorkspaces } from "../routers/segmentRules"; // eslint-disable-line
 import { registerEmailTrackingRoutes } from "../emailTracking";
 import { startInboundReplyPoller } from "../inboundReplyPoller";
+import { expireInvitations } from "../inviteExpiry";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -110,6 +111,9 @@ async function startServer() {
       const runBatch = () => {
         runNightlyBatch().catch((e) =>
           console.error("[NightlyBatch] nightly run failed:", e)
+        );
+        expireInvitations().catch((e) =>
+          console.error("[InviteExpiry] nightly run failed:", e)
         );
       };
       runBatch();
