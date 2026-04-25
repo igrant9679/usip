@@ -572,7 +572,7 @@ export default function Team() {
                                         <span className="hidden sm:inline ml-1">Edit</span>
                                       </Button>
                                     )}
-                                    {editable && (
+                                    {editable && !isPendingInvite && !isExpiredInvite && (
                                       <Button
                                         size="sm"
                                         variant="ghost"

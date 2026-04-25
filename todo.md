@@ -1409,3 +1409,7 @@
 - [x] Fix: setInvitePassword now allows any loginMethod (token is the authorisation)
 - [x] Fix: resendPasswordSetup guard updated to allow any non-pending loginMethod (google, facebook, etc.)
 - [x] Fix: Team.tsx missedPasswordStep flag updated to check any non-pending loginMethod
+
+## Bug Fix — Team page cosmetic issues
+- [x] Hide "Set Password" (admin-force-set) button for pending-invite members (loginMethod = invite/expired_invite)
+- [x] The → icon is the "View login history" button (not login-as) — correct to show for all members including self, no change needed
