@@ -577,7 +577,7 @@ export default function Team() {
                                           variant="ghost"
                                           title="Resend invitation email"
                                           disabled={resendInvitation.isPending}
-                                          onClick={() => resendInvitation.mutate({ memberId: m.memberId })}
+                                          onClick={() => resendInvitation.mutate({ memberId: m.memberId, origin: window.location.origin })}
                                         >
                                           <RefreshCw className="size-3.5" />
                                           <span className="hidden sm:inline ml-1">Resend</span>
@@ -1012,6 +1012,7 @@ export default function Team() {
             role: (f.get("role") as Role) ?? "rep",
             title: String(f.get("title") ?? "").trim() || undefined,
             quota: quotaStr ? Number(quotaStr) : undefined,
+            origin: window.location.origin,
           });
         }}
       >

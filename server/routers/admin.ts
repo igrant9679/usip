@@ -180,6 +180,7 @@ export const teamRouter = router({
         role: ROLE_ENUM.default("rep"),
         title: z.string().max(120).optional(),
         quota: z.number().nonnegative().optional(),
+        origin: z.string().url().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -246,7 +247,7 @@ export const teamRouter = router({
       // Send invitation email via workspace SMTP (Email Delivery settings)
       try {
         const { sendWorkspaceEmail } = await import("../emailDelivery");
-        const appOrigin = process.env.VITE_OAUTH_PORTAL_URL ?? "https://manus.im";
+        const appOrigin = input.origin ?? process.env.VITE_OAUTH_PORTAL_URL ?? "https://manus.im";
         const inviteUrl = `${appOrigin}/invite/accept?token=${inviteToken}`;
         const recipientName = input.name ?? input.email.split("@")[0];
         await sendWorkspaceEmail(ctx.workspace.id, {
@@ -572,7 +573,7 @@ export const teamRouter = router({
    * Guard: user must still have loginMethod = "invite".
    */
   resendInvitation: adminWsProcedure
-    .input(z.object({ memberId: z.number().int() }))
+    .input(z.object({ memberId: z.number().int(), origin: z.string().url().optional() }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
@@ -611,7 +612,7 @@ export const teamRouter = router({
       // Resend invitation email via workspace SMTP (Email Delivery settings)
       try {
         const { sendWorkspaceEmail } = await import("../emailDelivery");
-        const appOrigin = process.env.VITE_OAUTH_PORTAL_URL ?? "https://manus.im";
+        const appOrigin = input.origin ?? process.env.VITE_OAUTH_PORTAL_URL ?? "https://manus.im";
         const resendUrl = `${appOrigin}/invite/accept?token=${newToken}`;
         const recipientName = row.name ?? row.email?.split("@")[0];
         await sendWorkspaceEmail(ctx.workspace.id, {

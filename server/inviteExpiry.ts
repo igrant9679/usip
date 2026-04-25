@@ -95,7 +95,10 @@ export async function sendExpiryWarningEmails(): Promise<void> {
       : 48;
     const recipientName = member.userName ?? member.userEmail.split("@")[0];
     const workspaceName = member.workspaceName ?? "USIP";
-    const appOrigin = process.env.VITE_OAUTH_PORTAL_URL ?? "https://manus.im";
+    // MANUS_APP_URL is set via webdev_request_secrets to the deployed app URL
+    // (e.g. https://usipsales-8xkycm4e.manus.space). Falls back to VITE_OAUTH_PORTAL_URL
+    // only if not configured — admins should set MANUS_APP_URL in Secrets settings.
+    const appOrigin = (process.env.MANUS_APP_URL ?? process.env.VITE_OAUTH_PORTAL_URL ?? "https://manus.im").replace(/\/+$/, "");
     const inviteUrl = member.inviteToken
       ? `${appOrigin}/invite/accept?token=${member.inviteToken}`
       : appOrigin;

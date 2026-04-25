@@ -1315,3 +1315,9 @@
 - [x] UI: add "Member" filter dropdown to AuditLog page (/audit-log) that filters rows by actorUserId
 - [x] Server: extend audit.list procedure to accept optional memberId filter
 - [x] Tests: vitest specs for checkPermission logic, template preset maps, and audit memberId filter
+
+## Bug — Invite reminder email 404
+
+- [x] Investigate: identify the URL generated in reminder invite emails
+- [x] Fix: ensure the invite link URL matches the registered /invite/accept route
+- [x] Test: verify invite link resolves correctly end-to-end
