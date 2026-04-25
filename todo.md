@@ -1388,3 +1388,15 @@
 - [x] Root cause: req.cookies is undefined because cookie-parser middleware is not registered; the usip_invite_return cookie was never read by the OAuth callback
 - [x] Fix: import { parse as parseCookieHeader } from "cookie" in oauth.ts and parse req.headers.cookie manually (same pattern as sdk.ts)
 - [x] Verified: /api/auth/set-return sets the cookie correctly; OAuth callback now reads it and redirects to /invite/accept?token=...
+
+## Batch AC — Rate-limit & Resend Password Setup
+- [x] Rate-limit: replace in-memory per-email limiter with express-rate-limit (IP-based, 10 req / 15 min, skip in test env)
+- [x] Rate-limit: keyGenerator extracts IP from x-forwarded-for header (first entry) for proxy-aware limiting
+- [x] team.list: add `hasPassword` field (0/1 from SQL CASE) to member rows
+- [x] Server: add `team.resendPasswordSetup` procedure — targets oauth members with no password, issues fresh invite token, sends "Set your password" email
+- [x] Server: relax `acceptInvitePreview` guard to allow loginMethod=oauth with a valid token; return `passwordSetupOnly` flag
+- [x] Server: relax `setInvitePassword` guard to allow loginMethod=oauth (password-setup resend flow)
+- [x] InviteAccept.tsx: detect `passwordSetupOnly` flag; skip `finaliseAcceptance` for oauth members; show "Set Your Password" title/copy; hide Skip button in password-setup-only mode
+- [x] Team.tsx: add `missedPasswordStep` flag (oauth + no password + not deactivated); show "No password" badge in name column
+- [x] Team.tsx: show "Send Password Setup" action button for missedPasswordStep members (calls resendPasswordSetup mutation)
+- [x] Vitest: batch-ac.test.ts — 15 tests covering rate-limit config, resendPasswordSetup guards, acceptInvitePreview flag, setInvitePassword guard

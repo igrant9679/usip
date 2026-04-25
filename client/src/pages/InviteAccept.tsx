@@ -1,7 +1,7 @@
 /**
  * /invite/accept — Public invitation acceptance page.
  *
- * Flow:
+ * Flow A — New invite:
  * 1. Read ?token= from URL.
  * 2. Call team.acceptInvitePreview (public) to validate the token and fetch
  *    workspace/role info.
@@ -12,6 +12,11 @@
  *    The user can set a password or skip it.
  * 6. After the password step, call team.finaliseAcceptance (protected),
  *    then redirect to the dashboard.
+ *
+ * Flow B — Password-setup resend (passwordSetupOnly = true):
+ * Same as Flow A steps 1–5, but step 6 skips finaliseAcceptance and redirects
+ * directly to the dashboard. Used when an admin sends a "set your password"
+ * email to a member who already accepted via OAuth but skipped the password step.
  */
 import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
@@ -84,7 +89,7 @@ export default function InviteAccept() {
     },
   });
 
-  // Step 3: finalise mutation (protected — only called after password step)
+  // Step 3: finalise mutation (protected — only called after password step for new invites)
   const finaliseMutation = trpc.team.finaliseAcceptance.useMutation({
     onSuccess: (data) => {
       setFinalised(true);
@@ -100,7 +105,12 @@ export default function InviteAccept() {
   const [finaliseError, setFinaliseError] = useState<string | null>(null);
   const [autoFinaliseAttempted, setAutoFinaliseAttempted] = useState(false);
 
-  // When password step is done, auto-finalise
+  // Determine if this is a password-setup-only flow (member already accepted via OAuth)
+  const passwordSetupOnly = previewQuery.data?.passwordSetupOnly === true;
+
+  // When password step is done:
+  // - For new invites: call finaliseAcceptance
+  // - For password-setup-only: redirect directly to dashboard
   useEffect(() => {
     if (
       !authLoading &&
@@ -109,13 +119,19 @@ export default function InviteAccept() {
       !finalised &&
       !autoFinaliseAttempted &&
       !finaliseMutation.isPending &&
-      previewQuery.data && // token is valid
+      previewQuery.data &&
       passwordStep === "done"
     ) {
       setAutoFinaliseAttempted(true);
-      finaliseMutation.mutate({ token });
+      if (passwordSetupOnly) {
+        // Skip finaliseAcceptance — member already accepted; just go to dashboard
+        setFinalised(true);
+        setFinalResult({ workspaceName: previewQuery.data.workspaceName, role: previewQuery.data.role });
+      } else {
+        finaliseMutation.mutate({ token });
+      }
     }
-  }, [authLoading, user, token, finalised, autoFinaliseAttempted, previewQuery.data, passwordStep]);
+  }, [authLoading, user, token, finalised, autoFinaliseAttempted, previewQuery.data, passwordStep, passwordSetupOnly]);
 
   // Redirect to dashboard 3 seconds after successful acceptance
   useEffect(() => {
@@ -167,18 +183,25 @@ export default function InviteAccept() {
     );
   }
 
-  // Successful finalisation
+  // Successful finalisation (or password-setup-only redirect)
   if (finalised && finalResult) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background p-4">
         <Card className="w-full max-w-md">
           <CardHeader className="text-center">
             <CheckCircle2 className="mx-auto h-12 w-12 text-green-500 mb-2" />
-            <CardTitle>Welcome to {finalResult.workspaceName}!</CardTitle>
+            <CardTitle>
+              {passwordSetupOnly ? "Password saved!" : `Welcome to ${finalResult.workspaceName}!`}
+            </CardTitle>
             <CardDescription>
-              You have successfully joined as a{" "}
-              <strong>{ROLE_LABELS[finalResult.role] ?? finalResult.role}</strong>.
-              Redirecting you to the dashboard…
+              {passwordSetupOnly
+                ? "Your password has been set. You can now sign in directly from the login page."
+                : <>
+                    You have successfully joined as a{" "}
+                    <strong>{ROLE_LABELS[finalResult.role] ?? finalResult.role}</strong>.
+                  </>
+              }
+              {" "}Redirecting you to the dashboard…
             </CardDescription>
           </CardHeader>
           <CardContent className="flex justify-center">
@@ -246,9 +269,14 @@ export default function InviteAccept() {
             <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-primary/10">
               <Lock className="h-7 w-7 text-primary" />
             </div>
-            <CardTitle className="text-2xl">Create Your Password</CardTitle>
+            <CardTitle className="text-2xl">
+              {passwordSetupOnly ? "Set Your Password" : "Create Your Password"}
+            </CardTitle>
             <CardDescription className="text-base mt-1">
-              Set a password for your new account so you can sign in directly, or skip this step and use your existing sign-in method.
+              {passwordSetupOnly
+                ? "Set a password so you can sign in directly without going through the Manus portal every time."
+                : "Set a password for your new account so you can sign in directly, or skip this step and use your existing sign-in method."
+              }
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-5 pt-4">
@@ -320,15 +348,17 @@ export default function InviteAccept() {
                 "Set password & continue"
               )}
             </Button>
-            <Button
-              variant="ghost"
-              className="w-full text-muted-foreground"
-              onClick={() => setPasswordStep("done")}
-              disabled={setInvitePasswordMutation.isPending}
-            >
-              <SkipForward className="mr-2 h-4 w-4" />
-              Skip for now
-            </Button>
+            {!passwordSetupOnly && (
+              <Button
+                variant="ghost"
+                className="w-full text-muted-foreground"
+                onClick={() => setPasswordStep("done")}
+                disabled={setInvitePasswordMutation.isPending}
+              >
+                <SkipForward className="mr-2 h-4 w-4" />
+                Skip for now
+              </Button>
+            )}
             <p className="text-center text-xs text-muted-foreground">
               You can always set or change your password later in your account settings.
             </p>
@@ -349,31 +379,48 @@ export default function InviteAccept() {
       <Card className="w-full max-w-md shadow-lg">
         <CardHeader className="text-center pb-2">
           <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-primary/10">
-            <Building2 className="h-7 w-7 text-primary" />
+            {passwordSetupOnly ? (
+              <Lock className="h-7 w-7 text-primary" />
+            ) : (
+              <Building2 className="h-7 w-7 text-primary" />
+            )}
           </div>
-          <CardTitle className="text-2xl">You're Invited!</CardTitle>
+          <CardTitle className="text-2xl">
+            {passwordSetupOnly ? "Set Your Password" : "You're Invited!"}
+          </CardTitle>
           <CardDescription className="text-base mt-1">
-            You have been invited to join{" "}
-            <strong className="text-foreground">{preview.workspaceName}</strong>
+            {passwordSetupOnly
+              ? <>
+                  Set a password for your account at{" "}
+                  <strong className="text-foreground">{preview.workspaceName}</strong> so you can sign in directly.
+                </>
+              : <>
+                  You have been invited to join{" "}
+                  <strong className="text-foreground">{preview.workspaceName}</strong>
+                </>
+            }
           </CardDescription>
         </CardHeader>
 
         <CardContent className="space-y-5 pt-4">
           {/* Role badge */}
-          <div className="flex items-center justify-center gap-2">
-            <UserCheck className="h-4 w-4 text-muted-foreground" />
-            <span className="text-sm text-muted-foreground">Your role:</span>
-            <Badge variant="secondary" className="text-sm font-medium">
-              {ROLE_LABELS[preview.role] ?? preview.role}
-            </Badge>
-          </div>
+          {!passwordSetupOnly && (
+            <div className="flex items-center justify-center gap-2">
+              <UserCheck className="h-4 w-4 text-muted-foreground" />
+              <span className="text-sm text-muted-foreground">Your role:</span>
+              <Badge variant="secondary" className="text-sm font-medium">
+                {ROLE_LABELS[preview.role] ?? preview.role}
+              </Badge>
+            </div>
+          )}
 
           {/* Invited email */}
           {preview.userEmail && (
             <p className="text-center text-sm text-muted-foreground">
-              This invite was sent to{" "}
-              <span className="font-medium text-foreground">{preview.userEmail}</span>.
-              Please sign in with that email address.
+              {passwordSetupOnly
+                ? <>This link was sent to{" "}<span className="font-medium text-foreground">{preview.userEmail}</span>. Please sign in with that account.</>
+                : <>This invite was sent to{" "}<span className="font-medium text-foreground">{preview.userEmail}</span>. Please sign in with that email address.</>
+              }
             </p>
           )}
 
@@ -381,8 +428,8 @@ export default function InviteAccept() {
           {hoursLeft !== null && hoursLeft <= 48 && (
             <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-center text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
               {hoursLeft === 0
-                ? "This invitation has just expired."
-                : `This invitation expires in ${hoursLeft} hour${hoursLeft === 1 ? "" : "s"}.`}
+                ? "This link has just expired."
+                : `This link expires in ${hoursLeft} hour${hoursLeft === 1 ? "" : "s"}.`}
             </div>
           )}
 
@@ -392,13 +439,19 @@ export default function InviteAccept() {
             <Button
               className="w-full"
               onClick={() => {
-                setAutoFinaliseAttempted(false);
-                finaliseMutation.mutate({ token });
+                if (passwordSetupOnly) {
+                  setPasswordStep("pending");
+                } else {
+                  setAutoFinaliseAttempted(false);
+                  finaliseMutation.mutate({ token });
+                }
               }}
               disabled={finaliseMutation.isPending}
             >
               {finaliseMutation.isPending ? (
                 <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Accepting…</>
+              ) : passwordSetupOnly ? (
+                "Set Password"
               ) : (
                 "Accept Invitation"
               )}
@@ -408,12 +461,15 @@ export default function InviteAccept() {
               className="w-full"
               onClick={() => redirectToLoginWithReturn(returnPath)}
             >
-              Sign in to Accept Invitation
+              {passwordSetupOnly ? "Sign in to Set Password" : "Sign in to Accept Invitation"}
             </Button>
           )}
 
           <p className="text-center text-xs text-muted-foreground">
-            By accepting, you agree to join this workspace and its data policies.
+            {passwordSetupOnly
+              ? "Password login is optional — you can always sign in via the Manus portal instead."
+              : "By accepting, you agree to join this workspace and its data policies."
+            }
           </p>
         </CardContent>
       </Card>

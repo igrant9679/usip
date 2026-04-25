@@ -152,6 +152,7 @@ export const teamRouter = router({
         email: users.email,
         avatarUrl: users.avatarUrl,
         loginMethod: users.loginMethod,
+        hasPassword: sql<number>`CASE WHEN ${users.passwordHash} IS NOT NULL THEN 1 ELSE 0 END`,
         role: workspaceMembers.role,
         title: workspaceMembers.title,
         quota: workspaceMembers.quota,
@@ -644,6 +645,93 @@ export const teamRouter = router({
     }),
 
   /**
+   * Send a "set your password" email to a member who completed OAuth
+   * but skipped the password-creation step (loginMethod = "oauth", passwordHash = null).
+   *
+   * Generates a fresh invite token so the member can revisit /invite/accept?token=...
+   * and set their password without going through the full invite flow again.
+   * The token is scoped to password setup only — finaliseAcceptance will be a no-op
+   * because loginMethod is already "oauth".
+   */
+  resendPasswordSetup: adminWsProcedure
+    .input(z.object({ memberId: z.number().int(), origin: z.string().url().optional() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [row] = await db
+        .select({
+          userId: workspaceMembers.userId,
+          role: workspaceMembers.role,
+          deactivatedAt: workspaceMembers.deactivatedAt,
+          email: users.email,
+          name: users.name,
+          loginMethod: users.loginMethod,
+          passwordHash: users.passwordHash,
+        })
+        .from(workspaceMembers)
+        .innerJoin(users, eq(workspaceMembers.userId, users.id))
+        .where(and(eq(workspaceMembers.id, input.memberId), eq(workspaceMembers.workspaceId, ctx.workspace.id)));
+      if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Member not found" });
+      if (row.deactivatedAt) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot send password setup to a deactivated member" });
+      }
+      if (row.loginMethod !== "oauth") {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Member has not yet accepted their invitation via OAuth" });
+      }
+      if (row.passwordHash) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Member has already set a password" });
+      }
+      // Issue a fresh invite token so the member can reach /invite/accept?token=...
+      // The InviteAccept page shows the password-creation step when the user is already
+      // signed in (loginMethod = oauth) and the token is still valid.
+      const newToken = crypto.randomBytes(32).toString("hex");
+      const [wsSettings3] = await db
+        .select({ inviteExpiryDays: workspaceSettings.inviteExpiryDays })
+        .from(workspaceSettings)
+        .where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
+      const expiryDays3 = wsSettings3?.inviteExpiryDays ?? 7;
+      const newExpiresAt3 = expiryDays3 && expiryDays3 > 0
+        ? new Date(Date.now() + expiryDays3 * 86400_000)
+        : null;
+      await db.update(workspaceMembers)
+        .set({ inviteToken: newToken, inviteExpiresAt: newExpiresAt3 })
+        .where(eq(workspaceMembers.id, input.memberId));
+      // Send password-setup email
+      try {
+        const { sendWorkspaceEmail } = await import("../emailDelivery");
+        const appOrigin = input.origin ?? process.env.MANUS_APP_URL ?? process.env.VITE_OAUTH_PORTAL_URL ?? "https://manus.im";
+        const setupUrl = `${appOrigin}/invite/accept?token=${newToken}`;
+        const recipientName = row.name ?? row.email?.split("@")[0];
+        await sendWorkspaceEmail(ctx.workspace.id, {
+          to: row.email!,
+          subject: `Action required: Set your password for ${ctx.workspace.name}`,
+          html: `
+<div style="font-family:sans-serif;max-width:520px;margin:0 auto;padding:24px">
+  <h2 style="margin-bottom:8px">Set your password</h2>
+  <p>Hi ${recipientName},</p>
+  <p>You joined <strong>${ctx.workspace.name}</strong> on USIP but haven't set a local password yet.</p>
+  <p>Setting a password lets you sign in directly at <em>usipsales-8xkycm4e.manus.space/login</em> without needing to go through the Manus sign-in portal every time.</p>
+  <p style="margin:24px 0">
+    <a href="${setupUrl}" style="background:#2563eb;color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none;font-weight:600">Set my password</a>
+  </p>
+  <p style="color:#6b7280;font-size:13px">Or copy this link: <a href="${setupUrl}">${setupUrl}</a></p>
+  ${newExpiresAt3 ? `<p style="color:#6b7280;font-size:13px">This link expires on ${newExpiresAt3.toLocaleDateString()}.</p>` : ""}
+  <p style="color:#9ca3af;font-size:12px">If you did not expect this email, you can safely ignore it.</p>
+</div>`,
+        });
+      } catch (_e) { /* Non-fatal */ }
+      await recordAudit({
+        workspaceId: ctx.workspace.id,
+        actorUserId: ctx.user.id,
+        action: "update",
+        entityType: "workspace_member",
+        entityId: row.userId,
+        after: { action: "password_setup_email_sent", email: row.email },
+      });
+      return { ok: true };
+    }),
+
+  /**
    * Return the invite link URL for a pending member.
    * Regenerates the token if it is expired or missing.
    * Guard: member must still have loginMethod = "invite".
@@ -762,7 +850,10 @@ export const teamRouter = router({
         .innerJoin(workspaces, eq(workspaceMembers.workspaceId, workspaces.id))
         .where(eq(workspaceMembers.inviteToken, input.token));
       if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Invite link is invalid or has already been used." });
-      if (row.loginMethod !== "invite" && row.loginMethod !== "expired_invite") {
+      // Allow "oauth" members with a valid token — this handles the password-setup resend flow
+      // where an admin sends a fresh token to a member who already accepted via OAuth but skipped
+      // the password-creation step.
+      if (row.loginMethod !== "invite" && row.loginMethod !== "expired_invite" && row.loginMethod !== "oauth") {
         throw new TRPCError({ code: "BAD_REQUEST", message: "This invitation has already been accepted." });
       }
       const now = new Date();
@@ -775,6 +866,8 @@ export const teamRouter = router({
         userName: row.userName,
         userEmail: row.userEmail,
         expiresAt: row.inviteExpiresAt,
+        // Signal to the client that this is a password-setup-only flow
+        passwordSetupOnly: row.loginMethod === "oauth",
       };
     }),
 
@@ -873,7 +966,9 @@ export const teamRouter = router({
         .innerJoin(workspaces, eq(workspaceMembers.workspaceId, workspaces.id))
         .where(eq(workspaceMembers.inviteToken, input.token));
       if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Invite link is invalid or has already been used." });
-      if (row.loginMethod !== "invite" && row.loginMethod !== "expired_invite") {
+      // Also allow "oauth" members — this handles the password-setup resend flow where the member
+      // already accepted via OAuth but skipped the password-creation step.
+      if (row.loginMethod !== "invite" && row.loginMethod !== "expired_invite" && row.loginMethod !== "oauth") {
         throw new TRPCError({ code: "BAD_REQUEST", message: "This invitation has already been accepted." });
       }
       const now = new Date();

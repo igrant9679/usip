@@ -286,6 +286,11 @@ export default function Team() {
     onError: (e) => toast.error(e.message),
   });
 
+  const resendPasswordSetup = trpc.team.resendPasswordSetup.useMutation({
+    onSuccess: () => toast.success("Password setup email sent"),
+    onError: (e) => toast.error(e.message),
+  });
+
   const copyInviteLink = trpc.team.copyInviteLink.useMutation({
     onSuccess: (res) => {
       navigator.clipboard.writeText(res.url).then(() => {
@@ -454,6 +459,8 @@ export default function Team() {
                       const editable = canChange(m.role, m.userId);
                       const isPendingInvite = m.loginMethod === "invite";
                       const isExpiredInvite = m.loginMethod === "expired_invite";
+                      // oauth member who never set a password — eligible for password-setup resend
+                      const missedPasswordStep = m.loginMethod === "oauth" && !m.hasPassword && !isInactive;
                       return (
                         <tr key={m.memberId} className={`border-b ${isInactive ? "opacity-60" : ""}`}>
                           {isAdmin && (
@@ -486,6 +493,11 @@ export default function Team() {
                                   {isExpiredInvite && (
                                     <span className="inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400">
                                       <Clock className="size-2.5" /> Expired
+                                    </span>
+                                  )}
+                                  {missedPasswordStep && (
+                                    <span className="inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400">
+                                      <KeyRound className="size-2.5" /> No password
                                     </span>
                                   )}
                                 </div>
@@ -593,6 +605,18 @@ export default function Team() {
                                           <span className="hidden sm:inline ml-1">Copy Link</span>
                                         </Button>
                                       </>
+                                    )}
+                                    {missedPasswordStep && editable && (
+                                      <Button
+                                        size="sm"
+                                        variant="ghost"
+                                        title="Send password setup email"
+                                        disabled={resendPasswordSetup.isPending}
+                                        onClick={() => resendPasswordSetup.mutate({ memberId: m.memberId, origin: window.location.origin })}
+                                      >
+                                        <Mail className="size-3.5" />
+                                        <span className="hidden sm:inline ml-1">Send Password Setup</span>
+                                      </Button>
                                     )}
                                     <Button
                                       size="sm"
