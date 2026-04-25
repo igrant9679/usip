@@ -296,13 +296,37 @@ export default function ConnectedAccounts() {
       )}
       {/* Expired credentials banner - shown when any account needs re-auth */}
       {accounts.some((a) => EXPIRED_STATUSES.has(a.status)) && (
-        <div className="mx-6 mt-4 flex items-start gap-3 rounded-lg border border-red-400/40 bg-red-500/10 px-4 py-3 text-sm text-red-700">
-          <TriangleAlert className="h-4 w-4 shrink-0 mt-0.5" />
-          <div>
-            <span className="font-medium">Action required: </span>
-            <span className="text-red-600">
-              {accounts.filter((a) => EXPIRED_STATUSES.has(a.status)).length} account{accounts.filter((a) => EXPIRED_STATUSES.has(a.status)).length > 1 ? "s" : ""} need{accounts.filter((a) => EXPIRED_STATUSES.has(a.status)).length === 1 ? "s" : ""} to be reconnected. Click <strong>Reconnect</strong> on the affected account{accounts.filter((a) => EXPIRED_STATUSES.has(a.status)).length > 1 ? "s" : ""} below to restore access.
-            </span>
+        <div className="mx-6 mt-4 rounded-lg border border-amber-400/40 bg-amber-500/10 px-4 py-3 text-sm">
+          <div className="flex items-start gap-3 mb-3">
+            <TriangleAlert className="h-4 w-4 shrink-0 mt-0.5 text-amber-700" />
+            <div className="text-amber-800">
+              <span className="font-semibold">Action required: </span>
+              <span>
+                {accounts.filter((a) => EXPIRED_STATUSES.has(a.status)).length} account{accounts.filter((a) => EXPIRED_STATUSES.has(a.status)).length > 1 ? "s" : ""} need{accounts.filter((a) => EXPIRED_STATUSES.has(a.status)).length === 1 ? "s" : ""} to be reconnected to restore access.
+              </span>
+            </div>
+          </div>
+          <div className="flex flex-col gap-2 pl-7">
+            {accounts.filter((a) => EXPIRED_STATUSES.has(a.status)).map((acc) => (
+              <div key={acc.unipileAccountId} className="flex items-center justify-between gap-3 rounded-md border border-amber-300/50 bg-amber-50/60 px-3 py-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="text-xs font-medium text-amber-900 uppercase tracking-wide">{acc.provider}</span>
+                  <span className="text-amber-800 truncate">{acc.accountName || acc.unipileAccountId}</span>
+                  <Badge variant="outline" className="text-xs border-amber-400 text-amber-700 bg-amber-100 shrink-0">
+                    {acc.status === "CREDENTIALS" ? "Token expired" : acc.status === "ERROR" ? "Error" : "Stopped"}
+                  </Badge>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="shrink-0 border-amber-500 text-amber-800 hover:bg-amber-500/20 hover:border-amber-600 font-medium"
+                  onClick={() => handleReconnect(acc.unipileAccountId)}
+                  disabled={generateLink.isPending}
+                >
+                  {generateLink.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : "Reconnect"}
+                </Button>
+              </div>
+            ))}
           </div>
         </div>
       )}

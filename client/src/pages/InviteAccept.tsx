@@ -8,8 +8,10 @@
  * 3. Show a branded card with workspace name, role, and expiry.
  * 4. "Sign in to accept" button builds a login URL that encodes a returnPath
  *    back to this page so the OAuth callback redirects here after login.
- * 5. On return (user is now signed in), call team.finaliseAcceptance (protected)
- *    automatically, then redirect to the dashboard.
+ * 5. On return (user is now signed in), show a "Create your password" step.
+ *    The user can set a password or skip it.
+ * 6. After the password step, call team.finaliseAcceptance (protected),
+ *    then redirect to the dashboard.
  */
 import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
@@ -18,7 +20,9 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, CheckCircle2, XCircle, Building2, UserCheck } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Loader2, CheckCircle2, XCircle, Building2, UserCheck, Eye, EyeOff, Lock, SkipForward } from "lucide-react";
 
 function getLoginUrlWithReturn(returnPath: string): string {
   const oauthPortalUrl = import.meta.env.VITE_OAUTH_PORTAL_URL as string;
@@ -58,7 +62,24 @@ export default function InviteAccept() {
     },
   );
 
-  // Step 2: finalise mutation (protected — only called when user is signed in)
+  // Step 2: password-creation state
+  // "pending" = show form, "done" = password saved or skipped, proceed to finalise
+  const [passwordStep, setPasswordStep] = useState<"pending" | "done">("pending");
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [passwordError, setPasswordError] = useState<string | null>(null);
+
+  const setInvitePasswordMutation = trpc.team.setInvitePassword.useMutation({
+    onSuccess: () => {
+      setPasswordStep("done");
+    },
+    onError: (err) => {
+      setPasswordError(err.message);
+    },
+  });
+
+  // Step 3: finalise mutation (protected — only called after password step)
   const finaliseMutation = trpc.team.finaliseAcceptance.useMutation({
     onSuccess: (data) => {
       setFinalised(true);
@@ -74,7 +95,7 @@ export default function InviteAccept() {
   const [finaliseError, setFinaliseError] = useState<string | null>(null);
   const [autoFinaliseAttempted, setAutoFinaliseAttempted] = useState(false);
 
-  // When user signs in and returns to this page, auto-finalise
+  // When password step is done, auto-finalise
   useEffect(() => {
     if (
       !authLoading &&
@@ -83,12 +104,13 @@ export default function InviteAccept() {
       !finalised &&
       !autoFinaliseAttempted &&
       !finaliseMutation.isPending &&
-      previewQuery.data // token is valid
+      previewQuery.data && // token is valid
+      passwordStep === "done"
     ) {
       setAutoFinaliseAttempted(true);
       finaliseMutation.mutate({ token });
     }
-  }, [authLoading, user, token, finalised, autoFinaliseAttempted, previewQuery.data]);
+  }, [authLoading, user, token, finalised, autoFinaliseAttempted, previewQuery.data, passwordStep]);
 
   // Redirect to dashboard 3 seconds after successful acceptance
   useEffect(() => {
@@ -194,11 +216,104 @@ export default function InviteAccept() {
     );
   }
 
-  // Main state: show invite card
   const preview = previewQuery.data!;
   const returnPath = `/invite/accept?token=${encodeURIComponent(token)}`;
   const loginUrl = getLoginUrlWithReturn(returnPath);
 
+  // ── Password creation step (shown after sign-in, before finalise) ──────────
+  if (user && passwordStep === "pending") {
+    const handleSetPassword = () => {
+      setPasswordError(null);
+      if (password.length < 8) {
+        setPasswordError("Password must be at least 8 characters.");
+        return;
+      }
+      if (password !== confirmPassword) {
+        setPasswordError("Passwords do not match.");
+        return;
+      }
+      setInvitePasswordMutation.mutate({ token, password });
+    };
+
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-background to-muted/30 p-4">
+        <Card className="w-full max-w-md shadow-lg">
+          <CardHeader className="text-center pb-2">
+            <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-primary/10">
+              <Lock className="h-7 w-7 text-primary" />
+            </div>
+            <CardTitle className="text-2xl">Create Your Password</CardTitle>
+            <CardDescription className="text-base mt-1">
+              Set a password for your new account so you can sign in directly, or skip this step and use your existing sign-in method.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-5 pt-4">
+            <div className="space-y-2">
+              <Label htmlFor="invite-password">Password</Label>
+              <div className="relative">
+                <Input
+                  id="invite-password"
+                  type={showPassword ? "text" : "password"}
+                  placeholder="At least 8 characters"
+                  value={password}
+                  onChange={(e) => { setPassword(e.target.value); setPasswordError(null); }}
+                  className="pr-10"
+                  autoComplete="new-password"
+                />
+                <button
+                  type="button"
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  onClick={() => setShowPassword((v) => !v)}
+                  tabIndex={-1}
+                >
+                  {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="invite-confirm-password">Confirm password</Label>
+              <Input
+                id="invite-confirm-password"
+                type={showPassword ? "text" : "password"}
+                placeholder="Re-enter your password"
+                value={confirmPassword}
+                onChange={(e) => { setConfirmPassword(e.target.value); setPasswordError(null); }}
+                autoComplete="new-password"
+              />
+            </div>
+            {passwordError && (
+              <p className="text-sm text-destructive">{passwordError}</p>
+            )}
+            <Button
+              className="w-full"
+              onClick={handleSetPassword}
+              disabled={setInvitePasswordMutation.isPending || !password}
+            >
+              {setInvitePasswordMutation.isPending ? (
+                <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Saving…</>
+              ) : (
+                "Set password & continue"
+              )}
+            </Button>
+            <Button
+              variant="ghost"
+              className="w-full text-muted-foreground"
+              onClick={() => setPasswordStep("done")}
+              disabled={setInvitePasswordMutation.isPending}
+            >
+              <SkipForward className="mr-2 h-4 w-4" />
+              Skip for now
+            </Button>
+            <p className="text-center text-xs text-muted-foreground">
+              You can always set or change your password later in your account settings.
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  // ── Main invite card (not yet signed in) ──────────────────────────────────
   const expiresAt = preview.expiresAt ? new Date(preview.expiresAt) : null;
   const hoursLeft = expiresAt
     ? Math.max(0, Math.round((expiresAt.getTime() - Date.now()) / 3_600_000))

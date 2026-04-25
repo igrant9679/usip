@@ -1336,3 +1336,11 @@
 - [x] UI: "Connecting…" spinner on Connected Accounts page — pulsing state after auth tab opens, stops when new account appears or 5-min timeout
 - [x] UI: visual flag for expired/disconnected accounts — amber badge + warning icon + Reconnect CTA on account card
 - [x] Tests: vitest specs for status webhook handler and auto-disable logic
+
+## Batch AA — Invite Password Creation & Reconnect Banner Button
+
+- [x] Server: team.setInvitePassword procedure — validates token, hashes password with bcrypt, stores in users.passwordHash
+- [x] UI: InviteAccept.tsx — insert password-creation step between OAuth sign-in and finaliseAcceptance
+- [x] UI: InviteAccept.tsx — "Set password & continue" button + "Skip for now" ghost button
+- [x] UI: InviteAccept.tsx — show/hide password toggle, confirm password field, inline validation errors
+- [x] UI: ConnectedAccounts.tsx — replace generic expired banner with per-account rows each containing a Reconnect button

@@ -845,6 +845,63 @@ export const teamRouter = router({
     }),
 
   /**
+   * Protected: set a password for a pending invite user.
+   * Called from the InviteAccept page after OAuth sign-in but before
+   * finaliseAcceptance. Token is re-validated; password hashed with bcrypt.
+   * Skippable — user can proceed without setting a password.
+   */
+  setInvitePassword: protectedProcedure
+    .input(z.object({
+      token: z.string().min(1),
+      password: z.string().min(8, "Password must be at least 8 characters"),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const { workspaces } = await import("../../drizzle/schema");
+      const [row] = await db
+        .select({
+          memberId: workspaceMembers.id,
+          workspaceId: workspaceMembers.workspaceId,
+          userId: workspaceMembers.userId,
+          loginMethod: users.loginMethod,
+          userEmail: users.email,
+          inviteExpiresAt: workspaceMembers.inviteExpiresAt,
+        })
+        .from(workspaceMembers)
+        .innerJoin(users, eq(workspaceMembers.userId, users.id))
+        .innerJoin(workspaces, eq(workspaceMembers.workspaceId, workspaces.id))
+        .where(eq(workspaceMembers.inviteToken, input.token));
+      if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Invite link is invalid or has already been used." });
+      if (row.loginMethod !== "invite" && row.loginMethod !== "expired_invite") {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "This invitation has already been accepted." });
+      }
+      const now = new Date();
+      if (row.inviteExpiresAt && row.inviteExpiresAt <= now) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "This invitation link has expired." });
+      }
+      if (ctx.user.email?.toLowerCase() !== row.userEmail?.toLowerCase()) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: `This invite was sent to ${row.userEmail}. Please sign in with that email address.`,
+        });
+      }
+      const hash = await bcrypt.hash(input.password, 12);
+      await db.update(users)
+        .set({ passwordHash: hash })
+        .where(eq(users.id, row.userId));
+      await recordAudit({
+        workspaceId: row.workspaceId,
+        actorUserId: row.userId,
+        action: "update",
+        entityType: "user",
+        entityId: row.userId,
+        after: { action: "invite_password_set" },
+      });
+      return { ok: true };
+    }),
+
+  /**
    * Return filtered login history for a specific workspace member.
    * Supports optional outcome filter and date range. Returns up to 200 rows.
    */

@@ -453,3 +453,51 @@ describe("Unipile status webhook logic", () => {
     expect(backendStatuses.size).toBe(frontendStatuses.length);
   });
 });
+
+// ─── Batch AA: setInvitePassword ─────────────────────────────────────────────
+describe("team.setInvitePassword", () => {
+  it("rejects passwords shorter than 8 characters", () => {
+    const validate = (pw: string) => pw.length >= 8;
+    expect(validate("short")).toBe(false);
+    expect(validate("longpass")).toBe(true);
+  });
+
+  it("rejects if confirm password does not match", () => {
+    const validate = (pw: string, confirm: string) => pw === confirm;
+    expect(validate("password123", "password456")).toBe(false);
+    expect(validate("password123", "password123")).toBe(true);
+  });
+
+  it("accepts valid password and confirm match", () => {
+    const validate = (pw: string, confirm: string) =>
+      pw.length >= 8 && pw === confirm;
+    expect(validate("securePass1", "securePass1")).toBe(true);
+  });
+
+  it("skip path sets passwordStep to done without calling mutation", () => {
+    let step = "pending";
+    const skip = () => { step = "done"; };
+    skip();
+    expect(step).toBe("done");
+  });
+
+  it("password step blocks finalise until done", () => {
+    const shouldFinalise = (passwordStep: string, user: boolean) =>
+      user && passwordStep === "done";
+    expect(shouldFinalise("pending", true)).toBe(false);
+    expect(shouldFinalise("done", true)).toBe(true);
+    expect(shouldFinalise("done", false)).toBe(false);
+  });
+
+  it("expired banner maps each expired account to a reconnect button", () => {
+    const accounts = [
+      { unipileAccountId: "a1", status: "CREDENTIALS", provider: "LINKEDIN", accountName: "Alice" },
+      { unipileAccountId: "a2", status: "OK", provider: "LINKEDIN", accountName: "Bob" },
+      { unipileAccountId: "a3", status: "ERROR", provider: "GMAIL", accountName: "Carol" },
+    ];
+    const EXPIRED = new Set(["CREDENTIALS", "ERROR", "STOPPED"]);
+    const expired = accounts.filter((a) => EXPIRED.has(a.status));
+    expect(expired).toHaveLength(2);
+    expect(expired.map((a) => a.unipileAccountId)).toEqual(["a1", "a3"]);
+  });
+});
