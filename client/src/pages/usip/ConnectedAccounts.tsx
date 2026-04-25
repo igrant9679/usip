@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
 import { Shell, PageHeader } from "@/components/usip/Shell";
 import { Button } from "@/components/ui/button";
@@ -104,11 +104,13 @@ function ConnectDialog({
     try {
       const { url } = await generateLink.mutateAsync({
         providers: selectedProviders.length ? selectedProviders : undefined,
+        origin: window.location.origin,
       });
-      // Open Unipile Hosted Auth Wizard in a new tab
+      // Open Unipile Hosted Auth Wizard in a new tab.
+      // Unipile will redirect back to /connected-accounts?connected=1 on success.
       window.open(url, "_blank", "noopener,noreferrer");
       onOpenChange(false);
-      toast.success("Auth window opened", { description: "Complete the connection in the new tab, then refresh this page." });
+      toast.success("Auth window opened", { description: "Complete the connection in the new tab — this page will refresh automatically when you return." });
     } catch (err) {
       toast.error("Failed to generate connect link", { description: String(err) });
     } finally {
@@ -181,8 +183,15 @@ function ConnectDialog({
 export default function ConnectedAccounts() {
   const [connectOpen, setConnectOpen] = useState(false);
   const utils = trpc.useUtils();
-
-  const { data: accounts = [], isLoading, refetch } = trpc.unipile.listConnectedAccounts.useQuery();
+  const { data: accounts = [], isLoading, refetch } = trpc.unipile.listConnectedAccounts.useQuery(
+    undefined,
+    {
+      // Poll every 8s so the new account appears quickly after the user returns
+      // from the Unipile auth tab (webhook fires within ~2s of completion).
+      refetchInterval: 8_000,
+      refetchIntervalInBackground: false,
+    },
+  );
   const disconnect = trpc.unipile.disconnectAccount.useMutation({
     onSuccess: () => {
       utils.unipile.listConnectedAccounts.invalidate();
@@ -191,15 +200,32 @@ export default function ConnectedAccounts() {
     onError: (err) => toast.error("Failed to disconnect", { description: err.message }),
   });
   const generateLink = trpc.unipile.generateConnectLink.useMutation();
-
   const handleReconnect = async (unipileAccountId: string) => {
     try {
-      const { url } = await generateLink.mutateAsync({ reconnectAccountId: unipileAccountId });
+      const { url } = await generateLink.mutateAsync({
+        reconnectAccountId: unipileAccountId,
+        origin: window.location.origin,
+      });
       window.open(url, "_blank", "noopener,noreferrer");
     } catch (err) {
       toast.error("Failed to generate reconnect link", { description: String(err) });
     }
   };
+
+  // When Unipile redirects back with ?connected=1, immediately refetch and
+  // show a success toast, then clean the query param from the URL.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("connected") === "1") {
+      refetch();
+      toast.success("Account connected!", { description: "Your new account is now visible below." });
+      // Remove the query param without a page reload
+      const cleanUrl = window.location.pathname;
+      window.history.replaceState({}, "", cleanUrl);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
 
   // Group accounts by provider
   const byProvider = accounts.reduce<Record<string, typeof accounts>>((acc, a) => {

@@ -66,10 +66,20 @@ export const unipileRouter = router({
       z.object({
         providers: z.array(z.string()).optional(), // defaults to all
         reconnectAccountId: z.string().optional(),
+        origin: z.string().optional(), // window.location.origin from frontend
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const notifyUrl = `${process.env.VITE_FRONTEND_FORGE_API_URL ?? ""}/api/unipile/webhook-account?userId=${ctx.user.id}&workspaceId=${ctx.workspaceId}`;
+      // Use MANUS_APP_URL (deployed app URL) so Unipile can reach our webhook.
+      // Fall back to the origin passed by the frontend, then to VITE_FRONTEND_FORGE_API_URL.
+      const appBase = (
+        process.env.MANUS_APP_URL ||
+        input.origin ||
+        process.env.VITE_FRONTEND_FORGE_API_URL ||
+        ""
+      ).replace(/\/$/, "");
+      const notifyUrl = `${appBase}/api/unipile/account-webhook?userId=${ctx.user.id}&workspaceId=${ctx.workspaceId}`;
+      const successRedirectUrl = `${appBase}/connected-accounts?connected=1`;
       const expiresOn = new Date(Date.now() + 30 * 60 * 1000).toISOString(); // 30 min
 
       const result = await generateHostedAuthLink({
@@ -77,6 +87,7 @@ export const unipileRouter = router({
         providers: input.providers ?? ALL_PROVIDERS,
         expiresOn,
         notifyUrl,
+        successRedirectUrl,
         name: String(ctx.user.id),
         reconnectAccount: input.reconnectAccountId,
       });

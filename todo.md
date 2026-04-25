@@ -1321,3 +1321,9 @@
 - [x] Investigate: identify the URL generated in reminder invite emails
 - [x] Fix: ensure the invite link URL matches the registered /invite/accept route
 - [x] Test: verify invite link resolves correctly end-to-end
+
+## Bug — LinkedIn connected account not appearing after OAuth
+
+- [x] Investigate: trace the LinkedIn OAuth connect flow and listAccounts query
+- [x] Fix: ensure Connected Accounts list refreshes after successful LinkedIn connection
+- [x] Test: verify newly connected LinkedIn account appears immediately
