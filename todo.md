@@ -1382,3 +1382,9 @@
 - [x] Add GET /api/auth/set-return endpoint in oauth.ts: sets a short-lived HttpOnly cookie with the returnPath
 - [x] Update InviteAccept.tsx: replace href link with async onClick that calls /api/auth/set-return then redirects to OAuth portal
 - [x] Update oauth.ts callback: read usip_invite_return cookie after token exchange, redirect to stored path, clear cookie
+
+## Bug Fix — Invite password step v4 (cookie-parser missing)
+
+- [x] Root cause: req.cookies is undefined because cookie-parser middleware is not registered; the usip_invite_return cookie was never read by the OAuth callback
+- [x] Fix: import { parse as parseCookieHeader } from "cookie" in oauth.ts and parse req.headers.cookie manually (same pattern as sdk.ts)
+- [x] Verified: /api/auth/set-return sets the cookie correctly; OAuth callback now reads it and redirects to /invite/accept?token=...

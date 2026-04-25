@@ -1,4 +1,5 @@
 import { COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
+import { parse as parseCookieHeader } from "cookie";
 import type { Express, Request, Response } from "express";
 import * as db from "../db";
 import { getDb } from "../db";
@@ -85,8 +86,10 @@ export function registerOAuthRoutes(app: Express) {
       res.cookie(COOKIE_NAME, sessionToken, { ...cookieOptions, maxAge: ONE_YEAR_MS });
 
       // Check for a pre-auth invite return cookie set by /api/auth/set-return.
-      // If present, redirect there instead of '/'; clear the cookie immediately.
-      const inviteReturn = req.cookies?.[INVITE_RETURN_COOKIE];
+      // Express does not have cookie-parser registered, so we parse the raw
+      // Cookie header manually (same approach as sdk.ts parseCookies).
+      const rawCookies = parseCookieHeader(req.headers.cookie ?? "");
+      const inviteReturn = rawCookies[INVITE_RETURN_COOKIE];
       let redirectTo = "/";
       if (
         inviteReturn &&
