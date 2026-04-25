@@ -5,12 +5,31 @@ import { getDb } from "../db";
 import { getSessionCookieOptions } from "./cookies";
 import { sdk } from "./sdk";
 
+const INVITE_RETURN_COOKIE = "usip_invite_return";
+
 function getQueryParam(req: Request, key: string): string | undefined {
   const value = req.query[key];
   return typeof value === "string" ? value : undefined;
 }
 
 export function registerOAuthRoutes(app: Express) {
+  // Pre-auth endpoint: stores the returnPath in a short-lived HttpOnly cookie
+  // before the OAuth redirect so the callback can redirect back to the invite page.
+  // Called by InviteAccept.tsx before window.location.href = loginUrl.
+  app.get("/api/auth/set-return", (req: Request, res: Response) => {
+    const path = typeof req.query.path === "string" ? req.query.path : null;
+    if (path && path.startsWith("/invite/accept")) {
+      res.cookie(INVITE_RETURN_COOKIE, path, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "lax",
+        maxAge: 10 * 60 * 1000, // 10 minutes
+        path: "/",
+      });
+    }
+    res.json({ ok: true });
+  });
+
   app.get("/api/oauth/callback", async (req: Request, res: Response) => {
     const code = getQueryParam(req, "code");
     const state = getQueryParam(req, "state");
@@ -65,10 +84,19 @@ export function registerOAuthRoutes(app: Express) {
       const cookieOptions = getSessionCookieOptions(req);
       res.cookie(COOKIE_NAME, sessionToken, { ...cookieOptions, maxAge: ONE_YEAR_MS });
 
-      // Always redirect to '/' after OAuth. The client-side InviteAccept page
-      // stores its returnPath in sessionStorage before redirecting to the OAuth
-      // portal and reads it back on mount to navigate back to the invite flow.
-      res.redirect(302, "/");
+      // Check for a pre-auth invite return cookie set by /api/auth/set-return.
+      // If present, redirect there instead of '/'; clear the cookie immediately.
+      const inviteReturn = req.cookies?.[INVITE_RETURN_COOKIE];
+      let redirectTo = "/";
+      if (
+        inviteReturn &&
+        typeof inviteReturn === "string" &&
+        inviteReturn.startsWith("/invite/accept")
+      ) {
+        redirectTo = inviteReturn;
+        res.clearCookie(INVITE_RETURN_COOKIE, { path: "/" });
+      }
+      res.redirect(302, redirectTo);
     } catch (error) {
       console.error("[OAuth] Callback failed", error);
       res.status(500).json({ error: "OAuth callback failed" });

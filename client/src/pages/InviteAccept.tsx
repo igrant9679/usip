@@ -24,16 +24,15 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Loader2, CheckCircle2, XCircle, Building2, UserCheck, Eye, EyeOff, Lock, SkipForward } from "lucide-react";
 
-const INVITE_RETURN_KEY = "usip_invite_return";
-
-function getLoginUrlWithReturn(returnPath: string): string {
+// Calls /api/auth/set-return to store the returnPath in a server-side HttpOnly
+// cookie before redirecting to the OAuth portal. The OAuth callback reads this
+// cookie and redirects directly to the invite page after authentication.
+async function redirectToLoginWithReturn(returnPath: string): Promise<void> {
   const oauthPortalUrl = import.meta.env.VITE_OAUTH_PORTAL_URL as string;
   const appId = import.meta.env.VITE_APP_ID as string;
-  // The Manus OAuth server validates redirectUri against a registered allowlist.
-  // We MUST use the clean callback URL (no query params) as the redirectUri.
-  // Store returnPath in sessionStorage so InviteAccept can restore it after the
-  // OAuth callback redirects to '/' and the user is navigated back here.
-  sessionStorage.setItem(INVITE_RETURN_KEY, returnPath);
+  // Store the returnPath server-side so the OAuth callback can redirect to it.
+  // This avoids modifying the redirectUri (which is validated against an allowlist).
+  await fetch(`/api/auth/set-return?path=${encodeURIComponent(returnPath)}`);
   const redirectUri = `${window.location.origin}/api/oauth/callback`;
   const state = btoa(redirectUri);
   const url = new URL(`${oauthPortalUrl}/app-auth`);
@@ -41,7 +40,7 @@ function getLoginUrlWithReturn(returnPath: string): string {
   url.searchParams.set("redirectUri", redirectUri);
   url.searchParams.set("state", state);
   url.searchParams.set("type", "signIn");
-  return url.toString();
+  window.location.href = url.toString();
 }
 
 const ROLE_LABELS: Record<string, string> = {
@@ -224,7 +223,6 @@ export default function InviteAccept() {
 
   const preview = previewQuery.data!;
   const returnPath = `/invite/accept?token=${encodeURIComponent(token)}`;
-  const loginUrl = getLoginUrlWithReturn(returnPath);
 
   // ── Password creation step (shown after sign-in, before finalise) ──────────
   if (user && passwordStep === "pending") {
@@ -406,8 +404,11 @@ export default function InviteAccept() {
               )}
             </Button>
           ) : (
-            <Button className="w-full" asChild>
-              <a href={loginUrl}>Sign in to Accept Invitation</a>
+            <Button
+              className="w-full"
+              onClick={() => redirectToLoginWithReturn(returnPath)}
+            >
+              Sign in to Accept Invitation
             </Button>
           )}
 

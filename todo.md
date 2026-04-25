@@ -1375,3 +1375,10 @@
 - [x] Fix InviteAccept.tsx: store returnPath in sessionStorage before OAuth redirect; use clean redirectUri
 - [x] Fix App.tsx: add InviteReturnRedirect component that reads sessionStorage on auth and navigates back to invite page
 - [x] Fix server/_core/oauth.ts: revert to always redirecting to '/' (sessionStorage handles the return)
+
+## Bug Fix — Invite password step v3 (server-side cookie approach)
+
+- [x] Root cause: sessionStorage is cleared when the same tab navigates to the OAuth portal, so the returnPath was lost
+- [x] Add GET /api/auth/set-return endpoint in oauth.ts: sets a short-lived HttpOnly cookie with the returnPath
+- [x] Update InviteAccept.tsx: replace href link with async onClick that calls /api/auth/set-return then redirects to OAuth portal
+- [x] Update oauth.ts callback: read usip_invite_return cookie after token exchange, redirect to stored path, clear cookie
