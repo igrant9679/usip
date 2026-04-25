@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { trpc } from "@/lib/trpc";
 import { Shell, PageHeader } from "@/components/usip/Shell";
 import { Button } from "@/components/ui/button";
@@ -40,6 +40,8 @@ import {
   Plus,
   Wifi,
   WifiOff,
+  TriangleAlert,
+  XCircle,
 } from "lucide-react";
 
 
@@ -70,6 +72,9 @@ function ProviderIcon({ providerId, size = 32 }: { providerId: string; size?: nu
   );
 }
 
+// Statuses that mean the account needs re-authentication
+const EXPIRED_STATUSES = new Set(["CREDENTIALS", "ERROR", "STOPPED"]);
+
 function StatusBadge({ status }: { status: string }) {
   if (status === "OK" || status === "CONNECTED") {
     return <Badge className="bg-green-500/15 text-green-600 border-green-500/30 gap-1"><CheckCircle2 className="h-3 w-3" />Connected</Badge>;
@@ -77,7 +82,13 @@ function StatusBadge({ status }: { status: string }) {
   if (status === "CONNECTING" || status === "PENDING") {
     return <Badge className="bg-amber-500/15 text-amber-600 border-amber-500/30 gap-1"><Loader2 className="h-3 w-3 animate-spin" />Connecting</Badge>;
   }
-  return <Badge className="bg-red-500/15 text-red-600 border-red-500/30 gap-1"><AlertCircle className="h-3 w-3" />Error</Badge>;
+  if (status === "CREDENTIALS") {
+    return <Badge className="bg-amber-500/15 text-amber-700 border-amber-500/30 gap-1"><TriangleAlert className="h-3 w-3" />Credentials expired</Badge>;
+  }
+  if (status === "STOPPED" || status === "ERROR") {
+    return <Badge className="bg-red-500/15 text-red-600 border-red-500/30 gap-1"><XCircle className="h-3 w-3" />{status === "STOPPED" ? "Stopped" : "Error"}</Badge>;
+  }
+  return <Badge className="bg-red-500/15 text-red-600 border-red-500/30 gap-1"><AlertCircle className="h-3 w-3" />Disconnected</Badge>;
 }
 
 // ─── Connect Dialog ───────────────────────────────────────────────────────────
@@ -85,9 +96,11 @@ function StatusBadge({ status }: { status: string }) {
 function ConnectDialog({
   open,
   onOpenChange,
+  onConnecting,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
+  onConnecting?: () => void;
 }) {
   const [selectedProviders, setSelectedProviders] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -110,6 +123,7 @@ function ConnectDialog({
       // Unipile will redirect back to /connected-accounts?connected=1 on success.
       window.open(url, "_blank", "noopener,noreferrer");
       onOpenChange(false);
+      onConnecting?.();
       toast.success("Auth window opened", { description: "Complete the connection in the new tab — this page will refresh automatically when you return." });
     } catch (err) {
       toast.error("Failed to generate connect link", { description: String(err) });
@@ -182,6 +196,9 @@ function ConnectDialog({
 
 export default function ConnectedAccounts() {
   const [connectOpen, setConnectOpen] = useState(false);
+  // True while the user has the Unipile auth tab open (cleared after 5 min or on ?connected=1)
+  const [isConnecting, setIsConnecting] = useState(false);
+  const connectingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const utils = trpc.useUtils();
   const { data: accounts = [], isLoading, refetch } = trpc.unipile.listConnectedAccounts.useQuery(
     undefined,
@@ -207,6 +224,9 @@ export default function ConnectedAccounts() {
         origin: window.location.origin,
       });
       window.open(url, "_blank", "noopener,noreferrer");
+      setIsConnecting(true);
+      if (connectingTimerRef.current) clearTimeout(connectingTimerRef.current);
+      connectingTimerRef.current = setTimeout(() => setIsConnecting(false), 5 * 60 * 1000);
     } catch (err) {
       toast.error("Failed to generate reconnect link", { description: String(err) });
     }
@@ -217,6 +237,8 @@ export default function ConnectedAccounts() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.get("connected") === "1") {
+      setIsConnecting(false);
+      if (connectingTimerRef.current) clearTimeout(connectingTimerRef.current);
       refetch();
       toast.success("Account connected!", { description: "Your new account is now visible below." });
       // Remove the query param without a page reload
@@ -256,7 +278,34 @@ export default function ConnectedAccounts() {
           </div>
         }
       />
-
+      {/* Connecting banner - shown while auth tab is open */}
+      {isConnecting && (
+        <div className="mx-6 mt-4 flex items-center gap-3 rounded-lg border border-amber-400/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-700">
+          <Loader2 className="h-4 w-4 animate-spin shrink-0" />
+          <span className="font-medium">Connecting...</span>
+          <span className="text-amber-600">Complete the authentication in the new tab. This page will update automatically when the connection is established.</span>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="ml-auto text-amber-700 hover:bg-amber-500/20 h-6 px-2 text-xs"
+            onClick={() => setIsConnecting(false)}
+          >
+            Dismiss
+          </Button>
+        </div>
+      )}
+      {/* Expired credentials banner - shown when any account needs re-auth */}
+      {accounts.some((a) => EXPIRED_STATUSES.has(a.status)) && (
+        <div className="mx-6 mt-4 flex items-start gap-3 rounded-lg border border-red-400/40 bg-red-500/10 px-4 py-3 text-sm text-red-700">
+          <TriangleAlert className="h-4 w-4 shrink-0 mt-0.5" />
+          <div>
+            <span className="font-medium">Action required: </span>
+            <span className="text-red-600">
+              {accounts.filter((a) => EXPIRED_STATUSES.has(a.status)).length} account{accounts.filter((a) => EXPIRED_STATUSES.has(a.status)).length > 1 ? "s" : ""} need{accounts.filter((a) => EXPIRED_STATUSES.has(a.status)).length === 1 ? "s" : ""} to be reconnected. Click <strong>Reconnect</strong> on the affected account{accounts.filter((a) => EXPIRED_STATUSES.has(a.status)).length > 1 ? "s" : ""} below to restore access.
+            </span>
+          </div>
+        </div>
+      )}
       <div className="p-6 space-y-6">
         {/* Stats row */}
         <div className="grid grid-cols-3 gap-4">
@@ -334,18 +383,31 @@ export default function ConnectedAccounts() {
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     {provAccounts.map((acc) => (
                       <Card key={acc.id} className="hover:shadow-md transition-shadow">
-                        <CardHeader className="pb-2">
+                        <CardHeader className={`pb-2 ${EXPIRED_STATUSES.has(acc.status) ? "border-b border-amber-400/30 bg-amber-500/5 rounded-t-lg" : ""}`}>
+                          {EXPIRED_STATUSES.has(acc.status) && (
+                            <div className="flex items-center gap-1.5 text-xs text-amber-700 font-medium mb-2">
+                              <TriangleAlert className="h-3.5 w-3.5" />
+                              This account needs to be reconnected
+                            </div>
+                          )}
                           <div className="flex items-start justify-between">
                             <div className="flex items-center gap-3">
-                              {acc.profilePicture ? (
-                                <img
-                                  src={acc.profilePicture}
-                                  alt={acc.displayName ?? ""}
-                                  className="h-10 w-10 rounded-full object-cover"
-                                />
-                              ) : (
-                                <ProviderIcon providerId={acc.provider} size={40} />
-                              )}
+                              <div className="relative">
+                                {acc.profilePicture ? (
+                                  <img
+                                    src={acc.profilePicture}
+                                    alt={acc.displayName ?? ""}
+                                    className="h-10 w-10 rounded-full object-cover"
+                                  />
+                                ) : (
+                                  <ProviderIcon providerId={acc.provider} size={40} />
+                                )}
+                                {EXPIRED_STATUSES.has(acc.status) && (
+                                  <span className="absolute -bottom-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-amber-500 ring-2 ring-background">
+                                    <TriangleAlert className="h-2.5 w-2.5 text-white" />
+                                  </span>
+                                )}
+                              </div>
                               <div>
                                 <CardTitle className="text-sm">
                                   {acc.displayName ?? acc.unipileAccountId}
@@ -373,11 +435,11 @@ export default function ConnectedAccounts() {
                             <Button
                               variant="outline"
                               size="sm"
-                              className="flex-1"
+                              className={`flex-1 ${EXPIRED_STATUSES.has(acc.status) ? "border-amber-400 text-amber-700 hover:bg-amber-500/10 hover:border-amber-500 font-medium" : ""}`}
                               onClick={() => handleReconnect(acc.unipileAccountId)}
                             >
                               <RefreshCw className="h-3 w-3 mr-1" />
-                              Reconnect
+                              {EXPIRED_STATUSES.has(acc.status) ? "Reconnect now" : "Reconnect"}
                             </Button>
                             <AlertDialog>
                               <AlertDialogTrigger asChild>
@@ -441,7 +503,15 @@ export default function ConnectedAccounts() {
         )}
       </div>
 
-      <ConnectDialog open={connectOpen} onOpenChange={setConnectOpen} />
+      <ConnectDialog
+        open={connectOpen}
+        onOpenChange={setConnectOpen}
+        onConnecting={() => {
+          setIsConnecting(true);
+          if (connectingTimerRef.current) clearTimeout(connectingTimerRef.current);
+          connectingTimerRef.current = setTimeout(() => setIsConnecting(false), 5 * 60 * 1000);
+        }}
+      />
     </Shell>
   );
 }

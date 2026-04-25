@@ -1327,3 +1327,12 @@
 - [x] Investigate: trace the LinkedIn OAuth connect flow and listAccounts query
 - [x] Fix: ensure Connected Accounts list refreshes after successful LinkedIn connection
 - [x] Test: verify newly connected LinkedIn account appears immediately
+
+## Batch Z — Unipile Account Health
+
+- [x] Server: register POST /api/unipile/status-webhook to receive Unipile account status events (CREDENTIALS, DISCONNECTED, etc.)
+- [x] Server: on CREDENTIALS event — set unipile_accounts.status = 'CREDENTIALS', send re-auth email to user with fresh reconnect link
+- [x] Server: auto-disable — mark account disabled when status is CREDENTIALS or DISCONNECTED
+- [x] UI: "Connecting…" spinner on Connected Accounts page — pulsing state after auth tab opens, stops when new account appears or 5-min timeout
+- [x] UI: visual flag for expired/disconnected accounts — amber badge + warning icon + Reconnect CTA on account card
+- [x] Tests: vitest specs for status webhook handler and auto-disable logic

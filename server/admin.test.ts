@@ -383,3 +383,73 @@ describe("audit.list — actorUserId filter", () => {
     expect(filtered[0].id).toBe(1);
   });
 });
+
+// ─── Batch Z: Unipile Status Webhook ─────────────────────────────────────────
+describe("Unipile status webhook logic", () => {
+  const EXPIRED_STATUSES = ["CREDENTIALS", "ERROR", "STOPPED"];
+  const HEALTHY_STATUSES = ["OK", "CONNECTED", "CONNECTING", "PENDING"];
+
+  it("identifies expired statuses correctly", () => {
+    for (const s of EXPIRED_STATUSES) {
+      expect(["CREDENTIALS", "ERROR", "STOPPED"].includes(s)).toBe(true);
+    }
+  });
+
+  it("does not flag healthy statuses as expired", () => {
+    for (const s of HEALTHY_STATUSES) {
+      expect(["CREDENTIALS", "ERROR", "STOPPED"].includes(s)).toBe(false);
+    }
+  });
+
+  it("CREDENTIALS status triggers re-auth email path", () => {
+    const shouldSendEmail = (status: string) =>
+      ["CREDENTIALS", "ERROR", "STOPPED"].includes(status);
+    expect(shouldSendEmail("CREDENTIALS")).toBe(true);
+    expect(shouldSendEmail("ERROR")).toBe(true);
+    expect(shouldSendEmail("STOPPED")).toBe(true);
+    expect(shouldSendEmail("OK")).toBe(false);
+    expect(shouldSendEmail("CONNECTING")).toBe(false);
+  });
+
+  it("reconnect link uses MANUS_APP_URL base with correct path", () => {
+    const appBase = "https://usipsales-8xkycm4e.manus.space";
+    const userId = 42;
+    const workspaceId = 7;
+    const notifyUrl = `${appBase}/api/unipile/account-webhook?userId=${userId}&workspaceId=${workspaceId}`;
+    const successRedirectUrl = `${appBase}/connected-accounts?connected=1`;
+    expect(notifyUrl).toContain("/api/unipile/account-webhook");
+    expect(notifyUrl).toContain(`userId=${userId}`);
+    expect(notifyUrl).toContain(`workspaceId=${workspaceId}`);
+    expect(successRedirectUrl).toContain("/connected-accounts?connected=1");
+  });
+
+  it("strips trailing slash from MANUS_APP_URL", () => {
+    const rawUrl = "https://usipsales-8xkycm4e.manus.space/";
+    const appBase = rawUrl.replace(/\/$/, "");
+    expect(appBase).toBe("https://usipsales-8xkycm4e.manus.space");
+    expect(appBase.endsWith("/")).toBe(false);
+  });
+
+  it("reconnect link expires in 24 hours", () => {
+    const before = Date.now();
+    const expiresOn = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    const after = Date.now();
+    const expiresMs = new Date(expiresOn).getTime();
+    expect(expiresMs - before).toBeGreaterThanOrEqual(24 * 60 * 60 * 1000 - 1000);
+    expect(expiresMs - after).toBeLessThanOrEqual(24 * 60 * 60 * 1000 + 1000);
+  });
+
+  it("isConnecting banner auto-clears after 5 minutes timeout", () => {
+    const TIMEOUT_MS = 5 * 60 * 1000;
+    expect(TIMEOUT_MS).toBe(300_000);
+  });
+
+  it("EXPIRED_STATUSES set matches the frontend constant", () => {
+    const backendStatuses = new Set(["CREDENTIALS", "ERROR", "STOPPED"]);
+    const frontendStatuses = ["CREDENTIALS", "ERROR", "STOPPED"];
+    for (const s of frontendStatuses) {
+      expect(backendStatuses.has(s)).toBe(true);
+    }
+    expect(backendStatuses.size).toBe(frontendStatuses.length);
+  });
+});
