@@ -1173,3 +1173,31 @@
 - [x] ActivityTimeline: add provider icon badge (LinkedIn blue, WhatsApp green, Instagram pink, Telegram blue, X black, Outlook blue, IMAP gray) to each activity row based on activity metadata
 - [x] Dashboard: add Unipile Multichannel Outreach widget (messages sent, connections accepted, acceptance rate, per-provider bar chart)
 - [x] Server: add unipile.metrics tRPC procedure returning aggregated counts from unipileMessages and unipileInvites tables
+
+## Batch S — Team Member Password & Resend Invitation
+
+- [ ] Server: add `team.setMemberPassword` protected procedure (admin only) — hashes new password with bcrypt, updates user record, logs audit entry
+- [ ] Server: add `team.resendInvitation` protected procedure (admin only) — re-sends invitation email with existing or freshly-generated invite token
+- [ ] UI: "Set Password" action in Team Members row actions — opens a dialog with new-password + confirm fields, validates match + min-length, calls procedure
+- [ ] UI: "Resend Invite" action in Team Members row actions — visible only for members whose invite is pending/not-yet-accepted, calls procedure with toast feedback
+- [ ] Vitest: cover setMemberPassword (success, wrong role, mismatch) and resendInvitation (success, already-accepted guard)
+
+## Batch S — Team Member Password & Resend Invitation
+
+- [x] DB: add `passwordHash` (text, nullable) column to `users` table; migration applied
+- [x] Server: `team.setMemberPassword` — admin-only, bcrypt hash (cost 12), role-rank guard, audit log
+- [x] Server: `team.resendInvitation` — admin-only, guards for loginMethod=invite and not deactivated, re-sends invitation email via system sender
+- [x] Server: expose `loginMethod` in `team.list` query so UI can detect pending invitees
+- [x] UI: "Set Password" button in each active member's row actions → opens dialog with New Password + Confirm Password fields, validation (min 8, match), bcrypt stored on save
+- [x] UI: "Resend Invite" button visible only for members with loginMethod="invite" (pending badge shown in name column)
+- [x] Tests: 9 new vitest tests covering setMemberPassword and resendInvitation guards (all 689 pass)
+
+## Batch S — Team Member Password & Resend Invitation
+
+- [x] DB: add passwordHash (text, nullable) column to users table; migration applied
+- [x] Server: team.setMemberPassword — admin-only, bcrypt hash (cost 12), role-rank guard, audit log
+- [x] Server: team.resendInvitation — admin-only, guards for loginMethod=invite and not deactivated, re-sends invitation email via system sender
+- [x] Server: expose loginMethod in team.list query so UI can detect pending invitees
+- [x] UI: Set Password button in each active member row actions opens dialog with New Password + Confirm Password fields, validation (min 8, match), bcrypt stored on save
+- [x] UI: Resend Invite button visible only for members with loginMethod=invite (pending badge shown in name column)
+- [x] Tests: 9 new vitest tests covering setMemberPassword and resendInvitation guards (all 689 pass)

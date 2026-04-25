@@ -15,6 +15,7 @@
 import { TRPCError } from "@trpc/server";
 import { and, count, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
+import bcrypt from "bcryptjs";
 import {
   leads,
   opportunities,
@@ -146,6 +147,7 @@ export const teamRouter = router({
         name: users.name,
         email: users.email,
         avatarUrl: users.avatarUrl,
+        loginMethod: users.loginMethod,
         role: workspaceMembers.role,
         title: workspaceMembers.title,
         quota: workspaceMembers.quota,
@@ -520,6 +522,114 @@ export const teamRouter = router({
             eq(workspaceMembers.userId, ctx.user.id),
           ),
         );
+      return { ok: true };
+    }),
+
+  /**
+   * Set (or reset) a team member's local password.
+   * Only admins can set passwords for members below their rank.
+   * The password is hashed with bcrypt (cost 12) and stored in users.passwordHash.
+   */
+  setMemberPassword: adminWsProcedure
+    .input(
+      z.object({
+        memberId: z.number().int(),
+        password: z.string().min(8, "Password must be at least 8 characters"),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [member] = await db
+        .select({ userId: workspaceMembers.userId, role: workspaceMembers.role })
+        .from(workspaceMembers)
+        .where(and(eq(workspaceMembers.id, input.memberId), eq(workspaceMembers.workspaceId, ctx.workspace.id)));
+      if (!member) throw new TRPCError({ code: "NOT_FOUND", message: "Member not found" });
+      if (ctx.member.role !== "super_admin" && roleRank(member.role) >= roleRank(ctx.member.role)) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Cannot set password for a member at or above your role" });
+      }
+      const hash = await bcrypt.hash(input.password, 12);
+      await db.update(users).set({ passwordHash: hash }).where(eq(users.id, member.userId));
+      await recordAudit({
+        workspaceId: ctx.workspace.id,
+        actorUserId: ctx.user.id,
+        action: "update",
+        entityType: "workspace_member",
+        entityId: member.userId,
+        after: { action: "password_set" },
+      });
+      return { ok: true };
+    }),
+
+  /**
+   * Resend the invitation email to a pending (not-yet-accepted) member.
+   * Guard: user must still have loginMethod = "invite".
+   */
+  resendInvitation: adminWsProcedure
+    .input(z.object({ memberId: z.number().int() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [row] = await db
+        .select({
+          userId: workspaceMembers.userId,
+          role: workspaceMembers.role,
+          deactivatedAt: workspaceMembers.deactivatedAt,
+          email: users.email,
+          name: users.name,
+          loginMethod: users.loginMethod,
+        })
+        .from(workspaceMembers)
+        .innerJoin(users, eq(workspaceMembers.userId, users.id))
+        .where(and(eq(workspaceMembers.id, input.memberId), eq(workspaceMembers.workspaceId, ctx.workspace.id)));
+      if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Member not found" });
+      if (row.loginMethod !== "invite") {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Member has already accepted their invitation and signed in" });
+      }
+      if (row.deactivatedAt) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot resend invitation to a deactivated member" });
+      }
+      try {
+        const [settings] = await db
+          .select({ systemSenderAccountId: workspaceSettings.systemSenderAccountId })
+          .from(workspaceSettings)
+          .where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
+        if (settings?.systemSenderAccountId) {
+          const { sendingAccounts } = await import("../../drizzle/schema");
+          const { buildTransporter, decrypt } = await import("./smtpConfig");
+          const [sender] = await db
+            .select()
+            .from(sendingAccounts)
+            .where(eq(sendingAccounts.id, settings.systemSenderAccountId));
+          if (sender?.smtpHost && sender?.smtpUsername && sender?.smtpPassword) {
+            const pwd = decrypt(sender.smtpPassword);
+            const transporter = buildTransporter({
+              host: sender.smtpHost,
+              port: sender.smtpPort ?? 587,
+              secure: sender.smtpSecure ?? false,
+              username: sender.smtpUsername,
+              password: pwd,
+            });
+            await transporter.sendMail({
+              from: `"${sender.fromName ?? ctx.workspace.name}" <${sender.fromEmail}>`,
+              to: row.email!,
+              subject: `Reminder: You've been invited to ${ctx.workspace.name} on USIP`,
+              html: `<p>Hi ${row.name ?? row.email?.split("@")[0]},</p>
+<p>This is a reminder that you have been invited to join <strong>${ctx.workspace.name}</strong> on USIP as a <strong>${row.role}</strong>.</p>
+<p>Sign in at <a href="${process.env.VITE_OAUTH_PORTAL_URL ?? "https://manus.im"}">USIP</a> with this email address to accept your invitation.</p>
+<p>If you did not expect this invitation, you can safely ignore this email.</p>`,
+            });
+          }
+        }
+      } catch (_e) { /* Non-fatal */ }
+      await recordAudit({
+        workspaceId: ctx.workspace.id,
+        actorUserId: ctx.user.id,
+        action: "update",
+        entityType: "workspace_member",
+        entityId: row.userId,
+        after: { action: "invitation_resent", email: row.email },
+      });
       return { ok: true };
     }),
 

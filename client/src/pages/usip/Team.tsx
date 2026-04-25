@@ -6,7 +6,7 @@ import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { trpc } from "@/lib/trpc";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
-import { Mail, Shield, UserMinus, UserPlus, Users } from "lucide-react";
+import { KeyRound, Mail, RefreshCw, Shield, UserMinus, UserPlus, Users } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 
@@ -34,6 +34,11 @@ export default function Team() {
   const [inviteOpen, setInviteOpen] = useState(false);
   const [deactivateTarget, setDeactivateTarget] = useState<any | null>(null);
   const [reassignTo, setReassignTo] = useState<number | null>(null);
+
+  // Set Password dialog
+  const [pwTarget, setPwTarget] = useState<any | null>(null);
+  const [pwValue, setPwValue] = useState("");
+  const [pwConfirm, setPwConfirm] = useState("");
 
   const filtered = useMemo(() => {
     const rows = data ?? [];
@@ -105,6 +110,24 @@ export default function Team() {
     },
     onError: (e) => toast.error(e.message),
   });
+
+  const setMemberPassword = trpc.team.setMemberPassword.useMutation({
+    onSuccess: () => {
+      setPwTarget(null);
+      setPwValue("");
+      setPwConfirm("");
+      toast.success("Password updated successfully");
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const resendInvitation = trpc.team.resendInvitation.useMutation({
+    onSuccess: () => toast.success("Invitation re-sent"),
+    onError: (e) => toast.error(e.message),
+  });
+
+  const pwMismatch = pwValue.length > 0 && pwConfirm.length > 0 && pwValue !== pwConfirm;
+  const pwTooShort = pwValue.length > 0 && pwValue.length < 8;
 
   const canChange = (targetRole: Role, targetUserId: number) => {
     if (!isAdmin) return false;
@@ -219,6 +242,7 @@ export default function Team() {
                   {filtered.map((m: any) => {
                     const isInactive = Boolean(m.deactivatedAt);
                     const editable = canChange(m.role, m.userId);
+                    const isPendingInvite = m.loginMethod === "invite";
                     return (
                       <tr key={m.memberId} className={`border-b ${isInactive ? "opacity-60" : ""}`}>
                         {isAdmin && (
@@ -241,7 +265,14 @@ export default function Team() {
                               )}
                             </div>
                             <div className="min-w-0">
-                              <div className="font-medium truncate">{m.name ?? m.email}</div>
+                              <div className="font-medium truncate flex items-center gap-1.5">
+                                {m.name ?? m.email}
+                                {isPendingInvite && (
+                                  <span className="inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
+                                    <Mail className="size-2.5" /> Pending
+                                  </span>
+                                )}
+                              </div>
                               <div className="text-xs text-muted-foreground truncate">{m.email}</div>
                             </div>
                           </div>
@@ -292,19 +323,41 @@ export default function Team() {
                                   Reactivate
                                 </Button>
                               ) : (
-                                editable && (
-                                  <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    className="text-rose-600"
-                                    onClick={() => {
-                                      setDeactivateTarget(m);
-                                      setReassignTo(null);
-                                    }}
-                                  >
-                                    <UserMinus className="size-3.5" /> Deactivate
-                                  </Button>
-                                )
+                                <>
+                                  {editable && (
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      title="Set password"
+                                      onClick={() => { setPwTarget(m); setPwValue(""); setPwConfirm(""); }}
+                                    >
+                                      <KeyRound className="size-3.5" />
+                                      <span className="hidden sm:inline ml-1">Set Password</span>
+                                    </Button>
+                                  )}
+                                  {isPendingInvite && editable && (
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      title="Resend invitation email"
+                                      disabled={resendInvitation.isPending}
+                                      onClick={() => resendInvitation.mutate({ memberId: m.memberId })}
+                                    >
+                                      <RefreshCw className="size-3.5" />
+                                      <span className="hidden sm:inline ml-1">Resend Invite</span>
+                                    </Button>
+                                  )}
+                                  {editable && (
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      className="text-rose-600"
+                                      onClick={() => { setDeactivateTarget(m); setReassignTo(null); }}
+                                    >
+                                      <UserMinus className="size-3.5" /> Deactivate
+                                    </Button>
+                                  )}
+                                </>
                               )}
                             </div>
                           )}
@@ -348,6 +401,59 @@ export default function Team() {
         />
         <Field name="quota" label="Annual quota (optional)" type="number" placeholder="250000" />
       </FormDialog>
+
+      {/* Set Password dialog */}
+      <Dialog open={!!pwTarget} onOpenChange={(v) => { if (!v) { setPwTarget(null); setPwValue(""); setPwConfirm(""); } }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Set password — {pwTarget?.name ?? pwTarget?.email}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <p className="text-sm text-muted-foreground">
+              Set a local password for this member. They can use it to sign in directly if your workspace supports password-based login.
+            </p>
+            <div className="space-y-1">
+              <Label htmlFor="pw-new">New password</Label>
+              <Input
+                id="pw-new"
+                type="password"
+                placeholder="Min. 8 characters"
+                value={pwValue}
+                onChange={(e) => setPwValue(e.target.value)}
+                autoComplete="new-password"
+              />
+              {pwTooShort && <p className="text-xs text-rose-500">Password must be at least 8 characters.</p>}
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="pw-confirm">Confirm password</Label>
+              <Input
+                id="pw-confirm"
+                type="password"
+                placeholder="Re-enter password"
+                value={pwConfirm}
+                onChange={(e) => setPwConfirm(e.target.value)}
+                autoComplete="new-password"
+              />
+              {pwMismatch && <p className="text-xs text-rose-500">Passwords do not match.</p>}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => { setPwTarget(null); setPwValue(""); setPwConfirm(""); }}>
+              Cancel
+            </Button>
+            <Button
+              disabled={!pwValue || !pwConfirm || pwMismatch || pwTooShort || setMemberPassword.isPending}
+              onClick={() => {
+                if (!pwTarget || !pwValue || pwMismatch || pwTooShort) return;
+                setMemberPassword.mutate({ memberId: pwTarget.memberId, password: pwValue });
+              }}
+            >
+              <KeyRound className="size-4" />
+              {setMemberPassword.isPending ? "Saving…" : "Set password"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Deactivate dialog */}
       <Dialog open={!!deactivateTarget} onOpenChange={(v) => !v && setDeactivateTarget(null)}>
