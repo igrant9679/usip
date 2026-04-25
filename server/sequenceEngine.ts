@@ -15,6 +15,7 @@
 
 import { and, eq, isNull, lte, or } from "drizzle-orm";
 import {
+  activities,
   contacts,
   emailDrafts,
   enrollments,
@@ -22,15 +23,20 @@ import {
   sequences,
   sequenceAbVariants,
   tasks,
+  unipileAccounts,
+  unipileInvites,
+  unipileMessages,
 } from "../drizzle/schema";
+import { sendLinkedInInvitation, sendMessage } from "./lib/unipile";
 import { getDb } from "./db";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type Step = {
-  type: "email" | "wait" | "task";
+  type: "email" | "wait" | "task" | "linkedin_dm" | "linkedin_invite";
   subject?: string;
   body?: string;
+  note?: string; // linkedin_invite note
   waitDays?: number;
   taskTitle?: string;
   taskDueOffsetDays?: number;
@@ -263,6 +269,132 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
         });
 
         // Advance to next step
+        if (hasNextStep) {
+          const nextStep = steps[nextStepIndex];
+          const nextActionAt = nextStep.type === "wait"
+            ? new Date(now.getTime() + (nextStep.waitDays ?? 1) * 86400000)
+            : new Date(now.getTime() + 60000);
+          await db
+            .update(enrollments)
+            .set({ currentStep: nextStepIndex, nextActionAt })
+            .where(eq(enrollments.id, enrollment.id));
+        } else {
+          await db
+            .update(enrollments)
+            .set({ status: "finished" })
+            .where(eq(enrollments.id, enrollment.id));
+        }
+
+      } else if (step.type === "linkedin_dm" || step.type === "linkedin_invite") {
+        // ── LinkedIn outreach via Unipile ──────────────────────────────────────
+        // Resolve the contact/lead's LinkedIn URL (used as provider ID lookup)
+        let linkedinUrl: string | null | undefined;
+        let relatedType: "contact" | "lead" = "contact";
+        let relatedId: number | undefined;
+
+        if (enrollment.contactId) {
+          const [contact] = await db
+            .select({ linkedinUrl: contacts.linkedinUrl })
+            .from(contacts)
+            .where(eq(contacts.id, enrollment.contactId));
+          linkedinUrl = contact?.linkedinUrl;
+          relatedType = "contact";
+          relatedId = enrollment.contactId;
+        } else if (enrollment.leadId) {
+          relatedType = "lead";
+          relatedId = enrollment.leadId;
+          // Leads don't have a linkedinUrl field — skip gracefully
+        }
+
+        // Find the sequence owner's Unipile LinkedIn account
+        const [unipileAcct] = await db
+          .select()
+          .from(unipileAccounts)
+          .where(
+            and(
+              eq(unipileAccounts.workspaceId, enrollment.workspaceId),
+              eq(unipileAccounts.provider, "LINKEDIN"),
+            ),
+          )
+          .limit(1);
+
+        if (unipileAcct && linkedinUrl) {
+          // Extract the LinkedIn member URN / profile ID from the URL
+          // e.g. https://www.linkedin.com/in/john-doe → john-doe
+          const profileSlug = linkedinUrl.replace(/\/+$/, "").split("/").pop() ?? linkedinUrl;
+
+          try {
+            if (step.type === "linkedin_dm") {
+              const result = await sendMessage({
+                accountId: unipileAcct.unipileAccountId,
+                attendeesIds: [profileSlug],
+                text: step.body ?? "",
+              });
+              // Log to unipile_messages
+              await db.insert(unipileMessages).values({
+                workspaceId: enrollment.workspaceId,
+                unipileAccountId: unipileAcct.unipileAccountId,
+                provider: "LINKEDIN",
+                chatId: result.id,
+                messageId: result.id,
+                direction: "outbound",
+                text: step.body ?? "",
+                linkedContactId: enrollment.contactId ?? null,
+                linkedLeadId: enrollment.leadId ?? null,
+              });
+              // Log activity
+              if (relatedId) {
+                await db.insert(activities).values({
+                  workspaceId: enrollment.workspaceId,
+                  type: "linkedin",
+                  relatedType,
+                  relatedId,
+                  subject: "LinkedIn DM sent",
+                  body: step.body ?? "",
+                });
+              }
+            } else {
+              // linkedin_invite
+              await sendLinkedInInvitation({
+                accountId: unipileAcct.unipileAccountId,
+                providerId: profileSlug,
+                message: step.note ?? "",
+              });
+              // Log to unipile_invites
+              await db.insert(unipileInvites).values({
+                workspaceId: enrollment.workspaceId,
+                userId: unipileAcct.userId,
+                unipileAccountId: unipileAcct.unipileAccountId,
+                recipientProviderId: profileSlug,
+                message: step.note ?? "",
+                status: "pending",
+                linkedContactId: enrollment.contactId ?? null,
+                linkedLeadId: enrollment.leadId ?? null,
+              });
+              // Log activity
+              if (relatedId) {
+                await db.insert(activities).values({
+                  workspaceId: enrollment.workspaceId,
+                  type: "linkedin",
+                  relatedType,
+                  relatedId,
+                  subject: "LinkedIn connection request sent",
+                  body: step.note ?? "",
+                });
+              }
+            }
+          } catch (liErr) {
+            console.warn(`[SequenceEngine] LinkedIn step failed for enrollment ${enrollment.id}:`, liErr);
+            // Don't throw — advance past the step so the sequence continues
+          }
+        } else {
+          console.warn(
+            `[SequenceEngine] Skipping LinkedIn step for enrollment ${enrollment.id}: ` +
+            `${!unipileAcct ? "no Unipile LinkedIn account" : "no LinkedIn URL on contact"}`
+          );
+        }
+
+        // Advance to next step regardless of LinkedIn outcome
         if (hasNextStep) {
           const nextStep = steps[nextStepIndex];
           const nextActionAt = nextStep.type === "wait"

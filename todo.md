@@ -1167,7 +1167,7 @@
 ## Batch R — Sequences LinkedIn Steps, Channel Icons, Unipile Dashboard Widget
 
 - [x] Sequences: add `linkedin_dm` and `linkedin_invite` step types to sequenceSteps schema enum
-- [ ] Sequences: server-side execution for linkedin_dm and linkedin_invite steps (calls unipile sendMessage / sendLinkedInInvite)
+- [x] Sequences: server-side execution for linkedin_dm and linkedin_invite steps (calls unipile sendMessage / sendLinkedInInvite)
 - [x] Sequences: UI — add LinkedIn DM and Connection Request options to the step-type picker in the builder (SequenceCanvas.tsx)
 - [x] Sequences: UI — show LinkedIn DM compose panel (message body, char counter, merge tokens) and LinkedIn Invite compose panel (note, char counter, merge tokens) in NodeEditPanel.tsx
 - [x] ActivityTimeline: add provider icon badge (LinkedIn blue, WhatsApp green, Instagram pink, Telegram blue, X black, Outlook blue, IMAP gray) to each activity row based on activity metadata

@@ -12,6 +12,8 @@ const stepSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("email"), subject: z.string(), body: z.string().optional() }),
   z.object({ type: z.literal("wait"), days: z.number().int().min(0).max(60) }),
   z.object({ type: z.literal("task"), body: z.string() }),
+  z.object({ type: z.literal("linkedin_dm"), body: z.string().optional() }),
+  z.object({ type: z.literal("linkedin_invite"), note: z.string().optional() }),
 ]);
 
 export const sequencesRouter = router({
@@ -109,7 +111,7 @@ export const sequencesRouter = router({
       id: z.number(),
       nodes: z.array(z.object({
         id: z.string(),
-        type: z.enum(["start", "email", "wait", "condition", "action", "goal"]),
+        type: z.enum(["start", "email", "wait", "condition", "action", "goal", "linkedin_dm", "linkedin_invite"]),
         positionX: z.number(),
         positionY: z.number(),
         data: z.record(z.string(), z.any()),
