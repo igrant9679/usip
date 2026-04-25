@@ -56,6 +56,7 @@ import SegmentRules from "@/pages/usip/SegmentRules";
 import ConnectedAccounts from "@/pages/usip/ConnectedAccounts";
 import UnifiedInbox from "@/pages/usip/UnifiedInbox";
 import InviteAccept from "@/pages/InviteAccept";
+import PasswordLogin from "@/pages/PasswordLogin";
 import { Loader2 } from "lucide-react";
 import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
@@ -72,7 +73,10 @@ function Landing() {
         <p className="text-[#A5B4FC] text-sm tracking-wide">The Unified Revenue Intelligence Platform</p>
         <h1 className="font-serif text-4xl leading-tight">Full-lifecycle revenue intelligence, from first touch to renewal.</h1>
         <p className="text-[#FAF8F2]/70 text-sm leading-relaxed">CRM, sequences, customer success, social, campaigns, custom dashboards, workflow automation, and CPQ. Multi-workspace, role-aware, AI-native.</p>
-        <Button onClick={() => (window.location.href = getLoginUrl())} className="bg-[#14B89A] hover:bg-[#0FA086] text-black">Sign in</Button>
+        <div className="flex flex-col gap-3">
+          <Button onClick={() => (window.location.href = getLoginUrl())} className="bg-[#14B89A] hover:bg-[#0FA086] text-black w-full">Sign in with Manus</Button>
+          <Button variant="outline" onClick={() => (window.location.href = "/login")} className="border-white/20 text-white/70 hover:bg-white/10 hover:text-white bg-transparent w-full">Sign in with password</Button>
+        </div>
         <p className="text-[#FAF8F2]/40 text-xs">A demo workspace is provisioned automatically on first sign-in.</p>
       </div>
     </div>
@@ -143,6 +147,7 @@ function Router() {
       <Route path="/settings"><AuthGate><Settings /></AuthGate></Route>
       <Route path="/notification-prefs"><AuthGate><NotificationPrefs /></AuthGate></Route>
       <Route path="/invite/accept"><InviteAccept /></Route>
+      <Route path="/login"><PasswordLogin /></Route>
       <Route path="/404"><NotFound /></Route>
       <Route><NotFound /></Route>
     </Switch>

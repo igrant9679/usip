@@ -1344,3 +1344,21 @@
 - [x] UI: InviteAccept.tsx — "Set password & continue" button + "Skip for now" ghost button
 - [x] UI: InviteAccept.tsx — show/hide password toggle, confirm password field, inline validation errors
 - [x] UI: ConnectedAccounts.tsx — replace generic expired banner with per-account rows each containing a Reconnect button
+
+## Batch AB — Password Login, Strength Indicator, Reconnect All
+
+- [ ] Server: POST /api/auth/password-login — accepts email+password, verifies bcrypt hash, issues session cookie
+- [ ] UI: Login page with email+password form that calls the new endpoint
+- [ ] UI: Link from OAuth login page to password login page
+- [ ] UI: InviteAccept.tsx — add visual password strength indicator (Weak/Fair/Strong) to Create Your Password step
+- [ ] UI: ConnectedAccounts.tsx — add "Reconnect all" button to expired accounts banner header
+
+## Batch AB — Password Login, Strength Indicator, Reconnect All
+
+- [x] Server: POST /api/auth/password-login Express route (bcrypt verify, session cookie issue)
+- [x] UI: PasswordLogin.tsx page — email+password sign-in form at /login
+- [x] UI: Landing page — add "Sign in with password" secondary button linking to /login
+- [x] App.tsx: register /login route for PasswordLogin page
+- [x] UI: InviteAccept.tsx — password strength indicator (Weak/Fair/Strong bar + label) below password field
+- [x] UI: ConnectedAccounts.tsx — isReconnectingAll state + handleReconnectAll function
+- [x] UI: ConnectedAccounts.tsx — "Reconnect all" button in expired banner header (only shown when >1 expired account)

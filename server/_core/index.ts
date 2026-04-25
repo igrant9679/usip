@@ -17,6 +17,7 @@ import { registerEmailTrackingRoutes } from "../emailTracking";
 import { startInboundReplyPoller } from "../inboundReplyPoller";
 import { expireInvitations, sendExpiryWarningEmails } from "../inviteExpiry";
 import { registerUnipileWebhookRoutes } from "../unipileWebhook";
+import { registerPasswordAuthRoutes } from "../passwordAuth";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -48,6 +49,7 @@ async function startServer() {
   registerScimRoutes(app);
   registerEmailTrackingRoutes(app);
   registerUnipileWebhookRoutes(app);
+  registerPasswordAuthRoutes(app);
   // tRPC API
   app.use(
     "/api/trpc",

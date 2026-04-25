@@ -269,6 +269,27 @@ export default function InviteAccept() {
                   {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </button>
               </div>
+              {/* Password strength indicator */}
+              {password.length > 0 && (() => {
+                const hasLength = password.length >= 8;
+                const hasUpper = /[A-Z]/.test(password);
+                const hasLower = /[a-z]/.test(password);
+                const hasNumber = /[0-9]/.test(password);
+                const hasSymbol = /[^A-Za-z0-9]/.test(password);
+                const score = [hasLength, hasUpper, hasLower, hasNumber, hasSymbol].filter(Boolean).length;
+                const label = score <= 2 ? "Weak" : score <= 3 ? "Fair" : "Strong";
+                const barColor = score <= 2 ? "bg-red-500" : score <= 3 ? "bg-amber-500" : "bg-emerald-500";
+                const textColor = score <= 2 ? "text-red-600" : score <= 3 ? "text-amber-600" : "text-emerald-600";
+                const widthClass = score <= 2 ? "w-1/3" : score <= 3 ? "w-2/3" : "w-full";
+                return (
+                  <div className="mt-2 space-y-1">
+                    <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
+                      <div className={`h-full rounded-full transition-all duration-300 ${barColor} ${widthClass}`} />
+                    </div>
+                    <p className={`text-xs font-medium ${textColor}`}>{label} password</p>
+                  </div>
+                );
+              })()}
             </div>
             <div className="space-y-2">
               <Label htmlFor="invite-confirm-password">Confirm password</Label>

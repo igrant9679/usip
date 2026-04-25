@@ -217,6 +217,30 @@ export default function ConnectedAccounts() {
     onError: (err) => toast.error("Failed to disconnect", { description: err.message }),
   });
   const generateLink = trpc.unipile.generateConnectLink.useMutation();
+  const [isReconnectingAll, setIsReconnectingAll] = useState(false);
+  const handleReconnectAll = async () => {
+    const expired = accounts.filter((a) => EXPIRED_STATUSES.has(a.status));
+    if (expired.length === 0) return;
+    setIsReconnectingAll(true);
+    try {
+      for (const acc of expired) {
+        const { url } = await generateLink.mutateAsync({
+          reconnectAccountId: acc.unipileAccountId,
+          origin: window.location.origin,
+        });
+        window.open(url, '_blank', 'noopener,noreferrer');
+        // Small delay between tabs to avoid popup blockers
+        await new Promise((r) => setTimeout(r, 600));
+      }
+      setIsConnecting(true);
+      if (connectingTimerRef.current) clearTimeout(connectingTimerRef.current);
+      connectingTimerRef.current = setTimeout(() => setIsConnecting(false), 5 * 60 * 1000);
+    } catch (err) {
+      toast.error('Failed to generate reconnect links', { description: String(err) });
+    } finally {
+      setIsReconnectingAll(false);
+    }
+  };
   const handleReconnect = async (unipileAccountId: string) => {
     try {
       const { url } = await generateLink.mutateAsync({
@@ -297,14 +321,31 @@ export default function ConnectedAccounts() {
       {/* Expired credentials banner - shown when any account needs re-auth */}
       {accounts.some((a) => EXPIRED_STATUSES.has(a.status)) && (
         <div className="mx-6 mt-4 rounded-lg border border-amber-400/40 bg-amber-500/10 px-4 py-3 text-sm">
-          <div className="flex items-start gap-3 mb-3">
-            <TriangleAlert className="h-4 w-4 shrink-0 mt-0.5 text-amber-700" />
-            <div className="text-amber-800">
-              <span className="font-semibold">Action required: </span>
-              <span>
-                {accounts.filter((a) => EXPIRED_STATUSES.has(a.status)).length} account{accounts.filter((a) => EXPIRED_STATUSES.has(a.status)).length > 1 ? "s" : ""} need{accounts.filter((a) => EXPIRED_STATUSES.has(a.status)).length === 1 ? "s" : ""} to be reconnected to restore access.
-              </span>
+          <div className="flex items-start justify-between gap-3 mb-3">
+            <div className="flex items-start gap-3">
+              <TriangleAlert className="h-4 w-4 shrink-0 mt-0.5 text-amber-700" />
+              <div className="text-amber-800">
+                <span className="font-semibold">Action required: </span>
+                <span>
+                  {accounts.filter((a) => EXPIRED_STATUSES.has(a.status)).length} account{accounts.filter((a) => EXPIRED_STATUSES.has(a.status)).length > 1 ? "s" : ""} need{accounts.filter((a) => EXPIRED_STATUSES.has(a.status)).length === 1 ? "s" : ""} to be reconnected to restore access.
+                </span>
+              </div>
             </div>
+            {accounts.filter((a) => EXPIRED_STATUSES.has(a.status)).length > 1 && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="shrink-0 border-amber-500 text-amber-800 hover:bg-amber-500/20 hover:border-amber-600 font-medium text-xs"
+                onClick={handleReconnectAll}
+                disabled={isReconnectingAll || generateLink.isPending}
+              >
+                {isReconnectingAll ? (
+                  <><Loader2 className="h-3 w-3 animate-spin mr-1" />Opening tabs…</>
+                ) : (
+                  "Reconnect all"
+                )}
+              </Button>
+            )}
           </div>
           <div className="flex flex-col gap-2 pl-7">
             {accounts.filter((a) => EXPIRED_STATUSES.has(a.status)).map((acc) => (
