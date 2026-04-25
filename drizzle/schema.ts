@@ -2234,3 +2234,26 @@ export const unipileInvites = mysqlTable(
   }),
 );
 export type UnipileInvite = typeof unipileInvites.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Member Permissions
+   ────────────────────────────────────────────────────────────────────────── */
+
+export const memberPermissions = mysqlTable(
+  "member_permissions",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    userId: int("userId").notNull(),
+    feature: varchar("feature", { length: 80 }).notNull(),
+    granted: boolean("granted").default(true).notNull(),
+    grantedBy: int("grantedBy"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    uniq: uniqueIndex("ix_mp_uniq").on(t.workspaceId, t.userId, t.feature),
+    byUser: index("ix_mp_user").on(t.workspaceId, t.userId),
+  }),
+);
+export type MemberPermission = typeof memberPermissions.$inferSelect;

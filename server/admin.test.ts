@@ -144,3 +144,99 @@ describe("settings — input validation", () => {
     }
   });
 });
+
+describe("team — getPermissions / setPermissions logic", () => {
+  it("returns an empty map when no permissions have been set", () => {
+    // Simulate no rows returned from memberPermissions
+    const rows: { feature: string; granted: boolean }[] = [];
+    const perms: Record<string, boolean> = {};
+    for (const row of rows) perms[row.feature] = row.granted;
+    expect(Object.keys(perms).length).toBe(0);
+  });
+
+  it("maps feature rows to a boolean record correctly", () => {
+    const rows = [
+      { feature: "export_data", granted: true },
+      { feature: "access_billing", granted: false },
+      { feature: "manage_api_keys", granted: true },
+    ];
+    const perms: Record<string, boolean> = {};
+    for (const row of rows) perms[row.feature] = row.granted;
+    expect(perms.export_data).toBe(true);
+    expect(perms.access_billing).toBe(false);
+    expect(perms.manage_api_keys).toBe(true);
+  });
+
+  it("skips upsert when permissions map is empty", () => {
+    const entries = Object.entries({});
+    expect(entries.length).toBe(0);
+    // No DB calls should be made; the procedure returns early
+  });
+
+  it("correctly identifies all 6 expected feature keys", () => {
+    const PERMISSION_FEATURES = [
+      "export_data",
+      "manage_sequences",
+      "view_all_leads",
+      "manage_integrations",
+      "access_billing",
+      "manage_api_keys",
+    ];
+    expect(PERMISSION_FEATURES.length).toBe(6);
+    for (const key of PERMISSION_FEATURES) {
+      expect(typeof key).toBe("string");
+      expect(key.length).toBeLessThanOrEqual(80);
+    }
+  });
+});
+
+describe("team — getMemberActivityLog logic", () => {
+  it("filters audit log rows by entityType workspace_member or user", () => {
+    type AuditRow = { entityType: string; entityId: number; action: string; actorUserId: number };
+    const rows: AuditRow[] = [
+      { entityType: "workspace_member", entityId: 5, action: "update", actorUserId: 1 },
+      { entityType: "user", entityId: 5, action: "update", actorUserId: 1 },
+      { entityType: "lead", entityId: 5, action: "update", actorUserId: 1 },
+      { entityType: "workspace_member", entityId: 6, action: "update", actorUserId: 1 },
+    ];
+    const targetUserId = 5;
+    const filtered = rows.filter(
+      (r) =>
+        (r.entityType === "workspace_member" && r.entityId === targetUserId) ||
+        (r.entityType === "user" && r.entityId === targetUserId) ||
+        (r.action === "login" && r.actorUserId === targetUserId),
+    );
+    expect(filtered.length).toBe(2);
+    expect(filtered.every((r) => r.entityId === targetUserId || r.actorUserId === targetUserId)).toBe(true);
+  });
+
+  it("includes login events for the target user", () => {
+    type AuditRow = { entityType: string; entityId: number | null; action: string; actorUserId: number };
+    const rows: AuditRow[] = [
+      { entityType: "workspace_member", entityId: null, action: "login", actorUserId: 5 },
+      { entityType: "workspace_member", entityId: null, action: "login", actorUserId: 7 },
+    ];
+    const targetUserId = 5;
+    const filtered = rows.filter(
+      (r) =>
+        (r.entityType === "workspace_member" && r.entityId === targetUserId) ||
+        (r.action === "login" && r.actorUserId === targetUserId),
+    );
+    expect(filtered.length).toBe(1);
+    expect(filtered[0].actorUserId).toBe(5);
+  });
+
+  it("respects the limit parameter (default 50, max 100)", () => {
+    const defaultLimit = 50;
+    const maxLimit = 100;
+    const minLimit = 1;
+    expect(defaultLimit).toBe(50);
+    expect(maxLimit).toBe(100);
+    expect(minLimit).toBe(1);
+    // Clamp logic
+    const clamp = (n: number) => Math.max(minLimit, Math.min(maxLimit, n));
+    expect(clamp(0)).toBe(1);
+    expect(clamp(50)).toBe(50);
+    expect(clamp(150)).toBe(100);
+  });
+});

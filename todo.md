@@ -1267,19 +1267,19 @@
 
 ## Batch V — Fix Transactional Email Delivery (use smtp_configs not sendingAccounts)
 
-- [ ] Create server/emailDelivery.ts helper: sendWorkspaceEmail(workspaceId, {to, subject, html}) using smtp_configs table
-- [ ] Fix admin.ts invite procedure: replace systemSenderAccountId/sendingAccounts lookup with sendWorkspaceEmail
-- [ ] Fix admin.ts resendInvitation procedure: replace systemSenderAccountId/sendingAccounts lookup with sendWorkspaceEmail
-- [ ] Fix inviteExpiry.ts sendExpiryWarningEmails: replace systemSenderAccountId/sendingAccounts lookup with sendWorkspaceEmail
-- [ ] Fix pipelineAlerts.ts notification emails: replace systemSenderAccountId/sendingAccounts lookup with sendWorkspaceEmail
-- [ ] Tests: cover sendWorkspaceEmail helper (missing config, disabled config, send success)
+- [x] Create server/emailDelivery.ts helper: sendWorkspaceEmail(workspaceId, {to, subject, html}) using smtp_configs table
+- [x] Fix admin.ts invite procedure: replace systemSenderAccountId/sendingAccounts lookup with sendWorkspaceEmail
+- [x] Fix admin.ts resendInvitation procedure: replace systemSenderAccountId/sendingAccounts lookup with sendWorkspaceEmail
+- [x] Fix inviteExpiry.ts sendExpiryWarningEmails: replace systemSenderAccountId/sendingAccounts lookup with sendWorkspaceEmail
+- [x] Fix pipelineAlerts.ts notification emails: replace systemSenderAccountId/sendingAccounts lookup with sendWorkspaceEmail
+- [x] Tests: cover sendWorkspaceEmail helper (missing config, disabled config, send success)
 
 ## Batch W — Team Member Edit
 
-- [ ] Server: team.updateMember procedure (admin+): update name, email, title, role, quota for any member below caller rank
-- [ ] UI: Edit Member button (pencil icon) on each member row in Team.tsx
-- [ ] UI: Edit Member dialog with fields: name, email, title, role (select), quota (number)
-- [ ] UI: optimistic update on save; invalidate team.list on success
+- [x] Server: team.updateMember procedure (admin+): update name, email, title, role, quota for any member below caller rank
+- [x] UI: Edit Member button (pencil icon) on each member row in Team.tsx
+- [x] UI: Edit Member dialog with fields: name, email, title, role (select), quota (number)
+- [x] UI: optimistic update on save; invalidate team.list on success
 
 ## Batch V — Fix Transactional Email Delivery (completed)
 - [x] Create server/emailDelivery.ts — sendWorkspaceEmail helper reading smtp_configs table
@@ -1292,3 +1292,15 @@
 - [x] Server: add team.updateMember procedure (name, email, title, role, quota, notifEmail)
 - [x] Server: expose notifEmail in team.list query
 - [x] UI: add Edit button and Edit Member dialog to Team.tsx (all editable fields)
+
+## Batch X — Edit Member Dialog: Permissions, Activity Log, Deactivate
+
+- [x] Schema: add memberPermissions table (workspaceId, userId, feature, granted, grantedBy, createdAt)
+- [x] Migration: generate and apply memberPermissions migration
+- [x] Server: team.getPermissions procedure — returns permission rows for a member
+- [x] Server: team.setPermissions procedure — upserts permission rows, logs audit
+- [x] Server: team.getMemberActivityLog procedure — queries auditLog for workspace_member/user entity changes
+- [x] UI: convert Edit Member dialog to 3-tab layout (Profile, Permissions, Activity Log)
+- [x] UI: Permissions tab — feature toggle switches calling team.setPermissions
+- [x] UI: Activity Log tab — read-only audit table for the member
+- [x] UI: Deactivate User button in edit dialog footer (destructive, triggers reassign flow)

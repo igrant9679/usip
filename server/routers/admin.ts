@@ -18,8 +18,10 @@ import { z } from "zod";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import {
+  auditLog,
   leads,
   loginHistory,
+  memberPermissions,
   opportunities,
   tasks,
   usageCounters,
@@ -1072,5 +1074,103 @@ export const dangerZoneRouter = router({
       });
 
       return { ok: true };
+    }),
+
+  /** Return all permission overrides for a member in this workspace */
+  getPermissions: adminWsProcedure
+    .input(z.object({ memberId: z.number().int() }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+
+      const [member] = await db
+        .select({ userId: workspaceMembers.userId })
+        .from(workspaceMembers)
+        .where(and(eq(workspaceMembers.id, input.memberId), eq(workspaceMembers.workspaceId, ctx.workspace.id)));
+      if (!member) throw new TRPCError({ code: "NOT_FOUND", message: "Member not found" });
+
+      const rows = await db
+        .select()
+        .from(memberPermissions)
+        .where(and(eq(memberPermissions.workspaceId, ctx.workspace.id), eq(memberPermissions.userId, member.userId)));
+
+      // Return as a map: { feature: granted }
+      const perms: Record<string, boolean> = {};
+      for (const row of rows) perms[row.feature] = row.granted;
+      return perms;
+    }),
+
+  /** Upsert permission overrides for a member */
+  setPermissions: adminWsProcedure
+    .input(z.object({
+      memberId: z.number().int(),
+      permissions: z.record(z.string().max(80), z.boolean()),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+
+      const [member] = await db
+        .select({ userId: workspaceMembers.userId })
+        .from(workspaceMembers)
+        .where(and(eq(workspaceMembers.id, input.memberId), eq(workspaceMembers.workspaceId, ctx.workspace.id)));
+      if (!member) throw new TRPCError({ code: "NOT_FOUND", message: "Member not found" });
+
+      const entries = Object.entries(input.permissions);
+      if (entries.length === 0) return { ok: true };
+
+      // Upsert each feature permission
+      for (const [feature, granted] of entries) {
+        await db
+          .insert(memberPermissions)
+          .values({ workspaceId: ctx.workspace.id, userId: member.userId, feature, granted, grantedBy: ctx.user.id })
+          .onDuplicateKeyUpdate({ set: { granted, grantedBy: ctx.user.id } });
+      }
+
+      await recordAudit({
+        workspaceId: ctx.workspace.id,
+        actorUserId: ctx.user.id,
+        action: "update",
+        entityType: "workspace_member",
+        entityId: member.userId,
+        after: { permissions: input.permissions },
+      });
+
+      return { ok: true };
+    }),
+
+  /** Return recent audit log entries for a specific member */
+  getMemberActivityLog: adminWsProcedure
+    .input(z.object({
+      memberId: z.number().int(),
+      limit: z.number().int().min(1).max(100).default(50),
+    }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+
+      const [member] = await db
+        .select({ userId: workspaceMembers.userId })
+        .from(workspaceMembers)
+        .where(and(eq(workspaceMembers.id, input.memberId), eq(workspaceMembers.workspaceId, ctx.workspace.id)));
+      if (!member) throw new TRPCError({ code: "NOT_FOUND", message: "Member not found" });
+
+      const rows = await db
+        .select()
+        .from(auditLog)
+        .where(
+          and(
+            eq(auditLog.workspaceId, ctx.workspace.id),
+            or(
+              and(eq(auditLog.entityType, "workspace_member"), eq(auditLog.entityId, member.userId)),
+              and(eq(auditLog.entityType, "user"), eq(auditLog.entityId, member.userId)),
+              and(eq(auditLog.action, "login"), eq(auditLog.actorUserId, member.userId)),
+            ),
+          ),
+        )
+        .orderBy(desc(auditLog.createdAt))
+        .limit(input.limit);
+
+      return rows;
     }),
 });

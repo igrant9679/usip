@@ -7,6 +7,8 @@ import { trpc } from "@/lib/trpc";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Switch } from "@/components/ui/switch";
 import {
   CheckCircle2,
   Clock,
@@ -62,6 +64,10 @@ export default function Team() {
   const [editRole, setEditRole] = useState<Role>("rep");
   const [editQuota, setEditQuota] = useState("");
   const [editNotifEmail, setEditNotifEmail] = useState("");
+  const [editDialogTab, setEditDialogTab] = useState<"profile" | "permissions" | "activity">("profile");
+  // Local permissions state (feature -> granted)
+  const [localPerms, setLocalPerms] = useState<Record<string, boolean>>({});
+  const [permsDirty, setPermsDirty] = useState(false);
 
   // Set Password dialog
   const [pwTarget, setPwTarget] = useState<any | null>(null);
@@ -173,6 +179,50 @@ export default function Team() {
     },
     onError: (e) => toast.error(e.message),
   });
+
+  const setPermissions = trpc.team.setPermissions.useMutation({
+    onSuccess: () => {
+      utils.team.getPermissions.invalidate({ memberId: editTarget?.memberId });
+      setPermsDirty(false);
+      toast.success("Permissions saved");
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const { data: memberPerms, isLoading: permsLoading } = trpc.team.getPermissions.useQuery(
+    { memberId: editTarget?.memberId ?? 0 },
+    {
+      enabled: !!editTarget && editDialogTab === "permissions",
+      onSuccess: (d: Record<string, boolean>) => {
+        if (!permsDirty) setLocalPerms(d);
+      },
+    } as any,
+  );
+
+  const { data: memberActivityLog, isLoading: activityLoading } = trpc.team.getMemberActivityLog.useQuery(
+    { memberId: editTarget?.memberId ?? 0 },
+    { enabled: !!editTarget && editDialogTab === "activity" },
+  );
+
+  const PERMISSION_FEATURES: { key: string; label: string; description: string }[] = [
+    { key: "export_data", label: "Export data", description: "Can export leads, contacts, and reports to CSV/Excel" },
+    { key: "manage_sequences", label: "Manage sequences", description: "Can create, edit, and delete email sequences" },
+    { key: "view_all_leads", label: "View all leads", description: "Can view leads owned by other team members" },
+    { key: "manage_integrations", label: "Manage integrations", description: "Can connect and disconnect external integrations" },
+    { key: "access_billing", label: "Access billing", description: "Can view and manage workspace billing and subscription" },
+    { key: "manage_api_keys", label: "Manage API keys", description: "Can create and revoke API keys for the workspace" },
+  ];
+
+  function getPermValue(key: string): boolean {
+    // Use local state if dirty, otherwise fall back to server data
+    if (permsDirty) return localPerms[key] ?? false;
+    return (memberPerms ?? localPerms)[key] ?? false;
+  }
+
+  function togglePerm(key: string, value: boolean) {
+    setLocalPerms((prev) => ({ ...prev, [key]: value }));
+    setPermsDirty(true);
+  }
 
   const setMemberPassword = trpc.team.setMemberPassword.useMutation({
     onSuccess: () => {
@@ -693,74 +743,193 @@ export default function Team() {
         </div>
       )}
 
-      {/* Edit Member dialog */}
-      <Dialog open={!!editTarget} onOpenChange={(v) => { if (!v) setEditTarget(null); }}>
-        <DialogContent className="max-w-md">
+      {/* Edit Member dialog — 3-tab layout */}
+      <Dialog open={!!editTarget} onOpenChange={(v) => { if (!v) { setEditTarget(null); setEditDialogTab("profile"); setPermsDirty(false); } }}>
+        <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>Edit member — {editTarget?.name ?? editTarget?.email}</DialogTitle>
           </DialogHeader>
-          <div className="space-y-4 py-2">
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1">
-                <Label htmlFor="edit-name">Full name</Label>
-                <Input id="edit-name" value={editName} onChange={(e) => setEditName(e.target.value)} placeholder="Jane Doe" />
+
+          <Tabs value={editDialogTab} onValueChange={(v) => setEditDialogTab(v as any)} className="gap-0">
+            <TabsList className="w-full mb-4">
+              <TabsTrigger value="profile" className="flex-1">Profile</TabsTrigger>
+              <TabsTrigger value="permissions" className="flex-1">Permissions</TabsTrigger>
+              <TabsTrigger value="activity" className="flex-1">Activity Log</TabsTrigger>
+            </TabsList>
+
+            {/* ── Profile tab ── */}
+            <TabsContent value="profile">
+              <div className="space-y-4 py-1">
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <Label htmlFor="edit-name">Full name</Label>
+                    <Input id="edit-name" value={editName} onChange={(e) => setEditName(e.target.value)} placeholder="Jane Doe" />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="edit-email">Login email</Label>
+                    <Input id="edit-email" type="email" value={editEmail} onChange={(e) => setEditEmail(e.target.value)} placeholder="jane@acme.com" />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <Label htmlFor="edit-title">Title</Label>
+                    <Input id="edit-title" value={editTitle} onChange={(e) => setEditTitle(e.target.value)} placeholder="Account Executive" />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="edit-role">Role</Label>
+                    <select
+                      id="edit-role"
+                      className="w-full border rounded-md px-2 py-1.5 text-sm bg-background"
+                      value={editRole}
+                      onChange={(e) => setEditRole(e.target.value as Role)}
+                    >
+                      {ROLES.filter((r) => ROLE_RANK[r] <= ROLE_RANK[myRole] || r === editTarget?.role).map((r) => (
+                        <option key={r} value={r}>{r}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <Label htmlFor="edit-quota">Annual quota ($)</Label>
+                    <Input id="edit-quota" type="number" min={0} value={editQuota} onChange={(e) => setEditQuota(e.target.value)} placeholder="250000" />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="edit-notif">Notification email</Label>
+                    <Input id="edit-notif" type="email" value={editNotifEmail} onChange={(e) => setEditNotifEmail(e.target.value)} placeholder="Same as login email" />
+                    <p className="text-xs text-muted-foreground">Leave blank to use login email.</p>
+                  </div>
+                </div>
               </div>
-              <div className="space-y-1">
-                <Label htmlFor="edit-email">Login email</Label>
-                <Input id="edit-email" type="email" value={editEmail} onChange={(e) => setEditEmail(e.target.value)} placeholder="jane@acme.com" />
+            </TabsContent>
+
+            {/* ── Permissions tab ── */}
+            <TabsContent value="permissions">
+              <div className="py-1">
+                {permsLoading ? (
+                  <div className="py-6 text-sm text-center text-muted-foreground">Loading permissions…</div>
+                ) : (
+                  <div className="space-y-1">
+                    <p className="text-xs text-muted-foreground mb-3">
+                      Feature-level overrides for this member. Toggles here take precedence over workspace-wide defaults.
+                    </p>
+                    {PERMISSION_FEATURES.map(({ key, label, description }) => (
+                      <div key={key} className="flex items-center justify-between rounded-md px-3 py-2.5 hover:bg-muted/50 transition-colors">
+                        <div className="space-y-0.5">
+                          <div className="text-sm font-medium">{label}</div>
+                          <div className="text-xs text-muted-foreground">{description}</div>
+                        </div>
+                        <Switch
+                          checked={getPermValue(key)}
+                          onCheckedChange={(v) => togglePerm(key, v)}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1">
-                <Label htmlFor="edit-title">Title</Label>
-                <Input id="edit-title" value={editTitle} onChange={(e) => setEditTitle(e.target.value)} placeholder="Account Executive" />
+            </TabsContent>
+
+            {/* ── Activity Log tab ── */}
+            <TabsContent value="activity">
+              <div className="py-1">
+                {activityLoading ? (
+                  <div className="py-6 text-sm text-center text-muted-foreground">Loading activity…</div>
+                ) : !memberActivityLog || memberActivityLog.length === 0 ? (
+                  <div className="py-8 text-center">
+                    <LogIn className="size-8 mx-auto text-muted-foreground/40 mb-2" />
+                    <p className="text-sm text-muted-foreground">No activity recorded for this member yet.</p>
+                  </div>
+                ) : (
+                  <div className="overflow-y-auto max-h-72 rounded-md border">
+                    <table className="w-full text-xs">
+                      <thead className="text-muted-foreground border-b sticky top-0 bg-card">
+                        <tr className="text-left">
+                          <th className="px-3 py-2">Date</th>
+                          <th className="px-3 py-2">Action</th>
+                          <th className="px-3 py-2">Entity</th>
+                          <th className="px-3 py-2">Details</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {memberActivityLog.map((row: any) => (
+                          <tr key={row.id} className="border-b last:border-0">
+                            <td className="px-3 py-2 whitespace-nowrap tabular-nums">
+                              {new Date(row.createdAt).toLocaleString()}
+                            </td>
+                            <td className="px-3 py-2">
+                              <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                                row.action === "login" ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400" :
+                                row.action === "update" ? "bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400" :
+                                row.action === "delete" ? "bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400" :
+                                "bg-muted text-muted-foreground"
+                              }`}>
+                                {row.action}
+                              </span>
+                            </td>
+                            <td className="px-3 py-2 text-muted-foreground">{row.entityType ?? "—"}</td>
+                            <td className="px-3 py-2 text-muted-foreground max-w-[180px] truncate" title={JSON.stringify(row.after ?? row.before ?? {})}>
+                              {row.after ? Object.keys(row.after as object).join(", ") : "—"}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
-              <div className="space-y-1">
-                <Label htmlFor="edit-role">Role</Label>
-                <select
-                  id="edit-role"
-                  className="w-full border rounded-md px-2 py-1.5 text-sm bg-background"
-                  value={editRole}
-                  onChange={(e) => setEditRole(e.target.value as Role)}
+            </TabsContent>
+          </Tabs>
+
+          <DialogFooter className="flex items-center justify-between gap-2 flex-wrap">
+            {/* Deactivate button — only for active members */}
+            {editTarget && !editTarget.deactivatedAt && canChange(editTarget.role, editTarget.userId) && (
+              <Button
+                variant="ghost"
+                className="text-rose-600 hover:text-rose-700 hover:bg-rose-50 dark:hover:bg-rose-950/30 mr-auto"
+                onClick={() => {
+                  setEditTarget(null);
+                  setDeactivateTarget(editTarget);
+                  setReassignTo(null);
+                }}
+              >
+                <UserMinus className="size-4" /> Deactivate user
+              </Button>
+            )}
+            <div className="flex items-center gap-2">
+              <Button variant="ghost" onClick={() => { setEditTarget(null); setEditDialogTab("profile"); setPermsDirty(false); }}>Cancel</Button>
+              {editDialogTab === "profile" && (
+                <Button
+                  disabled={updateMember.isPending}
+                  onClick={() => {
+                    if (!editTarget) return;
+                    updateMember.mutate({
+                      memberId: editTarget.memberId,
+                      name: editName.trim() || undefined,
+                      email: editEmail.trim() || undefined,
+                      title: editTitle.trim() || null,
+                      role: editRole,
+                      quota: editQuota ? Number(editQuota) : null,
+                      notifEmail: editNotifEmail.trim() || null,
+                    });
+                  }}
                 >
-                  {ROLES.filter((r) => ROLE_RANK[r] <= ROLE_RANK[myRole] || r === editTarget?.role).map((r) => (
-                    <option key={r} value={r}>{r}</option>
-                  ))}
-                </select>
-              </div>
+                  <Pencil className="size-4" />
+                  {updateMember.isPending ? "Saving…" : "Save changes"}
+                </Button>
+              )}
+              {editDialogTab === "permissions" && (
+                <Button
+                  disabled={!permsDirty || setPermissions.isPending}
+                  onClick={() => {
+                    if (!editTarget) return;
+                    setPermissions.mutate({ memberId: editTarget.memberId, permissions: localPerms });
+                  }}
+                >
+                  {setPermissions.isPending ? "Saving…" : "Save permissions"}
+                </Button>
+              )}
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1">
-                <Label htmlFor="edit-quota">Annual quota ($)</Label>
-                <Input id="edit-quota" type="number" min={0} value={editQuota} onChange={(e) => setEditQuota(e.target.value)} placeholder="250000" />
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="edit-notif">Notification email</Label>
-                <Input id="edit-notif" type="email" value={editNotifEmail} onChange={(e) => setEditNotifEmail(e.target.value)} placeholder="Same as login email" />
-                <p className="text-xs text-muted-foreground">Leave blank to use login email.</p>
-              </div>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setEditTarget(null)}>Cancel</Button>
-            <Button
-              disabled={updateMember.isPending}
-              onClick={() => {
-                if (!editTarget) return;
-                updateMember.mutate({
-                  memberId: editTarget.memberId,
-                  name: editName.trim() || undefined,
-                  email: editEmail.trim() || undefined,
-                  title: editTitle.trim() || null,
-                  role: editRole,
-                  quota: editQuota ? Number(editQuota) : null,
-                  notifEmail: editNotifEmail.trim() || null,
-                });
-              }}
-            >
-              <Pencil className="size-4" />
-              {updateMember.isPending ? "Saving…" : "Save changes"}
-            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
