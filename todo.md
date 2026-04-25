@@ -1347,11 +1347,11 @@
 
 ## Batch AB — Password Login, Strength Indicator, Reconnect All
 
-- [ ] Server: POST /api/auth/password-login — accepts email+password, verifies bcrypt hash, issues session cookie
-- [ ] UI: Login page with email+password form that calls the new endpoint
-- [ ] UI: Link from OAuth login page to password login page
-- [ ] UI: InviteAccept.tsx — add visual password strength indicator (Weak/Fair/Strong) to Create Your Password step
-- [ ] UI: ConnectedAccounts.tsx — add "Reconnect all" button to expired accounts banner header
+- [x] Server: POST /api/auth/password-login — accepts email+password, verifies bcrypt hash, issues session cookie
+- [x] UI: Login page with email+password form that calls the new endpoint
+- [x] UI: Link from OAuth login page to password login page
+- [x] UI: InviteAccept.tsx — add visual password strength indicator (Weak/Fair/Strong) to Create Your Password step
+- [x] UI: ConnectedAccounts.tsx — add "Reconnect all" button to expired accounts banner header
 
 ## Batch AB — Password Login, Strength Indicator, Reconnect All
 
@@ -1362,3 +1362,9 @@
 - [x] UI: InviteAccept.tsx — password strength indicator (Weak/Fair/Strong bar + label) below password field
 - [x] UI: ConnectedAccounts.tsx — isReconnectingAll state + handleReconnectAll function
 - [x] UI: ConnectedAccounts.tsx — "Reconnect all" button in expired banner header (only shown when >1 expired account)
+
+## Bug Fix — Invite password step not shown (OAuth state encoding)
+
+- [x] Diagnose: getLoginUrlWithReturn encoded btoa(JSON.stringify({redirectUri,returnPath})) as state, breaking sdk.decodeState() which expects btoa(redirectUri)
+- [x] Fix InviteAccept.tsx: encode state as btoa(redirectUri) where redirectUri carries ?return=<returnPath>
+- [x] Fix server/_core/oauth.ts: extract ?return= from decoded redirectUri instead of trying to JSON.parse the state

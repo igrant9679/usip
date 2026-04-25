@@ -65,14 +65,18 @@ export function registerOAuthRoutes(app: Express) {
       const cookieOptions = getSessionCookieOptions(req);
       res.cookie(COOKIE_NAME, sessionToken, { ...cookieOptions, maxAge: ONE_YEAR_MS });
 
-      // Support returnPath encoded in state: btoa(JSON.stringify({ redirectUri, returnPath }))
+      // returnPath is carried as a ?return= query param on the redirectUri.
+      // The state is btoa(redirectUri) which the SDK uses for token exchange.
+      // Extract ?return= from the decoded redirectUri to determine where to send the user.
       let returnPath = "/";
       try {
-        const decoded = JSON.parse(Buffer.from(state, "base64").toString("utf8"));
-        if (decoded?.returnPath && typeof decoded.returnPath === "string" && decoded.returnPath.startsWith("/")) {
-          returnPath = decoded.returnPath;
+        const decodedRedirectUri = Buffer.from(state, "base64").toString("utf8");
+        const redirectUrl = new URL(decodedRedirectUri);
+        const returnParam = redirectUrl.searchParams.get("return");
+        if (returnParam && returnParam.startsWith("/")) {
+          returnPath = returnParam;
         }
-      } catch (_) { /* state was plain btoa(redirectUri) — keep default "/" */ }
+      } catch (_) { /* keep default "/" */ }
       res.redirect(302, returnPath);
     } catch (error) {
       console.error("[OAuth] Callback failed", error);

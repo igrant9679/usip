@@ -27,9 +27,13 @@ import { Loader2, CheckCircle2, XCircle, Building2, UserCheck, Eye, EyeOff, Lock
 function getLoginUrlWithReturn(returnPath: string): string {
   const oauthPortalUrl = import.meta.env.VITE_OAUTH_PORTAL_URL as string;
   const appId = import.meta.env.VITE_APP_ID as string;
-  const redirectUri = `${window.location.origin}/api/oauth/callback`;
-  // Encode returnPath into state so the OAuth callback redirects back here
-  const state = btoa(JSON.stringify({ redirectUri, returnPath }));
+  // The SDK's decodeState() does atob(state) and expects a plain redirectUri.
+  // Carry returnPath as a ?return= param on the redirectUri itself so the
+  // OAuth callback can extract it after the token exchange.
+  const baseRedirectUri = `${window.location.origin}/api/oauth/callback`;
+  const redirectUri = `${baseRedirectUri}?return=${encodeURIComponent(returnPath)}`;
+  // State must be btoa(redirectUri) — exactly what sdk.decodeState() expects.
+  const state = btoa(redirectUri);
   const url = new URL(`${oauthPortalUrl}/app-auth`);
   url.searchParams.set("appId", appId);
   url.searchParams.set("redirectUri", redirectUri);
