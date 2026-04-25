@@ -55,6 +55,7 @@ import PipelineAlerts from "@/pages/usip/PipelineAlerts";
 import SegmentRules from "@/pages/usip/SegmentRules";
 import ConnectedAccounts from "@/pages/usip/ConnectedAccounts";
 import UnifiedInbox from "@/pages/usip/UnifiedInbox";
+import InviteAccept from "@/pages/InviteAccept";
 import { Loader2 } from "lucide-react";
 import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
@@ -141,6 +142,7 @@ function Router() {
       <Route path="/segment-rules"><AuthGate><SegmentRules /></AuthGate></Route>
       <Route path="/settings"><AuthGate><Settings /></AuthGate></Route>
       <Route path="/notification-prefs"><AuthGate><NotificationPrefs /></AuthGate></Route>
+      <Route path="/invite/accept"><InviteAccept /></Route>
       <Route path="/404"><NotFound /></Route>
       <Route><NotFound /></Route>
     </Switch>

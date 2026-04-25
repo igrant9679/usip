@@ -13,7 +13,7 @@
  *   - team.bulkChangeRole                    (admin+ only)
  */
 import { TRPCError } from "@trpc/server";
-import { and, count, desc, eq, inArray, isNull, lte, sql } from "drizzle-orm";
+import { and, count, desc, eq, gte, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
@@ -29,7 +29,7 @@ import {
 } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { adminWsProcedure, roleRank, workspaceProcedure } from "../_core/workspace";
-import { router } from "../_core/trpc";
+import { publicProcedure, protectedProcedure, router } from "../_core/trpc";
 import { recordAudit } from "../audit";
 
 const ROLE_ENUM = z.enum(["super_admin", "admin", "manager", "rep"]);
@@ -751,6 +751,146 @@ export const teamRouter = router({
         after: { inviteExpiryDays: input.days },
       });
       return { ok: true };
+    }),
+
+  /**
+   * Public: look up an invite token and return workspace/role info for the acceptance page.
+   * Does not accept the invite — just validates the token and returns display info.
+   */
+  acceptInvitePreview: publicProcedure
+    .input(z.object({ token: z.string().min(1) }))
+    .query(async ({ input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const { workspaces } = await import("../../drizzle/schema");
+      const [row] = await db
+        .select({
+          memberId: workspaceMembers.id,
+          workspaceId: workspaceMembers.workspaceId,
+          workspaceName: workspaces.name,
+          role: workspaceMembers.role,
+          inviteExpiresAt: workspaceMembers.inviteExpiresAt,
+          loginMethod: users.loginMethod,
+          userName: users.name,
+          userEmail: users.email,
+        })
+        .from(workspaceMembers)
+        .innerJoin(users, eq(workspaceMembers.userId, users.id))
+        .innerJoin(workspaces, eq(workspaceMembers.workspaceId, workspaces.id))
+        .where(eq(workspaceMembers.inviteToken, input.token));
+      if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Invite link is invalid or has already been used." });
+      if (row.loginMethod !== "invite" && row.loginMethod !== "expired_invite") {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "This invitation has already been accepted." });
+      }
+      const now = new Date();
+      if (row.inviteExpiresAt && row.inviteExpiresAt <= now) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "This invitation link has expired. Please ask an admin to resend your invitation." });
+      }
+      return {
+        workspaceName: row.workspaceName,
+        role: row.role,
+        userName: row.userName,
+        userEmail: row.userEmail,
+        expiresAt: row.inviteExpiresAt,
+      };
+    }),
+
+  /**
+   * Protected: finalise invite acceptance after the user has signed in via OAuth.
+   * Matches the calling user's email to the pending invite token, then marks accepted.
+   */
+  finaliseAcceptance: protectedProcedure
+    .input(z.object({ token: z.string().min(1) }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const { workspaces } = await import("../../drizzle/schema");
+      const [row] = await db
+        .select({
+          memberId: workspaceMembers.id,
+          workspaceId: workspaceMembers.workspaceId,
+          workspaceName: workspaces.name,
+          userId: workspaceMembers.userId,
+          role: workspaceMembers.role,
+          inviteExpiresAt: workspaceMembers.inviteExpiresAt,
+          loginMethod: users.loginMethod,
+          userEmail: users.email,
+        })
+        .from(workspaceMembers)
+        .innerJoin(users, eq(workspaceMembers.userId, users.id))
+        .innerJoin(workspaces, eq(workspaceMembers.workspaceId, workspaces.id))
+        .where(eq(workspaceMembers.inviteToken, input.token));
+      if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Invite link is invalid or has already been used." });
+      if (row.loginMethod !== "invite" && row.loginMethod !== "expired_invite") {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "This invitation has already been accepted." });
+      }
+      const now = new Date();
+      if (row.inviteExpiresAt && row.inviteExpiresAt <= now) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "This invitation link has expired. Please ask an admin to resend your invitation." });
+      }
+      // Verify the signed-in user's email matches the invite
+      if (ctx.user.email?.toLowerCase() !== row.userEmail?.toLowerCase()) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: `This invite was sent to ${row.userEmail}. Please sign in with that email address.`,
+        });
+      }
+      // Mark accepted: update users.loginMethod, clear invite token
+      await db.update(users)
+        .set({ loginMethod: "oauth", openId: ctx.user.openId })
+        .where(eq(users.id, row.userId));
+      await db.update(workspaceMembers)
+        .set({ inviteToken: null, inviteExpiresAt: null })
+        .where(eq(workspaceMembers.id, row.memberId));
+      // Record login history
+      try {
+        await db.insert(loginHistory).values({
+          userId: row.userId,
+          workspaceId: row.workspaceId,
+          outcome: "success",
+        });
+      } catch (_) { /* non-fatal */ }
+      await recordAudit({
+        workspaceId: row.workspaceId,
+        actorUserId: row.userId,
+        action: "update",
+        entityType: "workspace_member",
+        entityId: row.memberId,
+        after: { loginMethod: "oauth", inviteAccepted: true },
+      });
+      return { ok: true, workspaceName: row.workspaceName, role: row.role };
+    }),
+
+  /**
+   * Return filtered login history for a specific workspace member.
+   * Supports optional outcome filter and date range. Returns up to 200 rows.
+   */
+  getLoginHistoryFiltered: adminWsProcedure
+    .input(z.object({
+      memberId: z.number().int(),
+      outcome: z.enum(["success", "failed", "expired_invite"]).optional(),
+      from: z.date().optional(),
+      to: z.date().optional(),
+      limit: z.number().int().min(1).max(500).default(200),
+    }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [member] = await db
+        .select({ userId: workspaceMembers.userId })
+        .from(workspaceMembers)
+        .where(and(eq(workspaceMembers.id, input.memberId), eq(workspaceMembers.workspaceId, ctx.workspace.id)));
+      if (!member) throw new TRPCError({ code: "NOT_FOUND", message: "Member not found" });
+      const conditions: ReturnType<typeof eq>[] = [eq(loginHistory.userId, member.userId) as any];
+      if (input.outcome) conditions.push(eq(loginHistory.outcome, input.outcome) as any);
+      if (input.from) conditions.push(gte(loginHistory.createdAt, input.from) as any);
+      if (input.to) conditions.push(lte(loginHistory.createdAt, input.to) as any);
+      return db
+        .select()
+        .from(loginHistory)
+        .where(and(...conditions))
+        .orderBy(desc(loginHistory.createdAt))
+        .limit(input.limit);
     }),
 
   /** Return the calling member's notification prefs. */

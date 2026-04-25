@@ -1204,21 +1204,21 @@
 
 ## Batch T — Invite Expiry, Login History, Copy Invite Link
 
-- [ ] Schema: add inviteToken (varchar 64, nullable, unique) and inviteExpiresAt (timestamp, nullable) to workspaceMembers
-- [ ] Schema: add inviteExpiryDays (int, default 7, nullable) to workspaceSettings
-- [ ] Schema: add loginHistory table (id, userId, workspaceId, ipAddress, userAgent, outcome enum, createdAt)
-- [ ] Migration: generate and apply via drizzle-kit + webdev_execute_sql
-- [ ] Server: invite procedure generates inviteToken + sets inviteExpiresAt; includes token link in email
-- [ ] Server: resendInvitation regenerates token + resets expiry
-- [ ] Server: team.copyInviteLink procedure returns invite URL for pending member (regenerates if expired)
-- [ ] Server: team.getLoginHistory procedure returns recent login events for a member
-- [ ] Server: team.updateInviteExpiry procedure saves inviteExpiryDays to workspaceSettings
-- [ ] Server: expireInvitations cron job (nightly) marks expired pending invites
-- [ ] Server: OAuth callback records loginHistory row on every sign-in
-- [ ] UI: Copy Invite Link button next to Resend Invite for pending members
-- [ ] UI: Login History tab on Team Members page showing per-member sign-in log
-- [ ] UI: Invitation expiry config field in workspace settings
-- [ ] Tests: cover invite expiry logic, copyInviteLink, getLoginHistory guards
+- [x] Schema: add inviteToken (varchar 64, nullable, unique) and inviteExpiresAt (timestamp, nullable) to workspaceMembers
+- [x] Schema: add inviteExpiryDays (int, default 7, nullable) to workspaceSettings
+- [x] Schema: add loginHistory table (id, userId, workspaceId, ipAddress, userAgent, outcome enum, createdAt)
+- [x] Migration: generate and apply via drizzle-kit + webdev_execute_sql
+- [x] Server: invite procedure generates inviteToken + sets inviteExpiresAt; includes token link in email
+- [x] Server: resendInvitation regenerates token + resets expiry
+- [x] Server: team.copyInviteLink procedure returns invite URL for pending member (regenerates if expired)
+- [x] Server: team.getLoginHistory procedure returns recent login events for a member
+- [x] Server: team.updateInviteExpiry procedure saves inviteExpiryDays to workspaceSettings
+- [x] Server: expireInvitations cron job (nightly) marks expired pending invites
+- [x] Server: OAuth callback records loginHistory row on every sign-in
+- [x] UI: Copy Invite Link button next to Resend Invite for pending members
+- [x] UI: Login History tab on Team Members page showing per-member sign-in log
+- [x] UI: Invitation expiry config field in workspace settings
+- [x] Tests: cover invite expiry logic, copyInviteLink, getLoginHistory guards
 
 ## Batch T — Invite Expiry, Login History, Copy Invite Link
 
@@ -1239,3 +1239,28 @@
 - [x] UI: add Settings tab on Team Members page with invitation expiry days config
 - [x] UI: show Expired badge on members with loginMethod = expired_invite
 - [x] Tests: invite.expiry.test.ts covering schema fields, procedure existence, and expireInvitations import
+
+## Batch U — Invite Acceptance Page, Login History Filters, Expiry Emails
+
+- [ ] Server: team.acceptInvite public procedure (validate token, return workspace/role info)
+- [ ] Server: team.finaliseAcceptance protected procedure (mark invite accepted after OAuth login)
+- [ ] Server: team.getLoginHistoryFiltered procedure (outcome filter + date range, up to 200 rows)
+- [ ] Server: sendExpiryWarningEmails() in inviteExpiry.ts (48h warning email via system sender)
+- [ ] Server: wire sendExpiryWarningEmails into nightly batch in index.ts
+- [ ] UI: /invite/accept page (public route, no AuthGate) with workspace/role card and OAuth sign-in button
+- [ ] UI: auto-finalise acceptance on return from OAuth login (detect token in URL, call finaliseAcceptance)
+- [ ] UI: Login History tab filter bar (date range from/to, outcome multi-select, clear button)
+- [ ] App.tsx: register /invite/accept route without AuthGate
+- [ ] Tests: cover acceptInvite validation, finaliseAcceptance, getLoginHistoryFiltered
+
+## Batch U — Invite Acceptance, Login History Filters, Expiry Emails
+
+- [x] Server: team.acceptInvitePreview (public) — validates token, returns workspace/role info
+- [x] Server: team.finaliseAcceptance (protected) — clears token, sets loginMethod=oauth, logs loginHistory
+- [x] Server: team.getLoginHistoryFiltered — outcome, from/to date range, limit up to 500
+- [x] Server: sendExpiryWarningEmails() in inviteExpiry.ts — finds members expiring within 48h, sends reminder email via system sender
+- [x] Server: wired sendExpiryWarningEmails into nightly batch in index.ts
+- [x] Server: OAuth callback extended to support returnPath in state (JSON-encoded) for post-login redirects
+- [x] UI: /invite/accept page — public route, shows workspace/role card, Sign in to accept button, auto-finalises on return
+- [x] UI: Login History tab — filter bar with member, outcome (all/success/failed/expired_invite), from/to date pickers, Clear all button
+- [x] Tests: invite.accept.test.ts covering acceptInvitePreview, finaliseAcceptance, getLoginHistoryFiltered, sendExpiryWarningEmails, OAuth state encoding

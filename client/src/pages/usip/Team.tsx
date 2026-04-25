@@ -60,8 +60,18 @@ export default function Team() {
 
   // Login History
   const [historyTarget, setHistoryTarget] = useState<any | null>(null);
-  const { data: loginHistoryData, isLoading: historyLoading } = trpc.team.getLoginHistory.useQuery(
-    { memberId: historyTarget?.memberId ?? 0 },
+  const [historyOutcome, setHistoryOutcome] = useState<"" | "success" | "failed" | "expired_invite">("" );
+  const [historyFrom, setHistoryFrom] = useState("");
+  const [historyTo, setHistoryTo] = useState("");
+  const hasFilters = !!historyOutcome || !!historyFrom || !!historyTo;
+
+  const { data: loginHistoryData, isLoading: historyLoading } = trpc.team.getLoginHistoryFiltered.useQuery(
+    {
+      memberId: historyTarget?.memberId ?? 0,
+      outcome: historyOutcome || undefined,
+      from: historyFrom ? new Date(historyFrom) : undefined,
+      to: historyTo ? new Date(historyTo + "T23:59:59") : undefined,
+    },
     { enabled: !!historyTarget }
   );
 
@@ -486,19 +496,69 @@ export default function Team() {
       {/* ── Login History tab ── */}
       {activeTab === "login_history" && (
         <div className="p-6 space-y-4">
-          <div className="flex items-center gap-3">
-            <div className="text-sm text-muted-foreground">
-              {historyTarget
-                ? `Showing sign-in history for ${historyTarget.name ?? historyTarget.email}`
-                : "Select a member from the Members tab to view their login history, or browse all recent events below."}
+          {/* Filter bar */}
+          <div className="flex flex-wrap items-end gap-3 rounded-lg border bg-card p-3">
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-muted-foreground">Member</label>
+              <div className="flex items-center gap-1">
+                <span className="text-sm">
+                  {historyTarget ? (historyTarget.name ?? historyTarget.email) : <span className="text-muted-foreground italic">All members</span>}
+                </span>
+                {historyTarget && (
+                  <Button size="sm" variant="ghost" className="h-6 px-1.5 text-xs" onClick={() => setHistoryTarget(null)}>
+                    ✕
+                  </Button>
+                )}
+              </div>
             </div>
-            {historyTarget && (
-              <Button size="sm" variant="ghost" onClick={() => setHistoryTarget(null)}>
-                Clear filter
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-muted-foreground">Outcome</label>
+              <select
+                className="h-8 rounded-md border bg-background px-2 text-sm"
+                value={historyOutcome}
+                onChange={(e) => setHistoryOutcome(e.target.value as any)}
+              >
+                <option value="">All outcomes</option>
+                <option value="success">Success</option>
+                <option value="failed">Failed</option>
+                <option value="expired_invite">Expired invite</option>
+              </select>
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-muted-foreground">From</label>
+              <Input
+                type="date"
+                className="h-8 w-36 text-sm"
+                value={historyFrom}
+                onChange={(e) => setHistoryFrom(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-muted-foreground">To</label>
+              <Input
+                type="date"
+                className="h-8 w-36 text-sm"
+                value={historyTo}
+                onChange={(e) => setHistoryTo(e.target.value)}
+              />
+            </div>
+            {(hasFilters || historyTarget) && (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="self-end"
+                onClick={() => {
+                  setHistoryOutcome("");
+                  setHistoryFrom("");
+                  setHistoryTo("");
+                  setHistoryTarget(null);
+                }}
+              >
+                Clear all
               </Button>
             )}
           </div>
-          <Section title="Recent sign-in events">
+          <Section title="Sign-in events">
             {historyLoading ? (
               <div className="p-4 text-sm text-muted-foreground">Loading…</div>
             ) : !historyTarget ? (
