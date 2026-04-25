@@ -65,19 +65,10 @@ export function registerOAuthRoutes(app: Express) {
       const cookieOptions = getSessionCookieOptions(req);
       res.cookie(COOKIE_NAME, sessionToken, { ...cookieOptions, maxAge: ONE_YEAR_MS });
 
-      // returnPath is carried as a ?return= query param on the redirectUri.
-      // The state is btoa(redirectUri) which the SDK uses for token exchange.
-      // Extract ?return= from the decoded redirectUri to determine where to send the user.
-      let returnPath = "/";
-      try {
-        const decodedRedirectUri = Buffer.from(state, "base64").toString("utf8");
-        const redirectUrl = new URL(decodedRedirectUri);
-        const returnParam = redirectUrl.searchParams.get("return");
-        if (returnParam && returnParam.startsWith("/")) {
-          returnPath = returnParam;
-        }
-      } catch (_) { /* keep default "/" */ }
-      res.redirect(302, returnPath);
+      // Always redirect to '/' after OAuth. The client-side InviteAccept page
+      // stores its returnPath in sessionStorage before redirecting to the OAuth
+      // portal and reads it back on mount to navigate back to the invite flow.
+      res.redirect(302, "/");
     } catch (error) {
       console.error("[OAuth] Callback failed", error);
       res.status(500).json({ error: "OAuth callback failed" });

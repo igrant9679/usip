@@ -24,15 +24,17 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Loader2, CheckCircle2, XCircle, Building2, UserCheck, Eye, EyeOff, Lock, SkipForward } from "lucide-react";
 
+const INVITE_RETURN_KEY = "usip_invite_return";
+
 function getLoginUrlWithReturn(returnPath: string): string {
   const oauthPortalUrl = import.meta.env.VITE_OAUTH_PORTAL_URL as string;
   const appId = import.meta.env.VITE_APP_ID as string;
-  // The SDK's decodeState() does atob(state) and expects a plain redirectUri.
-  // Carry returnPath as a ?return= param on the redirectUri itself so the
-  // OAuth callback can extract it after the token exchange.
-  const baseRedirectUri = `${window.location.origin}/api/oauth/callback`;
-  const redirectUri = `${baseRedirectUri}?return=${encodeURIComponent(returnPath)}`;
-  // State must be btoa(redirectUri) — exactly what sdk.decodeState() expects.
+  // The Manus OAuth server validates redirectUri against a registered allowlist.
+  // We MUST use the clean callback URL (no query params) as the redirectUri.
+  // Store returnPath in sessionStorage so InviteAccept can restore it after the
+  // OAuth callback redirects to '/' and the user is navigated back here.
+  sessionStorage.setItem(INVITE_RETURN_KEY, returnPath);
+  const redirectUri = `${window.location.origin}/api/oauth/callback`;
   const state = btoa(redirectUri);
   const url = new URL(`${oauthPortalUrl}/app-auth`);
   url.searchParams.set("appId", appId);

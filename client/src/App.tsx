@@ -58,9 +58,12 @@ import UnifiedInbox from "@/pages/usip/UnifiedInbox";
 import InviteAccept from "@/pages/InviteAccept";
 import PasswordLogin from "@/pages/PasswordLogin";
 import { Loader2 } from "lucide-react";
-import { Route, Switch } from "wouter";
+import { Route, Switch, useLocation } from "wouter";
+import { useEffect } from "react";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
+
+const INVITE_RETURN_KEY = "usip_invite_return";
 
 function Landing() {
   return (
@@ -83,11 +86,26 @@ function Landing() {
   );
 }
 
+function InviteReturnRedirect() {
+  const [, navigate] = useLocation();
+  const { user, loading } = useAuth();
+  useEffect(() => {
+    if (!loading && user) {
+      const returnPath = sessionStorage.getItem(INVITE_RETURN_KEY);
+      if (returnPath && returnPath.startsWith("/invite/accept")) {
+        sessionStorage.removeItem(INVITE_RETURN_KEY);
+        navigate(returnPath);
+      }
+    }
+  }, [loading, user, navigate]);
+  return null;
+}
+
 function AuthGate({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
   if (loading) return <div className="min-h-screen flex items-center justify-center"><Loader2 className="size-6 animate-spin text-muted-foreground" /></div>;
   if (!user) return <Landing />;
-  return <WorkspaceProvider>{children}</WorkspaceProvider>;
+  return <WorkspaceProvider><InviteReturnRedirect />{children}</WorkspaceProvider>;
 }
 
 function Router() {

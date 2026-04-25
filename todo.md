@@ -1368,3 +1368,10 @@
 - [x] Diagnose: getLoginUrlWithReturn encoded btoa(JSON.stringify({redirectUri,returnPath})) as state, breaking sdk.decodeState() which expects btoa(redirectUri)
 - [x] Fix InviteAccept.tsx: encode state as btoa(redirectUri) where redirectUri carries ?return=<returnPath>
 - [x] Fix server/_core/oauth.ts: extract ?return= from decoded redirectUri instead of trying to JSON.parse the state
+
+## Bug Fix — Invite password step (sessionStorage approach)
+
+- [x] Root cause: redirectUri with ?return= query param rejected by Manus OAuth allowlist validation
+- [x] Fix InviteAccept.tsx: store returnPath in sessionStorage before OAuth redirect; use clean redirectUri
+- [x] Fix App.tsx: add InviteReturnRedirect component that reads sessionStorage on auth and navigates back to invite page
+- [x] Fix server/_core/oauth.ts: revert to always redirecting to '/' (sessionStorage handles the return)
