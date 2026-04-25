@@ -1,3 +1,4 @@
+import { TRPCError } from "@trpc/server";
 import { and, eq, sql, desc } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
@@ -153,4 +154,63 @@ export async function listRecentOpportunities(workspaceId: number, limit = 8) {
     .where(eq(opportunities.workspaceId, workspaceId))
     .orderBy(desc(opportunities.updatedAt))
     .limit(limit);
+}
+
+/* ─── Permission enforcement ───────────────────────────────────────────── */
+
+/**
+ * Checks whether a workspace member has a specific feature permission.
+ *
+ * Resolution order:
+ *   1. If a row exists in `member_permissions` for (workspaceId, userId, feature),
+ *      return its `granted` value.
+ *   2. Otherwise fall back to a role-based default:
+ *      - super_admin / admin → all features granted by default
+ *      - manager / rep → export_data, access_billing, manage_api_keys denied by default
+ *
+ * Throws FORBIDDEN if the permission is denied.
+ */
+export async function checkPermission(
+  ctx: { workspace: { id: number }; user: { id: number }; member: { role: string } },
+  feature: string,
+): Promise<void> {
+  const db = await getDb();
+  if (!db) return; // fail-open if DB unavailable (avoids blocking non-DB envs)
+
+  // Import memberPermissions lazily to avoid circular deps
+  const { memberPermissions } = await import("../drizzle/schema");
+
+  const [row] = await db
+    .select({ granted: memberPermissions.granted })
+    .from(memberPermissions)
+    .where(
+      and(
+        eq(memberPermissions.workspaceId, ctx.workspace.id),
+        eq(memberPermissions.userId, ctx.user.id),
+        eq(memberPermissions.feature, feature),
+      ),
+    )
+    .limit(1);
+
+  if (row !== undefined) {
+    if (!row.granted) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: `You do not have permission to use: ${feature}`,
+      });
+    }
+    return; // explicitly granted
+  }
+
+  // No override row — apply role-based defaults
+  const restrictedByDefault = ["export_data", "access_billing", "manage_api_keys"];
+  const role = ctx.member.role as string;
+  const isElevated = role === "super_admin" || role === "admin";
+
+  if (!isElevated && restrictedByDefault.includes(feature)) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: `Your role (${role}) does not have permission to use: ${feature}`,
+    });
+  }
 }

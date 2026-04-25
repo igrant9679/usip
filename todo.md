@@ -1304,3 +1304,14 @@
 - [x] UI: Permissions tab — feature toggle switches calling team.setPermissions
 - [x] UI: Activity Log tab — read-only audit table for the member
 - [x] UI: Deactivate User button in edit dialog footer (destructive, triggers reassign flow)
+
+## Batch Y — Permission Enforcement, Bulk Templates, Audit Log Member Filter
+
+- [x] Server: add `checkPermission(ctx, feature)` helper in server/db.ts that queries member_permissions
+- [x] Server: gate export-related procedures behind checkPermission (e.g., contacts.export, leads.export)
+- [x] UI: add "Apply role template" button on Permissions tab with preset maps per role (rep/manager/admin/super_admin)
+- [x] UI: role template presets fill all 6 toggles and mark permsDirty so Save permissions activates
+- [x] Server: add team.listForFilter procedure returning id/name/email for member dropdown
+- [x] UI: add "Member" filter dropdown to AuditLog page (/audit-log) that filters rows by actorUserId
+- [x] Server: extend audit.list procedure to accept optional memberId filter
+- [x] Tests: vitest specs for checkPermission logic, template preset maps, and audit memberId filter

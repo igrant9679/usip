@@ -1577,13 +1577,27 @@ export const quotesRouter = router({
 /* ───── Audit / Notifications / SCIM ─────────────────────────────── */
 
 export const auditRouter = router({
-  list: adminWsProcedure.input(z.object({ entityType: z.string().optional(), limit: z.number().int().min(1).max(500).default(100) }).optional()).query(async ({ ctx, input }) => {
-    const db = await getDb();
-    if (!db) return [];
-    let rows = await db.select().from(auditLog).where(eq(auditLog.workspaceId, ctx.workspace.id)).orderBy(desc(auditLog.createdAt)).limit(input?.limit ?? 100);
-    if (input?.entityType) rows = rows.filter((r) => r.entityType === input.entityType);
-    return rows;
-  }),
+  list: adminWsProcedure
+    .input(
+      z.object({
+        entityType: z.string().optional(),
+        actorUserId: z.number().int().optional(),
+        limit: z.number().int().min(1).max(500).default(100),
+      }).optional(),
+    )
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) return [];
+      let rows = await db
+        .select()
+        .from(auditLog)
+        .where(eq(auditLog.workspaceId, ctx.workspace.id))
+        .orderBy(desc(auditLog.createdAt))
+        .limit(input?.limit ?? 100);
+      if (input?.entityType) rows = rows.filter((r) => r.entityType === input.entityType);
+      if (input?.actorUserId) rows = rows.filter((r) => r.actorUserId === input.actorUserId);
+      return rows;
+    }),
 });
 
 export const notificationsRouter = router({

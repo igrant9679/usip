@@ -213,6 +213,53 @@ export default function Team() {
     { key: "manage_api_keys", label: "Manage API keys", description: "Can create and revoke API keys for the workspace" },
   ];
 
+  /**
+   * Role-based permission presets.
+   * Keys match PERMISSION_FEATURES; values are the defaults for that role.
+   * super_admin and admin get everything; manager gets most; rep gets minimal.
+   */
+  const ROLE_PERMISSION_TEMPLATES: Record<string, Record<string, boolean>> = {
+    super_admin: {
+      export_data: true,
+      manage_sequences: true,
+      view_all_leads: true,
+      manage_integrations: true,
+      access_billing: true,
+      manage_api_keys: true,
+    },
+    admin: {
+      export_data: true,
+      manage_sequences: true,
+      view_all_leads: true,
+      manage_integrations: true,
+      access_billing: true,
+      manage_api_keys: false,
+    },
+    manager: {
+      export_data: true,
+      manage_sequences: true,
+      view_all_leads: true,
+      manage_integrations: false,
+      access_billing: false,
+      manage_api_keys: false,
+    },
+    rep: {
+      export_data: false,
+      manage_sequences: false,
+      view_all_leads: false,
+      manage_integrations: false,
+      access_billing: false,
+      manage_api_keys: false,
+    },
+  };
+
+  function applyRoleTemplate(role: string) {
+    const template = ROLE_PERMISSION_TEMPLATES[role];
+    if (!template) return;
+    setLocalPerms(template);
+    setPermsDirty(true);
+  }
+
   function getPermValue(key: string): boolean {
     // Use local state if dirty, otherwise fall back to server data
     if (permsDirty) return localPerms[key] ?? false;
@@ -810,9 +857,25 @@ export default function Team() {
                   <div className="py-6 text-sm text-center text-muted-foreground">Loading permissions…</div>
                 ) : (
                   <div className="space-y-1">
-                    <p className="text-xs text-muted-foreground mb-3">
-                      Feature-level overrides for this member. Toggles here take precedence over workspace-wide defaults.
-                    </p>
+                    <div className="flex items-center justify-between mb-3">
+                      <p className="text-xs text-muted-foreground">
+                        Feature-level overrides for this member. Toggles here take precedence over workspace-wide defaults.
+                      </p>
+                      <div className="flex items-center gap-1.5 ml-3 shrink-0">
+                        <span className="text-xs text-muted-foreground">Apply template:</span>
+                        {(["rep", "manager", "admin", "super_admin"] as const).map((r) => (
+                          <button
+                            key={r}
+                            type="button"
+                            className="text-[10px] px-2 py-0.5 rounded border border-border hover:bg-muted transition-colors font-medium"
+                            onClick={() => applyRoleTemplate(r)}
+                            title={`Apply ${r} permission preset`}
+                          >
+                            {r === "super_admin" ? "SA" : r === "admin" ? "Admin" : r === "manager" ? "Mgr" : "Rep"}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                     {PERMISSION_FEATURES.map(({ key, label, description }) => (
                       <div key={key} className="flex items-center justify-between rounded-md px-3 py-2.5 hover:bg-muted/50 transition-colors">
                         <div className="space-y-0.5">

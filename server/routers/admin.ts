@@ -29,7 +29,7 @@ import {
   workspaceMembers,
   workspaceSettings,
 } from "../../drizzle/schema";
-import { getDb } from "../db";
+import { checkPermission, getDb } from "../db";
 import { adminWsProcedure, roleRank, workspaceProcedure } from "../_core/workspace";
 import { publicProcedure, protectedProcedure, router } from "../_core/trpc";
 import { recordAudit } from "../audit";
@@ -968,9 +968,11 @@ export const dangerZoneRouter = router({
   exportData: adminWsProcedure.mutation(async ({ ctx }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    // Role guard: super_admin only (existing), plus per-member permission override
     if (ctx.member.role !== "super_admin") {
       throw new TRPCError({ code: "FORBIDDEN", message: "Only super admins can export workspace data" });
     }
+    await checkPermission(ctx, "export_data");
 
     const { contacts, leads, accounts, opportunities, customers, tasks: tasksTable } = await import("../../drizzle/schema");
 

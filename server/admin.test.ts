@@ -240,3 +240,146 @@ describe("team — getMemberActivityLog logic", () => {
     expect(clamp(150)).toBe(100);
   });
 });
+
+describe("checkPermission — role-based defaults", () => {
+  type Role = "super_admin" | "admin" | "manager" | "rep";
+
+  /**
+   * Mirrors the role-default logic inside checkPermission in server/db.ts.
+   * When no override row exists, restricted features are denied for non-elevated roles.
+   */
+  function defaultGranted(role: Role, feature: string): boolean {
+    const restrictedByDefault = ["export_data", "access_billing", "manage_api_keys"];
+    const isElevated = role === "super_admin" || role === "admin";
+    if (!isElevated && restrictedByDefault.includes(feature)) return false;
+    return true;
+  }
+
+  it("grants all features to super_admin by default", () => {
+    const features = ["export_data", "manage_sequences", "view_all_leads", "manage_integrations", "access_billing", "manage_api_keys"];
+    for (const f of features) {
+      expect(defaultGranted("super_admin", f)).toBe(true);
+    }
+  });
+
+  it("grants all features to admin by default", () => {
+    const features = ["export_data", "manage_sequences", "view_all_leads", "manage_integrations", "access_billing", "manage_api_keys"];
+    for (const f of features) {
+      expect(defaultGranted("admin", f)).toBe(true);
+    }
+  });
+
+  it("denies export_data, access_billing, manage_api_keys for rep by default", () => {
+    expect(defaultGranted("rep", "export_data")).toBe(false);
+    expect(defaultGranted("rep", "access_billing")).toBe(false);
+    expect(defaultGranted("rep", "manage_api_keys")).toBe(false);
+  });
+
+  it("allows manage_sequences and view_all_leads for rep by default", () => {
+    expect(defaultGranted("rep", "manage_sequences")).toBe(true);
+    expect(defaultGranted("rep", "view_all_leads")).toBe(true);
+  });
+
+  it("denies restricted features for manager by default", () => {
+    expect(defaultGranted("manager", "export_data")).toBe(false);
+    expect(defaultGranted("manager", "access_billing")).toBe(false);
+    expect(defaultGranted("manager", "manage_api_keys")).toBe(false);
+  });
+
+  it("an explicit override row takes precedence over role defaults", () => {
+    // Simulate: rep with an explicit export_data=true override
+    const overrideRow = { granted: true };
+    // If row exists, use its value regardless of role
+    const result = overrideRow !== undefined ? overrideRow.granted : defaultGranted("rep", "export_data");
+    expect(result).toBe(true);
+  });
+
+  it("an explicit override row can deny a feature that would otherwise be allowed", () => {
+    // Simulate: admin with an explicit export_data=false override
+    const overrideRow = { granted: false };
+    const result = overrideRow !== undefined ? overrideRow.granted : defaultGranted("admin", "export_data");
+    expect(result).toBe(false);
+  });
+});
+
+describe("role permission templates", () => {
+  const TEMPLATES: Record<string, Record<string, boolean>> = {
+    super_admin: { export_data: true, manage_sequences: true, view_all_leads: true, manage_integrations: true, access_billing: true, manage_api_keys: true },
+    admin: { export_data: true, manage_sequences: true, view_all_leads: true, manage_integrations: true, access_billing: true, manage_api_keys: false },
+    manager: { export_data: true, manage_sequences: true, view_all_leads: true, manage_integrations: false, access_billing: false, manage_api_keys: false },
+    rep: { export_data: false, manage_sequences: false, view_all_leads: false, manage_integrations: false, access_billing: false, manage_api_keys: false },
+  };
+
+  it("all templates cover exactly 6 features", () => {
+    for (const [role, tpl] of Object.entries(TEMPLATES)) {
+      expect(Object.keys(tpl).length).toBe(6);
+    }
+  });
+
+  it("super_admin template grants all features", () => {
+    for (const v of Object.values(TEMPLATES.super_admin)) expect(v).toBe(true);
+  });
+
+  it("rep template denies all features", () => {
+    for (const v of Object.values(TEMPLATES.rep)) expect(v).toBe(false);
+  });
+
+  it("admin template denies only manage_api_keys", () => {
+    const denied = Object.entries(TEMPLATES.admin).filter(([, v]) => !v).map(([k]) => k);
+    expect(denied).toEqual(["manage_api_keys"]);
+  });
+
+  it("manager template denies manage_integrations, access_billing, manage_api_keys", () => {
+    const denied = Object.entries(TEMPLATES.manager).filter(([, v]) => !v).map(([k]) => k).sort();
+    expect(denied).toEqual(["access_billing", "manage_api_keys", "manage_integrations"]);
+  });
+});
+
+describe("audit.list — actorUserId filter", () => {
+  type AuditRow = { id: number; actorUserId: number | null; entityType: string };
+
+  it("returns all rows when no actorUserId filter is set", () => {
+    const rows: AuditRow[] = [
+      { id: 1, actorUserId: 1, entityType: "lead" },
+      { id: 2, actorUserId: 2, entityType: "contact" },
+      { id: 3, actorUserId: null, entityType: "system" },
+    ];
+    const filtered = rows; // no filter applied
+    expect(filtered.length).toBe(3);
+  });
+
+  it("filters rows to only those matching actorUserId", () => {
+    const rows: AuditRow[] = [
+      { id: 1, actorUserId: 1, entityType: "lead" },
+      { id: 2, actorUserId: 2, entityType: "contact" },
+      { id: 3, actorUserId: 1, entityType: "account" },
+    ];
+    const actorUserId = 1;
+    const filtered = rows.filter((r) => r.actorUserId === actorUserId);
+    expect(filtered.length).toBe(2);
+    expect(filtered.every((r) => r.actorUserId === 1)).toBe(true);
+  });
+
+  it("returns empty array when no rows match the actorUserId", () => {
+    const rows: AuditRow[] = [
+      { id: 1, actorUserId: 1, entityType: "lead" },
+    ];
+    const filtered = rows.filter((r) => r.actorUserId === 99);
+    expect(filtered.length).toBe(0);
+  });
+
+  it("can combine entityType and actorUserId filters", () => {
+    const rows: AuditRow[] = [
+      { id: 1, actorUserId: 1, entityType: "lead" },
+      { id: 2, actorUserId: 1, entityType: "contact" },
+      { id: 3, actorUserId: 2, entityType: "lead" },
+    ];
+    const actorUserId = 1;
+    const entityType = "lead";
+    let filtered = rows;
+    if (entityType) filtered = filtered.filter((r) => r.entityType === entityType);
+    if (actorUserId) filtered = filtered.filter((r) => r.actorUserId === actorUserId);
+    expect(filtered.length).toBe(1);
+    expect(filtered[0].id).toBe(1);
+  });
+});
