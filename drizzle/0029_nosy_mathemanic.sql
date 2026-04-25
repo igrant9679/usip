@@ -1,0 +1,1 @@
+ALTER TABLE `sequence_nodes` MODIFY COLUMN `type` enum('start','email','wait','condition','action','goal','linkedin_dm','linkedin_invite') NOT NULL;

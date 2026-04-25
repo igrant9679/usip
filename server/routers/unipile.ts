@@ -4,7 +4,7 @@
  */
 
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq } from "drizzle-orm";
+import { and, count, desc, eq, gte, sql } from "drizzle-orm";
 import { z } from "zod";
 import { getDb } from "../db";
 import {
@@ -425,4 +425,77 @@ export const unipileRouter = router({
         .orderBy(desc(unipileInvites.sentAt))
         .limit(20);
     }),
+
+  /**
+   * Aggregate Unipile multichannel metrics for the Dashboard widget.
+   * Returns: messages sent (last 30d), connections made (accepted invites),
+   * acceptance rate %, and messages-by-provider breakdown.
+   */
+  metrics: protectedProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    const since30d = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+
+    // Total outbound messages in last 30 days
+    const [msgRow] = await db
+      .select({ total: count() })
+      .from(unipileMessages)
+      .where(
+        and(
+          eq(unipileMessages.workspaceId, ctx.workspaceId),
+          eq(unipileMessages.direction, "outbound"),
+          gte(unipileMessages.createdAt, since30d),
+        ),
+      );
+    const messagesSent = Number(msgRow?.total ?? 0);
+
+    // Total invites sent (all time for denominator, last 30d for numerator)
+    const [invTotalRow] = await db
+      .select({ total: count() })
+      .from(unipileInvites)
+      .where(eq(unipileInvites.workspaceId, ctx.workspaceId));
+    const invitesTotal = Number(invTotalRow?.total ?? 0);
+
+    const [invAcceptedRow] = await db
+      .select({ total: count() })
+      .from(unipileInvites)
+      .where(
+        and(
+          eq(unipileInvites.workspaceId, ctx.workspaceId),
+          eq(unipileInvites.status, "accepted"),
+        ),
+      );
+    const connectionsAccepted = Number(invAcceptedRow?.total ?? 0);
+    const acceptanceRate =
+      invitesTotal > 0 ? Math.round((connectionsAccepted / invitesTotal) * 100) : 0;
+
+    // Messages by provider (last 30d)
+    const byProviderRows = await db
+      .select({
+        provider: unipileMessages.provider,
+        total: count(),
+      })
+      .from(unipileMessages)
+      .where(
+        and(
+          eq(unipileMessages.workspaceId, ctx.workspaceId),
+          eq(unipileMessages.direction, "outbound"),
+          gte(unipileMessages.createdAt, since30d),
+        ),
+      )
+      .groupBy(unipileMessages.provider)
+      .orderBy(sql`count(*) desc`);
+
+    const byProvider = byProviderRows.map((r) => ({
+      provider: r.provider,
+      count: Number(r.total),
+    }));
+
+    return {
+      messagesSent,
+      connectionsAccepted,
+      invitesTotal,
+      acceptanceRate,
+      byProvider,
+    };
+  }),
 });

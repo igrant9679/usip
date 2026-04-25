@@ -1163,3 +1163,13 @@
 - [x] Frontend: Engage nav section — "Unified Inbox" and "Connected Accounts" nav items added to sidebar
 - [x] Secrets: UNIPILE_API_KEY and UNIPILE_DSN added via webdev_request_secrets; DSN corrected to https://api26.unipile.com:15619
 - [x] Vitest: Unipile credentials smoke test passes (2/2); full suite 680/680 passing
+
+## Batch R — Sequences LinkedIn Steps, Channel Icons, Unipile Dashboard Widget
+
+- [x] Sequences: add `linkedin_dm` and `linkedin_invite` step types to sequenceSteps schema enum
+- [ ] Sequences: server-side execution for linkedin_dm and linkedin_invite steps (calls unipile sendMessage / sendLinkedInInvite)
+- [x] Sequences: UI — add LinkedIn DM and Connection Request options to the step-type picker in the builder (SequenceCanvas.tsx)
+- [x] Sequences: UI — show LinkedIn DM compose panel (message body, char counter, merge tokens) and LinkedIn Invite compose panel (note, char counter, merge tokens) in NodeEditPanel.tsx
+- [x] ActivityTimeline: add provider icon badge (LinkedIn blue, WhatsApp green, Instagram pink, Telegram blue, X black, Outlook blue, IMAP gray) to each activity row based on activity metadata
+- [x] Dashboard: add Unipile Multichannel Outreach widget (messages sent, connections accepted, acceptance rate, per-provider bar chart)
+- [x] Server: add unipile.metrics tRPC procedure returning aggregated counts from unipileMessages and unipileInvites tables

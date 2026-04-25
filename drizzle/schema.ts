@@ -1081,7 +1081,7 @@ export const sequenceNodes = mysqlTable(
     id: varchar("id", { length: 64 }).primaryKey(), // React Flow node id (uuid)
     sequenceId: int("sequenceId").notNull(),
     workspaceId: int("workspaceId").notNull(),
-    type: mysqlEnum("type", ["start", "email", "wait", "condition", "action", "goal"]).notNull(),
+    type: mysqlEnum("type", ["start", "email", "wait", "condition", "action", "goal", "linkedin_dm", "linkedin_invite"]).notNull(),
     positionX: int("positionX").default(0).notNull(),
     positionY: int("positionY").default(0).notNull(),
     data: json("data").notNull(), // node-type-specific config payload

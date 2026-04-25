@@ -33,6 +33,9 @@ import {
   RefreshCw,
   Pencil,
   Check,
+  Link2,
+  UserPlus,
+  MessageSquare,
 } from "lucide-react";
 import { useState, useCallback, useRef } from "react";
 import { Link, useLocation } from "wouter";
@@ -317,6 +320,7 @@ export default function Dashboard() {
     utils.opportunities.winLoss.invalidate();
     utils.emailDrafts.list.invalidate();
     utils.opportunities.board.invalidate();
+    utils.unipile.metrics.invalidate();
     setLastRefreshed(new Date());
     setRefreshTick((t) => t + 1);
   }, [utils]);
@@ -328,6 +332,7 @@ export default function Dashboard() {
   const { data: winLoss } = trpc.opportunities.winLoss.useQuery();
   const { data: drafts } = trpc.emailDrafts.list.useQuery({ status: "pending_review" });
   const { data: opps } = trpc.opportunities.board.useQuery();
+  const { data: unipileMetrics } = trpc.unipile.metrics.useQuery();
 
   const recentOpps = (opps ?? []).slice(0, 6);
   const accent = useAccentColor();
@@ -589,6 +594,87 @@ export default function Dashboard() {
                 })
               )}
             </div>
+          </div>
+        </div>
+
+        {/* ── Row 4½: Unipile Multichannel Metrics ── */}
+        <div className="rounded-xl border bg-card">
+          <div className="px-5 py-4 border-b flex items-center gap-2">
+            <Link2 className="size-4" style={{ color: "#0A66C2" }} />
+            <span className="text-base font-semibold">Multichannel Outreach</span>
+            <span className="ml-auto text-xs text-muted-foreground">Last 30 days</span>
+            <Link href="/connected-accounts" className="ml-2 text-xs flex items-center gap-1" style={{ color: accent }}>
+              Manage <ArrowRight className="size-3" />
+            </Link>
+          </div>
+          <div className="p-5">
+            {/* Stat row */}
+            <div className="grid grid-cols-3 gap-4 mb-5">
+              <div className="rounded-lg border bg-secondary/30 p-3 text-center" style={{ borderLeftWidth: 3, borderLeftColor: "#0A66C2" }}>
+                <div className="flex items-center justify-center gap-1 mb-1">
+                  <MessageSquare className="size-3.5" style={{ color: "#0A66C2" }} />
+                  <span className="text-[11px] text-muted-foreground uppercase tracking-wide">Messages Sent</span>
+                </div>
+                <div className="text-2xl font-bold font-mono tabular-nums" style={{ color: "#0A66C2" }}>
+                  {unipileMetrics?.messagesSent ?? 0}
+                </div>
+              </div>
+              <div className="rounded-lg border bg-secondary/30 p-3 text-center" style={{ borderLeftWidth: 3, borderLeftColor: "#34D399" }}>
+                <div className="flex items-center justify-center gap-1 mb-1">
+                  <UserPlus className="size-3.5 text-emerald-500" />
+                  <span className="text-[11px] text-muted-foreground uppercase tracking-wide">Connections</span>
+                </div>
+                <div className="text-2xl font-bold font-mono tabular-nums text-emerald-500">
+                  {unipileMetrics?.connectionsAccepted ?? 0}
+                </div>
+              </div>
+              <div className="rounded-lg border bg-secondary/30 p-3 text-center" style={{ borderLeftWidth: 3, borderLeftColor: "#FCD34D" }}>
+                <div className="flex items-center justify-center gap-1 mb-1">
+                  <Target className="size-3.5 text-amber-400" />
+                  <span className="text-[11px] text-muted-foreground uppercase tracking-wide">Acceptance</span>
+                </div>
+                <div className="text-2xl font-bold font-mono tabular-nums text-amber-400">
+                  {unipileMetrics?.acceptanceRate ?? 0}%
+                </div>
+              </div>
+            </div>
+            {/* Provider breakdown bar chart */}
+            {(unipileMetrics?.byProvider ?? []).length === 0 ? (
+              <div className="text-sm text-muted-foreground text-center py-2">
+                No outbound messages yet. <Link href="/connected-accounts" className="underline" style={{ color: accent }}>Connect a channel</Link> to start.
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {(unipileMetrics?.byProvider ?? []).map((p) => {
+                  const maxCount = Math.max(...(unipileMetrics?.byProvider ?? []).map((x) => x.count), 1);
+                  const pct = Math.round((p.count / maxCount) * 100);
+                  const PROVIDER_COLORS: Record<string, string> = {
+                    LINKEDIN: "#0A66C2",
+                    WHATSAPP: "#25D366",
+                    INSTAGRAM: "#E1306C",
+                    MESSENGER: "#0084FF",
+                    TELEGRAM: "#2AABEE",
+                    TWITTER: "#000000",
+                    GOOGLE: "#EA4335",
+                    MICROSOFT: "#0078D4",
+                    IMAP: "#6B7280",
+                  };
+                  const color = PROVIDER_COLORS[p.provider.toUpperCase()] ?? accent;
+                  return (
+                    <div key={p.provider} className="flex items-center gap-3">
+                      <span className="text-xs text-muted-foreground w-20 shrink-0 capitalize">{p.provider.toLowerCase()}</span>
+                      <div className="flex-1 h-2 rounded-full bg-secondary overflow-hidden">
+                        <div
+                          className="h-full rounded-full transition-all duration-700"
+                          style={{ width: `${pct}%`, background: color }}
+                        />
+                      </div>
+                      <span className="text-xs font-mono font-semibold w-8 text-right tabular-nums" style={{ color }}>{p.count}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
 

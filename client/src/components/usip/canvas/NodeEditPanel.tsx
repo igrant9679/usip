@@ -1,6 +1,7 @@
 /**
  * NodeEditPanel — slide-in right panel for editing a selected canvas node.
- * Supports all node types: email, wait, condition, action, goal, start.
+ * Supports all node types: email, wait, condition, action, goal, start,
+ * linkedin_dm, linkedin_invite.
  * Email nodes have a three-tab generation mode selector:
  *   - dynamic: AI-generated at send time per recipient
  *   - template: pick from saved template library
@@ -21,16 +22,18 @@ import {
   Clock,
   FileText,
   GitBranch,
+  Link2,
   Mail,
   PenLine,
   Play,
   Settings2,
   Sparkles,
+  UserPlus,
   X,
   Zap,
   CheckCircle2,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Node } from "@xyflow/react";
 
 /* ─── Types ─────────────────────────────────────────────────────────────── */
@@ -60,6 +63,10 @@ export interface NodeData extends Record<string, unknown> {
   // Goal node
   goalType?: string;
   goalValue?: string;
+  // LinkedIn DM node
+  linkedinMessage?: string;
+  // LinkedIn Invite node
+  linkedinNote?: string;
 }
 
 interface Props {
@@ -84,6 +91,38 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
     <div className="space-y-1.5">
       <Label className="text-xs">{label}</Label>
       {children}
+    </div>
+  );
+}
+
+/* ─── Personalization token buttons ─────────────────────────────────────── */
+const MERGE_TOKENS = [
+  { token: "{{firstName}}", label: "First Name" },
+  { token: "{{lastName}}", label: "Last Name" },
+  { token: "{{company}}", label: "Company" },
+  { token: "{{title}}", label: "Title" },
+];
+
+function TokenButtons({
+  onInsert,
+  disabled,
+}: {
+  onInsert: (token: string) => void;
+  disabled: boolean;
+}) {
+  return (
+    <div className="flex flex-wrap gap-1">
+      {MERGE_TOKENS.map((t) => (
+        <button
+          key={t.token}
+          type="button"
+          disabled={disabled}
+          onClick={() => onInsert(t.token)}
+          className="text-[10px] px-1.5 py-0.5 rounded bg-muted hover:bg-muted/80 text-muted-foreground hover:text-foreground transition disabled:opacity-50 disabled:cursor-not-allowed font-mono"
+        >
+          {t.token}
+        </button>
+      ))}
     </div>
   );
 }
@@ -401,6 +440,136 @@ function GoalFields({ data, readOnly, onChange }: { data: NodeData; readOnly: bo
   );
 }
 
+/* ─── LinkedIn DM node fields ───────────────────────────────────────────── */
+const LI_DM_MAX = 300;
+
+function LinkedInDmFields({
+  data,
+  readOnly,
+  onChange,
+}: {
+  data: NodeData;
+  readOnly: boolean;
+  onChange: (p: Partial<NodeData>) => void;
+}) {
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const message = data.linkedinMessage ?? "";
+  const remaining = LI_DM_MAX - message.length;
+
+  const insertToken = (token: string) => {
+    if (readOnly) return;
+    const el = textareaRef.current;
+    if (!el) {
+      onChange({ linkedinMessage: message + token });
+      return;
+    }
+    const start = el.selectionStart ?? message.length;
+    const end = el.selectionEnd ?? message.length;
+    const next = message.slice(0, start) + token + message.slice(end);
+    onChange({ linkedinMessage: next.slice(0, LI_DM_MAX) });
+    // restore caret after React re-render
+    requestAnimationFrame(() => {
+      el.selectionStart = el.selectionEnd = start + token.length;
+      el.focus();
+    });
+  };
+
+  return (
+    <Section title="LinkedIn direct message">
+      <div className="rounded-md bg-[#0A66C2]/10 border border-[#0A66C2]/30 p-3 flex gap-2">
+        <Link2 className="size-4 shrink-0 mt-0.5" style={{ color: "#0A66C2" }} />
+        <p className="text-xs" style={{ color: "#0A66C2" }}>
+          Sends a direct message via LinkedIn through your connected Unipile account. The recipient must be a 1st-degree connection.
+        </p>
+      </div>
+      <Field label="Message text">
+        <Textarea
+          ref={textareaRef}
+          value={message}
+          disabled={readOnly}
+          placeholder={`Hi {{firstName}}, I noticed you're at {{company}}…`}
+          rows={5}
+          maxLength={LI_DM_MAX}
+          className="font-mono text-xs resize-y"
+          onChange={(e) => onChange({ linkedinMessage: e.target.value })}
+        />
+        <div className={`text-[10px] text-right mt-0.5 ${remaining < 30 ? "text-destructive" : "text-muted-foreground"}`}>
+          {remaining} characters remaining
+        </div>
+      </Field>
+      <Field label="Insert merge tag">
+        <TokenButtons onInsert={insertToken} disabled={readOnly} />
+      </Field>
+    </Section>
+  );
+}
+
+/* ─── LinkedIn Invite node fields ───────────────────────────────────────── */
+const LI_NOTE_MAX = 300;
+
+function LinkedInInviteFields({
+  data,
+  readOnly,
+  onChange,
+}: {
+  data: NodeData;
+  readOnly: boolean;
+  onChange: (p: Partial<NodeData>) => void;
+}) {
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const note = data.linkedinNote ?? "";
+  const remaining = LI_NOTE_MAX - note.length;
+
+  const insertToken = (token: string) => {
+    if (readOnly) return;
+    const el = textareaRef.current;
+    if (!el) {
+      onChange({ linkedinNote: note + token });
+      return;
+    }
+    const start = el.selectionStart ?? note.length;
+    const end = el.selectionEnd ?? note.length;
+    const next = note.slice(0, start) + token + note.slice(end);
+    onChange({ linkedinNote: next.slice(0, LI_NOTE_MAX) });
+    requestAnimationFrame(() => {
+      el.selectionStart = el.selectionEnd = start + token.length;
+      el.focus();
+    });
+  };
+
+  return (
+    <Section title="LinkedIn connection invite">
+      <div className="rounded-md bg-[#0A66C2]/10 border border-[#0A66C2]/30 p-3 flex gap-2">
+        <UserPlus className="size-4 shrink-0 mt-0.5" style={{ color: "#0A66C2" }} />
+        <p className="text-xs" style={{ color: "#0A66C2" }}>
+          Sends a LinkedIn connection request with an optional personalised note. Leave the note blank to send without a message.
+        </p>
+      </div>
+      <Field label="Connection note (optional)">
+        <Textarea
+          ref={textareaRef}
+          value={note}
+          disabled={readOnly}
+          placeholder={`Hi {{firstName}}, I'd love to connect and share insights about {{company}}…`}
+          rows={4}
+          maxLength={LI_NOTE_MAX}
+          className="font-mono text-xs resize-y"
+          onChange={(e) => onChange({ linkedinNote: e.target.value })}
+        />
+        <div className={`text-[10px] text-right mt-0.5 ${remaining < 30 ? "text-destructive" : "text-muted-foreground"}`}>
+          {remaining} / {LI_NOTE_MAX} characters
+        </div>
+      </Field>
+      <Field label="Insert merge tag">
+        <TokenButtons onInsert={insertToken} disabled={readOnly} />
+      </Field>
+      <p className="text-[11px] text-muted-foreground">
+        LinkedIn limits connection notes to 300 characters. Sending without a note may have a higher acceptance rate.
+      </p>
+    </Section>
+  );
+}
+
 /* ─── NODE_TYPE_META ────────────────────────────────────────────────────── */
 const NODE_META: Record<string, { icon: React.FC<any>; color: string; label: string }> = {
   start: { icon: Play, color: "#14B89A", label: "Start" },
@@ -409,6 +578,8 @@ const NODE_META: Record<string, { icon: React.FC<any>; color: string; label: str
   condition: { icon: GitBranch, color: "#8B5CF6", label: "Condition" },
   action: { icon: Zap, color: "#EC4899", label: "Action" },
   goal: { icon: CheckCircle2, color: "#10B981", label: "Goal" },
+  linkedin_dm: { icon: Link2, color: "#0A66C2", label: "LinkedIn DM" },
+  linkedin_invite: { icon: UserPlus, color: "#0A66C2", label: "LinkedIn Invite" },
 };
 
 /* ─── Main panel ────────────────────────────────────────────────────────── */
@@ -487,6 +658,12 @@ export function NodeEditPanel({ node, readOnly, onClose, onSave }: Props) {
         )}
         {node.type === "goal" && (
           <GoalFields data={draft} readOnly={readOnly} onChange={patch} />
+        )}
+        {node.type === "linkedin_dm" && (
+          <LinkedInDmFields data={draft} readOnly={readOnly} onChange={patch} />
+        )}
+        {node.type === "linkedin_invite" && (
+          <LinkedInInviteFields data={draft} readOnly={readOnly} onChange={patch} />
         )}
         {node.type === "start" && (
           <Section title="Start node">

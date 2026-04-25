@@ -37,10 +37,12 @@ import {
   CheckCircle2,
   Clock,
   GitBranch,
+  Link2,
   Mail,
   Play,
   Save,
   Settings2,
+  UserPlus,
   Zap,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -61,6 +63,8 @@ const NODE_COLORS: Record<string, string> = {
   condition: "#8B5CF6",
   action: "#EC4899",
   goal: "#10B981",
+  linkedin_dm: "#0A66C2",
+  linkedin_invite: "#0A66C2",
 };
 
 const NODE_ICONS: Record<string, React.FC<any>> = {
@@ -70,6 +74,8 @@ const NODE_ICONS: Record<string, React.FC<any>> = {
   condition: GitBranch,
   action: Zap,
   goal: CheckCircle2,
+  linkedin_dm: Link2,
+  linkedin_invite: UserPlus,
 };
 
 /* ─── Custom node component ─────────────────────────────────────────────── */
@@ -164,6 +170,8 @@ const nodeTypes = {
   condition: CanvasNode,
   action: CanvasNode,
   goal: CanvasNode,
+  linkedin_dm: CanvasNode,
+  linkedin_invite: CanvasNode,
 };
 
 /* ─── Palette entry ─────────────────────────────────────────────────────── */
@@ -173,6 +181,8 @@ const PALETTE_ITEMS = [
   { type: "condition", label: "Condition", description: "Branch on engagement signal" },
   { type: "action", label: "Action", description: "Update status, assign, tag, task" },
   { type: "goal", label: "Goal", description: "Exit condition / conversion event" },
+  { type: "linkedin_dm", label: "LinkedIn DM", description: "Send a LinkedIn direct message" },
+  { type: "linkedin_invite", label: "LinkedIn Invite", description: "Send a LinkedIn connection request" },
 ] as const;
 
 /* ─── Undo/redo stack ───────────────────────────────────────────────────── */
