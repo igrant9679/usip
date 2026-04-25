@@ -1242,16 +1242,16 @@
 
 ## Batch U — Invite Acceptance Page, Login History Filters, Expiry Emails
 
-- [ ] Server: team.acceptInvite public procedure (validate token, return workspace/role info)
-- [ ] Server: team.finaliseAcceptance protected procedure (mark invite accepted after OAuth login)
-- [ ] Server: team.getLoginHistoryFiltered procedure (outcome filter + date range, up to 200 rows)
-- [ ] Server: sendExpiryWarningEmails() in inviteExpiry.ts (48h warning email via system sender)
-- [ ] Server: wire sendExpiryWarningEmails into nightly batch in index.ts
-- [ ] UI: /invite/accept page (public route, no AuthGate) with workspace/role card and OAuth sign-in button
-- [ ] UI: auto-finalise acceptance on return from OAuth login (detect token in URL, call finaliseAcceptance)
-- [ ] UI: Login History tab filter bar (date range from/to, outcome multi-select, clear button)
-- [ ] App.tsx: register /invite/accept route without AuthGate
-- [ ] Tests: cover acceptInvite validation, finaliseAcceptance, getLoginHistoryFiltered
+- [x] Server: team.acceptInvite public procedure (validate token, return workspace/role info)
+- [x] Server: team.finaliseAcceptance protected procedure (mark invite accepted after OAuth login)
+- [x] Server: team.getLoginHistoryFiltered procedure (outcome filter + date range, up to 200 rows)
+- [x] Server: sendExpiryWarningEmails() in inviteExpiry.ts (48h warning email via system sender)
+- [x] Server: wire sendExpiryWarningEmails into nightly batch in index.ts
+- [x] UI: /invite/accept page (public route, no AuthGate) with workspace/role card and OAuth sign-in button
+- [x] UI: auto-finalise acceptance on return from OAuth login (detect token in URL, call finaliseAcceptance)
+- [x] UI: Login History tab filter bar (date range from/to, outcome multi-select, clear button)
+- [x] App.tsx: register /invite/accept route without AuthGate
+- [x] Tests: cover acceptInvite validation, finaliseAcceptance, getLoginHistoryFiltered
 
 ## Batch U — Invite Acceptance, Login History Filters, Expiry Emails
 
@@ -1264,3 +1264,31 @@
 - [x] UI: /invite/accept page — public route, shows workspace/role card, Sign in to accept button, auto-finalises on return
 - [x] UI: Login History tab — filter bar with member, outcome (all/success/failed/expired_invite), from/to date pickers, Clear all button
 - [x] Tests: invite.accept.test.ts covering acceptInvitePreview, finaliseAcceptance, getLoginHistoryFiltered, sendExpiryWarningEmails, OAuth state encoding
+
+## Batch V — Fix Transactional Email Delivery (use smtp_configs not sendingAccounts)
+
+- [ ] Create server/emailDelivery.ts helper: sendWorkspaceEmail(workspaceId, {to, subject, html}) using smtp_configs table
+- [ ] Fix admin.ts invite procedure: replace systemSenderAccountId/sendingAccounts lookup with sendWorkspaceEmail
+- [ ] Fix admin.ts resendInvitation procedure: replace systemSenderAccountId/sendingAccounts lookup with sendWorkspaceEmail
+- [ ] Fix inviteExpiry.ts sendExpiryWarningEmails: replace systemSenderAccountId/sendingAccounts lookup with sendWorkspaceEmail
+- [ ] Fix pipelineAlerts.ts notification emails: replace systemSenderAccountId/sendingAccounts lookup with sendWorkspaceEmail
+- [ ] Tests: cover sendWorkspaceEmail helper (missing config, disabled config, send success)
+
+## Batch W — Team Member Edit
+
+- [ ] Server: team.updateMember procedure (admin+): update name, email, title, role, quota for any member below caller rank
+- [ ] UI: Edit Member button (pencil icon) on each member row in Team.tsx
+- [ ] UI: Edit Member dialog with fields: name, email, title, role (select), quota (number)
+- [ ] UI: optimistic update on save; invalidate team.list on success
+
+## Batch V — Fix Transactional Email Delivery (completed)
+- [x] Create server/emailDelivery.ts — sendWorkspaceEmail helper reading smtp_configs table
+- [x] Fix team.invite to use sendWorkspaceEmail instead of sendingAccounts path
+- [x] Fix team.resendInvitation to use sendWorkspaceEmail
+- [x] Fix inviteExpiry.sendExpiryWarningEmails to use sendWorkspaceEmail
+- [x] Fix pipelineAlerts digest email to use sendWorkspaceEmail
+
+## Batch W — Team Member Edit (completed)
+- [x] Server: add team.updateMember procedure (name, email, title, role, quota, notifEmail)
+- [x] Server: expose notifEmail in team.list query
+- [x] UI: add Edit button and Edit Member dialog to Team.tsx (all editable fields)

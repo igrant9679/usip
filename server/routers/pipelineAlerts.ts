@@ -443,39 +443,19 @@ export const pipelineAlertsRouter = router({
 </table>
 <p style="font-family:sans-serif;color:#666;font-size:12px;margin-top:16px">Sent by USIP Pipeline Alerts</p>`;
 
-    // Get system sender
-    const [settings] = await db
-      .select({ systemSenderAccountId: workspaceSettings.systemSenderAccountId })
-      .from(workspaceSettings)
-      .where(eq(workspaceSettings.workspaceId, wsId));
-
-    if (!settings?.systemSenderAccountId) {
-      throw new TRPCError({ code: "PRECONDITION_FAILED", message: "No system sender configured. Please set a system sender in Settings → General." });
-    }
-
-    const { sendingAccounts } = await import("../../drizzle/schema");
-    const { buildTransporter, decrypt } = await import("./smtpConfig");
-    const [sender] = await db.select().from(sendingAccounts).where(eq(sendingAccounts.id, settings.systemSenderAccountId));
-    if (!sender?.smtpHost || !sender?.smtpUsername || !sender?.smtpPassword) {
-      throw new TRPCError({ code: "PRECONDITION_FAILED", message: "System sender is not fully configured (missing SMTP credentials)." });
-    }
-
-    const password = decrypt(sender.smtpPassword);
-    const transporter = buildTransporter({
-      host: sender.smtpHost,
-      port: sender.smtpPort ?? 587,
-      secure: sender.smtpSecure ?? false,
-      username: sender.smtpUsername,
-      password,
-    });
-
-    await transporter.sendMail({
-      from: `"${sender.fromName ?? ctx.workspace.name}" <${sender.fromEmail}>`,
+    // Send via workspace SMTP (Email Delivery settings — Settings → Email Delivery)
+    const { sendWorkspaceEmail } = await import("../emailDelivery");
+    const emailResult = await sendWorkspaceEmail(wsId, {
       to: recipientEmail,
       subject: `Pipeline Digest: ${stuckDeals.length} stuck deal${stuckDeals.length !== 1 ? "s" : ""} — ${new Date().toLocaleDateString()}`,
       html,
     });
-
+    if (!emailResult.ok) {
+      throw new TRPCError({
+        code: "PRECONDITION_FAILED",
+        message: emailResult.reason ?? "Email delivery failed. Please configure Email Delivery SMTP in Settings → Email Delivery.",
+      });
+    }
     return { ok: true, sent: true, count: stuckDeals.length, recipient: recipientEmail };
   }),
 });

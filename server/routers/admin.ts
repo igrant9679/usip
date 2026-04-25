@@ -155,6 +155,7 @@ export const teamRouter = router({
         quota: workspaceMembers.quota,
         deactivatedAt: workspaceMembers.deactivatedAt,
         lastActiveAt: workspaceMembers.lastActiveAt,
+        notifEmail: workspaceMembers.notifEmail,
       })
       .from(workspaceMembers)
       .innerJoin(users, eq(workspaceMembers.userId, users.id))
@@ -240,39 +241,28 @@ export const teamRouter = router({
         entityId: userId,
         after: { email: input.email, role: input.role },
       });
-      // Send invitation email using system sender if configured
+      // Send invitation email via workspace SMTP (Email Delivery settings)
       try {
-        const [settings] = await db
-          .select({ systemSenderAccountId: workspaceSettings.systemSenderAccountId })
-          .from(workspaceSettings)
-          .where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
-        if (settings?.systemSenderAccountId) {
-          const { sendingAccounts } = await import("../../drizzle/schema");
-          const { buildTransporter, decrypt } = await import("./smtpConfig");
-          const [sender] = await db
-            .select()
-            .from(sendingAccounts)
-            .where(eq(sendingAccounts.id, settings.systemSenderAccountId));
-          if (sender?.smtpHost && sender?.smtpUsername && sender?.smtpPassword) {
-            const password = decrypt(sender.smtpPassword);
-            const transporter = buildTransporter({
-              host: sender.smtpHost,
-              port: sender.smtpPort ?? 587,
-              secure: sender.smtpSecure ?? false,
-              username: sender.smtpUsername,
-              password,
-            });
-            await transporter.sendMail({
-              from: `"${sender.fromName ?? ctx.workspace.name}" <${sender.fromEmail}>`,
-              to: input.email,
-              subject: `You've been invited to ${ctx.workspace.name} on USIP`,
-              html: `<p>Hi ${input.name ?? input.email.split("@")[0]},</p>
-<p>You have been invited to join <strong>${ctx.workspace.name}</strong> on USIP as a <strong>${input.role}</strong>.</p>
-<p>Sign in at <a href="${process.env.VITE_OAUTH_PORTAL_URL ?? "https://manus.im"}">USIP</a> with this email address to accept your invitation.</p>
-<p>If you did not expect this invitation, you can safely ignore this email.</p>`,
-            });
-          }
-        }
+        const { sendWorkspaceEmail } = await import("../emailDelivery");
+        const appOrigin = process.env.VITE_OAUTH_PORTAL_URL ?? "https://manus.im";
+        const inviteUrl = `${appOrigin}/invite/accept?token=${inviteToken}`;
+        const recipientName = input.name ?? input.email.split("@")[0];
+        await sendWorkspaceEmail(ctx.workspace.id, {
+          to: input.email,
+          subject: `You've been invited to join ${ctx.workspace.name}`,
+          html: `
+<div style="font-family:sans-serif;max-width:520px;margin:0 auto;padding:24px">
+  <h2 style="margin-bottom:8px">You're invited!</h2>
+  <p>Hi ${recipientName},</p>
+  <p><strong>${ctx.workspace.name}</strong> has invited you to join their workspace on USIP as a <strong>${input.role}</strong>.</p>
+  <p style="margin:24px 0">
+    <a href="${inviteUrl}" style="background:#2563eb;color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none;font-weight:600">Accept invitation</a>
+  </p>
+  <p style="color:#6b7280;font-size:13px">Or copy this link: <a href="${inviteUrl}">${inviteUrl}</a></p>
+  ${inviteExpiresAt ? `<p style="color:#6b7280;font-size:13px">This invitation expires on ${inviteExpiresAt.toLocaleDateString()}.</p>` : ""}
+  <p style="color:#9ca3af;font-size:12px">If you did not expect this invitation, you can safely ignore this email.</p>
+</div>`,
+        });
       } catch (_e) {
         // Non-fatal: invitation email failure should not block the invite
       }
@@ -616,38 +606,28 @@ export const teamRouter = router({
       await db.update(workspaceMembers)
         .set({ inviteToken: newToken, inviteExpiresAt: newExpiresAt })
         .where(eq(workspaceMembers.id, input.memberId));
+      // Resend invitation email via workspace SMTP (Email Delivery settings)
       try {
-        const [settings] = await db
-          .select({ systemSenderAccountId: workspaceSettings.systemSenderAccountId })
-          .from(workspaceSettings)
-          .where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
-        if (settings?.systemSenderAccountId) {
-          const { sendingAccounts } = await import("../../drizzle/schema");
-          const { buildTransporter, decrypt } = await import("./smtpConfig");
-          const [sender] = await db
-            .select()
-            .from(sendingAccounts)
-            .where(eq(sendingAccounts.id, settings.systemSenderAccountId));
-          if (sender?.smtpHost && sender?.smtpUsername && sender?.smtpPassword) {
-            const pwd = decrypt(sender.smtpPassword);
-            const transporter = buildTransporter({
-              host: sender.smtpHost,
-              port: sender.smtpPort ?? 587,
-              secure: sender.smtpSecure ?? false,
-              username: sender.smtpUsername,
-              password: pwd,
-            });
-            await transporter.sendMail({
-              from: `"${sender.fromName ?? ctx.workspace.name}" <${sender.fromEmail}>`,
-              to: row.email!,
-              subject: `Reminder: You've been invited to ${ctx.workspace.name} on USIP`,
-              html: `<p>Hi ${row.name ?? row.email?.split("@")[0]},</p>
-<p>This is a reminder that you have been invited to join <strong>${ctx.workspace.name}</strong> on USIP as a <strong>${row.role}</strong>.</p>
-<p>Sign in at <a href="${process.env.VITE_OAUTH_PORTAL_URL ?? "https://manus.im"}">USIP</a> with this email address to accept your invitation.</p>
-<p>If you did not expect this invitation, you can safely ignore this email.</p>`,
-            });
-          }
-        }
+        const { sendWorkspaceEmail } = await import("../emailDelivery");
+        const appOrigin = process.env.VITE_OAUTH_PORTAL_URL ?? "https://manus.im";
+        const resendUrl = `${appOrigin}/invite/accept?token=${newToken}`;
+        const recipientName = row.name ?? row.email?.split("@")[0];
+        await sendWorkspaceEmail(ctx.workspace.id, {
+          to: row.email!,
+          subject: `Reminder: You've been invited to join ${ctx.workspace.name}`,
+          html: `
+<div style="font-family:sans-serif;max-width:520px;margin:0 auto;padding:24px">
+  <h2 style="margin-bottom:8px">Invitation reminder</h2>
+  <p>Hi ${recipientName},</p>
+  <p>This is a reminder that you have been invited to join <strong>${ctx.workspace.name}</strong> on USIP as a <strong>${row.role}</strong>.</p>
+  <p style="margin:24px 0">
+    <a href="${resendUrl}" style="background:#2563eb;color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none;font-weight:600">Accept invitation</a>
+  </p>
+  <p style="color:#6b7280;font-size:13px">Or copy this link: <a href="${resendUrl}">${resendUrl}</a></p>
+  ${newExpiresAt ? `<p style="color:#6b7280;font-size:13px">This invitation expires on ${newExpiresAt.toLocaleDateString()}.</p>` : ""}
+  <p style="color:#9ca3af;font-size:12px">If you did not expect this invitation, you can safely ignore this email.</p>
+</div>`,
+        });
       } catch (_e) { /* Non-fatal */ }
       await recordAudit({
         workspaceId: ctx.workspace.id,
@@ -1024,4 +1004,73 @@ export const dangerZoneRouter = router({
 
     return exportData;
   }),
+
+  /**
+   * Update editable fields for a team member.
+   * Admins can edit members below their rank.
+   * Editable fields: name, email (users table), title, role, quota, notifEmail (workspaceMembers table).
+   */
+  updateMember: adminWsProcedure
+    .input(
+      z.object({
+        memberId: z.number().int(),
+        name: z.string().min(1).max(120).optional(),
+        email: z.string().email().optional(),
+        title: z.string().max(120).nullable().optional(),
+        role: z.enum(["super_admin", "admin", "manager", "rep"]).optional(),
+        quota: z.number().min(0).nullable().optional(),
+        notifEmail: z.string().email().nullable().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+
+      // Resolve the member row
+      const [member] = await db
+        .select({ userId: workspaceMembers.userId, role: workspaceMembers.role })
+        .from(workspaceMembers)
+        .where(and(eq(workspaceMembers.id, input.memberId), eq(workspaceMembers.workspaceId, ctx.workspace.id)));
+      if (!member) throw new TRPCError({ code: "NOT_FOUND", message: "Member not found" });
+
+      // Role-rank guard: cannot edit a member at or above your own rank
+      if (ctx.member.role !== "super_admin" && roleRank(member.role) >= roleRank(ctx.member.role)) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Cannot edit a member at or above your role" });
+      }
+
+      // If promoting to a role above the caller's rank, block it
+      if (input.role && ctx.member.role !== "super_admin" && roleRank(input.role) >= roleRank(ctx.member.role)) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Cannot promote a member to a role at or above your own" });
+      }
+
+      // Update users table (name, email)
+      const userPatch: Record<string, unknown> = {};
+      if (input.name !== undefined) userPatch.name = input.name;
+      if (input.email !== undefined) userPatch.email = input.email;
+      if (Object.keys(userPatch).length > 0) {
+        await db.update(users).set(userPatch).where(eq(users.id, member.userId));
+      }
+
+      // Update workspaceMembers table (title, role, quota, notifEmail)
+      const memberPatch: Record<string, unknown> = {};
+      if (input.title !== undefined) memberPatch.title = input.title;
+      if (input.role !== undefined) memberPatch.role = input.role;
+      if (input.quota !== undefined) memberPatch.quota = input.quota !== null ? String(input.quota) : null;
+      if (input.notifEmail !== undefined) memberPatch.notifEmail = input.notifEmail;
+      if (Object.keys(memberPatch).length > 0) {
+        await db.update(workspaceMembers).set(memberPatch)
+          .where(and(eq(workspaceMembers.id, input.memberId), eq(workspaceMembers.workspaceId, ctx.workspace.id)));
+      }
+
+      await recordAudit({
+        workspaceId: ctx.workspace.id,
+        actorUserId: ctx.user.id,
+        action: "update",
+        entityType: "workspace_member",
+        entityId: member.userId,
+        after: { ...userPatch, ...memberPatch },
+      });
+
+      return { ok: true };
+    }),
 });

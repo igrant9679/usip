@@ -15,6 +15,7 @@ import {
   Link2,
   LogIn,
   Mail,
+  Pencil,
   RefreshCw,
   Shield,
   UserMinus,
@@ -52,6 +53,15 @@ export default function Team() {
   const [inviteOpen, setInviteOpen] = useState(false);
   const [deactivateTarget, setDeactivateTarget] = useState<any | null>(null);
   const [reassignTo, setReassignTo] = useState<number | null>(null);
+
+  // Edit Member dialog
+  const [editTarget, setEditTarget] = useState<any | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editEmail, setEditEmail] = useState("");
+  const [editTitle, setEditTitle] = useState("");
+  const [editRole, setEditRole] = useState<Role>("rep");
+  const [editQuota, setEditQuota] = useState("");
+  const [editNotifEmail, setEditNotifEmail] = useState("");
 
   // Set Password dialog
   const [pwTarget, setPwTarget] = useState<any | null>(null);
@@ -151,6 +161,15 @@ export default function Team() {
       setBulkDeactivateOpen(false);
       setBulkReassignTo(null);
       toast.success(`Deactivated ${res.deactivated} member(s)${res.skipped ? `, skipped ${res.skipped}` : ""}`);
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const updateMember = trpc.team.updateMember.useMutation({
+    onSuccess: () => {
+      utils.team.list.invalidate();
+      setEditTarget(null);
+      toast.success("Member updated");
     },
     onError: (e) => toast.error(e.message),
   });
@@ -428,6 +447,25 @@ export default function Team() {
                                       <Button
                                         size="sm"
                                         variant="ghost"
+                                        title="Edit member"
+                                        onClick={() => {
+                                          setEditTarget(m);
+                                          setEditName(m.name ?? "");
+                                          setEditEmail(m.email ?? "");
+                                          setEditTitle(m.title ?? "");
+                                          setEditRole(m.role as Role);
+                                          setEditQuota(m.quota ? String(m.quota) : "");
+                                          setEditNotifEmail(m.notifEmail ?? "");
+                                        }}
+                                      >
+                                        <Pencil className="size-3.5" />
+                                        <span className="hidden sm:inline ml-1">Edit</span>
+                                      </Button>
+                                    )}
+                                    {editable && (
+                                      <Button
+                                        size="sm"
+                                        variant="ghost"
                                         title="Set password"
                                         onClick={() => { setPwTarget(m); setPwValue(""); setPwConfirm(""); }}
                                       >
@@ -654,6 +692,78 @@ export default function Team() {
           </Section>
         </div>
       )}
+
+      {/* Edit Member dialog */}
+      <Dialog open={!!editTarget} onOpenChange={(v) => { if (!v) setEditTarget(null); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Edit member — {editTarget?.name ?? editTarget?.email}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label htmlFor="edit-name">Full name</Label>
+                <Input id="edit-name" value={editName} onChange={(e) => setEditName(e.target.value)} placeholder="Jane Doe" />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="edit-email">Login email</Label>
+                <Input id="edit-email" type="email" value={editEmail} onChange={(e) => setEditEmail(e.target.value)} placeholder="jane@acme.com" />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label htmlFor="edit-title">Title</Label>
+                <Input id="edit-title" value={editTitle} onChange={(e) => setEditTitle(e.target.value)} placeholder="Account Executive" />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="edit-role">Role</Label>
+                <select
+                  id="edit-role"
+                  className="w-full border rounded-md px-2 py-1.5 text-sm bg-background"
+                  value={editRole}
+                  onChange={(e) => setEditRole(e.target.value as Role)}
+                >
+                  {ROLES.filter((r) => ROLE_RANK[r] <= ROLE_RANK[myRole] || r === editTarget?.role).map((r) => (
+                    <option key={r} value={r}>{r}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label htmlFor="edit-quota">Annual quota ($)</Label>
+                <Input id="edit-quota" type="number" min={0} value={editQuota} onChange={(e) => setEditQuota(e.target.value)} placeholder="250000" />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="edit-notif">Notification email</Label>
+                <Input id="edit-notif" type="email" value={editNotifEmail} onChange={(e) => setEditNotifEmail(e.target.value)} placeholder="Same as login email" />
+                <p className="text-xs text-muted-foreground">Leave blank to use login email.</p>
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setEditTarget(null)}>Cancel</Button>
+            <Button
+              disabled={updateMember.isPending}
+              onClick={() => {
+                if (!editTarget) return;
+                updateMember.mutate({
+                  memberId: editTarget.memberId,
+                  name: editName.trim() || undefined,
+                  email: editEmail.trim() || undefined,
+                  title: editTitle.trim() || null,
+                  role: editRole,
+                  quota: editQuota ? Number(editQuota) : null,
+                  notifEmail: editNotifEmail.trim() || null,
+                });
+              }}
+            >
+              <Pencil className="size-4" />
+              {updateMember.isPending ? "Saving…" : "Save changes"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Invite dialog */}
       <FormDialog
