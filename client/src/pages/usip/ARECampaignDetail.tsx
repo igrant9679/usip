@@ -1,22 +1,35 @@
 /**
- * ARE Campaign Detail — full prospect review queue with AI intelligence dossiers,
- * sequence viewer, A/B variant panel, signal feed, and scraper controls.
+ * ARE Campaign Detail — Enhanced
+ *
+ * Tabs: Overview · Prospects · Scraper · A/B Variants · Signal Feed
+ *
+ * Key improvements:
+ *   - PageHeader with breadcrumb, status badge, and pause/activate CTA
+ *   - StatCard row using Shell design system tokens
+ *   - Prospect queue with ICP score ring, enrichment progress, and slide-over dossier
+ *   - Intelligence dossier in a Sheet slide-over (not inline panel)
+ *   - Sequence viewer with quality score bar
+ *   - Scraper panel with source icons and live result count
+ *   - A/B variant cards with reply-rate comparison bars
+ *   - Signal feed with sentiment colour coding and action badges
  */
-import { Shell } from "@/components/usip/Shell";
+import { Shell, PageHeader, StatCard, EmptyState } from "@/components/usip/Shell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Progress } from "@/components/ui/progress";
+import { Separator } from "@/components/ui/separator";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { trpc } from "@/lib/trpc";
 import {
   Activity,
   ArrowLeft,
-  Bot,
   Brain,
   CheckCircle2,
-  ChevronDown,
   ChevronRight,
-  Cpu,
+  Clock,
+  ExternalLink,
   Eye,
   FlaskConical,
   Globe,
@@ -31,8 +44,9 @@ import {
   RefreshCw,
   Search,
   Sparkles,
+  Star,
   Target,
-  Trash2,
+  TrendingDown,
   TrendingUp,
   Users,
   X,
@@ -42,6 +56,7 @@ import { useState } from "react";
 import { Link, useParams } from "wouter";
 import { toast } from "sonner";
 
+/* ─── constants ────────────────────────────────────────────────────────────── */
 const SOURCE_ICON: Record<string, React.ElementType> = {
   internal: Users,
   google_business: Globe,
@@ -51,14 +66,21 @@ const SOURCE_ICON: Record<string, React.ElementType> = {
   ai_research: Brain,
 };
 
-const STATUS_COLOR: Record<string, string> = {
+const SOURCE_LABEL: Record<string, string> = {
+  google_business: "Google Business",
+  linkedin: "LinkedIn",
+  web: "Web",
+  news: "News",
+};
+
+const ENRICH_COLOR: Record<string, string> = {
   pending: "#94A3B8",
   enriching: "#F59E0B",
   complete: "#34D399",
   failed: "#F87171",
 };
 
-const SEQ_STATUS_COLOR: Record<string, string> = {
+const SEQ_COLOR: Record<string, string> = {
   pending: "#94A3B8",
   approved: "#34D399",
   enrolled: "#60A5FA",
@@ -67,41 +89,51 @@ const SEQ_STATUS_COLOR: Record<string, string> = {
   replied: "#FB923C",
 };
 
+const SIGNAL_COLORS: Record<string, string> = {
+  positive: "#34D399",
+  negative: "#F87171",
+  objection: "#F59E0B",
+  neutral: "#94A3B8",
+};
+
+/* ─── ICP score ring ───────────────────────────────────────────────────────── */
+function IcpRing({ score }: { score: number }) {
+  const color = score >= 70 ? "#34D399" : score >= 40 ? "#F59E0B" : "#F87171";
+  const r = 14;
+  const circ = 2 * Math.PI * r;
+  const dash = (score / 100) * circ;
+  return (
+    <div className="relative size-9 shrink-0">
+      <svg viewBox="0 0 36 36" className="size-9 -rotate-90">
+        <circle cx="18" cy="18" r={r} fill="none" stroke="currentColor" strokeWidth="3" className="text-muted/30" />
+        <circle
+          cx="18" cy="18" r={r} fill="none"
+          stroke={color} strokeWidth="3"
+          strokeDasharray={`${dash} ${circ}`}
+          strokeLinecap="round"
+        />
+      </svg>
+      <div className="absolute inset-0 flex items-center justify-center">
+        <span className="text-[9px] font-bold tabular-nums" style={{ color }}>{score}</span>
+      </div>
+    </div>
+  );
+}
+
+/* ─── Prospect row ─────────────────────────────────────────────────────────── */
 function ProspectRow({
-  p,
-  campaignId,
-  onSelect,
-  selected,
+  p, campaignId, onSelect, selected,
 }: {
-  p: {
-    id: number;
-    firstName: string;
-    lastName: string;
-    title?: string | null;
-    companyName?: string | null;
-    industry?: string | null;
-    sourceType: string;
-    icpMatchScore?: number | null;
-    enrichmentStatus: string;
-    sequenceStatus: string;
-  };
-  campaignId: number;
-  onSelect: (id: number) => void;
-  selected: boolean;
+  p: any; campaignId: number; onSelect: (id: number) => void; selected: boolean;
 }) {
   const utils = trpc.useUtils();
+
   const enrich = trpc.are.prospects.enrich.useMutation({
-    onSuccess: () => {
-      toast.success("Enrichment started");
-      setTimeout(() => utils.are.prospects.list.invalidate(), 3000);
-    },
+    onSuccess: () => { toast.success("Enrichment started"); setTimeout(() => utils.are.prospects.list.invalidate(), 3000); },
     onError: (e) => toast.error(e.message),
   });
   const approve = trpc.are.prospects.approve.useMutation({
-    onSuccess: () => {
-      toast.success("Prospect approved");
-      utils.are.prospects.list.invalidate();
-    },
+    onSuccess: () => { toast.success("Approved"); utils.are.prospects.list.invalidate(); },
     onError: (e) => toast.error(e.message),
   });
   const skip = trpc.are.prospects.skip.useMutation({
@@ -109,257 +141,280 @@ function ProspectRow({
     onError: (e) => toast.error(e.message),
   });
   const genSeq = trpc.are.prospects.generateSequence.useMutation({
-    onSuccess: () => {
-      toast.success("Sequence generation started");
-      setTimeout(() => utils.are.prospects.list.invalidate(), 5000);
-    },
+    onSuccess: () => { toast.success("Sequence generation started"); setTimeout(() => utils.are.prospects.list.invalidate(), 5000); },
     onError: (e) => toast.error(e.message),
   });
 
   const SrcIcon = SOURCE_ICON[p.sourceType] ?? Globe;
+  const enrichColor = ENRICH_COLOR[p.enrichmentStatus] ?? "#94A3B8";
+  const seqColor = SEQ_COLOR[p.sequenceStatus] ?? "#94A3B8";
 
   return (
     <div
-      className={`flex items-center gap-3 rounded-xl border px-4 py-3 cursor-pointer transition-all ${
-        selected ? "border-emerald-500/50 bg-emerald-500/10" : "border-white/10 bg-white/5 hover:bg-white/10"
+      className={`group flex items-center gap-3 rounded-xl border px-3 py-2.5 cursor-pointer transition-all ${
+        selected
+          ? "border-primary/50 bg-primary/5 shadow-sm"
+          : "border-border bg-card hover:border-primary/20 hover:shadow-sm"
       }`}
       onClick={() => onSelect(p.id)}
     >
-      <SrcIcon className="size-4 text-white/30 shrink-0" />
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-medium text-white truncate">{p.firstName} {p.lastName}</span>
-          {p.icpMatchScore != null && (
-            <Badge
-              className="text-[10px] border-0"
-              style={{
-                backgroundColor: p.icpMatchScore >= 70 ? "#34D39922" : p.icpMatchScore >= 40 ? "#F59E0B22" : "#F8717122",
-                color: p.icpMatchScore >= 70 ? "#34D399" : p.icpMatchScore >= 40 ? "#F59E0B" : "#F87171",
-              }}
-            >
-              {p.icpMatchScore}% ICP
-            </Badge>
-          )}
+      {/* ICP ring or source icon */}
+      {p.icpMatchScore != null ? (
+        <IcpRing score={p.icpMatchScore} />
+      ) : (
+        <div className="size-9 rounded-full bg-muted flex items-center justify-center shrink-0">
+          <SrcIcon className="size-4 text-muted-foreground" />
         </div>
-        <div className="text-xs text-white/40 truncate">
-          {p.title ?? "—"} · {p.companyName ?? "—"} · {p.industry ?? "—"}
+      )}
+
+      {/* Name + company */}
+      <div className="flex-1 min-w-0">
+        <div className="text-sm font-medium truncate">{p.firstName} {p.lastName}</div>
+        <div className="text-xs text-muted-foreground truncate">
+          {[p.title, p.companyName].filter(Boolean).join(" · ") || "—"}
         </div>
       </div>
-      <div className="flex items-center gap-2 shrink-0">
-        <Badge
-          className="text-[10px] border-0"
-          style={{
-            backgroundColor: STATUS_COLOR[p.enrichmentStatus] + "22",
-            color: STATUS_COLOR[p.enrichmentStatus],
-          }}
-        >
+
+      {/* Status badges */}
+      <div className="hidden sm:flex items-center gap-1.5 shrink-0">
+        <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-5 border-0"
+          style={{ backgroundColor: enrichColor + "22", color: enrichColor }}>
           {p.enrichmentStatus}
         </Badge>
-        <Badge
-          className="text-[10px] border-0"
-          style={{
-            backgroundColor: SEQ_STATUS_COLOR[p.sequenceStatus] + "22",
-            color: SEQ_STATUS_COLOR[p.sequenceStatus],
-          }}
-        >
+        <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-5 border-0"
+          style={{ backgroundColor: seqColor + "22", color: seqColor }}>
           {p.sequenceStatus}
         </Badge>
       </div>
+
+      {/* Actions */}
       <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
         {p.enrichmentStatus === "pending" && (
-          <Button
-            size="sm"
-            variant="ghost"
-            className="text-blue-400 hover:text-blue-300 text-xs gap-1 h-7 px-2"
-            onClick={() => enrich.mutate({ prospectId: p.id })}
-            disabled={enrich.isPending}
-          >
-            <FlaskConical className="size-3" /> Enrich
+          <Button size="sm" variant="ghost" className="h-7 px-2 text-xs text-blue-500 hover:text-blue-600"
+            onClick={() => enrich.mutate({ prospectId: p.id })} disabled={enrich.isPending}>
+            {enrich.isPending ? <Loader2 className="size-3 animate-spin" /> : <FlaskConical className="size-3" />}
           </Button>
         )}
         {p.enrichmentStatus === "complete" && p.sequenceStatus === "pending" && (
-          <Button
-            size="sm"
-            variant="ghost"
-            className="text-violet-400 hover:text-violet-300 text-xs gap-1 h-7 px-2"
-            onClick={() => genSeq.mutate({ prospectId: p.id, campaignId })}
-            disabled={genSeq.isPending}
-          >
-            <Sparkles className="size-3" /> Sequence
+          <Button size="sm" variant="ghost" className="h-7 px-2 text-xs text-violet-500 hover:text-violet-600"
+            onClick={() => genSeq.mutate({ prospectId: p.id, campaignId })} disabled={genSeq.isPending}>
+            {genSeq.isPending ? <Loader2 className="size-3 animate-spin" /> : <Sparkles className="size-3" />}
           </Button>
         )}
-        {p.sequenceStatus === "pending" && p.enrichmentStatus === "complete" && (
-          <Button
-            size="sm"
-            variant="ghost"
-            className="text-emerald-400 hover:text-emerald-300 text-xs gap-1 h-7 px-2"
-            onClick={() => approve.mutate({ prospectId: p.id })}
-            disabled={approve.isPending}
-          >
-            <CheckCircle2 className="size-3" /> Approve
+        {p.enrichmentStatus === "complete" && p.sequenceStatus === "pending" && (
+          <Button size="sm" variant="ghost" className="h-7 px-2 text-xs text-emerald-600 hover:text-emerald-700"
+            onClick={() => approve.mutate({ prospectId: p.id })} disabled={approve.isPending}>
+            {approve.isPending ? <Loader2 className="size-3 animate-spin" /> : <CheckCircle2 className="size-3" />}
           </Button>
         )}
-        <Button
-          size="sm"
-          variant="ghost"
-          className="text-red-400/50 hover:text-red-400 text-xs h-7 px-2"
-          onClick={() => skip.mutate({ prospectId: p.id })}
-          disabled={skip.isPending}
-        >
+        <Button size="sm" variant="ghost" className="h-7 px-2 text-xs text-muted-foreground hover:text-destructive"
+          onClick={() => skip.mutate({ prospectId: p.id })} disabled={skip.isPending}>
           <X className="size-3" />
         </Button>
       </div>
+
+      <ChevronRight className="size-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
     </div>
   );
 }
 
-function IntelligencePanel({ prospectId, workspaceId }: { prospectId: number; workspaceId?: number }) {
-  const { data: intel, isLoading } = trpc.are.prospects.getIntelligence.useQuery({ prospectId });
-
-  if (isLoading) return (
-    <div className="flex items-center gap-2 text-white/40 py-8 justify-center">
-      <Loader2 className="size-4 animate-spin" /> Loading intelligence…
-    </div>
+/* ─── Intelligence dossier (Sheet content) ─────────────────────────────────── */
+function IntelligenceDossier({ prospect }: { prospect: any }) {
+  const { data: intel, isLoading } = trpc.are.prospects.getIntelligence.useQuery(
+    { prospectId: prospect.id },
+    { enabled: !!prospect.id },
   );
 
-  if (!intel) return (
-    <div className="text-center py-8 text-white/30 text-sm">
-      No intelligence yet — run Enrich Agent first.
-    </div>
-  );
+  if (isLoading) {
+    return (
+      <div className="flex items-center gap-2 text-muted-foreground py-16 justify-center">
+        <Loader2 className="size-4 animate-spin" /> Building intelligence dossier…
+      </div>
+    );
+  }
+
+  if (!intel) {
+    return (
+      <EmptyState
+        icon={FlaskConical}
+        title="No intelligence yet"
+        description="Run the Enrich Agent on this prospect to generate their intelligence dossier."
+      />
+    );
+  }
 
   const hooks = (intel.personalisationHooks as Array<{ hook: string; hookType: string }> | null) ?? [];
-  const triggers = (intel.triggerEvents as Array<{ type: string; description: string; date: string }> | null) ?? [];
+  const triggers = (intel.triggerEvents as Array<{ type: string; description: string; date?: string }> | null) ?? [];
   const pains = (intel.painSignals as Array<{ signal: string; evidence: string; strength: number }> | null) ?? [];
-  const news = (intel.recentNews as Array<{ headline: string; url: string; date: string; sentiment: string }> | null) ?? [];
-  const events = (intel.industryEvents as Array<{ eventName: string; date: string; role: string }> | null) ?? [];
+  const news = (intel.recentNews as Array<{ headline: string; url?: string; date?: string; sentiment?: string }> | null) ?? [];
+  const events = (intel.industryEvents as Array<{ eventName: string; date?: string; role?: string }> | null) ?? [];
   const sequence = (intel.generatedSequence as Array<{ stepIndex: number; day: number; channel: string; subject?: string; body: string }> | null) ?? [];
+  const qualityScore = intel.sequenceQualityScore ?? 0;
 
   return (
-    <div className="space-y-5 text-sm">
-      {/* ICP Score */}
-      <div className="flex items-center gap-3">
-        <div className="text-xs text-white/40">Enrichment Confidence</div>
-        <div
-          className="text-sm font-bold"
-          style={{ color: (intel.enrichmentConfidence ?? 0) >= 70 ? "#34D399" : "#F59E0B" }}
-        >
-          {intel.enrichmentConfidence ?? 0}%
+    <div className="space-y-6 pb-8">
+      {/* Confidence + channel */}
+      <div className="flex items-center gap-4 p-3 rounded-xl bg-muted/50 border">
+        <div className="text-center">
+          <div className="text-2xl font-bold tabular-nums" style={{ color: (intel.enrichmentConfidence ?? 0) >= 70 ? "#34D399" : "#F59E0B" }}>
+            {intel.enrichmentConfidence ?? 0}%
+          </div>
+          <div className="text-[10px] text-muted-foreground uppercase tracking-wider">Confidence</div>
         </div>
-        <div className="text-xs text-white/30">· Recommended: {intel.recommendedChannel}</div>
+        <Separator orientation="vertical" className="h-10" />
+        <div>
+          <div className="text-sm font-medium capitalize">{intel.recommendedChannel ?? "email"}</div>
+          <div className="text-[10px] text-muted-foreground">Recommended channel</div>
+        </div>
+        {intel.recommendedTiming && (
+          <>
+            <Separator orientation="vertical" className="h-10" />
+            <div>
+              <div className="text-sm font-medium">{intel.recommendedTiming}</div>
+              <div className="text-[10px] text-muted-foreground">Best timing</div>
+            </div>
+          </>
+        )}
       </div>
 
       {/* Company one-liner */}
       {intel.companyOneLiner && (
-        <div className="rounded-lg bg-white/5 border border-white/10 px-3 py-2 text-xs text-white/70 italic">
-          "{intel.companyOneLiner}"
-        </div>
+        <blockquote className="border-l-4 border-primary/40 pl-3 py-1 text-sm text-muted-foreground italic">
+          {intel.companyOneLiner}
+        </blockquote>
       )}
 
-      {/* Personalisation Hooks */}
+      {/* Personalisation hooks */}
       {hooks.length > 0 && (
         <div>
-          <div className="text-xs text-white/40 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-            <Sparkles className="size-3 text-emerald-400" /> Personalisation Hooks
+          <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+            <Sparkles className="size-3 text-emerald-500" /> Personalisation Hooks
           </div>
           <div className="space-y-2">
             {hooks.map((h, i) => (
-              <div key={i} className="rounded-lg bg-emerald-500/10 border border-emerald-500/20 px-3 py-2">
-                <div className="text-xs text-emerald-300 leading-relaxed">{h.hook}</div>
-                <div className="text-[10px] text-white/30 mt-1">{h.hookType}</div>
+              <div key={i} className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-3 py-2.5">
+                <div className="text-xs leading-relaxed">{h.hook}</div>
+                <div className="text-[10px] text-muted-foreground mt-1 capitalize">{h.hookType?.replace(/_/g, " ")}</div>
               </div>
             ))}
           </div>
         </div>
       )}
 
-      {/* Trigger Events */}
+      {/* Trigger events */}
       {triggers.length > 0 && (
         <div>
-          <div className="text-xs text-white/40 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-            <Zap className="size-3 text-yellow-400" /> Trigger Events
+          <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+            <Zap className="size-3 text-amber-500" /> Trigger Events
           </div>
           <div className="space-y-1.5">
             {triggers.map((t, i) => (
-              <div key={i} className="flex items-start gap-2 text-xs text-white/60">
-                <span className="text-yellow-400 mt-0.5 shrink-0">▸</span>
-                <span><strong className="text-white/80">{t.type}:</strong> {t.description}</span>
+              <div key={i} className="flex items-start gap-2 text-xs">
+                <span className="text-amber-500 mt-0.5 shrink-0">▸</span>
+                <div>
+                  <span className="font-medium">{t.type}: </span>
+                  <span className="text-muted-foreground">{t.description}</span>
+                  {t.date && <span className="text-muted-foreground/60 ml-1">({t.date})</span>}
+                </div>
               </div>
             ))}
           </div>
         </div>
       )}
 
-      {/* Pain Signals */}
+      {/* Pain signals */}
       {pains.length > 0 && (
         <div>
-          <div className="text-xs text-white/40 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-            <Target className="size-3 text-red-400" /> Pain Signals
+          <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+            <Target className="size-3 text-red-500" /> Pain Signals
           </div>
-          <div className="space-y-1.5">
+          <div className="space-y-2">
             {pains.map((p, i) => (
-              <div key={i} className="flex items-start gap-2 text-xs text-white/60">
-                <span className="text-red-400 mt-0.5 shrink-0">▸</span>
-                <span><strong className="text-white/80">{p.signal}:</strong> {p.evidence}</span>
+              <div key={i} className="rounded-lg border bg-card px-3 py-2">
+                <div className="flex items-center justify-between gap-2 mb-1">
+                  <span className="text-xs font-medium">{p.signal}</span>
+                  <div className="flex items-center gap-1">
+                    {Array.from({ length: 5 }).map((_, j) => (
+                      <div key={j} className={`size-1.5 rounded-full ${j < (p.strength ?? 0) ? "bg-red-500" : "bg-muted"}`} />
+                    ))}
+                  </div>
+                </div>
+                <div className="text-[11px] text-muted-foreground">{p.evidence}</div>
               </div>
             ))}
           </div>
         </div>
       )}
 
-      {/* Recent News */}
+      {/* Recent news */}
       {news.length > 0 && (
         <div>
-          <div className="text-xs text-white/40 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-            <Newspaper className="size-3 text-blue-400" /> Recent News
+          <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+            <Newspaper className="size-3 text-blue-500" /> Recent News
           </div>
           <div className="space-y-1.5">
             {news.map((n, i) => (
-              <div key={i} className="text-xs text-white/60">
-                <span className="text-blue-300">{n.headline}</span>
-                <span className="text-white/30 ml-2">{n.date}</span>
+              <div key={i} className="flex items-start gap-2 text-xs">
+                <div className="size-1.5 rounded-full bg-blue-400 mt-1.5 shrink-0" />
+                <div>
+                  <span className="text-blue-600 dark:text-blue-400">{n.headline}</span>
+                  {n.date && <span className="text-muted-foreground ml-2">{n.date}</span>}
+                </div>
               </div>
             ))}
           </div>
         </div>
       )}
 
-      {/* Industry Events */}
+      {/* Industry events */}
       {events.length > 0 && (
         <div>
-          <div className="text-xs text-white/40 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-            <Activity className="size-3 text-violet-400" /> Industry Events
+          <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+            <Activity className="size-3 text-violet-500" /> Industry Events
           </div>
           <div className="space-y-1.5">
             {events.map((e, i) => (
-              <div key={i} className="text-xs text-white/60">
-                <span className="text-violet-300">{e.eventName}</span>
-                <span className="text-white/30 ml-2">{e.date}</span>
-                {e.role && <span className="text-white/30 ml-1">· {e.role}</span>}
+              <div key={i} className="flex items-start gap-2 text-xs">
+                <div className="size-1.5 rounded-full bg-violet-400 mt-1.5 shrink-0" />
+                <div>
+                  <span className="font-medium">{e.eventName}</span>
+                  {e.date && <span className="text-muted-foreground ml-2">{e.date}</span>}
+                  {e.role && <span className="text-muted-foreground"> · {e.role}</span>}
+                </div>
               </div>
             ))}
           </div>
         </div>
       )}
 
-      {/* Generated Sequence */}
+      {/* Generated sequence */}
       {sequence.length > 0 && (
         <div>
-          <div className="text-xs text-white/40 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-            <MessageSquare className="size-3 text-emerald-400" /> Generated Sequence
-            <Badge className="bg-emerald-500/20 text-emerald-400 border-emerald-500/30 text-[10px] ml-1">
-              Quality: {intel.sequenceQualityScore ?? 0}/40
-            </Badge>
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              <MessageSquare className="size-3 text-emerald-500" /> Generated Sequence
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="text-[11px] text-muted-foreground">Quality</div>
+              <div className="w-20">
+                <Progress value={(qualityScore / 40) * 100} className="h-1.5" />
+              </div>
+              <div className="text-[11px] font-mono tabular-nums text-emerald-600">{qualityScore}/40</div>
+            </div>
           </div>
           <div className="space-y-3">
             {sequence.map((step) => (
-              <div key={step.stepIndex} className="rounded-lg border border-white/10 bg-white/5 p-3">
-                <div className="flex items-center gap-2 mb-1.5">
-                  <Badge className="bg-white/10 text-white/50 border-white/10 text-[10px]">Day {step.day}</Badge>
-                  <Badge className="bg-blue-500/20 text-blue-300 border-blue-500/20 text-[10px] capitalize">{step.channel}</Badge>
-                  {step.subject && <span className="text-xs text-white/60 truncate">{step.subject}</span>}
+              <div key={step.stepIndex} className="rounded-xl border bg-card p-3">
+                <div className="flex items-center gap-2 mb-2">
+                  <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-5">Day {step.day}</Badge>
+                  <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-5 border-blue-500/30 text-blue-600 bg-blue-500/10 capitalize">
+                    {step.channel}
+                  </Badge>
+                  {step.subject && (
+                    <span className="text-xs font-medium truncate flex-1">{step.subject}</span>
+                  )}
                 </div>
-                <p className="text-xs text-white/50 leading-relaxed whitespace-pre-wrap">{step.body}</p>
+                <p className="text-xs text-muted-foreground leading-relaxed whitespace-pre-wrap">{step.body}</p>
               </div>
             ))}
           </div>
@@ -369,6 +424,7 @@ function IntelligencePanel({ prospectId, workspaceId }: { prospectId: number; wo
   );
 }
 
+/* ─── Main page ────────────────────────────────────────────────────────────── */
 export default function ARECampaignDetail() {
   const { id } = useParams<{ id: string }>();
   const campaignId = parseInt(id ?? "0");
@@ -376,10 +432,11 @@ export default function ARECampaignDetail() {
 
   const { data: campaign, isLoading: loadingCampaign } = trpc.are.campaigns.get.useQuery({ id: campaignId });
   const { data: prospects, isLoading: loadingProspects } = trpc.are.prospects.list.useQuery({ campaignId, limit: 100 });
-  const { data: signals } = trpc.are.execution.getSignalLog.useQuery({ campaignId, limit: 30 });
+  const { data: signals } = trpc.are.execution.getSignalLog.useQuery({ campaignId, limit: 50 });
   const { data: abVariants } = trpc.are.prospects.getAbVariants.useQuery({ campaignId });
 
   const [selectedProspectId, setSelectedProspectId] = useState<number | null>(null);
+  const [dossierOpen, setDossierOpen] = useState(false);
   const [scrapeQuery, setScrapeQuery] = useState("");
   const [scrapeSource, setScrapeSource] = useState<"google_business" | "linkedin" | "web" | "news">("google_business");
 
@@ -398,7 +455,7 @@ export default function ARECampaignDetail() {
 
   const scrape = trpc.are.scraper.run.useMutation({
     onSuccess: (d) => {
-      toast.success(`Scraped ${d.prospectsAdded} prospects from ${d.source}`);
+      toast.success(`Scraped ${d.prospectsAdded} prospects from ${d.source.replace(/_/g, " ")}`);
       utils.are.prospects.list.invalidate();
       utils.are.campaigns.get.invalidate({ id: campaignId });
     },
@@ -408,8 +465,8 @@ export default function ARECampaignDetail() {
   if (loadingCampaign) {
     return (
       <Shell title="Campaign">
-        <div className="flex items-center gap-2 text-white/40 py-24 justify-center">
-          <Loader2 className="size-5 animate-spin" /> Loading…
+        <div className="flex items-center gap-2 text-muted-foreground py-24 justify-center">
+          <Loader2 className="size-5 animate-spin" /> Loading campaign…
         </div>
       </Shell>
     );
@@ -418,305 +475,352 @@ export default function ARECampaignDetail() {
   if (!campaign) {
     return (
       <Shell title="Campaign">
-        <div className="p-6 text-white/40">Campaign not found.</div>
+        <div className="p-6 text-muted-foreground">Campaign not found.</div>
       </Shell>
     );
   }
 
   const selectedProspect = prospects?.find((p) => p.id === selectedProspectId);
+  const pendingEnrich = prospects?.filter((p) => p.enrichmentStatus === "pending").length ?? 0;
+  const awaitingApproval = prospects?.filter((p) => p.sequenceStatus === "pending" && p.enrichmentStatus === "complete").length ?? 0;
+
+  const statusColor = campaign.status === "active" ? "#34D399" : campaign.status === "paused" ? "#F59E0B" : "#94A3B8";
+  const autonomyColor =
+    campaign.autonomyMode === "full" ? "border-emerald-500/30 text-emerald-600 bg-emerald-500/10"
+    : campaign.autonomyMode === "batch_approval" ? "border-blue-500/30 text-blue-600 bg-blue-500/10"
+    : "border-amber-500/30 text-amber-600 bg-amber-500/10";
 
   return (
     <Shell title={campaign.name}>
-      <div className="p-6 space-y-6 max-w-7xl mx-auto">
-        {/* Header */}
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <div className="flex items-center gap-2 mb-1">
-              <Link href="/are/campaigns">
-                <Button variant="ghost" size="sm" className="text-white/40 hover:text-white gap-1 text-xs p-0 h-auto">
-                  <ArrowLeft className="size-3" /> Campaigns
-                </Button>
-              </Link>
-            </div>
-            <div className="flex items-center gap-2">
-              <h1 className="text-xl font-bold text-white">{campaign.name}</h1>
-              <Badge
-                className="text-[10px] border-0"
-                style={{
-                  backgroundColor: campaign.status === "active" ? "#34D39922" : "#94A3B822",
-                  color: campaign.status === "active" ? "#34D399" : "#94A3B8",
-                }}
-              >
-                {campaign.status}
-              </Badge>
-              <Badge className="bg-white/10 text-white/50 border-white/10 text-[10px]">{campaign.autonomyMode}</Badge>
-            </div>
-            {campaign.description && (
-              <p className="text-xs text-white/40 mt-1">{campaign.description}</p>
-            )}
-          </div>
-          <div className="flex items-center gap-2 shrink-0">
-            {campaign.status === "active" ? (
-              <Button
-                size="sm"
-                variant="ghost"
-                className="text-yellow-400 hover:text-yellow-300 gap-1"
-                onClick={() => setStatus.mutate({ id: campaignId, status: "paused" })}
-              >
-                <Pause className="size-4" /> Pause
-              </Button>
-            ) : (
-              <Button
-                size="sm"
-                className="bg-emerald-500 hover:bg-emerald-600 text-black gap-1"
-                onClick={() => setStatus.mutate({ id: campaignId, status: "active" })}
-              >
-                <Play className="size-4" /> Activate
-              </Button>
-            )}
-          </div>
+      {/* ── Header ── */}
+      <PageHeader
+        title={campaign.name}
+        description={campaign.description ?? undefined}
+      >
+        <Link href="/are/campaigns">
+          <Button variant="ghost" size="sm" className="gap-1.5 text-xs text-muted-foreground">
+            <ArrowLeft className="size-3.5" /> All Campaigns
+          </Button>
+        </Link>
+        <Badge variant="outline" className={`text-[10px] px-2 py-0.5 border ${autonomyColor}`}>
+          {campaign.autonomyMode?.replace(/_/g, " ")}
+        </Badge>
+        <Badge variant="outline" className="text-[10px] px-2 py-0.5 border-0"
+          style={{ backgroundColor: statusColor + "22", color: statusColor }}>
+          {campaign.status}
+        </Badge>
+        {campaign.status === "active" ? (
+          <Button size="sm" variant="outline" className="gap-1.5 text-xs"
+            onClick={() => setStatus.mutate({ id: campaignId, status: "paused" })}
+            disabled={setStatus.isPending}>
+            {setStatus.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Pause className="size-3.5" />}
+            Pause
+          </Button>
+        ) : (
+          <Button size="sm" className="gap-1.5 text-xs"
+            onClick={() => setStatus.mutate({ id: campaignId, status: "active" })}
+            disabled={setStatus.isPending}>
+            {setStatus.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Play className="size-3.5" />}
+            Activate
+          </Button>
+        )}
+      </PageHeader>
+
+      <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto">
+
+        {/* ── Metrics row ── */}
+        <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-7 gap-3">
+          <StatCard label="Discovered" value={campaign.prospectsDiscovered ?? 0} />
+          <StatCard label="Enriched" value={campaign.prospectsEnriched ?? 0} />
+          <StatCard label="Approved" value={campaign.prospectsApproved ?? 0} />
+          <StatCard label="Enrolled" value={campaign.prospectsEnrolled ?? 0} />
+          <StatCard label="Contacted" value={campaign.prospectsContacted ?? 0} />
+          <StatCard label="Replied" value={campaign.prospectsReplied ?? 0} tone={(campaign.prospectsReplied ?? 0) > 0 ? "success" : undefined} />
+          <StatCard label="Meetings" value={campaign.meetingsBooked ?? 0} tone={(campaign.meetingsBooked ?? 0) > 0 ? "success" : undefined} />
         </div>
 
-        {/* Metrics Row */}
-        <div className="grid grid-cols-4 sm:grid-cols-7 gap-3">
-          {[
-            { label: "Discovered", value: campaign.prospectsDiscovered, color: "#60A5FA" },
-            { label: "Enriched", value: campaign.prospectsEnriched, color: "#A78BFA" },
-            { label: "Approved", value: campaign.prospectsApproved, color: "#34D399" },
-            { label: "Enrolled", value: campaign.prospectsEnrolled, color: "#F59E0B" },
-            { label: "Contacted", value: campaign.prospectsContacted, color: "#FB923C" },
-            { label: "Replied", value: campaign.prospectsReplied, color: "#F87171" },
-            { label: "Meetings", value: campaign.meetingsBooked, color: "#34D399" },
-          ].map((m) => (
-            <div key={m.label} className="rounded-xl border border-white/10 bg-white/5 p-3 text-center">
-              <div className="text-xl font-bold" style={{ color: m.color }}>{m.value}</div>
-              <div className="text-[10px] text-white/40 uppercase tracking-wider">{m.label}</div>
-            </div>
-          ))}
-        </div>
-
+        {/* ── Tabs ── */}
         <Tabs defaultValue="prospects">
-          <TabsList className="bg-white/5 border border-white/10">
-            <TabsTrigger value="prospects" className="text-xs data-[state=active]:bg-white/10 data-[state=active]:text-white text-white/50">
-              Prospects ({prospects?.length ?? 0})
+          <TabsList className="bg-muted/50 border">
+            <TabsTrigger value="prospects" className="text-xs gap-1.5">
+              <Users className="size-3.5" />
+              Prospects
+              {(prospects?.length ?? 0) > 0 && (
+                <span className="ml-1 text-[10px] bg-primary/20 text-primary rounded-full px-1.5 py-0.5 font-medium">
+                  {prospects?.length}
+                </span>
+              )}
             </TabsTrigger>
-            <TabsTrigger value="scraper" className="text-xs data-[state=active]:bg-white/10 data-[state=active]:text-white text-white/50">
-              Scraper
+            <TabsTrigger value="scraper" className="text-xs gap-1.5">
+              <Search className="size-3.5" /> Scraper
             </TabsTrigger>
-            <TabsTrigger value="ab" className="text-xs data-[state=active]:bg-white/10 data-[state=active]:text-white text-white/50">
-              A/B Variants
+            <TabsTrigger value="ab" className="text-xs gap-1.5">
+              <Sparkles className="size-3.5" /> A/B Variants
+              {(abVariants?.length ?? 0) > 0 && (
+                <span className="ml-1 text-[10px] bg-primary/20 text-primary rounded-full px-1.5 py-0.5 font-medium">
+                  {abVariants?.length}
+                </span>
+              )}
             </TabsTrigger>
-            <TabsTrigger value="signals" className="text-xs data-[state=active]:bg-white/10 data-[state=active]:text-white text-white/50">
-              Signal Feed
+            <TabsTrigger value="signals" className="text-xs gap-1.5">
+              <Activity className="size-3.5" /> Signals
+              {(signals?.length ?? 0) > 0 && (
+                <span className="ml-1 text-[10px] bg-primary/20 text-primary rounded-full px-1.5 py-0.5 font-medium">
+                  {signals?.length}
+                </span>
+              )}
             </TabsTrigger>
           </TabsList>
 
-          {/* Prospects Tab */}
+          {/* ── Prospects tab ── */}
           <TabsContent value="prospects" className="mt-4">
-            <div className="flex items-center justify-between mb-3">
-              <div className="text-xs text-white/40">
-                {prospects?.filter((p) => p.enrichmentStatus === "pending").length ?? 0} pending enrichment ·{" "}
-                {prospects?.filter((p) => p.sequenceStatus === "pending" && p.enrichmentStatus === "complete").length ?? 0} awaiting approval
+            {/* Action bar */}
+            <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+              <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                {pendingEnrich > 0 && (
+                  <span className="flex items-center gap-1">
+                    <div className="size-1.5 rounded-full bg-amber-400" />
+                    {pendingEnrich} pending enrichment
+                  </span>
+                )}
+                {awaitingApproval > 0 && (
+                  <span className="flex items-center gap-1">
+                    <div className="size-1.5 rounded-full bg-emerald-400" />
+                    {awaitingApproval} awaiting approval
+                  </span>
+                )}
               </div>
               <Button
-                size="sm"
-                variant="ghost"
-                className="text-blue-400 hover:text-blue-300 gap-1 text-xs"
+                size="sm" variant="outline" className="gap-1.5 text-xs"
                 onClick={() => enrichBatch.mutate({ campaignId, limit: 20 })}
-                disabled={enrichBatch.isPending}
+                disabled={enrichBatch.isPending || pendingEnrich === 0}
               >
-                {enrichBatch.isPending ? <Loader2 className="size-3 animate-spin" /> : <FlaskConical className="size-3" />}
+                {enrichBatch.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <FlaskConical className="size-3.5" />}
                 Enrich Batch (20)
               </Button>
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              {/* Prospect list */}
-              <div className="space-y-2 max-h-[600px] overflow-y-auto pr-1">
-                {loadingProspects ? (
-                  <div className="flex items-center gap-2 text-white/40 py-8 justify-center">
-                    <Loader2 className="size-4 animate-spin" /> Loading…
-                  </div>
-                ) : !prospects || prospects.length === 0 ? (
-                  <div className="rounded-xl border border-dashed border-white/10 p-8 text-center text-white/30 text-sm">
-                    No prospects yet. Use the Scraper tab to discover prospects.
-                  </div>
-                ) : (
-                  prospects.map((p) => (
-                    <ProspectRow
-                      key={p.id}
-                      p={p}
-                      campaignId={campaignId}
-                      onSelect={setSelectedProspectId}
-                      selected={selectedProspectId === p.id}
-                    />
-                  ))
-                )}
-              </div>
-
-              {/* Intelligence panel */}
-              <div className="rounded-xl border border-white/10 bg-white/5 p-4 max-h-[600px] overflow-y-auto">
-                {!selectedProspect ? (
-                  <div className="flex flex-col items-center justify-center h-40 text-white/30 text-sm gap-2">
-                    <Eye className="size-6" />
-                    Select a prospect to view their AI intelligence dossier
-                  </div>
-                ) : (
-                  <>
-                    <div className="mb-3 pb-3 border-b border-white/10">
-                      <div className="text-sm font-medium text-white">{selectedProspect.firstName} {selectedProspect.lastName}</div>
-                      <div className="text-xs text-white/40">{selectedProspect.title} · {selectedProspect.companyName}</div>
-                    </div>
-                    <IntelligencePanel prospectId={selectedProspect.id} />
-                  </>
-                )}
-              </div>
+            {/* Legend */}
+            <div className="flex items-center gap-4 mb-3 text-[11px] text-muted-foreground">
+              <span className="flex items-center gap-1"><div className="size-2 rounded-full bg-[#34D399]" /> complete</span>
+              <span className="flex items-center gap-1"><div className="size-2 rounded-full bg-[#F59E0B]" /> enriching</span>
+              <span className="flex items-center gap-1"><div className="size-2 rounded-full bg-[#94A3B8]" /> pending</span>
+              <span className="flex items-center gap-1"><div className="size-2 rounded-full bg-[#F87171]" /> failed</span>
+              <span className="ml-auto flex items-center gap-1"><Eye className="size-3" /> Click prospect to view dossier</span>
             </div>
+
+            {loadingProspects ? (
+              <div className="flex items-center gap-2 text-muted-foreground py-12 justify-center">
+                <Loader2 className="size-4 animate-spin" /> Loading prospects…
+              </div>
+            ) : !prospects || prospects.length === 0 ? (
+              <EmptyState
+                icon={Radar}
+                title="No prospects yet"
+                description="Use the Scraper tab to discover prospects from Google Business, LinkedIn, news, or the web."
+                action={<Button size="sm" variant="outline" onClick={() => {}}>Go to Scraper</Button>}
+              />
+            ) : (
+              <div className="space-y-2">
+                {prospects.map((p) => (
+                  <ProspectRow
+                    key={p.id}
+                    p={p}
+                    campaignId={campaignId}
+                    onSelect={(id) => { setSelectedProspectId(id); setDossierOpen(true); }}
+                    selected={selectedProspectId === p.id}
+                  />
+                ))}
+              </div>
+            )}
           </TabsContent>
 
-          {/* Scraper Tab */}
+          {/* ── Scraper tab ── */}
           <TabsContent value="scraper" className="mt-4">
-            <div className="space-y-4 max-w-xl">
-              <div className="text-sm text-white/60 leading-relaxed">
-                Discover new prospects from external sources. The AI extraction engine normalises all results into structured prospect records.
-              </div>
-              <div className="space-y-3">
-                <div>
-                  <div className="text-xs text-white/40 mb-1.5">Source</div>
-                  <div className="flex gap-2 flex-wrap">
-                    {(["google_business", "linkedin", "web", "news"] as const).map((s) => {
-                      const Icon = SOURCE_ICON[s] ?? Globe;
-                      return (
-                        <button
-                          key={s}
-                          onClick={() => setScrapeSource(s)}
-                          className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs transition-all ${
-                            scrapeSource === s
-                              ? "border-emerald-500/50 bg-emerald-500/10 text-emerald-400"
-                              : "border-white/10 bg-white/5 text-white/50 hover:bg-white/10"
-                          }`}
-                        >
-                          <Icon className="size-3" />
-                          {s.replace("_", " ")}
-                        </button>
-                      );
-                    })}
-                  </div>
+            <div className="max-w-2xl space-y-5">
+              <p className="text-sm text-muted-foreground leading-relaxed">
+                Discover new prospects from external sources. The AI extraction engine normalises all results into structured prospect records and scores them against the active ICP.
+              </p>
+
+              {/* Source selector */}
+              <div>
+                <div className="text-xs font-medium text-muted-foreground mb-2">Source</div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {(["google_business", "linkedin", "web", "news"] as const).map((s) => {
+                    const Icon = SOURCE_ICON[s] ?? Globe;
+                    const active = scrapeSource === s;
+                    return (
+                      <button
+                        key={s}
+                        onClick={() => setScrapeSource(s)}
+                        className={`flex flex-col items-center gap-1.5 rounded-xl border p-3 text-xs transition-all ${
+                          active
+                            ? "border-primary/50 bg-primary/5 text-primary shadow-sm"
+                            : "border-border bg-card text-muted-foreground hover:border-primary/20 hover:bg-muted/50"
+                        }`}
+                      >
+                        <Icon className="size-5" />
+                        <span className="font-medium">{SOURCE_LABEL[s]}</span>
+                      </button>
+                    );
+                  })}
                 </div>
-                <div>
-                  <div className="text-xs text-white/40 mb-1.5">Search Query / Topic</div>
-                  <div className="flex gap-2">
-                    <input
-                      value={scrapeQuery}
-                      onChange={(e) => setScrapeQuery(e.target.value)}
-                      placeholder={
-                        scrapeSource === "google_business" ? "e.g. SaaS companies London"
-                        : scrapeSource === "linkedin" ? "e.g. VP Sales fintech"
-                        : scrapeSource === "news" ? "e.g. Series B funding 2024"
-                        : "e.g. B2B software companies hiring"
+              </div>
+
+              {/* Query input */}
+              <div>
+                <div className="text-xs font-medium text-muted-foreground mb-2">Search Query</div>
+                <div className="flex gap-2">
+                  <input
+                    value={scrapeQuery}
+                    onChange={(e) => setScrapeQuery(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && scrapeQuery.trim()) {
+                        scrape.mutate({ campaignId, source: scrapeSource, query: scrapeQuery, limit: 20 });
                       }
-                      className="flex-1 rounded-lg border border-white/10 bg-white/5 text-white text-sm px-3 py-2 placeholder:text-white/30 focus:outline-none focus:border-emerald-500/50"
-                    />
-                    <Button
-                      onClick={() => scrape.mutate({ campaignId, source: scrapeSource, query: scrapeQuery, limit: 20 })}
-                      disabled={scrape.isPending || !scrapeQuery.trim()}
-                      className="bg-emerald-500 hover:bg-emerald-600 text-black gap-2"
-                    >
-                      {scrape.isPending ? <Loader2 className="size-4 animate-spin" /> : <Search className="size-4" />}
-                      Scrape
-                    </Button>
-                  </div>
-                </div>
-                <div className="text-xs text-white/30 leading-relaxed">
-                  The AI extraction engine will parse results and add qualifying prospects to the queue.
-                  Google Business returns company listings with contact info. LinkedIn returns people profiles.
-                  News returns companies making relevant announcements. Web returns general directory results.
+                    }}
+                    placeholder={
+                      scrapeSource === "google_business" ? "e.g. SaaS companies London"
+                      : scrapeSource === "linkedin" ? "e.g. VP Sales fintech"
+                      : scrapeSource === "news" ? "e.g. Series B funding 2024"
+                      : "e.g. B2B software companies hiring"
+                    }
+                    className="flex-1 rounded-lg border bg-background text-sm px-3 py-2 placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-primary/30"
+                  />
+                  <Button
+                    onClick={() => scrape.mutate({ campaignId, source: scrapeSource, query: scrapeQuery, limit: 20 })}
+                    disabled={scrape.isPending || !scrapeQuery.trim()}
+                    className="gap-1.5"
+                  >
+                    {scrape.isPending ? <Loader2 className="size-4 animate-spin" /> : <Search className="size-4" />}
+                    {scrape.isPending ? "Scraping…" : "Scrape"}
+                  </Button>
                 </div>
               </div>
+
+              {/* Source descriptions */}
+              <Card className="bg-muted/30 border-dashed">
+                <CardContent className="pt-4 pb-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs text-muted-foreground">
+                    <div className="flex items-start gap-2">
+                      <Globe className="size-3.5 mt-0.5 text-blue-500 shrink-0" />
+                      <div><strong className="text-foreground">Google Business</strong> — Company listings with contact info, reviews, and location data.</div>
+                    </div>
+                    <div className="flex items-start gap-2">
+                      <Linkedin className="size-3.5 mt-0.5 text-blue-600 shrink-0" />
+                      <div><strong className="text-foreground">LinkedIn</strong> — People and company profiles via Unipile integration.</div>
+                    </div>
+                    <div className="flex items-start gap-2">
+                      <Newspaper className="size-3.5 mt-0.5 text-amber-500 shrink-0" />
+                      <div><strong className="text-foreground">News</strong> — Companies making relevant announcements (funding, hiring, launches).</div>
+                    </div>
+                    <div className="flex items-start gap-2">
+                      <Globe className="size-3.5 mt-0.5 text-emerald-500 shrink-0" />
+                      <div><strong className="text-foreground">Web</strong> — General directory and company listing pages.</div>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
             </div>
           </TabsContent>
 
-          {/* A/B Variants Tab */}
+          {/* ── A/B Variants tab ── */}
           <TabsContent value="ab" className="mt-4">
             {!abVariants || abVariants.length === 0 ? (
-              <div className="text-center py-8 text-white/30 text-sm">
-                No A/B variants yet — generate sequences for prospects to see variants here.
-              </div>
+              <EmptyState
+                icon={Sparkles}
+                title="No A/B variants yet"
+                description="Generate sequences for prospects to see variant performance here. The Sequence Agent automatically creates two variants per step."
+              />
             ) : (
               <div className="space-y-4">
-                <div className="text-xs text-white/40 leading-relaxed">
-                  The Sequence Agent automatically generates two variants per step: Variant A uses a personalisation hook,
-                  Variant B uses a trigger event hook. Performance data updates as messages are sent.
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  {abVariants.map((v) => (
-                    <Card key={v.id} className="bg-white/5 border-white/10">
-                      <CardHeader className="pb-2">
-                        <div className="flex items-center gap-2">
-                          <Badge
-                            className="text-[10px] border-0"
-                            style={{
-                              backgroundColor: v.variantKey === "A" ? "#34D39922" : "#60A5FA22",
-                              color: v.variantKey === "A" ? "#34D399" : "#60A5FA",
-                            }}
-                          >
-                            Variant {v.variantKey}
-                          </Badge>
-                          <span className="text-xs text-white/50">Step {v.stepIndex}</span>
-                          <Badge className="bg-white/10 text-white/40 border-white/10 text-[10px]">{v.hookType}</Badge>
-                        </div>
-                        {v.subjectLine && (
-                          <div className="text-xs text-white/70 font-medium mt-1">{v.subjectLine}</div>
-                        )}
-                      </CardHeader>
-                      <CardContent>
-                        <p className="text-xs text-white/50 leading-relaxed">{v.bodyPreview}</p>
-                        <div className="flex items-center gap-4 mt-3 text-[10px] text-white/30">
-                          <span>Sent: {v.sentCount}</span>
-                          <span>Opens: {v.openCount}</span>
-                          <span>Replies: {v.replyCount}</span>
-                          {v.sentCount > 0 && (
-                            <span className="text-emerald-400">
-                              {((v.replyCount / v.sentCount) * 100).toFixed(1)}% reply rate
-                            </span>
+                <p className="text-sm text-muted-foreground">
+                  The Sequence Agent generates two variants per step: <strong>Variant A</strong> uses a personalisation hook, <strong>Variant B</strong> uses a trigger event hook. Performance updates as messages are sent.
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+                  {abVariants.map((v) => {
+                    const replyRate = v.sentCount > 0 ? ((v.replyCount / v.sentCount) * 100) : 0;
+                    const isA = v.variantKey === "A";
+                    return (
+                      <Card key={v.id} className="bg-card border">
+                        <CardHeader className="pb-2 pt-4 px-4">
+                          <div className="flex items-center gap-2">
+                            <Badge variant="outline" className={`text-[10px] px-2 py-0.5 border font-bold ${isA ? "border-emerald-500/30 text-emerald-600 bg-emerald-500/10" : "border-blue-500/30 text-blue-600 bg-blue-500/10"}`}>
+                              Variant {v.variantKey}
+                            </Badge>
+                            <span className="text-xs text-muted-foreground">Step {v.stepIndex}</span>
+                            {v.hookType && (
+                              <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 ml-auto capitalize">
+                                {v.hookType.replace(/_/g, " ")}
+                              </Badge>
+                            )}
+                          </div>
+                          {v.subjectLine && (
+                            <div className="text-xs font-medium mt-1.5 line-clamp-1">{v.subjectLine}</div>
                           )}
-                        </div>
-                      </CardContent>
-                    </Card>
-                  ))}
+                        </CardHeader>
+                        <CardContent className="px-4 pb-4 space-y-3">
+                          <p className="text-xs text-muted-foreground leading-relaxed line-clamp-3">{v.bodyPreview}</p>
+                          <div className="space-y-1.5">
+                            <div className="flex items-center justify-between text-[11px]">
+                              <span className="text-muted-foreground">Reply rate</span>
+                              <span className={`font-semibold tabular-nums ${replyRate > 0 ? "text-emerald-600" : "text-muted-foreground"}`}>
+                                {replyRate.toFixed(1)}%
+                              </span>
+                            </div>
+                            <Progress value={replyRate} className="h-1.5" />
+                            <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
+                              <span>Sent: {v.sentCount}</span>
+                              <span>Opens: {v.openCount}</span>
+                              <span>Replies: {v.replyCount}</span>
+                            </div>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    );
+                  })}
                 </div>
               </div>
             )}
           </TabsContent>
 
-          {/* Signal Feed Tab */}
+          {/* ── Signal Feed tab ── */}
           <TabsContent value="signals" className="mt-4">
             {!signals || signals.length === 0 ? (
-              <div className="text-center py-8 text-white/30 text-sm">
-                No signals yet — signals appear here as prospects engage with your outreach.
-              </div>
+              <EmptyState
+                icon={Activity}
+                title="No signals yet"
+                description="Signals appear here as prospects reply, open emails, or book meetings."
+              />
             ) : (
               <div className="space-y-2">
                 {signals.map((s) => {
-                  const sentimentColor =
-                    s.sentiment === "positive" ? "#34D399"
-                    : s.sentiment === "negative" ? "#F87171"
-                    : s.sentiment === "objection" ? "#F59E0B"
-                    : "#94A3B8";
+                  const color = SIGNAL_COLORS[s.sentiment] ?? SIGNAL_COLORS.neutral;
+                  const actionLabel = s.actionTaken && s.actionTaken !== "no_action"
+                    ? s.actionTaken.replace(/_/g, " ")
+                    : null;
                   return (
-                    <div key={s.id} className="flex items-start gap-3 rounded-xl border border-white/10 bg-white/5 px-4 py-3">
-                      <div className="size-2 rounded-full mt-1.5 shrink-0" style={{ backgroundColor: sentimentColor }} />
+                    <div key={s.id} className="flex items-start gap-3 rounded-xl border bg-card px-4 py-3">
+                      <div className="size-2 rounded-full mt-2 shrink-0" style={{ backgroundColor: color }} />
                       <div className="flex-1 min-w-0">
-                        <div className="text-sm text-white/70 font-medium">{s.signalType.replace(/_/g, " ")}</div>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-sm font-medium capitalize">{s.signalType.replace(/_/g, " ")}</span>
+                          <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 border-0 capitalize"
+                            style={{ backgroundColor: color + "22", color }}>
+                            {s.sentiment}
+                          </Badge>
+                          {actionLabel && (
+                            <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 border-emerald-500/30 text-emerald-600 bg-emerald-500/10">
+                              {actionLabel}
+                            </Badge>
+                          )}
+                        </div>
                         {s.sentimentReason && (
-                          <div className="text-xs text-white/40 mt-0.5">{s.sentimentReason}</div>
-                        )}
-                        {s.actionTaken && s.actionTaken !== "no_action" && (
-                          <div className="text-xs text-emerald-400/70 mt-0.5">Action: {s.actionTaken.replace(/_/g, " ")}</div>
+                          <div className="text-xs text-muted-foreground mt-0.5">{s.sentimentReason}</div>
                         )}
                       </div>
-                      <div className="text-[10px] text-white/30 shrink-0">
-                        {new Date(s.processedAt).toLocaleString()}
+                      <div className="text-[10px] text-muted-foreground shrink-0 mt-0.5">
+                        {new Date(s.processedAt).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
                       </div>
                     </div>
                   );
@@ -726,6 +830,33 @@ export default function ARECampaignDetail() {
           </TabsContent>
         </Tabs>
       </div>
+
+      {/* ── Intelligence Dossier Sheet ── */}
+      <Sheet open={dossierOpen} onOpenChange={setDossierOpen}>
+        <SheetContent side="right" className="w-full sm:max-w-xl overflow-y-auto">
+          <SheetHeader className="pb-4 border-b">
+            <SheetTitle className="flex items-center gap-2">
+              <Brain className="size-4 text-violet-500" />
+              Intelligence Dossier
+            </SheetTitle>
+            {selectedProspect && (
+              <div>
+                <div className="text-sm font-medium">{selectedProspect.firstName} {selectedProspect.lastName}</div>
+                <div className="text-xs text-muted-foreground">
+                  {[selectedProspect.title, selectedProspect.companyName].filter(Boolean).join(" · ")}
+                </div>
+              </div>
+            )}
+          </SheetHeader>
+          <div className="mt-4">
+            {selectedProspect ? (
+              <IntelligenceDossier prospect={selectedProspect} />
+            ) : (
+              <EmptyState icon={Eye} title="No prospect selected" description="Select a prospect from the queue to view their dossier." />
+            )}
+          </div>
+        </SheetContent>
+      </Sheet>
     </Shell>
   );
 }
