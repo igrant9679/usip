@@ -1774,3 +1774,8 @@
 - [x] UI: Live progress toast during bulk re-evaluation (shows N/total as each prospect is scored)
 - [x] Server: getRejectionReasonStats procedure returning top-N reason frequencies for a campaign
 - [x] UI: Rejection reason frequency bar chart on Rejections tab header
+
+## Round 28 — Threshold quick-edit, reason filter, ICP suggestion banner
+- [x] UI: Inline threshold number input inside Re-evaluate All confirmation dialog (overrides campaign default for this run)
+- [x] UI: Rejection reason bar chart bars are clickable to filter the rejection list to that reason
+- [x] UI: Zero-requalified ICP suggestion banner after re-evaluation run with link to ICP Agent

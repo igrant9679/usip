@@ -16,6 +16,7 @@
 import { Shell, PageHeader, StatCard, EmptyState } from "@/components/usip/Shell";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel,
   AlertDialogContent, AlertDialogDescription, AlertDialogFooter,
@@ -761,6 +762,7 @@ export default function ARECampaignDetail() {
           ? `Re-evaluated ${d.processed} prospects — ${d.requalified} re-qualified (threshold: ${d.threshold})!`
           : `Re-evaluated ${d.processed} prospects — none met the threshold (${d.threshold}).`
       );
+      if (d.processed > 0 && d.requalified === 0) setShowIcpSuggestion(true);
       utils.are.prospects.getRejectionStats.invalidate({ campaignId });
       utils.are.prospects.list.invalidate({ campaignId });
     },
@@ -793,6 +795,9 @@ export default function ARECampaignDetail() {
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [rejectDialogOpen, setRejectDialogOpen] = useState(false);
   const [reEvaluateAllConfirmOpen, setReEvaluateAllConfirmOpen] = useState(false);
+  const [thresholdOverride, setThresholdOverride] = useState<number | null>(null);
+  const [reasonFilter, setReasonFilter] = useState<string | null>(null);
+  const [showIcpSuggestion, setShowIcpSuggestion] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
   const [dossierTab, setDossierTab] = useState<"intel" | "notes">("intel");
   const bulkApprove = trpc.are.prospects.bulkApprove.useMutation({
@@ -1435,22 +1440,45 @@ export default function ARECampaignDetail() {
                     <div className="flex items-center gap-2 mb-3">
                       <BarChart2 className="size-3.5 text-muted-foreground" />
                       <span className="text-xs font-medium text-muted-foreground">Top Rejection Reasons</span>
+                      <span className="text-[10px] text-muted-foreground/60 ml-auto">Click a bar to filter</span>
+                      {reasonFilter && (
+                        <button
+                          type="button"
+                          className="text-[10px] text-destructive hover:underline flex items-center gap-0.5"
+                          onClick={() => setReasonFilter(null)}
+                        >
+                          <X className="size-2.5" /> Clear filter
+                        </button>
+                      )}
                     </div>
                     <div className="space-y-2">
                       {(rejectionStats?.byReason ?? []).slice(0, 5).map((r: { reason: string; count: number }) => {
                         const maxCount = rejectionStats!.byReason[0].count;
                         const pct = Math.round((r.count / maxCount) * 100);
+                        const isActive = reasonFilter === r.reason;
                         return (
-                          <div key={r.reason} className="flex items-center gap-2">
-                            <span className="text-[11px] text-muted-foreground truncate w-40 shrink-0" title={r.reason}>{r.reason}</span>
+                          <button
+                            key={r.reason}
+                            type="button"
+                            className={`flex items-center gap-2 w-full rounded-lg px-1 py-0.5 transition-colors ${
+                              isActive
+                                ? "bg-destructive/10 ring-1 ring-destructive/30"
+                                : "hover:bg-muted/60"
+                            }`}
+                            onClick={() => setReasonFilter(isActive ? null : r.reason)}
+                            title={isActive ? "Click to clear filter" : `Filter by: ${r.reason}`}
+                          >
+                            <span className="text-[11px] text-muted-foreground truncate w-40 shrink-0 text-left" title={r.reason}>{r.reason}</span>
                             <div className="flex-1 h-2 rounded-full bg-muted overflow-hidden">
                               <div
-                                className="h-full rounded-full bg-destructive/60 transition-all duration-500"
+                                className={`h-full rounded-full transition-all duration-500 ${
+                                  isActive ? "bg-destructive" : "bg-destructive/60"
+                                }`}
                                 style={{ width: `${pct}%` }}
                               />
                             </div>
                             <span className="text-[11px] tabular-nums text-muted-foreground w-6 text-right shrink-0">{r.count}</span>
-                          </div>
+                          </button>
                         );
                       })}
                     </div>
@@ -1505,7 +1533,50 @@ export default function ARECampaignDetail() {
                     </Button>
                   </div>
                 </div>
-                {(rejectionStats?.items ?? []).map((item: any) => (
+                {/* ── ICP suggestion banner after zero-requalified run ── */}
+                {showIcpSuggestion && (
+                  <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 px-4 py-3 mb-2 flex items-start gap-3">
+                    <Sparkles className="size-4 text-amber-500 mt-0.5 shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-medium text-amber-700 dark:text-amber-400">
+                        No prospects were re-qualified
+                      </p>
+                      <p className="text-[11px] text-muted-foreground mt-0.5">
+                        Consider updating your ICP profile to better match your target market, or lower the auto-approve threshold for a more permissive sweep.
+                      </p>
+                      <div className="flex items-center gap-3 mt-2">
+                        <Link href="/are/icp" className="text-[11px] text-amber-600 dark:text-amber-400 hover:underline font-medium flex items-center gap-1">
+                          <Brain className="size-3" /> Update ICP Profile
+                        </Link>
+                        <button
+                          type="button"
+                          className="text-[11px] text-muted-foreground hover:underline"
+                          onClick={() => setShowIcpSuggestion(false)}
+                        >
+                          Dismiss
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                {/* ── Active reason filter indicator ── */}
+                {reasonFilter && (
+                  <div className="flex items-center gap-2 rounded-lg bg-destructive/5 border border-destructive/20 px-3 py-1.5 mb-1">
+                    <span className="text-[11px] text-destructive font-medium">Filtering by:</span>
+                    <span className="text-[11px] text-foreground truncate flex-1">{reasonFilter}</span>
+                    <button
+                      type="button"
+                      className="text-[11px] text-muted-foreground hover:text-foreground flex items-center gap-0.5"
+                      onClick={() => setReasonFilter(null)}
+                    >
+                      <X className="size-3" /> Clear
+                    </button>
+                  </div>
+                )}
+                {(rejectionStats?.items ?? []).filter((item: any) =>
+                  reasonFilter === null ||
+                  (item.rejectionReason?.trim() || "No reason given") === reasonFilter
+                ).map((item: any) => (
                   <div key={item.id} className="flex items-start gap-3 rounded-xl border px-3 py-2.5 bg-card">
                     <XCircle className="size-4 text-destructive/60 mt-0.5 shrink-0" />
                     <div className="flex-1 min-w-0">
@@ -1676,6 +1747,37 @@ export default function ARECampaignDetail() {
                 </strong>.
                 Prospects scoring at or above this will be moved back to the pending queue.
               </span>
+              <span className="block">
+                <span className="text-xs text-muted-foreground">Override threshold for this run only (0–100):</span>
+                <span className="flex items-center gap-2 mt-1">
+                  <Input
+                    type="number"
+                    min={0}
+                    max={100}
+                    placeholder={String(autoThreshold ?? 70)}
+                    value={thresholdOverride !== null ? thresholdOverride : ""}
+                    onChange={(e) => {
+                      const v = e.target.value === "" ? null : Math.min(100, Math.max(0, Number(e.target.value)));
+                      setThresholdOverride(v);
+                    }}
+                    className="h-7 w-20 text-xs"
+                  />
+                  {thresholdOverride !== null && (
+                    <button
+                      type="button"
+                      className="text-[11px] text-muted-foreground hover:text-foreground underline"
+                      onClick={() => setThresholdOverride(null)}
+                    >
+                      Reset
+                    </button>
+                  )}
+                  {thresholdOverride !== null && (
+                    <span className="text-[11px] text-violet-600 dark:text-violet-400">
+                      Using {thresholdOverride} for this run
+                    </span>
+                  )}
+                </span>
+              </span>
               <span className="block text-amber-600 dark:text-amber-400">
                 This action cannot be undone.
               </span>
@@ -1687,7 +1789,11 @@ export default function ARECampaignDetail() {
               className="bg-violet-600 hover:bg-violet-700 text-white"
               onClick={() => {
                 setReEvaluateAllConfirmOpen(false);
-                reEvaluateAll.mutate({ campaignId });
+                reEvaluateAll.mutate({
+                  campaignId,
+                  overrideThreshold: thresholdOverride !== null ? thresholdOverride : undefined,
+                });
+                setThresholdOverride(null);
               }}
             >
               <RefreshCcw className="size-3.5 mr-1.5" />

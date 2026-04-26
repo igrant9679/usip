@@ -1048,7 +1048,7 @@ export const prospectsRouter = router({
     }),
 
   reEvaluateAll: workspaceProcedure
-    .input(z.object({ campaignId: z.number() }))
+    .input(z.object({ campaignId: z.number(), overrideThreshold: z.number().min(0).max(100).optional() }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
@@ -1076,8 +1076,8 @@ export const prospectsRouter = router({
           eq(prospectQueue.sequenceStatus, "skipped"),
         ));
       if (rejected.length === 0) return { processed: 0, requalified: 0, threshold: campaign.autoApproveThreshold ?? 70 };
-      // Use the campaign's actual threshold (fallback 70 if not set)
-      const autoApproveThreshold = campaign.autoApproveThreshold ?? 70;
+      // Use override threshold if provided (from quick-edit in dialog), else campaign's actual threshold, else 70
+      const autoApproveThreshold = input.overrideThreshold ?? campaign.autoApproveThreshold ?? 70;
       let requalified = 0;
       for (const prospect of rejected) {
         try {
