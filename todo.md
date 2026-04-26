@@ -1601,3 +1601,9 @@
 - [x] UI: ProposalDetail Overview — expiry date InfoCard with edit capability (color-coded by urgency)
 - [x] UI: ProposalCard — countdown badge when expiresAt within 7 days; expired badge when past
 - [x] UI: Proposals list — "Expiring Soon" filter chip (orange, hides when count=0)
+
+## Phase A — Enhancements (round 13)
+- [x] Server: /api/scheduled/proposal-followup — send expiry reminder email when expiresAt within 48h (not yet expired, status sent/under_review)
+- [x] UI: ProposalPortal (/p/:shareToken) — countdown banner when proposal expires within 7 days; "Expired" banner when past
+- [x] UI: Proposals list — multi-select checkboxes + bulk "Set Expiry Date" action with date picker dialog
+- [x] Server: proposals.bulkSetExpiry tRPC mutation — accepts array of proposal IDs + expiresAt date string

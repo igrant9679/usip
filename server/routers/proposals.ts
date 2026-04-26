@@ -1199,6 +1199,39 @@ Write 2-4 paragraphs of professional proposal content for this section. Be speci
       return { ok: true, score, prevScore, dropped: prevScore !== null && score < prevScore };
     }),
 
+  /** Bulk-set expiresAt on multiple proposals at once. */
+  bulkSetExpiry: workspaceProcedure
+    .input(
+      z.object({
+        ids: z.array(z.number().int().positive()).min(1).max(200),
+        expiresAt: z.string().nullable(), // ISO date string or null to clear
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const db = getDb();
+      const { inArray } = await import("drizzle-orm");
+      // Verify all proposals belong to this workspace
+      const rows = await db
+        .select({ id: proposals.id })
+        .from(proposals)
+        .where(
+          and(
+            inArray(proposals.id, input.ids),
+            eq(proposals.workspaceId, ctx.workspace.id),
+          ),
+        );
+      const validIds = rows.map((r) => r.id);
+      if (validIds.length === 0) return { updated: 0 };
+      await db
+        .update(proposals)
+        .set({
+          expiresAt: input.expiresAt ? new Date(input.expiresAt) : null,
+          updatedAt: new Date(),
+        })
+        .where(inArray(proposals.id, validIds));
+      return { updated: validIds.length };
+    }),
+
   /** Return last 30 daily score snapshots for a proposal (newest first) */
   getScoreHistory: workspaceProcedure
     .input(z.object({ proposalId: z.number().int().positive() }))

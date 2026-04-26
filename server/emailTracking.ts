@@ -434,6 +434,135 @@ export function registerEmailTrackingRoutes(app: Express) {
         }
       }
 
+      // ── Expiry reminder: email client when expiresAt is within 48h ──────────────
+      const { isNotNull: isNotNullR, gt: gtR, lte: lteR, inArray: inArrayR } = await import("drizzle-orm");
+      const reminderCutoff = new Date(Date.now() + 48 * 60 * 60 * 1000); // 48h from now
+      const reminderFloor = new Date(); // not yet expired
+      const expiringProposals = await db
+        .select()
+        .from(proposals)
+        .where(
+          and(
+            isNotNullR(proposals.expiresAt),
+            gtR(proposals.expiresAt, reminderFloor),
+            lteR(proposals.expiresAt, reminderCutoff),
+            inArrayR(proposals.status, ["sent", "under_review"]),
+          ),
+        );
+      let remindersSent = 0;
+      for (const rp of expiringProposals) {
+        try {
+          if (!rp.clientEmail || !rp.shareToken) continue;
+          // Deduplicate: check if we already logged a reminder activity today
+          const { gte: gteR2 } = await import("drizzle-orm");
+          const todayStart = new Date();
+          todayStart.setHours(0, 0, 0, 0);
+          const alreadySent = await db
+            .select({ id: activities.id })
+            .from(activities)
+            .where(
+              and(
+                eq(activities.workspaceId, rp.workspaceId),
+                eq(activities.relatedType, "proposal"),
+                eq(activities.relatedId, rp.id),
+                eq(activities.subject, "Expiry reminder email sent"),
+                gteR2(activities.occurredAt, todayStart),
+              ),
+            )
+            .limit(1);
+          if (alreadySent.length > 0) continue;
+          // Build reminder email
+          const expDate = new Date(rp.expiresAt!);
+          const daysLeft = Math.ceil((expDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+          const countdownText = daysLeft <= 1 ? "today" : `in ${daysLeft} day${daysLeft === 1 ? "" : "s"}`;
+          const shareUrl = `${process.env.MANUS_APP_URL ?? ""}/p/${rp.shareToken}`;
+          const emailHtml = `
+<div style="font-family:sans-serif;max-width:560px;margin:0 auto;padding:24px;color:#111827">
+  <div style="margin-bottom:24px">
+    <span style="font-size:13px;font-weight:600;letter-spacing:0.05em;color:#14b8a6;text-transform:uppercase">LSI Media · USIP</span>
+  </div>
+  <div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;padding:16px;margin-bottom:20px">
+    <p style="margin:0;font-weight:700;color:#c2410c;font-size:15px">⏰ Proposal Expiring ${countdownText}</p>
+    <p style="margin:6px 0 0;color:#9a3412;font-size:13px">This proposal will expire on ${expDate.toLocaleDateString()}.</p>
+  </div>
+  <h2 style="margin:0 0 8px;font-size:18px;font-weight:700">Action required: ${rp.title}</h2>
+  <p style="margin:0 0 16px;color:#6b7280">Hi ${rp.clientName},</p>
+  <p style="margin:0 0 16px;color:#374151">
+    The proposal <strong>${rp.title}</strong> is expiring ${countdownText}.
+    Please review and accept it before it closes.
+  </p>
+  <p style="margin:24px 0">
+    <a href="${shareUrl}" style="display:inline-block;background:#0f766e;color:#ffffff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px">
+      Review Proposal →
+    </a>
+  </p>
+  <hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0">
+  <p style="color:#9ca3af;font-size:12px">
+    You are receiving this because a proposal was shared with you. If you have questions, please reply to this email.
+  </p>
+</div>`;
+          // Send via workspace sending account
+          try {
+            const { createEmailAdapter } = await import("./emailAdapter");
+            const { sendingAccounts } = await import("../drizzle/schema");
+            const [sendingAcc] = await db
+              .select()
+              .from(sendingAccounts)
+              .where(and(eq(sendingAccounts.workspaceId, rp.workspaceId), eq(sendingAccounts.enabled, true)))
+              .limit(1);
+            if (sendingAcc) {
+              const adapter = createEmailAdapter(sendingAcc);
+              await adapter.sendEmail({
+                fromEmail: sendingAcc.fromEmail,
+                fromName: sendingAcc.fromName ?? "LSI Media",
+                to: rp.clientEmail,
+                subject: `Reminder: "${rp.title}" proposal expires ${countdownText}`,
+                bodyHtml: emailHtml,
+              });
+            } else {
+              const { sendWorkspaceEmail } = await import("./emailDelivery");
+              await sendWorkspaceEmail(rp.workspaceId, {
+                to: rp.clientEmail,
+                subject: `Reminder: "${rp.title}" proposal expires ${countdownText}`,
+                html: emailHtml,
+              });
+            }
+          } catch (_emailErr) {
+            // Non-fatal — still log activity and notify owner
+          }
+          // Log activity so we don't re-send today
+          await db.insert(activities).values({
+            workspaceId: rp.workspaceId,
+            type: "system",
+            relatedType: "proposal",
+            relatedId: rp.id,
+            subject: "Expiry reminder email sent",
+            body: `Reminder email sent to ${rp.clientEmail} — proposal expires ${countdownText} (${expDate.toLocaleDateString()}).`,
+            actorUserId: null,
+            occurredAt: new Date(),
+          });
+          // In-app notification to workspace owner
+          const wsOwnerRows = await db
+            .select({ ownerUserId: workspaces.ownerUserId })
+            .from(workspaces)
+            .where(eq(workspaces.id, rp.workspaceId))
+            .limit(1);
+          if (wsOwnerRows[0]) {
+            await db.insert(notifications).values({
+              workspaceId: rp.workspaceId,
+              userId: wsOwnerRows[0].ownerUserId,
+              kind: "system",
+              title: `Proposal expiring ${countdownText}: "${rp.title}"`,
+              body: `A reminder email was sent to ${rp.clientEmail}. The proposal expires on ${expDate.toLocaleDateString()}.`,
+              isRead: false,
+            });
+          }
+          remindersSent++;
+        } catch (e3) {
+          console.error(`[ProposalFollowup] Expiry reminder failed for proposal ${rp.id}:`, e3);
+        }
+      }
+
       // ── Auto-expire: set status=not_accepted for proposals past their expiresAt ──
       const { isNotNull, lte, inArray: inArrayOp } = await import("drizzle-orm");
       const now = new Date();
@@ -470,7 +599,7 @@ export function registerEmailTrackingRoutes(app: Express) {
           console.error(`[ProposalFollowup] Auto-expire failed for proposal ${ep.id}:`, e2);
         }
       }
-      return res.json({ ok: true, processed, total: staleProposals.length, autoExpired });
+      return res.json({ ok: true, processed, total: staleProposals.length, autoExpired, remindersSent });
     } catch (e) {
       console.error("[ProposalFollowup] Endpoint error:", e);
       return res.status(500).json({ ok: false, error: String(e) });

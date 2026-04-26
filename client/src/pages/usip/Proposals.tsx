@@ -42,6 +42,7 @@ import {
   Timer,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Checkbox } from "@/components/ui/checkbox";
 
 // ── Status config ─────────────────────────────────────────────────────────────
 const STATUS_CONFIG = {
@@ -419,10 +420,39 @@ export default function Proposals() {
   const [wizardOpen, setWizardOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [bulkExpiryOpen, setBulkExpiryOpen] = useState(false);
+  const [bulkExpiryDate, setBulkExpiryDate] = useState("");
 
   const { data: list, isLoading, refetch } = trpc.proposals.list.useQuery(undefined, {
     enabled: !!current,
   });
+  const bulkSetExpiryMutation = trpc.proposals.bulkSetExpiry.useMutation({
+    onSuccess: (data) => {
+      toast.success(`Expiry date updated for ${data.updated} proposal${data.updated === 1 ? "" : "s"}`);
+      setSelectedIds(new Set());
+      setBulkExpiryOpen(false);
+      setBulkExpiryDate("");
+      refetch();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  function toggleSelect(id: number, e: React.MouseEvent) {
+    e.stopPropagation();
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+  function toggleSelectAll() {
+    if (selectedIds.size === filtered.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(filtered.map((p) => p.id)));
+    }
+  }
 
   const filtered = useMemo(() => {
     if (!list) return [];
@@ -473,14 +503,51 @@ export default function Proposals() {
             Create, manage, and track client proposals
           </p>
         </div>
-        <Button
-          onClick={() => setWizardOpen(true)}
-          className="bg-teal-600 hover:bg-teal-700 text-white gap-1.5"
-        >
-          <Plus className="size-4" />
-          New Proposal
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={toggleSelectAll}
+            className="gap-1.5 text-xs"
+          >
+            <Checkbox
+              checked={filtered.length > 0 && selectedIds.size === filtered.length}
+              className="size-3.5 pointer-events-none"
+            />
+            {selectedIds.size === filtered.length && filtered.length > 0 ? "Deselect All" : "Select All"}
+          </Button>
+          <Button
+            onClick={() => setWizardOpen(true)}
+            className="bg-teal-600 hover:bg-teal-700 text-white gap-1.5"
+          >
+            <Plus className="size-4" />
+            New Proposal
+          </Button>
+        </div>
       </div>
+      {/* Bulk action bar */}
+      {selectedIds.size > 0 && (
+        <div className="flex items-center gap-3 px-6 py-2.5 bg-teal-500/10 border-b border-teal-500/30 shrink-0">
+          <span className="text-sm font-medium text-teal-400">{selectedIds.size} selected</span>
+          <Button
+            size="sm"
+            variant="outline"
+            className="gap-1.5 text-xs border-teal-500/40 text-teal-300 hover:bg-teal-500/10"
+            onClick={() => setBulkExpiryOpen(true)}
+          >
+            <Timer className="size-3.5" />
+            Set Expiry Date
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="text-xs text-muted-foreground"
+            onClick={() => setSelectedIds(new Set())}
+          >
+            Clear
+          </Button>
+        </div>
+      )}
 
       {/* Stats bar */}
       <div className="grid grid-cols-4 gap-4 px-6 py-4 border-b border-border shrink-0">
@@ -609,11 +676,26 @@ export default function Proposals() {
         ) : (
           <div className="space-y-2">
             {filtered.map((p) => (
-              <button
+              <div
                 key={p.id}
-                onClick={() => navigate(`/proposals/${p.id}`)}
-                className="w-full text-left bg-card border border-border rounded-lg px-4 py-3 hover:border-teal-500/50 hover:bg-card/80 transition-all group"
+                className={cn(
+                  "w-full text-left bg-card border rounded-lg px-4 py-3 hover:border-teal-500/50 hover:bg-card/80 transition-all group flex items-start gap-2",
+                  selectedIds.has(p.id) ? "border-teal-500/60 bg-teal-500/5" : "border-border",
+                )}
               >
+                <div
+                  className="mt-1 shrink-0"
+                  onClick={(e) => toggleSelect(p.id, e)}
+                >
+                  <Checkbox
+                    checked={selectedIds.has(p.id)}
+                    className="size-4"
+                  />
+                </div>
+                <button
+                  className="flex-1 min-w-0 text-left"
+                  onClick={() => navigate(`/proposals/${p.id}`)}
+                >
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1">
@@ -677,12 +759,61 @@ export default function Proposals() {
                     <ChevronRight className="size-4 text-muted-foreground group-hover:text-teal-400 transition-colors" />
                   </div>
                 </div>
-              </button>
+                </button>
+              </div>
             ))}
           </div>
         )}
       </div>
 
+      {/* Bulk Expiry Date Dialog */}
+      <Dialog open={bulkExpiryOpen} onOpenChange={setBulkExpiryOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Timer className="size-4 text-teal-400" />
+              Set Expiry Date
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <p className="text-sm text-muted-foreground">
+              Setting an expiry date on <strong>{selectedIds.size}</strong> proposal{selectedIds.size === 1 ? "" : "s"}.
+              Proposals will be automatically marked as <em>Not Accepted</em> once this date passes.
+            </p>
+            <div>
+              <Label>Expiry Date</Label>
+              <Input
+                type="date"
+                value={bulkExpiryDate}
+                onChange={(e) => setBulkExpiryDate(e.target.value)}
+                className="mt-1"
+                min={new Date().toISOString().slice(0, 10)}
+              />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Leave blank and click "Clear Expiry" to remove the expiry date from all selected proposals.
+            </p>
+          </div>
+          <DialogFooter className="gap-2">
+            <Button variant="ghost" onClick={() => setBulkExpiryOpen(false)}>Cancel</Button>
+            <Button
+              variant="outline"
+              onClick={() => bulkSetExpiryMutation.mutate({ ids: Array.from(selectedIds), expiresAt: null })}
+              disabled={bulkSetExpiryMutation.isPending}
+              className="text-muted-foreground"
+            >
+              Clear Expiry
+            </Button>
+            <Button
+              onClick={() => bulkSetExpiryMutation.mutate({ ids: Array.from(selectedIds), expiresAt: bulkExpiryDate || null })}
+              disabled={!bulkExpiryDate || bulkSetExpiryMutation.isPending}
+              className="bg-teal-600 hover:bg-teal-700 text-white"
+            >
+              {bulkSetExpiryMutation.isPending ? "Saving..." : "Set Date"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <NewProposalWizard
         open={wizardOpen}
         onClose={() => setWizardOpen(false)}

@@ -21,6 +21,8 @@ import {
   XCircle,
   RotateCcw,
   ThumbsUp,
+  Timer,
+  AlertTriangle,
 } from "lucide-react";
 import {
   Dialog,
@@ -132,6 +134,25 @@ export default function ProposalPortal() {
         </div>
       </header>
 
+      {/* ── Expiry countdown banner ── */}
+      {proposal.expiresAt && proposal.status !== "accepted" && !accepted && (() => {
+        const expDate = new Date(proposal.expiresAt);
+        const msLeft = expDate.getTime() - Date.now();
+        const isExpired = msLeft < 0;
+        const daysLeft = Math.ceil(msLeft / (1000 * 60 * 60 * 24));
+        if (!isExpired && daysLeft > 7) return null; // only show within 7 days or if expired
+        const label = isExpired
+          ? "This proposal has expired and is no longer available for acceptance."
+          : daysLeft <= 1
+          ? `This proposal expires today (${expDate.toLocaleDateString()}). Please review and accept before it closes.`
+          : `This proposal expires in ${daysLeft} days on ${expDate.toLocaleDateString()}. Please review and accept before it closes.`;
+        return (
+          <div className={`sticky top-[57px] z-10 border-b px-6 py-3 flex items-center gap-3 text-sm font-medium ${isExpired ? "bg-red-50 border-red-200 text-red-800" : "bg-orange-50 border-orange-200 text-orange-800"}`}>
+            {isExpired ? <AlertTriangle className="size-4 shrink-0 text-red-600" /> : <Timer className="size-4 shrink-0 text-orange-600" />}
+            <span>{label}</span>
+          </div>
+        );
+      })()}
       <main className="max-w-4xl mx-auto px-6 py-8 space-y-8">
         {/* Hero */}
         <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
