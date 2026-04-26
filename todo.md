@@ -1429,3 +1429,7 @@
 - [x] Tests: write server/proposals.test.ts covering key procedures
 - [x] Branding: USIP color tokens applied throughout, no hardcoded navy/teal from v5 HTML
 - [x] Role-based access: reps can create/edit own proposals, managers+ can view all
+
+## Phase A — Bug Fixes & Seed Data (post-delivery)
+- [x] Fix: NewProposalWizard contacts pre-fill — replaced non-existent trpc.contacts.search with trpc.contacts.list({search}); fixed applyContact to use correct schema fields (firstName, lastName, email, accountId); added trpc.accounts.get query + useEffect to auto-fill clientName and clientWebsite from linked account when contact is selected
+- [x] Seed: Meridian Health 2026 Digital Marketing Strategy proposal (id=1, status=sent, $85k, 6 sections, 6 milestones, 2 feedback entries from Rafael Radcliffe and Dr. Priya Nair)

@@ -1,5 +1,5 @@
 import { Shell } from "@/components/usip/Shell";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
@@ -92,10 +92,33 @@ function NewProposalWizard({ open, onClose, onCreated }: WizardProps) {
 
   // Contacts search for pre-fill
   const [contactSearch, setContactSearch] = useState("");
-  const { data: contactResults } = trpc.contacts.search.useQuery(
-    { query: contactSearch, workspaceId: current?.id ?? 0 },
+  // Track which account id to fetch when a contact with accountId is selected
+  const [selectedContactAccountId, setSelectedContactAccountId] = useState<number | null>(null);
+
+  // Use trpc.contacts.list with search param (NOT trpc.contacts.search which doesn't exist)
+  const { data: contactResults } = trpc.contacts.list.useQuery(
+    { search: contactSearch },
     { enabled: !!current && contactSearch.length >= 2 },
   );
+
+  // Fetch the linked account when a contact with accountId is selected
+  const { data: linkedAccount } = trpc.accounts.get.useQuery(
+    { id: selectedContactAccountId! },
+    { enabled: selectedContactAccountId !== null },
+  );
+
+  // When linked account data arrives, fill org name and website into the form
+  useEffect(() => {
+    if (!linkedAccount) return;
+    setForm((f) => ({
+      ...f,
+      clientName: linkedAccount.name || f.clientName,
+      clientWebsite: linkedAccount.domain
+        ? `https://${linkedAccount.domain}`
+        : f.clientWebsite,
+      orgAbbr: f.orgAbbr || linkedAccount.name?.slice(0, 32) || "",
+    }));
+  }, [linkedAccount]);
 
   const createMutation = trpc.proposals.create.useMutation({
     onSuccess: (data) => {
@@ -110,18 +133,22 @@ function NewProposalWizard({ open, onClose, onCreated }: WizardProps) {
     setStep(1);
     setForm({ title: "", clientName: "", clientEmail: "", clientWebsite: "", orgAbbr: "", projectType: "", rfpDeadline: "", completionDate: "", budget: "", description: "" });
     setContactSearch("");
+    setSelectedContactAccountId(null);
     onClose();
   }
 
   function applyContact(c: any) {
+    // Pre-fill contact name and email immediately (contacts have firstName, lastName, email, accountId)
     setForm((f) => ({
       ...f,
       clientName: `${c.firstName ?? ""} ${c.lastName ?? ""}`.trim() || f.clientName,
       clientEmail: c.email || f.clientEmail,
-      clientWebsite: c.website || f.clientWebsite,
-      orgAbbr: c.company?.slice(0, 32) || f.orgAbbr,
     }));
     setContactSearch("");
+    // If the contact has a linked account, trigger account lookup for org name + website
+    if (c.accountId) {
+      setSelectedContactAccountId(c.accountId);
+    }
   }
 
   const step1Valid = form.title.trim() && form.clientName.trim();
