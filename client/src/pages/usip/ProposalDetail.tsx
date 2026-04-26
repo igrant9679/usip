@@ -118,6 +118,7 @@ function OverviewTab({ proposal, onRefetch }: { proposal: any; onRefetch: () => 
     rfpDeadline: proposal.rfpDeadline ? new Date(proposal.rfpDeadline).toISOString().slice(0, 10) : "",
     completionDate: proposal.completionDate ? new Date(proposal.completionDate).toISOString().slice(0, 10) : "",
     expiresAt: proposal.expiresAt ? new Date(proposal.expiresAt).toISOString().slice(0, 10) : "",
+    skipAutoExtend: proposal.skipAutoExtend ?? false,
     budget: proposal.budget ? String(proposal.budget) : "",
     description: proposal.description ?? "",
   });
@@ -178,6 +179,19 @@ function OverviewTab({ proposal, onRefetch }: { proposal: any; onRefetch: () => 
           <Input type="date" value={form.expiresAt} onChange={(e) => setForm(f => ({ ...f, expiresAt: e.target.value }))} className="mt-1" />
           <p className="text-xs text-muted-foreground mt-1">Auto-marks as Not Accepted when this date passes.</p>
         </div>
+        <div className="flex items-center gap-2 mt-1">
+          <input
+            type="checkbox"
+            id="skipAutoExtend"
+            checked={form.skipAutoExtend}
+            onChange={(e) => setForm(f => ({ ...f, skipAutoExtend: e.target.checked }))}
+            className="size-4 rounded border-border accent-teal-500 cursor-pointer"
+          />
+          <label htmlFor="skipAutoExtend" className="text-sm text-foreground cursor-pointer select-none">
+            Skip auto-extend for this proposal
+          </label>
+          <span className="text-xs text-muted-foreground">(overrides workspace setting)</span>
+        </div>
         <div>
           <Label>Budget ($)</Label>
           <Input type="number" value={form.budget} onChange={(e) => setForm(f => ({ ...f, budget: e.target.value }))} className="mt-1" />
@@ -187,7 +201,7 @@ function OverviewTab({ proposal, onRefetch }: { proposal: any; onRefetch: () => 
           <Textarea value={form.description} onChange={(e) => setForm(f => ({ ...f, description: e.target.value }))} className="mt-1 min-h-[80px]" />
         </div>
         <Button
-          onClick={() => updateMutation.mutate({ id: proposal.id, ...form, budget: form.budget ? parseFloat(form.budget) : null, rfpDeadline: form.rfpDeadline || null, completionDate: form.completionDate || null, expiresAt: form.expiresAt || null })}
+          onClick={() => updateMutation.mutate({ id: proposal.id, ...form, budget: form.budget ? parseFloat(form.budget) : null, rfpDeadline: form.rfpDeadline || null, completionDate: form.completionDate || null, expiresAt: form.expiresAt || null, skipAutoExtend: form.skipAutoExtend })}
           disabled={updateMutation.isPending}
           className="bg-teal-600 hover:bg-teal-700 text-white"
         >
@@ -271,6 +285,12 @@ function OverviewTab({ proposal, onRefetch }: { proposal: any; onRefetch: () => 
           );
         })()}
       </div>
+      {proposal.skipAutoExtend && (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground bg-muted/40 border border-border rounded-lg px-3 py-2">
+          <AlertTriangle className="size-3.5 text-amber-400 shrink-0" />
+          Auto-extend is <span className="font-medium text-amber-400">disabled</span> for this proposal (workspace rule overridden).
+        </div>
+      )}
       {/* ── Pipeline Integration Panel ── */}
       <PipelinePanel proposal={proposal} onRefetch={onRefetch} />
       {proposal.description && (
@@ -1279,6 +1299,32 @@ function PipelinePanel({ proposal, onRefetch }: { proposal: any; onRefetch: () =
 function ActivityFeed({ proposalId }: { proposalId: number }) {
   const { workspaceId } = useWorkspace();
   const [activeFilter, setActiveFilter] = useState<string>("all");
+  const [approveOpen, setApproveOpen] = useState(false);
+  const [denyOpen, setDenyOpen] = useState(false);
+  const [approveDate, setApproveDate] = useState("");
+  const [approveNote, setApproveNote] = useState("");
+  const [denyReason, setDenyReason] = useState("");
+  const utils = trpc.useUtils();
+  const approveMutation = trpc.proposals.approveExtension.useMutation({
+    onSuccess: () => {
+      toast.success("Extension approved — client notified");
+      setApproveOpen(false);
+      setApproveDate("");
+      setApproveNote("");
+      utils.proposals.listActivity.invalidate({ proposalId });
+      utils.proposals.get.invalidate({ id: proposalId });
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const denyMutation = trpc.proposals.denyExtension.useMutation({
+    onSuccess: () => {
+      toast.success("Extension request declined");
+      setDenyOpen(false);
+      setDenyReason("");
+      utils.proposals.listActivity.invalidate({ proposalId });
+    },
+    onError: (e) => toast.error(e.message),
+  });
   const { data: events, isLoading } = trpc.proposals.listActivity.useQuery(
     { proposalId },
     { enabled: !!workspaceId },
@@ -1412,6 +1458,28 @@ function ActivityFeed({ proposalId }: { proposalId: number }) {
                   {ev.body && (
                     <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">{ev.body}</p>
                   )}
+                  {(ev.subject ?? "").toLowerCase().includes("extension requested") && (
+                    <div className="flex gap-2 mt-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 text-xs gap-1.5 border-emerald-500/40 text-emerald-400 hover:bg-emerald-500/10"
+                        onClick={() => setApproveOpen(true)}
+                      >
+                        <CheckCircle2 className="size-3" />
+                        Approve
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 text-xs gap-1.5 border-red-500/40 text-red-400 hover:bg-red-500/10"
+                        onClick={() => setDenyOpen(true)}
+                      >
+                        <XCircle className="size-3" />
+                        Decline
+                      </Button>
+                    </div>
+                  )}
                   <div className="flex items-center gap-2 mt-1">
                     <span className="text-xs text-muted-foreground/70">
                       {new Date(ev.occurredAt).toLocaleString()}
@@ -1429,6 +1497,66 @@ function ActivityFeed({ proposalId }: { proposalId: number }) {
           })}
         </div>
       )}
+    {/* Approve Extension Dialog */}
+    <Dialog open={approveOpen} onOpenChange={setApproveOpen}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle>Approve Extension Request</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3 py-2">
+          <div>
+            <Label>New Expiry Date</Label>
+            <Input type="date" value={approveDate} onChange={(e) => setApproveDate(e.target.value)} className="mt-1" />
+          </div>
+          <div>
+            <Label>Note to Client <span className="text-muted-foreground font-normal text-xs">(optional)</span></Label>
+            <Textarea
+              value={approveNote}
+              onChange={(e) => setApproveNote(e.target.value)}
+              placeholder="e.g. We have extended the deadline to accommodate your review timeline."
+              className="mt-1 min-h-[70px]"
+            />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setApproveOpen(false)}>Cancel</Button>
+          <Button
+            className="bg-emerald-600 hover:bg-emerald-700 text-white"
+            disabled={!approveDate || approveMutation.isPending}
+            onClick={() => approveMutation.mutate({ proposalId, newExpiresAt: approveDate, note: approveNote || undefined })}
+          >
+            {approveMutation.isPending ? "Approving..." : "Approve & Notify Client"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+    {/* Deny Extension Dialog */}
+    <Dialog open={denyOpen} onOpenChange={setDenyOpen}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle>Decline Extension Request</DialogTitle>
+        </DialogHeader>
+        <div className="py-2">
+          <Label>Reason <span className="text-muted-foreground font-normal text-xs">(optional)</span></Label>
+          <Textarea
+            value={denyReason}
+            onChange={(e) => setDenyReason(e.target.value)}
+            placeholder="e.g. The proposal terms are time-sensitive and cannot be extended."
+            className="mt-1 min-h-[70px]"
+          />
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setDenyOpen(false)}>Cancel</Button>
+          <Button
+            variant="destructive"
+            disabled={denyMutation.isPending}
+            onClick={() => denyMutation.mutate({ proposalId, reason: denyReason || undefined })}
+          >
+            {denyMutation.isPending ? "Declining..." : "Decline & Notify Client"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
     </div>
   );
 }

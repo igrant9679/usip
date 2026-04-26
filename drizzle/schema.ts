@@ -2306,6 +2306,8 @@ export const proposals = mysqlTable(
     emailClickedAt: timestamp("emailClickedAt"),
     acceptedAt: timestamp("acceptedAt"),
     expiresAt: timestamp("expiresAt"),
+    /** When true, the email-open auto-extend logic is skipped for this proposal */
+    skipAutoExtend: boolean("skipAutoExtend").default(false).notNull(),
     // Pipeline integration
     linkedOpportunityId: int("linkedOpportunityId"),  // fk to opportunities
     createdAt: timestamp("createdAt").defaultNow().notNull(),

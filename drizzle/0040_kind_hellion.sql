@@ -1,0 +1,1 @@
+ALTER TABLE `proposals` ADD `skipAutoExtend` boolean DEFAULT false NOT NULL;

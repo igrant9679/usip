@@ -1615,3 +1615,13 @@
 - [x] UI: ProposalPortal — "Request Extension" button + reason dialog (hidden when accepted/expired)
 - [x] UI: Proposals list — sortable "Expires" sort button (ArrowUpDown toggle: none/asc/desc); Expires date shown in card metadata row
 - [x] UI: Settings page — new Proposals tab with auto-extend toggle + days input
+
+## Phase A — Enhancements (round 15)
+- [x] Schema: add skipAutoExtend (boolean, default false) to proposals table; migration 0040 applied
+- [x] Server: proposals.approveExtension protected mutation — updates expiresAt, logs activity, sends approval email to client
+- [x] Server: proposals.denyExtension protected mutation — logs activity, sends decline email to client
+- [x] Server: dashboard widget resolver — add "proposal_expiry_funnel" type returning expired/extended/accepted counts for 30/60/90d windows
+- [x] Server: email-open tracker — respect skipAutoExtend flag (skip auto-extend when true)
+- [x] UI: ProposalDetail activity feed — Approve/Decline buttons on extension_requested activities; Approve dialog (new date + note); Decline dialog (reason)
+- [x] UI: Dashboard widget library — ProposalExpiryFunnelWidget (stacked progress bars per 30/60/90d window); added to WIDGET_TYPES and defaultSize
+- [x] UI: ProposalDetail Overview — skipAutoExtend checkbox in edit form; amber badge in view mode when enabled

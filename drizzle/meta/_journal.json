@@ -281,6 +281,13 @@
       "when": 1777174570957,
       "tag": "0039_flaky_jack_flag",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "5",
+      "when": 1777175510649,
+      "tag": "0040_kind_hellion",
+      "breakpoints": true
     }
   ]
 }

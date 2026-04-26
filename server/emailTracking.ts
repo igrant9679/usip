@@ -251,6 +251,7 @@ export function registerEmailTrackingRoutes(app: Express) {
           title: proposals.title,
           emailOpenedAt: proposals.emailOpenedAt,
           expiresAt: proposals.expiresAt,
+          skipAutoExtend: proposals.skipAutoExtend,
         })
         .from(proposals)
         .where(eq(proposals.shareToken, token))
@@ -271,7 +272,7 @@ export function registerEmailTrackingRoutes(app: Express) {
           .from(workspaceSettings)
           .where(eq(workspaceSettings.workspaceId, proposal.workspaceId))
           .limit(1);
-        if (ws?.autoExtendOnOpen && proposal.expiresAt) {
+        if (ws?.autoExtendOnOpen && proposal.expiresAt && !proposal.skipAutoExtend) {
           const msLeft = new Date(proposal.expiresAt).getTime() - Date.now();
           const sevenDays = 7 * 24 * 60 * 60 * 1000;
           // Only auto-extend if expiry is within 7 days (and not already expired)

@@ -74,6 +74,7 @@ const WIDGET_TYPES = [
   { value: "pipeline_stage", label: "Pipeline stage breakdown" },
   { value: "rep_performance",label: "Rep performance table" },
   { value: "email_health",   label: "Email health" },
+  { value: "proposal_expiry_funnel", label: "Proposal expiry funnel" },
   { value: "table",          label: "Top accounts table" },
 ];
 
@@ -115,6 +116,8 @@ function defaultSize(type: string): { w: number; h: number } {
       return { w: 4, h: 5 };
     case "email_health":
       return { w: 3, h: 6 };
+    case "proposal_expiry_funnel":
+      return { w: 4, h: 6 };
     default:
       return { w: 4, h: 5 };
   }

@@ -298,18 +298,20 @@ export const proposalsRouter = router({
         description: z.string().optional(),
         requirements: z.array(z.string()).optional(),
         expiresAt: z.string().nullable().optional(),
+        skipAutoExtend: z.boolean().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       await getProposalOrThrow(db, input.id, ctx.workspace.id);
-      const { id, rfpDeadline, completionDate, budget, expiresAt, ...rest } = input;
+      const { id, rfpDeadline, completionDate, budget, expiresAt, skipAutoExtend, ...rest } = input;
       const patch: Record<string, unknown> = { ...rest };
       if (rfpDeadline !== undefined) patch.rfpDeadline = rfpDeadline ? new Date(rfpDeadline) : null;
       if (completionDate !== undefined)
         patch.completionDate = completionDate ? new Date(completionDate) : null;
       if (budget !== undefined) patch.budget = budget != null ? String(budget) : null;
       if (expiresAt !== undefined) patch.expiresAt = expiresAt ? new Date(expiresAt) : null;
+      if (skipAutoExtend !== undefined) patch.skipAutoExtend = skipAutoExtend;
       await db.update(proposals).set(patch).where(eq(proposals.id, id));
       // Sync budget to linked opportunity if budget changed
       if (budget !== undefined && budget != null) {
@@ -1305,6 +1307,124 @@ Reason: ${input.reason}`,
       return { updated: validIds.length };
     }),
 
+  /**
+   * Approve a client extension request. Updates expiresAt to the new date,
+   * logs an activity, and sends a notification email to the client.
+   */
+  approveExtension: workspaceProcedure
+    .input(
+      z.object({
+        proposalId: z.number().int().positive(),
+        newExpiresAt: z.string(), // ISO date string
+        note: z.string().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      const proposal = await getProposalOrThrow(db, input.proposalId, ctx.workspace.id);
+      const newDate = new Date(input.newExpiresAt);
+      await db
+        .update(proposals)
+        .set({ expiresAt: newDate, updatedAt: new Date() })
+        .where(eq(proposals.id, input.proposalId));
+      // Log activity
+      await logProposalActivity(db, {
+        workspaceId: ctx.workspace.id,
+        proposalId: input.proposalId,
+        actorUserId: ctx.user.id,
+        actorName: ctx.user.name ?? undefined,
+        subject: `Extension approved — new expiry: ${newDate.toLocaleDateString()}`,
+        body: input.note ?? undefined,
+      });
+      // Send email to client if possible
+      if (proposal.clientEmail) {
+        try {
+          const [sendingAcc] = await db
+            .select()
+            .from(sendingAccounts)
+            .where(and(eq(sendingAccounts.workspaceId, ctx.workspace.id), eq(sendingAccounts.enabled, true)))
+            .limit(1);
+          const subject = `Your proposal has been extended — "${proposal.title}"`;
+          const html = `<p>Hi ${proposal.clientName ?? "there"},</p>
+<p>Great news — your extension request has been approved. The proposal <strong>${proposal.title}</strong> is now valid until <strong>${newDate.toLocaleDateString()}</strong>.</p>
+${input.note ? `<p>${input.note}</p>` : ""}
+${proposal.shareToken ? `<p><a href="${process.env.MANUS_APP_URL ?? ""}/p/${proposal.shareToken}">View proposal &rarr;</a></p>` : ""}
+<p>Best regards,<br/>${ctx.user.name ?? "The team"}</p>`;
+          if (sendingAcc) {
+            const adapter = createEmailAdapter(sendingAcc);
+            await adapter.sendEmail({
+              fromEmail: sendingAcc.fromEmail,
+              fromName: sendingAcc.fromName ?? ctx.user.name ?? "USIP",
+              to: proposal.clientEmail,
+              subject,
+              bodyHtml: html,
+            });
+          } else {
+            const { sendWorkspaceEmail } = await import("../emailDelivery");
+            await sendWorkspaceEmail(ctx.workspace.id, { to: proposal.clientEmail, subject, html });
+          }
+        } catch (_e) {
+          // Non-fatal
+        }
+      }
+      return { ok: true };
+    }),
+  /**
+   * Deny a client extension request. Logs an activity and optionally sends
+   * a decline email to the client.
+   */
+  denyExtension: workspaceProcedure
+    .input(
+      z.object({
+        proposalId: z.number().int().positive(),
+        reason: z.string().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      const proposal = await getProposalOrThrow(db, input.proposalId, ctx.workspace.id);
+      // Log activity
+      await logProposalActivity(db, {
+        workspaceId: ctx.workspace.id,
+        proposalId: input.proposalId,
+        actorUserId: ctx.user.id,
+        actorName: ctx.user.name ?? undefined,
+        subject: "Extension request declined",
+        body: input.reason ?? undefined,
+      });
+      // Send decline email to client if possible
+      if (proposal.clientEmail) {
+        try {
+          const [sendingAcc] = await db
+            .select()
+            .from(sendingAccounts)
+            .where(and(eq(sendingAccounts.workspaceId, ctx.workspace.id), eq(sendingAccounts.enabled, true)))
+            .limit(1);
+          const subject = `Regarding your extension request — "${proposal.title}"`;
+          const html = `<p>Hi ${proposal.clientName ?? "there"},</p>
+<p>Thank you for your interest in <strong>${proposal.title}</strong>. Unfortunately, we are unable to extend the proposal at this time.</p>
+${input.reason ? `<p>${input.reason}</p>` : ""}
+<p>Please don\'t hesitate to reach out if you have any questions.</p>
+<p>Best regards,<br/>${ctx.user.name ?? "The team"}</p>`;
+          if (sendingAcc) {
+            const adapter = createEmailAdapter(sendingAcc);
+            await adapter.sendEmail({
+              fromEmail: sendingAcc.fromEmail,
+              fromName: sendingAcc.fromName ?? ctx.user.name ?? "USIP",
+              to: proposal.clientEmail,
+              subject,
+              bodyHtml: html,
+            });
+          } else {
+            const { sendWorkspaceEmail } = await import("../emailDelivery");
+            await sendWorkspaceEmail(ctx.workspace.id, { to: proposal.clientEmail, subject, html });
+          }
+        } catch (_e) {
+          // Non-fatal
+        }
+      }
+      return { ok: true };
+    }),
   /** Return last 30 daily score snapshots for a proposal (newest first) */
   getScoreHistory: workspaceProcedure
     .input(z.object({ proposalId: z.number().int().positive() }))

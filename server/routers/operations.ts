@@ -1379,6 +1379,41 @@ async function resolveWidgetData(
     return { type: "email_health", title: w.title, total, valid, acceptAll, risky, invalid, unknown, verifiedPct };
   }
 
+  /* ═══════════════════════════════════════════════════════════
+     Proposal Expiry Funnel
+     Returns expired / extended / accepted counts for 30/60/90d windows
+  ═══════════════════════════════════════════════════════════ */
+  if (w.type === "proposal_expiry_funnel") {
+    const { proposals: proposalsTable } = await import("../../drizzle/schema");
+    const windows = [30, 60, 90];
+    const series = await Promise.all(
+      windows.map(async (days) => {
+        const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+        const rows = await db
+          .select({
+            status: proposalsTable.status,
+            expiresAt: proposalsTable.expiresAt,
+          })
+          .from(proposalsTable)
+          .where(
+            and(
+              eq(proposalsTable.workspaceId, workspaceId),
+              sql`${proposalsTable.createdAt} >= ${since}`,
+            ),
+          );
+        const now = Date.now();
+        const expired = rows.filter(
+          (r) => r.expiresAt && new Date(r.expiresAt).getTime() < now && r.status !== "accepted",
+        ).length;
+        const extended = rows.filter(
+          (r) => r.expiresAt && new Date(r.expiresAt).getTime() >= now && r.status !== "accepted",
+        ).length;
+        const accepted = rows.filter((r) => r.status === "accepted").length;
+        return { label: `${days}d`, expired, extended, accepted };
+      }),
+    );
+    return { type: "proposal_expiry_funnel", title: w.title, series };
+  }
   return { type: w.type, title: w.title, value: null };
 }
 

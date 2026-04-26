@@ -343,6 +343,51 @@ export function TableWidget({ data }: { data: any }) {
 /* ═══════════════════════════════════════════════════════════════════════════
    WIDGET DISPATCHER — renders the correct widget component for non-chart types
 ═══════════════════════════════════════════════════════════════════════════ */
+/* ═══════════════════════════════════════════════════════════════════════════
+   PROPOSAL EXPIRY FUNNEL WIDGET
+   Shows expired / extended / accepted counts for 30/60/90d windows
+═══════════════════════════════════════════════════════════════════════════ */
+export function ProposalExpiryFunnelWidget({ data }: { data: any }) {
+  const series: Array<{ label: string; expired: number; extended: number; accepted: number }> =
+    data?.series ?? [];
+  if (series.length === 0) {
+    return <div className="text-xs text-muted-foreground text-center py-4">No data yet.</div>;
+  }
+  return (
+    <div className="space-y-3 text-xs">
+      {series.map((w) => {
+        const total = w.expired + w.extended + w.accepted;
+        const acceptedPct = total === 0 ? 0 : Math.round((w.accepted / total) * 100);
+        const expiredPct  = total === 0 ? 0 : Math.round((w.expired  / total) * 100);
+        return (
+          <div key={w.label} className="space-y-1">
+            <div className="flex items-center justify-between text-muted-foreground">
+              <span className="font-medium text-foreground">Last {w.label}</span>
+              <span>{total} proposals</span>
+            </div>
+            {/* stacked progress bar */}
+            <div className="flex h-2 rounded-full overflow-hidden bg-muted/40 gap-px">
+              {w.accepted > 0 && (
+                <div className="bg-emerald-500" style={{ width: `${acceptedPct}%` }} title={`Accepted: ${w.accepted}`} />
+              )}
+              {w.extended > 0 && (
+                <div className="bg-blue-500" style={{ width: `${total === 0 ? 0 : Math.round((w.extended / total) * 100)}%` }} title={`Active/Extended: ${w.extended}`} />
+              )}
+              {w.expired > 0 && (
+                <div className="bg-red-500" style={{ width: `${expiredPct}%` }} title={`Expired: ${w.expired}`} />
+              )}
+            </div>
+            <div className="flex gap-3 text-[10px] text-muted-foreground">
+              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" />Accepted {w.accepted}</span>
+              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-blue-500 inline-block" />Active {w.extended}</span>
+              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-500 inline-block" />Expired {w.expired}</span>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 export function WidgetDataRenderer({ data }: { data: any }) {
   if (!data) return <p className="text-xs text-muted-foreground py-4 text-center">Loading…</p>;
   switch (data.type) {
@@ -364,6 +409,8 @@ export function WidgetDataRenderer({ data }: { data: any }) {
       return <RepPerformanceWidget data={data} />;
     case "email_health":
       return <EmailHealthWidget data={data} />;
+    case "proposal_expiry_funnel":
+      return <ProposalExpiryFunnelWidget data={data} />;
     case "table":
       return <TableWidget data={data} />;
     default:
