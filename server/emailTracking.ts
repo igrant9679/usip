@@ -727,7 +727,88 @@ export function registerEmailTrackingRoutes(app: Express) {
           console.error(`[ProposalFollowup] SLA overdue notification failed for activity ${pendingAct.id}:`, e4);
         }
       }
-      return res.json({ ok: true, processed, total: staleProposals.length, autoExpired, remindersSent, slaNotifsent });
+      // ── 72h SLA escalation: create a task for the rep if extension request still unresolved after 72h ──
+      const sla72Cutoff = new Date(Date.now() - 72 * 60 * 60 * 1000);
+      const { gt: gt72Op } = await import("drizzle-orm");
+      const overdue72Acts = await db
+        .select({
+          id: activities.id,
+          workspaceId: activities.workspaceId,
+          relatedId: activities.relatedId,
+          occurredAt: activities.occurredAt,
+        })
+        .from(activities)
+        .where(
+          and(
+            likeOp(activities.subject, "%Extension requested%"),
+            lt(activities.occurredAt, sla72Cutoff),
+          ),
+        );
+      let slaTasksCreated = 0;
+      for (const act72 of overdue72Acts) {
+        try {
+          // Skip if already resolved
+          const resActs = await db
+            .select({ id: activities.id, subject: activities.subject })
+            .from(activities)
+            .where(
+              and(
+                eq(activities.relatedId, act72.relatedId!),
+                eq(activities.relatedType, "proposal"),
+              ),
+            );
+          const resolved = resActs.some(
+            (a) =>
+              (a as any).subject?.toLowerCase().includes("extension approved") ||
+              (a as any).subject?.toLowerCase().includes("extension declined"),
+          );
+          if (resolved) continue;
+          // Check if a 72h escalation task already exists for this proposal
+          const existingEscalation = await db
+            .select({ id: tasks.id })
+            .from(tasks)
+            .where(
+              and(
+                eq(tasks.workspaceId, act72.workspaceId),
+                eq(tasks.relatedType, "proposal"),
+                eq(tasks.relatedId, act72.relatedId!),
+                likeOp(tasks.title, "%Extension request overdue%"),
+              ),
+            );
+          if (existingEscalation.length > 0) continue;
+          // Get workspace owner
+          const ws72Row = await db
+            .select({ ownerUserId: workspaces.ownerUserId })
+            .from(workspaces)
+            .where(eq(workspaces.id, act72.workspaceId))
+            .limit(1);
+          if (!ws72Row[0]) continue;
+          const ownerUserId72 = ws72Row[0].ownerUserId;
+          // Get proposal title
+          const prop72Row = await db
+            .select({ title: proposals.title })
+            .from(proposals)
+            .where(eq(proposals.id, act72.relatedId!))
+            .limit(1);
+          const propTitle72 = prop72Row[0]?.title ?? "Unknown Proposal";
+          // Create escalation task
+          await db.insert(tasks).values({
+            workspaceId: act72.workspaceId,
+            ownerUserId: ownerUserId72,
+            relatedType: "proposal",
+            relatedId: act72.relatedId!,
+            title: `Extension request overdue — action required: "${propTitle72}"`,
+            description: `A client extension request for proposal "${propTitle72}" has been pending for over 72 hours without a response. Please approve or decline the request.`,
+            status: "open",
+            priority: "high",
+            dueAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+          });
+          slaTasksCreated++;
+        } catch (e5) {
+          console.error(`[ProposalFollowup] 72h escalation task failed for activity ${act72.id}:`, e5);
+        }
+      }
+      return res.json({ ok: true, processed, total: staleProposals.length, autoExpired, remindersSent, slaNotifsent, slaTasksCreated });
     } catch (e) {
       console.error("[ProposalFollowup] Endpoint error:", e);
       return res.status(500).json({ ok: false, error: String(e) });

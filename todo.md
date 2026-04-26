@@ -1643,3 +1643,10 @@
 - [x] UI: Proposals list extension management dialog — "pending since" countdown label on each row; amber "Overdue" badge when >48h
 - [x] UI: ProposalPortal — status-aware rendering: approved = green badge with new deadline; denied = red badge; pending = orange "awaiting response" badge; none = Request Extension button
 - [x] UI: ProposalDetail header — amber "N Extensions" chip with CalendarCheck icon shown when extensionCount > 0
+
+## Phase A — Enhancements (round 18)
+- [x] Server: proposals.approveExtension mutation — already sends branded email with new deadline (confirmed from Round 15 implementation)
+- [x] Server: proposals.denyExtension mutation — already sends branded decline email with reason (confirmed from Round 15 implementation)
+- [x] Server: /api/scheduled/proposal-followup — 72h SLA escalation tier added: creates task (ownerUserId, dueAt+24h, "Extension request overdue") when pending >72h; deduped via "Extension SLA 72h" activity marker
+- [x] Server: proposals.listExtensionDetails protected procedure — returns full extension event list (id, subject, body, occurredAt, actorUserId) for a proposalId
+- [x] UI: ProposalDetail Overview tab — "Extension History" sub-section (shown when extensionCount > 0): color-coded timeline (amber=requested, green=approved, red=declined) with new deadline parsing and body note display

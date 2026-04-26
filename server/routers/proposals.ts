@@ -1605,6 +1605,34 @@ ${input.reason ? `<p>${input.reason}</p>` : ""}
       // Latest is a request with no resolution
       return { status: "pending" as const, resolvedAt: null, newExpiresAt: null, reason: latest.body ?? null };
     }),
+  /**
+   * Protected: return full extension event history for a proposal
+   * (for the ProposalDetail Extensions sub-section).
+   */
+  listExtensionDetails: workspaceProcedure
+    .input(z.object({ proposalId: z.number().int().positive() }))
+    .query(async ({ ctx, input }) => {
+      const db = getDb();
+      await getProposalOrThrow(db, input.proposalId, ctx.workspace.id);
+      const rows = await db
+        .select({
+          id: activities.id,
+          subject: activities.subject,
+          body: activities.body,
+          occurredAt: activities.occurredAt,
+          actorUserId: activities.actorUserId,
+        })
+        .from(activities)
+        .where(
+          and(
+            eq(activities.relatedType, "proposal"),
+            eq(activities.relatedId, input.proposalId),
+            like(activities.subject, "%extension%"),
+          ),
+        )
+        .orderBy(asc(activities.occurredAt));
+      return rows;
+    }),
   /** Return last 30 daily score snapshots for a proposal (newest first) */
   getScoreHistory: workspaceProcedure
     .input(z.object({ proposalId: z.number().int().positive() }))

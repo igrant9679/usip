@@ -324,11 +324,74 @@ function OverviewTab({ proposal, onRefetch }: { proposal: any; onRefetch: () => 
           })}
         </div>
       </div>
+      {/* ── Extensions Sub-section ── */}
+      {(proposal.extensionCount ?? 0) > 0 && (
+        <ExtensionHistorySection proposalId={proposal.id} />
+      )}
       {/* ── Activity Feed ── */}
       <div>
         <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-3">Activity</p>
         <ActivityFeed proposalId={proposal.id} />
       </div>
+    </div>
+  );
+}
+
+// ── Extension History Sub-section ─────────────────────────────────────────────
+function ExtensionHistorySection({ proposalId }: { proposalId: number }) {
+  const { data: events, isLoading } = trpc.proposals.listExtensionDetails.useQuery({ proposalId });
+
+  const getEventStyle = (subject: string) => {
+    const s = (subject ?? "").toLowerCase();
+    if (s.includes("approved")) return { dot: "bg-emerald-400", label: "Approved", color: "text-emerald-400" };
+    if (s.includes("declined")) return { dot: "bg-red-400", label: "Declined", color: "text-red-400" };
+    return { dot: "bg-amber-400", label: "Requested", color: "text-amber-400" };
+  };
+
+  return (
+    <div>
+      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-3 flex items-center gap-1.5">
+        <CalendarCheck className="size-3" />
+        Extension History
+      </p>
+      {isLoading ? (
+        <div className="space-y-2">
+          {[0, 1].map((i) => (
+            <div key={i} className="h-14 rounded-lg bg-muted/40 animate-pulse" />
+          ))}
+        </div>
+      ) : !events || events.length === 0 ? (
+        <p className="text-sm text-muted-foreground italic">No extension events yet.</p>
+      ) : (
+        <div className="space-y-2">
+          {events.map((ev) => {
+            const style = getEventStyle(ev.subject ?? "");
+            const newDeadlineMatch = (ev.subject ?? "").match(/new expiry:\s*(.+)/i);
+            const newDeadline = newDeadlineMatch ? newDeadlineMatch[1].trim() : null;
+            return (
+              <div key={ev.id} className="flex gap-3 items-start bg-muted/30 rounded-lg p-3 border border-border">
+                <div className={`mt-1.5 size-2 rounded-full shrink-0 ${style.dot}`} />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className={`text-xs font-semibold ${style.color}`}>{style.label}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {new Date(ev.occurredAt).toLocaleDateString()}
+                    </span>
+                  </div>
+                  {newDeadline && (
+                    <p className="text-xs text-foreground mt-0.5">
+                      New deadline: <span className="font-medium">{newDeadline}</span>
+                    </p>
+                  )}
+                  {ev.body && (
+                    <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{ev.body}</p>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
