@@ -33,6 +33,7 @@ import { emailSuppressionsRouter } from "./routers/emailSuppressions";
 import { sendingAccountsRouter, senderPoolsRouter } from "./routers/sendingAccounts";
 import { mailboxRouter } from "./routers/mailbox";
 import { calendarRouter } from "./routers/calendar";
+import { proposalsRouter } from "./routers/proposals";
 import { unipileRouter } from "./routers/unipile";
 
 export const appRouter = router({
@@ -102,6 +103,7 @@ export const appRouter = router({
   mailbox: mailboxRouter,
   calendar: calendarRouter,
   unipile: unipileRouter,
+  proposals: proposalsRouter,
 });
 
 export type AppRouter = typeof appRouter;

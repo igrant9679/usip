@@ -232,6 +232,13 @@
       "when": 1777136446394,
       "tag": "0032_misty_johnny_blaze",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "5",
+      "when": 1777163986072,
+      "tag": "0033_true_hydra",
+      "breakpoints": true
     }
   ]
 }

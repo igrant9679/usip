@@ -1413,3 +1413,19 @@
 ## Bug Fix — Team page cosmetic issues
 - [x] Hide "Set Password" (admin-force-set) button for pending-invite members (loginMethod = invite/expired_invite)
 - [x] The → icon is the "View login history" button (not login-as) — correct to show for all members including self, no change needed
+
+## Phase A — Proposal Management System Integration (v5 embed)
+
+- [x] Schema: add proposals, proposal_sections, proposal_milestones, proposal_feedback tables to drizzle/schema.ts
+- [ ] Migration: run drizzle-kit generate and apply SQL via webdev_execute_sql
+- [ ] Server: create server/routers/proposals.ts with list, get, create, update, updateStatus, updateSection, upsertMilestone, deleteMilestone, submitFeedback (public), getByShareToken (public), generateSectionContent (AI)
+- [ ] Server: register proposalsRouter in server/routers.ts
+- [ ] UI: add Proposals nav entry to Shell.tsx (Operate group)
+- [ ] UI: add /proposals and /proposals/:id routes to App.tsx
+- [ ] UI: create Proposals list page (client/src/pages/usip/Proposals.tsx) with dashboard stats + proposal cards + New Proposal wizard (with Contacts/Accounts pre-fill)
+- [ ] UI: create ProposalDetail page (client/src/pages/usip/ProposalDetail.tsx) with Overview, Content, Timeline, Process, Feedback, Share tabs
+- [ ] UI: public client portal route /p/:shareToken (client/src/pages/ClientPortal.tsx)
+- [ ] UI: register public /p/:shareToken route in App.tsx
+- [ ] Tests: write server/proposals.test.ts covering key procedures
+- [ ] Branding: USIP color tokens applied throughout, no hardcoded navy/teal from v5 HTML
+- [ ] Role-based access: reps can create/edit own proposals, managers+ can view all

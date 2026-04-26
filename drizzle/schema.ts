@@ -2257,3 +2257,105 @@ export const memberPermissions = mysqlTable(
   }),
 );
 export type MemberPermission = typeof memberPermissions.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Proposals
+   ────────────────────────────────────────────────────────────────────────── */
+
+export const proposals = mysqlTable(
+  "proposals",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    createdBy: int("createdBy").notNull(),
+    // Client info
+    title: varchar("title", { length: 255 }).notNull(),
+    clientName: varchar("clientName", { length: 255 }).notNull(),
+    clientEmail: varchar("clientEmail", { length: 320 }),
+    clientWebsite: varchar("clientWebsite", { length: 512 }),
+    orgAbbr: varchar("orgAbbr", { length: 32 }),
+    // Linked CRM records (optional)
+    contactId: int("contactId"),
+    accountId: int("accountId"),
+    // Project details
+    projectType: varchar("projectType", { length: 120 }),
+    rfpDeadline: timestamp("rfpDeadline"),
+    completionDate: timestamp("completionDate"),
+    budget: decimal("budget", { precision: 14, scale: 2 }),
+    description: text("description"),
+    requirements: json("requirements").$type<string[]>().default([]),
+    // Status workflow
+    status: mysqlEnum("status", [
+      "draft",
+      "sent",
+      "under_review",
+      "accepted",
+      "not_accepted",
+      "revision_requested",
+    ])
+      .default("draft")
+      .notNull(),
+    // Sharing
+    shareToken: varchar("shareToken", { length: 128 }).unique(),
+    sentAt: timestamp("sentAt"),
+    acceptedAt: timestamp("acceptedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    byWorkspace: index("ix_prop_ws").on(t.workspaceId),
+    byCreator: index("ix_prop_creator").on(t.workspaceId, t.createdBy),
+    byToken: uniqueIndex("ix_prop_token").on(t.shareToken),
+  }),
+);
+export type Proposal = typeof proposals.$inferSelect;
+export type InsertProposal = typeof proposals.$inferInsert;
+
+export const proposalSections = mysqlTable(
+  "proposal_sections",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    proposalId: int("proposalId").notNull(),
+    sectionKey: varchar("sectionKey", { length: 64 }).notNull(),
+    content: text("content").default("").notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    uniq: uniqueIndex("ix_ps_uniq").on(t.proposalId, t.sectionKey),
+    byProposal: index("ix_ps_proposal").on(t.proposalId),
+  }),
+);
+export type ProposalSection = typeof proposalSections.$inferSelect;
+
+export const proposalMilestones = mysqlTable(
+  "proposal_milestones",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    proposalId: int("proposalId").notNull(),
+    name: varchar("name", { length: 255 }).notNull(),
+    milestoneDate: timestamp("milestoneDate"),
+    description: text("description"),
+    owner: mysqlEnum("owner", ["lsi_media", "client", "both"]).default("lsi_media").notNull(),
+    sortOrder: int("sortOrder").default(0).notNull(),
+  },
+  (t) => ({
+    byProposal: index("ix_pm_proposal").on(t.proposalId),
+  }),
+);
+export type ProposalMilestone = typeof proposalMilestones.$inferSelect;
+
+export const proposalFeedback = mysqlTable(
+  "proposal_feedback",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    proposalId: int("proposalId").notNull(),
+    authorName: varchar("authorName", { length: 255 }).notNull(),
+    authorEmail: varchar("authorEmail", { length: 320 }),
+    message: text("message").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    byProposal: index("ix_pf_proposal").on(t.proposalId),
+  }),
+);
+export type ProposalFeedback = typeof proposalFeedback.$inferSelect;

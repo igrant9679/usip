@@ -57,6 +57,9 @@ import ConnectedAccounts from "@/pages/usip/ConnectedAccounts";
 import UnifiedInbox from "@/pages/usip/UnifiedInbox";
 import InviteAccept from "@/pages/InviteAccept";
 import PasswordLogin from "@/pages/PasswordLogin";
+import Proposals from "@/pages/usip/Proposals";
+import ProposalDetail from "@/pages/usip/ProposalDetail";
+import ProposalPortal from "@/pages/ProposalPortal";
 import { Loader2 } from "lucide-react";
 import { Route, Switch, useLocation } from "wouter";
 import { useEffect } from "react";
@@ -164,6 +167,9 @@ function Router() {
       <Route path="/segment-rules"><AuthGate><SegmentRules /></AuthGate></Route>
       <Route path="/settings"><AuthGate><Settings /></AuthGate></Route>
       <Route path="/notification-prefs"><AuthGate><NotificationPrefs /></AuthGate></Route>
+      <Route path="/proposals"><AuthGate><Proposals /></AuthGate></Route>
+      <Route path="/proposals/:id"><AuthGate><ProposalDetail /></AuthGate></Route>
+      <Route path="/p/:token"><ProposalPortal /></Route>
       <Route path="/invite/accept"><InviteAccept /></Route>
       <Route path="/login"><PasswordLogin /></Route>
       <Route path="/404"><NotFound /></Route>

@@ -138,6 +138,7 @@ const NAV: NavGroup[] = [
       { href: "/workflows", label: "Workflows", icon: Workflow },
       { href: "/dashboards", label: "Dashboards", icon: PieChart },
       { href: "/products", label: "Products", icon: Package },
+      { href: "/proposals", label: "Proposals", icon: ClipboardList },
       { href: "/quotes", label: "Quotes", icon: FileText },
       { href: "/territories", label: "Territories", icon: Network },
       { href: "/lead-routing", label: "Lead Routing", icon: Sparkles },
