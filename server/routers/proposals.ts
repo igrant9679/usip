@@ -411,6 +411,8 @@ export const proposalsRouter = router({
         origin: z.string().url(),
         /** Optional personal message to include in the email body. */
         message: z.string().optional(),
+        /** Optional sending account ID to use (overrides workspace default). */
+        sendingAccountId: z.number().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -471,12 +473,22 @@ export const proposalsRouter = router({
   </p>
 </div>`;
       try {
-        // Prefer the first enabled connected sending account in the workspace
-        const [sendingAcc] = await db
-          .select()
-          .from(sendingAccounts)
-          .where(and(eq(sendingAccounts.workspaceId, ctx.workspace.id), eq(sendingAccounts.enabled, true)))
-          .limit(1);
+        // Use specified account if provided, else prefer the first enabled connected account
+        const [sendingAcc] = input.sendingAccountId
+          ? await db
+              .select()
+              .from(sendingAccounts)
+              .where(and(
+                eq(sendingAccounts.id, input.sendingAccountId),
+                eq(sendingAccounts.workspaceId, ctx.workspace.id),
+                eq(sendingAccounts.enabled, true),
+              ))
+              .limit(1)
+          : await db
+              .select()
+              .from(sendingAccounts)
+              .where(and(eq(sendingAccounts.workspaceId, ctx.workspace.id), eq(sendingAccounts.enabled, true)))
+              .limit(1);
         if (sendingAcc) {
           const adapter = createEmailAdapter(sendingAcc);
           await adapter.sendEmail({
@@ -799,6 +811,99 @@ Write 2-4 paragraphs of professional proposal content for this section. Be speci
       return { ok: true, alreadyAccepted: false, opportunityId };
     }),
   // ── Proposal revision history ─────────────────────────────────────────────
+  /**
+   * Restore a past revision back into the live section content.
+   * Also snapshots a new revision tagged as "restored from revision #N".
+   */
+  restoreRevision: repProcedure
+    .input(z.object({ revisionId: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
+      // Load the revision
+      const [rev] = await db
+        .select()
+        .from(proposalRevisions)
+        .where(eq(proposalRevisions.id, input.revisionId))
+        .limit(1);
+      if (!rev) throw new TRPCError({ code: "NOT_FOUND", message: "Revision not found" });
+      // Verify the proposal belongs to this workspace
+      await getProposalOrThrow(db, rev.proposalId, ctx.workspace.id);
+      // Upsert the section content (same pattern as updateSection)
+      const existing = await db
+        .select({ id: proposalSections.id })
+        .from(proposalSections)
+        .where(and(eq(proposalSections.proposalId, rev.proposalId), eq(proposalSections.sectionKey, rev.sectionKey)))
+        .limit(1);
+      if (existing[0]) {
+        await db
+          .update(proposalSections)
+          .set({ content: rev.content })
+          .where(eq(proposalSections.id, existing[0].id));
+      } else {
+        await db.insert(proposalSections).values({
+          proposalId: rev.proposalId,
+          sectionKey: rev.sectionKey,
+          content: rev.content,
+        });
+      }
+      // Snapshot a new revision tagged as a restore
+      await db.insert(proposalRevisions).values({
+        proposalId: rev.proposalId,
+        sectionKey: rev.sectionKey,
+        content: rev.content,
+        savedByUserId: ctx.user.id,
+        savedByName: `${ctx.user.name ?? "User"} (restored from revision #${rev.id})`,
+      });
+      return { ok: true, sectionKey: rev.sectionKey, content: rev.content };
+    }),
+  /**
+   * Link or unlink an existing opportunity to a proposal.
+   * Pass opportunityId=null to unlink.
+   */
+  linkOpportunity: repProcedure
+    .input(z.object({
+      proposalId: z.number(),
+      opportunityId: z.number().nullable(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
+      await getProposalOrThrow(db, input.proposalId, ctx.workspace.id);
+      if (input.opportunityId !== null) {
+        const [opp] = await db
+          .select({ id: opportunities.id })
+          .from(opportunities)
+          .where(and(eq(opportunities.id, input.opportunityId), eq(opportunities.workspaceId, ctx.workspace.id)))
+          .limit(1);
+        if (!opp) throw new TRPCError({ code: "NOT_FOUND", message: "Opportunity not found" });
+      }
+      await db
+        .update(proposals)
+        .set({ linkedOpportunityId: input.opportunityId })
+        .where(eq(proposals.id, input.proposalId));
+      return { ok: true };
+    }),
+  /**
+   * List enabled sending accounts for the workspace (used by the account picker in Send to Client).
+   */
+  listSendingAccounts: repProcedure
+    .query(async ({ ctx }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
+      const rows = await db
+        .select({
+          id: sendingAccounts.id,
+          name: sendingAccounts.name,
+          fromEmail: sendingAccounts.fromEmail,
+          fromName: sendingAccounts.fromName,
+          provider: sendingAccounts.provider,
+        })
+        .from(sendingAccounts)
+        .where(and(eq(sendingAccounts.workspaceId, ctx.workspace.id), eq(sendingAccounts.enabled, true)))
+        .orderBy(sendingAccounts.name);
+      return rows;
+    }),
   /**
    * Snapshot the current content of a section into proposal_revisions.
    * Called automatically when a section is saved.

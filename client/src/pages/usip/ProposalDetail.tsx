@@ -53,6 +53,10 @@ import {
   User,
   ChevronDown,
   ChevronRight,
+  AlertTriangle,
+  Unlink,
+  ExternalLink,
+  RefreshCw,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Shell } from "@/components/usip/Shell";
@@ -212,16 +216,9 @@ function OverviewTab({ proposal, onRefetch }: { proposal: any; onRefetch: () => 
         {proposal.budget && <InfoCard label="Budget" value={`$${Number(proposal.budget).toLocaleString()}`} icon={DollarSign} />}
         {proposal.rfpDeadline && <InfoCard label="RFP Deadline" value={new Date(proposal.rfpDeadline).toLocaleDateString()} icon={Calendar} />}
         {proposal.completionDate && <InfoCard label="Completion Date" value={new Date(proposal.completionDate).toLocaleDateString()} icon={Calendar} />}
-        {proposal.linkedOpportunityId && (
-          <InfoCard
-            label="Pipeline Deal"
-            value={`Opportunity #${proposal.linkedOpportunityId}`}
-            icon={TrendingUp}
-            href={`/pipeline`}
-          />
-        )}
       </div>
-
+      {/* ── Pipeline Integration Panel ── */}
+      <PipelinePanel proposal={proposal} onRefetch={onRefetch} />
       {proposal.description && (
         <div>
           <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1.5">Description</p>
@@ -643,10 +640,23 @@ function ShareTab({ proposal, onRefetch }: { proposal: any; onRefetch: () => voi
       id: proposal.id,
       origin: window.location.origin,
       message: personalMessage || undefined,
+      sendingAccountId: selectedAccountId !== "auto" ? (selectedAccountId as number) : undefined,
     });
   }
 
   const hasClientEmail = !!proposal.clientEmail;
+  const previewHtml = [
+    '<div style="font-family:sans-serif;max-width:560px;margin:0 auto;padding:24px;color:#111827;background:#fff">',
+    '<div style="margin-bottom:16px"><span style="font-size:12px;font-weight:600;color:#14b8a6;text-transform:uppercase">LSI Media</span></div>',
+    '<h2 style="margin:0 0 8px;font-size:18px;font-weight:700">You have a new proposal to review</h2>',
+    `<p style="margin:0 0 12px;color:#6b7280">Hi ${proposal.clientName},</p>`,
+    `<p style="margin:0 0 12px;color:#374151">A proposal has been shared: <strong>${proposal.title}</strong>.</p>`,
+    personalMessage ? `<p style="padding:10px 14px;background:#f9fafb;border-left:3px solid #14b8a6;border-radius:4px;font-style:italic;color:#374151">${personalMessage}</p>` : "",
+    `<p style="margin:16px 0"><a href="${shareUrl ?? "#"}" style="display:inline-block;background:#0f766e;color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none;font-weight:600">View Proposal</a></p>`,
+    '<hr style="border:none;border-top:1px solid #e5e7eb;margin:16px 0">',
+    '<p style="color:#9ca3af;font-size:11px">You can view the proposal without creating an account.</p>',
+    '</div>',
+  ].join("");
 
   return (
     <div className="space-y-6 max-w-lg">
@@ -728,37 +738,89 @@ function ShareTab({ proposal, onRefetch }: { proposal: any; onRefetch: () => voi
       </div>
 
       {/* Send to Client dialog */}
-      <Dialog open={sendDialogOpen} onOpenChange={setSendDialogOpen}>
-        <DialogContent className="max-w-md">
+      <Dialog open={sendDialogOpen} onOpenChange={(open) => { setSendDialogOpen(open); if (!open) { setPersonalMessage(""); setSelectedAccountId("auto"); setShowPreview(false); } }}>
+        <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>Send Proposal to Client</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
+            {/* Recipient */}
             <div className="bg-muted/40 rounded-lg p-3 border border-border text-sm">
               <p className="text-muted-foreground text-xs mb-1">Sending to</p>
               <p className="font-medium">{proposal.clientName}</p>
               <p className="text-teal-400 text-xs">{proposal.clientEmail}</p>
             </div>
+            {/* Sending account picker */}
+            <div>
+              <Label className="text-xs text-muted-foreground mb-1.5 block">Send from</Label>
+              <Select
+                value={String(selectedAccountId)}
+                onValueChange={(v) => setSelectedAccountId(v === "auto" ? "auto" : Number(v))}
+              >
+                <SelectTrigger className="text-sm">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="auto">
+                    {sendingAccounts && sendingAccounts.length > 0
+                      ? `Auto (${sendingAccounts[0].fromEmail})`
+                      : "Auto (workspace default)"}
+                  </SelectItem>
+                  {sendingAccounts?.map((acc) => (
+                    <SelectItem key={acc.id} value={String(acc.id)}>
+                      {acc.name} — {acc.fromEmail}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {(!sendingAccounts || sendingAccounts.length === 0) && (
+                <p className="text-xs text-amber-400 mt-1">
+                  No connected accounts found. Connect one in My Mailbox or configure SMTP in Settings.
+                </p>
+              )}
+            </div>
+            {/* Personal message */}
             <div>
               <Label>Personal message (optional)</Label>
               <Textarea
                 value={personalMessage}
                 onChange={(e) => setPersonalMessage(e.target.value)}
-                className="mt-1 min-h-[100px]"
+                className="mt-1 min-h-[80px]"
                 placeholder="Add a personal note to include in the email..."
               />
             </div>
+            {/* Email preview toggle */}
+            <div>
+              <button
+                type="button"
+                className="flex items-center gap-1.5 text-xs text-teal-400 hover:text-teal-300 transition-colors"
+                onClick={() => setShowPreview(!showPreview)}
+              >
+                <Eye className="size-3.5" />
+                {showPreview ? "Hide preview" : "Preview email"}
+              </button>
+              {showPreview && (
+                <div className="mt-2 border border-border rounded-lg overflow-hidden max-h-64 overflow-y-auto">
+                  <iframe
+                    srcDoc={previewHtml}
+                    className="w-full"
+                    style={{ height: "240px", border: "none" }}
+                    title="Email preview"
+                  />
+                </div>
+              )}
+            </div>
+            {/* Info */}
             <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-3 text-xs text-blue-300">
               <p className="font-medium mb-1">This will also:</p>
               <ul className="space-y-0.5 text-blue-300/80">
                 <li>• Mark the proposal status as <strong>Sent</strong></li>
                 <li>• Send an email with the portal link to the client</li>
-                <li>• Use your connected email account if available (My Mailbox)</li>
               </ul>
             </div>
           </div>
           <DialogFooter>
-            <Button variant="ghost" onClick={() => { setSendDialogOpen(false); setPersonalMessage(""); }}>
+            <Button variant="ghost" onClick={() => { setSendDialogOpen(false); setPersonalMessage(""); setSelectedAccountId("auto"); setShowPreview(false); }}>
               Cancel
             </Button>
             <Button
@@ -905,6 +967,155 @@ export default function ProposalDetail() {
   );
 }
 
+// ── Pipeline Panel (in OverviewTab) ──────────────────────────────────────────
+function PipelinePanel({ proposal, onRefetch }: { proposal: any; onRefetch: () => void }) {
+  const [linkDialogOpen, setLinkDialogOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const utils = trpc.useUtils();
+  const { data: opportunities } = trpc.opportunities.list.useQuery(undefined, { enabled: linkDialogOpen });
+  const linkOpp = trpc.proposals.linkOpportunity.useMutation({
+    onSuccess: () => {
+      toast.success("Opportunity linked");
+      utils.proposals.get.invalidate({ id: proposal.id });
+      onRefetch();
+      setLinkDialogOpen(false);
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const unlinkOpp = trpc.proposals.linkOpportunity.useMutation({
+    onSuccess: () => {
+      toast.success("Opportunity unlinked");
+      utils.proposals.get.invalidate({ id: proposal.id });
+      onRefetch();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const createAndLink = trpc.proposals.acceptProposal.useMutation({
+    onSuccess: (data) => {
+      if (data.opportunityId) {
+        toast.success(`Pipeline opportunity created and linked (#${data.opportunityId})`);
+        utils.proposals.get.invalidate({ id: proposal.id });
+        onRefetch();
+      }
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const filtered = (opportunities ?? []).filter((o: any) =>
+    !search || o.name.toLowerCase().includes(search.toLowerCase())
+  );
+  const hasLinked = !!proposal.linkedOpportunityId;
+  return (
+    <div className="border border-border rounded-lg p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <TrendingUp className="size-4 text-teal-400" />
+          <span className="text-sm font-medium">Pipeline Integration</span>
+        </div>
+        {hasLinked && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-xs text-muted-foreground gap-1 h-6 px-2"
+            onClick={() => unlinkOpp.mutate({ proposalId: proposal.id, opportunityId: null })}
+            disabled={unlinkOpp.isPending}
+          >
+            <Unlink className="size-3" />
+            Unlink
+          </Button>
+        )}
+      </div>
+      {hasLinked ? (
+        <div className="flex items-center gap-3 bg-teal-500/10 border border-teal-500/20 rounded-lg p-3">
+          <div className="size-8 rounded-full bg-teal-500/20 flex items-center justify-center shrink-0">
+            <TrendingUp className="size-4 text-teal-400" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium">Opportunity #{proposal.linkedOpportunityId}</p>
+            <p className="text-xs text-muted-foreground">Linked pipeline deal</p>
+          </div>
+          <a
+            href="/pipeline"
+            className="inline-flex items-center gap-1 text-xs text-teal-400 hover:text-teal-300 transition-colors"
+          >
+            <ExternalLink className="size-3" />
+            View
+          </a>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          <p className="text-xs text-muted-foreground">
+            No pipeline deal linked. Link an existing opportunity or create a new one.
+          </p>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5 text-xs"
+              onClick={() => setLinkDialogOpen(true)}
+            >
+              <Link2 className="size-3.5" />
+              Link Existing
+            </Button>
+            {proposal.accountId && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5 text-xs text-teal-400 border-teal-500/30 hover:bg-teal-500/10"
+                onClick={() => createAndLink.mutate({ id: proposal.id })}
+                disabled={createAndLink.isPending}
+              >
+                <Plus className="size-3.5" />
+                {createAndLink.isPending ? "Creating..." : "Create & Link"}
+              </Button>
+            )}
+          </div>
+        </div>
+      )}
+      {/* Link Opportunity Dialog */}
+      <Dialog open={linkDialogOpen} onOpenChange={setLinkDialogOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Link Pipeline Opportunity</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Input
+              placeholder="Search opportunities..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="text-sm"
+            />
+            <div className="space-y-1 max-h-60 overflow-y-auto">
+              {filtered.length === 0 ? (
+                <p className="text-xs text-muted-foreground text-center py-4">No opportunities found</p>
+              ) : (
+                filtered.map((opp: any) => (
+                  <button
+                    key={opp.id}
+                    className="w-full flex items-center gap-3 p-2.5 rounded-lg hover:bg-muted/40 text-left transition-colors"
+                    onClick={() => linkOpp.mutate({ proposalId: proposal.id, opportunityId: opp.id })}
+                    disabled={linkOpp.isPending}
+                  >
+                    <div className="size-7 rounded-full bg-teal-500/15 flex items-center justify-center shrink-0">
+                      <TrendingUp className="size-3.5 text-teal-400" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium truncate">{opp.name}</p>
+                      <p className="text-xs text-muted-foreground capitalize">{opp.stage} · ${Number(opp.value).toLocaleString()}</p>
+                    </div>
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" size="sm" onClick={() => setLinkDialogOpen(false)}>Cancel</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
 // ── History Tab ───────────────────────────────────────────────────────────────
 const SECTION_LABELS: Record<string, string> = {
   executive_summary: "Executive Summary",
@@ -915,9 +1126,72 @@ const SECTION_LABELS: Record<string, string> = {
   why_us: "Why Us",
 };
 
+function ExpandedRevision({ rev, proposalId, onRestored }: { rev: any; proposalId: number; onRestored: () => void }) {
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const utils = trpc.useUtils();
+  const restore = trpc.proposals.restoreRevision.useMutation({
+    onSuccess: (data) => {
+      toast.success(`Section "${data.sectionKey.replace(/_/g, " ")}" restored`);
+      utils.proposals.get.invalidate({ id: proposalId });
+      utils.proposals.listRevisions.invalidate({ proposalId });
+      setConfirmOpen(false);
+      onRestored();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  return (
+    <>
+      <div className="border-t border-border bg-muted/20 p-3 space-y-2">
+        <pre className="text-xs text-foreground whitespace-pre-wrap font-mono leading-relaxed max-h-48 overflow-y-auto">
+          {rev.content || <span className="text-muted-foreground italic">(empty)</span>}
+        </pre>
+        <div className="flex justify-end">
+          <Button
+            size="sm"
+            variant="outline"
+            className="gap-1.5 text-amber-400 border-amber-500/30 hover:bg-amber-500/10 text-xs h-7"
+            onClick={() => setConfirmOpen(true)}
+          >
+            <RotateCcw className="size-3" />
+            Restore this version
+          </Button>
+        </div>
+      </div>
+      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="size-4 text-amber-400" />
+              Restore Revision?
+            </DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            This will overwrite the current content of the <strong>{rev.sectionKey.replace(/_/g, " ")}</strong> section
+            with this version from <strong>{new Date(rev.createdAt).toLocaleString()}</strong>.
+            A new revision will be saved to preserve the restore point.
+          </p>
+          <DialogFooter>
+            <Button variant="ghost" size="sm" onClick={() => setConfirmOpen(false)}>Cancel</Button>
+            <Button
+              size="sm"
+              onClick={() => restore.mutate({ revisionId: rev.id })}
+              disabled={restore.isPending}
+              className="bg-amber-600 hover:bg-amber-700 text-white gap-1.5"
+            >
+              <RotateCcw className="size-3.5" />
+              {restore.isPending ? "Restoring..." : "Restore"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
 function HistoryTab({ proposalId }: { proposalId: number }) {
-  const { data: revisions, isLoading } = trpc.proposals.listRevisions.useQuery({ proposalId });
+  const { data: revisions, isLoading, refetch } = trpc.proposals.listRevisions.useQuery({ proposalId });
   const [expanded, setExpanded] = useState<number | null>(null);
+  function onRestored() { refetch(); }
 
   if (isLoading) {
     return (
@@ -994,11 +1268,7 @@ function HistoryTab({ proposalId }: { proposalId: number }) {
               )}
             </button>
             {expanded === rev.id && (
-              <div className="border-t border-border bg-muted/20 p-3">
-                <pre className="text-xs text-foreground whitespace-pre-wrap font-mono leading-relaxed max-h-64 overflow-y-auto">
-                  {rev.content || <span className="text-muted-foreground italic">(empty)</span>}
-                </pre>
-              </div>
+              <ExpandedRevision rev={rev} proposalId={proposalId} onRestored={onRestored} />
             )}
           </div>
         ))}

@@ -1453,17 +1453,17 @@
 - [x] Tests: 799/799 passing — acceptByToken and search/filter covered and search/filter logic
 
 ## Phase A — Enhancements (round 4)
-- [ ] Schema: proposalRevisions table (id, proposalId, sectionKey, content, savedBy, createdAt)
-- [ ] Schema: proposals.linkedDealId column (nullable int, FK to deals)
-- [ ] DB migration: generate + apply SQL for above schema changes
-- [ ] Server: proposals.sendToClient — use Unipile connected email account (via UNIPILE_API_KEY) instead of SMTP; fall back to sendWorkspaceEmail if no account connected
-- [ ] Server: proposals.acceptProposal + acceptByToken — auto-create Pipeline deal (or update existing) when proposal is accepted; link deal back via linkedDealId
-- [ ] Server: proposals.saveRevision mutation — snapshot current section content into proposalRevisions on each section save
-- [ ] Server: proposals.listRevisions query — return revision history for a proposal (grouped by sectionKey, ordered by createdAt desc)
-- [ ] UI: ProposalDetail Share tab — show connected email account name/address used for sending; fallback note if none connected
-- [ ] UI: ProposalDetail Overview — show linked deal badge with link to Pipeline deal when linkedDealId is set
-- [ ] UI: ProposalDetail — add Version History tab showing revision list per section with content diff viewer
-- [ ] Tests: 799+ passing after all changes
+- [x] Schema: proposalRevisions table (id, proposalId, sectionKey, content, savedBy, createdAt)
+- [x] Schema: proposals.linkedDealId column (nullable int, FK to deals) — implemented as linkedOpportunityId
+- [x] DB migration: generate + apply SQL for above schema changes
+- [x] Server: proposals.sendToClient — use Unipile connected email account (via UNIPILE_API_KEY) instead of SMTP; fall back to sendWorkspaceEmail if no account connected
+- [x] Server: proposals.acceptProposal + acceptByToken — auto-create Pipeline deal (or update existing) when proposal is accepted; link deal back via linkedDealId
+- [x] Server: proposals.saveRevision mutation — snapshot current section content into proposalRevisions on each section save
+- [x] Server: proposals.listRevisions query — return revision history for a proposal (grouped by sectionKey, ordered by createdAt desc)
+- [x] UI: ProposalDetail Share tab — show connected email account name/address used for sending; fallback note if none connected
+- [x] UI: ProposalDetail Overview — show linked deal badge with link to Pipeline deal when linkedDealId is set
+- [x] UI: ProposalDetail — add Version History tab showing revision list per section with content diff viewer
+- [x] Tests: 799/799 passing after all changes
 
 ## Phase A — Enhancements (round 4 — COMPLETED)
 - [x] Schema: proposalRevisions table (id, proposalId, sectionKey, content, savedByUserId, savedByName, createdAt)
@@ -1479,3 +1479,23 @@
 - [x] UI: ShareTab Send dialog — note that connected email account will be used if available
 - [x] UI: ProposalDetail — History tab with revision list (expandable content preview per revision)
 - [x] Tests: 799/799 passing — all 36 test files pass
+
+## Phase A — Enhancements (round 5)
+- [ ] Server: proposals.restoreRevision — copy a revision's content back into proposalSections (upsert) and snapshot a new revision marked as "restored"
+- [ ] Server: proposals.linkOpportunity — link/unlink an existing opportunity to a proposal (set/clear linkedOpportunityId)
+- [ ] Server: proposals.listSendingAccounts — return enabled sending accounts for the workspace (id, name, fromEmail, provider)
+- [ ] UI: History tab — "Restore" button on each expanded revision entry; confirmation dialog; success toast + section content refresh
+- [ ] UI: Overview tab — Pipeline panel: show linked opportunity details (name, stage, value) with "View in Pipeline" link; "Link Opportunity" button to search and link an existing one; "Create & Link" button to auto-create a won opportunity
+- [ ] UI: Share tab — Send to Client dialog: account picker dropdown (lists connected sending accounts); "Preview Email" toggle showing the rendered HTML; retry button when last send failed
+- [ ] Tests: 799+ passing after all changes
+
+## Phase A — Enhancements (round 5 COMPLETED)
+
+- [x] Server: proposals.restoreRevision — restores a past revision into the live section, snapshots a new revision tagged as "restored from #N"
+- [x] Server: proposals.linkOpportunity — links or unlinks an existing opportunity to a proposal
+- [x] Server: proposals.listSendingAccounts — returns enabled sending accounts for the workspace (for account picker)
+- [x] Server: proposals.sendToClient — extended with optional sendingAccountId param to override the auto-selected account
+- [x] UI: HistoryTab — Restore button on each expanded revision with confirmation dialog
+- [x] UI: OverviewTab — PipelinePanel replaces simple InfoCard: shows linked opportunity with Unlink button, or Link Existing / Create & Link buttons when unlinked
+- [x] UI: PipelinePanel — Link Existing dialog with search and opportunity list
+- [x] UI: ShareTab — account picker dropdown (auto or specific account), email preview iframe toggle
