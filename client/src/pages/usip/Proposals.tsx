@@ -368,7 +368,7 @@ function NewProposalWizard({ open, onClose, onCreated }: WizardProps) {
   );
 }
 
-// ── Status badge ──────────────────────────────────────────────────────────────
+// ── Status badge ──────────────────────────────────────────────────────────────────────────────
 function StatusBadge({ status }: { status: ProposalStatus }) {
   const cfg = STATUS_CONFIG[status] ?? STATUS_CONFIG.draft;
   const Icon = cfg.icon;
@@ -376,6 +376,24 @@ function StatusBadge({ status }: { status: ProposalStatus }) {
     <span className={cn("inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border", cfg.color)}>
       <Icon className="size-3" />
       {cfg.label}
+    </span>
+  );
+}
+
+function EngagementBadge({ score }: { score: number }) {
+  if (score === 0) return null;
+  const { label, className } = score >= 80
+    ? { label: "Hot", className: "bg-red-500/20 text-red-400 border-red-500/30" }
+    : score >= 40
+    ? { label: "Warm", className: "bg-amber-500/20 text-amber-400 border-amber-500/30" }
+    : { label: "Cold", className: "bg-blue-500/20 text-blue-400 border-blue-500/30" };
+  return (
+    <span
+      className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-semibold border ${className}`}
+      title={`Engagement score: ${score}/100`}
+    >
+      <span className="size-1.5 rounded-full bg-current opacity-80" />
+      {label} {score}
     </span>
   );
 }
@@ -542,6 +560,9 @@ export default function Proposals() {
                     <div className="flex items-center gap-2 mb-1">
                       <span className="font-medium text-foreground truncate">{p.title}</span>
                       <StatusBadge status={p.status as ProposalStatus} />
+                      {(p as any).engagementScore > 0 && (
+                        <EngagementBadge score={(p as any).engagementScore} />
+                      )}
                     </div>
                     <div className="flex items-center gap-4 text-xs text-muted-foreground">
                       <span className="flex items-center gap-1">

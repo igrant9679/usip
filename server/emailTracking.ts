@@ -328,6 +328,118 @@ export function registerEmailTrackingRoutes(app: Express) {
       console.error("[ProposalTracking] click event failed:", e);
     }
   });
+
+  /* ── Scheduled: proposal follow-up reminder ──────────────────────────────
+     POST /api/scheduled/proposal-followup
+     Called by the Manus scheduled task agent every 24h.
+     Finds proposals sent 48+ hours ago with no emailOpenedAt, creates a
+     follow_up task and in-app notification for the workspace owner.
+  ─────────────────────────────────────────────────────────────────────────── */
+  app.post("/api/scheduled/proposal-followup", async (req: any, res: any) => {
+    try {
+      const db = await getDb();
+      if (!db) return res.status(503).json({ ok: false, error: "DB unavailable" });
+
+      const { proposals, tasks, notifications, activities, workspaces } = await import("../drizzle/schema");
+      const { and, isNull, lt } = await import("drizzle-orm");
+
+      const cutoff = new Date(Date.now() - 48 * 60 * 60 * 1000); // 48 hours ago
+
+      // Find sent proposals with no emailOpenedAt, sent before the cutoff
+      const staleProposals = await db
+        .select()
+        .from(proposals)
+        .where(
+          and(
+            eq(proposals.status, "sent"),
+            isNull(proposals.emailOpenedAt),
+            lt(proposals.sentAt, cutoff),
+          ),
+        );
+
+      if (staleProposals.length === 0) {
+        return res.json({ ok: true, processed: 0, message: "No stale proposals found" });
+      }
+
+      let processed = 0;
+      for (const proposal of staleProposals) {
+        try {
+          // Get workspace owner
+          const wsRows = await db
+            .select({ ownerUserId: workspaces.ownerUserId })
+            .from(workspaces)
+            .where(eq(workspaces.id, proposal.workspaceId))
+            .limit(1);
+          if (!wsRows[0]) continue;
+          const ownerUserId = wsRows[0].ownerUserId;
+
+          // Check if a follow-up task already exists for this proposal
+          const existingTask = await db
+            .select({ id: tasks.id })
+            .from(tasks)
+            .where(
+              and(
+                eq(tasks.workspaceId, proposal.workspaceId),
+                eq(tasks.relatedType, "proposal"),
+                eq(tasks.relatedId, proposal.id),
+                eq(tasks.type, "follow_up"),
+                eq(tasks.status, "open"),
+              ),
+            )
+            .limit(1);
+
+          if (existingTask.length > 0) continue; // already has an open follow-up
+
+          const dueAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // due in 24h
+
+          // Create follow-up task
+          await db.insert(tasks).values({
+            workspaceId: proposal.workspaceId,
+            title: `Follow up: "${proposal.title}" — client hasn't opened the email`,
+            description: `Proposal sent to ${proposal.clientEmail ?? proposal.clientName} on ${proposal.sentAt?.toLocaleDateString() ?? "unknown date"}. No email open detected after 48 hours. Consider reaching out directly.`,
+            type: "follow_up",
+            priority: "high",
+            status: "open",
+            dueAt,
+            ownerUserId,
+            relatedType: "proposal",
+            relatedId: proposal.id,
+          });
+
+          // Create in-app notification
+          await db.insert(notifications).values({
+            workspaceId: proposal.workspaceId,
+            userId: ownerUserId,
+            kind: "system",
+            title: `Follow-up needed: "${proposal.title}"`,
+            body: `This proposal was sent 48+ hours ago but the client hasn't opened the email yet. A follow-up task has been created.`,
+            isRead: false,
+          });
+
+          // Log activity
+          await db.insert(activities).values({
+            workspaceId: proposal.workspaceId,
+            type: "system",
+            relatedType: "proposal",
+            relatedId: proposal.id,
+            subject: "Automated follow-up task created (no email open after 48h)",
+            body: "The system detected no email open after 48 hours and created a follow-up task.",
+            actorUserId: null,
+            occurredAt: new Date(),
+          });
+
+          processed++;
+        } catch (e) {
+          console.error(`[ProposalFollowup] Failed for proposal ${proposal.id}:`, e);
+        }
+      }
+
+      return res.json({ ok: true, processed, total: staleProposals.length });
+    } catch (e) {
+      console.error("[ProposalFollowup] Endpoint error:", e);
+      return res.status(500).json({ ok: false, error: String(e) });
+    }
+  });
 }
 
 /* ─────────────────────────────────────────────────────────────────────────

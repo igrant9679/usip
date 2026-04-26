@@ -1513,12 +1513,12 @@
 
 ## Phase A — Enhancements (round 7)
 
-- [ ] Server: public GET /api/track/open/:token endpoint — logs "Client opened the proposal email" activity, returns 1x1 transparent GIF
-- [ ] Server: sendToClient — append tracking pixel <img> to email HTML body
-- [ ] Server: proposals table — add emailOpenedAt timestamp column, set on first open
-- [ ] UI: ActivityFeed — entries whose subject mentions "opportunity" or "pipeline" render as a tappable link to /pipeline
-- [ ] Seed: insert activity history rows for the Meridian Health demo proposal (created, sent, status changes, etc.)
-- [ ] Tests: 799+ passing after all changes
+- [x] Server: public GET /api/track/open/:token endpoint — logs "Client opened the proposal email" activity, returns 1x1 transparent GIF
+- [x] Server: sendToClient — append tracking pixel <img> to email HTML body
+- [x] Server: proposals table — add emailOpenedAt timestamp column, set on first open
+- [x] UI: ActivityFeed — entries whose subject mentions "opportunity" or "pipeline" render as a tappable link to /pipeline
+- [x] Seed: insert activity history rows for the Meridian Health demo proposal (created, sent, status changes, etc.)
+- [x] Tests: 799+ passing after all changes
 
 ## Phase A — Enhancements (round 7 COMPLETED)
 - [x] Schema: add emailOpenedAt timestamp column to proposals table (migration 0035)
@@ -1530,13 +1530,13 @@
 - [x] Data: Seeded 16 realistic activity events for Meridian Health proposal (id=1) spanning 2 weeks
 
 ## Phase A — Enhancements (round 8 IN PROGRESS)
-- [ ] Server: /api/track/proposal-click/:token endpoint — logs "Client clicked the proposal link" activity then redirects to portal
-- [ ] Server: sendToClient email CTA — wrap "View Proposal →" button with click-tracking redirect URL
-- [ ] Server: proposals.get — include emailOpenedAt and emailClickedAt in returned proposal fields
-- [ ] UI: ProposalDetail Overview — "First Opened" InfoCard showing emailOpenedAt timestamp
-- [ ] UI: ProposalDetail Overview — "First Clicked" InfoCard showing emailClickedAt timestamp
-- [ ] UI: ActivityFeed — type filter chips (All / Email / Note / System / Stage)
-- [ ] UI: ActivityFeed — richer icon set: Mail for email opens/clicks, CheckCircle for accepted, AlertCircle for revision
+- [x] Server: /api/track/proposal-click/:token endpoint — logs "Client clicked the proposal link" activity then redirects to portal
+- [x] Server: sendToClient email CTA — wrap "View Proposal →" button with click-tracking redirect URL
+- [x] Server: proposals.get — include emailOpenedAt and emailClickedAt in returned proposal fields
+- [x] UI: ProposalDetail Overview — "First Opened" InfoCard showing emailOpenedAt timestamp
+- [x] UI: ProposalDetail Overview — "First Clicked" InfoCard showing emailClickedAt timestamp
+- [x] UI: ActivityFeed — type filter chips (All / Email / Note / System / Stage)
+- [x] UI: ActivityFeed — richer icon set: Mail for email opens/clicks, CheckCircle for accepted, AlertCircle for revision
 
 ## Phase A — Enhancements (round 8 COMPLETED)
 - [x] Schema: add emailClickedAt timestamp column to proposals table (migration 0036)
@@ -1546,3 +1546,22 @@
 - [x] UI: ProposalDetail Overview — "Sent to Client" InfoCard (sentAt), "Email First Opened" InfoCard (emailOpenedAt), "Link First Clicked" InfoCard (emailClickedAt) — all conditional on field being set
 - [x] UI: ActivityFeed — type filter chips (All / Email / Notes / System / Stage) with live counts, hidden when count=0
 - [x] UI: ActivityFeed — richer icon set: Mail for email opens, MousePointerClick for link clicks, AlertCircle for revisions, color-coded per event type
+
+## Phase A — Enhancements (round 9 IN PROGRESS)
+- [ ] Server: engagementScore helper — compute 0-100 score from sentAt, emailOpenedAt, emailClickedAt, feedbackCount
+- [ ] Server: proposals.list — include engagementScore on each proposal row
+- [ ] Server: proposals.get — include engagementScore in returned proposal
+- [ ] Server: /api/scheduled/proposal-followup POST endpoint — checks sent proposals with no emailOpenedAt after 48h, creates follow_up task + in-app notification
+- [ ] UI: ProposalCard (Proposals list) — engagement score badge with colour coding (cold/warm/hot)
+- [ ] UI: ProposalDetail header — engagement score badge
+- [ ] UI: ActivityFeed — "Views" filter chip showing only email open/click events (type=system, subject contains "opened" or "clicked")
+
+## Phase A — Enhancements (round 9 — COMPLETED)
+- [x] Server: computeEngagementScore helper (0-100: +20 sent, +25 opened, +25 clicked, +15 feedback, +15 accepted)
+- [x] Server: proposals.list enriched with feedbackCount and engagementScore per proposal
+- [x] Server: proposals.get enriched with engagementScore in the proposal object
+- [x] Server: POST /api/scheduled/proposal-followup endpoint — finds sent proposals with no emailOpenedAt after 48h, creates follow_up task + notification + activity log
+- [x] UI: EngagementBadge component in Proposals.tsx — Hot/Warm/Cold pill with score shown on each ProposalCard
+- [x] UI: EngagementScoreBadge component in ProposalDetail.tsx — shown in header next to StatusBadge
+- [x] UI: ActivityFeed "Views" filter chip — filters to email open and link click events only
+- [x] UI: ActivityFeed chip count logic updated for "views" virtual filter

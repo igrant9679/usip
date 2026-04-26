@@ -123,6 +123,30 @@ async function logProposalActivity(
   }
 }
 
+/**
+ * Compute a 0-100 engagement score for a proposal row.
+ * Scoring:
+ *   +20  sentAt is set (proposal has been sent)
+ *   +25  emailOpenedAt is set (client opened the email)
+ *   +25  emailClickedAt is set (client clicked the portal link)
+ *   +15  feedbackCount >= 1
+ *   +15  status is accepted
+ */
+function computeEngagementScore(p: {
+  sentAt: Date | null;
+  emailOpenedAt: Date | null;
+  emailClickedAt: Date | null;
+  status: string;
+  feedbackCount?: number;
+}): number {
+  let score = 0;
+  if (p.sentAt) score += 20;
+  if (p.emailOpenedAt) score += 25;
+  if (p.emailClickedAt) score += 25;
+  if ((p.feedbackCount ?? 0) >= 1) score += 15;
+  if (p.status === "accepted") score += 15;
+  return Math.min(score, 100);
+}
 // ── Router ────────────────────────────────────────────────────────────────────
 export const proposalsRouter = router({
   /** List proposals in the workspace. Reps see only their own; managers+ see all. */
@@ -142,7 +166,29 @@ export const proposalsRouter = router({
             ),
       )
       .orderBy(desc(proposals.updatedAt));
-    return rows;
+    // Enrich with feedback counts and engagement scores
+    const proposalIds = rows.map((r) => r.id);
+    let feedbackCounts: Map<number, number> = new Map();
+    if (proposalIds.length > 0) {
+      const fbRows = await db
+        .select({ proposalId: proposalFeedback.proposalId })
+        .from(proposalFeedback)
+        .where(or(...proposalIds.map((id) => eq(proposalFeedback.proposalId, id))));
+      for (const fb of fbRows) {
+        feedbackCounts.set(fb.proposalId, (feedbackCounts.get(fb.proposalId) ?? 0) + 1);
+      }
+    }
+    return rows.map((r) => ({
+      ...r,
+      feedbackCount: feedbackCounts.get(r.id) ?? 0,
+      engagementScore: computeEngagementScore({
+        sentAt: r.sentAt ?? null,
+        emailOpenedAt: r.emailOpenedAt ?? null,
+        emailClickedAt: r.emailClickedAt ?? null,
+        status: r.status,
+        feedbackCount: feedbackCounts.get(r.id) ?? 0,
+      }),
+    }));
   }),
 
   /** Get a single proposal with sections, milestones, and feedback. */
@@ -162,7 +208,14 @@ export const proposalsRouter = router({
               .orderBy(desc(proposalFeedback.createdAt))
           : [],
       ]);
-      return { proposal, sections, milestones, feedback };
+      const engagementScore = computeEngagementScore({
+        sentAt: proposal.sentAt ?? null,
+        emailOpenedAt: proposal.emailOpenedAt ?? null,
+        emailClickedAt: proposal.emailClickedAt ?? null,
+        status: proposal.status,
+        feedbackCount: feedback.length,
+      });
+      return { proposal: { ...proposal, engagementScore }, sections, milestones, feedback };
     }),
 
   /** Create a new proposal (rep+). */

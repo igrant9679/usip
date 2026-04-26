@@ -878,6 +878,23 @@ function ShareTab({ proposal, onRefetch }: { proposal: any; onRefetch: () => voi
 }
 
 // ── Main detail page ──────────────────────────────────────────────────────────
+function EngagementScoreBadge({ score }: { score: number }) {
+  const { label, className } = score >= 80
+    ? { label: "Hot", className: "bg-red-500/20 text-red-400 border-red-500/30" }
+    : score >= 40
+    ? { label: "Warm", className: "bg-amber-500/20 text-amber-400 border-amber-500/30" }
+    : { label: "Cold", className: "bg-blue-500/20 text-blue-400 border-blue-500/30" };
+  return (
+    <span
+      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold border ${className}`}
+      title={`Engagement score: ${score}/100`}
+    >
+      <span className="size-2 rounded-full bg-current opacity-80" />
+      {label} · {score}/100
+    </span>
+  );
+}
+
 export default function ProposalDetail() {
   const params = useParams<{ id: string }>();
   const [, navigate] = useLocation();
@@ -938,6 +955,9 @@ export default function ProposalDetail() {
           <div className="flex items-center gap-2">
             <h1 className="text-lg font-semibold truncate">{proposal.title}</h1>
             <StatusBadge status={proposal.status as ProposalStatus} />
+            {(proposal as any).engagementScore > 0 && (
+              <EngagementScoreBadge score={(proposal as any).engagementScore} />
+            )}
           </div>
           <p className="text-xs text-muted-foreground mt-0.5">
             {proposal.clientName}
@@ -1202,14 +1222,21 @@ function ActivityFeed({ proposalId }: { proposalId: number }) {
   }
   const FILTER_CHIPS = [
     { key: "all", label: "All" },
+    { key: "views", label: "Views" },
     { key: "email", label: "Email" },
     { key: "note", label: "Notes" },
     { key: "system", label: "System" },
     { key: "stage_change", label: "Stage" },
   ];
+  const isViewEvent = (ev: any) => {
+    const s = (ev.subject ?? "").toLowerCase();
+    return s.includes("opened the proposal email") || s.includes("clicked the proposal link");
+  };
   const filtered = events
     ? activeFilter === "all"
       ? events
+      : activeFilter === "views"
+      ? events.filter(isViewEvent)
       : events.filter((ev: any) => ev.type === activeFilter)
     : [];
   if (isLoading) return (
@@ -1229,7 +1256,11 @@ function ActivityFeed({ proposalId }: { proposalId: number }) {
       {/* Filter chips */}
       <div className="flex flex-wrap gap-1.5">
         {FILTER_CHIPS.map(chip => {
-          const count = chip.key === "all" ? events.length : events.filter((ev: any) => ev.type === chip.key).length;
+          const count = chip.key === "all"
+            ? events.length
+            : chip.key === "views"
+            ? events.filter(isViewEvent).length
+            : events.filter((ev: any) => ev.type === chip.key).length;
           if (chip.key !== "all" && count === 0) return null;
           return (
             <button
