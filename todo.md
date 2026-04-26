@@ -1451,3 +1451,31 @@
 - [x] UI: ProposalDetail Share tab — enhanced Send to Client dialog with email preview panel, SMTP status indicator
 - [x] UI: ClientPortal.tsx — Accept Proposal button with confirmation dialog, success state
 - [x] Tests: 799/799 passing — acceptByToken and search/filter covered and search/filter logic
+
+## Phase A — Enhancements (round 4)
+- [ ] Schema: proposalRevisions table (id, proposalId, sectionKey, content, savedBy, createdAt)
+- [ ] Schema: proposals.linkedDealId column (nullable int, FK to deals)
+- [ ] DB migration: generate + apply SQL for above schema changes
+- [ ] Server: proposals.sendToClient — use Unipile connected email account (via UNIPILE_API_KEY) instead of SMTP; fall back to sendWorkspaceEmail if no account connected
+- [ ] Server: proposals.acceptProposal + acceptByToken — auto-create Pipeline deal (or update existing) when proposal is accepted; link deal back via linkedDealId
+- [ ] Server: proposals.saveRevision mutation — snapshot current section content into proposalRevisions on each section save
+- [ ] Server: proposals.listRevisions query — return revision history for a proposal (grouped by sectionKey, ordered by createdAt desc)
+- [ ] UI: ProposalDetail Share tab — show connected email account name/address used for sending; fallback note if none connected
+- [ ] UI: ProposalDetail Overview — show linked deal badge with link to Pipeline deal when linkedDealId is set
+- [ ] UI: ProposalDetail — add Version History tab showing revision list per section with content diff viewer
+- [ ] Tests: 799+ passing after all changes
+
+## Phase A — Enhancements (round 4 — COMPLETED)
+- [x] Schema: proposalRevisions table (id, proposalId, sectionKey, content, savedByUserId, savedByName, createdAt)
+- [x] Schema: proposals.linkedOpportunityId column (nullable int, FK to opportunities)
+- [x] DB migration: generated 0034_flat_deadpool.sql and applied to database
+- [x] Server: proposals.sendToClient — prefer first enabled sendingAccount (Unipile/SMTP adapter) over workspace SMTP config; return senderEmail in response
+- [x] Server: proposals.acceptProposal — auto-create or update Pipeline opportunity (stage=won, winProb=100) and link back via linkedOpportunityId
+- [x] Server: proposals.acceptByToken — same opportunity auto-create/update logic for client portal acceptance
+- [x] Server: proposals.saveRevision mutation — snapshot section content into proposalRevisions on each save
+- [x] Server: proposals.listRevisions query — return all revisions for a proposal ordered newest-first
+- [x] UI: ContentTab — call saveRevision after successful updateSection
+- [x] UI: OverviewTab — show linked opportunity InfoCard with link to Pipeline when linkedOpportunityId is set
+- [x] UI: ShareTab Send dialog — note that connected email account will be used if available
+- [x] UI: ProposalDetail — History tab with revision list (expandable content preview per revision)
+- [x] Tests: 799/799 passing — all 36 test files pass

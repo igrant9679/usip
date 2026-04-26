@@ -2299,6 +2299,8 @@ export const proposals = mysqlTable(
     shareToken: varchar("shareToken", { length: 128 }).unique(),
     sentAt: timestamp("sentAt"),
     acceptedAt: timestamp("acceptedAt"),
+    // Pipeline integration
+    linkedOpportunityId: int("linkedOpportunityId"),  // fk to opportunities
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
@@ -2359,3 +2361,24 @@ export const proposalFeedback = mysqlTable(
   }),
 );
 export type ProposalFeedback = typeof proposalFeedback.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Proposal Revisions (version history)
+   ────────────────────────────────────────────────────────────────────────── */
+export const proposalRevisions = mysqlTable(
+  "proposal_revisions",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    proposalId: int("proposalId").notNull(),
+    sectionKey: varchar("sectionKey", { length: 64 }).notNull(),
+    content: text("content").notNull(),
+    savedByUserId: int("savedByUserId"),
+    savedByName: varchar("savedByName", { length: 120 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    byProposal: index("ix_pr_proposal").on(t.proposalId),
+    bySection: index("ix_pr_section").on(t.proposalId, t.sectionKey),
+  }),
+);
+export type ProposalRevision = typeof proposalRevisions.$inferSelect;

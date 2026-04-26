@@ -48,6 +48,11 @@ import {
   Send,
   Globe,
   Mail,
+  History,
+  TrendingUp,
+  User,
+  ChevronDown,
+  ChevronRight,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Shell } from "@/components/usip/Shell";
@@ -207,6 +212,14 @@ function OverviewTab({ proposal, onRefetch }: { proposal: any; onRefetch: () => 
         {proposal.budget && <InfoCard label="Budget" value={`$${Number(proposal.budget).toLocaleString()}`} icon={DollarSign} />}
         {proposal.rfpDeadline && <InfoCard label="RFP Deadline" value={new Date(proposal.rfpDeadline).toLocaleDateString()} icon={Calendar} />}
         {proposal.completionDate && <InfoCard label="Completion Date" value={new Date(proposal.completionDate).toLocaleDateString()} icon={Calendar} />}
+        {proposal.linkedOpportunityId && (
+          <InfoCard
+            label="Pipeline Deal"
+            value={`Opportunity #${proposal.linkedOpportunityId}`}
+            icon={TrendingUp}
+            href={`/pipeline`}
+          />
+        )}
       </div>
 
       {proposal.description && (
@@ -290,8 +303,17 @@ function ContentTab({ proposal, sections, onRefetch }: { proposal: any; sections
 
   const currentContent = editContent ?? sectionMap[activeSection] ?? "";
 
+  const saveRevision = trpc.proposals.saveRevision.useMutation();
   const updateSection = trpc.proposals.updateSection.useMutation({
-    onSuccess: () => { toast.success("Section saved"); onRefetch(); setEditContent(null); },
+    onSuccess: () => {
+      toast.success("Section saved");
+      onRefetch();
+      // Snapshot revision after save
+      if (editContent !== null) {
+        saveRevision.mutate({ proposalId: proposal.id, sectionKey: activeSection, content: editContent });
+      }
+      setEditContent(null);
+    },
     onError: (e) => toast.error(e.message),
   });
 
@@ -593,7 +615,7 @@ function ShareTab({ proposal, onRefetch }: { proposal: any; onRefetch: () => voi
   const sendToClient = trpc.proposals.sendToClient.useMutation({
     onSuccess: (data) => {
       if (data.emailSent) {
-        toast.success(`Email sent to ${proposal.clientEmail}`);
+        toast.success(data.deliveryNote ?? `Email sent to ${proposal.clientEmail}`);
       } else {
         toast.info(data.deliveryNote ?? "Proposal marked as sent.");
       }
@@ -731,6 +753,7 @@ function ShareTab({ proposal, onRefetch }: { proposal: any; onRefetch: () => voi
               <ul className="space-y-0.5 text-blue-300/80">
                 <li>• Mark the proposal status as <strong>Sent</strong></li>
                 <li>• Send an email with the portal link to the client</li>
+                <li>• Use your connected email account if available (My Mailbox)</li>
               </ul>
             </div>
           </div>
@@ -843,6 +866,7 @@ export default function ProposalDetail() {
             { value: "content", label: "Content" },
             { value: "timeline", label: "Timeline" },
             { value: "feedback", label: `Feedback${feedback.length > 0 ? ` (${feedback.length})` : ""}` },
+            { value: "history", label: "History" },
             { value: "share", label: "Share" },
           ].map((t) => (
             <TabsTrigger
@@ -868,6 +892,9 @@ export default function ProposalDetail() {
           <TabsContent value="feedback" className="mt-0">
             <FeedbackTab feedback={feedback} />
           </TabsContent>
+          <TabsContent value="history" className="mt-0">
+            <HistoryTab proposalId={proposal.id} />
+          </TabsContent>
           <TabsContent value="share" className="mt-0">
             <ShareTab proposal={proposal} onRefetch={refetch} />
           </TabsContent>
@@ -875,5 +902,110 @@ export default function ProposalDetail() {
       </Tabs>
     </div>
     </Shell>
+  );
+}
+
+// ── History Tab ───────────────────────────────────────────────────────────────
+const SECTION_LABELS: Record<string, string> = {
+  executive_summary: "Executive Summary",
+  problem_statement: "Problem Statement",
+  proposed_solution: "Proposed Solution",
+  scope_of_work: "Scope of Work",
+  pricing: "Pricing",
+  why_us: "Why Us",
+};
+
+function HistoryTab({ proposalId }: { proposalId: number }) {
+  const { data: revisions, isLoading } = trpc.proposals.listRevisions.useQuery({ proposalId });
+  const [expanded, setExpanded] = useState<number | null>(null);
+
+  if (isLoading) {
+    return (
+      <div className="space-y-3">
+        {[1, 2, 3].map((i) => (
+          <Skeleton key={i} className="h-16 w-full" />
+        ))}
+      </div>
+    );
+  }
+
+  if (!revisions || revisions.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center py-16 text-center">
+        <div className="size-12 rounded-full bg-muted/40 flex items-center justify-center mb-3">
+          <History className="size-5 text-muted-foreground" />
+        </div>
+        <p className="text-sm font-medium text-foreground">No revision history yet</p>
+        <p className="text-xs text-muted-foreground mt-1">
+          Revisions are saved automatically each time you save a content section.
+        </p>
+      </div>
+    );
+  }
+
+  // Group by sectionKey for display
+  const grouped: Record<string, typeof revisions> = {};
+  for (const r of revisions) {
+    if (!grouped[r.sectionKey]) grouped[r.sectionKey] = [];
+    grouped[r.sectionKey].push(r);
+  }
+
+  return (
+    <div className="space-y-4 max-w-2xl">
+      <div>
+        <h3 className="font-semibold mb-0.5">Revision History</h3>
+        <p className="text-sm text-muted-foreground">
+          Every time a content section is saved, a snapshot is recorded here. Click any entry to view its content.
+        </p>
+      </div>
+      <div className="space-y-2">
+        {revisions.map((rev) => (
+          <div
+            key={rev.id}
+            className="border border-border rounded-lg overflow-hidden"
+          >
+            <button
+              className="w-full flex items-center gap-3 p-3 text-left hover:bg-muted/30 transition-colors"
+              onClick={() => setExpanded(expanded === rev.id ? null : rev.id)}
+            >
+              <div className="size-7 rounded-full bg-teal-500/15 flex items-center justify-center shrink-0">
+                <FileText className="size-3.5 text-teal-400" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium truncate">
+                    {SECTION_LABELS[rev.sectionKey] ?? rev.sectionKey}
+                  </span>
+                  <span className="text-xs text-muted-foreground shrink-0">
+                    {new Date(rev.createdAt).toLocaleString()}
+                  </span>
+                </div>
+                {rev.savedByName && (
+                  <div className="flex items-center gap-1 mt-0.5">
+                    <User className="size-3 text-muted-foreground" />
+                    <span className="text-xs text-muted-foreground">{rev.savedByName}</span>
+                  </div>
+                )}
+              </div>
+              {expanded === rev.id ? (
+                <ChevronDown className="size-4 text-muted-foreground shrink-0" />
+              ) : (
+                <ChevronRight className="size-4 text-muted-foreground shrink-0" />
+              )}
+            </button>
+            {expanded === rev.id && (
+              <div className="border-t border-border bg-muted/20 p-3">
+                <pre className="text-xs text-foreground whitespace-pre-wrap font-mono leading-relaxed max-h-64 overflow-y-auto">
+                  {rev.content || <span className="text-muted-foreground italic">(empty)</span>}
+                </pre>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Showing {revisions.length} revision{revisions.length !== 1 ? "s" : ""} across {Object.keys(grouped).length} section{Object.keys(grouped).length !== 1 ? "s" : ""}.
+      </p>
+    </div>
   );
 }

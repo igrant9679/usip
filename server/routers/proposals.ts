@@ -14,10 +14,14 @@ import {
   proposalSections,
   proposalMilestones,
   proposalFeedback,
+  proposalRevisions,
   tasks,
   notifications,
   workspaces,
+  opportunities,
+  sendingAccounts,
 } from "../../drizzle/schema";
+import { createEmailAdapter } from "../emailAdapter";
 import { getDb } from "../db";
 import { invokeLLM } from "../_core/llm";
 import { publicProcedure, router } from "../_core/trpc";
@@ -436,14 +440,12 @@ export const proposalsRouter = router({
         ? `<p style="margin:16px 0;padding:12px 16px;background:#f9fafb;border-left:3px solid #14b8a6;border-radius:4px;font-style:italic;color:#374151">${input.message.replace(/\n/g, "<br>")}</p>`
         : "";
 
-      // Send email (non-fatal — we still mark as sent even if email fails)
+      // ── Send email via team member's connected sending account (Unipile/SMTP) ──
+      // Falls back to workspace SMTP config if no connected account is found.
       let emailOk = false;
-      try {
-        const { sendWorkspaceEmail } = await import("../emailDelivery");
-        const result = await sendWorkspaceEmail(ctx.workspace.id, {
-          to: proposal.clientEmail,
-          subject: `${senderName} has shared a proposal with you: ${proposal.title}`,
-          html: `
+      let senderEmail = "";
+      const emailSubject = `${senderName} has shared a proposal with you: ${proposal.title}`;
+      const emailHtml = `
 <div style="font-family:sans-serif;max-width:560px;margin:0 auto;padding:24px;color:#111827">
   <div style="margin-bottom:24px">
     <span style="font-size:13px;font-weight:600;letter-spacing:0.05em;color:#14b8a6;text-transform:uppercase">LSI Media · USIP</span>
@@ -467,9 +469,35 @@ export const proposalsRouter = router({
     You can view the proposal and leave feedback without creating an account.
     If you did not expect this email, you can safely ignore it.
   </p>
-</div>`,
-        });
-        emailOk = result.ok;
+</div>`;
+      try {
+        // Prefer the first enabled connected sending account in the workspace
+        const [sendingAcc] = await db
+          .select()
+          .from(sendingAccounts)
+          .where(and(eq(sendingAccounts.workspaceId, ctx.workspace.id), eq(sendingAccounts.enabled, true)))
+          .limit(1);
+        if (sendingAcc) {
+          const adapter = createEmailAdapter(sendingAcc);
+          await adapter.sendEmail({
+            fromEmail: sendingAcc.fromEmail,
+            fromName: sendingAcc.fromName ?? senderName,
+            to: proposal.clientEmail!,
+            subject: emailSubject,
+            bodyHtml: emailHtml,
+          });
+          senderEmail = sendingAcc.fromEmail;
+          emailOk = true;
+        } else {
+          // Fallback to workspace SMTP config
+          const { sendWorkspaceEmail } = await import("../emailDelivery");
+          const result = await sendWorkspaceEmail(ctx.workspace.id, {
+            to: proposal.clientEmail!,
+            subject: emailSubject,
+            html: emailHtml,
+          });
+          emailOk = result.ok;
+        }
       } catch (_e) {
         // Non-fatal: mark as sent regardless
       }
@@ -480,10 +508,10 @@ export const proposalsRouter = router({
         .set({ status: "sent", sentAt: new Date() })
         .where(eq(proposals.id, input.id));
 
-       const deliveryNote = emailOk
-        ? `Email sent to ${proposal.clientEmail}`
-        : "Proposal marked as sent. Email delivery requires SMTP configuration in Settings → Email Delivery.";
-      return { ok: true, emailSent: emailOk, shareUrl, deliveryNote };
+      const deliveryNote = emailOk
+        ? `Email sent to ${proposal.clientEmail}${senderEmail ? ` from ${senderEmail}` : ""}`
+        : "Proposal marked as sent. Connect an email account in My Mailbox or configure SMTP in Settings → Email Delivery.";
+      return { ok: true, emailSent: emailOk, shareUrl, deliveryNote, senderEmail };
     }),
   /**
    * Accept a proposal internally (rep+). Marks status=accepted, creates a
@@ -533,7 +561,40 @@ export const proposalsRouter = router({
           relatedId: input.id,
         });
       }
-      return { ok: true, taskId };
+      // ── Auto-create or update Pipeline opportunity ──
+      let opportunityId = proposal.linkedOpportunityId ?? null;
+      if (proposal.accountId) {
+        const oppValue = proposal.budget ? String(proposal.budget) : "0";
+        if (opportunityId) {
+          // Update existing opportunity to "won" stage
+          await db
+            .update(opportunities)
+            .set({ stage: "won", winProb: 100, value: oppValue, updatedAt: new Date() })
+            .where(eq(opportunities.id, opportunityId));
+        } else {
+          // Create a new opportunity in "won" stage
+          const oppResult = await db.insert(opportunities).values({
+            workspaceId: ctx.workspace.id,
+            accountId: proposal.accountId,
+            name: proposal.title,
+            stage: "won",
+            value: oppValue,
+            winProb: 100,
+            ownerUserId: ctx.user.id,
+            closeDate: new Date(),
+            nextStep: `Kickoff: follow up on accepted proposal "${proposal.title}"`,
+          });
+          opportunityId = Number((oppResult as any)[0]?.insertId ?? 0) || null;
+          // Link the opportunity back to the proposal
+          if (opportunityId) {
+            await db
+              .update(proposals)
+              .set({ linkedOpportunityId: opportunityId })
+              .where(eq(proposals.id, input.id));
+          }
+        }
+      }
+      return { ok: true, taskId, opportunityId };
     }),
   /** Delete a proposal (manager+ only). */
   delete: managerProcedure
@@ -705,6 +766,76 @@ Write 2-4 paragraphs of professional proposal content for this section. Be speci
           relatedId: proposal.id,
         });
       }
-      return { ok: true, alreadyAccepted: false };
+      // ── Auto-create Pipeline opportunity ──
+      let opportunityId = proposal.linkedOpportunityId ?? null;
+      if (proposal.accountId) {
+        const oppValue = proposal.budget ? String(proposal.budget) : "0";
+        if (opportunityId) {
+          await db
+            .update(opportunities)
+            .set({ stage: "won", winProb: 100, value: oppValue, updatedAt: new Date() })
+            .where(eq(opportunities.id, opportunityId));
+        } else {
+          const oppResult = await db.insert(opportunities).values({
+            workspaceId: proposal.workspaceId,
+            accountId: proposal.accountId,
+            name: proposal.title,
+            stage: "won",
+            value: oppValue,
+            winProb: 100,
+            ownerUserId: ownerUserId ?? undefined,
+            closeDate: new Date(),
+            nextStep: `Kickoff: ${proposal.clientName} accepted the proposal via client portal.`,
+          });
+          opportunityId = Number((oppResult as any)[0]?.insertId ?? 0) || null;
+          if (opportunityId) {
+            await db
+              .update(proposals)
+              .set({ linkedOpportunityId: opportunityId })
+              .where(eq(proposals.id, proposal.id));
+          }
+        }
+      }
+      return { ok: true, alreadyAccepted: false, opportunityId };
+    }),
+  // ── Proposal revision history ─────────────────────────────────────────────
+  /**
+   * Snapshot the current content of a section into proposal_revisions.
+   * Called automatically when a section is saved.
+   */
+  saveRevision: repProcedure
+    .input(z.object({
+      proposalId: z.number(),
+      sectionKey: z.string(),
+      content: z.string(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
+      await getProposalOrThrow(db, input.proposalId, ctx.workspace.id);
+      await db.insert(proposalRevisions).values({
+        proposalId: input.proposalId,
+        sectionKey: input.sectionKey,
+        content: input.content,
+        savedByUserId: ctx.user.id,
+        savedByName: ctx.user.name ?? undefined,
+      });
+      return { ok: true };
+    }),
+  /**
+   * List revision history for a proposal, ordered newest-first.
+   */
+  listRevisions: repProcedure
+    .input(z.object({ proposalId: z.number() }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
+      await getProposalOrThrow(db, input.proposalId, ctx.workspace.id);
+      const rows = await db
+        .select()
+        .from(proposalRevisions)
+        .where(eq(proposalRevisions.proposalId, input.proposalId))
+        .orderBy(desc(proposalRevisions.createdAt));
+      return rows;
     }),
 });
