@@ -213,7 +213,13 @@ function OverviewTab({ proposal, onRefetch }: { proposal: any; onRefetch: () => 
           />
         )}
         {proposal.projectType && <InfoCard label="Project Type" value={proposal.projectType} icon={FileText} />}
-        {proposal.budget && <InfoCard label="Budget" value={`$${Number(proposal.budget).toLocaleString()}`} icon={DollarSign} />}
+        {proposal.budget && (
+          <InfoCard
+            label={proposal.linkedOpportunityId ? "Budget (synced to pipeline)" : "Budget"}
+            value={`$${Number(proposal.budget).toLocaleString()}`}
+            icon={DollarSign}
+          />
+        )}
         {proposal.rfpDeadline && <InfoCard label="RFP Deadline" value={new Date(proposal.rfpDeadline).toLocaleDateString()} icon={Calendar} />}
         {proposal.completionDate && <InfoCard label="Completion Date" value={new Date(proposal.completionDate).toLocaleDateString()} icon={Calendar} />}
       </div>
@@ -248,6 +254,11 @@ function OverviewTab({ proposal, onRefetch }: { proposal: any; onRefetch: () => 
             );
           })}
         </div>
+      </div>
+      {/* ── Activity Feed ── */}
+      <div>
+        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-3">Activity</p>
+        <ActivityFeed proposalId={proposal.id} />
       </div>
     </div>
   );
@@ -707,6 +718,23 @@ function ShareTab({ proposal, onRefetch }: { proposal: any; onRefetch: () => voi
               Add a client email address in the Overview tab to enable "Send to Client".
             </p>
           )}
+          {proposal.sentAt && (
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <CheckCircle2 className="size-3 text-emerald-400 shrink-0" />
+              Last sent {new Date(proposal.sentAt).toLocaleString()}
+              {proposal.clientEmail && (
+                <span className="text-muted-foreground/60">to {proposal.clientEmail}</span>
+              )}
+              <button
+                type="button"
+                onClick={() => setSendDialogOpen(true)}
+                disabled={!hasClientEmail}
+                className="ml-1 text-teal-400 hover:text-teal-300 underline underline-offset-2 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                Resend
+              </button>
+            </div>
+          )}
           <p className="text-xs text-muted-foreground">
             Regenerating the link will invalidate the old one.
           </p>
@@ -1112,6 +1140,88 @@ function PipelinePanel({ proposal, onRefetch }: { proposal: any; onRefetch: () =
           </DialogFooter>
         </DialogContent>
       </Dialog>
+    </div>
+  );
+}
+
+// ── Activity Feed ────────────────────────────────────────────────────────────
+function ActivityFeed({ proposalId }: { proposalId: number }) {
+  const { workspaceId } = useWorkspace();
+  const { data: events, isLoading } = trpc.proposals.listActivity.useQuery(
+    { proposalId },
+    { enabled: !!workspaceId },
+  );
+
+  const ACTIVITY_ICONS: Record<string, any> = {
+    system: Clock,
+    email: Send,
+    note: MessageSquare,
+    call: User,
+    meeting: Calendar,
+    stage_change: TrendingUp,
+  };
+
+  function getIcon(type: string, subject: string) {
+    if (subject.toLowerCase().includes("sent")) return Send;
+    if (subject.toLowerCase().includes("accepted")) return CheckCircle2;
+    if (subject.toLowerCase().includes("created")) return Plus;
+    if (subject.toLowerCase().includes("updated")) return Edit2;
+    if (subject.toLowerCase().includes("status")) return RotateCcw;
+    if (subject.toLowerCase().includes("restored")) return History;
+    if (subject.toLowerCase().includes("opportunity") || subject.toLowerCase().includes("pipeline")) return TrendingUp;
+    return ACTIVITY_ICONS[type] ?? Clock;
+  }
+
+  if (isLoading) return (
+    <div className="space-y-2">
+      {[1,2,3].map(i => <Skeleton key={i} className="h-12 rounded-lg" />)}
+    </div>
+  );
+
+  if (!events || events.length === 0) return (
+    <div className="text-center py-6 text-muted-foreground text-sm">
+      <Clock className="size-8 mx-auto mb-2 opacity-30" />
+      <p>No activity recorded yet.</p>
+      <p className="text-xs mt-1">Events like sends, status changes, and edits will appear here.</p>
+    </div>
+  );
+
+  return (
+    <div className="space-y-1">
+      {events.map((ev: any, idx: number) => {
+        const Icon = getIcon(ev.type, ev.subject ?? "");
+        return (
+          <div key={ev.id} className="flex gap-3 group">
+            {/* Timeline spine */}
+            <div className="flex flex-col items-center">
+              <div className="size-7 rounded-full bg-muted/60 border border-border flex items-center justify-center shrink-0 mt-0.5">
+                <Icon className="size-3.5 text-teal-400" />
+              </div>
+              {idx < events.length - 1 && (
+                <div className="w-px flex-1 bg-border mt-1 mb-1 min-h-[12px]" />
+              )}
+            </div>
+            {/* Content */}
+            <div className="pb-3 min-w-0 flex-1">
+              <p className="text-sm text-foreground leading-snug">{ev.subject}</p>
+              {ev.body && (
+                <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">{ev.body}</p>
+              )}
+              <div className="flex items-center gap-2 mt-1">
+                <span className="text-xs text-muted-foreground/70">
+                  {new Date(ev.occurredAt).toLocaleString()}
+                </span>
+                {ev.actorName && ev.actorName !== "System" && (
+                  <>
+                    <span className="text-muted-foreground/40 text-xs">·</span>
+                    <span className="text-xs text-muted-foreground/70">{ev.actorName}</span>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }

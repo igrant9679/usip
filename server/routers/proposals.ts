@@ -6,7 +6,7 @@
  *         duplicate, sendToClient, acceptProposal, acceptByToken
  */
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, or } from "drizzle-orm";
 import crypto from "crypto";
 import { z } from "zod";
 import {
@@ -20,6 +20,8 @@ import {
   workspaces,
   opportunities,
   sendingAccounts,
+  activities,
+  users,
 } from "../../drizzle/schema";
 import { createEmailAdapter } from "../emailAdapter";
 import { getDb } from "../db";
@@ -87,6 +89,38 @@ async function getMilestones(db: Awaited<ReturnType<typeof getDb>>, proposalId: 
 
 function generateShareToken() {
   return crypto.randomBytes(32).toString("hex");
+}
+
+/**
+ * Insert a system activity row for a proposal event.
+ * Non-fatal — errors are silently swallowed so they never break the main flow.
+ */
+async function logProposalActivity(
+  db: Awaited<ReturnType<typeof getDb>>,
+  opts: {
+    workspaceId: number;
+    proposalId: number;
+    actorUserId?: number;
+    actorName?: string;
+    subject: string;
+    body?: string;
+  },
+) {
+  if (!db) return;
+  try {
+    await db.insert(activities).values({
+      workspaceId: opts.workspaceId,
+      type: "system",
+      relatedType: "proposal",
+      relatedId: opts.proposalId,
+      subject: opts.subject,
+      body: opts.body ?? null,
+      actorUserId: opts.actorUserId ?? null,
+      occurredAt: new Date(),
+    });
+  } catch (_e) {
+    // non-fatal
+  }
 }
 
 // ── Router ────────────────────────────────────────────────────────────────────
@@ -204,6 +238,32 @@ export const proposalsRouter = router({
         patch.completionDate = completionDate ? new Date(completionDate) : null;
       if (budget !== undefined) patch.budget = budget != null ? String(budget) : null;
       await db.update(proposals).set(patch).where(eq(proposals.id, id));
+      // Sync budget to linked opportunity if budget changed
+      if (budget !== undefined && budget != null) {
+        const [updated] = await db
+          .select({ linkedOpportunityId: proposals.linkedOpportunityId })
+          .from(proposals)
+          .where(eq(proposals.id, id))
+          .limit(1);
+        if (updated?.linkedOpportunityId) {
+          await db
+            .update(opportunities)
+            .set({ value: String(budget), updatedAt: new Date() })
+            .where(eq(opportunities.id, updated.linkedOpportunityId));
+        }
+      }
+      // Log activity
+      const changedFields = Object.keys(patch).filter((k) => k !== "updatedAt");
+      if (changedFields.length > 0) {
+        await logProposalActivity(db, {
+          workspaceId: ctx.workspace.id,
+          proposalId: id,
+          actorUserId: ctx.user.id,
+          actorName: ctx.user.name ?? undefined,
+          subject: `Proposal updated`,
+          body: `Fields changed: ${changedFields.join(", ")}`,
+        });
+      }
       return { ok: true };
     }),
 
@@ -229,6 +289,13 @@ export const proposalsRouter = router({
       if (input.status === "sent") patch.sentAt = new Date();
       if (input.status === "accepted") patch.acceptedAt = new Date();
       await db.update(proposals).set(patch).where(eq(proposals.id, input.id));
+      await logProposalActivity(db, {
+        workspaceId: ctx.workspace.id,
+        proposalId: input.id,
+        actorUserId: ctx.user.id,
+        actorName: ctx.user.name ?? undefined,
+        subject: `Status changed to "${input.status}"`,
+      });
       return { ok: true };
     }),
 
@@ -395,6 +462,14 @@ export const proposalsRouter = router({
         );
       }
 
+      // Log activity
+      await logProposalActivity(db, {
+        workspaceId: ctx.workspace.id,
+        proposalId: newId,
+        actorUserId: ctx.user.id,
+        actorName: ctx.user.name ?? undefined,
+        subject: `Proposal created: "${input.title}"`,
+      });
       return { id: newId };
     }),
 
@@ -523,6 +598,16 @@ export const proposalsRouter = router({
       const deliveryNote = emailOk
         ? `Email sent to ${proposal.clientEmail}${senderEmail ? ` from ${senderEmail}` : ""}`
         : "Proposal marked as sent. Connect an email account in My Mailbox or configure SMTP in Settings → Email Delivery.";
+      await logProposalActivity(db, {
+        workspaceId: ctx.workspace.id,
+        proposalId: input.id,
+        actorUserId: ctx.user.id,
+        actorName: ctx.user.name ?? undefined,
+        subject: `Proposal sent to ${proposal.clientEmail}`,
+        body: emailOk
+          ? `Email delivered${senderEmail ? ` from ${senderEmail}` : ""}.`
+          : "Proposal marked as sent. Email delivery pending SMTP/account configuration.",
+      });
       return { ok: true, emailSent: emailOk, shareUrl, deliveryNote, senderEmail };
     }),
   /**
@@ -606,6 +691,14 @@ export const proposalsRouter = router({
           }
         }
       }
+      await logProposalActivity(db, {
+        workspaceId: ctx.workspace.id,
+        proposalId: input.id,
+        actorUserId: ctx.user.id,
+        actorName: ctx.user.name ?? undefined,
+        subject: `Proposal accepted`,
+        body: `Accepted internally by ${ctx.user.name ?? "a team member"}.`,
+      });
       return { ok: true, taskId, opportunityId };
     }),
   /** Delete a proposal (manager+ only). */
@@ -942,5 +1035,48 @@ Write 2-4 paragraphs of professional proposal content for this section. Be speci
         .where(eq(proposalRevisions.proposalId, input.proposalId))
         .orderBy(desc(proposalRevisions.createdAt));
       return rows;
+    }),
+  /**
+   * List activity feed for a proposal (system events + manual notes).
+   * Returns newest-first, enriched with actor display name.
+   */
+  listActivity: repProcedure
+    .input(z.object({ proposalId: z.number() }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
+      await getProposalOrThrow(db, input.proposalId, ctx.workspace.id);
+      const rows = await db
+        .select({
+          id: activities.id,
+          type: activities.type,
+          subject: activities.subject,
+          body: activities.body,
+          actorUserId: activities.actorUserId,
+          occurredAt: activities.occurredAt,
+        })
+        .from(activities)
+        .where(
+          and(
+            eq(activities.workspaceId, ctx.workspace.id),
+            eq(activities.relatedType, "proposal"),
+            eq(activities.relatedId, input.proposalId),
+          ),
+        )
+        .orderBy(desc(activities.occurredAt));
+      // Enrich with actor names
+      const actorIds = [...new Set(rows.map((r) => r.actorUserId).filter(Boolean) as number[])];
+      let nameMap: Map<number, string> = new Map();
+      if (actorIds.length > 0) {
+        const userRows = await db
+          .select({ id: users.id, name: users.name })
+          .from(users)
+          .where(or(...actorIds.map((id) => eq(users.id, id))));
+        nameMap = new Map(userRows.map((u) => [u.id, u.name ?? "Unknown"]));
+      }
+      return rows.map((r) => ({
+        ...r,
+        actorName: r.actorUserId ? (nameMap.get(r.actorUserId) ?? "System") : "System",
+      }));
     }),
 });

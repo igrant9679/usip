@@ -1481,13 +1481,13 @@
 - [x] Tests: 799/799 passing — all 36 test files pass
 
 ## Phase A — Enhancements (round 5)
-- [ ] Server: proposals.restoreRevision — copy a revision's content back into proposalSections (upsert) and snapshot a new revision marked as "restored"
-- [ ] Server: proposals.linkOpportunity — link/unlink an existing opportunity to a proposal (set/clear linkedOpportunityId)
-- [ ] Server: proposals.listSendingAccounts — return enabled sending accounts for the workspace (id, name, fromEmail, provider)
-- [ ] UI: History tab — "Restore" button on each expanded revision entry; confirmation dialog; success toast + section content refresh
-- [ ] UI: Overview tab — Pipeline panel: show linked opportunity details (name, stage, value) with "View in Pipeline" link; "Link Opportunity" button to search and link an existing one; "Create & Link" button to auto-create a won opportunity
-- [ ] UI: Share tab — Send to Client dialog: account picker dropdown (lists connected sending accounts); "Preview Email" toggle showing the rendered HTML; retry button when last send failed
-- [ ] Tests: 799+ passing after all changes
+- [x] Server: proposals.restoreRevision — copy a revision's content back into proposalSections (upsert) and snapshot a new revision marked as "restored"
+- [x] Server: proposals.linkOpportunity — link/unlink an existing opportunity to a proposal (set/clear linkedOpportunityId)
+- [x] Server: proposals.listSendingAccounts — return enabled sending accounts for the workspace (id, name, fromEmail, provider)
+- [x] UI: History tab — "Restore" button on each expanded revision entry; confirmation dialog; success toast + section content refresh
+- [x] UI: Overview tab — Pipeline panel: show linked opportunity details (name, stage, value) with "View in Pipeline" link; "Link Opportunity" button to search and link an existing one; "Create & Link" button to auto-create a won opportunity
+- [x] UI: Share tab — Send to Client dialog: account picker dropdown (lists connected sending accounts); "Preview Email" toggle showing the rendered HTML; retry button when last send failed
+- [x] Tests: 799/799 passing after all changes
 
 ## Phase A — Enhancements (round 5 COMPLETED)
 
@@ -1499,3 +1499,14 @@
 - [x] UI: OverviewTab — PipelinePanel replaces simple InfoCard: shows linked opportunity with Unlink button, or Link Existing / Create & Link buttons when unlinked
 - [x] UI: PipelinePanel — Link Existing dialog with search and opportunity list
 - [x] UI: ShareTab — account picker dropdown (auto or specific account), email preview iframe toggle
+
+## Phase A — Enhancements (round 6) COMPLETED
+
+- [x] Server: proposals.listActivity — query activities table filtered by entityType=proposal + entityId, return newest-first with actor name
+- [x] Server: logProposalActivity helper — insert a new activity row for a proposal event (used internally by other procedures)
+- [x] Server: auto-log activity on key proposal events: created, sent, accepted, status changed, proposal updated
+- [x] Server: proposals.update — when budget changes and linkedOpportunityId is set, sync the opportunity value
+- [x] UI: OverviewTab — Activity Feed panel below PipelinePanel showing chronological events with icons, actor, and timestamp
+- [x] UI: ShareTab — last-sent timestamp with recipient email shown below portal link; "Resend" inline link opens Send to Client dialog
+- [x] UI: OverviewTab — budget InfoCard label changes to "Budget (synced to pipeline)" when linkedOpportunityId is set
+- [x] Tests: 799/799 passing after all changes
