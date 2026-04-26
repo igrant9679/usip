@@ -28,6 +28,9 @@ import { trpc } from "@/lib/trpc";
 import {
   Activity,
   ArrowLeft,
+  AtSign,
+  Download,
+  RefreshCcw,
   Bot,
   Brain,
   CheckCircle2,
@@ -457,6 +460,10 @@ function ProspectNotes({ prospectId }: { prospectId: number }) {
   const [filterCategory, setFilterCategory] = useState<string>("all");
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editBody, setEditBody] = useState("");
+  const { data: workspaceMembers } = trpc.are.prospects.getWorkspaceMembers.useQuery();
+  const [mentionQuery, setMentionQuery] = useState("");
+  const [showMentionPicker, setShowMentionPicker] = useState(false);
+  const [mentionAnchor, setMentionAnchor] = useState<number>(-1);
 
   const invalidate = () => utils.are.prospects.listNotes.invalidate({ prospectId });
 
@@ -533,13 +540,67 @@ function ProspectNotes({ prospectId }: { prospectId: number }) {
             </button>
           ))}
         </div>
-        <Textarea
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          placeholder="Add a note about this prospect…"
-          className="text-sm min-h-[72px] resize-none"
-          maxLength={4000}
-        />
+        <div className="relative">
+          <Textarea
+            value={draft}
+            onChange={(e) => {
+              const val = e.target.value;
+              setDraft(val);
+              // Detect @mention trigger
+              const cursor = e.target.selectionStart ?? val.length;
+              const textBefore = val.slice(0, cursor);
+              const atIdx = textBefore.lastIndexOf("@");
+              if (atIdx !== -1 && !textBefore.slice(atIdx).includes(" ")) {
+                setMentionAnchor(atIdx);
+                setMentionQuery(textBefore.slice(atIdx + 1));
+                setShowMentionPicker(true);
+              } else {
+                setShowMentionPicker(false);
+                setMentionAnchor(-1);
+              }
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") setShowMentionPicker(false);
+            }}
+            placeholder="Add a note… type @ to mention a teammate"
+            className="text-sm min-h-[72px] resize-none"
+            maxLength={4000}
+          />
+          {showMentionPicker && (workspaceMembers ?? []).filter(m =>
+            !mentionQuery || m.name?.toLowerCase().includes(mentionQuery.toLowerCase())
+          ).length > 0 && (
+            <div className="absolute z-50 bottom-full mb-1 left-0 w-56 rounded-xl border bg-popover shadow-lg overflow-hidden">
+              <div className="px-2 py-1 text-[10px] text-muted-foreground border-b flex items-center gap-1">
+                <AtSign className="size-3" /> Mention a teammate
+              </div>
+              {(workspaceMembers ?? [])
+                .filter(m => !mentionQuery || m.name?.toLowerCase().includes(mentionQuery.toLowerCase()))
+                .slice(0, 6)
+                .map((m) => (
+                  <button
+                    key={m.userId}
+                    type="button"
+                    className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-accent transition-colors text-left"
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      // Replace the @query with @name
+                      const before = draft.slice(0, mentionAnchor);
+                      const after = draft.slice(mentionAnchor + mentionQuery.length + 1);
+                      setDraft(before + "@" + m.name + " " + after);
+                      setShowMentionPicker(false);
+                      setMentionQuery("");
+                    }}
+                  >
+                    <div className="size-5 rounded-full bg-primary/10 flex items-center justify-center text-[10px] font-medium text-primary shrink-0">
+                      {(m.name ?? "?")[0].toUpperCase()}
+                    </div>
+                    <span className="truncate">{m.name}</span>
+                    {m.title && <span className="text-muted-foreground truncate text-[10px]">{m.title}</span>}
+                  </button>
+                ))}
+            </div>
+          )}
+        </div>
         <div className="flex items-center justify-between">
           <span className="text-[10px] text-muted-foreground">{draft.length}/4000</span>
           <Button
@@ -593,7 +654,15 @@ function ProspectNotes({ prospectId }: { prospectId: number }) {
               ) : (
                 <div className="flex items-start gap-2">
                   {note.isPinned && <Pin className="size-3 text-amber-500 mt-0.5 shrink-0" />}
-                  <p className="text-xs leading-relaxed flex-1 whitespace-pre-wrap">{note.body}</p>
+                  <p className="text-xs leading-relaxed flex-1 whitespace-pre-wrap">
+                    {note.body.split(/(@[\w.\- ]+)/).map((part, i) =>
+                      part.startsWith("@") ? (
+                        <span key={i} className="inline-flex items-center gap-0.5 px-1 py-0.5 rounded bg-violet-500/10 text-violet-600 font-medium text-[10px]">
+                          <AtSign className="size-2.5" />{part.slice(1)}
+                        </span>
+                      ) : part
+                    )}
+                  </p>
                   <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
                     <button
                       className="p-1 rounded hover:bg-muted transition-colors"
@@ -648,6 +717,34 @@ export default function ARECampaignDetail() {
   const { data: signals } = trpc.are.execution.getSignalLog.useQuery({ campaignId, limit: 50 });
   const { data: abVariants } = trpc.are.prospects.getAbVariants.useQuery({ campaignId });
   const { data: rejectionStats } = trpc.are.prospects.getRejectionStats.useQuery({ campaignId });
+  const { data: csvData, refetch: fetchCsv } = trpc.are.prospects.exportRejections.useQuery(
+    { campaignId },
+    { enabled: false }
+  );
+  const reEvaluate = trpc.are.prospects.reEvaluate.useMutation({
+    onSuccess: (d) => {
+      toast.success(
+        d.newStatus === "pending"
+          ? `Re-qualified! New ICP score: ${d.newScore}`
+          : `Still below threshold. New score: ${d.newScore}`
+      );
+      utils.are.prospects.getRejectionStats.invalidate({ campaignId });
+      utils.are.prospects.list.invalidate({ campaignId });
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const handleExportCsv = async () => {
+    const result = await fetchCsv();
+    if (!result.data?.csv) { toast.error("No data to export"); return; }
+    const blob = new Blob([result.data.csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `rejections-campaign-${campaignId}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success(`Exported ${result.data.count} rejections`);
+  };
 
   const [selectedProspectId, setSelectedProspectId] = useState<number | null>(null);
   const [dossierOpen, setDossierOpen] = useState(false);
@@ -1294,10 +1391,21 @@ export default function ARECampaignDetail() {
               />
             ) : (
               <div className="space-y-2">
-                <p className="text-xs text-muted-foreground mb-3">
-                  {rejectionStats?.total} prospect{(rejectionStats?.total ?? 0) !== 1 ? "s" : ""} rejected across this campaign.
-                  Use this log to refine your ICP or adjust scraper sources.
-                </p>
+                <div className="flex items-center justify-between mb-3">
+                  <p className="text-xs text-muted-foreground">
+                    {rejectionStats?.total} prospect{(rejectionStats?.total ?? 0) !== 1 ? "s" : ""} rejected.
+                    Use this log to refine your ICP or adjust scraper sources.
+                  </p>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="text-xs h-7 gap-1.5"
+                    onClick={handleExportCsv}
+                  >
+                    <Download className="size-3" />
+                    Export CSV
+                  </Button>
+                </div>
                 {(rejectionStats?.items ?? []).map((item: any) => (
                   <div key={item.id} className="flex items-start gap-3 rounded-xl border px-3 py-2.5 bg-card">
                     <XCircle className="size-4 text-destructive/60 mt-0.5 shrink-0" />
@@ -1323,6 +1431,20 @@ export default function ARECampaignDetail() {
                           {new Date(item.rejectedAt).toLocaleDateString([], { month: "short", day: "numeric" })}
                         </div>
                       )}
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="text-[10px] h-6 px-2 gap-1 text-violet-600 hover:text-violet-700 hover:bg-violet-500/10 mt-0.5"
+                        onClick={() => reEvaluate.mutate({ prospectId: item.id })}
+                        disabled={reEvaluate.isPending}
+                      >
+                        {reEvaluate.isPending ? (
+                          <Loader2 className="size-3 animate-spin" />
+                        ) : (
+                          <RefreshCcw className="size-3" />
+                        )}
+                        Re-evaluate
+                      </Button>
                     </div>
                   </div>
                 ))}

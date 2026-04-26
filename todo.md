@@ -1748,3 +1748,13 @@
 - [x] UI: Reject dialog — pre-built reason templates (chips)
 - [x] UI: Campaign Detail — Rejection Analytics card in overview stats row
 - [x] UI: Campaign Detail — Rejected tab showing audit trail of all rejected prospects
+
+## Round 24 — Export CSV, Re-evaluate, @mention
+- [x] Server: exportRejections procedure (returns CSV string)
+- [x] Server: reEvaluate procedure (re-runs ICP match score on rejected prospect)
+- [x] Server: addNote updated to parse @mentions and create mention notifications
+- [x] Server: getWorkspaceMembers procedure on are.prospects for @mention picker
+- [x] UI: Export CSV button on Rejections tab
+- [x] UI: Re-evaluate action button on each rejection row
+- [x] UI: @mention picker in ProspectNotes textarea
+- [x] UI: Mentioned users shown as chips in note body
