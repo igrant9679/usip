@@ -2299,6 +2299,7 @@ export const proposals = mysqlTable(
     shareToken: varchar("shareToken", { length: 128 }).unique(),
     sentAt: timestamp("sentAt"),
     emailOpenedAt: timestamp("emailOpenedAt"),
+    emailClickedAt: timestamp("emailClickedAt"),
     acceptedAt: timestamp("acceptedAt"),
     // Pipeline integration
     linkedOpportunityId: int("linkedOpportunityId"),  // fk to opportunities

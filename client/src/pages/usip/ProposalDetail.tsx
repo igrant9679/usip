@@ -57,6 +57,8 @@ import {
   Unlink,
   ExternalLink,
   RefreshCw,
+  MousePointerClick,
+  AlertCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Shell } from "@/components/usip/Shell";
@@ -222,6 +224,15 @@ function OverviewTab({ proposal, onRefetch }: { proposal: any; onRefetch: () => 
         )}
         {proposal.rfpDeadline && <InfoCard label="RFP Deadline" value={new Date(proposal.rfpDeadline).toLocaleDateString()} icon={Calendar} />}
         {proposal.completionDate && <InfoCard label="Completion Date" value={new Date(proposal.completionDate).toLocaleDateString()} icon={Calendar} />}
+        {proposal.sentAt && (
+          <InfoCard label="Sent to Client" value={new Date(proposal.sentAt).toLocaleString()} icon={Send} />
+        )}
+        {proposal.emailOpenedAt && (
+          <InfoCard label="Email First Opened" value={new Date(proposal.emailOpenedAt).toLocaleString()} icon={Mail} />
+        )}
+        {proposal.emailClickedAt && (
+          <InfoCard label="Link First Clicked" value={new Date(proposal.emailClickedAt).toLocaleString()} icon={MousePointerClick} />
+        )}
       </div>
       {/* ── Pipeline Integration Panel ── */}
       <PipelinePanel proposal={proposal} onRefetch={onRefetch} />
@@ -1147,11 +1158,11 @@ function PipelinePanel({ proposal, onRefetch }: { proposal: any; onRefetch: () =
 // ── Activity Feed ────────────────────────────────────────────────────────────
 function ActivityFeed({ proposalId }: { proposalId: number }) {
   const { workspaceId } = useWorkspace();
+  const [activeFilter, setActiveFilter] = useState<string>("all");
   const { data: events, isLoading } = trpc.proposals.listActivity.useQuery(
     { proposalId },
     { enabled: !!workspaceId },
   );
-
   const ACTIVITY_ICONS: Record<string, any> = {
     system: Clock,
     email: Send,
@@ -1160,28 +1171,52 @@ function ActivityFeed({ proposalId }: { proposalId: number }) {
     meeting: Calendar,
     stage_change: TrendingUp,
   };
-
   function getIcon(type: string, subject: string) {
-    if (subject.toLowerCase().includes("sent")) return Send;
-    if (subject.toLowerCase().includes("accepted")) return CheckCircle2;
-    if (subject.toLowerCase().includes("created")) return Plus;
-    if (subject.toLowerCase().includes("updated")) return Edit2;
-    if (subject.toLowerCase().includes("status")) return RotateCcw;
-    if (subject.toLowerCase().includes("restored")) return History;
-    if (subject.toLowerCase().includes("opportunity") || subject.toLowerCase().includes("pipeline")) return TrendingUp;
+    const s = subject.toLowerCase();
+    if (s.includes("opened the proposal email")) return Mail;
+    if (s.includes("clicked the proposal link")) return MousePointerClick;
+    if (s.includes("sent")) return Send;
+    if (s.includes("accepted")) return CheckCircle2;
+    if (s.includes("created")) return Plus;
+    if (s.includes("updated")) return Edit2;
+    if (s.includes("status")) return RotateCcw;
+    if (s.includes("restored")) return History;
+    if (s.includes("revision")) return AlertCircle;
+    if (s.includes("opportunity") || s.includes("pipeline") || s.includes("deal")) return TrendingUp;
+    if (type === "note") return MessageSquare;
+    if (type === "email") return Send;
     return ACTIVITY_ICONS[type] ?? Clock;
+  }
+  function getIconColor(type: string, subject: string) {
+    const s = subject.toLowerCase();
+    if (s.includes("accepted")) return "text-emerald-400";
+    if (s.includes("opened") || s.includes("clicked")) return "text-blue-400";
+    if (s.includes("revision") || s.includes("not_accepted")) return "text-amber-400";
+    if (s.includes("opportunity") || s.includes("pipeline")) return "text-purple-400";
+    if (type === "note") return "text-sky-400";
+    return "text-teal-400";
   }
   function isPipelineEvent(subject: string) {
     const s = subject.toLowerCase();
     return s.includes("opportunity") || s.includes("pipeline") || s.includes("deal");
   }
-
+  const FILTER_CHIPS = [
+    { key: "all", label: "All" },
+    { key: "email", label: "Email" },
+    { key: "note", label: "Notes" },
+    { key: "system", label: "System" },
+    { key: "stage_change", label: "Stage" },
+  ];
+  const filtered = events
+    ? activeFilter === "all"
+      ? events
+      : events.filter((ev: any) => ev.type === activeFilter)
+    : [];
   if (isLoading) return (
     <div className="space-y-2">
       {[1,2,3].map(i => <Skeleton key={i} className="h-12 rounded-lg" />)}
     </div>
   );
-
   if (!events || events.length === 0) return (
     <div className="text-center py-6 text-muted-foreground text-sm">
       <Clock className="size-8 mx-auto mb-2 opacity-30" />
@@ -1189,54 +1224,83 @@ function ActivityFeed({ proposalId }: { proposalId: number }) {
       <p className="text-xs mt-1">Events like sends, status changes, and edits will appear here.</p>
     </div>
   );
-
   return (
-    <div className="space-y-1">
-      {events.map((ev: any, idx: number) => {
-        const Icon = getIcon(ev.type, ev.subject ?? "");
-        return (
-          <div key={ev.id} className="flex gap-3 group">
-            {/* Timeline spine */}
-            <div className="flex flex-col items-center">
-              <div className="size-7 rounded-full bg-muted/60 border border-border flex items-center justify-center shrink-0 mt-0.5">
-                <Icon className="size-3.5 text-teal-400" />
+    <div className="space-y-3">
+      {/* Filter chips */}
+      <div className="flex flex-wrap gap-1.5">
+        {FILTER_CHIPS.map(chip => {
+          const count = chip.key === "all" ? events.length : events.filter((ev: any) => ev.type === chip.key).length;
+          if (chip.key !== "all" && count === 0) return null;
+          return (
+            <button
+              key={chip.key}
+              onClick={() => setActiveFilter(chip.key)}
+              className={cn(
+                "inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium border transition-all",
+                activeFilter === chip.key
+                  ? "bg-teal-500/20 border-teal-500/50 text-teal-300"
+                  : "border-border text-muted-foreground hover:border-teal-500/30 hover:text-foreground",
+              )}
+            >
+              {chip.label}
+              <span className="opacity-60">{count}</span>
+            </button>
+          );
+        })}
+      </div>
+      {filtered.length === 0 ? (
+        <div className="text-center py-4 text-muted-foreground text-xs">
+          No {activeFilter} events recorded.
+        </div>
+      ) : (
+        <div className="space-y-1">
+          {filtered.map((ev: any, idx: number) => {
+            const Icon = getIcon(ev.type, ev.subject ?? "");
+            const iconColor = getIconColor(ev.type, ev.subject ?? "");
+            return (
+              <div key={ev.id} className="flex gap-3 group">
+                {/* Timeline spine */}
+                <div className="flex flex-col items-center">
+                  <div className="size-7 rounded-full bg-muted/60 border border-border flex items-center justify-center shrink-0 mt-0.5">
+                    <Icon className={cn("size-3.5", iconColor)} />
+                  </div>
+                  {idx < filtered.length - 1 && (
+                    <div className="w-px flex-1 bg-border mt-1 mb-1 min-h-[12px]" />
+                  )}
+                </div>
+                {/* Content */}
+                <div className="pb-3 min-w-0 flex-1">
+                  {isPipelineEvent(ev.subject ?? "") ? (
+                    <Link href="/pipeline" className="text-sm text-teal-400 hover:text-teal-300 hover:underline underline-offset-2 leading-snug inline-flex items-center gap-1">
+                      {ev.subject}
+                      <ExternalLink className="size-3 shrink-0" />
+                    </Link>
+                  ) : (
+                    <p className="text-sm text-foreground leading-snug">{ev.subject}</p>
+                  )}
+                  {ev.body && (
+                    <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">{ev.body}</p>
+                  )}
+                  <div className="flex items-center gap-2 mt-1">
+                    <span className="text-xs text-muted-foreground/70">
+                      {new Date(ev.occurredAt).toLocaleString()}
+                    </span>
+                    {ev.actorName && ev.actorName !== "System" && (
+                      <>
+                        <span className="text-muted-foreground/40 text-xs">·</span>
+                        <span className="text-xs text-muted-foreground/70">{ev.actorName}</span>
+                      </>
+                    )}
+                  </div>
+                </div>
               </div>
-              {idx < events.length - 1 && (
-                <div className="w-px flex-1 bg-border mt-1 mb-1 min-h-[12px]" />
-              )}
-            </div>
-            {/* Content */}
-            <div className="pb-3 min-w-0 flex-1">
-              {isPipelineEvent(ev.subject ?? "") ? (
-                <Link href="/pipeline" className="text-sm text-teal-400 hover:text-teal-300 hover:underline underline-offset-2 leading-snug inline-flex items-center gap-1">
-                  {ev.subject}
-                  <ExternalLink className="size-3 shrink-0" />
-                </Link>
-              ) : (
-                <p className="text-sm text-foreground leading-snug">{ev.subject}</p>
-              )}
-              {ev.body && (
-                <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">{ev.body}</p>
-              )}
-              <div className="flex items-center gap-2 mt-1">
-                <span className="text-xs text-muted-foreground/70">
-                  {new Date(ev.occurredAt).toLocaleString()}
-                </span>
-                {ev.actorName && ev.actorName !== "System" && (
-                  <>
-                    <span className="text-muted-foreground/40 text-xs">·</span>
-                    <span className="text-xs text-muted-foreground/70">{ev.actorName}</span>
-                  </>
-                )}
-              </div>
-            </div>
-          </div>
-        );
-      })}
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
-
 // ── History Tab ───────────────────────────────────────────────────────────────
 const SECTION_LABELS: Record<string, string> = {
   executive_summary: "Executive Summary",

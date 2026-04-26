@@ -535,7 +535,7 @@ export const proposalsRouter = router({
   </p>
   ${personalNote}
   <p style="margin:24px 0">
-    <a href="${shareUrl}" style="display:inline-block;background:#0f766e;color:#ffffff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px">
+    <a href="${input.origin}/api/track/proposal-click/${token}?dest=${encodeURIComponent(shareUrl)}" style="display:inline-block;background:#0f766e;color:#ffffff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px">
       View Proposal →
     </a>
   </p>

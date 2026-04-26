@@ -277,6 +277,57 @@ export function registerEmailTrackingRoutes(app: Express) {
       console.error("[ProposalTracking] open event failed:", e);
     }
   });
+
+  /**
+   * Proposal email click tracker — called when the client clicks the "View Proposal" CTA.
+   * Logs a "Client clicked the proposal link" activity, sets emailClickedAt on first click,
+   * then redirects to the actual portal URL.
+   */
+  app.get("/api/track/proposal-click/:token", async (req: Request, res: Response) => {
+    const { token } = req.params;
+    const { dest } = req.query as { dest?: string };
+    // Redirect immediately — tracking is best-effort
+    const fallback = dest || "/";
+    res.redirect(302, fallback);
+    if (!token) return;
+    try {
+      const db = await getDb();
+      if (!db) return;
+      const { proposals, activities } = await import("../drizzle/schema");
+      const { eq } = await import("drizzle-orm");
+      const [proposal] = await db
+        .select({
+          id: proposals.id,
+          workspaceId: proposals.workspaceId,
+          title: proposals.title,
+          emailClickedAt: proposals.emailClickedAt,
+        })
+        .from(proposals)
+        .where(eq(proposals.shareToken, token))
+        .limit(1);
+      if (!proposal) return;
+      // Set emailClickedAt only on first click
+      if (!proposal.emailClickedAt) {
+        await db
+          .update(proposals)
+          .set({ emailClickedAt: new Date() })
+          .where(eq(proposals.id, proposal.id));
+      }
+      // Log the click event as an activity
+      await db.insert(activities).values({
+        workspaceId: proposal.workspaceId,
+        relatedType: "proposal",
+        relatedId: proposal.id,
+        type: "system",
+        subject: "Client clicked the proposal link",
+        body: `The client clicked the "View Proposal" button in the email for "${proposal.title}".`,
+        actorUserId: null,
+        occurredAt: new Date(),
+      });
+    } catch (e) {
+      console.error("[ProposalTracking] click event failed:", e);
+    }
+  });
 }
 
 /* ─────────────────────────────────────────────────────────────────────────

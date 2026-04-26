@@ -1528,3 +1528,21 @@
 - [x] UI: ActivityFeed — isPipelineEvent helper detects pipeline/opportunity/deal keywords
 - [x] UI: ActivityFeed — pipeline events render as teal Link to /pipeline with ExternalLink icon
 - [x] Data: Seeded 16 realistic activity events for Meridian Health proposal (id=1) spanning 2 weeks
+
+## Phase A — Enhancements (round 8 IN PROGRESS)
+- [ ] Server: /api/track/proposal-click/:token endpoint — logs "Client clicked the proposal link" activity then redirects to portal
+- [ ] Server: sendToClient email CTA — wrap "View Proposal →" button with click-tracking redirect URL
+- [ ] Server: proposals.get — include emailOpenedAt and emailClickedAt in returned proposal fields
+- [ ] UI: ProposalDetail Overview — "First Opened" InfoCard showing emailOpenedAt timestamp
+- [ ] UI: ProposalDetail Overview — "First Clicked" InfoCard showing emailClickedAt timestamp
+- [ ] UI: ActivityFeed — type filter chips (All / Email / Note / System / Stage)
+- [ ] UI: ActivityFeed — richer icon set: Mail for email opens/clicks, CheckCircle for accepted, AlertCircle for revision
+
+## Phase A — Enhancements (round 8 COMPLETED)
+- [x] Schema: add emailClickedAt timestamp column to proposals table (migration 0036)
+- [x] Server: /api/track/proposal-click/:token endpoint — 302 redirect to ?dest=, logs activity, sets emailClickedAt on first click
+- [x] Server: sendToClient email CTA — "View Proposal →" button now routes through /api/track/proposal-click/:token?dest=<shareUrl>
+- [x] Server: proposals.get — emailOpenedAt and emailClickedAt already returned via getProposalOrThrow (select *)
+- [x] UI: ProposalDetail Overview — "Sent to Client" InfoCard (sentAt), "Email First Opened" InfoCard (emailOpenedAt), "Link First Clicked" InfoCard (emailClickedAt) — all conditional on field being set
+- [x] UI: ActivityFeed — type filter chips (All / Email / Notes / System / Stage) with live counts, hidden when count=0
+- [x] UI: ActivityFeed — richer icon set: Mail for email opens, MousePointerClick for link clicks, AlertCircle for revisions, color-coded per event type
