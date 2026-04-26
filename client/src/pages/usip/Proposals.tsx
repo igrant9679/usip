@@ -38,6 +38,7 @@ import {
   XCircle,
   RotateCcw,
   Eye,
+  AlertTriangle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -417,7 +418,12 @@ export default function Proposals() {
         !search ||
         p.title.toLowerCase().includes(search.toLowerCase()) ||
         p.clientName.toLowerCase().includes(search.toLowerCase());
-      const matchStatus = statusFilter === "all" || p.status === statusFilter;
+      const matchStatus =
+        statusFilter === "all"
+          ? true
+          : statusFilter === "stale"
+          ? !!(p as any).isStale
+          : p.status === statusFilter;
       return matchSearch && matchStatus;
     });
   }, [list, search, statusFilter]);
@@ -519,6 +525,25 @@ export default function Proposals() {
               </button>
             );
           })}
+          {/* Stale chip */}
+          {(() => {
+            const staleCount = list?.filter((p) => !!(p as any).isStale).length ?? 0;
+            if (staleCount === 0 && statusFilter !== "stale") return null;
+            return (
+              <button
+                onClick={() => setStatusFilter(statusFilter === "stale" ? "all" : "stale")}
+                className={cn(
+                  "inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium border transition-all",
+                  statusFilter === "stale"
+                    ? "bg-amber-500/15 text-amber-400 border-amber-500/40 ring-1 ring-amber-400"
+                    : "border-border text-muted-foreground hover:border-amber-500/30 hover:text-foreground",
+                )}
+              >
+                <AlertTriangle className="size-3" />
+                Stale ({staleCount})
+              </button>
+            );
+          })()}
         </div>
       </div>
 
@@ -562,6 +587,12 @@ export default function Proposals() {
                       <StatusBadge status={p.status as ProposalStatus} />
                       {(p as any).engagementScore > 0 && (
                         <EngagementBadge score={(p as any).engagementScore} />
+                      )}
+                      {(p as any).isStale && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-500/15 text-amber-400 border border-amber-500/30">
+                          <AlertTriangle className="size-3" />
+                          Stale
+                        </span>
                       )}
                     </div>
                     <div className="flex items-center gap-4 text-xs text-muted-foreground">

@@ -179,6 +179,8 @@ export const proposalsRouter = router({
         feedbackCounts.set(fb.proposalId, (feedbackCounts.get(fb.proposalId) ?? 0) + 1);
       }
     }
+    const now = Date.now();
+    const STALE_MS = 48 * 60 * 60 * 1000; // 48 hours
     return rows.map((r) => ({
       ...r,
       feedbackCount: feedbackCounts.get(r.id) ?? 0,
@@ -189,6 +191,11 @@ export const proposalsRouter = router({
         status: r.status,
         feedbackCount: feedbackCounts.get(r.id) ?? 0,
       }),
+      isStale:
+        r.status === "sent" &&
+        r.emailOpenedAt === null &&
+        r.sentAt !== null &&
+        now - new Date(r.sentAt).getTime() > STALE_MS,
     }));
   }),
 
@@ -1146,11 +1153,38 @@ Write 2-4 paragraphs of professional proposal content for this section. Be speci
         .from(proposalFeedback)
         .where(eq(proposalFeedback.proposalId, proposal.id));
       const score = computeEngagementScore(proposal, feedbackRows.length);
+      // Check for score drop vs most recent snapshot
+      const [prevSnapshot] = await db
+        .select({ score: proposalScoreHistory.score })
+        .from(proposalScoreHistory)
+        .where(eq(proposalScoreHistory.proposalId, proposal.id))
+        .orderBy(desc(proposalScoreHistory.createdAt))
+        .limit(1);
+      const prevScore = prevSnapshot?.score ?? null;
       await db.insert(proposalScoreHistory).values({
         proposalId: proposal.id,
         score,
       });
-      return { ok: true, score };
+      // Alert on score drop (non-fatal)
+      if (prevScore !== null && score < prevScore) {
+        try {
+          await logProposalActivity(db, {
+            proposalId: proposal.id,
+            workspaceId: ctx.workspace.id,
+            actorUserId: ctx.user.id,
+            subject: `Engagement score dropped from ${prevScore} to ${score}`,
+            detail: `The proposal "${proposal.title}" engagement score decreased by ${prevScore - score} points.`,
+          });
+          const { notifyOwner } = await import("../_core/notification");
+          await notifyOwner({
+            title: `Proposal engagement dropped: ${proposal.title}`,
+            content: `Score fell from ${prevScore} to ${score}/100. Consider following up with ${proposal.clientName || "the client"}.`,
+          });
+        } catch {
+          // non-fatal
+        }
+      }
+      return { ok: true, score, prevScore, dropped: prevScore !== null && score < prevScore };
     }),
 
   /** Return last 30 daily score snapshots for a proposal (newest first) */

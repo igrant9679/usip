@@ -1567,13 +1567,13 @@
 - [x] UI: ActivityFeed chip count logic updated for "views" virtual filter
 
 ## Phase A — Enhancements (round 10 — IN PROGRESS)
-- [ ] Schema: proposalScoreHistory table (proposalId, score, createdAt)
-- [ ] Server: proposals.snapshotScore mutation — inserts daily score snapshot
-- [ ] Server: proposals.getScoreHistory query — returns last 30 snapshots for a proposal
-- [ ] Server: /api/scheduled/proposal-followup — already exists, wire as scheduled task every 6h
-- [ ] UI: Proposals list — "Accepted" filter chip (already in STATUS_CONFIG, just needs to be surfaced as a chip)
-- [ ] UI: ProposalDetail header — engagement score sparkline chart (last 30 days)
-- [ ] Data: seed 14 days of score history for Meridian Health proposal
+- [x] Schema: proposalScoreHistory table (proposalId, score, createdAt)
+- [x] Server: proposals.snapshotScore mutation — inserts daily score snapshot
+- [x] Server: proposals.getScoreHistory query — returns last 30 snapshots for a proposal
+- [x] Server: /api/scheduled/proposal-followup — already exists, wire as scheduled task every 6h
+- [x] UI: Proposals list — "Accepted" filter chip (already in STATUS_CONFIG, just needs to be surfaced as a chip)
+- [x] UI: ProposalDetail header — engagement score sparkline chart (last 30 days)
+- [x] Data: seed 14 days of score history for Meridian Health proposal
 
 ## Phase A — Enhancements (round 10 — COMPLETED)
 - [x] Schema: proposalScoreHistory table (proposalId, score, createdAt) — migration 0037
@@ -1583,3 +1583,10 @@
 - [x] UI: Proposals list — "Accepted" filter chip already existed in STATUS_CONFIG loop (confirmed, no change needed)
 - [x] UI: ProposalDetail header — ScoreSparkline component using recharts LineChart, auto-snapshots once per day
 - [x] Data: seeded 14 days of score history for Meridian Health proposal (0→100 progression)
+
+## Phase A — Enhancements (round 11)
+- [x] Server: score history backfill — for all existing proposals, insert historical snapshots based on sentAt/emailOpenedAt/emailClickedAt/acceptedAt timestamps
+- [x] Server: score trend alert — when snapshotScore detects a drop vs previous day, log activity and notify owner
+- [x] Server: proposals.list — add isStale flag (sent 48h+ ago, no emailOpenedAt)
+- [x] UI: Proposals list — "Stale" filter chip
+- [x] UI: ProposalCard — amber "Stale" indicator when isStale=true
