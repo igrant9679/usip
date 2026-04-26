@@ -47,6 +47,7 @@ import {
   UserCheck,
   ThumbsUp,
   ThumbsDown,
+  AlertCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -473,6 +474,14 @@ export default function Proposals() {
   });
   const [approveDialogState, setApproveDialogState] = useState<{ proposalId: number; newDate: string; note: string } | null>(null);
   const [denyDialogState, setDenyDialogState] = useState<{ proposalId: number; reason: string } | null>(null);
+  function formatPendingSince(requestedAt: Date): { label: string; isOverdue: boolean } {
+    const diffMs = Date.now() - new Date(requestedAt).getTime();
+    const diffH = Math.floor(diffMs / (1000 * 60 * 60));
+    const diffD = Math.floor(diffH / 24);
+    const isOverdue = diffH >= 48;
+    const label = diffD >= 1 ? `${diffD}d ago` : `${diffH}h ago`;
+    return { label, isOverdue };
+  }
   function toggleSelect(id: number, e: React.MouseEvent) {
     e.stopPropagation();
     setSelectedIds((prev) => {
@@ -961,9 +970,22 @@ export default function Proposals() {
                   {req.reason && (
                     <p className="text-xs text-muted-foreground bg-muted/30 rounded p-2 leading-relaxed">{req.reason}</p>
                   )}
-                  <div className="flex gap-4 text-[10px] text-muted-foreground">
+                  <div className="flex flex-wrap items-center gap-3 text-[10px] text-muted-foreground">
                     {req.expiresAt && <span>Current expiry: {new Date(req.expiresAt).toLocaleDateString()}</span>}
-                    <span>Requested: {new Date(req.requestedAt).toLocaleDateString()}</span>
+                    {(() => {
+                      const { label, isOverdue } = formatPendingSince(req.requestedAt);
+                      return isOverdue ? (
+                        <span className="inline-flex items-center gap-1 text-amber-500 font-medium">
+                          <AlertCircle className="size-3" />
+                          Overdue — pending {label}
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1">
+                          <Clock className="size-3" />
+                          Pending {label}
+                        </span>
+                      );
+                    })()}
                   </div>
                 </div>
               ))}

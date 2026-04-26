@@ -25,6 +25,7 @@ import {
 import { toast } from "sonner";
 import {
   ArrowLeft,
+  CalendarCheck,
   ClipboardList,
   Building2,
   Calendar,
@@ -1076,6 +1077,15 @@ export default function ProposalDetail() {
             <StatusBadge status={proposal.status as ProposalStatus} />
             {(proposal as any).engagementScore > 0 && (
               <EngagementScoreBadge score={(proposal as any).engagementScore} />
+            )}
+            {(proposal as any).extensionCount > 0 && (
+              <span
+                className="inline-flex items-center gap-1 text-[10px] font-medium text-amber-600 bg-amber-500/10 border border-amber-500/30 rounded-full px-2 py-0.5"
+                title={`${(proposal as any).extensionCount} approved extension${(proposal as any).extensionCount === 1 ? "" : "s"}`}
+              >
+                <CalendarCheck className="size-3" />
+                {(proposal as any).extensionCount === 1 ? "1 Extension" : `${(proposal as any).extensionCount} Extensions`}
+              </span>
             )}
           </div>
           <ScoreSparkline proposalId={proposal.id} />

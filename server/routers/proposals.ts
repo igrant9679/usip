@@ -6,7 +6,7 @@
  *         duplicate, sendToClient, acceptProposal, acceptByToken
  */
 import { TRPCError } from "@trpc/server";
-import { and, asc, desc, eq, or } from "drizzle-orm";
+import { and, asc, desc, eq, like, or } from "drizzle-orm";
 import crypto from "crypto";
 import { z } from "zod";
 import {
@@ -231,7 +231,21 @@ export const proposalsRouter = router({
         status: proposal.status,
         feedbackCount: feedback.length,
       });
-      return { proposal: { ...proposal, engagementScore }, sections, milestones, feedback };
+      // Count approved extensions
+      const extensionApprovedActs = db
+        ? await db
+            .select({ id: activities.id })
+            .from(activities)
+            .where(
+              and(
+                eq(activities.relatedType, "proposal"),
+                eq(activities.relatedId, input.id),
+                like(activities.subject, "%Extension approved%"),
+              ),
+            )
+        : [];
+      const extensionCount = extensionApprovedActs.length;
+      return { proposal: { ...proposal, engagementScore, extensionCount }, sections, milestones, feedback };
     }),
 
   /** Create a new proposal (rep+). */
@@ -1539,6 +1553,58 @@ ${input.reason ? `<p>${input.reason}</p>` : ""}
     }
     return pending;
   }),
+  /**
+   * Public: return the latest extension status for a proposal by shareToken.
+   * Returns { status: "none"|"pending"|"approved"|"denied", resolvedAt, newExpiresAt, reason }
+   */
+  getExtensionStatus: publicProcedure
+    .input(z.object({ token: z.string() }))
+    .query(async ({ input }) => {
+      const db = await getDb();
+      if (!db) return { status: "none" as const, resolvedAt: null, newExpiresAt: null, reason: null };
+      const [proposal] = await db
+        .select({ id: proposals.id, expiresAt: proposals.expiresAt })
+        .from(proposals)
+        .where(eq(proposals.shareToken, input.token))
+        .limit(1);
+      if (!proposal) return { status: "none" as const, resolvedAt: null, newExpiresAt: null, reason: null };
+      // Get all extension-related activities for this proposal, newest first
+      const extActs = await db
+        .select({ id: activities.id, subject: activities.subject, body: activities.body, occurredAt: activities.occurredAt })
+        .from(activities)
+        .where(
+          and(
+            eq(activities.relatedType, "proposal"),
+            eq(activities.relatedId, proposal.id),
+            or(
+              like(activities.subject, "%Extension requested%"),
+              like(activities.subject, "%Extension approved%"),
+              like(activities.subject, "%Extension declined%"),
+            ),
+          ),
+        )
+        .orderBy(desc(activities.occurredAt));
+      if (extActs.length === 0) return { status: "none" as const, resolvedAt: null, newExpiresAt: null, reason: null };
+      const latest = extActs[0];
+      if (latest.subject.toLowerCase().includes("extension approved")) {
+        return {
+          status: "approved" as const,
+          resolvedAt: latest.occurredAt,
+          newExpiresAt: proposal.expiresAt ?? null,
+          reason: latest.body ?? null,
+        };
+      }
+      if (latest.subject.toLowerCase().includes("extension declined")) {
+        return {
+          status: "denied" as const,
+          resolvedAt: latest.occurredAt,
+          newExpiresAt: null,
+          reason: latest.body ?? null,
+        };
+      }
+      // Latest is a request with no resolution
+      return { status: "pending" as const, resolvedAt: null, newExpiresAt: null, reason: latest.body ?? null };
+    }),
   /** Return last 30 daily score snapshots for a proposal (newest first) */
   getScoreHistory: workspaceProcedure
     .input(z.object({ proposalId: z.number().int().positive() }))

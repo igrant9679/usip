@@ -636,7 +636,98 @@ export function registerEmailTrackingRoutes(app: Express) {
           console.error(`[ProposalFollowup] Auto-expire failed for proposal ${ep.id}:`, e2);
         }
       }
-      return res.json({ ok: true, processed, total: staleProposals.length, autoExpired, remindersSent });
+      // ── SLA overdue: notify owner when extension request has been pending >48h without resolution ──
+      const slaOverdueCutoff = new Date(Date.now() - 48 * 60 * 60 * 1000);
+      // Find all extension_requested activities older than 48h
+      const { gt: gtOp, like: likeOp } = await import("drizzle-orm");
+      const pendingExtActivities = await db
+        .select({
+          id: activities.id,
+          workspaceId: activities.workspaceId,
+          relatedId: activities.relatedId,
+          subject: activities.subject,
+          occurredAt: activities.occurredAt,
+        })
+        .from(activities)
+        .where(
+          and(
+            likeOp(activities.subject, "%Extension requested%"),
+            lt(activities.occurredAt, slaOverdueCutoff),
+          ),
+        );
+      let slaNotifsent = 0;
+      for (const pendingAct of pendingExtActivities) {
+        try {
+          // Check if there's already a resolution (approved/declined) for this proposal
+          const resolutionActs = await db
+            .select({ id: activities.id })
+            .from(activities)
+            .where(
+              and(
+                eq(activities.relatedId, pendingAct.relatedId!),
+                eq(activities.relatedType, "proposal"),
+              ),
+            );
+          const hasResolution = resolutionActs.some(
+            (a) =>
+              (a as any).subject?.toLowerCase().includes("extension approved") ||
+              (a as any).subject?.toLowerCase().includes("extension declined"),
+          );
+          if (hasResolution) continue;
+          // Check if we already sent an SLA overdue notification for this activity
+          const alreadyNotified = await db
+            .select({ id: activities.id })
+            .from(activities)
+            .where(
+              and(
+                eq(activities.relatedId, pendingAct.relatedId!),
+                eq(activities.relatedType, "proposal"),
+                likeOp(activities.subject, "%Extension SLA overdue%"),
+              ),
+            );
+          if (alreadyNotified.length > 0) continue;
+          // Get workspace owner
+          const wsRow = await db
+            .select({ ownerUserId: workspaces.ownerUserId })
+            .from(workspaces)
+            .where(eq(workspaces.id, pendingAct.workspaceId))
+            .limit(1);
+          if (!wsRow[0]) continue;
+          const ownerUserId = wsRow[0].ownerUserId;
+          // Get proposal title
+          const propRow = await db
+            .select({ title: proposals.title })
+            .from(proposals)
+            .where(eq(proposals.id, pendingAct.relatedId!))
+            .limit(1);
+          const propTitle = propRow[0]?.title ?? "Unknown Proposal";
+          // Send in-app notification to owner
+          await db.insert(notifications).values({
+            workspaceId: pendingAct.workspaceId,
+            userId: ownerUserId,
+            kind: "system",
+            title: "Extension request overdue",
+            body: `The extension request for "${propTitle}" has been pending for over 48 hours without a response.`,
+            read: false,
+            createdAt: new Date(),
+          });
+          // Log a dedup marker activity
+          await db.insert(activities).values({
+            workspaceId: pendingAct.workspaceId,
+            type: "system",
+            relatedType: "proposal",
+            relatedId: pendingAct.relatedId!,
+            subject: "Extension SLA overdue — owner notified",
+            body: `Extension request pending for over 48h. Owner notified via in-app notification.`,
+            actorUserId: null,
+            occurredAt: new Date(),
+          });
+          slaNotifsent++;
+        } catch (e4) {
+          console.error(`[ProposalFollowup] SLA overdue notification failed for activity ${pendingAct.id}:`, e4);
+        }
+      }
+      return res.json({ ok: true, processed, total: staleProposals.length, autoExpired, remindersSent, slaNotifsent });
     } catch (e) {
       console.error("[ProposalFollowup] Endpoint error:", e);
       return res.status(500).json({ ok: false, error: String(e) });

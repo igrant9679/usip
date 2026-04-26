@@ -82,6 +82,10 @@ export default function ProposalPortal() {
     { token: token ?? "" },
     { enabled: !!token },
   );
+  const { data: extensionStatus } = trpc.proposals.getExtensionStatus.useQuery(
+    { token: token ?? "" },
+    { enabled: !!token },
+  );
   const requestExtensionMutation = trpc.proposals.requestExtension.useMutation({
     onSuccess: () => {
       setExtensionSubmitted(true);
@@ -213,22 +217,47 @@ export default function ProposalPortal() {
                 <ThumbsUp className="size-4" />
                 Accept This Proposal
               </Button>
-              {(proposal as any).expiresAt && !extensionSubmitted && (
-                <Button
-                  variant="outline"
-                  onClick={() => setExtensionDialogOpen(true)}
-                  className="gap-2 border-orange-300 text-orange-700 hover:bg-orange-50"
-                >
-                  <CalendarClock className="size-4" />
-                  Request Extension
-                </Button>
-              )}
-              {extensionSubmitted && (
-                <span className="text-xs text-orange-600 font-medium flex items-center gap-1">
-                  <CalendarClock className="size-3.5" />
-                  Extension request sent
-                </span>
-              )}
+              {(proposal as any).expiresAt && (() => {
+                const extStatus = extensionStatus?.status ?? "none";
+                if (extStatus === "approved") {
+                  return (
+                    <span className="inline-flex items-center gap-1.5 text-xs font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-3 py-1">
+                      <CheckCircle2 className="size-3.5 text-emerald-500" />
+                      Extension Approved
+                      {extensionStatus?.newExpiresAt && (
+                        <> — new deadline: {new Date(extensionStatus.newExpiresAt).toLocaleDateString()}</>
+                      )}
+                    </span>
+                  );
+                }
+                if (extStatus === "denied") {
+                  return (
+                    <span className="inline-flex items-center gap-1.5 text-xs font-medium text-red-700 bg-red-50 border border-red-200 rounded-full px-3 py-1">
+                      <CalendarClock className="size-3.5 text-red-500" />
+                      Extension Declined
+                    </span>
+                  );
+                }
+                if (extStatus === "pending" || extensionSubmitted) {
+                  return (
+                    <span className="inline-flex items-center gap-1.5 text-xs font-medium text-orange-700 bg-orange-50 border border-orange-200 rounded-full px-3 py-1">
+                      <CalendarClock className="size-3.5 text-orange-500" />
+                      Extension Requested — awaiting response
+                    </span>
+                  );
+                }
+                // status === "none" — show the button
+                return (
+                  <Button
+                    variant="outline"
+                    onClick={() => setExtensionDialogOpen(true)}
+                    className="gap-2 border-orange-300 text-orange-700 hover:bg-orange-50"
+                  >
+                    <CalendarClock className="size-4" />
+                    Request Extension
+                  </Button>
+                );
+              })()}
               <p className="text-xs text-gray-400">
                 Accepting notifies the team and creates a follow-up action.
               </p>
