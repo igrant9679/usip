@@ -1058,6 +1058,17 @@ export const workspaceSettings = mysqlTable("workspace_settings", {
   autoExtendOnOpen: boolean("autoExtendOnOpen").default(false).notNull(),
   /** Number of days to extend expiresAt when autoExtendOnOpen fires */
   autoExtendDays: int("autoExtendDays").default(7).notNull(),
+  /** ARE global defaults */
+  areDefaultAutonomyMode: mysqlEnum("areDefaultAutonomyMode", ["full", "batch_approval", "review_release"]).default("batch_approval").notNull(),
+  areDefaultDailySendCap: int("areDefaultDailySendCap").default(50).notNull(),
+  areDefaultAutoApproveThreshold: int("areDefaultAutoApproveThreshold"),
+  areDefaultSignalToOpportunity: boolean("areDefaultSignalToOpportunity").default(false).notNull(),
+  areDefaultChannels: json("areDefaultChannels"),
+  areDefaultSequenceTemplate: varchar("areDefaultSequenceTemplate", { length: 64 }).default("standard_7step").notNull(),
+  areMaxConcurrentCampaigns: int("areMaxConcurrentCampaigns").default(5).notNull(),
+  areNotifyOnMeetingBooked: boolean("areNotifyOnMeetingBooked").default(true).notNull(),
+  areNotifyOnAutoApprove: boolean("areNotifyOnAutoApprove").default(false).notNull(),
+  areNotifyOnIcpUpdate: boolean("areNotifyOnIcpUpdate").default(true).notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
 export type WorkspaceSettings = typeof workspaceSettings.$inferSelect;
@@ -2543,6 +2554,9 @@ export const prospectQueue = mysqlTable(
     sequenceStatus: mysqlEnum("sequenceStatus", ["pending", "approved", "enrolled", "skipped", "completed", "replied"]).default("pending").notNull(),
     approvedAt: timestamp("approvedAt"),
     approvedByUserId: int("approvedByUserId"),
+    rejectedAt: timestamp("rejectedAt"),
+    rejectedByUserId: int("rejectedByUserId"),
+    rejectionReason: text("rejectionReason"),
     // Linked CRM records (created after positive reply)
     linkedContactId: int("linkedContactId"),
     linkedOpportunityId: int("linkedOpportunityId"),
@@ -2710,6 +2724,27 @@ export const areSuppressionList = mysqlTable(
 );
 export type AreSuppressionList = typeof areSuppressionList.$inferSelect;
 
+/* ──────────────────────────────────────────────────────────────────────────
+   Prospect Notes — rep-authored notes on a queued prospect
+   ────────────────────────────────────────────────────────────────────────── */
+export const prospectNotes = mysqlTable(
+  "prospect_notes",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    prospectQueueId: int("prospectQueueId").notNull(),
+    userId: int("userId").notNull(),
+    body: text("body").notNull(),
+    isPinned: boolean("isPinned").default(false).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    byProspect: index("ix_pn_prospect").on(t.prospectQueueId),
+    byWs: index("ix_pn_ws").on(t.workspaceId),
+  }),
+);
+export type ProspectNote = typeof prospectNotes.$inferSelect;
 /* ──────────────────────────────────────────────────────────────────────────
    ARE Scrape Jobs — web/Google Business/LinkedIn/news scrape job log
    ────────────────────────────────────────────────────────────────────────── */

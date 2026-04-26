@@ -26,6 +26,7 @@ import {
   areCampaigns,
   icpProfiles,
   prospectIntelligence,
+  prospectNotes,
   prospectQueue,
 } from "../../../drizzle/schema";
 import { getDb } from "../../db";
@@ -724,5 +725,121 @@ export const prospectsRouter = router({
         sequenceStatus: "pending",
       }).$returningId();
       return { id: row.id };
+    }),
+  /** Reject a prospect with an optional reason */
+  reject: workspaceProcedure
+    .input(z.object({ prospectId: z.number(), reason: z.string().optional() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      await db.update(prospectQueue).set({
+        sequenceStatus: "skipped",
+        rejectedAt: new Date(),
+        rejectedByUserId: ctx.user.id,
+        rejectionReason: input.reason ?? null,
+      }).where(and(eq(prospectQueue.id, input.prospectId), eq(prospectQueue.workspaceId, ctx.workspace.id)));
+      return { success: true };
+    }),
+
+  /** Bulk approve a list of prospects */
+  bulkApprove: workspaceProcedure
+    .input(z.object({ prospectIds: z.array(z.number()).min(1).max(200) }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      let approved = 0;
+      for (const id of input.prospectIds) {
+        const result = await db.update(prospectQueue).set({
+          sequenceStatus: "approved",
+          approvedAt: new Date(),
+          approvedByUserId: ctx.user.id,
+        }).where(and(
+          eq(prospectQueue.id, id),
+          eq(prospectQueue.workspaceId, ctx.workspace.id),
+          eq(prospectQueue.sequenceStatus, "pending"),
+        ));
+        if ((result[0] as any).affectedRows > 0) approved++;
+      }
+      return { approved };
+    }),
+
+  /** Bulk reject a list of prospects with an optional shared reason */
+  bulkReject: workspaceProcedure
+    .input(z.object({ prospectIds: z.array(z.number()).min(1).max(200), reason: z.string().optional() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      let rejected = 0;
+      for (const id of input.prospectIds) {
+        const result = await db.update(prospectQueue).set({
+          sequenceStatus: "skipped",
+          rejectedAt: new Date(),
+          rejectedByUserId: ctx.user.id,
+          rejectionReason: input.reason ?? null,
+        }).where(and(
+          eq(prospectQueue.id, id),
+          eq(prospectQueue.workspaceId, ctx.workspace.id),
+        ));
+        if ((result[0] as any).affectedRows > 0) rejected++;
+      }
+      return { rejected };
+    }),
+
+  /** Add a note to a prospect */
+  addNote: workspaceProcedure
+    .input(z.object({ prospectId: z.number(), body: z.string().min(1).max(4000) }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [row] = await db.insert(prospectNotes).values({
+        workspaceId: ctx.workspace.id,
+        prospectQueueId: input.prospectId,
+        userId: ctx.user.id,
+        body: input.body,
+        isPinned: false,
+      }).$returningId();
+      return { id: row.id };
+    }),
+
+  /** List notes for a prospect, pinned first */
+  listNotes: workspaceProcedure
+    .input(z.object({ prospectId: z.number() }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      return db.select().from(prospectNotes)
+        .where(and(
+          eq(prospectNotes.prospectQueueId, input.prospectId),
+          eq(prospectNotes.workspaceId, ctx.workspace.id),
+        ))
+        .orderBy(desc(prospectNotes.isPinned), desc(prospectNotes.createdAt));
+    }),
+
+  /** Delete a note (only the author or workspace admin can delete) */
+  deleteNote: workspaceProcedure
+    .input(z.object({ noteId: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [note] = await db.select().from(prospectNotes)
+        .where(and(eq(prospectNotes.id, input.noteId), eq(prospectNotes.workspaceId, ctx.workspace.id)))
+        .limit(1);
+      if (!note) throw new TRPCError({ code: "NOT_FOUND" });
+      if (note.userId !== ctx.user.id && ctx.user.role !== "admin") {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Only the note author or an admin can delete notes." });
+      }
+      await db.delete(prospectNotes).where(eq(prospectNotes.id, input.noteId));
+      return { success: true };
+    }),
+
+  /** Toggle pin on a note */
+  pinNote: workspaceProcedure
+    .input(z.object({ noteId: z.number(), isPinned: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      await db.update(prospectNotes).set({ isPinned: input.isPinned })
+        .where(and(eq(prospectNotes.id, input.noteId), eq(prospectNotes.workspaceId, ctx.workspace.id)));
+      return { success: true };
     }),
 });

@@ -64,6 +64,7 @@ import AREHub from "@/pages/usip/AREHub";
 import AREIcpAgent from "@/pages/usip/AREIcpAgent";
 import ARECampaigns from "@/pages/usip/ARECampaigns";
 import ARECampaignDetail from "@/pages/usip/ARECampaignDetail";
+import ARESettings from "@/pages/usip/ARESettings";
 import { Loader2 } from "lucide-react";
 import { Route, Switch, useLocation } from "wouter";
 import { useEffect } from "react";
@@ -177,6 +178,7 @@ function Router() {
       <Route path="/are/icp"><AuthGate><AREIcpAgent /></AuthGate></Route>
       <Route path="/are/campaigns"><AuthGate><ARECampaigns /></AuthGate></Route>
       <Route path="/are/campaigns/:id"><AuthGate><ARECampaignDetail /></AuthGate></Route>
+      <Route path="/are/settings"><AuthGate><ARESettings /></AuthGate></Route>
       <Route path="/p/:token"><ProposalPortal /></Route>
       <Route path="/invite/accept"><InviteAccept /></Route>
       <Route path="/login"><PasswordLogin /></Route>

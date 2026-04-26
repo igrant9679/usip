@@ -14,6 +14,9 @@
  *   - Signal feed with sentiment colour coding and action badges
  */
 import { Shell, PageHeader, StatCard, EmptyState } from "@/components/usip/Shell";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -46,12 +49,16 @@ import {
   Search,
   Settings,
   Sparkles,
+  Pin,
+  StickyNote,
   Star,
   Target,
+  Trash2,
   TrendingDown,
   TrendingUp,
   Users,
   X,
+  XCircle,
   Zap,
 } from "lucide-react";
 import { useState } from "react";
@@ -426,6 +433,92 @@ function IntelligenceDossier({ prospect }: { prospect: any }) {
   );
 }
 
+/* ─── Prospect notes ──────────────────────────────────────────────────────── */
+function ProspectNotes({ prospectId }: { prospectId: number }) {
+  const utils = trpc.useUtils();
+  const { data: notes, isLoading } = trpc.are.prospects.listNotes.useQuery({ prospectId });
+  const [draft, setDraft] = useState("");
+  const addNote = trpc.are.prospects.addNote.useMutation({
+    onSuccess: () => { setDraft(""); utils.are.prospects.listNotes.invalidate({ prospectId }); },
+    onError: (e) => toast.error(e.message),
+  });
+  const deleteNote = trpc.are.prospects.deleteNote.useMutation({
+    onSuccess: () => utils.are.prospects.listNotes.invalidate({ prospectId }),
+    onError: (e) => toast.error(e.message),
+  });
+  const pinNote = trpc.are.prospects.pinNote.useMutation({
+    onSuccess: () => utils.are.prospects.listNotes.invalidate({ prospectId }),
+    onError: (e) => toast.error(e.message),
+  });
+  return (
+    <div className="space-y-4 pb-8">
+      {/* Compose */}
+      <div className="space-y-2">
+        <Textarea
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          placeholder="Add a note about this prospect…"
+          className="text-sm min-h-[80px] resize-none"
+        />
+        <div className="flex justify-end">
+          <Button
+            size="sm" className="gap-1.5 text-xs"
+            onClick={() => addNote.mutate({ prospectId, content: draft })}
+            disabled={!draft.trim() || addNote.isPending}
+          >
+            {addNote.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <StickyNote className="size-3.5" />}
+            Save Note
+          </Button>
+        </div>
+      </div>
+      {/* Notes list */}
+      {isLoading ? (
+        <div className="flex items-center gap-2 text-muted-foreground py-8 justify-center">
+          <Loader2 className="size-4 animate-spin" /> Loading notes…
+        </div>
+      ) : !notes || notes.length === 0 ? (
+        <div className="flex flex-col items-center gap-2 py-10 text-muted-foreground">
+          <StickyNote className="size-8 opacity-30" />
+          <div className="text-sm">No notes yet</div>
+          <div className="text-xs opacity-60">Notes you add here are private to your workspace.</div>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {[...notes].sort((a, b) => (b.isPinned ? 1 : 0) - (a.isPinned ? 1 : 0)).map((note) => (
+            <div key={note.id} className={`rounded-xl border px-3 py-2.5 space-y-1.5 ${
+              note.isPinned ? "border-amber-500/30 bg-amber-500/5" : "border-border bg-card"
+            }`}>
+              <div className="flex items-start gap-2">
+                {note.isPinned && <Pin className="size-3 text-amber-500 mt-0.5 shrink-0" />}
+                <p className="text-xs leading-relaxed flex-1 whitespace-pre-wrap">{note.content}</p>
+                <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
+                  <button
+                    className="p-1 rounded hover:bg-muted transition-colors"
+                    onClick={() => pinNote.mutate({ noteId: note.id, pinned: !note.isPinned })}
+                    title={note.isPinned ? "Unpin" : "Pin"}
+                  >
+                    <Pin className={`size-3 ${note.isPinned ? "text-amber-500" : "text-muted-foreground"}`} />
+                  </button>
+                  <button
+                    className="p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
+                    onClick={() => deleteNote.mutate({ noteId: note.id })}
+                    title="Delete"
+                  >
+                    <Trash2 className="size-3" />
+                  </button>
+                </div>
+              </div>
+              <div className="text-[10px] text-muted-foreground">
+                {note.authorName ?? "You"} · {new Date(note.createdAt).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ─── Main page ────────────────────────────────────────────────────────────── */
 export default function ARECampaignDetail() {
   const { id } = useParams<{ id: string }>();
@@ -443,6 +536,41 @@ export default function ARECampaignDetail() {
   const [scrapeSource, setScrapeSource] = useState<"google_business" | "linkedin" | "web" | "news">("google_business");
   const [thresholdDraft, setThresholdDraft] = useState<number | null>(null);
   const [s2oEnabled, setS2oEnabled] = useState<boolean | null>(null);
+  // Bulk selection
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [rejectDialogOpen, setRejectDialogOpen] = useState(false);
+  const [rejectReason, setRejectReason] = useState("");
+  const [dossierTab, setDossierTab] = useState<"intel" | "notes">("intel");
+  const bulkApprove = trpc.are.prospects.bulkApprove.useMutation({
+    onSuccess: (d) => {
+      toast.success(`Approved ${d.approved} prospects`);
+      setSelectedIds(new Set());
+      utils.are.prospects.list.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const bulkReject = trpc.are.prospects.bulkReject.useMutation({
+    onSuccess: (d) => {
+      toast.success(`Rejected ${d.rejected} prospects`);
+      setSelectedIds(new Set());
+      setRejectDialogOpen(false);
+      setRejectReason("");
+      utils.are.prospects.list.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const toggleSelect = (id: number) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+  const toggleSelectAll = () => {
+    if (!prospects) return;
+    if (selectedIds.size === prospects.length) setSelectedIds(new Set());
+    else setSelectedIds(new Set(prospects.map((p) => p.id)));
+  };
 
   const updateCampaign = trpc.are.campaigns.update.useMutation({
     onSuccess: () => {
@@ -619,14 +747,55 @@ export default function ARECampaignDetail() {
               </Button>
             </div>
 
-            {/* Legend */}
+            {/* Select-all + legend row */}
             <div className="flex items-center gap-4 mb-3 text-[11px] text-muted-foreground">
+              {prospects && prospects.length > 0 && (
+                <label className="flex items-center gap-1.5 cursor-pointer select-none">
+                  <Checkbox
+                    checked={selectedIds.size === prospects.length && prospects.length > 0}
+                    onCheckedChange={toggleSelectAll}
+                    className="size-3.5"
+                  />
+                  <span>All</span>
+                </label>
+              )}
               <span className="flex items-center gap-1"><div className="size-2 rounded-full bg-[#34D399]" /> complete</span>
               <span className="flex items-center gap-1"><div className="size-2 rounded-full bg-[#F59E0B]" /> enriching</span>
               <span className="flex items-center gap-1"><div className="size-2 rounded-full bg-[#94A3B8]" /> pending</span>
               <span className="flex items-center gap-1"><div className="size-2 rounded-full bg-[#F87171]" /> failed</span>
-              <span className="ml-auto flex items-center gap-1"><Eye className="size-3" /> Click prospect to view dossier</span>
+              <span className="ml-auto flex items-center gap-1"><Eye className="size-3" /> Click row to view dossier</span>
             </div>
+            {/* Floating bulk action bar */}
+            {selectedIds.size > 0 && (
+              <div className="flex items-center gap-3 mb-3 px-4 py-2.5 rounded-xl border border-primary/30 bg-primary/5 shadow-sm">
+                <span className="text-xs font-medium text-primary">{selectedIds.size} selected</span>
+                <div className="flex items-center gap-2 ml-auto">
+                  <Button
+                    size="sm" variant="outline"
+                    className="h-7 px-3 text-xs gap-1.5 border-emerald-500/30 text-emerald-600 hover:bg-emerald-500/10"
+                    onClick={() => bulkApprove.mutate({ prospectIds: Array.from(selectedIds) })}
+                    disabled={bulkApprove.isPending}
+                  >
+                    {bulkApprove.isPending ? <Loader2 className="size-3 animate-spin" /> : <CheckCircle2 className="size-3" />}
+                    Approve All
+                  </Button>
+                  <Button
+                    size="sm" variant="outline"
+                    className="h-7 px-3 text-xs gap-1.5 border-destructive/30 text-destructive hover:bg-destructive/10"
+                    onClick={() => setRejectDialogOpen(true)}
+                  >
+                    <XCircle className="size-3" /> Reject All
+                  </Button>
+                  <Button
+                    size="sm" variant="ghost"
+                    className="h-7 px-2 text-xs text-muted-foreground"
+                    onClick={() => setSelectedIds(new Set())}
+                  >
+                    <X className="size-3" />
+                  </Button>
+                </div>
+              </div>
+            )}
 
             {loadingProspects ? (
               <div className="flex items-center gap-2 text-muted-foreground py-12 justify-center">
@@ -642,13 +811,22 @@ export default function ARECampaignDetail() {
             ) : (
               <div className="space-y-2">
                 {prospects.map((p) => (
-                  <ProspectRow
-                    key={p.id}
-                    p={p}
-                    campaignId={campaignId}
-                    onSelect={(id) => { setSelectedProspectId(id); setDossierOpen(true); }}
-                    selected={selectedProspectId === p.id}
-                  />
+                  <div key={p.id} className="flex items-center gap-2">
+                    <Checkbox
+                      checked={selectedIds.has(p.id)}
+                      onCheckedChange={() => toggleSelect(p.id)}
+                      className="size-3.5 shrink-0"
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                    <div className="flex-1 min-w-0">
+                      <ProspectRow
+                        p={p}
+                        campaignId={campaignId}
+                        onSelect={(id) => { setSelectedProspectId(id); setDossierOpen(true); setDossierTab("intel"); }}
+                        selected={selectedProspectId === p.id}
+                      />
+                    </div>
+                  </div>
                 ))}
               </div>
             )}
@@ -998,15 +1176,76 @@ export default function ARECampaignDetail() {
               </div>
             )}
           </SheetHeader>
+          {/* Dossier tabs: Intel | Notes */}
+          <div className="mt-3 border-b">
+            <div className="flex gap-0">
+              <button
+                onClick={() => setDossierTab("intel")}
+                className={`px-4 py-2 text-xs font-medium border-b-2 transition-colors ${
+                  dossierTab === "intel"
+                    ? "border-primary text-primary"
+                    : "border-transparent text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                <span className="flex items-center gap-1.5"><Brain className="size-3" /> Intelligence</span>
+              </button>
+              <button
+                onClick={() => setDossierTab("notes")}
+                className={`px-4 py-2 text-xs font-medium border-b-2 transition-colors ${
+                  dossierTab === "notes"
+                    ? "border-primary text-primary"
+                    : "border-transparent text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                <span className="flex items-center gap-1.5"><StickyNote className="size-3" /> Notes</span>
+              </button>
+            </div>
+          </div>
           <div className="mt-4">
-            {selectedProspect ? (
+            {!selectedProspect ? (
+              <EmptyState icon={Eye} title="No prospect selected" description="Select a prospect from the queue to view their dossier." />
+            ) : dossierTab === "intel" ? (
               <IntelligenceDossier prospect={selectedProspect} />
             ) : (
-              <EmptyState icon={Eye} title="No prospect selected" description="Select a prospect from the queue to view their dossier." />
+              <ProspectNotes prospectId={selectedProspect.id} />
             )}
           </div>
         </SheetContent>
       </Sheet>
+
+      {/* ── Reject Dialog ── */}
+      <Dialog open={rejectDialogOpen} onOpenChange={setRejectDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <XCircle className="size-4 text-destructive" />
+              Reject {selectedIds.size} Prospect{selectedIds.size !== 1 ? "s" : ""}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <p className="text-sm text-muted-foreground">
+              These prospects will be marked as rejected and removed from the review queue. You can optionally provide a reason for the rejection.
+            </p>
+            <Textarea
+              value={rejectReason}
+              onChange={(e) => setRejectReason(e.target.value)}
+              placeholder="Rejection reason (optional) — e.g. wrong industry, too small, already a customer…"
+              className="text-sm min-h-[80px] resize-none"
+            />
+          </div>
+          <DialogFooter className="gap-2">
+            <Button variant="ghost" size="sm" onClick={() => setRejectDialogOpen(false)}>Cancel</Button>
+            <Button
+              variant="destructive" size="sm" className="gap-1.5"
+              onClick={() => bulkReject.mutate({ prospectIds: Array.from(selectedIds), reason: rejectReason || undefined })}
+              disabled={bulkReject.isPending}
+            >
+              {bulkReject.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <XCircle className="size-3.5" />}
+              Confirm Rejection
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Shell>
   );
 }

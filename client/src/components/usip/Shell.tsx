@@ -90,6 +90,7 @@ const NAV: NavGroup[] = [
       { href: "/are", label: "ARE Hub", icon: Bot },
       { href: "/are/icp", label: "ICP Agent", icon: Cpu },
       { href: "/are/campaigns", label: "Campaigns", icon: Radar },
+      { href: "/are/settings", label: "ARE Settings", icon: Settings },
     ],
   },
   {

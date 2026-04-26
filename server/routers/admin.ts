@@ -119,6 +119,48 @@ export const settingsRouter = router({
       });
       return { ok: true };
     }),
+
+  getAreSettings: workspaceProcedure.query(async ({ ctx }) => {
+    const s = await getOrSeedSettings(ctx.workspace.id);
+    return {
+      areDefaultAutonomyMode: s.areDefaultAutonomyMode,
+      areDefaultDailySendCap: s.areDefaultDailySendCap,
+      areDefaultAutoApproveThreshold: s.areDefaultAutoApproveThreshold ?? null,
+      areDefaultSignalToOpportunity: s.areDefaultSignalToOpportunity,
+      areDefaultChannels: (s.areDefaultChannels as Record<string, boolean>) ?? { email: true, linkedin: false, sms: false, voice: false },
+      areDefaultSequenceTemplate: s.areDefaultSequenceTemplate,
+      areMaxConcurrentCampaigns: s.areMaxConcurrentCampaigns,
+      areNotifyOnMeetingBooked: s.areNotifyOnMeetingBooked,
+      areNotifyOnAutoApprove: s.areNotifyOnAutoApprove,
+      areNotifyOnIcpUpdate: s.areNotifyOnIcpUpdate,
+    };
+  }),
+
+  updateAreSettings: workspaceProcedure
+    .input(z.object({
+      areDefaultAutonomyMode: z.enum(["full", "batch_approval", "review_release"]).optional(),
+      areDefaultDailySendCap: z.number().int().min(1).max(500).optional(),
+      areDefaultAutoApproveThreshold: z.number().int().min(0).max(100).nullable().optional(),
+      areDefaultSignalToOpportunity: z.boolean().optional(),
+      areDefaultChannels: z.record(z.string(), z.boolean()).optional(),
+      areDefaultSequenceTemplate: z.string().max(64).optional(),
+      areMaxConcurrentCampaigns: z.number().int().min(1).max(50).optional(),
+      areNotifyOnMeetingBooked: z.boolean().optional(),
+      areNotifyOnAutoApprove: z.boolean().optional(),
+      areNotifyOnIcpUpdate: z.boolean().optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      await getOrSeedSettings(ctx.workspace.id);
+      const patch: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(input)) {
+        if (v !== undefined) patch[k] = v;
+      }
+      if (Object.keys(patch).length === 0) return { ok: true };
+      await db.update(workspaceSettings).set(patch).where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
+      return { ok: true };
+    }),
 });
 
 export const usageRouter = router({

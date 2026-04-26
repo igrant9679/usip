@@ -1696,16 +1696,37 @@
 
 ## Round 21 — ARE Notification System, Signal Enhancement, ICP Version History
 
-- [ ] Schema: add `are_notification` kind to notifications.kind enum
-- [ ] Schema: add `enhancedHook` (text) and `signalEnhancedAt` (timestamp) to prospectIntelligence
-- [ ] Schema: add `restore` procedure to ICP router (set isActive=true for version, false for others)
-- [ ] Server: areNotify() helper — writes in-app notification with ARE-specific kind and relatedType
-- [ ] Server: fire areNotify on meeting_booked, auto_approved, icp_updated, campaign_completed, signal_classified
-- [ ] Server: Signal Enhancement agent — on email_open/click, fetch recent news for prospect company, rewrite top hook with LLM, store in prospectIntelligence.enhancedHook
-- [ ] Server: ICP restore procedure — sets chosen version isActive=true, all others false
-- [ ] UI: Notification bell — ARE-specific card styles (Bot icon, violet accent, relatedType=are_campaign)
-- [ ] UI: ARE Notifications panel — dedicated /are/notifications page showing ARE-only alerts
-- [ ] UI: Signal Enhancement badge on prospect row — shows "Hook Enhanced" when enhancedHook is set
-- [ ] UI: ICP Version History — full diff view comparing two versions side by side
-- [ ] UI: ICP Version History — confidence trend sparkline chart across versions
-- [ ] UI: ICP Version History — Restore button on each non-active version
+- [x] Schema: add `are_notification` kind to notifications.kind enum
+- [x] Schema: add `enhancedHook` (text) and `signalEnhancedAt` (timestamp) to prospectIntelligence
+- [x] Schema: add `restore` procedure to ICP router (set isActive=true for version, false for others)
+- [x] Server: areNotify() helper — writes in-app notification with ARE-specific kind and relatedType
+- [x] Server: fire areNotify on meeting_booked, auto_approved, icp_updated, campaign_completed, signal_classified
+- [x] Server: Signal Enhancement agent — on email_open/click, fetch recent news for prospect company, rewrite top hook with LLM, store in prospectIntelligence.enhancedHook
+- [x] Server: ICP restore procedure — sets chosen version isActive=true, all others false
+- [x] UI: Notification bell — ARE-specific card styles (Bot icon, violet accent, relatedType=are_campaign)
+- [x] UI: ARE Notifications panel — dedicated /are/notifications page showing ARE-only alerts
+- [x] UI: Signal Enhancement badge on prospect row — shows "Hook Enhanced" when enhancedHook is set
+- [x] UI: ICP Version History — full diff view comparing two versions side by side
+- [x] UI: ICP Version History — confidence trend sparkline chart across versions
+- [x] UI: ICP Version History — Restore button on each non-active version
+
+## Round 22 — ARE Approve/Reject, Notes, and Settings
+
+- [ ] Schema: prospect_notes table (id, workspaceId, prospectQueueId, userId, body, isPinned, createdAt, updatedAt)
+- [ ] Schema: add rejectedAt, rejectedByUserId, rejectionReason (text) to prospectQueue
+- [ ] Schema: add ARE global settings columns to workspaceSettings (areDefaultAutonomyMode, areDefaultDailySendCap, areDefaultAutoApproveThreshold, areDefaultSignalToOpportunity, areDefaultChannels, areDefaultSequenceTemplate, areMaxConcurrentCampaigns, areNotifyOnMeetingBooked, areNotifyOnAutoApprove, areNotifyOnIcpUpdate)
+- [ ] Server: prospects.reject procedure (sets sequenceStatus=skipped, stores rejectedAt/rejectedByUserId/rejectionReason)
+- [ ] Server: prospects.bulkApprove procedure (array of prospectIds)
+- [ ] Server: prospects.bulkReject procedure (array of prospectIds + reason)
+- [ ] Server: prospects.addNote procedure (insert into prospect_notes)
+- [ ] Server: prospects.listNotes procedure (select notes for a prospect)
+- [ ] Server: prospects.deleteNote procedure
+- [ ] Server: prospects.pinNote procedure (toggle isPinned)
+- [ ] Server: settings.getAreSettings procedure (read from workspaceSettings)
+- [ ] Server: settings.updateAreSettings procedure (update workspaceSettings ARE columns)
+- [ ] UI: ProspectRow — checkbox for bulk selection, Reject button with reason dialog
+- [ ] UI: Prospect queue bulk action bar — floating bar with Approve All / Reject All / count
+- [ ] UI: Dossier slide-over — Notes tab with add note form, pinned notes, timestamped list
+- [ ] UI: ARE Settings page (/are/settings) with global defaults card and notification preferences card
+- [ ] UI: Shell nav — add "Settings" link under Revenue Engine group
+- [ ] UI: App.tsx — add /are/settings route
