@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, isNotNull, lt, lte, sql } from "drizzle-orm";
 import { z } from "zod";
 import { invokeLLM } from "../_core/llm";
 import {
@@ -19,6 +19,7 @@ import {
   users,
   workspaceMembers,
   workspaceSettings,
+  proposals,
 } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
 import { getDb } from "../db";
@@ -974,6 +975,35 @@ export const opportunitiesRouter = router({
     const custNow = allCustomers.length;
     const custPrev = allCustomers.filter((c) => (c.createdAt ?? 0) < thisMonthStart).length;
     const delta = (a: number, b: number) => b === 0 ? (a > 0 ? 100 : 0) : Math.round(((a - b) / b) * 100);
+    // Proposal health counts
+    const STALE_MS = 48 * 60 * 60 * 1000;
+    const EXPIRING_SOON_MS = 7 * 24 * 60 * 60 * 1000;
+    const nowTs = Date.now();
+    const allProposals = await db
+      .select({
+        id: proposals.id,
+        status: proposals.status,
+        sentAt: proposals.sentAt,
+        emailOpenedAt: proposals.emailOpenedAt,
+        expiresAt: proposals.expiresAt,
+      })
+      .from(proposals)
+      .where(eq(proposals.workspaceId, wid));
+    const staleProposals = allProposals.filter(
+      (p) =>
+        p.status === "sent" &&
+        p.emailOpenedAt === null &&
+        p.sentAt !== null &&
+        nowTs - new Date(p.sentAt).getTime() > STALE_MS,
+    ).length;
+    const expiringProposals = allProposals.filter(
+      (p) =>
+        p.expiresAt !== null &&
+        new Date(p.expiresAt).getTime() >= nowTs &&
+        new Date(p.expiresAt).getTime() - nowTs <= EXPIRING_SOON_MS &&
+        p.status !== "accepted" &&
+        p.status !== "not_accepted",
+    ).length;
     return {
       pipelineValue: pipelineNow,
       pipelineDelta: delta(pipelineNow, pipelinePrev),
@@ -985,6 +1015,8 @@ export const opportunitiesRouter = router({
       customerDelta: delta(custNow, custPrev),
       openOppsCount: openOpps.length,
       totalWonValue: wonOpps.reduce((s, o) => s + Number(o.value ?? 0), 0),
+      staleProposals,
+      expiringProposals,
     };
   }),
 

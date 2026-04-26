@@ -2301,6 +2301,7 @@ export const proposals = mysqlTable(
     emailOpenedAt: timestamp("emailOpenedAt"),
     emailClickedAt: timestamp("emailClickedAt"),
     acceptedAt: timestamp("acceptedAt"),
+    expiresAt: timestamp("expiresAt"),
     // Pipeline integration
     linkedOpportunityId: int("linkedOpportunityId"),  // fk to opportunities
     createdAt: timestamp("createdAt").defaultNow().notNull(),

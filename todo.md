@@ -1590,3 +1590,14 @@
 - [x] Server: proposals.list — add isStale flag (sent 48h+ ago, no emailOpenedAt)
 - [x] UI: Proposals list — "Stale" filter chip
 - [x] UI: ProposalCard — amber "Stale" indicator when isStale=true
+
+## Phase A — Enhancements (round 12)
+- [x] Schema: add expiresAt column to proposals table, generate migration 0038, applied
+- [x] Server: proposals.list — add isExpiringSoon flag (expiresAt within 7 days), isExpired flag
+- [x] Server: /api/scheduled/proposal-followup — auto-set status=not_accepted for expired proposals
+- [x] Server: dashboard stats — add staleProposals count and expiringProposals count
+- [x] UI: Dashboard — Stale Proposals KPI tile (amber, links to /proposals, shows expiring count as hint)
+- [x] UI: NewProposalWizard — expiry date field (optional, step 2)
+- [x] UI: ProposalDetail Overview — expiry date InfoCard with edit capability (color-coded by urgency)
+- [x] UI: ProposalCard — countdown badge when expiresAt within 7 days; expired badge when past
+- [x] UI: Proposals list — "Expiring Soon" filter chip (orange, hides when count=0)

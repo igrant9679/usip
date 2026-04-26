@@ -181,6 +181,7 @@ export const proposalsRouter = router({
     }
     const now = Date.now();
     const STALE_MS = 48 * 60 * 60 * 1000; // 48 hours
+    const EXPIRING_SOON_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
     return rows.map((r) => ({
       ...r,
       feedbackCount: feedbackCounts.get(r.id) ?? 0,
@@ -196,6 +197,13 @@ export const proposalsRouter = router({
         r.emailOpenedAt === null &&
         r.sentAt !== null &&
         now - new Date(r.sentAt).getTime() > STALE_MS,
+      isExpired:
+        r.expiresAt !== null &&
+        new Date(r.expiresAt).getTime() < now,
+      isExpiringSoon:
+        r.expiresAt !== null &&
+        new Date(r.expiresAt).getTime() >= now &&
+        new Date(r.expiresAt).getTime() - now <= EXPIRING_SOON_MS,
     }));
   }),
 
@@ -243,6 +251,7 @@ export const proposalsRouter = router({
         budget: z.number().optional(),
         description: z.string().optional(),
         requirements: z.array(z.string()).optional(),
+        expiresAt: z.string().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -264,6 +273,7 @@ export const proposalsRouter = router({
         budget: input.budget != null ? String(input.budget) : null,
         description: input.description || null,
         requirements: input.requirements ?? [],
+        expiresAt: input.expiresAt ? new Date(input.expiresAt) : null,
         status: "draft",
       });
       return { id: (result as any).insertId as number };
@@ -287,17 +297,19 @@ export const proposalsRouter = router({
         budget: z.number().nullable().optional(),
         description: z.string().optional(),
         requirements: z.array(z.string()).optional(),
+        expiresAt: z.string().nullable().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       await getProposalOrThrow(db, input.id, ctx.workspace.id);
-      const { id, rfpDeadline, completionDate, budget, ...rest } = input;
+      const { id, rfpDeadline, completionDate, budget, expiresAt, ...rest } = input;
       const patch: Record<string, unknown> = { ...rest };
       if (rfpDeadline !== undefined) patch.rfpDeadline = rfpDeadline ? new Date(rfpDeadline) : null;
       if (completionDate !== undefined)
         patch.completionDate = completionDate ? new Date(completionDate) : null;
       if (budget !== undefined) patch.budget = budget != null ? String(budget) : null;
+      if (expiresAt !== undefined) patch.expiresAt = expiresAt ? new Date(expiresAt) : null;
       await db.update(proposals).set(patch).where(eq(proposals.id, id));
       // Sync budget to linked opportunity if budget changed
       if (budget !== undefined && budget != null) {

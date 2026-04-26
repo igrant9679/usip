@@ -39,6 +39,7 @@ import {
   RotateCcw,
   Eye,
   AlertTriangle,
+  Timer,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -87,6 +88,7 @@ function NewProposalWizard({ open, onClose, onCreated }: WizardProps) {
     projectType: "",
     rfpDeadline: "",
     completionDate: "",
+    expiresAt: "",
     budget: "",
     description: "",
   });
@@ -132,7 +134,7 @@ function NewProposalWizard({ open, onClose, onCreated }: WizardProps) {
 
   function handleClose() {
     setStep(1);
-    setForm({ title: "", clientName: "", clientEmail: "", clientWebsite: "", orgAbbr: "", projectType: "", rfpDeadline: "", completionDate: "", budget: "", description: "" });
+    setForm({ title: "", clientName: "", clientEmail: "", clientWebsite: "", orgAbbr: "", projectType: "", rfpDeadline: "", completionDate: "", expiresAt: "", budget: "", description: "" });
     setContactSearch("");
     setSelectedContactAccountId(null);
     onClose();
@@ -164,6 +166,7 @@ function NewProposalWizard({ open, onClose, onCreated }: WizardProps) {
       projectType: form.projectType || undefined,
       rfpDeadline: form.rfpDeadline || undefined,
       completionDate: form.completionDate || undefined,
+      expiresAt: form.expiresAt || undefined,
       budget: form.budget ? parseFloat(form.budget) : undefined,
       description: form.description || undefined,
     });
@@ -315,6 +318,16 @@ function NewProposalWizard({ open, onClose, onCreated }: WizardProps) {
                 />
               </div>
             </div>
+            <div>
+              <Label>Proposal Expiry Date <span className="text-muted-foreground font-normal">(optional)</span></Label>
+              <Input
+                type="date"
+                value={form.expiresAt}
+                onChange={(e) => setForm((f) => ({ ...f, expiresAt: e.target.value }))}
+                className="mt-1"
+              />
+              <p className="text-xs text-muted-foreground mt-1">If set, the proposal will be automatically marked as Not Accepted after this date.</p>
+            </div>
 
             <div>
               <Label>Estimated Budget ($)</Label>
@@ -423,6 +436,8 @@ export default function Proposals() {
           ? true
           : statusFilter === "stale"
           ? !!(p as any).isStale
+          : statusFilter === "expiring_soon"
+          ? !!(p as any).isExpiringSoon
           : p.status === statusFilter;
       return matchSearch && matchStatus;
     });
@@ -544,6 +559,25 @@ export default function Proposals() {
               </button>
             );
           })()}
+          {/* Expiring Soon chip */}
+          {(() => {
+            const expiringCount = list?.filter((p) => !!(p as any).isExpiringSoon).length ?? 0;
+            if (expiringCount === 0 && statusFilter !== "expiring_soon") return null;
+            return (
+              <button
+                onClick={() => setStatusFilter(statusFilter === "expiring_soon" ? "all" : "expiring_soon")}
+                className={cn(
+                  "inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium border transition-all",
+                  statusFilter === "expiring_soon"
+                    ? "bg-orange-500/15 text-orange-400 border-orange-500/40 ring-1 ring-orange-400"
+                    : "border-border text-muted-foreground hover:border-orange-500/30 hover:text-foreground",
+                )}
+              >
+                <Timer className="size-3" />
+                Expiring Soon ({expiringCount})
+              </button>
+            );
+          })()}
         </div>
       </div>
 
@@ -592,6 +626,21 @@ export default function Proposals() {
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-500/15 text-amber-400 border border-amber-500/30">
                           <AlertTriangle className="size-3" />
                           Stale
+                        </span>
+                      )}
+                      {(p as any).isExpired && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-500/15 text-red-400 border border-red-500/30">
+                          <Timer className="size-3" />
+                          Expired
+                        </span>
+                      )}
+                      {!(p as any).isExpired && (p as any).isExpiringSoon && (p as any).expiresAt && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-orange-500/15 text-orange-400 border border-orange-500/30">
+                          <Timer className="size-3" />
+                          {(() => {
+                            const daysLeft = Math.ceil((new Date((p as any).expiresAt).getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+                            return daysLeft <= 1 ? "Expires today" : `Expires in ${daysLeft}d`;
+                          })()}
                         </span>
                       )}
                     </div>

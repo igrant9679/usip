@@ -434,7 +434,43 @@ export function registerEmailTrackingRoutes(app: Express) {
         }
       }
 
-      return res.json({ ok: true, processed, total: staleProposals.length });
+      // ── Auto-expire: set status=not_accepted for proposals past their expiresAt ──
+      const { isNotNull, lte, inArray: inArrayOp } = await import("drizzle-orm");
+      const now = new Date();
+      const expiredProposals = await db
+        .select({ id: proposals.id, workspaceId: proposals.workspaceId, title: proposals.title, clientName: proposals.clientName, clientEmail: proposals.clientEmail })
+        .from(proposals)
+        .where(
+          and(
+            isNotNull(proposals.expiresAt),
+            lte(proposals.expiresAt, now),
+            inArrayOp(proposals.status, ["sent", "under_review"]),
+          ),
+        );
+      let autoExpired = 0;
+      for (const ep of expiredProposals) {
+        try {
+          await db
+            .update(proposals)
+            .set({ status: "not_accepted", updatedAt: new Date() })
+            .where(eq(proposals.id, ep.id));
+          // Log activity
+          await db.insert(activities).values({
+            workspaceId: ep.workspaceId,
+            type: "system",
+            relatedType: "proposal",
+            relatedId: ep.id,
+            subject: "Proposal auto-expired",
+            body: `Proposal "${ep.title}" has passed its expiry date and was automatically marked as Not Accepted.`,
+            actorUserId: null,
+            occurredAt: new Date(),
+          });
+          autoExpired++;
+        } catch (e2) {
+          console.error(`[ProposalFollowup] Auto-expire failed for proposal ${ep.id}:`, e2);
+        }
+      }
+      return res.json({ ok: true, processed, total: staleProposals.length, autoExpired });
     } catch (e) {
       console.error("[ProposalFollowup] Endpoint error:", e);
       return res.status(500).json({ ok: false, error: String(e) });

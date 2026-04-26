@@ -59,6 +59,7 @@ import {
   RefreshCw,
   MousePointerClick,
   AlertCircle,
+  Timer,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -116,6 +117,7 @@ function OverviewTab({ proposal, onRefetch }: { proposal: any; onRefetch: () => 
     projectType: proposal.projectType ?? "",
     rfpDeadline: proposal.rfpDeadline ? new Date(proposal.rfpDeadline).toISOString().slice(0, 10) : "",
     completionDate: proposal.completionDate ? new Date(proposal.completionDate).toISOString().slice(0, 10) : "",
+    expiresAt: proposal.expiresAt ? new Date(proposal.expiresAt).toISOString().slice(0, 10) : "",
     budget: proposal.budget ? String(proposal.budget) : "",
     description: proposal.description ?? "",
   });
@@ -172,6 +174,11 @@ function OverviewTab({ proposal, onRefetch }: { proposal: any; onRefetch: () => 
           </div>
         </div>
         <div>
+          <Label>Proposal Expiry Date <span className="text-muted-foreground font-normal text-xs">(optional)</span></Label>
+          <Input type="date" value={form.expiresAt} onChange={(e) => setForm(f => ({ ...f, expiresAt: e.target.value }))} className="mt-1" />
+          <p className="text-xs text-muted-foreground mt-1">Auto-marks as Not Accepted when this date passes.</p>
+        </div>
+        <div>
           <Label>Budget ($)</Label>
           <Input type="number" value={form.budget} onChange={(e) => setForm(f => ({ ...f, budget: e.target.value }))} className="mt-1" />
         </div>
@@ -180,7 +187,7 @@ function OverviewTab({ proposal, onRefetch }: { proposal: any; onRefetch: () => 
           <Textarea value={form.description} onChange={(e) => setForm(f => ({ ...f, description: e.target.value }))} className="mt-1 min-h-[80px]" />
         </div>
         <Button
-          onClick={() => updateMutation.mutate({ id: proposal.id, ...form, budget: form.budget ? parseFloat(form.budget) : null, rfpDeadline: form.rfpDeadline || null, completionDate: form.completionDate || null })}
+          onClick={() => updateMutation.mutate({ id: proposal.id, ...form, budget: form.budget ? parseFloat(form.budget) : null, rfpDeadline: form.rfpDeadline || null, completionDate: form.completionDate || null, expiresAt: form.expiresAt || null })}
           disabled={updateMutation.isPending}
           className="bg-teal-600 hover:bg-teal-700 text-white"
         >
@@ -239,6 +246,30 @@ function OverviewTab({ proposal, onRefetch }: { proposal: any; onRefetch: () => 
         {proposal.emailClickedAt && (
           <InfoCard label="Link First Clicked" value={new Date(proposal.emailClickedAt).toLocaleString()} icon={MousePointerClick} />
         )}
+        {proposal.expiresAt && (() => {
+          const expDate = new Date(proposal.expiresAt);
+          const now = Date.now();
+          const msLeft = expDate.getTime() - now;
+          const isExpired = msLeft < 0;
+          const daysLeft = Math.ceil(msLeft / (1000 * 60 * 60 * 24));
+          const label = isExpired
+            ? "Expired"
+            : daysLeft <= 1
+            ? "Expires today"
+            : `Expires in ${daysLeft}d`;
+          return (
+            <div className={`bg-muted/40 rounded-lg p-3 border ${isExpired ? "border-red-500/40" : daysLeft <= 7 ? "border-orange-500/40" : "border-border"}`}>
+              <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-1">
+                <Timer className="size-3" />
+                Proposal Expiry
+              </div>
+              <div className={`text-sm font-medium ${isExpired ? "text-red-400" : daysLeft <= 7 ? "text-orange-400" : "text-foreground"}`}>
+                {expDate.toLocaleDateString()}
+                <span className="ml-2 text-xs font-normal opacity-80">({label})</span>
+              </div>
+            </div>
+          );
+        })()}
       </div>
       {/* ── Pipeline Integration Panel ── */}
       <PipelinePanel proposal={proposal} onRefetch={onRefetch} />

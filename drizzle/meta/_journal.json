@@ -267,6 +267,13 @@
       "when": 1777172337135,
       "tag": "0037_tiny_bruce_banner",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "5",
+      "when": 1777173282914,
+      "tag": "0038_silent_blockbuster",
+      "breakpoints": true
     }
   ]
 }

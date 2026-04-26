@@ -36,6 +36,8 @@ import {
   Link2,
   UserPlus,
   MessageSquare,
+  AlertTriangle,
+  Timer,
 } from "lucide-react";
 import { useState, useCallback, useRef } from "react";
 import { Link, useLocation } from "wouter";
@@ -63,6 +65,7 @@ const DEFAULT_GOALS: Record<string, number> = {
   closedWon:     20,
   activeLeads:   100,
   customers:     50,
+  staleProposals: 5,
 };
 
 /* ─── helpers ─────────────────────────────────────────────────────────────── */
@@ -363,7 +366,7 @@ export default function Dashboard() {
       <div className="p-6 space-y-6">
 
         {/* ── Row 1: Live stat cards with goal progress ── */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
           <MBStatCard
             label="Pipeline Value"
             value={fmt$(stats?.pipelineValue ?? 0)}
@@ -415,6 +418,24 @@ export default function Dashboard() {
             goals={goals}
             onGoalChange={handleGoalChange}
           />
+          <Link href="/proposals">
+            <MBStatCard
+              label="Stale Proposals"
+              value={(stats?.staleProposals ?? 0).toLocaleString()}
+              rawValue={stats?.staleProposals ?? 0}
+              hint={
+                (stats?.expiringProposals ?? 0) > 0
+                  ? `${stats?.expiringProposals} expiring soon`
+                  : "no expiring soon"
+              }
+              icon={AlertTriangle}
+              iconColor="#F59E0B"
+              loading={statsLoading}
+              goalKey="staleProposals"
+              goals={goals}
+              onGoalChange={handleGoalChange}
+            />
+          </Link>
         </div>
 
         {/* ── Row 2: Revenue chart + Win/Loss donut ── */}
