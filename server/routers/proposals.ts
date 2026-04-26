@@ -3,7 +3,7 @@
  * Covers: list, get, create, update, updateStatus, updateSection,
  *         upsertMilestone, deleteMilestone, submitFeedback (public),
  *         getByShareToken (public), generateSectionContent (AI),
- *         duplicate, sendToClient
+ *         duplicate, sendToClient, acceptProposal, acceptByToken
  */
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq } from "drizzle-orm";
@@ -14,6 +14,9 @@ import {
   proposalSections,
   proposalMilestones,
   proposalFeedback,
+  tasks,
+  notifications,
+  workspaces,
 } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { invokeLLM } from "../_core/llm";
@@ -477,9 +480,61 @@ export const proposalsRouter = router({
         .set({ status: "sent", sentAt: new Date() })
         .where(eq(proposals.id, input.id));
 
-      return { ok: true, emailSent: emailOk, shareUrl };
+       const deliveryNote = emailOk
+        ? `Email sent to ${proposal.clientEmail}`
+        : "Proposal marked as sent. Email delivery requires SMTP configuration in Settings → Email Delivery.";
+      return { ok: true, emailSent: emailOk, shareUrl, deliveryNote };
     }),
-
+  /**
+   * Accept a proposal internally (rep+). Marks status=accepted, creates a
+   * follow-up task, and sends an in-app notification to the workspace owner.
+   */
+  acceptProposal: repProcedure
+    .input(z.object({ id: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
+      const proposal = await getProposalOrThrow(db, input.id, ctx.workspace.id);
+      // Mark accepted
+      await db
+        .update(proposals)
+        .set({ status: "accepted", acceptedAt: new Date() })
+        .where(eq(proposals.id, input.id));
+      // Create follow-up task
+      const taskTitle = `Follow up: ${proposal.title} — accepted by ${proposal.clientName}`;
+      const taskResult = await db.insert(tasks).values({
+        workspaceId: ctx.workspace.id,
+        title: taskTitle,
+        description: `Proposal "${proposal.title}" was accepted. Schedule a kickoff meeting and send the contract.`,
+        type: "follow_up",
+        priority: "high",
+        status: "open",
+        ownerUserId: ctx.user.id,
+        relatedType: "proposal",
+        relatedId: input.id,
+        dueAt: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000), // 3 days from now
+      });
+      const taskId = Number((taskResult as any)[0]?.insertId ?? 0);
+      // Notify workspace owner (if different from current user)
+      const wsRows = await db
+        .select({ ownerUserId: workspaces.ownerUserId })
+        .from(workspaces)
+        .where(eq(workspaces.id, ctx.workspace.id))
+        .limit(1);
+      const ownerUserId = wsRows[0]?.ownerUserId;
+      if (ownerUserId && ownerUserId !== ctx.user.id) {
+        await db.insert(notifications).values({
+          workspaceId: ctx.workspace.id,
+          userId: ownerUserId,
+          kind: "deal_won",
+          title: `Proposal accepted: ${proposal.title}`,
+          body: `${proposal.clientName} accepted the proposal. A follow-up task has been created.`,
+          relatedType: "proposal",
+          relatedId: input.id,
+        });
+      }
+      return { ok: true, taskId };
+    }),
   /** Delete a proposal (manager+ only). */
   delete: managerProcedure
     .input(z.object({ id: z.number() }))
@@ -593,5 +648,63 @@ Write 2-4 paragraphs of professional proposal content for this section. Be speci
           ),
         );
       return { ok: true };
+    }),
+  /**
+   * Accept proposal by share token — public, for the client portal.
+   * Marks status=accepted, creates a follow-up task for the workspace owner,
+   * and sends an in-app notification to the workspace owner.
+   */
+  acceptByToken: publicProcedure
+    .input(z.object({ token: z.string(), clientName: z.string().optional() }))
+    .mutation(async ({ input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
+      const rows = await db
+        .select()
+        .from(proposals)
+        .where(eq(proposals.shareToken, input.token))
+        .limit(1);
+      if (!rows[0]) throw new TRPCError({ code: "NOT_FOUND", message: "Proposal not found" });
+      const proposal = rows[0];
+      // Idempotent: if already accepted, return ok
+      if (proposal.status === "accepted") return { ok: true, alreadyAccepted: true };
+      // Mark accepted
+      await db
+        .update(proposals)
+        .set({ status: "accepted", acceptedAt: new Date() })
+        .where(eq(proposals.id, proposal.id));
+      // Get workspace owner
+      const wsRows = await db
+        .select({ ownerUserId: workspaces.ownerUserId })
+        .from(workspaces)
+        .where(eq(workspaces.id, proposal.workspaceId))
+        .limit(1);
+      const ownerUserId = wsRows[0]?.ownerUserId;
+      if (ownerUserId) {
+        // Create follow-up task for owner
+        await db.insert(tasks).values({
+          workspaceId: proposal.workspaceId,
+          title: `Follow up: ${proposal.title} — accepted by ${proposal.clientName}`,
+          description: `Client ${proposal.clientName} accepted the proposal via the client portal. Schedule a kickoff meeting and send the contract.`,
+          type: "follow_up",
+          priority: "high",
+          status: "open",
+          ownerUserId,
+          relatedType: "proposal",
+          relatedId: proposal.id,
+          dueAt: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000),
+        });
+        // In-app notification
+        await db.insert(notifications).values({
+          workspaceId: proposal.workspaceId,
+          userId: ownerUserId,
+          kind: "deal_won",
+          title: `Proposal accepted: ${proposal.title}`,
+          body: `${proposal.clientName} accepted the proposal via the client portal. A follow-up task has been created.`,
+          relatedType: "proposal",
+          relatedId: proposal.id,
+        });
+      }
+      return { ok: true, alreadyAccepted: false };
     }),
 });

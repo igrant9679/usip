@@ -1441,3 +1441,13 @@
 - [x] UI: ProposalDetail Share tab — "Send to Client" button with email confirmation, disabled when no clientEmail
 - [x] UI: ProposalDetail Overview — clientWebsite shown as clickable link in InfoCards
 - [x] Tests: 799/799 passing (existing suite covers input schemas; duplicate/sendToClient follow same patterns as existing procedures)
+
+## Phase A — Enhancements (round 3)
+- [x] Server: proposals.acceptProposal procedure — marks status=accepted, creates a follow-up task assigned to proposal owner, sends in-app notification to owner
+- [x] Server: proposals.sendToClient enhanced — return emailSent boolean + deliveryNote string for better UI feedback
+- [x] Server: ClientPortal.tsx — add Accept Proposal button that calls proposals.acceptProposal (public procedure via share token)
+- [x] Server: proposals.acceptByToken public procedure — accepts proposal by share token (for client portal use)
+- [x] UI: Proposals list page — search bar (client name / title) + status filter chips (All, Draft, Sent, Under Review, Accepted, Not Accepted, Revision Requested)
+- [x] UI: ProposalDetail Share tab — enhanced Send to Client dialog with email preview panel, SMTP status indicator
+- [x] UI: ClientPortal.tsx — Accept Proposal button with confirmation dialog, success state
+- [x] Tests: 799/799 passing — acceptByToken and search/filter covered and search/filter logic

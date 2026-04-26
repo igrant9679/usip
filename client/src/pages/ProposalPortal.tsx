@@ -20,7 +20,15 @@ import {
   Eye,
   XCircle,
   RotateCcw,
+  ThumbsUp,
 } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 
 const STATUS_CONFIG = {
@@ -59,6 +67,20 @@ export default function ProposalPortal() {
     onSuccess: () => {
       setSubmitted(true);
       toast.success("Feedback submitted — thank you!");
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const [acceptDialogOpen, setAcceptDialogOpen] = useState(false);
+  const [accepted, setAccepted] = useState(false);
+  const acceptMutation = trpc.proposals.acceptByToken.useMutation({
+    onSuccess: (data) => {
+      setAccepted(true);
+      setAcceptDialogOpen(false);
+      if (data.alreadyAccepted) {
+        toast.info("This proposal was already accepted.");
+      } else {
+        toast.success("Proposal accepted! The team has been notified.");
+      }
     },
     onError: (e) => toast.error(e.message),
   });
@@ -143,6 +165,27 @@ export default function ProposalPortal() {
             <p className="text-gray-600 text-sm leading-relaxed mt-4 border-t border-gray-100 pt-4">
               {proposal.description}
             </p>
+          )}
+          {/* Accept Proposal CTA */}
+          {proposal.status !== "accepted" && !accepted && (
+            <div className="mt-4 pt-4 border-t border-gray-100 flex items-center gap-3">
+              <Button
+                onClick={() => setAcceptDialogOpen(true)}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white gap-2"
+              >
+                <ThumbsUp className="size-4" />
+                Accept This Proposal
+              </Button>
+              <p className="text-xs text-gray-400">
+                Accepting notifies the team and creates a follow-up action.
+              </p>
+            </div>
+          )}
+          {(proposal.status === "accepted" || accepted) && (
+            <div className="mt-4 pt-4 border-t border-gray-100 flex items-center gap-2 text-emerald-700">
+              <CheckCircle2 className="size-5 text-emerald-500" />
+              <span className="text-sm font-medium">This proposal has been accepted.</span>
+            </div>
           )}
         </div>
 
@@ -274,6 +317,41 @@ export default function ProposalPortal() {
         </Tabs>
       </main>
 
+      {/* Accept Proposal dialog */}
+      <Dialog open={acceptDialogOpen} onOpenChange={setAcceptDialogOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Accept This Proposal?</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 text-sm text-gray-600">
+            <p>
+              By accepting, you confirm that <strong>{proposal.clientName}</strong> agrees to move forward with{" "}
+              <strong>{proposal.title}</strong>.
+            </p>
+            <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-emerald-800 text-xs">
+              <p className="font-medium mb-1">What happens next:</p>
+              <ul className="space-y-0.5">
+                <li>• The proposal team is notified immediately</li>
+                <li>• A follow-up task is created for your account manager</li>
+                <li>• You can still submit feedback via the Feedback tab</li>
+              </ul>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setAcceptDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => acceptMutation.mutate({ token })}
+              disabled={acceptMutation.isPending}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white gap-1.5"
+            >
+              <ThumbsUp className="size-4" />
+              {acceptMutation.isPending ? "Accepting..." : "Yes, Accept"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <footer className="text-center py-6 text-xs text-gray-400 border-t border-gray-200 mt-8">
         Powered by USIP — Unified Sales Intelligence Platform
       </footer>

@@ -593,9 +593,9 @@ function ShareTab({ proposal, onRefetch }: { proposal: any; onRefetch: () => voi
   const sendToClient = trpc.proposals.sendToClient.useMutation({
     onSuccess: (data) => {
       if (data.emailSent) {
-        toast.success("Proposal sent to client via email");
+        toast.success(`Email sent to ${proposal.clientEmail}`);
       } else {
-        toast.success("Proposal marked as sent. Email delivery requires SMTP configuration in Settings → Email Delivery.");
+        toast.info(data.deliveryNote ?? "Proposal marked as sent.");
       }
       setSendDialogOpen(false);
       setPersonalMessage("");

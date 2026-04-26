@@ -459,27 +459,49 @@ export default function Proposals() {
       </div>
 
       {/* Filters */}
-      <div className="flex items-center gap-3 px-6 py-3 border-b border-border shrink-0">
-        <div className="relative flex-1 max-w-xs">
+      <div className="flex flex-col gap-2 px-6 py-3 border-b border-border shrink-0">
+        <div className="relative max-w-sm">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
           <Input
-            placeholder="Search proposals..."
+            placeholder="Search by title or client..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="pl-9"
+            className="pl-9 h-9"
           />
         </div>
-        <Select value={statusFilter} onValueChange={setStatusFilter}>
-          <SelectTrigger className="w-44">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Statuses</SelectItem>
-            {Object.entries(STATUS_CONFIG).map(([k, v]) => (
-              <SelectItem key={k} value={k}>{v.label}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <button
+            onClick={() => setStatusFilter("all")}
+            className={cn(
+              "px-3 py-1 rounded-full text-xs font-medium border transition-all",
+              statusFilter === "all"
+                ? "bg-teal-500/20 text-teal-400 border-teal-500/40"
+                : "border-border text-muted-foreground hover:border-teal-500/30 hover:text-foreground",
+            )}
+          >
+            All{list ? ` (${list.length})` : ""}
+          </button>
+          {Object.entries(STATUS_CONFIG).map(([k, v]) => {
+            const Icon = v.icon;
+            const count = list?.filter((p) => p.status === k).length ?? 0;
+            if (count === 0 && statusFilter !== k) return null;
+            return (
+              <button
+                key={k}
+                onClick={() => setStatusFilter(statusFilter === k ? "all" : k)}
+                className={cn(
+                  "inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium border transition-all",
+                  statusFilter === k
+                    ? cn(v.color, "ring-1 ring-current")
+                    : "border-border text-muted-foreground hover:border-teal-500/30 hover:text-foreground",
+                )}
+              >
+                <Icon className="size-3" />
+                {v.label} ({count})
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {/* List */}
