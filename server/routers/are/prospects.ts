@@ -1052,6 +1052,13 @@ export const prospectsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
+      // Get the campaign to read its actual autoApproveThreshold
+      const [campaign] = await db
+        .select({ autoApproveThreshold: areCampaigns.autoApproveThreshold })
+        .from(areCampaigns)
+        .where(and(eq(areCampaigns.id, input.campaignId), eq(areCampaigns.workspaceId, ctx.workspace.id)))
+        .limit(1);
+      if (!campaign) throw new TRPCError({ code: "NOT_FOUND", message: "Campaign not found" });
       // Get latest active ICP
       const [icp] = await db
         .select()
@@ -1068,8 +1075,9 @@ export const prospectsRouter = router({
           eq(prospectQueue.workspaceId, ctx.workspace.id),
           eq(prospectQueue.sequenceStatus, "skipped"),
         ));
-      if (rejected.length === 0) return { processed: 0, requalified: 0 };
-      const autoApproveThreshold = 70;
+      if (rejected.length === 0) return { processed: 0, requalified: 0, threshold: campaign.autoApproveThreshold ?? 70 };
+      // Use the campaign's actual threshold (fallback 70 if not set)
+      const autoApproveThreshold = campaign.autoApproveThreshold ?? 70;
       let requalified = 0;
       for (const prospect of rejected) {
         try {
@@ -1087,6 +1095,6 @@ export const prospectsRouter = router({
           console.error("[reEvaluateAll] Failed for prospect", prospect.id, e);
         }
       }
-      return { processed: rejected.length, requalified };
+      return { processed: rejected.length, requalified, threshold: autoApproveThreshold };
     }),
 });

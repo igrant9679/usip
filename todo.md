@@ -1768,3 +1768,9 @@
 
 ## Round 26 — Re-evaluate All confirmation dialog
 - [x] UI: Confirmation dialog before Re-evaluate All bulk action (shows rejection count, warns about LLM cost, requires explicit confirm)
+
+## Round 27 — Threshold in dialog, progress toast, rejection reason chart
+- [x] UI: Show actual campaign autoApproveThreshold in Re-evaluate All confirmation dialog
+- [x] UI: Live progress toast during bulk re-evaluation (shows N/total as each prospect is scored)
+- [x] Server: getRejectionReasonStats procedure returning top-N reason frequencies for a campaign
+- [x] UI: Rejection reason frequency bar chart on Rejections tab header

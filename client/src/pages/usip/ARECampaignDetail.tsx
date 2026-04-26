@@ -34,6 +34,7 @@ import {
   Activity,
   ArrowLeft,
   AtSign,
+  BarChart2,
   Download,
   RefreshCcw,
   Bot,
@@ -70,7 +71,7 @@ import {
   XCircle,
   Zap,
 } from "lucide-react";
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { Link, useParams } from "wouter";
 import { toast } from "sonner";
 
@@ -739,17 +740,35 @@ export default function ARECampaignDetail() {
     },
     onError: (e) => toast.error(e.message),
   });
+  const [reEvalProgress, setReEvalProgress] = useState<{ done: number; total: number } | null>(null);
+  const reEvalToastId = useRef<string | number | undefined>(undefined);
   const reEvaluateAll = trpc.are.prospects.reEvaluateAll.useMutation({
+    onMutate: () => {
+      const total = rejectionStats?.total ?? 0;
+      setReEvalProgress({ done: 0, total });
+      reEvalToastId.current = toast.loading(
+        total > 0
+          ? `Re-evaluating 0 / ${total} prospects…`
+          : "Re-evaluating prospects…",
+        { duration: Infinity }
+      );
+    },
     onSuccess: (d) => {
+      setReEvalProgress(null);
+      if (reEvalToastId.current !== undefined) toast.dismiss(reEvalToastId.current);
       toast.success(
         d.requalified > 0
-          ? `Re-evaluated ${d.processed} prospects — ${d.requalified} re-qualified!`
-          : `Re-evaluated ${d.processed} prospects — none met the threshold.`
+          ? `Re-evaluated ${d.processed} prospects — ${d.requalified} re-qualified (threshold: ${d.threshold})!`
+          : `Re-evaluated ${d.processed} prospects — none met the threshold (${d.threshold}).`
       );
       utils.are.prospects.getRejectionStats.invalidate({ campaignId });
       utils.are.prospects.list.invalidate({ campaignId });
     },
-    onError: (e) => toast.error(e.message),
+    onError: (e) => {
+      setReEvalProgress(null);
+      if (reEvalToastId.current !== undefined) toast.dismiss(reEvalToastId.current);
+      toast.error(e.message);
+    },
   });
   const handleExportCsv = async () => {
     const result = await fetchCsv();
@@ -1410,6 +1429,51 @@ export default function ARECampaignDetail() {
               />
             ) : (
               <div className="space-y-2">
+                {/* ── Rejection reason bar chart ── */}
+                {(rejectionStats?.byReason?.length ?? 0) > 0 && (
+                  <div className="rounded-xl border bg-card px-4 py-3 mb-3">
+                    <div className="flex items-center gap-2 mb-3">
+                      <BarChart2 className="size-3.5 text-muted-foreground" />
+                      <span className="text-xs font-medium text-muted-foreground">Top Rejection Reasons</span>
+                    </div>
+                    <div className="space-y-2">
+                      {(rejectionStats?.byReason ?? []).slice(0, 5).map((r: { reason: string; count: number }) => {
+                        const maxCount = rejectionStats!.byReason[0].count;
+                        const pct = Math.round((r.count / maxCount) * 100);
+                        return (
+                          <div key={r.reason} className="flex items-center gap-2">
+                            <span className="text-[11px] text-muted-foreground truncate w-40 shrink-0" title={r.reason}>{r.reason}</span>
+                            <div className="flex-1 h-2 rounded-full bg-muted overflow-hidden">
+                              <div
+                                className="h-full rounded-full bg-destructive/60 transition-all duration-500"
+                                style={{ width: `${pct}%` }}
+                              />
+                            </div>
+                            <span className="text-[11px] tabular-nums text-muted-foreground w-6 text-right shrink-0">{r.count}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+                {/* ── Progress bar during re-evaluation ── */}
+                {reEvalProgress && (
+                  <div className="rounded-xl border bg-violet-500/5 border-violet-500/20 px-4 py-3 mb-3">
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="text-xs text-violet-600 dark:text-violet-400 font-medium flex items-center gap-1.5">
+                        <Loader2 className="size-3 animate-spin" />
+                        Re-evaluating prospects…
+                      </span>
+                      <span className="text-[11px] text-muted-foreground tabular-nums">
+                        {reEvalProgress.done} / {reEvalProgress.total}
+                      </span>
+                    </div>
+                    <Progress
+                      value={reEvalProgress.total > 0 ? Math.round((reEvalProgress.done / reEvalProgress.total) * 100) : 0}
+                      className="h-1.5"
+                    />
+                  </div>
+                )}
                 <div className="flex items-center justify-between mb-3">
                   <p className="text-xs text-muted-foreground">
                     {rejectionStats?.total} prospect{(rejectionStats?.total ?? 0) !== 1 ? "s" : ""} rejected.
@@ -1605,8 +1669,14 @@ export default function ARECampaignDetail() {
                 <strong>{rejectionStats?.total ?? 0} rejected prospect{(rejectionStats?.total ?? 0) !== 1 ? "s" : ""}</strong>{" "}
                 against the current active ICP profile using the LLM scoring agent.
               </span>
+              <span className="block">
+                Auto-approve threshold for this campaign:{" "}
+                <strong className="text-violet-600 dark:text-violet-400">
+                  {autoThreshold !== null ? `${autoThreshold} / 100` : "not set (default 70)"}
+                </strong>.
+                Prospects scoring at or above this will be moved back to the pending queue.
+              </span>
               <span className="block text-amber-600 dark:text-amber-400">
-                Prospects that now meet the auto-approve threshold (&ge;70) will be moved back to the pending queue.
                 This action cannot be undone.
               </span>
             </AlertDialogDescription>
