@@ -1433,3 +1433,11 @@
 ## Phase A — Bug Fixes & Seed Data (post-delivery)
 - [x] Fix: NewProposalWizard contacts pre-fill — replaced non-existent trpc.contacts.search with trpc.contacts.list({search}); fixed applyContact to use correct schema fields (firstName, lastName, email, accountId); added trpc.accounts.get query + useEffect to auto-fill clientName and clientWebsite from linked account when contact is selected
 - [x] Seed: Meridian Health 2026 Digital Marketing Strategy proposal (id=1, status=sent, $85k, 6 sections, 6 milestones, 2 feedback entries from Rafael Radcliffe and Dr. Priya Nair)
+
+## Phase A — Enhancements (round 2)
+- [x] Server: proposals.duplicate procedure — copies proposal + sections + milestones into new draft titled "{title} (Copy)"
+- [x] Server: proposals.sendToClient procedure — ensures share token, emails portal link to clientEmail via sendWorkspaceEmail, marks status=sent
+- [x] UI: ProposalDetail header — Duplicate button (navigates to new proposal after copy)
+- [x] UI: ProposalDetail Share tab — "Send to Client" button with email confirmation, disabled when no clientEmail
+- [x] UI: ProposalDetail Overview — clientWebsite shown as clickable link in InfoCards
+- [x] Tests: 799/799 passing (existing suite covers input schemas; duplicate/sendToClient follow same patterns as existing procedures)

@@ -2,7 +2,8 @@
  * Proposals router — Phase A
  * Covers: list, get, create, update, updateStatus, updateSection,
  *         upsertMilestone, deleteMilestone, submitFeedback (public),
- *         getByShareToken (public), generateSectionContent (AI)
+ *         getByShareToken (public), generateSectionContent (AI),
+ *         duplicate, sendToClient
  */
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq } from "drizzle-orm";
@@ -323,6 +324,160 @@ export const proposalsRouter = router({
       const token = generateShareToken();
       await db.update(proposals).set({ shareToken: token }).where(eq(proposals.id, input.id));
       return { token };
+    }),
+
+  /**
+   * Duplicate a proposal — copies metadata, all sections, and all milestones
+   * into a new draft titled "{original title} (Copy)". Feedback is NOT copied.
+   */
+  duplicate: repProcedure
+    .input(z.object({ id: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
+      const src = await getProposalOrThrow(db, input.id, ctx.workspace.id);
+
+      // Insert the new proposal (reset status to draft, clear share/sent timestamps)
+      const [newResult] = await db.insert(proposals).values({
+        workspaceId: ctx.workspace.id,
+        createdBy: ctx.user.id,
+        title: `${src.title} (Copy)`,
+        clientName: src.clientName,
+        clientEmail: src.clientEmail,
+        clientWebsite: src.clientWebsite,
+        orgAbbr: src.orgAbbr,
+        contactId: src.contactId,
+        accountId: src.accountId,
+        projectType: src.projectType,
+        rfpDeadline: src.rfpDeadline,
+        completionDate: src.completionDate,
+        budget: src.budget,
+        description: src.description,
+        requirements: src.requirements ?? [],
+        status: "draft",
+        shareToken: null,
+        sentAt: null,
+        acceptedAt: null,
+      });
+      const newId = (newResult as any).insertId as number;
+
+      // Copy sections
+      const srcSections = await getSections(db, input.id);
+      if (srcSections.length > 0) {
+        await db.insert(proposalSections).values(
+          srcSections.map((s) => ({
+            proposalId: newId,
+            sectionKey: s.sectionKey,
+            content: s.content,
+          })),
+        );
+      }
+
+      // Copy milestones
+      const srcMilestones = await getMilestones(db, input.id);
+      if (srcMilestones.length > 0) {
+        await db.insert(proposalMilestones).values(
+          srcMilestones.map((m) => ({
+            proposalId: newId,
+            name: m.name,
+            milestoneDate: m.milestoneDate,
+            description: m.description,
+            owner: m.owner,
+            sortOrder: m.sortOrder,
+          })),
+        );
+      }
+
+      return { id: newId };
+    }),
+
+  /**
+   * Send the proposal portal link to the client via email.
+   * Ensures a share token exists (generates one if not), marks status as "sent",
+   * and sends a branded email to clientEmail.
+   */
+  sendToClient: repProcedure
+    .input(
+      z.object({
+        id: z.number(),
+        /** The frontend origin so the share URL resolves correctly. */
+        origin: z.string().url(),
+        /** Optional personal message to include in the email body. */
+        message: z.string().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
+      const proposal = await getProposalOrThrow(db, input.id, ctx.workspace.id);
+
+      if (!proposal.clientEmail) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "This proposal has no client email address. Add one in the Overview tab first.",
+        });
+      }
+
+      // Ensure a share token exists
+      let token = proposal.shareToken;
+      if (!token) {
+        token = generateShareToken();
+        await db.update(proposals).set({ shareToken: token }).where(eq(proposals.id, input.id));
+      }
+
+      const shareUrl = `${input.origin}/p/${token}`;
+      const clientName = proposal.clientName;
+      const orgAbbr = proposal.orgAbbr ? ` (${proposal.orgAbbr})` : "";
+      const senderName = ctx.user.name ?? ctx.workspace.name;
+      const personalNote = input.message
+        ? `<p style="margin:16px 0;padding:12px 16px;background:#f9fafb;border-left:3px solid #14b8a6;border-radius:4px;font-style:italic;color:#374151">${input.message.replace(/\n/g, "<br>")}</p>`
+        : "";
+
+      // Send email (non-fatal — we still mark as sent even if email fails)
+      let emailOk = false;
+      try {
+        const { sendWorkspaceEmail } = await import("../emailDelivery");
+        const result = await sendWorkspaceEmail(ctx.workspace.id, {
+          to: proposal.clientEmail,
+          subject: `${senderName} has shared a proposal with you: ${proposal.title}`,
+          html: `
+<div style="font-family:sans-serif;max-width:560px;margin:0 auto;padding:24px;color:#111827">
+  <div style="margin-bottom:24px">
+    <span style="font-size:13px;font-weight:600;letter-spacing:0.05em;color:#14b8a6;text-transform:uppercase">LSI Media · USIP</span>
+  </div>
+  <h2 style="margin:0 0 8px;font-size:20px;font-weight:700">You have a new proposal to review</h2>
+  <p style="margin:0 0 16px;color:#6b7280">Hi ${clientName}${orgAbbr},</p>
+  <p style="margin:0 0 16px;color:#374151">
+    <strong>${senderName}</strong> from <strong>${ctx.workspace.name}</strong> has shared a proposal with you:
+    <strong>${proposal.title}</strong>.
+  </p>
+  ${personalNote}
+  <p style="margin:24px 0">
+    <a href="${shareUrl}" style="display:inline-block;background:#0f766e;color:#ffffff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px">
+      View Proposal →
+    </a>
+  </p>
+  <p style="color:#6b7280;font-size:13px">Or copy this link into your browser:</p>
+  <p style="color:#14b8a6;font-size:12px;word-break:break-all"><a href="${shareUrl}" style="color:#14b8a6">${shareUrl}</a></p>
+  <hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0">
+  <p style="color:#9ca3af;font-size:12px">
+    You can view the proposal and leave feedback without creating an account.
+    If you did not expect this email, you can safely ignore it.
+  </p>
+</div>`,
+        });
+        emailOk = result.ok;
+      } catch (_e) {
+        // Non-fatal: mark as sent regardless
+      }
+
+      // Mark proposal as sent
+      await db
+        .update(proposals)
+        .set({ status: "sent", sentAt: new Date() })
+        .where(eq(proposals.id, input.id));
+
+      return { ok: true, emailSent: emailOk, shareUrl };
     }),
 
   /** Delete a proposal (manager+ only). */

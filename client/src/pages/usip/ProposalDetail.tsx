@@ -1,10 +1,8 @@
-import { Shell } from "@/components/usip/Shell";
 import { useState, useMemo } from "react";
 import { useLocation, useParams } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -45,10 +43,14 @@ import {
   Copy,
   Check,
   MessageSquare,
-  Share2,
   Edit2,
+  Files,
+  Send,
+  Globe,
+  Mail,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Shell } from "@/components/usip/Shell";
 
 // ── Status config ─────────────────────────────────────────────────────────────
 const STATUS_CONFIG = {
@@ -190,7 +192,17 @@ function OverviewTab({ proposal, onRefetch }: { proposal: any; onRefetch: () => 
 
       <div className="grid grid-cols-2 gap-4">
         <InfoCard label="Client" value={`${proposal.clientName}${proposal.orgAbbr ? ` (${proposal.orgAbbr})` : ""}`} icon={Building2} />
-        {proposal.clientEmail && <InfoCard label="Client Email" value={proposal.clientEmail} icon={MessageSquare} />}
+        {proposal.clientEmail && (
+          <InfoCard label="Client Email" value={proposal.clientEmail} icon={Mail} href={`mailto:${proposal.clientEmail}`} />
+        )}
+        {proposal.clientWebsite && (
+          <InfoCard
+            label="Client Website"
+            value={proposal.clientWebsite.replace(/^https?:\/\//, "")}
+            icon={Globe}
+            href={proposal.clientWebsite.startsWith("http") ? proposal.clientWebsite : `https://${proposal.clientWebsite}`}
+          />
+        )}
         {proposal.projectType && <InfoCard label="Project Type" value={proposal.projectType} icon={FileText} />}
         {proposal.budget && <InfoCard label="Budget" value={`$${Number(proposal.budget).toLocaleString()}`} icon={DollarSign} />}
         {proposal.rfpDeadline && <InfoCard label="RFP Deadline" value={new Date(proposal.rfpDeadline).toLocaleDateString()} icon={Calendar} />}
@@ -231,14 +243,35 @@ function OverviewTab({ proposal, onRefetch }: { proposal: any; onRefetch: () => 
   );
 }
 
-function InfoCard({ label, value, icon: Icon }: { label: string; value: string; icon: any }) {
+function InfoCard({
+  label,
+  value,
+  icon: Icon,
+  href,
+}: {
+  label: string;
+  value: string;
+  icon: any;
+  href?: string;
+}) {
   return (
     <div className="bg-muted/40 rounded-lg p-3 border border-border">
       <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-1">
         <Icon className="size-3" />
         {label}
       </div>
-      <div className="text-sm font-medium text-foreground">{value}</div>
+      {href ? (
+        <a
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-sm font-medium text-teal-400 hover:text-teal-300 hover:underline truncate block"
+        >
+          {value}
+        </a>
+      ) : (
+        <div className="text-sm font-medium text-foreground">{value}</div>
+      )}
     </div>
   );
 }
@@ -549,9 +582,25 @@ function FeedbackTab({ feedback }: { feedback: any[] }) {
 // ── Share Tab ─────────────────────────────────────────────────────────────────
 function ShareTab({ proposal, onRefetch }: { proposal: any; onRefetch: () => void }) {
   const [copied, setCopied] = useState(false);
+  const [sendDialogOpen, setSendDialogOpen] = useState(false);
+  const [personalMessage, setPersonalMessage] = useState("");
 
   const generateLink = trpc.proposals.generateShareLink.useMutation({
     onSuccess: () => { toast.success("Share link generated"); onRefetch(); },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const sendToClient = trpc.proposals.sendToClient.useMutation({
+    onSuccess: (data) => {
+      if (data.emailSent) {
+        toast.success("Proposal sent to client via email");
+      } else {
+        toast.success("Proposal marked as sent. Email delivery requires SMTP configuration in Settings → Email Delivery.");
+      }
+      setSendDialogOpen(false);
+      setPersonalMessage("");
+      onRefetch();
+    },
     onError: (e) => toast.error(e.message),
   });
 
@@ -566,6 +615,16 @@ function ShareTab({ proposal, onRefetch }: { proposal: any; onRefetch: () => voi
       setTimeout(() => setCopied(false), 2000);
     });
   }
+
+  function handleSendToClient() {
+    sendToClient.mutate({
+      id: proposal.id,
+      origin: window.location.origin,
+      message: personalMessage || undefined,
+    });
+  }
+
+  const hasClientEmail = !!proposal.clientEmail;
 
   return (
     <div className="space-y-6 max-w-lg">
@@ -589,29 +648,51 @@ function ShareTab({ proposal, onRefetch }: { proposal: any; onRefetch: () => voi
               {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
             </Button>
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => generateLink.mutate({ id: proposal.id })}
-            disabled={generateLink.isPending}
-            className="gap-1.5 text-amber-400 border-amber-500/30 hover:bg-amber-500/10"
-          >
-            <RotateCcw className="size-3.5" />
-            Regenerate Link
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              onClick={() => setSendDialogOpen(true)}
+              disabled={!hasClientEmail}
+              className="bg-teal-600 hover:bg-teal-700 text-white gap-1.5"
+              title={hasClientEmail ? undefined : "Add a client email in the Overview tab first"}
+            >
+              <Send className="size-3.5" />
+              Send to Client
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => generateLink.mutate({ id: proposal.id })}
+              disabled={generateLink.isPending}
+              className="gap-1.5 text-amber-400 border-amber-500/30 hover:bg-amber-500/10"
+            >
+              <RotateCcw className="size-3.5" />
+              Regenerate Link
+            </Button>
+          </div>
+          {!hasClientEmail && (
+            <p className="text-xs text-amber-400">
+              Add a client email address in the Overview tab to enable "Send to Client".
+            </p>
+          )}
           <p className="text-xs text-muted-foreground">
             Regenerating the link will invalidate the old one.
           </p>
         </div>
       ) : (
-        <Button
-          onClick={() => generateLink.mutate({ id: proposal.id })}
-          disabled={generateLink.isPending}
-          className="bg-teal-600 hover:bg-teal-700 text-white gap-1.5"
-        >
-          <Link2 className="size-4" />
-          {generateLink.isPending ? "Generating..." : "Generate Share Link"}
-        </Button>
+        <div className="space-y-3">
+          <Button
+            onClick={() => generateLink.mutate({ id: proposal.id })}
+            disabled={generateLink.isPending}
+            className="bg-teal-600 hover:bg-teal-700 text-white gap-1.5"
+          >
+            <Link2 className="size-4" />
+            {generateLink.isPending ? "Generating..." : "Generate Share Link"}
+          </Button>
+          <p className="text-xs text-muted-foreground">
+            Generate a link first, then you can send it directly to the client.
+          </p>
+        </div>
       )}
 
       <div className="bg-muted/40 rounded-lg border border-border p-4 text-sm space-y-2">
@@ -623,6 +704,51 @@ function ShareTab({ proposal, onRefetch }: { proposal: any; onRefetch: () => voi
           <li>• A feedback form to submit questions or comments</li>
         </ul>
       </div>
+
+      {/* Send to Client dialog */}
+      <Dialog open={sendDialogOpen} onOpenChange={setSendDialogOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Send Proposal to Client</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="bg-muted/40 rounded-lg p-3 border border-border text-sm">
+              <p className="text-muted-foreground text-xs mb-1">Sending to</p>
+              <p className="font-medium">{proposal.clientName}</p>
+              <p className="text-teal-400 text-xs">{proposal.clientEmail}</p>
+            </div>
+            <div>
+              <Label>Personal message (optional)</Label>
+              <Textarea
+                value={personalMessage}
+                onChange={(e) => setPersonalMessage(e.target.value)}
+                className="mt-1 min-h-[100px]"
+                placeholder="Add a personal note to include in the email..."
+              />
+            </div>
+            <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-3 text-xs text-blue-300">
+              <p className="font-medium mb-1">This will also:</p>
+              <ul className="space-y-0.5 text-blue-300/80">
+                <li>• Mark the proposal status as <strong>Sent</strong></li>
+                <li>• Send an email with the portal link to the client</li>
+              </ul>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => { setSendDialogOpen(false); setPersonalMessage(""); }}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleSendToClient}
+              disabled={sendToClient.isPending}
+              className="bg-teal-600 hover:bg-teal-700 text-white gap-1.5"
+            >
+              <Send className="size-3.5" />
+              {sendToClient.isPending ? "Sending..." : "Send Proposal"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -638,6 +764,14 @@ export default function ProposalDetail() {
     { id: proposalId },
     { enabled: !!current && proposalId > 0 },
   );
+
+  const duplicateMutation = trpc.proposals.duplicate.useMutation({
+    onSuccess: (result) => {
+      toast.success("Proposal duplicated");
+      navigate(`/proposals/${result.id}`);
+    },
+    onError: (e) => toast.error(e.message),
+  });
 
   if (isLoading) {
     return (
@@ -687,6 +821,18 @@ export default function ProposalDetail() {
             {proposal.projectType && ` · ${proposal.projectType}`}
           </p>
         </div>
+        {/* Header actions */}
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => duplicateMutation.mutate({ id: proposal.id })}
+          disabled={duplicateMutation.isPending}
+          className="gap-1.5 shrink-0"
+          title="Duplicate this proposal as a new draft"
+        >
+          <Files className="size-3.5" />
+          {duplicateMutation.isPending ? "Duplicating..." : "Duplicate"}
+        </Button>
       </div>
 
       {/* Tabs */}
