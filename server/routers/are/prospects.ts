@@ -787,7 +787,11 @@ export const prospectsRouter = router({
 
   /** Add a note to a prospect */
   addNote: workspaceProcedure
-    .input(z.object({ prospectId: z.number(), body: z.string().min(1).max(4000) }))
+    .input(z.object({
+      prospectId: z.number(),
+      body: z.string().min(1).max(4000),
+      category: z.enum(["general", "qualification", "objection", "follow_up", "intel"]).optional().default("general"),
+    }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
@@ -796,11 +800,35 @@ export const prospectsRouter = router({
         prospectQueueId: input.prospectId,
         userId: ctx.user.id,
         body: input.body,
+        category: input.category ?? "general",
         isPinned: false,
       }).$returningId();
       return { id: row.id };
     }),
 
+  /** Edit a note body (only the author can edit) */
+  editNote: workspaceProcedure
+    .input(z.object({
+      noteId: z.number(),
+      body: z.string().min(1).max(4000),
+      category: z.enum(["general", "qualification", "objection", "follow_up", "intel"]).optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [note] = await db.select().from(prospectNotes)
+        .where(and(eq(prospectNotes.id, input.noteId), eq(prospectNotes.workspaceId, ctx.workspace.id)))
+        .limit(1);
+      if (!note) throw new TRPCError({ code: "NOT_FOUND" });
+      if (note.userId !== ctx.user.id) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Only the note author can edit notes." });
+      }
+      const patch: Record<string, unknown> = { body: input.body, editedAt: new Date() };
+      if (input.category) patch.category = input.category;
+      await db.update(prospectNotes).set(patch)
+        .where(and(eq(prospectNotes.id, input.noteId), eq(prospectNotes.workspaceId, ctx.workspace.id)));
+      return { success: true };
+    }),
   /** List notes for a prospect, pinned first */
   listNotes: workspaceProcedure
     .input(z.object({ prospectId: z.number() }))
@@ -841,5 +869,38 @@ export const prospectsRouter = router({
       await db.update(prospectNotes).set({ isPinned: input.isPinned })
         .where(and(eq(prospectNotes.id, input.noteId), eq(prospectNotes.workspaceId, ctx.workspace.id)));
       return { success: true };
+    }),
+  /** Rejection analytics — top reasons and counts for a campaign */
+  getRejectionStats: workspaceProcedure
+    .input(z.object({ campaignId: z.number() }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) return { total: 0, byReason: [] };
+      const rejected = await db.select({
+        id: prospectQueue.id,
+        companyName: prospectQueue.companyName,
+        contactName: prospectQueue.contactName,
+        contactTitle: prospectQueue.contactTitle,
+        rejectionReason: prospectQueue.rejectionReason,
+        rejectedAt: prospectQueue.rejectedAt,
+      })
+        .from(prospectQueue)
+        .where(and(
+          eq(prospectQueue.campaignId, input.campaignId),
+          eq(prospectQueue.workspaceId, ctx.workspace.id),
+          eq(prospectQueue.sequenceStatus, "skipped"),
+        ))
+        .orderBy(desc(prospectQueue.rejectedAt));
+      // Aggregate by reason
+      const reasonMap = new Map<string, number>();
+      for (const p of rejected) {
+        const key = p.rejectionReason?.trim() || "No reason given";
+        reasonMap.set(key, (reasonMap.get(key) ?? 0) + 1);
+      }
+      const byReason = Array.from(reasonMap.entries())
+        .map(([reason, count]) => ({ reason, count }))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 10);
+      return { total: rejected.length, byReason, items: rejected };
     }),
 });

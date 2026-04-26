@@ -2736,6 +2736,8 @@ export const prospectNotes = mysqlTable(
     userId: int("userId").notNull(),
     body: text("body").notNull(),
     isPinned: boolean("isPinned").default(false).notNull(),
+    category: varchar("category", { length: 32 }).default("general").notNull(),
+    editedAt: timestamp("editedAt"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },

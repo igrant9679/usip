@@ -19,23 +19,30 @@ import {
   Bot,
   Brain,
   CheckCircle2,
+  Clock,
+  FileText,
   Globe,
   Linkedin,
   Loader2,
   Mail,
   MessageSquare,
+  Mic2,
   Moon,
+  Newspaper,
   Phone,
+  RefreshCw,
   Save,
+  Search,
   Shield,
   Sliders,
   Sparkles,
+  Star,
   Zap,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
-/* ─── Types ──────────────────────────────────────────────────────────────── */
+/* --- Types ---------------------------------------------------------------- */
 type AutonomyMode = "full" | "batch_approval" | "review_release";
 
 const AUTONOMY_OPTIONS: { value: AutonomyMode; label: string; description: string; color: string }[] = [
@@ -66,7 +73,7 @@ const CHANNEL_OPTIONS = [
   { key: "voice", label: "AI Voice", icon: Phone, color: "text-violet-500" },
 ];
 
-/* ─── Section card wrapper ───────────────────────────────────────────────── */
+/* --- Section card wrapper ------------------------------------------------- */
 function Section({ icon: Icon, title, description, children }: {
   icon: any; title: string; description: string; children: React.ReactNode;
 }) {
@@ -86,7 +93,7 @@ function Section({ icon: Icon, title, description, children }: {
   );
 }
 
-/* ─── Toggle switch ──────────────────────────────────────────────────────── */
+/* --- Toggle switch -------------------------------------------------------- */
 function Toggle({ checked, onChange, color = "bg-primary" }: { checked: boolean; onChange: () => void; color?: string }) {
   return (
     <button
@@ -104,7 +111,7 @@ function Toggle({ checked, onChange, color = "bg-primary" }: { checked: boolean;
   );
 }
 
-/* ─── Main page ──────────────────────────────────────────────────────────── */
+/* --- Main page ------------------------------------------------------------ */
 export default function ARESettings() {
   const utils = trpc.useUtils();
   const { data: settings, isLoading } = trpc.settings.getAreSettings.useQuery();
@@ -119,6 +126,12 @@ export default function ARESettings() {
   const [notifyMeeting, setNotifyMeeting] = useState(true);
   const [notifyAutoApprove, setNotifyAutoApprove] = useState(false);
   const [notifyIcpUpdate, setNotifyIcpUpdate] = useState(true);
+  // New settings
+  const [sequenceTemplate, setSequenceTemplate] = useState("standard_7step");
+  const [brandVoice, setBrandVoice] = useState("professional");
+  const [scraperSources, setScraperSources] = useState<Record<string, boolean>>({ google_business: true, linkedin_company: true, linkedin_people: true, web: true, news: true, events: false });
+  const [icpRegenSchedule, setIcpRegenSchedule] = useState("weekly");
+  const [sequenceQualityThreshold, setSequenceQualityThreshold] = useState(65);
   const [dirty, setDirty] = useState(false);
 
   // Sync from server on load
@@ -133,6 +146,11 @@ export default function ARESettings() {
     setNotifyMeeting(settings.areNotifyOnMeetingBooked ?? true);
     setNotifyAutoApprove(settings.areNotifyOnAutoApprove ?? false);
     setNotifyIcpUpdate(settings.areNotifyOnIcpUpdate ?? true);
+    setSequenceTemplate((settings.areDefaultSequenceTemplate as string) ?? "standard_7step");
+    setBrandVoice((settings as any).areBrandVoice ?? "professional");
+    setScraperSources((settings as any).areScraperSources ?? { google_business: true, linkedin_company: true, linkedin_people: true, web: true, news: true, events: false });
+    setIcpRegenSchedule((settings as any).areIcpRegenSchedule ?? "weekly");
+    setSequenceQualityThreshold((settings as any).areSequenceQualityThreshold ?? 65);
     setDirty(false);
   }, [settings]);
 
@@ -156,6 +174,7 @@ export default function ARESettings() {
       areNotifyOnMeetingBooked: notifyMeeting,
       areNotifyOnAutoApprove: notifyAutoApprove,
       areNotifyOnIcpUpdate: notifyIcpUpdate,
+      areDefaultSequenceTemplate: sequenceTemplate,
     });
   };
 
@@ -184,7 +203,7 @@ export default function ARESettings() {
 
       <div className="p-4 md:p-6 max-w-3xl mx-auto space-y-6">
 
-        {/* ── 1. Autonomy Defaults ── */}
+        {/* -- 1. Autonomy Defaults -- */}
         <Section
           icon={Sliders}
           title="Default Autonomy Mode"
@@ -289,7 +308,7 @@ export default function ARESettings() {
           </div>
         </Section>
 
-        {/* ── 2. Channel Defaults ── */}
+        {/* -- 2. Channel Defaults -- */}
         <Section
           icon={Globe}
           title="Default Outreach Channels"
@@ -317,7 +336,7 @@ export default function ARESettings() {
           </div>
         </Section>
 
-        {/* ── 3. Signal Automation ── */}
+        {/* -- 3. Signal Automation -- */}
         <Section
           icon={Zap}
           title="Signal Automation"
@@ -337,7 +356,7 @@ export default function ARESettings() {
           </div>
         </Section>
 
-        {/* ── 4. Capacity ── */}
+        {/* -- 4. Capacity -- */}
         <Section
           icon={Sparkles}
           title="Capacity Limits"
@@ -365,7 +384,7 @@ export default function ARESettings() {
           </div>
         </Section>
 
-        {/* ── 5. Notification Preferences ── */}
+        {/* -- 5. Notification Preferences -- */}
         <Section
           icon={Bell}
           title="Notification Preferences"
@@ -388,7 +407,156 @@ export default function ARESettings() {
           </div>
         </Section>
 
-        {/* ── Save bar ── */}
+        {/* -- 6. Sequence Template -- */}
+        <Section
+          icon={FileText}
+          title="Default Sequence Template"
+          description="New campaigns inherit this sequence structure. The AI adapts the copy but follows the step cadence."
+        >
+          <div className="grid grid-cols-2 gap-2">
+            {[
+              { value: "standard_7step", label: "Standard 7-Step", desc: "Email × 4 + LinkedIn × 2 + call × 1 over 21 days. Best for most B2B campaigns.", icon: Mail },
+              { value: "aggressive_3step", label: "Aggressive 3-Step", desc: "3 emails in 7 days. High velocity, best for warm lists or time-sensitive offers.", icon: Zap },
+              { value: "nurture_14step", label: "Nurture 14-Step", desc: "14 touches over 60 days mixing email, LinkedIn, and value content. Best for enterprise.", icon: RefreshCw },
+              { value: "custom", label: "Custom", desc: "The AI designs the sequence from scratch based on the campaign ICP and channels.", icon: Sparkles },
+            ].map(({ value, label, desc, icon: Icon }) => (
+              <button
+                key={value}
+                onClick={() => { setSequenceTemplate(value); mark(); }}
+                className={`text-left rounded-xl border px-3 py-2.5 transition-all ${
+                  sequenceTemplate === value
+                    ? "border-primary/50 bg-primary/5 shadow-sm"
+                    : "border-border bg-card text-muted-foreground hover:border-primary/20 hover:bg-muted/30"
+                }`}
+              >
+                <div className="flex items-center gap-1.5 mb-0.5">
+                  <Icon className={`size-3.5 ${sequenceTemplate === value ? "text-primary" : "text-muted-foreground"}`} />
+                  <span className="text-xs font-medium">{label}</span>
+                  {sequenceTemplate === value && <CheckCircle2 className="size-3 text-primary ml-auto" />}
+                </div>
+                <p className="text-[10px] text-muted-foreground leading-relaxed">{desc}</p>
+              </button>
+            ))}
+          </div>
+
+          {/* Sequence quality threshold */}
+          <div className="space-y-2 pt-3 border-t">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-xs font-medium flex items-center gap-1.5"><Star className="size-3.5 text-amber-500" /> Sequence Quality Threshold</div>
+                <div className="text-[11px] text-muted-foreground">The AI self-evaluates each sequence. Steps scoring below this threshold are automatically rewritten before sending.</div>
+              </div>
+              <span className="text-sm font-bold tabular-nums" style={{ color: sequenceQualityThreshold >= 70 ? "#34D399" : sequenceQualityThreshold >= 50 ? "#F59E0B" : "#F87171" }}>{sequenceQualityThreshold}</span>
+            </div>
+            <input type="range" min={0} max={100} step={5} value={sequenceQualityThreshold}
+              onChange={(e) => { setSequenceQualityThreshold(parseInt(e.target.value)); mark(); }}
+              className="w-full accent-amber-500" />
+            <div className="flex justify-between text-[10px] text-muted-foreground">
+              <span>0 — send anything</span>
+              <span>50 — moderate</span>
+              <span>100 — perfect only</span>
+            </div>
+          </div>
+        </Section>
+
+        {/* -- 7. Brand Voice -- */}
+        <Section
+          icon={Mic2}
+          title="Brand Voice"
+          description="The AI uses this voice profile when writing all outreach copy for new campaigns."
+        >
+          <div className="grid grid-cols-2 gap-2">
+            {[
+              { value: "professional", label: "Professional", desc: "Formal, precise, and credibility-focused. Suits financial services, legal, and enterprise SaaS.", color: "text-blue-500" },
+              { value: "conversational", label: "Conversational", desc: "Warm, human, and approachable. Suits SMB, HR tech, and consumer-adjacent B2B.", color: "text-emerald-500" },
+              { value: "direct", label: "Direct", desc: "Short, punchy, and action-oriented. Suits sales tools, growth products, and time-sensitive offers.", color: "text-orange-500" },
+              { value: "consultative", label: "Consultative", desc: "Insight-led and value-first. Suits consulting, advisory, and complex solution selling.", color: "text-violet-500" },
+            ].map(({ value, label, desc, color }) => (
+              <button
+                key={value}
+                onClick={() => { setBrandVoice(value); mark(); }}
+                className={`text-left rounded-xl border px-3 py-2.5 transition-all ${
+                  brandVoice === value
+                    ? "border-primary/50 bg-primary/5 shadow-sm"
+                    : "border-border bg-card text-muted-foreground hover:border-primary/20 hover:bg-muted/30"
+                }`}
+              >
+                <div className="flex items-center gap-1.5 mb-0.5">
+                  <span className={`text-xs font-semibold ${brandVoice === value ? color : "text-muted-foreground"}`}>{label}</span>
+                  {brandVoice === value && <CheckCircle2 className="size-3 text-primary ml-auto" />}
+                </div>
+                <p className="text-[10px] text-muted-foreground leading-relaxed">{desc}</p>
+              </button>
+            ))}
+          </div>
+        </Section>
+
+        {/* -- 8. Scraper Source Defaults -- */}
+        <Section
+          icon={Search}
+          title="Default Scraper Sources"
+          description="New campaigns will have these sources pre-enabled. The AI uses them to discover and enrich prospects."
+        >
+          <div className="space-y-2">
+            {[
+              { key: "google_business", label: "Google Business Profiles", desc: "Discover local and regional businesses via Google Maps and Business listings.", icon: Globe, color: "text-blue-500" },
+              { key: "linkedin_company", label: "LinkedIn Company Pages", desc: "Scrape company size, industry, recent posts, and hiring signals from LinkedIn.", icon: Linkedin, color: "text-blue-600" },
+              { key: "linkedin_people", label: "LinkedIn People Search", desc: "Find decision-makers matching your ICP title filters on LinkedIn.", icon: Linkedin, color: "text-blue-400" },
+              { key: "web", label: "General Web", desc: "Crawl company websites for contact info, tech stack signals, and about pages.", icon: Globe, color: "text-emerald-500" },
+              { key: "news", label: "News Monitoring", desc: "Track funding rounds, product launches, leadership changes, and press mentions.", icon: Newspaper, color: "text-amber-500" },
+              { key: "events", label: "Industry Events", desc: "Find companies attending or sponsoring relevant conferences and trade shows.", icon: Star, color: "text-violet-500" },
+            ].map(({ key, label, desc, icon: Icon, color }) => {
+              const active = !!scraperSources[key];
+              return (
+                <div key={key} className={`flex items-center gap-3 p-2.5 rounded-xl border transition-all ${
+                  active ? "border-primary/30 bg-primary/5" : "border-border bg-card"
+                }`}>
+                  <Icon className={`size-4 shrink-0 ${active ? color : "text-muted-foreground"}`} />
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs font-medium">{label}</div>
+                    <div className="text-[10px] text-muted-foreground">{desc}</div>
+                  </div>
+                  <Toggle checked={active} onChange={() => { setScraperSources(prev => ({ ...prev, [key]: !prev[key] })); mark(); }} />
+                </div>
+              );
+            })}
+          </div>
+        </Section>
+
+        {/* -- 9. ICP Regen Schedule -- */}
+        <Section
+          icon={Clock}
+          title="ICP Re-inference Schedule"
+          description="How often the ICP Agent re-reads your CRM data and updates the ideal customer profile."
+        >
+          <div className="grid grid-cols-2 gap-2">
+            {[
+              { value: "daily", label: "Daily", desc: "Re-infer every night at 02:00 UTC. Best for high-velocity teams closing deals frequently.", icon: RefreshCw },
+              { value: "weekly", label: "Weekly", desc: "Re-infer every Monday at 02:00 UTC. Recommended default for most teams.", icon: Clock },
+              { value: "on_new_deal", label: "On New Deal", desc: "Re-infer automatically whenever a deal is marked Won or Lost.", icon: Zap },
+              { value: "manual", label: "Manual Only", desc: "Only re-infer when you click Regenerate on the ICP Agent page.", icon: Shield },
+            ].map(({ value, label, desc, icon: Icon }) => (
+              <button
+                key={value}
+                onClick={() => { setIcpRegenSchedule(value); mark(); }}
+                className={`text-left rounded-xl border px-3 py-2.5 transition-all ${
+                  icpRegenSchedule === value
+                    ? "border-primary/50 bg-primary/5 shadow-sm"
+                    : "border-border bg-card text-muted-foreground hover:border-primary/20 hover:bg-muted/30"
+                }`}
+              >
+                <div className="flex items-center gap-1.5 mb-0.5">
+                  <Icon className={`size-3.5 ${icpRegenSchedule === value ? "text-primary" : "text-muted-foreground"}`} />
+                  <span className="text-xs font-medium">{label}</span>
+                  {icpRegenSchedule === value && <CheckCircle2 className="size-3 text-primary ml-auto" />}
+                </div>
+                <p className="text-[10px] text-muted-foreground leading-relaxed">{desc}</p>
+              </button>
+            ))}
+          </div>
+        </Section>
+
+        {/* -- Save bar -- */}
         <div className={`flex items-center gap-3 p-4 rounded-xl border transition-all ${
           dirty ? "border-primary/30 bg-primary/5 shadow-sm" : "border-transparent bg-transparent"
         }`}>
@@ -419,7 +587,7 @@ export default function ARESettings() {
           </div>
         </div>
 
-        {/* ── Danger zone ── */}
+        {/* -- Danger zone -- */}
         <Card className="border-destructive/30 bg-destructive/5">
           <CardHeader className="pb-2 pt-4 px-5">
             <CardTitle className="text-sm flex items-center gap-2 text-destructive">

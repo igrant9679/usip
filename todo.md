@@ -1712,21 +1712,39 @@
 
 ## Round 22 — ARE Approve/Reject, Notes, and Settings
 
-- [ ] Schema: prospect_notes table (id, workspaceId, prospectQueueId, userId, body, isPinned, createdAt, updatedAt)
-- [ ] Schema: add rejectedAt, rejectedByUserId, rejectionReason (text) to prospectQueue
-- [ ] Schema: add ARE global settings columns to workspaceSettings (areDefaultAutonomyMode, areDefaultDailySendCap, areDefaultAutoApproveThreshold, areDefaultSignalToOpportunity, areDefaultChannels, areDefaultSequenceTemplate, areMaxConcurrentCampaigns, areNotifyOnMeetingBooked, areNotifyOnAutoApprove, areNotifyOnIcpUpdate)
-- [ ] Server: prospects.reject procedure (sets sequenceStatus=skipped, stores rejectedAt/rejectedByUserId/rejectionReason)
-- [ ] Server: prospects.bulkApprove procedure (array of prospectIds)
-- [ ] Server: prospects.bulkReject procedure (array of prospectIds + reason)
-- [ ] Server: prospects.addNote procedure (insert into prospect_notes)
-- [ ] Server: prospects.listNotes procedure (select notes for a prospect)
-- [ ] Server: prospects.deleteNote procedure
-- [ ] Server: prospects.pinNote procedure (toggle isPinned)
-- [ ] Server: settings.getAreSettings procedure (read from workspaceSettings)
-- [ ] Server: settings.updateAreSettings procedure (update workspaceSettings ARE columns)
-- [ ] UI: ProspectRow — checkbox for bulk selection, Reject button with reason dialog
-- [ ] UI: Prospect queue bulk action bar — floating bar with Approve All / Reject All / count
-- [ ] UI: Dossier slide-over — Notes tab with add note form, pinned notes, timestamped list
-- [ ] UI: ARE Settings page (/are/settings) with global defaults card and notification preferences card
-- [ ] UI: Shell nav — add "Settings" link under Revenue Engine group
-- [ ] UI: App.tsx — add /are/settings route
+- [x] Schema: prospect_notes table (id, workspaceId, prospectQueueId, userId, body, isPinned, createdAt, updatedAt)
+- [x] Schema: add rejectedAt, rejectedByUserId, rejectionReason (text) to prospectQueue
+- [x] Schema: add ARE global settings columns to workspaceSettings (areDefaultAutonomyMode, areDefaultDailySendCap, areDefaultAutoApproveThreshold, areDefaultSignalToOpportunity, areDefaultChannels, areDefaultSequenceTemplate, areMaxConcurrentCampaigns, areNotifyOnMeetingBooked, areNotifyOnAutoApprove, areNotifyOnIcpUpdate)
+- [x] Server: prospects.reject procedure (sets sequenceStatus=skipped, stores rejectedAt/rejectedByUserId/rejectionReason)
+- [x] Server: prospects.bulkApprove procedure (array of prospectIds)
+- [x] Server: prospects.bulkReject procedure (array of prospectIds + reason)
+- [x] Server: prospects.addNote procedure (insert into prospect_notes)
+- [x] Server: prospects.listNotes procedure (select notes for a prospect)
+- [x] Server: prospects.deleteNote procedure
+- [x] Server: prospects.pinNote procedure (toggle isPinned)
+- [x] Server: settings.getAreSettings procedure (read from workspaceSettings)
+- [x] Server: settings.updateAreSettings procedure (update workspaceSettings ARE columns)
+- [x] UI: ProspectRow — checkbox for bulk selection, Reject button with reason dialog
+- [x] UI: Prospect queue bulk action bar — floating bar with Approve All / Reject All / count
+- [x] UI: Dossier slide-over — Notes tab with add note form, pinned notes, timestamped list
+- [x] UI: ARE Settings page (/are/settings) with global defaults card and notification preferences card
+- [x] UI: Shell nav — add "Settings" link under Revenue Engine group
+- [x] UI: App.tsx — add /are/settings route
+
+## Round 23 — Settings, Notes, Rejection Enhancements
+
+- [x] Settings: add Sequence Template selector (standard_7step, aggressive_3step, nurture_14step, custom)
+- [x] Settings: add Brand Voice picker (professional, conversational, direct, consultative)
+- [x] Settings: add Scraper Source defaults (toggle each source on/off globally)
+- [x] Settings: add ICP Regen Schedule selector (daily, weekly, on_new_deal, manual)
+- [x] Settings: add Sequence Quality Threshold slider (min score 0-100 before sending)
+- [x] Schema: add category/tag column to prospect_notes
+- [x] Schema: add editedAt column to prospect_notes
+- [x] Server: addNote — accept optional category field
+- [x] Server: editNote procedure
+- [x] Server: listNotes — return category and editedAt
+- [x] Server: getRejectionStats procedure (count by reason, by campaign)
+- [x] UI: ProspectNotes — category chips, search/filter bar, character count, edit-in-place
+- [x] UI: Reject dialog — pre-built reason templates (chips)
+- [x] UI: Campaign Detail — Rejection Analytics card in overview stats row
+- [x] UI: Campaign Detail — Rejected tab showing audit trail of all rejected prospects
