@@ -2487,6 +2487,9 @@ export const areCampaigns = mysqlTable(
     meetingsBooked: int("meetingsBooked").default(0).notNull(),
     opportunitiesCreated: int("opportunitiesCreated").default(0).notNull(),
     ownerUserId: int("ownerUserId"),
+    // Automation settings
+    autoApproveThreshold: int("autoApproveThreshold"),  // null = manual review; 0-100 = auto-approve if icpMatchScore >= this
+    signalToOpportunityEnabled: boolean("signalToOpportunityEnabled").default(false).notNull(), // auto-create opp on meeting_booked signal
     startedAt: timestamp("startedAt"),
     completedAt: timestamp("completedAt"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),

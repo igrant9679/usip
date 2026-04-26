@@ -63,6 +63,8 @@ export const campaignsRouter = router({
         }).default({ email: true, linkedin: false, sms: false, voice: false }),
         sequenceTemplate: z.string().default("standard_7step"),
         goalType: z.enum(["meeting_booked", "reply", "opportunity_created"]).default("reply"),
+        autoApproveThreshold: z.number().min(0).max(100).nullable().optional(),
+        signalToOpportunityEnabled: z.boolean().default(false),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -83,6 +85,8 @@ export const campaignsRouter = router({
           channelsEnabled: input.channelsEnabled,
           sequenceTemplate: input.sequenceTemplate,
           goalType: input.goalType,
+          autoApproveThreshold: input.autoApproveThreshold ?? null,
+          signalToOpportunityEnabled: input.signalToOpportunityEnabled,
           ownerUserId: ctx.user.id,
         })
         .$returningId();
@@ -103,6 +107,8 @@ export const campaignsRouter = router({
         goalType: z.enum(["meeting_booked", "reply", "opportunity_created"]).optional(),
         icpOverrides: z.any().optional(),
         prospectSources: z.array(z.string()).optional(),
+        autoApproveThreshold: z.number().min(0).max(100).nullable().optional(),
+        signalToOpportunityEnabled: z.boolean().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -120,6 +126,8 @@ export const campaignsRouter = router({
       if (rest.goalType !== undefined) updates.goalType = rest.goalType;
       if (rest.icpOverrides !== undefined) updates.icpOverrides = rest.icpOverrides;
       if (rest.prospectSources !== undefined) updates.prospectSources = rest.prospectSources;
+      if (rest.autoApproveThreshold !== undefined) updates.autoApproveThreshold = rest.autoApproveThreshold;
+      if (rest.signalToOpportunityEnabled !== undefined) updates.signalToOpportunityEnabled = rest.signalToOpportunityEnabled;
       await db
         .update(areCampaigns)
         .set(updates)

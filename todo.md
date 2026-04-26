@@ -1681,3 +1681,15 @@
 - [x] UI: Add "Autonomous Engine" nav group to Shell.tsx with ARE Hub, ICP Profile, and Scrape Jobs links
 - [x] UI: Add /are, /are/icp, /are/campaigns/:id routes to App.tsx
 - [x] Tests: vitest coverage for ICP Agent inference, Sequence Agent quality scoring, Prospect Agent deduplication, scraper helpers
+
+## Round 20 — Campaign Detail Suggestions
+
+- [ ] Schema: add autoApproveThreshold (int, nullable) to areCampaigns table
+- [ ] Schema: add signalToOpportunityEnabled (boolean default false) to areCampaigns table
+- [ ] Router: expose autoApproveThreshold + signalToOpportunityEnabled in campaigns.create/update
+- [ ] Router: auto-approve logic in prospects.enrich — if icpMatchScore >= threshold, auto-approve
+- [ ] Router: signal->opportunity automation in execution router — when meeting_booked, create account+contact+opportunity
+- [ ] UI: Campaign Detail — Settings tab with threshold slider and signal->opportunity toggle
+- [ ] UI: Campaign Detail — Prospects tab shows auto-approve badge when score >= threshold
+- [ ] UI: Campaign Detail — Signal feed shows "Opportunity Created" badge on meeting_booked signals
+- [x] Scheduled ICP re-inference — /api/scheduled/icp-regen endpoint + nightly scheduled task

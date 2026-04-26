@@ -25,6 +25,7 @@ import { trpc } from "@/lib/trpc";
 import {
   Activity,
   ArrowLeft,
+  Bot,
   Brain,
   CheckCircle2,
   ChevronRight,
@@ -43,6 +44,7 @@ import {
   Radar,
   RefreshCw,
   Search,
+  Settings,
   Sparkles,
   Star,
   Target,
@@ -439,6 +441,18 @@ export default function ARECampaignDetail() {
   const [dossierOpen, setDossierOpen] = useState(false);
   const [scrapeQuery, setScrapeQuery] = useState("");
   const [scrapeSource, setScrapeSource] = useState<"google_business" | "linkedin" | "web" | "news">("google_business");
+  const [thresholdDraft, setThresholdDraft] = useState<number | null>(null);
+  const [s2oEnabled, setS2oEnabled] = useState<boolean | null>(null);
+
+  const updateCampaign = trpc.are.campaigns.update.useMutation({
+    onSuccess: () => {
+      toast.success("Campaign settings saved");
+      utils.are.campaigns.get.invalidate({ id: campaignId });
+      setThresholdDraft(null);
+      setS2oEnabled(null);
+    },
+    onError: (e) => toast.error(e.message),
+  });
 
   const setStatus = trpc.are.campaigns.setStatus.useMutation({
     onSuccess: () => utils.are.campaigns.get.invalidate({ id: campaignId }),
@@ -483,6 +497,8 @@ export default function ARECampaignDetail() {
   const selectedProspect = prospects?.find((p) => p.id === selectedProspectId);
   const pendingEnrich = prospects?.filter((p) => p.enrichmentStatus === "pending").length ?? 0;
   const awaitingApproval = prospects?.filter((p) => p.sequenceStatus === "pending" && p.enrichmentStatus === "complete").length ?? 0;
+  const autoThreshold = thresholdDraft !== null ? thresholdDraft : (campaign?.autoApproveThreshold ?? null);
+  const s2oActive = s2oEnabled !== null ? s2oEnabled : (campaign?.signalToOpportunityEnabled ?? false);
 
   const statusColor = campaign.status === "active" ? "#34D399" : campaign.status === "paused" ? "#F59E0B" : "#94A3B8";
   const autonomyColor =
@@ -569,6 +585,9 @@ export default function ARECampaignDetail() {
                   {signals?.length}
                 </span>
               )}
+            </TabsTrigger>
+            <TabsTrigger value="settings" className="text-xs gap-1.5">
+              <Settings className="size-3.5" /> Settings
             </TabsTrigger>
           </TabsList>
 
@@ -827,10 +846,141 @@ export default function ARECampaignDetail() {
                 })}
               </div>
             )}
+           </TabsContent>
+
+          {/* ── Settings tab ── */}
+          <TabsContent value="settings" className="mt-4">
+            <div className="max-w-xl space-y-6">
+              <p className="text-sm text-muted-foreground leading-relaxed">
+                Configure automation behaviour for this campaign. Changes take effect immediately on the next agent run.
+              </p>
+
+              {/* Auto-approve threshold */}
+              <Card className="bg-card border">
+                <CardHeader className="pb-2 pt-4 px-4">
+                  <CardTitle className="text-sm flex items-center gap-2">
+                    <CheckCircle2 className="size-4 text-emerald-500" />
+                    Auto-Approve Threshold
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="px-4 pb-4 space-y-4">
+                  <p className="text-xs text-muted-foreground leading-relaxed">
+                    Prospects whose ICP match score meets or exceeds this threshold are automatically approved and skip the manual review queue. Set to <strong>Off</strong> to require manual approval for all prospects.
+                  </p>
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-medium">Threshold</span>
+                      <div className="flex items-center gap-2">
+                        {autoThreshold !== null ? (
+                          <span className="text-sm font-bold tabular-nums" style={{ color: autoThreshold >= 70 ? "#34D399" : autoThreshold >= 40 ? "#F59E0B" : "#F87171" }}>
+                            {autoThreshold}
+                          </span>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">Off (manual review)</span>
+                        )}
+                        <Button
+                          size="sm" variant="outline" className="h-6 px-2 text-[10px]"
+                          onClick={() => setThresholdDraft(autoThreshold === null ? 70 : null)}
+                        >
+                          {autoThreshold === null ? "Enable" : "Disable"}
+                        </Button>
+                      </div>
+                    </div>
+                    {autoThreshold !== null && (
+                      <div className="space-y-2">
+                        <input
+                          type="range" min={0} max={100} step={5}
+                          value={autoThreshold}
+                          onChange={(e) => setThresholdDraft(parseInt(e.target.value))}
+                          className="w-full accent-emerald-500"
+                        />
+                        <div className="flex justify-between text-[10px] text-muted-foreground">
+                          <span>0 — approve all</span>
+                          <span>50 — moderate</span>
+                          <span>100 — perfect match only</span>
+                        </div>
+                        <div className="flex items-center gap-2 p-2 rounded-lg bg-muted/50 text-xs">
+                          <div className="size-2 rounded-full shrink-0" style={{ backgroundColor: autoThreshold >= 70 ? "#34D399" : autoThreshold >= 40 ? "#F59E0B" : "#F87171" }} />
+                          <span>
+                            {autoThreshold >= 70 ? "High precision — only strong ICP matches will be auto-approved."
+                              : autoThreshold >= 40 ? "Balanced — moderate and strong matches will be auto-approved."
+                              : "High volume — most prospects will be auto-approved regardless of fit."}
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Signal → Opportunity */}
+              <Card className="bg-card border">
+                <CardHeader className="pb-2 pt-4 px-4">
+                  <CardTitle className="text-sm flex items-center gap-2">
+                    <Bot className="size-4 text-violet-500" />
+                    Signal → Opportunity Automation
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="px-4 pb-4 space-y-4">
+                  <p className="text-xs text-muted-foreground leading-relaxed">
+                    When a <strong>meeting_booked</strong> signal is received, the AI automatically creates a CRM account, contact, and opportunity pre-filled with the prospect’s intelligence dossier (hooks, pain signals, recommended timing). The campaign owner is notified via in-app notification.
+                  </p>
+                  <div className="flex items-center justify-between p-3 rounded-xl border bg-muted/30">
+                    <div className="space-y-0.5">
+                      <div className="text-xs font-medium">Auto-create opportunity on meeting booked</div>
+                      <div className="text-[11px] text-muted-foreground">Creates account + contact + opportunity in the CRM pipeline</div>
+                    </div>
+                    <button
+                      onClick={() => setS2oEnabled(!s2oActive)}
+                      className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${
+                        s2oActive ? "bg-violet-500" : "bg-muted"
+                      }`}
+                      role="switch"
+                      aria-checked={s2oActive}
+                    >
+                      <span className={`pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${
+                        s2oActive ? "translate-x-4" : "translate-x-0"
+                      }`} />
+                    </button>
+                  </div>
+                  {s2oActive && (
+                    <div className="flex items-start gap-2 p-2.5 rounded-lg border border-violet-500/20 bg-violet-500/5 text-xs">
+                      <Zap className="size-3.5 text-violet-500 mt-0.5 shrink-0" />
+                      <span className="text-violet-700 dark:text-violet-300">
+                        Active — the next <code className="bg-violet-500/10 px-1 rounded">meeting_booked</code> signal will automatically create a discovery-stage opportunity in the pipeline.
+                      </span>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Save button */}
+              {(thresholdDraft !== null || s2oEnabled !== null) && (
+                <div className="flex items-center gap-3">
+                  <Button
+                    onClick={() => updateCampaign.mutate({
+                      id: campaignId,
+                      autoApproveThreshold: autoThreshold,
+                      signalToOpportunityEnabled: s2oActive,
+                    })}
+                    disabled={updateCampaign.isPending}
+                    className="gap-1.5"
+                  >
+                    {updateCampaign.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <CheckCircle2 className="size-3.5" />}
+                    Save Settings
+                  </Button>
+                  <Button
+                    variant="ghost" size="sm" className="text-xs text-muted-foreground"
+                    onClick={() => { setThresholdDraft(null); setS2oEnabled(null); }}
+                  >
+                    Discard
+                  </Button>
+                </div>
+              )}
+            </div>
           </TabsContent>
         </Tabs>
       </div>
-
       {/* ── Intelligence Dossier Sheet ── */}
       <Sheet open={dossierOpen} onOpenChange={setDossierOpen}>
         <SheetContent side="right" className="w-full sm:max-w-xl overflow-y-auto">

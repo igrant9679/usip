@@ -13,16 +13,21 @@ import { TRPCError } from "@trpc/server";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
+  accounts,
   areCampaigns,
   areExecutionQueue,
   areSignalLog,
   areSuppressionList,
+  contacts,
+  opportunities,
   prospectQueue,
+  prospectIntelligence,
 } from "../../../drizzle/schema";
 import { getDb } from "../../db";
 import { invokeLLM } from "../../_core/llm";
 import { router } from "../../_core/trpc";
 import { workspaceProcedure } from "../../_core/workspace";
+import { notifyOwner } from "../../_core/notification";
 
 /* ─── Signal Feedback Agent ─────────────────────────────────────────────── */
 
@@ -117,13 +122,91 @@ export async function processSignal(
     }
   }
 
-  // Handle meeting booked
+  // Handle meeting booked — optionally auto-create CRM opportunity
   if (signalType === "meeting_booked") {
     sentiment = "positive";
     sentimentReason = "Meeting booked — highest positive signal";
     await db.update(prospectQueue).set({ sequenceStatus: "replied" }).where(eq(prospectQueue.id, prospectQueueId));
-    await db.update(areCampaigns).set({ meetingsBooked: 1 }).where(eq(areCampaigns.id, campaignId));
+    await db.execute(sql`UPDATE are_campaigns SET meetingsBooked = meetingsBooked + 1 WHERE id = ${campaignId}`);
     actionTaken = "meeting_booked";
+
+    // Check if signalToOpportunityEnabled is set on the campaign
+    const [campaign] = await db.select().from(areCampaigns).where(eq(areCampaigns.id, campaignId)).limit(1);
+    if (campaign?.signalToOpportunityEnabled) {
+      // Fetch prospect details
+      const [prospect] = await db.select().from(prospectQueue).where(eq(prospectQueue.id, prospectQueueId)).limit(1);
+      if (prospect) {
+        // Fetch intelligence dossier for context
+        const [intel] = await db.select().from(prospectIntelligence)
+          .where(eq(prospectIntelligence.prospectQueueId, prospectQueueId)).limit(1);
+
+        // Create or find account
+        let accountId: number;
+        const companyName = prospect.companyName ?? "Unknown Company";
+        const [existingAccount] = await db.select().from(accounts)
+          .where(and(eq(accounts.workspaceId, workspaceId), eq(accounts.name, companyName))).limit(1);
+        if (existingAccount) {
+          accountId = existingAccount.id;
+        } else {
+          const [newAcc] = await db.insert(accounts).values({
+            workspaceId,
+            name: companyName,
+            domain: prospect.companyDomain ?? undefined,
+            industry: prospect.industry ?? undefined,
+            ownerUserId: campaign.ownerUserId ?? undefined,
+          }).$returningId();
+          accountId = newAcc.id;
+        }
+
+        // Create contact
+        const [newContact] = await db.insert(contacts).values({
+          workspaceId,
+          accountId,
+          firstName: prospect.firstName ?? "Unknown",
+          lastName: prospect.lastName ?? "Prospect",
+          title: prospect.title ?? undefined,
+          email: prospect.email ?? undefined,
+          phone: prospect.phone ?? undefined,
+          linkedinUrl: prospect.linkedinUrl ?? undefined,
+          ownerUserId: campaign.ownerUserId ?? undefined,
+        }).$returningId();
+
+        // Build AI note from intelligence dossier
+        const intelData = intel?.data as Record<string, unknown> | null;
+        const hooks = (intelData?.personalisationHooks as Array<{hook: string}> | null) ?? [];
+        const pains = (intelData?.painSignals as Array<{signal: string}> | null) ?? [];
+        const aiNote = [
+          `ARE Campaign: ${campaign.name}`,
+          hooks.length > 0 ? `Hooks: ${hooks.slice(0, 2).map(h => h.hook).join(" | ")}` : null,
+          pains.length > 0 ? `Pain signals: ${pains.slice(0, 2).map(p => p.signal).join(", ")}` : null,
+          intelData?.recommendedTiming ? `Best timing: ${intelData.recommendedTiming}` : null,
+        ].filter(Boolean).join("\n");
+
+        // Create opportunity
+        const oppName = companyName + " — ARE Meeting";
+        await db.insert(opportunities).values({
+          workspaceId,
+          accountId,
+          name: oppName,
+          stage: "discovery",
+          value: "0",
+          winProb: 30,
+          aiNote: aiNote || undefined,
+          campaignId,
+          ownerUserId: campaign.ownerUserId ?? undefined,
+        });
+
+        // Increment opportunitiesCreated counter
+        await db.execute(sql`UPDATE are_campaigns SET opportunitiesCreated = opportunitiesCreated + 1 WHERE id = ${campaignId}`);
+        actionTaken = "opportunity_created";
+
+        // Notify owner
+        await notifyOwner({
+          title: `ARE: Meeting booked → Opportunity created`,
+          content: `Campaign "${campaign.name}" — ${prospect.firstName ?? ""} ${prospect.lastName ?? ""} at ${companyName} booked a meeting. A new opportunity "${oppName}" has been created in the pipeline.`,
+        }).catch(() => {/* non-fatal */});
+      }
+    }
   }
 
   // Handle bounces and unsubscribes

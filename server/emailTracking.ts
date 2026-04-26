@@ -814,6 +814,40 @@ export function registerEmailTrackingRoutes(app: Express) {
       return res.status(500).json({ ok: false, error: String(e) });
     }
   });
+
+  /* -- Scheduled: ARE ICP re-inference --
+     POST /api/scheduled/icp-regen
+     Called by the Manus scheduled task agent nightly.
+     Runs the ICP inference agent for every workspace that has at least one
+     won or lost opportunity, updating the active ICP profile.
+  ----------------------------------------------------------------- */
+  app.post("/api/scheduled/icp-regen", async (req: any, res: any) => {
+    try {
+      const db = await getDb();
+      if (!db) return res.status(503).json({ ok: false, error: "DB unavailable" });
+      const { workspaces } = await import("../drizzle/schema");
+      const { runIcpInference } = await import("./routers/are/icp");
+      const allWorkspaces = await db.select({ id: workspaces.id }).from(workspaces);
+      let succeeded = 0;
+      let failed = 0;
+      const errors: string[] = [];
+      for (const ws of allWorkspaces) {
+        try {
+          await runIcpInference(ws.id);
+          succeeded++;
+        } catch (e) {
+          failed++;
+          errors.push("ws " + ws.id + ": " + String(e).slice(0, 120));
+          console.error("[IcpRegen] Failed for workspace " + ws.id + ":", e);
+        }
+      }
+      console.log("[IcpRegen] Completed: " + succeeded + " succeeded, " + failed + " failed");
+      return res.json({ ok: true, succeeded, failed, errors });
+    } catch (e) {
+      console.error("[IcpRegen] Endpoint error:", e);
+      return res.status(500).json({ ok: false, error: String(e) });
+    }
+  });
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
