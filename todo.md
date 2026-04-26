@@ -1765,3 +1765,6 @@
 - [x] UI: "Re-evaluate All" button on Rejections tab header (next to Export CSV)
 - [x] UI: Inbox — mention notifications with relatedType=prospect_note link to /are/campaigns/:campaignId?prospect=:prospectId
 - [x] Scheduled task: weekly Monday 9am rejection digest cron job
+
+## Round 26 — Re-evaluate All confirmation dialog
+- [x] UI: Confirmation dialog before Re-evaluate All bulk action (shows rejection count, warns about LLM cost, requires explicit confirm)

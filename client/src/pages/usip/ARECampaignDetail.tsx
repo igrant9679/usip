@@ -16,6 +16,11 @@
 import { Shell, PageHeader, StatCard, EmptyState } from "@/components/usip/Shell";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel,
+  AlertDialogContent, AlertDialogDescription, AlertDialogFooter,
+  AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -768,6 +773,7 @@ export default function ARECampaignDetail() {
   // Bulk selection
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [rejectDialogOpen, setRejectDialogOpen] = useState(false);
+  const [reEvaluateAllConfirmOpen, setReEvaluateAllConfirmOpen] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
   const [dossierTab, setDossierTab] = useState<"intel" | "notes">("intel");
   const bulkApprove = trpc.are.prospects.bulkApprove.useMutation({
@@ -1414,7 +1420,7 @@ export default function ARECampaignDetail() {
                       size="sm"
                       variant="outline"
                       className="text-xs h-7 gap-1.5"
-                      onClick={() => reEvaluateAll.mutate({ campaignId })}
+                      onClick={() => setReEvaluateAllConfirmOpen(true)}
                       disabled={reEvaluateAll.isPending}
                     >
                       {reEvaluateAll.isPending ? (
@@ -1584,6 +1590,42 @@ export default function ARECampaignDetail() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* ── Re-evaluate All confirmation ── */}
+      <AlertDialog open={reEvaluateAllConfirmOpen} onOpenChange={setReEvaluateAllConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <RefreshCcw className="size-4 text-violet-500" />
+              Re-evaluate All Rejected Prospects?
+            </AlertDialogTitle>
+            <AlertDialogDescription className="space-y-2">
+              <span className="block">
+                This will re-score all{" "}
+                <strong>{rejectionStats?.total ?? 0} rejected prospect{(rejectionStats?.total ?? 0) !== 1 ? "s" : ""}</strong>{" "}
+                against the current active ICP profile using the LLM scoring agent.
+              </span>
+              <span className="block text-amber-600 dark:text-amber-400">
+                Prospects that now meet the auto-approve threshold (&ge;70) will be moved back to the pending queue.
+                This action cannot be undone.
+              </span>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-violet-600 hover:bg-violet-700 text-white"
+              onClick={() => {
+                setReEvaluateAllConfirmOpen(false);
+                reEvaluateAll.mutate({ campaignId });
+              }}
+            >
+              <RefreshCcw className="size-3.5 mr-1.5" />
+              Yes, Re-evaluate All
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Shell>
   );
 }
