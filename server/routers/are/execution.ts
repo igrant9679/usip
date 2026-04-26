@@ -28,6 +28,8 @@ import { invokeLLM } from "../../_core/llm";
 import { router } from "../../_core/trpc";
 import { workspaceProcedure } from "../../_core/workspace";
 import { notifyOwner } from "../../_core/notification";
+import { areNotify } from "./notify";
+import { runSignalEnhancement } from "./signalEnhancement";
 
 /* ─── Signal Feedback Agent ─────────────────────────────────────────────── */
 
@@ -100,6 +102,15 @@ export async function processSignal(
             // Increment prospectsReplied counter
             await db.execute(sql`UPDATE are_campaigns SET prospectsReplied = prospectsReplied + 1 WHERE id = ${campaignId}`);
             actionTaken = "flagged_for_opportunity";
+            // Notify owner of positive reply
+            await areNotify({
+              workspaceId,
+              eventType: "signal_classified",
+              title: "ARE: Positive reply — opportunity flagged",
+              body: `A prospect replied positively. Sentiment: ${sentData.sentiment}. Reason: ${sentData.reason}. Flagged for opportunity creation.`,
+              relatedId: campaignId,
+              relatedType: "are_campaign",
+            });
             break;
           case "add_suppression":
             const [prospect] = await db.select().from(prospectQueue).where(eq(prospectQueue.id, prospectQueueId)).limit(1);
@@ -221,6 +232,25 @@ export async function processSignal(
       });
       await db.update(prospectQueue).set({ sequenceStatus: "skipped" }).where(eq(prospectQueue.id, prospectQueueId));
       actionTaken = "added_suppression";
+    }
+  }
+
+  // Run Signal Enhancement Agent for positive engagement signals (non-blocking)
+  runSignalEnhancement(workspaceId, prospectQueueId, campaignId, signalType).catch(() => {/* non-fatal */});
+
+  // Fire ARE in-app notification for key events
+  if (signalType === "email_open" || signalType === "email_click" || signalType === "linkedin_accepted") {
+    const [p] = await db.select({ firstName: prospectQueue.firstName, lastName: prospectQueue.lastName, companyName: prospectQueue.companyName }).from(prospectQueue).where(eq(prospectQueue.id, prospectQueueId)).limit(1);
+    const label = signalType === "email_open" ? "opened your email" : signalType === "email_click" ? "clicked a link" : "accepted your LinkedIn connection";
+    if (p) {
+      await areNotify({
+        workspaceId,
+        eventType: "signal_classified",
+        title: "ARE: Engagement signal received",
+        body: `${p.firstName ?? ""} ${p.lastName ?? ""} at ${p.companyName ?? "unknown"} ${label}. Hook enhancement is running.`,
+        relatedId: campaignId,
+        relatedType: "are_campaign",
+      });
     }
   }
 

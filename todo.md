@@ -1684,12 +1684,28 @@
 
 ## Round 20 — Campaign Detail Suggestions
 
-- [ ] Schema: add autoApproveThreshold (int, nullable) to areCampaigns table
-- [ ] Schema: add signalToOpportunityEnabled (boolean default false) to areCampaigns table
-- [ ] Router: expose autoApproveThreshold + signalToOpportunityEnabled in campaigns.create/update
-- [ ] Router: auto-approve logic in prospects.enrich — if icpMatchScore >= threshold, auto-approve
-- [ ] Router: signal->opportunity automation in execution router — when meeting_booked, create account+contact+opportunity
-- [ ] UI: Campaign Detail — Settings tab with threshold slider and signal->opportunity toggle
-- [ ] UI: Campaign Detail — Prospects tab shows auto-approve badge when score >= threshold
-- [ ] UI: Campaign Detail — Signal feed shows "Opportunity Created" badge on meeting_booked signals
+- [x] Schema: add autoApproveThreshold (int, nullable) to areCampaigns table
+- [x] Schema: add signalToOpportunityEnabled (boolean default false) to areCampaigns table
+- [x] Router: expose autoApproveThreshold + signalToOpportunityEnabled in campaigns.create/update
+- [x] Router: auto-approve logic in prospects.enrich — if icpMatchScore >= threshold, auto-approve
+- [x] Router: signal->opportunity automation in execution router — when meeting_booked, create account+contact+opportunity
+- [x] UI: Campaign Detail — Settings tab with threshold slider and signal->opportunity toggle
+- [x] UI: Campaign Detail — Prospects tab shows auto-approve badge when score >= threshold
+- [x] UI: Campaign Detail — Signal feed shows "Opportunity Created" badge on meeting_booked signals
 - [x] Scheduled ICP re-inference — /api/scheduled/icp-regen endpoint + nightly scheduled task
+
+## Round 21 — ARE Notification System, Signal Enhancement, ICP Version History
+
+- [ ] Schema: add `are_notification` kind to notifications.kind enum
+- [ ] Schema: add `enhancedHook` (text) and `signalEnhancedAt` (timestamp) to prospectIntelligence
+- [ ] Schema: add `restore` procedure to ICP router (set isActive=true for version, false for others)
+- [ ] Server: areNotify() helper — writes in-app notification with ARE-specific kind and relatedType
+- [ ] Server: fire areNotify on meeting_booked, auto_approved, icp_updated, campaign_completed, signal_classified
+- [ ] Server: Signal Enhancement agent — on email_open/click, fetch recent news for prospect company, rewrite top hook with LLM, store in prospectIntelligence.enhancedHook
+- [ ] Server: ICP restore procedure — sets chosen version isActive=true, all others false
+- [ ] UI: Notification bell — ARE-specific card styles (Bot icon, violet accent, relatedType=are_campaign)
+- [ ] UI: ARE Notifications panel — dedicated /are/notifications page showing ARE-only alerts
+- [ ] UI: Signal Enhancement badge on prospect row — shows "Hook Enhanced" when enhancedHook is set
+- [ ] UI: ICP Version History — full diff view comparing two versions side by side
+- [ ] UI: ICP Version History — confidence trend sparkline chart across versions
+- [ ] UI: ICP Version History — Restore button on each non-active version

@@ -8,7 +8,7 @@ import { Link } from "wouter";
 import { cn } from "@/lib/utils";
 import {
   CheckCheck, Inbox as InboxIcon, Mail, Bell, AlertTriangle,
-  CheckCircle2, XCircle, CalendarClock, Zap, AtSign, ClipboardList, MailOpen
+  CheckCircle2, XCircle, CalendarClock, Zap, AtSign, ClipboardList, MailOpen, Bot, Sparkles
 } from "lucide-react";
 
 const KIND_META: Record<string, { label: string; icon: any; color: string }> = {
@@ -23,9 +23,10 @@ const KIND_META: Record<string, { label: string; icon: any; color: string }> = {
   workflow_fired:   { label: "Workflow",       icon: Zap,           color: "text-violet-500" },
   system:           { label: "System",         icon: Bell,          color: "text-muted-foreground" },
   email_reply:      { label: "Email Reply",    icon: MailOpen,      color: "text-sky-500" },
+  are_event:        { label: "ARE Agent",      icon: Bot,           color: "text-violet-500" },
 };
 
-type FilterKind = "all" | "email_reply" | "system";
+type FilterKind = "all" | "email_reply" | "are_event" | "system";
 
 export default function Inbox() {
   const utils = trpc.useUtils();
@@ -37,10 +38,12 @@ export default function Inbox() {
   const filtered = (data ?? []).filter((n) => {
     if (filter === "all") return true;
     if (filter === "email_reply") return n.kind === "email_reply";
-    return n.kind !== "email_reply";
+    if (filter === "are_event") return n.kind === "are_event";
+    return n.kind !== "email_reply" && n.kind !== "are_event";
   });
   const unreadCount = (data ?? []).filter((n) => !n.readAt).length;
   const replyCount = (data ?? []).filter((n) => n.kind === "email_reply" && !n.readAt).length;
+  const areCount = (data ?? []).filter((n) => n.kind === "are_event" && !n.readAt).length;
 
   return (
     <Shell title="Inbox">
@@ -51,13 +54,14 @@ export default function Inbox() {
       </PageHeader>
       <div className="p-4 md:p-6 max-w-3xl">
         <div className="flex items-center gap-2 mb-4">
-          {(["all", "email_reply", "system"] as FilterKind[]).map((f) => (
+          {(["all", "email_reply", "are_event", "system"] as FilterKind[]).map((f) => (
             <button key={f} onClick={() => setFilter(f)}
               className={cn("px-3 py-1.5 rounded-full text-xs font-medium transition-colors",
                 filter === f ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:bg-muted/80")}>
-              {f === "all" ? "All" : f === "email_reply" ? "Email Replies" : "Notifications"}
+              {f === "all" ? "All" : f === "email_reply" ? "Email Replies" : f === "are_event" ? "ARE Agent" : "Notifications"}
               {f === "all" && unreadCount > 0 && <Badge variant="secondary" className="ml-1.5 h-4 text-[10px]">{unreadCount}</Badge>}
               {f === "email_reply" && replyCount > 0 && <Badge variant="secondary" className="ml-1.5 h-4 text-[10px]">{replyCount}</Badge>}
+              {f === "are_event" && areCount > 0 && <Badge variant="secondary" className="ml-1.5 h-4 text-[10px] bg-violet-500/20 text-violet-600">{areCount}</Badge>}
             </button>
           ))}
         </div>

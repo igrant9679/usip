@@ -15,6 +15,7 @@
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { z } from "zod";
+import { areNotify } from "./notify";
 import {
   accounts,
   contacts,
@@ -338,6 +339,13 @@ export const icpRouter = router({
   /** Trigger immediate AI re-inference */
   regenerate: workspaceProcedure.mutation(async ({ ctx }) => {
     await runIcpInference(ctx.workspace.id);
+    await areNotify({
+      workspaceId: ctx.workspace.id,
+      eventType: "icp_updated",
+      title: "ARE: ICP Profile Updated",
+      body: "The AI has re-inferred your Ideal Customer Profile based on the latest won and lost deal data. Review the new version in the ICP Agent page.",
+      relatedType: "icp_profile",
+    });
     return { success: true };
   }),
 
@@ -379,5 +387,31 @@ export const icpRouter = router({
 
       await db.update(icpProfiles).set(updates).where(eq(icpProfiles.id, current.id));
       return { success: true };
+    }),
+  /** Restore a previous ICP version — sets it as active, deactivates all others */
+  restore: workspaceProcedure
+    .input(z.object({ id: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // Verify the version belongs to this workspace
+      const [target] = await db
+        .select()
+        .from(icpProfiles)
+        .where(and(eq(icpProfiles.id, input.id), eq(icpProfiles.workspaceId, ctx.workspace.id)))
+        .limit(1);
+      if (!target) throw new TRPCError({ code: "NOT_FOUND", message: "ICP version not found." });
+      if (target.isActive) return { success: true, message: "Already active." };
+      // Deactivate all versions, then activate the target
+      await db.update(icpProfiles).set({ isActive: false }).where(eq(icpProfiles.workspaceId, ctx.workspace.id));
+      await db.update(icpProfiles).set({ isActive: true }).where(eq(icpProfiles.id, input.id));
+      await areNotify({
+        workspaceId: ctx.workspace.id,
+        eventType: "icp_updated",
+        title: `ARE: ICP Profile Restored to v${target.version}`,
+        body: `ICP version ${target.version} (confidence ${target.confidenceScore}%) has been restored as the active profile. All new campaigns will use this version for prospect scoring.`,
+        relatedType: "icp_profile",
+      });
+      return { success: true, message: `Restored to version ${target.version}.` };
     }),
 });

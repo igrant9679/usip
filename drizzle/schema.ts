@@ -899,6 +899,7 @@ export const notifications = mysqlTable(
       "workflow_fired",
       "system",
       "email_reply",
+      "are_event",
     ]).notNull(),
     title: varchar("title", { length: 240 }).notNull(),
     body: text("body"),
@@ -2586,6 +2587,8 @@ export const prospectIntelligence = mysqlTable(
     sequenceQualityScore: int("sequenceQualityScore"), // 0-40 (sum of 4 dimensions × 10)
     sequenceQualityBreakdown: json("sequenceQualityBreakdown"), // {specificity, clarity, brevity, cta}
     sequenceRewriteCount: int("sequenceRewriteCount").default(0).notNull(),
+    enhancedHook: text("enhancedHook"),           // AI-rewritten hook after signal enhancement
+    signalEnhancedAt: timestamp("signalEnhancedAt"), // when the hook was last enhanced
     generatedAt: timestamp("generatedAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },

@@ -1,0 +1,3 @@
+ALTER TABLE `notifications` MODIFY COLUMN `kind` enum('mention','task_assigned','task_due','deal_won','deal_lost','renewal_due','churn_risk','approval_request','workflow_fired','system','email_reply','are_event') NOT NULL;--> statement-breakpoint
+ALTER TABLE `prospect_intelligence` ADD `enhancedHook` text;--> statement-breakpoint
+ALTER TABLE `prospect_intelligence` ADD `signalEnhancedAt` timestamp;

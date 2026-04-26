@@ -32,6 +32,7 @@ import {
   MapPin,
   Pencil,
   RefreshCw,
+  RotateCcw,
   Sparkles,
   Target,
   TrendingUp,
@@ -352,10 +353,103 @@ function OverrideDialog({
   );
 }
 
+/* ─── Confidence trend sparkline ─────────────────────────────────────────── */
+function ConfidenceTrend({ history }: { history: Array<{ version: number; confidenceScore: number; generatedAt: string }> }) {
+  if (!history || history.length < 2) return null;
+  const sorted = [...history].sort((a, b) => a.version - b.version);
+  const maxScore = Math.max(...sorted.map(h => h.confidenceScore), 1);
+  const width = 220;
+  const height = 48;
+  const pad = 6;
+  const innerW = width - pad * 2;
+  const innerH = height - pad * 2;
+  const pts = sorted.map((h, i) => {
+    const x = pad + (i / (sorted.length - 1)) * innerW;
+    const y = pad + (1 - h.confidenceScore / maxScore) * innerH;
+    return `${x},${y}`;
+  });
+  const polyline = pts.join(" ");
+  const latest = sorted[sorted.length - 1];
+  const prev = sorted[sorted.length - 2];
+  const delta = latest.confidenceScore - prev.confidenceScore;
+  return (
+    <div className="flex items-center gap-3 px-4 py-3 rounded-xl border bg-card">
+      <div>
+        <div className="text-xs text-muted-foreground mb-1">Confidence Trend</div>
+        <svg width={width} height={height} className="overflow-visible">
+          <polyline points={polyline} fill="none" stroke="#A78BFA" strokeWidth="2" strokeLinejoin="round" />
+          {sorted.map((h, i) => {
+            const x = pad + (i / (sorted.length - 1)) * innerW;
+            const y = pad + (1 - h.confidenceScore / maxScore) * innerH;
+            return <circle key={i} cx={x} cy={y} r="3" fill="#A78BFA" />;
+          })}
+        </svg>
+      </div>
+      <div className="text-right">
+        <div className="text-lg font-bold" style={{ color: delta >= 0 ? "#34D399" : "#F87171" }}>
+          {delta >= 0 ? "+" : ""}{delta}%
+        </div>
+        <div className="text-xs text-muted-foreground">vs prev version</div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── Version diff view ──────────────────────────────────────────────────── */
+function VersionDiff({ a, b }: { a: any; b: any }) {
+  const fields: Array<{ label: string; key: string }> = [
+    { label: "Industries", key: "targetIndustries" },
+    { label: "Titles", key: "targetTitles" },
+    { label: "Geographies", key: "targetGeographies" },
+    { label: "Tech Stack", key: "targetTechStack" },
+    { label: "Anti-Patterns", key: "antiPatterns" },
+  ];
+  return (
+    <div className="rounded-xl border bg-card overflow-hidden">
+      <div className="grid grid-cols-2 divide-x">
+        <div className="px-3 py-2 bg-muted/30 text-xs font-semibold text-muted-foreground">v{a.version} (older)</div>
+        <div className="px-3 py-2 bg-primary/5 text-xs font-semibold text-primary">v{b.version} (newer)</div>
+      </div>
+      {fields.map(({ label, key }) => {
+        const aItems = parseJsonArray(a[key]);
+        const bItems = parseJsonArray(b[key]);
+        const added = bItems.filter(x => !aItems.includes(x));
+        const removed = aItems.filter(x => !bItems.includes(x));
+        const unchanged = aItems.filter(x => bItems.includes(x));
+        if (aItems.length === 0 && bItems.length === 0) return null;
+        return (
+          <div key={key} className="border-t">
+            <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground bg-muted/20">{label}</div>
+            <div className="grid grid-cols-2 divide-x">
+              <div className="px-3 py-2 text-xs space-y-1">
+                {aItems.map((item, i) => (
+                  <div key={i} className={removed.includes(item) ? "line-through text-rose-400" : "text-muted-foreground"}>{item}</div>
+                ))}
+              </div>
+              <div className="px-3 py-2 text-xs space-y-1">
+                {unchanged.map((item, i) => <div key={i} className="text-muted-foreground">{item}</div>)}
+                {added.map((item, i) => <div key={i} className="text-emerald-500 font-medium">+ {item}</div>)}
+              </div>
+            </div>
+          </div>
+        );
+      })}
+      {(a.confidenceScore != null || b.confidenceScore != null) && (
+        <div className="border-t grid grid-cols-2 divide-x">
+          <div className="px-3 py-2 text-xs text-muted-foreground">Confidence: {a.confidenceScore ?? "—"}%</div>
+          <div className="px-3 py-2 text-xs font-medium" style={{ color: (b.confidenceScore ?? 0) >= (a.confidenceScore ?? 0) ? "#34D399" : "#F87171" }}>
+            Confidence: {b.confidenceScore ?? "—"}% {(b.confidenceScore ?? 0) > (a.confidenceScore ?? 0) ? "▲" : (b.confidenceScore ?? 0) < (a.confidenceScore ?? 0) ? "▼" : ""}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ─── Version history row ────────────────────────────────────────────────── */
-function VersionRow({ v, isActive }: { v: any; isActive: boolean }) {
+function VersionRow({ v, isActive, onRestore, isRestoring }: { v: any; isActive: boolean; onRestore?: () => void; isRestoring?: boolean }) {
   const [expanded, setExpanded] = useState(false);
-  const rationale = v.rationale ?? v.icpRationale ?? "";
+  const rationale = v.rationale ?? v.icpRationale ?? v.aiRationale ?? "";
   const buyingTriggers = parseJsonArray(v.buyingTriggers);
   const industries = parseJsonArray(v.targetIndustries);
 
@@ -426,6 +520,20 @@ function VersionRow({ v, isActive }: { v: any; isActive: boolean }) {
               <BulletList items={buyingTriggers} color="#F59E0B" />
             </div>
           )}
+          {!isActive && onRestore && (
+            <div className="pt-2 border-t">
+              <Button
+                size="sm"
+                variant="outline"
+                className="gap-1.5 text-xs bg-violet-500/10 border-violet-500/30 text-violet-600 hover:bg-violet-500/20"
+                onClick={(e) => { e.stopPropagation(); onRestore(); }}
+                disabled={isRestoring}
+              >
+                {isRestoring ? <Loader2 className="size-3 animate-spin" /> : <RotateCcw className="size-3" />}
+                Restore this version
+              </Button>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -446,6 +554,17 @@ export default function AREIcpAgent() {
       setTimeout(() => utils.are.icp.getHistory.invalidate(), 5000);
     },
     onError: (e) => toast.error(e.message),
+  });
+  const [restoringId, setRestoringId] = useState<number | null>(null);
+  const [diffPair, setDiffPair] = useState<[any, any] | null>(null);
+  const restore = trpc.are.icp.restore.useMutation({
+    onSuccess: (_, vars) => {
+      toast.success("ICP version restored successfully");
+      setRestoringId(null);
+      utils.are.icp.getCurrent.invalidate();
+      utils.are.icp.getHistory.invalidate();
+    },
+    onError: (e) => { toast.error(e.message); setRestoringId(null); },
   });
 
   /* parse ICP fields */
@@ -700,10 +819,41 @@ export default function AREIcpAgent() {
           {!history || history.length === 0 ? (
             <div className="text-sm text-muted-foreground italic">No previous versions yet.</div>
           ) : (
-            <div className="space-y-2">
-              {history.map((v) => (
-                <VersionRow key={v.id} v={v} isActive={!!v.isActive} />
-              ))}
+            <div className="space-y-4">
+              {history.length >= 2 && (
+                <ConfidenceTrend
+                  history={history.map(h => ({
+                    version: h.version,
+                    confidenceScore: h.confidenceScore ?? 0,
+                    generatedAt: h.createdAt ? String(h.createdAt) : "",
+                  }))}
+                />
+              )}
+              {history.length >= 2 && (
+                <div className="flex items-center gap-2">
+                  <button
+                    className="text-xs text-violet-500 hover:text-violet-400 underline underline-offset-2"
+                    onClick={() => {
+                      const sorted = [...history].sort((a, b) => b.version - a.version);
+                      setDiffPair(diffPair ? null : [sorted[1], sorted[0]]);
+                    }}
+                  >
+                    {diffPair ? "Hide diff view" : "Compare last 2 versions"}
+                  </button>
+                </div>
+              )}
+              {diffPair && <VersionDiff a={diffPair[0]} b={diffPair[1]} />}
+              <div className="space-y-2">
+                {[...history].sort((a, b) => b.version - a.version).map((v) => (
+                  <VersionRow
+                    key={v.id}
+                    v={v}
+                    isActive={!!v.isActive}
+                    onRestore={() => { setRestoringId(v.id); restore.mutate({ id: v.id }); }}
+                    isRestoring={restoringId === v.id}
+                  />
+                ))}
+              </div>
             </div>
           )}
         </section>
