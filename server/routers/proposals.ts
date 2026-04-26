@@ -546,6 +546,8 @@ export const proposalsRouter = router({
     You can view the proposal and leave feedback without creating an account.
     If you did not expect this email, you can safely ignore it.
   </p>
+  <!-- Tracking pixel: 1x1 transparent GIF, logs open event server-side -->
+  <img src="${input.origin}/api/track/proposal-open/${token}" width="1" height="1" style="display:block;width:1px;height:1px;border:0;margin:0;padding:0" alt="" />
 </div>`;
       try {
         // Use specified account if provided, else prefer the first enabled connected account

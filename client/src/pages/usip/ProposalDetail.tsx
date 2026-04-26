@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { useLocation, useParams } from "wouter";
+import { useLocation, useParams, Link } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { Button } from "@/components/ui/button";
@@ -1171,6 +1171,10 @@ function ActivityFeed({ proposalId }: { proposalId: number }) {
     if (subject.toLowerCase().includes("opportunity") || subject.toLowerCase().includes("pipeline")) return TrendingUp;
     return ACTIVITY_ICONS[type] ?? Clock;
   }
+  function isPipelineEvent(subject: string) {
+    const s = subject.toLowerCase();
+    return s.includes("opportunity") || s.includes("pipeline") || s.includes("deal");
+  }
 
   if (isLoading) return (
     <div className="space-y-2">
@@ -1203,7 +1207,14 @@ function ActivityFeed({ proposalId }: { proposalId: number }) {
             </div>
             {/* Content */}
             <div className="pb-3 min-w-0 flex-1">
-              <p className="text-sm text-foreground leading-snug">{ev.subject}</p>
+              {isPipelineEvent(ev.subject ?? "") ? (
+                <Link href="/pipeline" className="text-sm text-teal-400 hover:text-teal-300 hover:underline underline-offset-2 leading-snug inline-flex items-center gap-1">
+                  {ev.subject}
+                  <ExternalLink className="size-3 shrink-0" />
+                </Link>
+              ) : (
+                <p className="text-sm text-foreground leading-snug">{ev.subject}</p>
+              )}
               {ev.body && (
                 <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">{ev.body}</p>
               )}

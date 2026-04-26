@@ -1510,3 +1510,21 @@
 - [x] UI: ShareTab — last-sent timestamp with recipient email shown below portal link; "Resend" inline link opens Send to Client dialog
 - [x] UI: OverviewTab — budget InfoCard label changes to "Budget (synced to pipeline)" when linkedOpportunityId is set
 - [x] Tests: 799/799 passing after all changes
+
+## Phase A — Enhancements (round 7)
+
+- [ ] Server: public GET /api/track/open/:token endpoint — logs "Client opened the proposal email" activity, returns 1x1 transparent GIF
+- [ ] Server: sendToClient — append tracking pixel <img> to email HTML body
+- [ ] Server: proposals table — add emailOpenedAt timestamp column, set on first open
+- [ ] UI: ActivityFeed — entries whose subject mentions "opportunity" or "pipeline" render as a tappable link to /pipeline
+- [ ] Seed: insert activity history rows for the Meridian Health demo proposal (created, sent, status changes, etc.)
+- [ ] Tests: 799+ passing after all changes
+
+## Phase A — Enhancements (round 7 COMPLETED)
+- [x] Schema: add emailOpenedAt timestamp column to proposals table (migration 0035)
+- [x] Server: /api/track/proposal-open/:token public endpoint — returns 1x1 GIF, logs activity, sets emailOpenedAt on first open
+- [x] Server: sendToClient email HTML — tracking pixel injected using share token
+- [x] Server: emailTracking.ts activities insert — fixed to use relatedType/relatedId (not entityType/entityId)
+- [x] UI: ActivityFeed — isPipelineEvent helper detects pipeline/opportunity/deal keywords
+- [x] UI: ActivityFeed — pipeline events render as teal Link to /pipeline with ExternalLink icon
+- [x] Data: Seeded 16 realistic activity events for Meridian Health proposal (id=1) spanning 2 weeks

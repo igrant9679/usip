@@ -223,6 +223,60 @@ export function registerEmailTrackingRoutes(app: Express) {
       console.error("[BounceWebhook] Unhandled error:", e);
     }
   });
+
+  /**
+   * Proposal email open pixel — called when the client loads the proposal email.
+   * Logs a "Client opened the proposal email" activity and sets emailOpenedAt.
+   * Uses the proposal shareToken as the tracking token.
+   */
+  app.get("/api/track/proposal-open/:token", async (req: Request, res: Response) => {
+    // Return the pixel immediately
+    res.setHeader("Content-Type", "image/gif");
+    res.setHeader("Content-Length", TRACKING_PIXEL.length);
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, private");
+    res.setHeader("Pragma", "no-cache");
+    res.end(TRACKING_PIXEL);
+    const { token } = req.params;
+    if (!token) return;
+    try {
+      const db = await getDb();
+      if (!db) return;
+      const { proposals, activities } = await import("../drizzle/schema");
+      const { eq } = await import("drizzle-orm");
+      // Look up the proposal by shareToken
+      const [proposal] = await db
+        .select({
+          id: proposals.id,
+          workspaceId: proposals.workspaceId,
+          title: proposals.title,
+          emailOpenedAt: proposals.emailOpenedAt,
+        })
+        .from(proposals)
+        .where(eq(proposals.shareToken, token))
+        .limit(1);
+      if (!proposal) return;
+      // Set emailOpenedAt only on first open
+      if (!proposal.emailOpenedAt) {
+        await db
+          .update(proposals)
+          .set({ emailOpenedAt: new Date() })
+          .where(eq(proposals.id, proposal.id));
+      }
+      // Always log the open event as an activity
+      await db.insert(activities).values({
+        workspaceId: proposal.workspaceId,
+        relatedType: "proposal",
+        relatedId: proposal.id,
+        type: "system",
+        subject: "Client opened the proposal email",
+        body: `The client opened the email for "${proposal.title}".`,
+        actorUserId: null,
+        occurredAt: new Date(),
+      });
+    } catch (e) {
+      console.error("[ProposalTracking] open event failed:", e);
+    }
+  });
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
