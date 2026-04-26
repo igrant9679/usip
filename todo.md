@@ -1548,13 +1548,13 @@
 - [x] UI: ActivityFeed — richer icon set: Mail for email opens, MousePointerClick for link clicks, AlertCircle for revisions, color-coded per event type
 
 ## Phase A — Enhancements (round 9 IN PROGRESS)
-- [ ] Server: engagementScore helper — compute 0-100 score from sentAt, emailOpenedAt, emailClickedAt, feedbackCount
-- [ ] Server: proposals.list — include engagementScore on each proposal row
-- [ ] Server: proposals.get — include engagementScore in returned proposal
-- [ ] Server: /api/scheduled/proposal-followup POST endpoint — checks sent proposals with no emailOpenedAt after 48h, creates follow_up task + in-app notification
-- [ ] UI: ProposalCard (Proposals list) — engagement score badge with colour coding (cold/warm/hot)
-- [ ] UI: ProposalDetail header — engagement score badge
-- [ ] UI: ActivityFeed — "Views" filter chip showing only email open/click events (type=system, subject contains "opened" or "clicked")
+- [x] Server: engagementScore helper — compute 0-100 score from sentAt, emailOpenedAt, emailClickedAt, feedbackCount
+- [x] Server: proposals.list — include engagementScore on each proposal row
+- [x] Server: proposals.get — include engagementScore in returned proposal
+- [x] Server: /api/scheduled/proposal-followup POST endpoint — checks sent proposals with no emailOpenedAt after 48h, creates follow_up task + in-app notification
+- [x] UI: ProposalCard (Proposals list) — engagement score badge with colour coding (cold/warm/hot)
+- [x] UI: ProposalDetail header — engagement score badge
+- [x] UI: ActivityFeed — "Views" filter chip showing only email open/click events (type=system, subject contains "opened" or "clicked")
 
 ## Phase A — Enhancements (round 9 — COMPLETED)
 - [x] Server: computeEngagementScore helper (0-100: +20 sent, +25 opened, +25 clicked, +15 feedback, +15 accepted)
@@ -1565,3 +1565,21 @@
 - [x] UI: EngagementScoreBadge component in ProposalDetail.tsx — shown in header next to StatusBadge
 - [x] UI: ActivityFeed "Views" filter chip — filters to email open and link click events only
 - [x] UI: ActivityFeed chip count logic updated for "views" virtual filter
+
+## Phase A — Enhancements (round 10 — IN PROGRESS)
+- [ ] Schema: proposalScoreHistory table (proposalId, score, createdAt)
+- [ ] Server: proposals.snapshotScore mutation — inserts daily score snapshot
+- [ ] Server: proposals.getScoreHistory query — returns last 30 snapshots for a proposal
+- [ ] Server: /api/scheduled/proposal-followup — already exists, wire as scheduled task every 6h
+- [ ] UI: Proposals list — "Accepted" filter chip (already in STATUS_CONFIG, just needs to be surfaced as a chip)
+- [ ] UI: ProposalDetail header — engagement score sparkline chart (last 30 days)
+- [ ] Data: seed 14 days of score history for Meridian Health proposal
+
+## Phase A — Enhancements (round 10 — COMPLETED)
+- [x] Schema: proposalScoreHistory table (proposalId, score, createdAt) — migration 0037
+- [x] Server: proposals.snapshotScore mutation — inserts daily score snapshot
+- [x] Server: proposals.getScoreHistory query — returns last 30 snapshots for a proposal
+- [x] Scheduled task: proposal-followup wired to run every 6 hours via cron
+- [x] UI: Proposals list — "Accepted" filter chip already existed in STATUS_CONFIG loop (confirmed, no change needed)
+- [x] UI: ProposalDetail header — ScoreSparkline component using recharts LineChart, auto-snapshots once per day
+- [x] Data: seeded 14 days of score history for Meridian Health proposal (0→100 progression)

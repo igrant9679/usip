@@ -2384,3 +2384,21 @@ export const proposalRevisions = mysqlTable(
   }),
 );
 export type ProposalRevision = typeof proposalRevisions.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Proposal Score History (daily engagement score snapshots)
+   ────────────────────────────────────────────────────────────────────────── */
+export const proposalScoreHistory = mysqlTable(
+  "proposal_score_history",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    proposalId: int("proposalId").notNull(),
+    score: int("score").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    byProposal: index("ix_psh_proposal").on(t.proposalId),
+    byProposalDate: index("ix_psh_proposal_date").on(t.proposalId, t.createdAt),
+  }),
+);
+export type ProposalScoreHistory = typeof proposalScoreHistory.$inferSelect;

@@ -61,6 +61,12 @@ import {
   AlertCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import {
+  LineChart,
+  Line,
+  ResponsiveContainer,
+  Tooltip as RechartsTooltip,
+} from "recharts";
 import { Shell } from "@/components/usip/Shell";
 
 // ── Status config ─────────────────────────────────────────────────────────────
@@ -895,6 +901,68 @@ function EngagementScoreBadge({ score }: { score: number }) {
   );
 }
 
+
+// ── Score Sparkline ───────────────────────────────────────────────────────────
+function ScoreSparkline({ proposalId }: { proposalId: number }) {
+  const { current } = useWorkspace();
+  const { data: history } = trpc.proposals.getScoreHistory.useQuery(
+    { proposalId },
+    { enabled: !!current && proposalId > 0 },
+  );
+  const snapshotMutation = trpc.proposals.snapshotScore.useMutation();
+
+  // Auto-snapshot once per day (if no entry today)
+  const today = new Date().toDateString();
+  const lastEntry = history?.[0];
+  const lastEntryDate = lastEntry ? new Date(lastEntry.createdAt).toDateString() : null;
+  if (history !== undefined && lastEntryDate !== today) {
+    // Only trigger once per render cycle
+    if (!snapshotMutation.isPending && !snapshotMutation.isSuccess) {
+      snapshotMutation.mutate({ proposalId });
+    }
+  }
+
+  if (!history || history.length < 2) return null;
+
+  // Reverse to chronological order for the chart
+  const chartData = [...history].reverse().map((h, i) => ({
+    day: i + 1,
+    score: h.score,
+    date: new Date(h.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric" }),
+  }));
+
+  return (
+    <div className="flex items-center gap-1.5" title="Engagement score trend (last 30 days)">
+      <span className="text-xs text-muted-foreground hidden sm:block">Trend</span>
+      <div className="w-20 h-6">
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={chartData} margin={{ top: 2, right: 2, bottom: 2, left: 2 }}>
+            <Line
+              type="monotone"
+              dataKey="score"
+              stroke="#14b8a6"
+              strokeWidth={1.5}
+              dot={false}
+              isAnimationActive={false}
+            />
+            <RechartsTooltip
+              content={({ active, payload }) => {
+                if (!active || !payload?.length) return null;
+                const d = payload[0].payload as { date: string; score: number };
+                return (
+                  <div className="bg-popover border border-border rounded px-2 py-1 text-xs shadow-md">
+                    <span className="text-muted-foreground">{d.date}</span>
+                    <span className="ml-2 font-semibold text-teal-400">{d.score}/100</span>
+                  </div>
+                );
+              }}
+            />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
+}
 export default function ProposalDetail() {
   const params = useParams<{ id: string }>();
   const [, navigate] = useLocation();
@@ -959,6 +1027,7 @@ export default function ProposalDetail() {
               <EngagementScoreBadge score={(proposal as any).engagementScore} />
             )}
           </div>
+          <ScoreSparkline proposalId={proposal.id} />
           <p className="text-xs text-muted-foreground mt-0.5">
             {proposal.clientName}
             {proposal.orgAbbr && ` · ${proposal.orgAbbr}`}

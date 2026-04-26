@@ -260,6 +260,13 @@
       "when": 1777171243204,
       "tag": "0036_yielding_arclight",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "5",
+      "when": 1777172337135,
+      "tag": "0037_tiny_bruce_banner",
+      "breakpoints": true
     }
   ]
 }

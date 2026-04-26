@@ -22,6 +22,7 @@ import {
   sendingAccounts,
   activities,
   users,
+  proposalScoreHistory,
 } from "../../drizzle/schema";
 import { createEmailAdapter } from "../emailAdapter";
 import { getDb } from "../db";
@@ -1134,4 +1135,40 @@ Write 2-4 paragraphs of professional proposal content for this section. Be speci
         actorName: r.actorUserId ? (nameMap.get(r.actorUserId) ?? "System") : "System",
       }));
     }),
+  /** Snapshot today's engagement score for a proposal */
+  snapshotScore: workspaceProcedure
+    .input(z.object({ proposalId: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = getDb();
+      const proposal = await getProposalOrThrow(db, input.proposalId, ctx.workspace.id);
+      const feedbackRows = await db
+        .select({ id: proposalFeedback.id })
+        .from(proposalFeedback)
+        .where(eq(proposalFeedback.proposalId, proposal.id));
+      const score = computeEngagementScore(proposal, feedbackRows.length);
+      await db.insert(proposalScoreHistory).values({
+        proposalId: proposal.id,
+        score,
+      });
+      return { ok: true, score };
+    }),
+
+  /** Return last 30 daily score snapshots for a proposal (newest first) */
+  getScoreHistory: workspaceProcedure
+    .input(z.object({ proposalId: z.number().int().positive() }))
+    .query(async ({ ctx, input }) => {
+      await getProposalOrThrow(getDb(), input.proposalId, ctx.workspace.id);
+      const rows = await getDb()
+        .select({
+          id: proposalScoreHistory.id,
+          score: proposalScoreHistory.score,
+          createdAt: proposalScoreHistory.createdAt,
+        })
+        .from(proposalScoreHistory)
+        .where(eq(proposalScoreHistory.proposalId, input.proposalId))
+        .orderBy(desc(proposalScoreHistory.createdAt))
+        .limit(30);
+      return rows;
+    }),
+
 });
