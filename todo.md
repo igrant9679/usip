@@ -1625,3 +1625,13 @@
 - [x] UI: ProposalDetail activity feed — Approve/Decline buttons on extension_requested activities; Approve dialog (new date + note); Decline dialog (reason)
 - [x] UI: Dashboard widget library — ProposalExpiryFunnelWidget (stacked progress bars per 30/60/90d window); added to WIDGET_TYPES and defaultSize
 - [x] UI: ProposalDetail Overview — skipAutoExtend checkbox in edit form; amber badge in view mode when enabled
+
+## Phase A — Enhancements (round 16)
+- [x] Server: proposals.getExtensionHistory public procedure — returns extension-related activities for a shareToken
+- [x] Server: proposals.listExtensionPending protected procedure — returns proposals with pending extension requests (request but no approve/deny)
+- [x] Server: operations.ts proposal_expiry_funnel resolver — windowDays added to each series item for drill-down URL construction
+- [x] UI: ProposalPortal — "Extension History" tab (read-only timeline with color-coded dots for request/approve/deny events)
+- [x] UI: DashboardWidgets ProposalExpiryFunnelWidget — each bar segment and legend item is a clickable link to /proposals?expiryFilter=X&window=Y
+- [x] UI: Proposals list — reads URL params expiryFilter + window on mount; cohort filter logic added to filtered useMemo
+- [x] UI: Proposals list — orange alert bar when extensionPending.length > 0; "Review Requests" button opens extension management dialog
+- [x] UI: Proposals list — extension management dialog with per-request Approve/Decline buttons; Approve dialog (new date + note); Decline dialog (reason)

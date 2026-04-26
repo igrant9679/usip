@@ -1425,6 +1425,120 @@ ${input.reason ? `<p>${input.reason}</p>` : ""}
       }
       return { ok: true };
     }),
+  /**
+   * Public: return extension-related activity events for the portal timeline.
+   * Filters activities whose subject contains "extension" for the given shareToken.
+   */
+  getExtensionHistory: publicProcedure
+    .input(z.object({ token: z.string() }))
+    .query(async ({ input }) => {
+      const db = await getDb();
+      if (!db) return [];
+      const rows = await db
+        .select({ id: proposals.id })
+        .from(proposals)
+        .where(eq(proposals.shareToken, input.token))
+        .limit(1);
+      if (!rows[0]) return [];
+      const proposalId = rows[0].id;
+      const events = await db
+        .select({
+          id: activities.id,
+          subject: activities.subject,
+          body: activities.body,
+          occurredAt: activities.occurredAt,
+        })
+        .from(activities)
+        .where(
+          and(
+            eq(activities.relatedType, "proposal"),
+            eq(activities.relatedId, proposalId),
+            like(activities.subject, "%extension%"),
+          ),
+        )
+        .orderBy(asc(activities.occurredAt));
+      return events;
+    }),
+  /**
+   * Protected: list proposals that have a pending extension request
+   * (extension_requested activity with no subsequent approved/denied activity).
+   */
+  listExtensionPending: workspaceProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) return [];
+    const isManager = ["manager", "admin", "super_admin"].includes(ctx.member.role);
+    const proposalRows = await db
+      .select({
+        id: proposals.id,
+        title: proposals.title,
+        clientName: proposals.clientName,
+        clientEmail: proposals.clientEmail,
+        expiresAt: proposals.expiresAt,
+        status: proposals.status,
+      })
+      .from(proposals)
+      .where(
+        isManager
+          ? eq(proposals.workspaceId, ctx.workspace.id)
+          : and(eq(proposals.workspaceId, ctx.workspace.id), eq(proposals.createdBy, ctx.user.id)),
+      );
+    if (proposalRows.length === 0) return [];
+    const proposalIds = proposalRows.map((r) => r.id);
+    const actRows = await db
+      .select({
+        relatedId: activities.relatedId,
+        subject: activities.subject,
+        body: activities.body,
+        occurredAt: activities.occurredAt,
+      })
+      .from(activities)
+      .where(
+        and(
+          eq(activities.relatedType, "proposal"),
+          or(...proposalIds.map((id) => eq(activities.relatedId, id))),
+          like(activities.subject, "%extension%"),
+        ),
+      )
+      .orderBy(asc(activities.occurredAt));
+    const byProposal = new Map<number, typeof actRows>();
+    for (const a of actRows) {
+      if (!byProposal.has(a.relatedId)) byProposal.set(a.relatedId, []);
+      byProposal.get(a.relatedId)!.push(a);
+    }
+    const pending: Array<{
+      id: number;
+      title: string;
+      clientName: string | null;
+      clientEmail: string | null;
+      expiresAt: Date | null;
+      status: string;
+      requestedAt: Date;
+      reason: string | null;
+    }> = [];
+    for (const [proposalId, acts] of byProposal.entries()) {
+      const hasRequest = acts.some((a) => a.subject.toLowerCase().includes("extension requested"));
+      const hasResolution = acts.some(
+        (a) =>
+          a.subject.toLowerCase().includes("extension approved") ||
+          a.subject.toLowerCase().includes("extension declined"),
+      );
+      if (hasRequest && !hasResolution) {
+        const req = acts.find((a) => a.subject.toLowerCase().includes("extension requested"))!;
+        const proposal = proposalRows.find((p) => p.id === proposalId)!;
+        pending.push({
+          id: proposalId,
+          title: proposal.title,
+          clientName: proposal.clientName,
+          clientEmail: proposal.clientEmail,
+          expiresAt: proposal.expiresAt,
+          status: proposal.status,
+          requestedAt: req.occurredAt,
+          reason: req.body,
+        });
+      }
+    }
+    return pending;
+  }),
   /** Return last 30 daily score snapshots for a proposal (newest first) */
   getScoreHistory: workspaceProcedure
     .input(z.object({ proposalId: z.number().int().positive() }))

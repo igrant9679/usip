@@ -1,6 +1,6 @@
 import { Shell } from "@/components/usip/Shell";
 import { useState, useMemo, useEffect } from "react";
-import { useLocation } from "wouter";
+import { useLocation, useSearch } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { Button } from "@/components/ui/button";
@@ -43,6 +43,10 @@ import {
   ArrowUpDown,
   ArrowUp,
   ArrowDown,
+  CalendarCheck,
+  UserCheck,
+  ThumbsUp,
+  ThumbsDown,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -419,10 +423,24 @@ function EngagementBadge({ score }: { score: number }) {
 // ── Main list page ────────────────────────────────────────────────────────────
 export default function Proposals() {
   const [, navigate] = useLocation();
+  const searchStr = useSearch();
   const { current } = useWorkspace();
   const [wizardOpen, setWizardOpen] = useState(false);
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [statusFilter, setStatusFilter] = useState<string>(() => {
+    const params = new URLSearchParams(searchStr);
+    const ef = params.get("expiryFilter");
+    if (ef === "expired") return "expired_cohort";
+    if (ef === "accepted") return "accepted_cohort";
+    if (ef === "active") return "active_cohort";
+    return "all";
+  });
+  const [expiryWindow, setExpiryWindow] = useState<number | null>(() => {
+    const params = new URLSearchParams(searchStr);
+    const w = params.get("window");
+    return w ? parseInt(w) : null;
+  });
+  const [extMgmtOpen, setExtMgmtOpen] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [bulkExpiryOpen, setBulkExpiryOpen] = useState(false);
   const [bulkExpiryDate, setBulkExpiryDate] = useState("");
@@ -441,6 +459,20 @@ export default function Proposals() {
     },
     onError: (e) => toast.error(e.message),
   });
+  const { data: extensionPending, refetch: refetchPending } = trpc.proposals.listExtensionPending.useQuery(
+    undefined,
+    { enabled: !!current },
+  );
+  const approveExtMutation = trpc.proposals.approveExtension.useMutation({
+    onSuccess: () => { toast.success("Extension approved"); refetch(); refetchPending(); },
+    onError: (e) => toast.error(e.message),
+  });
+  const denyExtMutation = trpc.proposals.denyExtension.useMutation({
+    onSuccess: () => { toast.success("Extension declined"); refetch(); refetchPending(); },
+    onError: (e) => toast.error(e.message),
+  });
+  const [approveDialogState, setApproveDialogState] = useState<{ proposalId: number; newDate: string; note: string } | null>(null);
+  const [denyDialogState, setDenyDialogState] = useState<{ proposalId: number; reason: string } | null>(null);
   function toggleSelect(id: number, e: React.MouseEvent) {
     e.stopPropagation();
     setSelectedIds((prev) => {
@@ -465,6 +497,9 @@ export default function Proposals() {
         !search ||
         p.title.toLowerCase().includes(search.toLowerCase()) ||
         p.clientName.toLowerCase().includes(search.toLowerCase());
+      const now = Date.now();
+      const windowMs = expiryWindow ? expiryWindow * 24 * 60 * 60 * 1000 : null;
+      const windowStart = windowMs ? now - windowMs : null;
       const matchStatus =
         statusFilter === "all"
           ? true
@@ -472,6 +507,19 @@ export default function Proposals() {
           ? !!(p as any).isStale
           : statusFilter === "expiring_soon"
           ? !!(p as any).isExpiringSoon
+          : statusFilter === "expired_cohort"
+          ? (p as any).expiresAt &&
+            new Date((p as any).expiresAt).getTime() < now &&
+            p.status !== "accepted" &&
+            (!windowStart || (p.createdAt && new Date(p.createdAt).getTime() >= windowStart))
+          : statusFilter === "accepted_cohort"
+          ? p.status === "accepted" &&
+            (!windowStart || (p.createdAt && new Date(p.createdAt).getTime() >= windowStart))
+          : statusFilter === "active_cohort"
+          ? (p as any).expiresAt &&
+            new Date((p as any).expiresAt).getTime() >= now &&
+            p.status !== "accepted" &&
+            (!windowStart || (p.createdAt && new Date(p.createdAt).getTime() >= windowStart))
           : p.status === statusFilter;
       return matchSearch && matchStatus;
     });
@@ -489,7 +537,7 @@ export default function Proposals() {
       });
     }
     return result;
-  }, [list, search, statusFilter, sortBy]);
+  }, [list, search, statusFilter, sortBy, expiryWindow]);
 
   // Summary counts
   const counts = useMemo(() => {
@@ -563,6 +611,24 @@ export default function Proposals() {
             onClick={() => setSelectedIds(new Set())}
           >
             Clear
+          </Button>
+        </div>
+      )}
+      {/* Extension Requests alert bar */}
+      {extensionPending && extensionPending.length > 0 && (
+        <div className="flex items-center gap-3 px-6 py-2 bg-orange-500/10 border-b border-orange-500/30 shrink-0">
+          <CalendarCheck className="size-4 text-orange-400 shrink-0" />
+          <span className="text-sm text-orange-300 flex-1">
+            <strong>{extensionPending.length}</strong> pending extension request{extensionPending.length === 1 ? "" : "s"}
+          </span>
+          <Button
+            size="sm"
+            variant="outline"
+            className="gap-1.5 text-xs border-orange-500/40 text-orange-300 hover:bg-orange-500/10"
+            onClick={() => setExtMgmtOpen(true)}
+          >
+            <UserCheck className="size-3.5" />
+            Review Requests
           </Button>
         </div>
       )}
@@ -847,6 +913,155 @@ export default function Proposals() {
               className="bg-teal-600 hover:bg-teal-700 text-white"
             >
               {bulkSetExpiryMutation.isPending ? "Saving..." : "Set Date"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      {/* Extension Management Dialog */}
+      <Dialog open={extMgmtOpen} onOpenChange={setExtMgmtOpen}>
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <CalendarCheck className="size-5 text-orange-400" />
+              Pending Extension Requests
+            </DialogTitle>
+          </DialogHeader>
+          {!extensionPending || extensionPending.length === 0 ? (
+            <p className="text-sm text-muted-foreground py-4 text-center">No pending extension requests.</p>
+          ) : (
+            <div className="space-y-3 py-2">
+              {extensionPending.map((req) => (
+                <div key={req.id} className="border border-border rounded-lg p-4 space-y-2">
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <p className="text-sm font-medium">{req.title}</p>
+                      <p className="text-xs text-muted-foreground">{req.clientName} · {req.clientEmail}</p>
+                    </div>
+                    <div className="flex gap-2 shrink-0">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="gap-1 text-xs border-emerald-500/40 text-emerald-400 hover:bg-emerald-500/10"
+                        onClick={() => setApproveDialogState({ proposalId: req.id, newDate: req.expiresAt ? new Date(new Date(req.expiresAt).getTime() + 7 * 86400000).toISOString().slice(0, 10) : "", note: "" })}
+                      >
+                        <ThumbsUp className="size-3" />
+                        Approve
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="gap-1 text-xs border-red-500/40 text-red-400 hover:bg-red-500/10"
+                        onClick={() => setDenyDialogState({ proposalId: req.id, reason: "" })}
+                      >
+                        <ThumbsDown className="size-3" />
+                        Decline
+                      </Button>
+                    </div>
+                  </div>
+                  {req.reason && (
+                    <p className="text-xs text-muted-foreground bg-muted/30 rounded p-2 leading-relaxed">{req.reason}</p>
+                  )}
+                  <div className="flex gap-4 text-[10px] text-muted-foreground">
+                    {req.expiresAt && <span>Current expiry: {new Date(req.expiresAt).toLocaleDateString()}</span>}
+                    <span>Requested: {new Date(req.requestedAt).toLocaleDateString()}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setExtMgmtOpen(false)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      {/* Approve Extension Dialog */}
+      <Dialog open={!!approveDialogState} onOpenChange={(o) => !o && setApproveDialogState(null)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <ThumbsUp className="size-4 text-emerald-400" />
+              Approve Extension
+            </DialogTitle>
+          </DialogHeader>
+          {approveDialogState && (
+            <div className="space-y-3 py-2">
+              <div>
+                <Label>New Expiry Date</Label>
+                <Input
+                  type="date"
+                  value={approveDialogState.newDate}
+                  onChange={(e) => setApproveDialogState({ ...approveDialogState, newDate: e.target.value })}
+                  className="mt-1"
+                  min={new Date().toISOString().slice(0, 10)}
+                />
+              </div>
+              <div>
+                <Label>Note to client (optional)</Label>
+                <Textarea
+                  value={approveDialogState.note}
+                  onChange={(e) => setApproveDialogState({ ...approveDialogState, note: e.target.value })}
+                  placeholder="We've extended your proposal deadline..."
+                  className="mt-1 text-sm"
+                  rows={3}
+                />
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setApproveDialogState(null)}>Cancel</Button>
+            <Button
+              className="bg-emerald-600 hover:bg-emerald-700 text-white"
+              disabled={!approveDialogState?.newDate || approveExtMutation.isPending}
+              onClick={() => {
+                if (!approveDialogState) return;
+                approveExtMutation.mutate(
+                  { proposalId: approveDialogState.proposalId, newExpiresAt: approveDialogState.newDate, note: approveDialogState.note || undefined },
+                  { onSuccess: () => { setApproveDialogState(null); setExtMgmtOpen(false); } },
+                );
+              }}
+            >
+              {approveExtMutation.isPending ? "Approving..." : "Approve"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      {/* Decline Extension Dialog */}
+      <Dialog open={!!denyDialogState} onOpenChange={(o) => !o && setDenyDialogState(null)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <ThumbsDown className="size-4 text-red-400" />
+              Decline Extension
+            </DialogTitle>
+          </DialogHeader>
+          {denyDialogState && (
+            <div className="space-y-3 py-2">
+              <div>
+                <Label>Reason (optional)</Label>
+                <Textarea
+                  value={denyDialogState.reason}
+                  onChange={(e) => setDenyDialogState({ ...denyDialogState, reason: e.target.value })}
+                  placeholder="Unfortunately, we cannot extend this proposal..."
+                  className="mt-1 text-sm"
+                  rows={3}
+                />
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setDenyDialogState(null)}>Cancel</Button>
+            <Button
+              variant="destructive"
+              disabled={denyExtMutation.isPending}
+              onClick={() => {
+                if (!denyDialogState) return;
+                denyExtMutation.mutate(
+                  { proposalId: denyDialogState.proposalId, reason: denyDialogState.reason || undefined },
+                  { onSuccess: () => { setDenyDialogState(null); setExtMgmtOpen(false); } },
+                );
+              }}
+            >
+              {denyExtMutation.isPending ? "Declining..." : "Decline"}
             </Button>
           </DialogFooter>
         </DialogContent>

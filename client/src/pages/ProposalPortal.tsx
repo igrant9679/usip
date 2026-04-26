@@ -78,6 +78,10 @@ export default function ProposalPortal() {
   const [extensionDialogOpen, setExtensionDialogOpen] = useState(false);
   const [extensionReason, setExtensionReason] = useState("");
   const [extensionSubmitted, setExtensionSubmitted] = useState(false);
+  const { data: extensionHistory } = trpc.proposals.getExtensionHistory.useQuery(
+    { token: token ?? "" },
+    { enabled: !!token },
+  );
   const requestExtensionMutation = trpc.proposals.requestExtension.useMutation({
     onSuccess: () => {
       setExtensionSubmitted(true);
@@ -253,6 +257,11 @@ export default function ProposalPortal() {
             <TabsTrigger value="feedback" className="rounded-md data-[state=active]:bg-teal-600 data-[state=active]:text-white text-sm">
               Submit Feedback
             </TabsTrigger>
+            {extensionHistory && extensionHistory.length > 0 && (
+              <TabsTrigger value="extension_history" className="rounded-md data-[state=active]:bg-teal-600 data-[state=active]:text-white text-sm">
+                Extension History
+              </TabsTrigger>
+            )}
           </TabsList>
 
           {/* Content sections */}
@@ -363,6 +372,49 @@ export default function ProposalPortal() {
               )}
             </div>
           </TabsContent>
+          {/* Extension History tab */}
+          {extensionHistory && extensionHistory.length > 0 && (
+            <TabsContent value="extension_history" className="mt-0">
+              <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
+                <h2 className="text-base font-semibold text-gray-800 mb-4 pb-2 border-b border-gray-100 flex items-center gap-2">
+                  <CalendarClock className="size-4 text-orange-500" />
+                  Extension Request History
+                </h2>
+                <div className="relative">
+                  <div className="absolute left-3 top-0 bottom-0 w-px bg-gray-200" />
+                  <ol className="space-y-4 pl-8">
+                    {extensionHistory.map((ev) => {
+                      const subj = ev.subject ?? "";
+                      const isApproved = subj.toLowerCase().includes("extension approved");
+                      const isDenied = subj.toLowerCase().includes("extension declined");
+                      const dotColor = isApproved
+                        ? "bg-emerald-500"
+                        : isDenied
+                        ? "bg-red-500"
+                        : "bg-orange-400";
+                      const icon = isApproved ? "\u2713" : isDenied ? "\u2715" : "\u2197";
+                      return (
+                        <li key={ev.id} className="relative">
+                          <span
+                            className={`absolute -left-5 top-1 size-4 rounded-full flex items-center justify-center text-white text-[9px] font-bold ${dotColor}`}
+                          >
+                            {icon}
+                          </span>
+                          <div className="text-sm font-medium text-gray-800">{subj}</div>
+                          {ev.body && (
+                            <p className="text-xs text-gray-500 mt-0.5 leading-relaxed">{ev.body}</p>
+                          )}
+                          <time className="text-[10px] text-gray-400 mt-0.5 block">
+                            {new Date(ev.occurredAt).toLocaleString()}
+                          </time>
+                        </li>
+                      );
+                    })}
+                  </ol>
+                </div>
+              </div>
+            </TabsContent>
+          )}
         </Tabs>
       </main>
 

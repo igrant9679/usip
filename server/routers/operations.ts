@@ -1409,7 +1409,7 @@ async function resolveWidgetData(
           (r) => r.expiresAt && new Date(r.expiresAt).getTime() >= now && r.status !== "accepted",
         ).length;
         const accepted = rows.filter((r) => r.status === "accepted").length;
-        return { label: `${days}d`, expired, extended, accepted };
+        return { label: `${days}d`, windowDays: days, expired, extended, accepted };
       }),
     );
     return { type: "proposal_expiry_funnel", title: w.title, series };
