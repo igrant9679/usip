@@ -1053,6 +1053,10 @@ export const workspaceSettings = mysqlTable("workspace_settings", {
   systemSenderAccountId: int("systemSenderAccountId"),
   /** How many days before a pending invitation expires (null = never) */
   inviteExpiryDays: int("inviteExpiryDays").default(7),
+  /** Auto-extend proposal expiresAt when client opens the email (within 7 days of expiry) */
+  autoExtendOnOpen: boolean("autoExtendOnOpen").default(false).notNull(),
+  /** Number of days to extend expiresAt when autoExtendOnOpen fires */
+  autoExtendDays: int("autoExtendDays").default(7).notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
 export type WorkspaceSettings = typeof workspaceSettings.$inferSelect;

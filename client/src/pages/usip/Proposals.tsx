@@ -40,6 +40,9 @@ import {
   Eye,
   AlertTriangle,
   Timer,
+  ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -423,6 +426,7 @@ export default function Proposals() {
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [bulkExpiryOpen, setBulkExpiryOpen] = useState(false);
   const [bulkExpiryDate, setBulkExpiryDate] = useState("");
+  const [sortBy, setSortBy] = useState<"none" | "expires_asc" | "expires_desc">("none");
 
   const { data: list, isLoading, refetch } = trpc.proposals.list.useQuery(undefined, {
     enabled: !!current,
@@ -456,7 +460,7 @@ export default function Proposals() {
 
   const filtered = useMemo(() => {
     if (!list) return [];
-    return list.filter((p) => {
+    const result = list.filter((p) => {
       const matchSearch =
         !search ||
         p.title.toLowerCase().includes(search.toLowerCase()) ||
@@ -471,7 +475,21 @@ export default function Proposals() {
           : p.status === statusFilter;
       return matchSearch && matchStatus;
     });
-  }, [list, search, statusFilter]);
+    if (sortBy === "expires_asc") {
+      result.sort((a, b) => {
+        const aT = (a as any).expiresAt ? new Date((a as any).expiresAt).getTime() : Infinity;
+        const bT = (b as any).expiresAt ? new Date((b as any).expiresAt).getTime() : Infinity;
+        return aT - bT;
+      });
+    } else if (sortBy === "expires_desc") {
+      result.sort((a, b) => {
+        const aT = (a as any).expiresAt ? new Date((a as any).expiresAt).getTime() : -Infinity;
+        const bT = (b as any).expiresAt ? new Date((b as any).expiresAt).getTime() : -Infinity;
+        return bT - aT;
+      });
+    }
+    return result;
+  }, [list, search, statusFilter, sortBy]);
 
   // Summary counts
   const counts = useMemo(() => {
@@ -645,6 +663,19 @@ export default function Proposals() {
               </button>
             );
           })()}
+          {/* Expires sort button */}
+          <button
+            onClick={() => setSortBy(s => s === "expires_asc" ? "expires_desc" : s === "expires_desc" ? "none" : "expires_asc")}
+            className={cn(
+              "inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium border transition-all ml-auto",
+              sortBy !== "none"
+                ? "bg-teal-500/15 text-teal-400 border-teal-500/40 ring-1 ring-teal-400"
+                : "border-border text-muted-foreground hover:border-teal-500/30 hover:text-foreground",
+            )}
+          >
+            {sortBy === "expires_asc" ? <ArrowUp className="size-3" /> : sortBy === "expires_desc" ? <ArrowDown className="size-3" /> : <ArrowUpDown className="size-3" />}
+            Expires
+          </button>
         </div>
       </div>
 
@@ -748,6 +779,12 @@ export default function Proposals() {
                         <span className="flex items-center gap-1">
                           <Calendar className="size-3" />
                           Due {new Date(p.rfpDeadline).toLocaleDateString()}
+                        </span>
+                      )}
+                      {(p as any).expiresAt && (
+                        <span className={cn("flex items-center gap-1", (p as any).isExpired ? "text-red-500" : (p as any).isExpiringSoon ? "text-orange-500" : "")}>
+                          <Timer className="size-3" />
+                          Expires {new Date((p as any).expiresAt).toLocaleDateString()}
                         </span>
                       )}
                     </div>

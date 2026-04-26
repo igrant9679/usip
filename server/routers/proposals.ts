@@ -1199,6 +1199,79 @@ Write 2-4 paragraphs of professional proposal content for this section. Be speci
       return { ok: true, score, prevScore, dropped: prevScore !== null && score < prevScore };
     }),
 
+  /**
+   * Request an extension — public, for the client portal.
+   * Client submits a reason; creates a task + in-app notification for the workspace owner.
+   */
+  requestExtension: publicProcedure
+    .input(
+      z.object({
+        token: z.string(),
+        reason: z.string().min(1).max(2000),
+        clientName: z.string().optional(),
+      }),
+    )
+    .mutation(async ({ input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
+      const rows = await db
+        .select()
+        .from(proposals)
+        .where(eq(proposals.shareToken, input.token))
+        .limit(1);
+      if (!rows[0]) throw new TRPCError({ code: "NOT_FOUND", message: "Proposal not found" });
+      const proposal = rows[0];
+      // Get workspace owner
+      const wsRows = await db
+        .select({ ownerUserId: workspaces.ownerUserId })
+        .from(workspaces)
+        .where(eq(workspaces.id, proposal.workspaceId))
+        .limit(1);
+      const ownerUserId = wsRows[0]?.ownerUserId;
+      const clientLabel = input.clientName ?? proposal.clientName;
+      const dueAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // due in 24h
+      // Create a task for the rep
+      if (ownerUserId) {
+        await db.insert(tasks).values({
+          workspaceId: proposal.workspaceId,
+          title: `Extension requested: "${proposal.title}"`,
+          description: `${clientLabel} has requested an extension.
+
+Reason: ${input.reason}`,
+          type: "follow_up",
+          priority: "high",
+          status: "open",
+          dueAt,
+          ownerUserId,
+          relatedType: "proposal",
+          relatedId: proposal.id,
+        });
+        // In-app notification
+        await db.insert(notifications).values({
+          workspaceId: proposal.workspaceId,
+          userId: ownerUserId,
+          kind: "system",
+          title: `Extension requested: "${proposal.title}"`,
+          body: `${clientLabel} has requested an extension. Reason: ${input.reason.slice(0, 200)}`,
+          isRead: false,
+        });
+      }
+      // Log activity
+      await db.insert(activities).values({
+        workspaceId: proposal.workspaceId,
+        type: "note",
+        relatedType: "proposal",
+        relatedId: proposal.id,
+        subject: "Client requested an extension",
+        body: `${clientLabel} submitted an extension request via the proposal portal.
+
+Reason: ${input.reason}`,
+        actorUserId: null,
+        occurredAt: new Date(),
+      });
+      return { ok: true };
+    }),
+
   /** Bulk-set expiresAt on multiple proposals at once. */
   bulkSetExpiry: workspaceProcedure
     .input(

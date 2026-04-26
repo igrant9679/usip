@@ -250,6 +250,7 @@ export function registerEmailTrackingRoutes(app: Express) {
           workspaceId: proposals.workspaceId,
           title: proposals.title,
           emailOpenedAt: proposals.emailOpenedAt,
+          expiresAt: proposals.expiresAt,
         })
         .from(proposals)
         .where(eq(proposals.shareToken, token))
@@ -261,6 +262,41 @@ export function registerEmailTrackingRoutes(app: Express) {
           .update(proposals)
           .set({ emailOpenedAt: new Date() })
           .where(eq(proposals.id, proposal.id));
+      }
+      // ── Auto-extend expiresAt if workspace setting is enabled ──────────────
+      try {
+        const { workspaceSettings } = await import("../drizzle/schema");
+        const [ws] = await db
+          .select({ autoExtendOnOpen: workspaceSettings.autoExtendOnOpen, autoExtendDays: workspaceSettings.autoExtendDays })
+          .from(workspaceSettings)
+          .where(eq(workspaceSettings.workspaceId, proposal.workspaceId))
+          .limit(1);
+        if (ws?.autoExtendOnOpen && proposal.expiresAt) {
+          const msLeft = new Date(proposal.expiresAt).getTime() - Date.now();
+          const sevenDays = 7 * 24 * 60 * 60 * 1000;
+          // Only auto-extend if expiry is within 7 days (and not already expired)
+          if (msLeft > 0 && msLeft <= sevenDays) {
+            const extendDays = ws.autoExtendDays ?? 7;
+            const newExpiry = new Date(new Date(proposal.expiresAt).getTime() + extendDays * 24 * 60 * 60 * 1000);
+            await db
+              .update(proposals)
+              .set({ expiresAt: newExpiry, updatedAt: new Date() })
+              .where(eq(proposals.id, proposal.id));
+            // Log the auto-extension as an activity
+            await db.insert(activities).values({
+              workspaceId: proposal.workspaceId,
+              relatedType: "proposal",
+              relatedId: proposal.id,
+              type: "system",
+              subject: `Expiry auto-extended by ${extendDays} days (client opened email)`,
+              body: `The client opened the proposal email. The expiry date was automatically extended by ${extendDays} days to ${newExpiry.toLocaleDateString()}.`,
+              actorUserId: null,
+              occurredAt: new Date(),
+            });
+          }
+        }
+      } catch (_extErr) {
+        // Non-fatal — auto-extend failure should not break the open tracking
       }
       // Always log the open event as an activity
       await db.insert(activities).values({

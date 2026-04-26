@@ -23,6 +23,7 @@ import {
   ThumbsUp,
   Timer,
   AlertTriangle,
+  CalendarClock,
 } from "lucide-react";
 import {
   Dialog,
@@ -74,6 +75,17 @@ export default function ProposalPortal() {
   });
   const [acceptDialogOpen, setAcceptDialogOpen] = useState(false);
   const [accepted, setAccepted] = useState(false);
+  const [extensionDialogOpen, setExtensionDialogOpen] = useState(false);
+  const [extensionReason, setExtensionReason] = useState("");
+  const [extensionSubmitted, setExtensionSubmitted] = useState(false);
+  const requestExtensionMutation = trpc.proposals.requestExtension.useMutation({
+    onSuccess: () => {
+      setExtensionSubmitted(true);
+      setExtensionDialogOpen(false);
+      toast.success("Extension request sent \u2014 the team has been notified.");
+    },
+    onError: (e) => toast.error(e.message),
+  });
   const acceptMutation = trpc.proposals.acceptByToken.useMutation({
     onSuccess: (data) => {
       setAccepted(true);
@@ -189,7 +201,7 @@ export default function ProposalPortal() {
           )}
           {/* Accept Proposal CTA */}
           {proposal.status !== "accepted" && !accepted && (
-            <div className="mt-4 pt-4 border-t border-gray-100 flex items-center gap-3">
+            <div className="mt-4 pt-4 border-t border-gray-100 flex flex-wrap items-center gap-3">
               <Button
                 onClick={() => setAcceptDialogOpen(true)}
                 className="bg-emerald-600 hover:bg-emerald-700 text-white gap-2"
@@ -197,6 +209,22 @@ export default function ProposalPortal() {
                 <ThumbsUp className="size-4" />
                 Accept This Proposal
               </Button>
+              {(proposal as any).expiresAt && !extensionSubmitted && (
+                <Button
+                  variant="outline"
+                  onClick={() => setExtensionDialogOpen(true)}
+                  className="gap-2 border-orange-300 text-orange-700 hover:bg-orange-50"
+                >
+                  <CalendarClock className="size-4" />
+                  Request Extension
+                </Button>
+              )}
+              {extensionSubmitted && (
+                <span className="text-xs text-orange-600 font-medium flex items-center gap-1">
+                  <CalendarClock className="size-3.5" />
+                  Extension request sent
+                </span>
+              )}
               <p className="text-xs text-gray-400">
                 Accepting notifies the team and creates a follow-up action.
               </p>
@@ -338,6 +366,44 @@ export default function ProposalPortal() {
         </Tabs>
       </main>
 
+      {/* Request Extension dialog */}
+      <Dialog open={extensionDialogOpen} onOpenChange={setExtensionDialogOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <CalendarClock className="size-5 text-orange-500" />
+              Request an Extension
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <p className="text-sm text-gray-600">
+              Let the team know why you need more time to review this proposal. They will be notified and will follow up with you.
+            </p>
+            <div>
+              <Label htmlFor="ext-reason">Reason for extension</Label>
+              <Textarea
+                id="ext-reason"
+                placeholder="e.g. We need additional time to review the budget internally…"
+                value={extensionReason}
+                onChange={(e) => setExtensionReason(e.target.value)}
+                className="mt-1 min-h-[100px]"
+                maxLength={2000}
+              />
+              <p className="text-xs text-gray-400 mt-1">{extensionReason.length}/2000</p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setExtensionDialogOpen(false)}>Cancel</Button>
+            <Button
+              onClick={() => requestExtensionMutation.mutate({ token, reason: extensionReason })}
+              disabled={!extensionReason.trim() || requestExtensionMutation.isPending}
+              className="bg-orange-600 hover:bg-orange-700 text-white gap-2"
+            >
+              {requestExtensionMutation.isPending ? "Sending…" : "Send Request"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       {/* Accept Proposal dialog */}
       <Dialog open={acceptDialogOpen} onOpenChange={setAcceptDialogOpen}>
         <DialogContent className="max-w-sm">

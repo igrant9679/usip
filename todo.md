@@ -1607,3 +1607,11 @@
 - [x] UI: ProposalPortal (/p/:shareToken) — countdown banner when proposal expires within 7 days; "Expired" banner when past
 - [x] UI: Proposals list — multi-select checkboxes + bulk "Set Expiry Date" action with date picker dialog
 - [x] Server: proposals.bulkSetExpiry tRPC mutation — accepts array of proposal IDs + expiresAt date string
+
+## Phase A — Enhancements (round 14)
+- [x] Server: proposals.requestExtension public mutation — client submits reason via portal, creates task + in-app notification for rep
+- [x] Server: workspace settings — add autoExtendOnOpen boolean + autoExtendDays int to workspace_settings table; migration 0039
+- [x] Server: email-open tracker — if autoExtendOnOpen=true and proposal has expiresAt within 7 days, extend expiresAt by autoExtendDays
+- [x] UI: ProposalPortal — "Request Extension" button + reason dialog (hidden when accepted/expired)
+- [x] UI: Proposals list — sortable "Expires" sort button (ArrowUpDown toggle: none/asc/desc); Expires date shown in card metadata row
+- [x] UI: Settings page — new Proposals tab with auto-extend toggle + days input

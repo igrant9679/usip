@@ -21,6 +21,7 @@ const TABS = [
   { id: "notifications", label: "Notifications", icon: Bell },
   { id: "integrations", label: "Integrations", icon: Plug },
   { id: "smtp", label: "Email Delivery", icon: Mail },
+  { id: "proposals", label: "Proposals", icon: Zap },
   { id: "billing", label: "Billing", icon: CreditCard },
   { id: "danger", label: "Danger zone", icon: AlertTriangle },
 ] as const;
@@ -118,6 +119,7 @@ export default function Settings() {
           {tab === "notifications" && <NotificationsTab settings={settings.data} save={save.mutate} canEdit={isAdmin} />}
           {tab === "integrations" && <IntegrationsTab />}
           {tab === "smtp" && <SmtpTab canEdit={isAdmin} />}
+          {tab === "proposals" && <ProposalsTab settings={settings.data} save={save.mutate} canEdit={isAdmin} />}
           {tab === "billing" && <BillingTab usage={usage.data} />}
           {tab === "danger" && <DangerTab canEdit={isAdmin} />}
         </div>
@@ -737,6 +739,76 @@ function IntegrationsTab() {
       {/* Slack / Teams / System Sender */}
       <WorkspaceMessagingSection isAdmin={isAdmin} />
     </>
+  );
+}
+
+/* ─── Proposals Tab ────────────────────────────────────────────────────── */
+function ProposalsTab({ settings, save, canEdit }: { settings: any; save: (patch: any) => void; canEdit: boolean }) {
+  const [autoExtend, setAutoExtend] = useState(false);
+  const [autoExtendDays, setAutoExtendDays] = useState(7);
+
+  useEffect(() => {
+    if (settings?.autoExtendOnOpen !== undefined) setAutoExtend(!!settings.autoExtendOnOpen);
+    if (settings?.autoExtendDays !== undefined) setAutoExtendDays(Number(settings.autoExtendDays) || 7);
+  }, [settings?.autoExtendOnOpen, settings?.autoExtendDays]);
+
+  return (
+    <Section
+      title="Proposal Expiry"
+      description="Configure how proposal expiry dates behave when clients interact with sent proposals."
+    >
+      <div className="p-4 space-y-6">
+        {/* Auto-extend on open */}
+        <div className="flex items-start gap-4">
+          <div className="flex-1 space-y-1">
+            <div className="text-sm font-medium">Auto-extend expiry when client opens email</div>
+            <div className="text-xs text-muted-foreground">
+              When enabled, if a client opens the proposal email and the expiry date is within 7 days (but not yet expired), the expiry date is automatically extended by the number of days below. This prevents active proposals from silently expiring on engaged clients.
+            </div>
+          </div>
+          <Switch
+            checked={autoExtend}
+            onCheckedChange={(v) => {
+              if (!canEdit) return;
+              setAutoExtend(v);
+              save({ autoExtendOnOpen: v });
+            }}
+            disabled={!canEdit}
+          />
+        </div>
+
+        {/* Extension days */}
+        {autoExtend && (
+          <div className="flex items-center gap-4 pl-0">
+            <div className="flex-1 space-y-1">
+              <div className="text-sm font-medium">Extension duration (days)</div>
+              <div className="text-xs text-muted-foreground">
+                Number of days to add to the expiry date when auto-extend fires.
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <Input
+                type="number"
+                min={1}
+                max={365}
+                value={autoExtendDays}
+                onChange={(e) => setAutoExtendDays(Number(e.target.value))}
+                className="w-20 text-center"
+                disabled={!canEdit}
+              />
+              <span className="text-sm text-muted-foreground">days</span>
+              <Button
+                size="sm"
+                disabled={!canEdit}
+                onClick={() => save({ autoExtendDays })}
+              >
+                Save
+              </Button>
+            </div>
+          </div>
+        )}
+      </div>
+    </Section>
   );
 }
 

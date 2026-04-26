@@ -95,6 +95,8 @@ export const settingsRouter = router({
         slackWebhookUrl: z.string().url().nullable().optional(),
         teamsWebhookUrl: z.string().url().nullable().optional(),
         systemSenderAccountId: z.number().int().nullable().optional(),
+        autoExtendOnOpen: z.boolean().optional(),
+        autoExtendDays: z.number().int().min(1).max(365).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
