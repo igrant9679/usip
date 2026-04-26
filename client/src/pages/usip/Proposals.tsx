@@ -1,3 +1,4 @@
+import { Shell } from "@/components/usip/Shell";
 import { useState, useMemo } from "react";
 import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
@@ -393,6 +394,7 @@ export default function Proposals() {
   }
 
   return (
+    <Shell title="Proposals">
     <div className="flex flex-col h-full">
       {/* Header */}
       <div className="flex items-center justify-between px-6 py-4 border-b border-border shrink-0">
@@ -537,5 +539,6 @@ export default function Proposals() {
         onCreated={handleCreated}
       />
     </div>
+    </Shell>
   );
 }

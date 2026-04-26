@@ -1,3 +1,4 @@
+import { Shell } from "@/components/usip/Shell";
 import { useState, useMemo } from "react";
 import { useLocation, useParams } from "wouter";
 import { trpc } from "@/lib/trpc";
@@ -663,6 +664,7 @@ export default function ProposalDetail() {
   const { proposal, sections, milestones, feedback } = data;
 
   return (
+    <Shell title="Proposal">
     <div className="flex flex-col h-full">
       {/* Header */}
       <div className="flex items-center gap-3 px-6 py-4 border-b border-border shrink-0">
@@ -726,5 +728,6 @@ export default function ProposalDetail() {
         </div>
       </Tabs>
     </div>
+    </Shell>
   );
 }
