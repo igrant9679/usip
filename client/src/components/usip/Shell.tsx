@@ -51,6 +51,9 @@ import {
   CalendarDays,
   Plug,
   MessageSquare,
+  Bot,
+  Cpu,
+  Radar,
 } from "lucide-react";
 import { ReactNode, useEffect, useState, createContext, useContext } from "react";
 import { Link, useLocation } from "wouter";
@@ -76,6 +79,17 @@ const NAV: NavGroup[] = [
       { href: "/inbox", label: "Inbox", icon: Inbox },
       { href: "/mailbox", label: "My Mailbox", icon: MailOpen },
       { href: "/calendar", label: "My Calendar", icon: CalendarDays },
+    ],
+  },
+  {
+    label: "Revenue Engine",
+    color: "#34D399",
+    activeColor: "#34D399",
+    activeBg: "rgba(52,211,153,0.12)",
+    items: [
+      { href: "/are", label: "ARE Hub", icon: Bot },
+      { href: "/are/icp", label: "ICP Agent", icon: Cpu },
+      { href: "/are/campaigns", label: "Campaigns", icon: Radar },
     ],
   },
   {

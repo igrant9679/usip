@@ -288,6 +288,13 @@
       "when": 1777175510649,
       "tag": "0040_kind_hellion",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "5",
+      "when": 1777179417736,
+      "tag": "0041_aberrant_black_queen",
+      "breakpoints": true
     }
   ]
 }

@@ -2409,3 +2409,325 @@ export const proposalScoreHistory = mysqlTable(
   }),
 );
 export type ProposalScoreHistory = typeof proposalScoreHistory.$inferSelect;
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   AUTONOMOUS REVENUE ENGINE (ARE) — Round 19
+   Tables: icp_profiles, are_campaigns, prospect_queue, prospect_intelligence,
+           are_execution_queue, are_signal_log, are_ab_variants,
+           are_suppression_list, are_scrape_jobs
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+/* ──────────────────────────────────────────────────────────────────────────
+   ICP Profiles — versioned Ideal Customer Profile inferred by AI
+   ────────────────────────────────────────────────────────────────────────── */
+export const icpProfiles = mysqlTable(
+  "icp_profiles",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    version: int("version").default(1).notNull(),
+    generatedAt: timestamp("generatedAt").defaultNow().notNull(),
+    // Target dimensions (JSON arrays of weighted objects)
+    targetIndustries: json("targetIndustries"),   // [{industry, weight, examples[]}]
+    targetCompanySizeMin: int("targetCompanySizeMin"),
+    targetCompanySizeMax: int("targetCompanySizeMax"),
+    targetRevenueMin: decimal("targetRevenueMin", { precision: 18, scale: 2 }),
+    targetRevenueMax: decimal("targetRevenueMax", { precision: 18, scale: 2 }),
+    targetTitles: json("targetTitles"),           // [{title, seniority, role, weight}]
+    targetGeographies: json("targetGeographies"), // [{country, region, weight}]
+    targetTechStack: json("targetTechStack"),     // [{technology, signal_type, weight}]
+    antiPatterns: json("antiPatterns"),           // [{dimension, value, reason}]
+    // Deal metrics
+    avgDealValue: decimal("avgDealValue", { precision: 14, scale: 2 }),
+    avgSalesCycleDays: int("avgSalesCycleDays"),
+    topConversionSignals: json("topConversionSignals"), // [{signal, correlation_score}]
+    // Meta
+    confidenceScore: int("confidenceScore").default(0).notNull(), // 0-100
+    sampleWonDeals: int("sampleWonDeals").default(0).notNull(),
+    aiRationale: text("aiRationale"),  // markdown narrative
+    isActive: boolean("isActive").default(true).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    byWs: index("ix_icp_ws").on(t.workspaceId),
+    byWsVersion: index("ix_icp_ws_ver").on(t.workspaceId, t.version),
+  }),
+);
+export type IcpProfile = typeof icpProfiles.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   ARE Campaigns — autonomous prospecting campaign configuration
+   ────────────────────────────────────────────────────────────────────────── */
+export const areCampaigns = mysqlTable(
+  "are_campaigns",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    name: varchar("name", { length: 200 }).notNull(),
+    description: text("description"),
+    status: mysqlEnum("status", ["draft", "active", "paused", "completed"]).default("draft").notNull(),
+    autonomyMode: mysqlEnum("autonomyMode", ["full", "batch_approval", "review_release"]).default("batch_approval").notNull(),
+    icpProfileId: int("icpProfileId"),  // FK to icp_profiles; null = use latest active
+    icpOverrides: json("icpOverrides"), // partial ICP overrides for this campaign
+    // Sourcing
+    prospectSources: json("prospectSources"), // ['internal','google_business','linkedin','web','news','apollo','zoominfo','clay','ai_research']
+    targetProspectCount: int("targetProspectCount").default(100).notNull(),
+    dailySendCap: int("dailySendCap").default(50).notNull(),
+    // Channels
+    channelsEnabled: json("channelsEnabled"), // {email:bool, linkedin:bool, sms:bool, voice:bool}
+    sequenceTemplate: varchar("sequenceTemplate", { length: 64 }).default("standard_7step").notNull(),
+    goalType: mysqlEnum("goalType", ["meeting_booked", "reply", "opportunity_created"]).default("reply").notNull(),
+    // Metrics (denormalised for fast dashboard reads)
+    prospectsDiscovered: int("prospectsDiscovered").default(0).notNull(),
+    prospectsEnriched: int("prospectsEnriched").default(0).notNull(),
+    prospectsApproved: int("prospectsApproved").default(0).notNull(),
+    prospectsEnrolled: int("prospectsEnrolled").default(0).notNull(),
+    prospectsContacted: int("prospectsContacted").default(0).notNull(),
+    prospectsReplied: int("prospectsReplied").default(0).notNull(),
+    meetingsBooked: int("meetingsBooked").default(0).notNull(),
+    opportunitiesCreated: int("opportunitiesCreated").default(0).notNull(),
+    ownerUserId: int("ownerUserId"),
+    startedAt: timestamp("startedAt"),
+    completedAt: timestamp("completedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    byWs: index("ix_arec_ws").on(t.workspaceId),
+    byStatus: index("ix_arec_status").on(t.workspaceId, t.status),
+  }),
+);
+export type AreCampaign = typeof areCampaigns.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Prospect Queue — staged prospects awaiting enrichment + sequence generation
+   ────────────────────────────────────────────────────────────────────────── */
+export const prospectQueue = mysqlTable(
+  "prospect_queue",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    campaignId: int("campaignId").notNull(),
+    // Source
+    sourceType: mysqlEnum("sourceType", [
+      "internal_contact", "internal_lead",
+      "google_business", "linkedin_company", "linkedin_people",
+      "web_scrape", "news_event", "industry_event",
+      "apollo", "zoominfo", "clay", "ai_research",
+    ]).notNull(),
+    sourceId: varchar("sourceId", { length: 256 }), // external ID from data provider
+    sourceUrl: text("sourceUrl"),                    // original URL scraped
+    // Person
+    firstName: varchar("firstName", { length: 80 }),
+    lastName: varchar("lastName", { length: 80 }),
+    email: varchar("email", { length: 320 }),
+    linkedinUrl: text("linkedinUrl"),
+    phone: varchar("phone", { length: 40 }),
+    title: varchar("title", { length: 120 }),
+    // Company
+    companyName: varchar("companyName", { length: 200 }),
+    companyDomain: varchar("companyDomain", { length: 200 }),
+    companySize: varchar("companySize", { length: 40 }),
+    industry: varchar("industry", { length: 80 }),
+    geography: varchar("geography", { length: 120 }),
+    // Scoring
+    icpMatchScore: int("icpMatchScore").default(0).notNull(), // 0-100
+    icpMatchBreakdown: json("icpMatchBreakdown"), // {industry, title, size, geo, tech, antiPattern}
+    // Status
+    enrichmentStatus: mysqlEnum("enrichmentStatus", ["pending", "enriching", "complete", "failed"]).default("pending").notNull(),
+    enrichedAt: timestamp("enrichedAt"),
+    sequenceStatus: mysqlEnum("sequenceStatus", ["pending", "approved", "enrolled", "skipped", "completed", "replied"]).default("pending").notNull(),
+    approvedAt: timestamp("approvedAt"),
+    approvedByUserId: int("approvedByUserId"),
+    // Linked CRM records (created after positive reply)
+    linkedContactId: int("linkedContactId"),
+    linkedOpportunityId: int("linkedOpportunityId"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    byCampaign: index("ix_pq_campaign").on(t.campaignId),
+    byWs: index("ix_pq_ws").on(t.workspaceId),
+    byEmail: index("ix_pq_email").on(t.email),
+    byStatus: index("ix_pq_status").on(t.campaignId, t.enrichmentStatus),
+  }),
+);
+export type ProspectQueue = typeof prospectQueue.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Prospect Intelligence — enrichment dossier per prospect
+   ────────────────────────────────────────────────────────────────────────── */
+export const prospectIntelligence = mysqlTable(
+  "prospect_intelligence",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    prospectQueueId: int("prospectQueueId").notNull().unique(),
+    workspaceId: int("workspaceId").notNull(),
+    // Enrichment data
+    triggerEvents: json("triggerEvents"),       // [{type, description, date, recencyScore, sourceUrl}]
+    painSignals: json("painSignals"),           // [{signal, evidence, strength, sourceUrl}]
+    relationshipPaths: json("relationshipPaths"), // [{type, contactId, description}]
+    personalisationHooks: json("personalisationHooks"), // [{hook, source, verifiedAt, hookType}]
+    techStack: json("techStack"),               // string[]
+    recentNews: json("recentNews"),             // [{headline, url, date, sentiment}]
+    industryEvents: json("industryEvents"),     // [{eventName, date, role, url}]
+    googleBusinessData: json("googleBusinessData"), // {rating, reviewCount, categories[], address, phone, website}
+    linkedinSummary: text("linkedinSummary"),   // AI-generated 2-sentence summary
+    companyOneLiner: text("companyOneLiner"),   // AI-generated one-sentence company description
+    // Recommendations
+    recommendedChannel: mysqlEnum("recommendedChannel", ["email", "linkedin", "sms", "voice"]).default("email").notNull(),
+    recommendedTiming: json("recommendedTiming"), // {dayOfWeek, hourOfDay, timezone}
+    enrichmentConfidence: int("enrichmentConfidence").default(0).notNull(), // 0-100
+    // Generated sequence
+    generatedSequence: json("generatedSequence"), // [{stepIndex, day, channel, subject?, body, variantKey}]
+    sequenceQualityScore: int("sequenceQualityScore"), // 0-40 (sum of 4 dimensions × 10)
+    sequenceQualityBreakdown: json("sequenceQualityBreakdown"), // {specificity, clarity, brevity, cta}
+    sequenceRewriteCount: int("sequenceRewriteCount").default(0).notNull(),
+    generatedAt: timestamp("generatedAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    byProspect: index("ix_pi_prospect").on(t.prospectQueueId),
+    byWs: index("ix_pi_ws").on(t.workspaceId),
+  }),
+);
+export type ProspectIntelligence = typeof prospectIntelligence.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   ARE Execution Queue — scheduled outreach steps across all channels
+   ────────────────────────────────────────────────────────────────────────── */
+export const areExecutionQueue = mysqlTable(
+  "are_execution_queue",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    campaignId: int("campaignId").notNull(),
+    prospectQueueId: int("prospectQueueId").notNull(),
+    stepIndex: int("stepIndex").notNull(),
+    channel: mysqlEnum("channel", ["email", "linkedin", "sms", "voice"]).notNull(),
+    scheduledAt: timestamp("scheduledAt").notNull(),
+    executedAt: timestamp("executedAt"),
+    status: mysqlEnum("status", ["scheduled", "sent", "failed", "skipped", "paused"]).default("scheduled").notNull(),
+    messageContent: json("messageContent"), // {subject?, body, variantKey, abVariantId?}
+    externalId: varchar("externalId", { length: 256 }), // message ID from sending provider
+    failureReason: text("failureReason"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    byCampaign: index("ix_aeq_campaign").on(t.campaignId),
+    byProspect: index("ix_aeq_prospect").on(t.prospectQueueId),
+    byScheduled: index("ix_aeq_scheduled").on(t.workspaceId, t.status, t.scheduledAt),
+  }),
+);
+export type AreExecutionQueue = typeof areExecutionQueue.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   ARE Signal Log — raw signal events (opens, replies, calls, clicks)
+   ────────────────────────────────────────────────────────────────────────── */
+export const areSignalLog = mysqlTable(
+  "are_signal_log",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    executionQueueId: int("executionQueueId"),
+    prospectQueueId: int("prospectQueueId").notNull(),
+    campaignId: int("campaignId").notNull(),
+    signalType: mysqlEnum("signalType", [
+      "email_open", "email_click", "email_reply", "email_bounce", "email_unsubscribe",
+      "linkedin_accepted", "linkedin_reply",
+      "sms_reply", "sms_unsubscribe",
+      "voice_connected_interested", "voice_connected_not_interested", "voice_voicemail", "voice_no_answer",
+      "meeting_booked", "opportunity_created",
+    ]).notNull(),
+    rawPayload: json("rawPayload"),   // full webhook/event payload
+    sentiment: mysqlEnum("sentiment", ["positive", "neutral", "negative", "objection"]),
+    sentimentReason: text("sentimentReason"), // AI-extracted reason
+    processedAt: timestamp("processedAt").defaultNow().notNull(),
+    actionTaken: varchar("actionTaken", { length: 120 }), // 'paused_sequence' | 'created_opportunity' | 'added_suppression' | etc.
+  },
+  (t) => ({
+    byProspect: index("ix_asl_prospect").on(t.prospectQueueId),
+    byCampaign: index("ix_asl_campaign").on(t.campaignId),
+    byType: index("ix_asl_type").on(t.workspaceId, t.signalType),
+  }),
+);
+export type AreSignalLog = typeof areSignalLog.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   ARE A/B Variants — message variant performance tracking
+   ────────────────────────────────────────────────────────────────────────── */
+export const areAbVariants = mysqlTable(
+  "are_ab_variants",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    campaignId: int("campaignId").notNull(),
+    stepIndex: int("stepIndex").notNull(),
+    variantKey: varchar("variantKey", { length: 8 }).notNull(), // 'A' | 'B'
+    hookType: varchar("hookType", { length: 64 }), // 'trigger_event' | 'pain_signal' | 'relationship_path'
+    subjectLine: varchar("subjectLine", { length: 240 }),
+    bodyPreview: text("bodyPreview"), // first 300 chars
+    sentCount: int("sentCount").default(0).notNull(),
+    openCount: int("openCount").default(0).notNull(),
+    replyCount: int("replyCount").default(0).notNull(),
+    meetingCount: int("meetingCount").default(0).notNull(),
+    isWinner: boolean("isWinner").default(false).notNull(),
+    promotedAt: timestamp("promotedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    byCampaign: index("ix_aav_campaign").on(t.campaignId),
+    byVariant: uniqueIndex("ix_aav_variant").on(t.campaignId, t.stepIndex, t.variantKey),
+  }),
+);
+export type AreAbVariant = typeof areAbVariants.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   ARE Suppression List — contacts that must never be contacted
+   ────────────────────────────────────────────────────────────────────────── */
+export const areSuppressionList = mysqlTable(
+  "are_suppression_list",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    email: varchar("email", { length: 320 }),
+    linkedinUrl: text("linkedinUrl"),
+    companyDomain: varchar("companyDomain", { length: 200 }),
+    reason: mysqlEnum("reason", ["unsubscribe", "bounce", "competitor", "existing_customer", "manual", "do_not_contact"]).notNull(),
+    addedByUserId: int("addedByUserId"),
+    addedAt: timestamp("addedAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    byWs: index("ix_asupp_ws").on(t.workspaceId),
+    byEmail: index("ix_asupp_email").on(t.workspaceId, t.email),
+  }),
+);
+export type AreSuppressionList = typeof areSuppressionList.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   ARE Scrape Jobs — web/Google Business/LinkedIn/news scrape job log
+   ────────────────────────────────────────────────────────────────────────── */
+export const areScrapeJobs = mysqlTable(
+  "are_scrape_jobs",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    campaignId: int("campaignId"),
+    sourceType: mysqlEnum("sourceType", [
+      "google_business", "linkedin_company", "linkedin_people",
+      "web_scrape", "news", "industry_events",
+    ]).notNull(),
+    query: text("query").notNull(),          // search query or URL
+    status: mysqlEnum("status", ["pending", "running", "complete", "failed"]).default("pending").notNull(),
+    resultCount: int("resultCount").default(0).notNull(),
+    rawResults: json("rawResults"),          // array of discovered prospect objects
+    errorMessage: text("errorMessage"),
+    scrapedAt: timestamp("scrapedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    byWs: index("ix_asj_ws").on(t.workspaceId),
+    byCampaign: index("ix_asj_campaign").on(t.campaignId),
+  }),
+);
+export type AreScrapeJob = typeof areScrapeJobs.$inferSelect;

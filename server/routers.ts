@@ -35,6 +35,7 @@ import { mailboxRouter } from "./routers/mailbox";
 import { calendarRouter } from "./routers/calendar";
 import { proposalsRouter } from "./routers/proposals";
 import { unipileRouter } from "./routers/unipile";
+import { areRouter } from "./routers/are";
 
 export const appRouter = router({
   system: systemRouter,
@@ -104,6 +105,7 @@ export const appRouter = router({
   calendar: calendarRouter,
   unipile: unipileRouter,
   proposals: proposalsRouter,
+  are: areRouter,
 });
 
 export type AppRouter = typeof appRouter;

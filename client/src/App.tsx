@@ -60,6 +60,10 @@ import PasswordLogin from "@/pages/PasswordLogin";
 import Proposals from "@/pages/usip/Proposals";
 import ProposalDetail from "@/pages/usip/ProposalDetail";
 import ProposalPortal from "@/pages/ProposalPortal";
+import AREHub from "@/pages/usip/AREHub";
+import AREIcpAgent from "@/pages/usip/AREIcpAgent";
+import ARECampaigns from "@/pages/usip/ARECampaigns";
+import ARECampaignDetail from "@/pages/usip/ARECampaignDetail";
 import { Loader2 } from "lucide-react";
 import { Route, Switch, useLocation } from "wouter";
 import { useEffect } from "react";
@@ -169,6 +173,10 @@ function Router() {
       <Route path="/notification-prefs"><AuthGate><NotificationPrefs /></AuthGate></Route>
       <Route path="/proposals"><AuthGate><Proposals /></AuthGate></Route>
       <Route path="/proposals/:id"><AuthGate><ProposalDetail /></AuthGate></Route>
+      <Route path="/are"><AuthGate><AREHub /></AuthGate></Route>
+      <Route path="/are/icp"><AuthGate><AREIcpAgent /></AuthGate></Route>
+      <Route path="/are/campaigns"><AuthGate><ARECampaigns /></AuthGate></Route>
+      <Route path="/are/campaigns/:id"><AuthGate><ARECampaignDetail /></AuthGate></Route>
       <Route path="/p/:token"><ProposalPortal /></Route>
       <Route path="/invite/accept"><InviteAccept /></Route>
       <Route path="/login"><PasswordLogin /></Route>

@@ -1650,3 +1650,34 @@
 - [x] Server: /api/scheduled/proposal-followup — 72h SLA escalation tier added: creates task (ownerUserId, dueAt+24h, "Extension request overdue") when pending >72h; deduped via "Extension SLA 72h" activity marker
 - [x] Server: proposals.listExtensionDetails protected procedure — returns full extension event list (id, subject, body, occurredAt, actorUserId) for a proposalId
 - [x] UI: ProposalDetail Overview tab — "Extension History" sub-section (shown when extensionCount > 0): color-coded timeline (amber=requested, green=approved, red=declined) with new deadline parsing and body note display
+
+## Round 19 — Autonomous Revenue Engine (ARE) — Phase 1: Foundation
+- [x] Schema: add icp_profiles table (versioned ICP records with targetIndustries, targetTitles, targetCompanySizeMin/Max, targetGeographies, targetTechStack, antiPatterns, confidenceScore, aiRationale)
+- [x] Schema: add are_campaigns table (name, status, autonomyMode, icpProfileId, icpOverrides, prospectSources, targetProspectCount, dailySendCap, channelsEnabled, sequenceTemplate, goalType)
+- [x] Schema: add prospect_queue table (campaignId, sourceType, icpMatchScore, enrichmentStatus, sequenceStatus, firstName, lastName, email, linkedinUrl, companyName, companyDomain, industry, geography)
+- [x] Schema: add prospect_intelligence table (prospectQueueId, triggerEvents, painSignals, personalisationHooks, techStack, recentNews, linkedinSummary, companyOneLiner, recommendedChannel, recommendedTiming, enrichmentConfidence)
+- [x] Schema: add are_execution_queue table (campaignId, prospectQueueId, stepIndex, channel, scheduledAt, executedAt, status, messageContent, externalId, failureReason)
+- [x] Schema: add are_signal_log table (executionQueueId, signalType, rawPayload, sentiment, processedAt)
+- [x] Schema: add are_ab_variants table (campaignId, stepIndex, variantKey, subjectLine, bodyPreview, sentCount, replyCount, meetingCount)
+- [x] Schema: add are_suppression_list table (workspaceId, email, linkedinUrl, reason, addedAt)
+- [x] Schema: add are_scrape_jobs table (workspaceId, campaignId, sourceType, query, status, resultCount, rawResults JSON, scrapedAt)
+- [x] Migration: generate and apply migration 0041 for all 9 new ARE tables
+- [x] Server: create server/routers/are/ directory with icp.ts, campaigns.ts, prospects.ts, execution.ts, scraper.ts
+- [x] Server: icp.ts — getCurrent, getHistory, regenerate, override procedures; ICP inference via invokeLLM reading won/lost opportunities + accounts + contacts
+- [x] Server: campaigns.ts — list, get, create, update, setStatus, approveBatch procedures
+- [x] Server: prospects.ts — list, getIntelligence, approve, skip, getSequencePreview, editMessage procedures
+- [x] Server: execution.ts — getQueue, pause, resume, getSignalLog procedures
+- [x] Server: scraper.ts — scrapeGoogleBusiness, scrapeLinkedInCompany, scrapeLinkedInPeople, scrapeWeb, scrapeNews, scrapeIndustryEvents procedures using invokeLLM + fetch
+- [x] Server: ICP Agent — AI inference from won/lost deals with structured JSON schema output; confidence scoring; weekly scheduled re-run
+- [x] Server: Prospect Agent — internal CRM sourcing (contacts/leads not yet enrolled); ICP match scoring; deduplication against existing enrollments; web/Google Business/LinkedIn/news sourcing
+- [x] Server: Enrich Agent — trigger event detection, pain signal extraction, personalisation hook generation via invokeLLM; Google Business scraping; LinkedIn profile enrichment via Unipile; news/industry event monitoring
+- [x] Server: Sequence Agent — AI-authored multi-step sequences per prospect; quality self-evaluation (second LLM pass scoring specificity/clarity/brevity/CTA); A/B variant generation; auto-rewrite on low score
+- [x] Server: Signal Feedback Agent — reply sentiment analysis; ICP feedback loop; message performance learning; suppression list management
+- [x] Server: register are router (icp, campaigns, prospects, execution, scraper) in routers.ts
+- [x] UI: ARE Hub page at /are — active campaign cards, ICP summary, system status, New Campaign wizard
+- [x] UI: ICP Profile page at /are/icp — visual ICP breakdown, anti-patterns, version history, manual override controls
+- [x] UI: Campaign Detail page at /are/campaigns/:id — Overview/Prospects/Sequences/Execution Queue/Signals tabs
+- [x] UI: Prospect Intelligence slide-over panel — enrichment dossier, personalisation hooks, generated sequence with quality scores, edit controls
+- [x] UI: Add "Autonomous Engine" nav group to Shell.tsx with ARE Hub, ICP Profile, and Scrape Jobs links
+- [x] UI: Add /are, /are/icp, /are/campaigns/:id routes to App.tsx
+- [x] Tests: vitest coverage for ICP Agent inference, Sequence Agent quality scoring, Prospect Agent deduplication, scraper helpers
