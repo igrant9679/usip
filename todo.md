@@ -1758,3 +1758,10 @@
 - [x] UI: Re-evaluate action button on each rejection row
 - [x] UI: @mention picker in ProspectNotes textarea
 - [x] UI: Mentioned users shown as chips in note body
+
+## Round 25 — Re-evaluate All, Mention Deep-link, Weekly Digest
+- [x] Server: reEvaluateAll mutation — bulk re-score all rejected prospects for a campaign against latest ICP
+- [x] Server: /api/scheduled/rejection-digest endpoint — accepts POST, queries all campaigns, builds per-owner CSV digest, sends email via notifyOwner
+- [x] UI: "Re-evaluate All" button on Rejections tab header (next to Export CSV)
+- [x] UI: Inbox — mention notifications with relatedType=prospect_note link to /are/campaigns/:campaignId?prospect=:prospectId
+- [x] Scheduled task: weekly Monday 9am rejection digest cron job

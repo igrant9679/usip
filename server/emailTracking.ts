@@ -848,6 +848,133 @@ export function registerEmailTrackingRoutes(app: Express) {
       return res.status(500).json({ ok: false, error: String(e) });
     }
   });
+
+  /* -----------------------------------------------------------------
+     POST /api/scheduled/rejection-digest
+     Called by the Manus scheduled task agent weekly (Monday 9am).
+     For every active campaign across all workspaces, builds a CSV of
+     prospects rejected in the past 7 days and sends an in-app
+     notification to the campaign owner (or workspace owner as fallback).
+  ----------------------------------------------------------------- */
+  app.post("/api/scheduled/rejection-digest", async (req: any, res: any) => {
+    try {
+      const db = await getDb();
+      if (!db) return res.status(503).json({ ok: false, error: "DB unavailable" });
+      const {
+        areCampaigns: areCampaignsT,
+        prospectQueue: prospectQueueT,
+        workspaces: workspacesT,
+        notifications: notificationsT,
+      } = await import("../drizzle/schema");
+      const { and: andR, eq: eqR, gte: gteR, desc: descR } = await import("drizzle-orm");
+      const { notifyOwner } = await import("./_core/notification");
+
+      const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+      const activeCampaigns = await db
+        .select({
+          id: areCampaignsT.id,
+          name: areCampaignsT.name,
+          workspaceId: areCampaignsT.workspaceId,
+          ownerUserId: areCampaignsT.ownerUserId,
+        })
+        .from(areCampaignsT)
+        .where(eqR(areCampaignsT.status, "active"));
+
+      let digestsSent = 0;
+      const errors: string[] = [];
+
+      for (const campaign of activeCampaigns) {
+        try {
+          const rejected = await db
+            .select({
+              id: prospectQueueT.id,
+              firstName: prospectQueueT.firstName,
+              lastName: prospectQueueT.lastName,
+              title: prospectQueueT.title,
+              companyName: prospectQueueT.companyName,
+              industry: prospectQueueT.industry,
+              icpMatchScore: prospectQueueT.icpMatchScore,
+              rejectionReason: prospectQueueT.rejectionReason,
+              rejectedAt: prospectQueueT.rejectedAt,
+            })
+            .from(prospectQueueT)
+            .where(andR(
+              eqR(prospectQueueT.campaignId, campaign.id),
+              eqR(prospectQueueT.workspaceId, campaign.workspaceId),
+              eqR(prospectQueueT.sequenceStatus, "skipped"),
+              gteR(prospectQueueT.rejectedAt, sevenDaysAgo),
+            ))
+            .orderBy(descR(prospectQueueT.rejectedAt));
+
+          if (rejected.length === 0) continue;
+
+          // Build CSV
+          const escape = (v: unknown) => {
+            if (v == null) return "";
+            const s = String(v);
+            return s.includes(",") || s.includes('"') || s.includes("\n")
+              ? `"${s.replace(/"/g, '""')}"` : s;
+          };
+          const headers = ["ID", "First Name", "Last Name", "Title", "Company", "Industry", "ICP Score", "Rejection Reason", "Rejected At"];
+          const rows = rejected.map((r) => [
+            r.id, r.firstName, r.lastName, r.title, r.companyName, r.industry,
+            r.icpMatchScore, r.rejectionReason,
+            r.rejectedAt ? new Date(r.rejectedAt).toISOString() : "",
+          ].map(escape).join(","));
+          const csvContent = [headers.join(","), ...rows].join("\n");
+
+          // Determine recipient — campaign owner or workspace owner
+          let recipientUserId = campaign.ownerUserId;
+          if (!recipientUserId) {
+            const [ws] = await db
+              .select({ ownerId: workspacesT.ownerId })
+              .from(workspacesT)
+              .where(eqR(workspacesT.id, campaign.workspaceId))
+              .limit(1);
+            recipientUserId = ws?.ownerId ?? null;
+          }
+
+          // Write in-app notification with CSV inline
+          if (recipientUserId) {
+            await db.insert(notificationsT).values({
+              workspaceId: campaign.workspaceId,
+              userId: recipientUserId,
+              kind: "are_event",
+              title: `Weekly Rejection Digest — ${campaign.name}`,
+              body: `${rejected.length} prospect${rejected.length !== 1 ? "s" : ""} rejected in the past 7 days.\n\n` +
+                `Top rejections:\n` +
+                rejected.slice(0, 5).map((r) =>
+                  `• ${[r.firstName, r.lastName].filter(Boolean).join(" ") || "Unknown"} (${r.companyName ?? "—"}) — ${r.rejectionReason ?? "No reason"}`
+                ).join("\n") +
+                `\n\nFull CSV:\n${csvContent.slice(0, 3500)}`,
+              relatedType: "are_campaign",
+              relatedId: campaign.id,
+            });
+          }
+
+          // Also push a Manus platform notification to the owner
+          await notifyOwner({
+            title: `ARE Rejection Digest: ${campaign.name}`,
+            content: `${rejected.length} prospect${rejected.length !== 1 ? "s" : ""} rejected this week in campaign "${campaign.name}".\n` +
+              rejected.slice(0, 5).map((r) =>
+                `• ${[r.firstName, r.lastName].filter(Boolean).join(" ") || "Unknown"} (${r.companyName ?? "—"}) — ${r.rejectionReason ?? "No reason"}`
+              ).join("\n"),
+          }).catch(() => {/* non-fatal */});
+
+          digestsSent++;
+        } catch (e) {
+          errors.push(`campaign ${campaign.id}: ${String(e).slice(0, 120)}`);
+          console.error("[RejectionDigest] Failed for campaign", campaign.id, e);
+        }
+      }
+
+      console.log(`[RejectionDigest] Sent ${digestsSent} digests, ${errors.length} errors`);
+      return res.json({ ok: true, digestsSent, errors });
+    } catch (e) {
+      console.error("[RejectionDigest] Endpoint error:", e);
+      return res.status(500).json({ ok: false, error: String(e) });
+    }
+  });
 }
 
 /* ─────────────────────────────────────────────────────────────────────────

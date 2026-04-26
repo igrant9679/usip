@@ -792,6 +792,7 @@ export const prospectsRouter = router({
   addNote: workspaceProcedure
     .input(z.object({
       prospectId: z.number(),
+      campaignId: z.number().optional(),
       body: z.string().min(1).max(4000),
       category: z.enum(["general", "qualification", "objection", "follow_up", "intel"]).optional().default("general"),
     }))
@@ -829,13 +830,17 @@ export const prospectsRouter = router({
           .map((mem) => mem.userId)
           .filter((uid) => uid !== ctx.user.id);
         if (mentionedUserIds.length > 0) {
+          // Encode campaignId + prospectId in the body as a JSON prefix so the Inbox can deep-link
+          const deepLinkMeta = input.campaignId
+            ? `{"campaignId":${input.campaignId},"prospectId":${input.prospectId}}\n`
+            : "";
           await db.insert(notifications).values(
             mentionedUserIds.map((uid) => ({
               workspaceId: ctx.workspace.id,
               userId: uid,
               kind: "mention" as const,
               title: `${ctx.user.name ?? "Someone"} mentioned you in a prospect note`,
-              body: input.body.slice(0, 240),
+              body: deepLinkMeta + input.body.slice(0, 240),
               relatedType: "prospect_note",
               relatedId: row.id,
             }))
@@ -1040,5 +1045,48 @@ export const prospectsRouter = router({
           eq(workspaceMembers.workspaceId, ctx.workspace.id),
         ))
         .orderBy(users.name);
+    }),
+
+  reEvaluateAll: workspaceProcedure
+    .input(z.object({ campaignId: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
+      // Get latest active ICP
+      const [icp] = await db
+        .select()
+        .from(icpProfiles)
+        .where(and(eq(icpProfiles.workspaceId, ctx.workspace.id), eq(icpProfiles.isActive, true)))
+        .limit(1);
+      if (!icp) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "No active ICP profile" });
+      // Fetch all rejected (skipped) prospects for this campaign
+      const rejected = await db
+        .select()
+        .from(prospectQueue)
+        .where(and(
+          eq(prospectQueue.campaignId, input.campaignId),
+          eq(prospectQueue.workspaceId, ctx.workspace.id),
+          eq(prospectQueue.sequenceStatus, "skipped"),
+        ));
+      if (rejected.length === 0) return { processed: 0, requalified: 0 };
+      const autoApproveThreshold = 70;
+      let requalified = 0;
+      for (const prospect of rejected) {
+        try {
+          const match = await scoreIcpMatch(prospect, icp);
+          const newStatus = match.score >= autoApproveThreshold ? "pending" : "skipped";
+          if (newStatus === "pending") requalified++;
+          await db.update(prospectQueue).set({
+            icpMatchScore: match.score,
+            icpMatchBreakdown: JSON.stringify(match.breakdown),
+            sequenceStatus: newStatus,
+            rejectedAt: newStatus === "pending" ? null : prospect.rejectedAt,
+            rejectionReason: newStatus === "pending" ? null : prospect.rejectionReason,
+          }).where(eq(prospectQueue.id, prospect.id));
+        } catch (e) {
+          console.error("[reEvaluateAll] Failed for prospect", prospect.id, e);
+        }
+      }
+      return { processed: rejected.length, requalified };
     }),
 });

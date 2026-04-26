@@ -451,7 +451,7 @@ function IntelligenceDossier({ prospect }: { prospect: any }) {
 }
 
 /* ─── Prospect notes ──────────────────────────────────────────────────────── */
-function ProspectNotes({ prospectId }: { prospectId: number }) {
+function ProspectNotes({ prospectId, campaignId }: { prospectId: number; campaignId: number }) {
   const utils = trpc.useUtils();
   const { data: notes, isLoading } = trpc.are.prospects.listNotes.useQuery({ prospectId });
   const [draft, setDraft] = useState("");
@@ -471,6 +471,7 @@ function ProspectNotes({ prospectId }: { prospectId: number }) {
     onSuccess: () => { setDraft(""); invalidate(); },
     onError: (e) => toast.error(e.message),
   });
+  // campaignId is passed through to addNote for deep-link generation in mention notifications
   const editNote = trpc.are.prospects.editNote.useMutation({
     onSuccess: () => { setEditingId(null); invalidate(); },
     onError: (e) => toast.error(e.message),
@@ -605,7 +606,7 @@ function ProspectNotes({ prospectId }: { prospectId: number }) {
           <span className="text-[10px] text-muted-foreground">{draft.length}/4000</span>
           <Button
             size="sm" className="gap-1.5 text-xs"
-            onClick={() => addNote.mutate({ prospectId, body: draft, category: draftCategory })}
+            onClick={() => addNote.mutate({ prospectId, campaignId, body: draft, category: draftCategory })}
             disabled={!draft.trim() || addNote.isPending}
           >
             {addNote.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <StickyNote className="size-3.5" />}
@@ -727,6 +728,18 @@ export default function ARECampaignDetail() {
         d.newStatus === "pending"
           ? `Re-qualified! New ICP score: ${d.newScore}`
           : `Still below threshold. New score: ${d.newScore}`
+      );
+      utils.are.prospects.getRejectionStats.invalidate({ campaignId });
+      utils.are.prospects.list.invalidate({ campaignId });
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const reEvaluateAll = trpc.are.prospects.reEvaluateAll.useMutation({
+    onSuccess: (d) => {
+      toast.success(
+        d.requalified > 0
+          ? `Re-evaluated ${d.processed} prospects — ${d.requalified} re-qualified!`
+          : `Re-evaluated ${d.processed} prospects — none met the threshold.`
       );
       utils.are.prospects.getRejectionStats.invalidate({ campaignId });
       utils.are.prospects.list.invalidate({ campaignId });
@@ -1396,15 +1409,31 @@ export default function ARECampaignDetail() {
                     {rejectionStats?.total} prospect{(rejectionStats?.total ?? 0) !== 1 ? "s" : ""} rejected.
                     Use this log to refine your ICP or adjust scraper sources.
                   </p>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="text-xs h-7 gap-1.5"
-                    onClick={handleExportCsv}
-                  >
-                    <Download className="size-3" />
-                    Export CSV
-                  </Button>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-xs h-7 gap-1.5"
+                      onClick={() => reEvaluateAll.mutate({ campaignId })}
+                      disabled={reEvaluateAll.isPending}
+                    >
+                      {reEvaluateAll.isPending ? (
+                        <Loader2 className="size-3 animate-spin" />
+                      ) : (
+                        <RefreshCcw className="size-3" />
+                      )}
+                      Re-evaluate All
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-xs h-7 gap-1.5"
+                      onClick={handleExportCsv}
+                    >
+                      <Download className="size-3" />
+                      Export CSV
+                    </Button>
+                  </div>
                 </div>
                 {(rejectionStats?.items ?? []).map((item: any) => (
                   <div key={item.id} className="flex items-start gap-3 rounded-xl border px-3 py-2.5 bg-card">
@@ -1501,7 +1530,7 @@ export default function ARECampaignDetail() {
             ) : dossierTab === "intel" ? (
               <IntelligenceDossier prospect={selectedProspect} />
             ) : (
-              <ProspectNotes prospectId={selectedProspect.id} />
+              <ProspectNotes prospectId={selectedProspect.id} campaignId={campaignId} />
             )}
           </div>
         </SheetContent>
