@@ -313,7 +313,9 @@ export default function Accounts() {
 
   return (
     <Shell title="Accounts">
-      <PageHeader title="Accounts" description="Companies you sell to. Parent → child rollup of ARR is computed automatically." pageKey="accounts">
+      <PageHeader title="Accounts" description="Manage company accounts, hierarchy, ARR rollup, and associated contacts and deals." pageKey="accounts"
+        icon={<Building2 className="size-5" />}
+      >
         {someSelected && (
           <>
             <Button variant="outline" onClick={() => setSendEmailOpen(true)} className="gap-2">

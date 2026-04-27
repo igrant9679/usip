@@ -10,7 +10,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { trpc } from "@/lib/trpc";
 import {
   Loader2, Plus, Sparkles, Target, UserCheck,
-  MoreHorizontal, Pencil, Trash2, Send, Tag, Megaphone, Wand2, Download,
+  MoreHorizontal, Pencil, Trash2, Send, Tag, Megaphone, Wand2, Download, UserPlus
 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -235,7 +235,9 @@ export default function Leads() {
 
   return (
     <Shell title="Leads">
-      <PageHeader title="Leads" description="Inbound + outbound lead inbox with AI grading." pageKey="leads">
+      <PageHeader title="Leads" description="Capture, score, and route inbound leads before they enter the CRM pipeline." pageKey="leads"
+        icon={<UserPlus className="size-5" />}
+      >
         <Input placeholder="Search…" value={search} onChange={(e) => setSearch(e.target.value)} className="w-56" />
         {someSelected && (
           <>

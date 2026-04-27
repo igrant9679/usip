@@ -20,7 +20,7 @@ import { Progress } from "@/components/ui/progress";
 import {
   Megaphone, Plus, Rocket, Pause, Trash2, Settings2,
   Mail, MousePointerClick, Reply, AlertTriangle,
-  BarChart3, Loader2, GitBranch, Users, Layers, CheckSquare, Square, CheckCircle2,
+  BarChart3, Loader2, GitBranch, Users, Layers, CheckSquare, Square, CheckCircle2, Layers3
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -589,7 +589,9 @@ export default function Campaigns() {
 
   return (
     <Shell title="Campaigns">
-      <PageHeader title="Outreach Campaigns" description="Configure, launch, and analyze multi-step email campaigns." pageKey="campaigns">
+      <PageHeader title="Outreach Campaigns" description="Orchestrate multi-channel campaigns combining email sequences, social, and ads." pageKey="campaigns"
+        icon={<Layers3 className="size-5" />}
+      >
         <Button onClick={() => setOpenCreate(true)}>
           <Plus className="h-4 w-4 mr-1" /> New Campaign
         </Button>

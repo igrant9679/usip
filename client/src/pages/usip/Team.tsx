@@ -23,7 +23,7 @@ import {
   UserMinus,
   UserPlus,
   Users,
-  XCircle,
+  XCircle, UsersRound
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -344,7 +344,9 @@ export default function Team() {
 
   return (
     <Shell title="Team">
-      <PageHeader title="Workspace team" description="Members, roles, quotas, and access controls." pageKey="team">
+      <PageHeader title="Workspace team" description="Manage team members, roles, permissions, and workspace access." pageKey="team"
+        icon={<UsersRound className="size-5" />}
+      >
         {isAdmin && (
           <Button onClick={() => setInviteOpen(true)}>
             <UserPlus className="size-4" /> Invite

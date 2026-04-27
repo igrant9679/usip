@@ -567,7 +567,9 @@ export default function Proposals() {
   return (
     <Shell title="Proposals">
     <div className="flex flex-col h-full">
-      <PageHeader title="Proposals" description="Create, manage, and track client proposals" pageKey="proposals">
+      <PageHeader title="Proposals" description="Create, send, and track client proposals with versioning, e-signature, and analytics." pageKey="proposals"
+        icon={<ClipboardList className="size-5" />}
+      >
         <div className="flex items-center gap-2">
           <Button
             variant="outline"

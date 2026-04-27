@@ -13,7 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { toast } from "sonner";
-import { FlaskConical, GitBranch, Plus, Star, Trash2, Edit2, Copy, Clock } from "lucide-react";
+import { FlaskConical, GitBranch, Plus, Star, Trash2, Edit2, Copy, Clock, MessageSquare } from "lucide-react";
 
 type GoalType = "intro" | "follow_up" | "meeting_request" | "value_prop" | "breakup" | "check_in";
 const GOALS: GoalType[] = ["intro", "follow_up", "meeting_request", "value_prop", "breakup", "check_in"];
@@ -150,7 +150,9 @@ export default function PromptTemplatesPage() {
     <Shell title="Prompt Templates">
       <PageHeader
         title="Prompt Templates" pageKey="prompt-templates"
-        description="Versioned AI prompt templates for email generation — activate one per goal, use A/B groups for testing"
+        description="Manage AI prompt templates used across the email composer, research pipeline, and ICP agent."
+      
+        icon={<MessageSquare className="size-5" />}
       >
         <Button size="sm" onClick={openCreate}>
           <Plus size={14} className="mr-1.5" /> New Template

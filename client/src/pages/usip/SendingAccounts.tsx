@@ -38,7 +38,7 @@ import {
   Plus,
   RefreshCw,
   Trash2,
-  Zap,
+  Zap, AtSign
 } from "lucide-react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -754,8 +754,10 @@ export default function SendingAccounts() {
       <div className="space-y-6">
         <PageHeader
           title="Sending Accounts" pageKey="sending-accounts"
-          description="Connect unlimited sending accounts across Gmail, Outlook, Amazon SES, or any SMTP provider."
-        >
+          description="Connect and manage the email accounts used for outbound sending."
+        
+        icon={<AtSign className="size-5" />}
+      >
           <Button onClick={openAdd} className="gap-2">
             <Plus className="w-4 h-4" /> Connect account
           </Button>

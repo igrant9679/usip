@@ -407,7 +407,9 @@ export default function Segments() {
     <Shell title="Segments">
       <PageHeader
         title="Segments" pageKey="segments"
-        description="Build rule-based contact filters to target the right audience for sequences and campaigns."
+        description="Build dynamic audience segments using CRM fields, behaviour signals, and AI scores."
+      
+        icon={<Filter className="size-5" />}
       >
         <Button size="sm" onClick={() => { setEditing(null); setBuilderOpen(true); }}>
           <Plus className="size-3.5 mr-1.5" />

@@ -264,10 +264,12 @@ export default function UnifiedInbox() {
   return (
     <Shell>
       <PageHeader
-        title="Unified Inbox" pageKey="unified-inbox"
+        title="Unified Inbox" description="A single inbox for all inbound replies across every connected email account." pageKey="unified-inbox"
         subtitle="All your conversations across every channel in one place"
         actions={
-          <div className="flex gap-2">
+          <div className="flex gap-2"
+        icon={<Inbox className="size-5" />}
+      >
             <Button variant="outline" size="sm" onClick={() => refetchInbox()}>
               <RefreshCw className="h-4 w-4 mr-2" />
               Refresh

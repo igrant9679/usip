@@ -72,7 +72,7 @@ import {
   Users,
   X,
   XCircle,
-  Zap,
+  Zap, Megaphone
 } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
 import { Link, useParams, useLocation } from "wouter";
@@ -923,6 +923,8 @@ export default function ARECampaignDetail() {
         title={campaign.name}
         pageKey="are-campaign-detail"
         description={campaign.description ?? undefined}
+      
+        icon={<Megaphone className="size-5" />}
       >
         <Link href="/are/campaigns">
           <Button variant="ghost" size="sm" className="gap-1.5 text-xs text-muted-foreground">

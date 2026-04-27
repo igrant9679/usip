@@ -2,7 +2,7 @@ import { Button } from "@/components/ui/button";
 import { Field, fmtDate, FormDialog, Section, SelectField, StatusPill, TextareaField } from "@/components/usip/Common";
 import { EmptyState, PageHeader, Shell } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
-import { CalendarCheck2, Plus, Sparkles } from "lucide-react";
+import { CalendarCheck2, Plus, Sparkles, Presentation } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -19,7 +19,9 @@ export default function QBRs() {
 
   return (
     <Shell title="QBRs">
-      <PageHeader title="Quarterly Business Reviews" description="Schedule, AI-prep, and complete QBRs." pageKey="qbrs">
+      <PageHeader title="Quarterly Business Reviews" description="Prepare, schedule, and record Quarterly Business Reviews with AI-generated talking points." pageKey="qbrs"
+        icon={<Presentation className="size-5" />}
+      >
         <Button onClick={() => setOpen(true)}><Plus className="size-4" /> Schedule QBR</Button>
       </PageHeader>
       <div className="p-6 space-y-3">

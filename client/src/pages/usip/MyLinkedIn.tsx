@@ -79,7 +79,9 @@ export default function MyLinkedIn() {
     <Shell>
       <PageHeader
         title="My LinkedIn" pageKey="my-linkedin"
-        description="Connect your LinkedIn profile for outreach tracking and team visibility"
+        description="Connect your LinkedIn account and manage outreach, connection requests, and InMail."
+      
+        icon={<Linkedin className="size-5" />}
       />
 
       <div className="max-w-3xl space-y-6">

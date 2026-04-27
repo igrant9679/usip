@@ -625,7 +625,9 @@ export default function Contacts() {
 
   return (
     <Shell title="Contacts">
-      <PageHeader title="Contacts" pageKey="contacts" description={`${(data ?? []).length} contact${(data ?? []).length !== 1 ? "s" : ""}${verifFilter !== "all" ? " · filtered" : " · all"}`}>
+      <PageHeader title="Contacts" pageKey="contacts" description={`${(data ?? []).length} contact${(data ?? []).length !== 1 ? "s" : ""}${verifFilter !== "all" ? " · filtered" : " · all"}`}
+        icon={<Users className="size-5" />}
+      >
         <Input
           placeholder="Search…"
           value={search}

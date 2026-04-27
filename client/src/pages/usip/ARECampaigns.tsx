@@ -20,7 +20,7 @@ import {
   Play,
   Plus,
   Radar,
-  Trash2,
+  Trash2, Megaphone
 } from "lucide-react";
 import { useState } from "react";
 import { Link, useLocation } from "wouter";
@@ -95,7 +95,9 @@ export default function ARECampaigns() {
     <Shell title="ARE Campaigns">
       <PageHeader
         title="Autonomous Campaigns" pageKey="are-campaigns"
-        description="Each campaign runs its own AI pipeline: discover → enrich → sequence → execute → learn."
+        description="Create and manage ARE campaigns that source, score, and sequence qualified prospects."
+      
+        icon={<Megaphone className="size-5" />}
       >
         <Button onClick={() => setShowCreate(true)} className="gap-2">
           <Plus className="size-4" /> New Campaign

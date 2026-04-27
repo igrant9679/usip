@@ -401,7 +401,7 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
   );
 }
 
-export function PageHeader({ title, description: defaultDescription, pageKey, children }: { title: string; description?: string; pageKey?: string; children?: ReactNode }) {
+export function PageHeader({ title, description: defaultDescription, pageKey, icon, children }: { title: string; description?: string; pageKey?: string; icon?: ReactNode; children?: ReactNode }) {
   const accent = useAccentColor();
   const { user } = useAuth();
   const isAdmin = user?.role === "admin" || user?.role === "super_admin";
@@ -448,7 +448,10 @@ export function PageHeader({ title, description: defaultDescription, pageKey, ch
       }}
     >
       <div className="flex-1 min-w-0">
-        <h1 className="text-lg md:text-xl font-semibold tracking-tight line-clamp-1" title={title} style={{ color: accent }}>{title}</h1>
+        <div className="flex items-center gap-2">
+          {icon && <span className="shrink-0" style={{ color: accent }}>{icon}</span>}
+          <h1 className="text-lg md:text-xl font-semibold tracking-tight line-clamp-1" title={title} style={{ color: accent }}>{title}</h1>
+        </div>
         <div className="flex items-center gap-1.5 mt-0.5 group/desc">
           {editing ? (
             <>

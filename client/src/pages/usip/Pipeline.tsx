@@ -7,7 +7,7 @@ import { Field, fmt$, FormDialog, SelectField } from "@/components/usip/Common";
 import { PageHeader, Shell } from "@/components/usip/Shell";
 import { RecordDrawer } from "@/components/usip/RecordDrawer";
 import { trpc } from "@/lib/trpc";
-import { Brain, Download, Loader2, Plus, TrendingUp, Zap, Filter, X, User } from "lucide-react";
+import { Brain, Download, Loader2, Plus, TrendingUp, Zap, Filter, X, User, KanbanSquare } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useLocation } from "wouter";
@@ -365,7 +365,9 @@ export default function Pipeline() {
           </button>
         </div>
       )}
-      <PageHeader title="Pipeline" description="Drag cards between stages. Hover a card and click the brain icon to run AI analysis." pageKey="pipeline">
+      <PageHeader title="Pipeline" description="Visualise and advance open opportunities across every stage of your sales funnel." pageKey="pipeline"
+        icon={<KanbanSquare className="size-5" />}
+      >
         {/* View toggle */}
         <div className="flex items-center border rounded-md overflow-hidden text-sm">
           {(["board", "forecast"] as const).map((v) => (

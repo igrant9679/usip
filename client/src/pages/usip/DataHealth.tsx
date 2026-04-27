@@ -20,7 +20,7 @@ import {
   Phone,
   RefreshCw,
   Users,
-  XCircle,
+  XCircle, ShieldCheck
 } from "lucide-react";
 
 function MetricCard({
@@ -265,7 +265,9 @@ export default function DataHealth() {
     <Shell title="Data Health">
       <PageHeader
         title="Data Health" pageKey="data-health"
-        description="Monitor the quality and completeness of your contact database."
+        description="Monitor data quality across your CRM — duplicates, missing fields, and enrichment gaps."
+      
+        icon={<ShieldCheck className="size-5" />}
       >
         <Button variant="outline" size="sm" onClick={() => { refetch(); refetchDupes(); }}>
           <RefreshCw className="size-3.5 mr-1.5" />

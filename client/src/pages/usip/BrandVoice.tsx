@@ -161,7 +161,9 @@ export default function BrandVoicePage() {
     <Shell title="Brand Voice">
       <PageHeader
         title="Brand Voice" pageKey="brand-voice"
-        description="Define the tone, style, and persona for AI-generated emails"
+        description="Define your brand voice guidelines so AI-generated content stays on-message."
+      
+        icon={<Mic2 className="size-5" />}
       >
         <Button size="sm" onClick={handleSave} disabled={!isDirty || saveMutation.isPending}>
           <Save size={14} className="mr-1.5" /> {saveMutation.isPending ? "Saving…" : "Save Changes"}

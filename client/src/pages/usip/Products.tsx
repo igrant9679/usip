@@ -15,7 +15,9 @@ export default function Products() {
 
   return (
     <Shell title="Product Catalog">
-      <PageHeader title="Product catalog" description="Used in quotes and as deal line items." pageKey="products">
+      <PageHeader title="Product catalog" description="Manage your product catalogue — SKUs, pricing, billing cycles, and line-item configuration." pageKey="products"
+        icon={<Package className="size-5" />}
+      >
         <Button onClick={() => setOpen(true)}><Plus className="size-4" /> New product</Button>
       </PageHeader>
       <div className="p-6">

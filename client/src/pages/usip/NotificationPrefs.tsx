@@ -3,7 +3,7 @@ import { Switch } from "@/components/ui/switch";
 import { Field, Section } from "@/components/usip/Common";
 import { PageHeader, Shell } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
-import { Bell } from "lucide-react";
+import { Bell, BellRing } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
@@ -56,7 +56,9 @@ export default function NotificationPrefs() {
 
   return (
     <Shell title="Notification Preferences">
-      <PageHeader title="Notification Preferences" description="Control which events trigger email notifications for your account." pageKey="notification-prefs">
+      <PageHeader title="Notification Preferences" description="Configure which events trigger in-app and email notifications for your account." pageKey="notification-prefs"
+        icon={<BellRing className="size-5" />}
+      >
         <Button onClick={handleSave} disabled={!dirty || update.isPending}>
           {update.isPending ? "Saving…" : "Save preferences"}
         </Button>

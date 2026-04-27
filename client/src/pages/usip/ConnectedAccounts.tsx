@@ -41,7 +41,7 @@ import {
   Wifi,
   WifiOff,
   TriangleAlert,
-  XCircle,
+  XCircle, Link2
 } from "lucide-react";
 
 
@@ -283,10 +283,12 @@ export default function ConnectedAccounts() {
   return (
     <Shell>
       <PageHeader
-        title="Connected Accounts" pageKey="connected-accounts"
+        title="Connected Accounts" description="Connect LinkedIn, email, and social accounts to power outreach and engagement tracking." pageKey="connected-accounts"
         subtitle="Manage your multichannel connections — LinkedIn, email, messaging, and more"
         actions={
-          <div className="flex gap-2">
+          <div className="flex gap-2"
+        icon={<Link2 className="size-5" />}
+      >
             <Button variant="outline" size="sm" onClick={() => refetch()}>
               <RefreshCw className="h-4 w-4 mr-2" />
               Refresh

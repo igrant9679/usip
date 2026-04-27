@@ -83,7 +83,9 @@ export default function Social() {
 
   return (
     <Shell title="Social Publishing">
-      <PageHeader title="Social Publishing" description="Schedule, approve, and analyze posts across platforms." pageKey="social">
+      <PageHeader title="Social Publishing" description="Schedule, publish, and analyse social posts across LinkedIn, Twitter/X, and more." pageKey="social"
+        icon={<Share2 className="size-5" />}
+      >
         <Button variant="outline" onClick={() => setConnectOpen(true)}><Plus className="size-4" /> Connect account</Button>
         <Button onClick={() => setComposeOpen(true)}><Plus className="size-4" /> New post</Button>
       </PageHeader>

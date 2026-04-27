@@ -3,7 +3,7 @@ import { Switch } from "@/components/ui/switch";
 import { Field, fmtDate, FormDialog, Section, SelectField, StatusPill } from "@/components/usip/Common";
 import { EmptyState, PageHeader, Shell } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
-import { Play, Plus, Save, Trash2, Workflow } from "lucide-react";
+import { Play, Plus, Save, Trash2, Workflow, GitBranch } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
@@ -57,7 +57,9 @@ export default function Workflows() {
 
   return (
     <Shell title="Workflow Automation">
-      <PageHeader title="Workflow Automation" description="When something happens, do something. Conditions narrow it down." pageKey="workflows">
+      <PageHeader title="Workflow Automation" description="Automate repetitive actions with trigger-based workflow rules across the entire CRM." pageKey="workflows"
+        icon={<GitBranch className="size-5" />}
+      >
         <Button onClick={() => setOpenNew(true)}><Plus className="size-4" /> New rule</Button>
       </PageHeader>
       <div className="p-6 grid grid-cols-1 lg:grid-cols-3 gap-4">

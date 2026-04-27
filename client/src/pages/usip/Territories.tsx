@@ -15,7 +15,9 @@ export default function Territories() {
 
   return (
     <Shell title="Territories">
-      <PageHeader title="Territories" description="Group accounts by region, segment, or product line." pageKey="territories">
+      <PageHeader title="Territories" description="Define geographic or account-based territories and assign reps accordingly." pageKey="territories"
+        icon={<Map className="size-5" />}
+      >
         <Button onClick={() => setOpen(true)}><Plus className="size-4" /> New territory</Button>
       </PageHeader>
       <div className="p-6">

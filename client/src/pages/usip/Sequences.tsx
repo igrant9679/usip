@@ -11,7 +11,7 @@ import { trpc } from "@/lib/trpc";
 import {
   Activity, GitBranch, Pause, Play, Plus, Power, CheckCircle2, XCircle,
   BarChart3, RefreshCw, Pencil, Trash2, ArrowUp, ArrowDown, Mail, Clock, ClipboardList, TrendingUp,
-  FlaskConical, Trophy, Loader2,
+  FlaskConical, Trophy, Loader2, ListOrdered
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { Link } from "wouter";
@@ -761,7 +761,9 @@ export default function Sequences() {
 
   return (
     <Shell title="Sequences">
-      <PageHeader title="Sequences" description="Multi-step outbound cadences with AI compose." pageKey="sequences">
+      <PageHeader title="Sequences" description="Build multi-step email and task cadences to engage prospects at scale." pageKey="sequences"
+        icon={<ListOrdered className="size-5" />}
+      >
         <Button onClick={() => setOpen(true)}><Plus className="size-4" /> New sequence</Button>
       </PageHeader>
       <div className="p-6 grid grid-cols-1 lg:grid-cols-3 gap-4">

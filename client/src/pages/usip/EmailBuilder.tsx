@@ -32,7 +32,7 @@ import {
   Monitor, Pencil, Plus, Save, Smartphone,
   Space, Square, Tag, Trash2, Type,
   Wand2, X, Zap, Sparkles, Lightbulb,
-  Loader2, RefreshCw,
+  Loader2, RefreshCw, PenLine
 } from "lucide-react";
 
 /* ─── Types ─────────────────────────────────────────────────────────────── */
@@ -1667,7 +1667,9 @@ export default function EmailBuilderPage() {
     <Shell title="Email Builder">
       <PageHeader
         title="Email Builder" pageKey="email-builder"
-        description="Design reusable email templates with drag-and-drop blocks"
+        description="Design and preview HTML email templates with drag-and-drop blocks."
+      
+        icon={<PenLine className="size-5" />}
       />
       <div className="flex flex-1 min-h-0 border rounded-xl overflow-hidden bg-card" style={{height: 'calc(100vh - 180px)'}}>
         <TemplateList onOpen={(id) => navigate(`/email-builder/${id}`)} />

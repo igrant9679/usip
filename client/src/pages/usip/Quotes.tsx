@@ -2,7 +2,7 @@ import { Button } from "@/components/ui/button";
 import { Field, fmt$, fmtDate, FormDialog, Section, SelectField, StatusPill, TextareaField } from "@/components/usip/Common";
 import { EmptyState, PageHeader, Shell } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
-import { ExternalLink, FileText, Plus, Send, Trash2 } from "lucide-react";
+import { ExternalLink, FileText, Plus, Send, Trash2, Receipt } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -33,7 +33,9 @@ export default function Quotes() {
 
   return (
     <Shell title="Quotes (CPQ)">
-      <PageHeader title="Quotes & proposals" description="Configure → price → quote. Generates a print-ready document." pageKey="quotes">
+      <PageHeader title="Quotes & proposals" description="Generate and manage price quotes linked to open opportunities." pageKey="quotes"
+        icon={<Receipt className="size-5" />}
+      >
         <Button onClick={() => setOpenNew(true)}><Plus className="size-4" /> New quote</Button>
       </PageHeader>
       <div className="p-6">

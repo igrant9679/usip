@@ -4,7 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { EmptyState, PageHeader, Shell } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
-import { ArrowDown, ArrowUp, Pencil, Plus, Sparkles, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp, Pencil, Plus, Sparkles, Trash2, GitMerge } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
@@ -59,7 +59,9 @@ export default function LeadRouting() {
 
   return (
     <Shell title="Lead Routing">
-      <PageHeader title="Lead Routing Engine" description="First matching rule wins (sorted by priority). Strategies: Round Robin, Geography, Industry, Direct." pageKey="lead-routing">
+      <PageHeader title="Lead Routing Engine" description="Configure rules that automatically assign inbound leads to the right rep or team." pageKey="lead-routing"
+        icon={<GitMerge className="size-5" />}
+      >
         <Button onClick={() => setEditing({ name: "", priority: ((rules?.length ?? 0) + 1) * 10, enabled: true, conditions: { all: [] }, strategy: "round_robin", targetUserIds: [] })}>
           <Plus className="size-4" /> New rule
         </Button>

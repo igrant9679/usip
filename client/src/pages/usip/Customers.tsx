@@ -3,7 +3,7 @@ import { fmt$, fmtDate, Field, FormDialog, Section, SelectField, StatusPill, Tex
 import { EmptyState, PageHeader, Shell, StatCard } from "@/components/usip/Shell";
 import { RecordDrawer } from "@/components/usip/RecordDrawer";
 import { trpc } from "@/lib/trpc";
-import { AlertTriangle, FolderOpen, Heart, TrendingUp } from "lucide-react";
+import { AlertTriangle, FolderOpen, Heart, TrendingUp, HeartHandshake } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -32,7 +32,9 @@ export default function Customers() {
 
   return (
     <Shell title="Customers">
-      <PageHeader title="Customers" description="Health, churn risk, expansion. Click a row for detail." pageKey="customers" />
+      <PageHeader title="Customers" description="Track customer health, renewal risk, NPS, and expansion potential post-close." pageKey="customers" 
+        icon={<HeartHandshake className="size-5" />}
+      />
       <div className="p-6 space-y-4">
         {kpis && (
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">

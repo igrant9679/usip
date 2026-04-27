@@ -41,7 +41,7 @@ import {
   Send,
   Settings2,
   Trash2,
-  X,
+  X, LayoutGrid
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { GridLayout } from "react-grid-layout";
@@ -392,7 +392,9 @@ export default function Dashboards() {
 
   return (
     <Shell>
-      <PageHeader title="Dashboards" description="Custom analytics dashboards with drag-to-resize widgets" pageKey="dashboards">
+      <PageHeader title="Dashboards" description="Build custom dashboards with KPI widgets, charts, and live CRM data." pageKey="dashboards"
+        icon={<LayoutGrid className="size-5" />}
+      >
         <Button size="sm" variant="outline" onClick={() => setOpenSched(true)}>
           <Send className="h-3.5 w-3.5 mr-1" /> Schedule
         </Button>

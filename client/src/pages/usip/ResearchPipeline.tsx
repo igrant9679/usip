@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
-import { CheckCircle, Circle, Loader2, ChevronDown, ChevronRight, Sparkles, Copy, ArrowRight } from "lucide-react";
+import { CheckCircle, Circle, Loader2, ChevronDown, ChevronRight, Sparkles, Copy, ArrowRight, FlaskConical } from "lucide-react";
 import { toast } from "sonner";
 
 const STAGES = [
@@ -104,7 +104,9 @@ export default function ResearchPipeline() {
 
   return (
     <Shell title="Research Pipeline">
-      <PageHeader title="AI Research Pipeline" description="5-stage AI pipeline: prospect research → signals → angles → drafts → final" pageKey="research-pipeline" />
+      <PageHeader title="AI Research Pipeline" description="Run the 5-stage AI research pipeline: org signals → contact fit → angles → draft variants → review." pageKey="research-pipeline" 
+        icon={<FlaskConical className="size-5" />}
+      />
       <div className="p-6 max-w-5xl mx-auto space-y-6">
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

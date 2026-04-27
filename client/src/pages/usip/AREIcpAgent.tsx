@@ -589,7 +589,9 @@ export default function AREIcpAgent() {
       {/* ── Header ── */}
       <PageHeader
         title="ICP Agent" pageKey="are-icp-agent"
-        description="Analyses every won and lost deal in your CRM using an LLM to infer your Ideal Customer Profile — continuously updated as new deals close."
+        description="Define and refine your Ideal Customer Profile to sharpen prospect qualification."
+      
+        icon={<Target className="size-5" />}
       >
         {icp?.confidenceScore != null && (
           <ConfidenceBadge score={icp.confidenceScore} />

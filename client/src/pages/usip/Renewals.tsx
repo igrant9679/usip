@@ -24,7 +24,9 @@ export default function Renewals() {
 
   return (
     <Shell title="Renewals">
-      <PageHeader title="Renewal pipeline" description="Customers grouped by days to renewal." pageKey="renewals" />
+      <PageHeader title="Renewal pipeline" description="Manage the full renewal cycle — from early-warning flags to signed renewals." pageKey="renewals" 
+        icon={<RefreshCcw className="size-5" />}
+      />
       <div className="p-4 overflow-x-auto">
         <div className="flex gap-3 min-w-max">
           {STAGES.map((s) => {

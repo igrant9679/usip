@@ -37,7 +37,7 @@ import {
   UserPlus,
   MessageSquare,
   AlertTriangle,
-  Timer,
+  Timer, LayoutDashboard
 } from "lucide-react";
 import { useState, useCallback, useRef } from "react";
 import { Link, useLocation } from "wouter";
@@ -351,7 +351,9 @@ export default function Dashboard() {
 
   return (
     <Shell title="Dashboard">
-      <PageHeader title="Dashboard" description="Your unified revenue intelligence overview." pageKey="dashboard">
+      <PageHeader title="Dashboard" description="Your unified revenue intelligence overview — pipeline health, activity, and team performance at a glance." pageKey="dashboard"
+        icon={<LayoutDashboard className="size-5" />}
+      >
         {/* Last refreshed + Refresh button */}
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <span>Updated {fmtRelative(lastRefreshed)}</span>

@@ -151,7 +151,9 @@ export default function EmailAnalytics() {
     <Shell title="Email Analytics">
       <PageHeader
         title="Email Analytics" pageKey="email-analytics"
-        description="Delivery, open, and click metrics for all outbound emails."
+        description="Track open rates, click-through, reply rates, and deliverability across all campaigns."
+      
+        icon={<BarChart2 className="size-5" />}
       />
 
       {/* KPI Cards */}

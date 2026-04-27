@@ -37,7 +37,7 @@ import {
   Sliders,
   Sparkles,
   Star,
-  Zap,
+  Zap, Settings2
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -194,7 +194,9 @@ export default function ARESettings() {
     <Shell title="ARE Settings">
       <PageHeader
         title="ARE Settings" pageKey="are-settings"
-        description="Global defaults for the Autonomous Revenue Engine. Campaign-level settings override these values."
+        description="Configure ARE engine defaults — scoring thresholds, enrichment providers, and automation rules."
+      
+        icon={<Settings2 className="size-5" />}
       >
         <Badge variant="outline" className="text-[10px] px-2 py-0.5 border-emerald-500/30 text-emerald-600 bg-emerald-500/10 gap-1">
           <Bot className="size-3" /> Autonomous Revenue Engine

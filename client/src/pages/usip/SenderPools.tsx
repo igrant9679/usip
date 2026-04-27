@@ -462,8 +462,10 @@ export default function SenderPools() {
       <div className="space-y-6">
         <PageHeader
           title="Sender Pools" pageKey="sender-pools"
-          description="Group sending accounts into named pools with round-robin, weighted, or random rotation. Campaigns can target a pool instead of a single account."
-        >
+          description="Group sending accounts into pools for load-balanced, reputation-safe delivery."
+        
+        icon={<Layers className="size-5" />}
+      >
           <Button onClick={() => setShowCreate(true)} className="gap-2" disabled={accounts.length < 2}>
             <Plus className="w-4 h-4" /> Create pool
           </Button>

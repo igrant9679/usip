@@ -3,7 +3,7 @@ import { Switch } from "@/components/ui/switch";
 import { Field, FormDialog, Section, StatusPill, fmtDate } from "@/components/usip/Common";
 import { EmptyState, PageHeader, Shell } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
-import { Copy, KeyRound, Plus, Trash2 } from "lucide-react";
+import { Copy, KeyRound, Plus, Trash2, Shield } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -22,7 +22,9 @@ export default function SCIM() {
 
   return (
     <Shell title="SCIM">
-      <PageHeader title="SCIM provisioning" description="Connect Okta / Azure AD / Jumpcloud to provision users into this workspace." pageKey="scim">
+      <PageHeader title="SCIM provisioning" description="Configure SCIM 2.0 provisioning to sync users and groups from your identity provider." pageKey="scim"
+        icon={<Shield className="size-5" />}
+      >
         <Button onClick={() => setOpen(true)}><Plus className="size-4" /> New provider</Button>
       </PageHeader>
       <div className="p-6 grid grid-cols-1 lg:grid-cols-2 gap-4">

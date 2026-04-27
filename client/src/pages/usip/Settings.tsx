@@ -7,7 +7,7 @@ import { Section, StatusPill, fmt$ } from "@/components/usip/Common";
 import { PageHeader, Shell, StatCard } from "@/components/usip/Shell";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { trpc } from "@/lib/trpc";
-import { AlertTriangle, Bell, Building2, CheckCircle2, CreditCard, Download, ExternalLink, Loader2, Mail, Palette, Plug, ShieldCheck, TestTube2, Trash2, XCircle, Zap } from "lucide-react";
+import { AlertTriangle, Bell, Building2, CheckCircle2, CreditCard, Download, ExternalLink, Loader2, Mail, Palette, Plug, ShieldCheck, TestTube2, Trash2, XCircle, Zap, Settings as SettingsIcon } from "lucide-react";
 import { useReduceMotion } from "@/components/PageTransition";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -55,7 +55,9 @@ export default function Settings() {
 
   return (
     <Shell title="Settings">
-      <PageHeader title="Workspace settings" description="Administrative configuration for this workspace." pageKey="settings" />
+      <PageHeader title="Workspace settings" description="Workspace settings — general, billing, integrations, and notification preferences." pageKey="settings" 
+        icon={<SettingsIcon className="size-5" />}
+      />
       <div className="p-6 grid grid-cols-1 md:grid-cols-[220px_1fr] gap-6">
         {/* Tab nav */}
         <nav className="space-y-1">

@@ -824,7 +824,9 @@ export default function MailboxPage() {
 
   return (
     <Shell title="My Mailbox">
-      <PageHeader title="My Mailbox" description="Manage email threads across all your connected sending accounts." pageKey="mailbox" />
+      <PageHeader title="My Mailbox" description="Manage your connected email accounts, compose messages, and track replies." pageKey="mailbox" 
+        icon={<Mail className="size-5" />}
+      />
       <div className="h-[calc(100vh-8.5rem)] flex overflow-hidden">
 
         {/* Left panel */}

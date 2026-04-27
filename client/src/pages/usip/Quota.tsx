@@ -99,7 +99,9 @@ export default function Quota() {
 
   return (
     <Shell title="Quota Management">
-      <PageHeader title="Quota Management" description="Set and track revenue, deal, and activity targets per rep" pageKey="quota">
+      <PageHeader title="Quota Management" description="Set and track revenue, deal, and activity quotas per rep and per period." pageKey="quota"
+        icon={<TrendingUp className="size-5" />}
+      >
         <div className="flex items-center gap-3">
           <Select value={period} onValueChange={setPeriod}>
             <SelectTrigger className="w-36">

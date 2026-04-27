@@ -39,7 +39,7 @@ import {
   TrendingDown,
   TrendingUp,
   Users,
-  Zap,
+  Zap, Rocket
 } from "lucide-react";
 import { Link } from "wouter";
 import { AreaChart, Area, ResponsiveContainer, Tooltip } from "recharts";
@@ -299,7 +299,9 @@ export default function AREHub() {
       {/* ── Header ── */}
       <PageHeader
         title="Autonomous Revenue Engine" pageKey="are-hub"
-        description="End-to-end AI prospecting: ICP inference → prospect discovery → enrichment → sequence generation → multi-channel outreach → signal feedback loop."
+        description="Command centre for your Account Research & Engagement engine — campaigns, ICP, and pipeline flow."
+      
+        icon={<Rocket className="size-5" />}
       >
         <Button variant="outline" size="sm" onClick={() => refetch()} className="gap-1.5 text-xs">
           <RefreshCw className="size-3.5" />

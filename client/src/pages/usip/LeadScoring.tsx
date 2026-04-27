@@ -3,7 +3,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { PageHeader, Shell } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
-import { Loader2, RefreshCw, Save, Sparkles, Target } from "lucide-react";
+import { Loader2, RefreshCw, Save, Sparkles, Target, Gauge } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
@@ -82,7 +82,9 @@ export default function LeadScoring() {
 
   return (
     <Shell title="Lead Scoring">
-      <PageHeader title="Lead Scoring Engine" pageKey="lead-scoring" description={`Three-component model. Current configuration max-possible = ${totalMax} pts (capped at 100). Default 40 + 30 + 30 = 100.`}>
+      <PageHeader title="Lead Scoring Engine" pageKey="lead-scoring" description={`Three-component model. Current configuration max-possible = ${totalMax} pts (capped at 100). Default 40 + 30 + 30 = 100.`}
+        icon={<Gauge className="size-5" />}
+      >
         <Button variant="outline" className="bg-card" onClick={() => recomputeAll.mutate()} disabled={recomputeAll.isPending}>
           <RefreshCw className={`size-4 ${recomputeAll.isPending ? "animate-spin" : ""}`} /> Recompute all
         </Button>

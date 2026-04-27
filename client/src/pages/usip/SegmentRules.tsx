@@ -7,7 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { PageHeader, Shell } from "@/components/usip/Shell";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { trpc } from "@/lib/trpc";
-import { CheckCircle2, Loader2, Play, Plus, Trash2, Users, Zap } from "lucide-react";
+import { CheckCircle2, Loader2, Play, Plus, Trash2, Users, Zap, SlidersHorizontal } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -48,7 +48,9 @@ export default function SegmentRules() {
 
   return (
     <Shell>
-      <PageHeader title="Segment Auto-Enroll" description="Connect audience segments to sequences — contacts matching a segment are enrolled automatically every hour." pageKey="segment-rules">
+      <PageHeader title="Segment Auto-Enroll" description="Define auto-enrolment rules that keep segments fresh as your data changes." pageKey="segment-rules"
+        icon={<SlidersHorizontal className="size-5" />}
+      >
         {isAdmin && (
           <Button size="sm" variant="outline" onClick={() => runNow.mutate()} disabled={runNow.isPending}>
             {runNow.isPending ? <Loader2 className="size-4 animate-spin mr-1" /> : <Play className="size-4 mr-1" />}

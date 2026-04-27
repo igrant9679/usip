@@ -1832,3 +1832,13 @@
 - [x] Retain pages: Customers, Renewals, QBRs — add PageHeader (red accent)
 - [x] Operate pages: Tasks, Workflows, Dashboards, Products, Proposals, Quotes, Territories, Lead Routing, Quota Management — add PageHeader (teal accent)
 - [x] Admin pages: Team, Lead Scoring, Custom Fields, Prompt Templates, Brand Voice, Audit Log, SCIM, My LinkedIn, Settings — add PageHeader (slate accent)
+
+## Round 33 — PageHeader icon prop, all nav groups, product-voice descriptions
+- [x] Shell/PageHeader: add optional icon prop (ReactNode, renders left of h1 in accent color)
+- [x] Revenue Engine: ARE Hub, ICP Agent, Campaigns, ARE Settings — add icon to PageHeader
+- [x] Acquire: Leads, Contacts, Import Contacts, Data Health, Accounts, Pipeline, Pipeline Alerts — add icon to PageHeader
+- [x] Engage: Sequences, Email Drafts, Email Analytics, Opt-Out, Sending Accounts, Sender Pools, Snippets, AI Research Pipeline, AI Draft Queue, Unified Inbox, Connected Accounts, Social, Segments, Segment Auto-Enroll, Email Builder — add icon to PageHeader
+- [x] Retain: Customers, Renewals, QBRs — add icon to PageHeader
+- [x] Operate: Tasks, Workflows, Dashboards, Products, Proposals, Quotes, Territories, Lead Routing, Quota — add icon to PageHeader
+- [x] Admin: Team, Lead Scoring, Custom Fields, Prompt Templates, Brand Voice, Audit Log, SCIM, My LinkedIn, Settings — add icon to PageHeader
+- [x] All pages: update description copy to product-voice quality

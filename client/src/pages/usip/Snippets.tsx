@@ -13,7 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { toast } from "sonner";
-import { BookOpen, Check, Copy, Edit2, Plus, Search, Trash2, Wand2 } from "lucide-react";
+import { BookOpen, Check, Copy, Edit2, Plus, Search, Trash2, Wand2, Scissors } from "lucide-react";
 
 type SnippetCategory = "opener" | "value_prop" | "social_proof" | "objection_handler" | "cta" | "closing" | "ps";
 const CATEGORIES: SnippetCategory[] = ["opener", "value_prop", "social_proof", "objection_handler", "cta", "closing", "ps"];
@@ -160,7 +160,9 @@ export default function SnippetsPage() {
     <Shell title="Snippet Library">
       <PageHeader
         title="Snippet Library" pageKey="snippets"
-        description="Reusable text blocks for quick insertion into emails and sequences"
+        description="Create reusable text snippets and personalisation tokens for email templates."
+      
+        icon={<Scissors className="size-5" />}
       >
         <Button size="sm" onClick={openCreate}>
           <Plus size={14} className="mr-1.5" /> New Snippet

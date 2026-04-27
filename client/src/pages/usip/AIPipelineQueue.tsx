@@ -404,7 +404,9 @@ export default function AIPipelineQueue() {
 
   return (
     <Shell title="AI Pipeline">
-      <PageHeader title="AI Draft Queue" description="5-stage AI pipeline: Org Research → Contact Research → Fit Analysis → 3-Variant Drafts → Review Queue" pageKey="ai-pipeline">
+      <PageHeader title="AI Draft Queue" description="Review and approve AI-generated email drafts from the research pipeline queue." pageKey="ai-pipeline"
+        icon={<Sparkles className="size-5" />}
+      >
         <Button variant="outline" size="sm" onClick={handleRefresh}>
           <RefreshCw className="h-4 w-4 mr-1" />
           Refresh
