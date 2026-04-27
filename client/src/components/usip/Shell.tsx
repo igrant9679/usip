@@ -66,14 +66,16 @@ const AccentContext = createContext<string>("#1D4ED8");
 export function useAccentColor() { return useContext(AccentContext); }
 
 type NavItem = { href: string; label: string; icon: any };
-type NavGroup = { label: string; items: NavItem[]; color: string; activeColor: string; activeBg: string };
+type NavGroup = { label: string; items: NavItem[]; color: string; darkColor: string; activeColor: string; activeBg: string; darkActiveBg: string };
 
 const NAV: NavGroup[] = [
   {
     label: "Overview",
     color: "#1D4ED8",
+    darkColor: "#93C5FD",
     activeColor: "#1D4ED8",
     activeBg: "rgba(29,78,216,0.10)",
+    darkActiveBg: "rgba(147,197,253,0.12)",
     items: [
       { href: "/", label: "Dashboard", icon: LayoutDashboard },
       { href: "/inbox", label: "Inbox", icon: Inbox },
@@ -84,8 +86,10 @@ const NAV: NavGroup[] = [
   {
     label: "Revenue Engine",
     color: "#059669",
+    darkColor: "#6EE7B7",
     activeColor: "#059669",
     activeBg: "rgba(5,150,105,0.10)",
+    darkActiveBg: "rgba(110,231,183,0.12)",
     items: [
       { href: "/are", label: "ARE Hub", icon: Bot },
       { href: "/are/icp", label: "ICP Agent", icon: Cpu },
@@ -96,8 +100,10 @@ const NAV: NavGroup[] = [
   {
     label: "Acquire",
     color: "#B45309",
+    darkColor: "#FCD34D",
     activeColor: "#B45309",
     activeBg: "rgba(180,83,9,0.10)",
+    darkActiveBg: "rgba(252,211,77,0.12)",
     items: [
       { href: "/leads", label: "Leads", icon: Target },
       { href: "/contacts", label: "Contacts", icon: Users },
@@ -111,8 +117,10 @@ const NAV: NavGroup[] = [
   {
     label: "Engage",
     color: "#7C3AED",
+    darkColor: "#C4B5FD",
     activeColor: "#7C3AED",
     activeBg: "rgba(124,58,237,0.10)",
+    darkActiveBg: "rgba(196,181,253,0.12)",
     items: [
       { href: "/segments", label: "Segments", icon: Filter },
       { href: "/segment-rules", label: "Segment Auto-Enroll", icon: Zap },
@@ -135,8 +143,10 @@ const NAV: NavGroup[] = [
   {
     label: "Retain",
     color: "#DC2626",
+    darkColor: "#FCA5A5",
     activeColor: "#DC2626",
     activeBg: "rgba(220,38,38,0.10)",
+    darkActiveBg: "rgba(252,165,165,0.12)",
     items: [
       { href: "/customers", label: "Customers", icon: Heart },
       { href: "/renewals", label: "Renewals", icon: CalendarClock },
@@ -146,8 +156,10 @@ const NAV: NavGroup[] = [
   {
     label: "Operate",
     color: "#0F766E",
+    darkColor: "#5EEAD4",
     activeColor: "#0F766E",
     activeBg: "rgba(15,118,110,0.10)",
+    darkActiveBg: "rgba(94,234,212,0.12)",
     items: [
       { href: "/tasks", label: "Tasks", icon: ListChecks },
       { href: "/workflows", label: "Workflows", icon: Workflow },
@@ -163,8 +175,10 @@ const NAV: NavGroup[] = [
   {
     label: "Admin",
     color: "#475569",
+    darkColor: "#CBD5E1",
     activeColor: "#475569",
     activeBg: "rgba(71,85,105,0.10)",
+    darkActiveBg: "rgba(203,213,225,0.12)",
     items: [
       { href: "/team", label: "Team", icon: Users },
       { href: "/lead-scoring", label: "Lead Scoring", icon: Target },
@@ -202,7 +216,10 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
 
   // Derive current category accent from active route
   const activeGroup = effectiveNav.find(g => g.items.some(i => i.href === location || (i.href !== "/" && i.href !== homeDashboardHref && location.startsWith(i.href)) || i.href === location));
-  const accentColor = activeGroup?.color ?? "#1D4ED8";
+  const isDark = theme === "dark";
+  const accentColor = isDark
+    ? (activeGroup?.darkColor ?? "#93C5FD")
+    : (activeGroup?.color ?? "#1D4ED8");
 
   // close dropdowns/drawers on route change
   useEffect(() => {
@@ -235,16 +252,19 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
         </div>
 
         <nav className="flex-1 overflow-y-auto py-3 px-0 space-y-2">
-          {effectiveNav.map((group) => (
+          {effectiveNav.map((group) => {
+            const gc = isDark ? group.darkColor : group.color;
+            const gBg = isDark ? group.darkActiveBg : group.activeBg;
+            return (
             <div key={group.label}>
               {/* Section header with left stripe */}
               <div
                 className="flex items-center gap-1.5 pl-3 pr-2 pb-1 pt-0.5"
-                style={{ borderLeft: `3px solid ${group.color}` }}
+                style={{ borderLeft: `3px solid ${gc}` }}
               >
                 <span
                   className="text-[10px] font-bold uppercase tracking-widest"
-                  style={{ color: group.color }}
+                  style={{ color: gc }}
                 >
                   {group.label}
                 </span>
@@ -253,17 +273,19 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
                 {group.items.map((item) => {
                   const active = location === item.href || (item.href !== "/" && location.startsWith(item.href));
                   const Icon = item.icon;
+                  // Inactive icon: use group color at 70% opacity (cc) for minimum legibility
+                  const inactiveIconColor = gc + 'cc';
                   return (
                     <Link
                       key={item.href}
                       href={item.href}
                       className={cn(
                         "flex items-center gap-2.5 pl-3 pr-2 py-1.5 text-[13px] transition-all duration-150",
-                        active ? "text-white" : "text-white/60 hover:text-white/90",
+                        active ? "text-white" : "text-white/70 hover:text-white/95",
                       )}
                       style={active ? {
-                        borderLeft: `3px solid ${group.color}`,
-                        backgroundColor: group.activeBg,
+                        borderLeft: `3px solid ${gc}`,
+                        backgroundColor: gBg,
                         paddingLeft: '12px',
                       } : {
                         borderLeft: '3px solid transparent',
@@ -272,7 +294,7 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
                     >
                       <Icon
                         className="size-4 shrink-0 transition-colors"
-                        style={{ color: active ? group.color : group.color + 'aa' }}
+                        style={{ color: active ? gc : inactiveIconColor }}
                       />
                       <span className="truncate">{item.label}</span>
                     </Link>
@@ -280,7 +302,8 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
                 })}
               </div>
             </div>
-          ))}
+            );
+          })}
         </nav>
 
         <div className="px-3 py-3 border-t border-white/10 text-[12px] text-white/60 flex items-center gap-2">

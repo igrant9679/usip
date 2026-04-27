@@ -15,7 +15,7 @@
  *   - Compose new email
  */
 import { useState, useEffect, useRef } from "react";
-import { Shell } from "@/components/usip/Shell";
+import { Shell, PageHeader } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Button } from "@/components/ui/button";
@@ -824,7 +824,8 @@ export default function MailboxPage() {
 
   return (
     <Shell title="My Mailbox">
-      <div className="h-[calc(100vh-3.5rem)] flex overflow-hidden">
+      <PageHeader title="My Mailbox" description="Manage email threads across all your connected sending accounts." />
+      <div className="h-[calc(100vh-8.5rem)] flex overflow-hidden">
 
         {/* Left panel */}
         <div className="w-52 shrink-0 border-r bg-muted/20 flex flex-col overflow-hidden">

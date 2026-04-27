@@ -1810,3 +1810,13 @@
 - [x] Data Health page: section headers, metric labels
 - [x] Sequences page: page title, step labels
 - [x] Settings pages: section headers, form labels
+
+## Round 31 — Dark-mode contrast, sidebar legibility, typography tokens, uniform Overview headings
+- [x] index.css: dark-mode accent color overrides (lighter 400/500 variants for dark canvas)
+- [x] index.css: h1–h4 typography scale base styles
+- [x] Shell.tsx: sidebar inactive icon minimum brightness floor (opacity aa → cc for dark-mode legibility)
+- [x] Shell.tsx: dark-mode nav group color overrides (lighter variants when .dark is active)
+- [x] Dashboard page: uniform PageHeader with blue accent, consistent section headers
+- [x] Inbox page: uniform PageHeader with blue accent
+- [x] My Mailbox page: uniform PageHeader with blue accent
+- [x] My Calendar page: uniform PageHeader with blue accent
