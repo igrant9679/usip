@@ -1,10 +1,9 @@
 /**
  * ARE Campaigns — list and create autonomous prospecting campaigns
  */
-import { Shell } from "@/components/usip/Shell";
+import { Shell, PageHeader } from "@/components/usip/Shell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -94,55 +93,50 @@ export default function ARECampaigns() {
 
   return (
     <Shell title="ARE Campaigns">
-      <div className="p-6 space-y-6 max-w-6xl mx-auto">
-        {/* Header */}
-        <div className="flex items-center justify-between gap-4">
-          <div>
-            <div className="flex items-center gap-2 mb-1">
-              <Radar className="size-5 text-emerald-400" />
-              <h1 className="text-xl font-bold text-white">Autonomous Campaigns</h1>
-            </div>
-            <p className="text-sm text-white/50">Each campaign runs its own AI pipeline: discover → enrich → sequence → execute → learn.</p>
-          </div>
-          <Button onClick={() => setShowCreate(true)} className="bg-emerald-500 hover:bg-emerald-600 text-black gap-2 shrink-0">
-            <Plus className="size-4" /> New Campaign
-          </Button>
-        </div>
+      <PageHeader
+        title="Autonomous Campaigns"
+        description="Each campaign runs its own AI pipeline: discover → enrich → sequence → execute → learn."
+      >
+        <Button onClick={() => setShowCreate(true)} className="gap-2">
+          <Plus className="size-4" /> New Campaign
+        </Button>
+      </PageHeader>
 
+      <div className="p-4 md:p-6 space-y-4 max-w-5xl">
         {/* Campaign list */}
         {isLoading ? (
-          <div className="flex items-center gap-2 text-white/40 py-12 justify-center">
+          <div className="flex items-center gap-2 text-muted-foreground py-12 justify-center">
             <Loader2 className="size-5 animate-spin" /> Loading campaigns…
           </div>
         ) : !campaigns || campaigns.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-white/10 p-12 text-center">
-            <Bot className="size-10 text-white/20 mx-auto mb-3" />
-            <div className="text-white/40 mb-4">No campaigns yet. Create your first autonomous prospecting campaign.</div>
-            <Button onClick={() => setShowCreate(true)} className="bg-emerald-500 hover:bg-emerald-600 text-black gap-2">
+          <div className="rounded-xl border border-dashed p-12 text-center">
+            <Bot className="size-10 text-muted-foreground/40 mx-auto mb-3" />
+            <p className="text-sm text-muted-foreground mb-4">No campaigns yet. Create your first autonomous prospecting campaign.</p>
+            <Button onClick={() => setShowCreate(true)} className="gap-2">
               <Plus className="size-4" /> Create Campaign
             </Button>
           </div>
         ) : (
-          <div className="space-y-3">
+          <div className="space-y-2">
             {campaigns.map((c) => (
-              <div key={c.id} className="rounded-xl border border-white/10 bg-white/5 p-4 flex items-center gap-4">
+              <div key={c.id} className="rounded-xl border bg-card p-4 flex items-center gap-4 hover:bg-muted/30 transition-colors">
                 <div className="size-2.5 rounded-full shrink-0" style={{ backgroundColor: STATUS_COLOR[c.status] ?? "#94A3B8" }} />
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-0.5">
-                    <span className="text-sm font-medium text-white truncate">{c.name}</span>
-                    <Badge className="text-[10px] border-white/10 bg-white/10 text-white/50 capitalize">{c.status}</Badge>
-                    <Badge className="text-[10px] border-white/10 bg-white/10 text-white/50">{c.autonomyMode}</Badge>
+                  <div className="flex items-center gap-2 mb-0.5 flex-wrap">
+                    <span className="text-sm font-medium text-foreground truncate">{c.name}</span>
+                    <Badge variant="outline" className="text-[10px] capitalize">{c.status}</Badge>
+                    <Badge variant="secondary" className="text-[10px]">{c.autonomyMode}</Badge>
                   </div>
-                  <div className="text-xs text-white/40">
+                  <div className="text-xs text-muted-foreground">
                     {c.prospectsDiscovered} discovered · {c.prospectsEnriched} enriched · {c.prospectsContacted} contacted · {c.prospectsReplied} replied · {c.meetingsBooked} meetings
                   </div>
                 </div>
-                <div className="flex items-center gap-2 shrink-0">
+                <div className="flex items-center gap-1 shrink-0">
                   {c.status === "active" ? (
                     <Button
                       size="sm"
                       variant="ghost"
-                      className="text-yellow-400 hover:text-yellow-300 gap-1 text-xs"
+                      className="text-amber-600 hover:text-amber-700 gap-1 text-xs"
                       onClick={() => setStatus.mutate({ id: c.id, status: "paused" })}
                     >
                       <Pause className="size-3" /> Pause
@@ -151,7 +145,7 @@ export default function ARECampaigns() {
                     <Button
                       size="sm"
                       variant="ghost"
-                      className="text-emerald-400 hover:text-emerald-300 gap-1 text-xs"
+                      className="text-emerald-600 hover:text-emerald-700 gap-1 text-xs"
                       onClick={() => setStatus.mutate({ id: c.id, status: "active" })}
                     >
                       <Play className="size-3" /> Activate
@@ -160,7 +154,7 @@ export default function ARECampaigns() {
                   <Button
                     size="sm"
                     variant="ghost"
-                    className="text-red-400/60 hover:text-red-400 gap-1 text-xs"
+                    className="text-destructive/60 hover:text-destructive gap-1 text-xs"
                     onClick={() => {
                       if (confirm("Delete this campaign?")) deleteCampaign.mutate({ id: c.id });
                     }}
@@ -168,7 +162,7 @@ export default function ARECampaigns() {
                     <Trash2 className="size-3" />
                   </Button>
                   <Link href={`/are/campaigns/${c.id}`}>
-                    <Button size="sm" variant="ghost" className="text-white/50 hover:text-white gap-1 text-xs">
+                    <Button size="sm" variant="ghost" className="gap-1 text-xs">
                       Open <ArrowRight className="size-3" />
                     </Button>
                   </Link>
@@ -181,54 +175,53 @@ export default function ARECampaigns() {
 
       {/* Create Campaign Dialog */}
       <Dialog open={showCreate} onOpenChange={setShowCreate}>
-        <DialogContent className="max-w-lg bg-[#0F1F1B] border-white/10 text-white">
+        <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <Bot className="size-4 text-emerald-400" />
+              <Bot className="size-4 text-primary" />
               New Autonomous Campaign
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-2">
             <div>
-              <Label className="text-xs text-white/60 mb-1.5 block">Campaign Name</Label>
+              <Label className="text-xs text-muted-foreground mb-1.5 block">Campaign Name</Label>
               <Input
                 value={form.name}
                 onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
                 placeholder="e.g. Q2 SaaS CFO Outreach"
-                className="bg-white/5 border-white/10 text-white"
               />
             </div>
             <div>
-              <Label className="text-xs text-white/60 mb-1.5 block">Description (optional)</Label>
+              <Label className="text-xs text-muted-foreground mb-1.5 block">Description (optional)</Label>
               <Textarea
                 value={form.description}
                 onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
                 placeholder="What is this campaign targeting?"
-                className="bg-white/5 border-white/10 text-white text-sm"
+                className="text-sm"
                 rows={2}
               />
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <Label className="text-xs text-white/60 mb-1.5 block">Autonomy Mode</Label>
+                <Label className="text-xs text-muted-foreground mb-1.5 block">Autonomy Mode</Label>
                 <Select value={form.autonomyMode} onValueChange={(v) => setForm((f) => ({ ...f, autonomyMode: v as typeof form.autonomyMode }))}>
-                  <SelectTrigger className="bg-white/5 border-white/10 text-white text-sm">
+                  <SelectTrigger className="text-sm">
                     <SelectValue />
                   </SelectTrigger>
-                  <SelectContent className="bg-[#0F1F1B] border-white/10 text-white">
+                  <SelectContent>
                     <SelectItem value="full">Full Auto</SelectItem>
                     <SelectItem value="batch_approval">Batch Approval</SelectItem>
-                    <SelectItem value="review_release">Review & Release</SelectItem>
+                    <SelectItem value="review_release">Review &amp; Release</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
               <div>
-                <Label className="text-xs text-white/60 mb-1.5 block">Goal</Label>
+                <Label className="text-xs text-muted-foreground mb-1.5 block">Goal</Label>
                 <Select value={form.goalType} onValueChange={(v) => setForm((f) => ({ ...f, goalType: v as typeof form.goalType }))}>
-                  <SelectTrigger className="bg-white/5 border-white/10 text-white text-sm">
+                  <SelectTrigger className="text-sm">
                     <SelectValue />
                   </SelectTrigger>
-                  <SelectContent className="bg-[#0F1F1B] border-white/10 text-white">
+                  <SelectContent>
                     <SelectItem value="reply">Get a Reply</SelectItem>
                     <SelectItem value="meeting_booked">Book a Meeting</SelectItem>
                     <SelectItem value="opportunity_created">Create Opportunity</SelectItem>
@@ -238,61 +231,57 @@ export default function ARECampaigns() {
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <Label className="text-xs text-white/60 mb-1.5 block">Target Prospects</Label>
+                <Label className="text-xs text-muted-foreground mb-1.5 block">Target Prospects</Label>
                 <Input
                   type="number"
                   value={form.targetProspectCount}
                   onChange={(e) => setForm((f) => ({ ...f, targetProspectCount: parseInt(e.target.value) || 100 }))}
-                  className="bg-white/5 border-white/10 text-white"
                 />
               </div>
               <div>
-                <Label className="text-xs text-white/60 mb-1.5 block">Daily Send Cap</Label>
+                <Label className="text-xs text-muted-foreground mb-1.5 block">Daily Send Cap</Label>
                 <Input
                   type="number"
                   value={form.dailySendCap}
                   onChange={(e) => setForm((f) => ({ ...f, dailySendCap: parseInt(e.target.value) || 50 }))}
-                  className="bg-white/5 border-white/10 text-white"
                 />
               </div>
             </div>
             <div>
-              <Label className="text-xs text-white/60 mb-2 block">Prospect Sources</Label>
+              <Label className="text-xs text-muted-foreground mb-2 block">Prospect Sources</Label>
               <div className="grid grid-cols-2 gap-2">
                 {SOURCE_OPTIONS.map((s) => (
                   <label key={s.id} className="flex items-center gap-2 cursor-pointer">
                     <Checkbox
                       checked={form.prospectSources.includes(s.id)}
                       onCheckedChange={() => toggleSource(s.id)}
-                      className="border-white/20"
                     />
-                    <span className="text-xs text-white/70">{s.label}</span>
+                    <span className="text-xs text-foreground">{s.label}</span>
                   </label>
                 ))}
               </div>
             </div>
             <div>
-              <Label className="text-xs text-white/60 mb-2 block">Channels</Label>
+              <Label className="text-xs text-muted-foreground mb-2 block">Channels</Label>
               <div className="flex gap-4">
                 {(["email", "linkedin", "sms", "voice"] as const).map((ch) => (
                   <label key={ch} className="flex items-center gap-1.5 cursor-pointer">
                     <Checkbox
                       checked={form.channelsEnabled[ch]}
                       onCheckedChange={(v) => setForm((f) => ({ ...f, channelsEnabled: { ...f.channelsEnabled, [ch]: !!v } }))}
-                      className="border-white/20"
                     />
-                    <span className="text-xs text-white/70 capitalize">{ch}</span>
+                    <span className="text-xs text-foreground capitalize">{ch}</span>
                   </label>
                 ))}
               </div>
             </div>
           </div>
           <DialogFooter>
-            <Button variant="ghost" onClick={() => setShowCreate(false)} className="text-white/60">Cancel</Button>
+            <Button variant="ghost" onClick={() => setShowCreate(false)}>Cancel</Button>
             <Button
               onClick={() => create.mutate(form)}
               disabled={create.isPending || !form.name.trim()}
-              className="bg-emerald-500 hover:bg-emerald-600 text-black gap-2"
+              className="gap-2"
             >
               {create.isPending ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}
               Create Campaign

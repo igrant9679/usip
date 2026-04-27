@@ -29,7 +29,7 @@ function StageIndicator({ stage, current, status }: { stage: number; current: nu
       ) : active ? (
         <Loader2 className="h-5 w-5 text-blue-500 animate-spin shrink-0" />
       ) : failed ? (
-        <Circle className="h-5 w-5 text-red-400 shrink-0" />
+        <Circle className="h-5 w-5 text-red-500 shrink-0" />
       ) : (
         <Circle className="h-5 w-5 text-muted-foreground/40 shrink-0" />
       )}
@@ -109,7 +109,7 @@ export default function ResearchPipeline() {
       <div className="flex items-center gap-3">
         <Sparkles className="h-6 w-6 text-emerald-500" />
         <div>
-          <h1 className="text-2xl font-bold">AI Research-to-Draft Pipeline</h1>
+          <h1 className="text-xl font-semibold">AI Research-to-Draft Pipeline</h1>
           <p className="text-muted-foreground text-sm">5-stage AI pipeline: prospect research → signals → angles → drafts → final</p>
         </div>
       </div>

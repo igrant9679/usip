@@ -105,7 +105,7 @@ export default function Quota() {
           <div className="flex items-center gap-3">
             <TrendingUp className="h-6 w-6 text-blue-500" />
             <div>
-              <h1 className="text-2xl font-bold">Quota Management</h1>
+              <h1 className="text-xl font-semibold">Quota Management</h1>
               <p className="text-muted-foreground text-sm">Set and track revenue, deal, and activity targets per rep</p>
             </div>
           </div>

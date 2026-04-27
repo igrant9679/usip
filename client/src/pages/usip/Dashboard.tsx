@@ -494,7 +494,7 @@ export default function Dashboard() {
           {/* Win/Loss donut — 1/3 width */}
           <div className="rounded-xl border bg-card">
             <div className="px-5 py-4 border-b flex items-center gap-2">
-              <Target className="size-4 text-amber-400" />
+              <Target className="size-4 text-amber-500" />
               <span className="text-base font-semibold">Win / Loss</span>
               <span className="ml-auto text-xs text-muted-foreground">Last 90 days</span>
             </div>
@@ -545,7 +545,7 @@ export default function Dashboard() {
           {/* Stage Funnel */}
           <div className="rounded-xl border bg-card">
             <div className="px-5 py-4 border-b flex items-center gap-2">
-              <Zap className="size-4 text-yellow-400" />
+              <Zap className="size-4 text-yellow-500" />
               <span className="text-base font-semibold">Pipeline Funnel</span>
             </div>
             <div className="p-5">
@@ -572,7 +572,7 @@ export default function Dashboard() {
           {/* Top Reps leaderboard — rows are clickable → /pipeline?owner=<userId> */}
           <div className="rounded-xl border bg-card">
             <div className="px-5 py-4 border-b flex items-center gap-2">
-              <Trophy className="size-4 text-amber-400" />
+              <Trophy className="size-4 text-amber-500" />
               <span className="text-base font-semibold">Top Reps</span>
               <span className="ml-auto text-xs text-muted-foreground">Closed-Won value · click to drill down</span>
             </div>
@@ -651,10 +651,10 @@ export default function Dashboard() {
               </div>
               <div className="rounded-lg border bg-secondary/30 p-3 text-center" style={{ borderLeftWidth: 3, borderLeftColor: "#FCD34D" }}>
                 <div className="flex items-center justify-center gap-1 mb-1">
-                  <Target className="size-3.5 text-amber-400" />
+                  <Target className="size-3.5 text-amber-500" />
                   <span className="text-[11px] text-muted-foreground uppercase tracking-wide">Acceptance</span>
                 </div>
-                <div className="text-2xl font-bold font-mono tabular-nums text-amber-400">
+                <div className="text-2xl font-bold font-mono tabular-nums text-amber-600">
                   {unipileMetrics?.acceptanceRate ?? 0}%
                 </div>
               </div>
@@ -744,10 +744,10 @@ export default function Dashboard() {
           <div className="rounded-xl border bg-card">
             <div className="px-5 py-3.5 border-b flex items-center">
               <div className="flex items-center gap-2">
-                <Zap className="size-3.5 text-violet-400" />
+                <Zap className="size-3.5 text-violet-500" />
                 <div className="text-sm font-semibold">AI Drafts Awaiting Review</div>
                 {(drafts ?? []).length > 0 && (
-                  <span className="ml-1 rounded-full bg-violet-500/20 text-violet-400 text-xs font-bold px-2 py-0.5">
+                  <span className="ml-1 rounded-full bg-violet-500/20 text-violet-600 text-xs font-bold px-2 py-0.5">
                     {(drafts ?? []).length}
                   </span>
                 )}

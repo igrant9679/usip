@@ -222,7 +222,7 @@ function ForecastView() {
 
       {/* Stage funnel */}
       <div>
-        <h3 className="text-sm font-semibold mb-3">Stage Funnel</h3>
+        <h3 className="text-sm font-semibold text-muted-foreground mb-3">Stage Funnel</h3>
         <div className="space-y-2">
           {STAGES.filter((s) => s.id !== "lost").map((s) => {
             const st = stages.find((x) => x.stage === s.id);
@@ -249,7 +249,7 @@ function ForecastView() {
       {/* Monthly close projection */}
       {months.length > 0 && (
         <div>
-          <h3 className="text-sm font-semibold mb-3">Monthly Close Projection (weighted)</h3>
+          <h3 className="text-sm font-semibold text-muted-foreground mb-3">Monthly Close Projection (weighted)</h3>
           <div className="space-y-2">
             {months.map((m) => {
               const barPct = Math.round((m.weighted / maxMonthWeighted) * 100);

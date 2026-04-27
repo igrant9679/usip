@@ -186,7 +186,7 @@ function NewProposalWizard({ open, onClose, onCreated }: WizardProps) {
       <DialogContent className="max-w-lg">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <ClipboardList className="size-5 text-teal-400" />
+            <ClipboardList className="size-5 text-teal-600" />
             New Proposal — Step {step} of 2
           </DialogTitle>
         </DialogHeader>
@@ -571,7 +571,7 @@ export default function Proposals() {
       <div className="flex items-center justify-between px-6 py-4 border-b border-border shrink-0">
         <div>
           <h1 className="text-xl font-semibold text-foreground flex items-center gap-2">
-            <ClipboardList className="size-5 text-teal-400" />
+            <ClipboardList className="size-5 text-teal-600" />
             Proposals
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">
@@ -603,7 +603,7 @@ export default function Proposals() {
       {/* Bulk action bar */}
       {selectedIds.size > 0 && (
         <div className="flex items-center gap-3 px-6 py-2.5 bg-teal-500/10 border-b border-teal-500/30 shrink-0">
-          <span className="text-sm font-medium text-teal-400">{selectedIds.size} selected</span>
+          <span className="text-sm font-medium text-teal-600">{selectedIds.size} selected</span>
           <Button
             size="sm"
             variant="outline"
@@ -646,9 +646,9 @@ export default function Proposals() {
       <div className="grid grid-cols-4 gap-4 px-6 py-4 border-b border-border shrink-0">
         {[
           { label: "Total", value: counts.total, color: "text-foreground" },
-          { label: "Accepted", value: counts.accepted, color: "text-emerald-400" },
-          { label: "Pending Review", value: counts.pending, color: "text-amber-400" },
-          { label: "Drafts", value: counts.drafts, color: "text-slate-400" },
+          { label: "Accepted", value: counts.accepted, color: "text-emerald-600" },
+          { label: "Pending Review", value: counts.pending, color: "text-amber-600" },
+          { label: "Drafts", value: counts.drafts, color: "text-slate-600" },
         ].map((s) => (
           <div key={s.label} className="bg-card rounded-lg border border-border p-3 text-center">
             <div className={cn("text-2xl font-bold", s.color)}>{s.value}</div>
@@ -883,7 +883,7 @@ export default function Proposals() {
         <DialogContent className="max-w-sm">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <Timer className="size-4 text-teal-400" />
+              <Timer className="size-4 text-teal-600" />
               Set Expiry Date
             </DialogTitle>
           </DialogHeader>
@@ -931,7 +931,7 @@ export default function Proposals() {
         <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <CalendarCheck className="size-5 text-orange-400" />
+              <CalendarCheck className="size-5 text-orange-600" />
               Pending Extension Requests
             </DialogTitle>
           </DialogHeader>
@@ -1001,7 +1001,7 @@ export default function Proposals() {
         <DialogContent className="max-w-sm">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <ThumbsUp className="size-4 text-emerald-400" />
+              <ThumbsUp className="size-4 text-emerald-600" />
               Approve Extension
             </DialogTitle>
           </DialogHeader>
@@ -1052,7 +1052,7 @@ export default function Proposals() {
         <DialogContent className="max-w-sm">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <ThumbsDown className="size-4 text-red-400" />
+              <ThumbsDown className="size-4 text-red-600" />
               Decline Extension
             </DialogTitle>
           </DialogHeader>

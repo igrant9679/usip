@@ -408,8 +408,8 @@ export default function AIPipelineQueue() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
-            <Sparkles className="h-6 w-6 text-purple-500" />
+          <h1 className="text-xl font-semibold flex items-center gap-2">
+            <Sparkles className="h-5 w-5 text-purple-500" />
             AI Research Pipeline
           </h1>
           <p className="text-muted-foreground text-sm mt-1">

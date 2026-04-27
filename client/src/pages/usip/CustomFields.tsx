@@ -115,7 +115,7 @@ export default function CustomFields() {
           <div className="flex items-center gap-3">
             <SlidersHorizontal className="h-6 w-6 text-purple-500" />
             <div>
-              <h1 className="text-2xl font-bold">Custom Fields</h1>
+              <h1 className="text-xl font-semibold">Custom Fields</h1>
               <p className="text-muted-foreground text-sm">Define additional fields for each entity type</p>
             </div>
           </div>

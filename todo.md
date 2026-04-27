@@ -1787,3 +1787,26 @@
 - [x] UI: reasonFilter persisted in URL as ?reason= query param (read on mount, update on change)
 - [x] UI: Run history popover on Rejections tab header showing last 20 runs with timestamp, threshold, processed, requalified
 - [x] UI: ICP suggestion banner auto-dismissed when Re-evaluate All dialog opens
+
+## Round 30 — Full heading/title/label audit & fix
+- [x] Global: index.css heading hierarchy tokens (h1-h4 sizes, weights, line-heights)
+- [x] Shell/PageHeader: consistent padding, title size, breadcrumb alignment
+- [x] DashboardLayout: sidebar nav label sizes and spacing
+- [x] Dashboard page: stat card titles, section headers, chart titles
+- [x] Inbox page: heading, notification type labels, empty state
+- [x] My Mailbox page: section headers, email list labels
+- [x] My Calendar page: page title, event labels
+- [x] ARE Hub page: page title, section headers, stat labels
+- [x] ICP Agent page: page title, section/subsection headers
+- [x] Campaigns page: page title, table column headers, status labels
+- [x] ARE Settings page: section headers, form labels
+- [x] ARE Campaign Detail: all tab headings, subsection headers, card titles
+- [x] Leads page: page title, table headers, filter labels
+- [x] Contacts page: page title, table headers
+- [x] Accounts page: page title, table headers
+- [x] Pipeline page: page title, stage column headers
+- [x] Pipeline Alerts page: page title, alert labels
+- [x] Import Contacts page: step headers, field labels
+- [x] Data Health page: section headers, metric labels
+- [x] Sequences page: page title, step labels
+- [x] Settings pages: section headers, form labels

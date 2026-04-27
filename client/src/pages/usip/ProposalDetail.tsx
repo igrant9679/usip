@@ -138,7 +138,7 @@ function OverviewTab({ proposal, onRefetch }: { proposal: any; onRefetch: () => 
     return (
       <div className="space-y-4 max-w-2xl">
         <div className="flex items-center justify-between mb-2">
-          <h3 className="font-semibold">Edit Proposal Details</h3>
+          <h3 className="text-sm font-semibold text-foreground">Edit Proposal Details</h3>
           <Button variant="ghost" size="sm" onClick={() => setEditing(false)}>Cancel</Button>
         </div>
         <div>
@@ -278,7 +278,7 @@ function OverviewTab({ proposal, onRefetch }: { proposal: any; onRefetch: () => 
                 <Timer className="size-3" />
                 Proposal Expiry
               </div>
-              <div className={`text-sm font-medium ${isExpired ? "text-red-400" : daysLeft <= 7 ? "text-orange-400" : "text-foreground"}`}>
+              <div className={`text-sm font-medium ${isExpired ? "text-red-600" : daysLeft <= 7 ? "text-orange-600" : "text-foreground"}`}>
                 {expDate.toLocaleDateString()}
                 <span className="ml-2 text-xs font-normal opacity-80">({label})</span>
               </div>
@@ -289,7 +289,7 @@ function OverviewTab({ proposal, onRefetch }: { proposal: any; onRefetch: () => 
       {proposal.skipAutoExtend && (
         <div className="flex items-center gap-2 text-xs text-muted-foreground bg-muted/40 border border-border rounded-lg px-3 py-2">
           <AlertTriangle className="size-3.5 text-amber-400 shrink-0" />
-          Auto-extend is <span className="font-medium text-amber-400">disabled</span> for this proposal (workspace rule overridden).
+          Auto-extend is <span className="font-medium text-amber-600">disabled</span> for this proposal (workspace rule overridden).
         </div>
       )}
       {/* ── Pipeline Integration Panel ── */}
@@ -509,7 +509,7 @@ function ContentTab({ proposal, sections, onRefetch }: { proposal: any; sections
       {/* Editor */}
       <div className="flex-1 flex flex-col gap-3 min-w-0">
         <div className="flex items-center justify-between">
-          <h3 className="font-semibold text-foreground">
+          <h3 className="text-sm font-semibold text-foreground">
             {SECTION_KEYS.find((s) => s.key === activeSection)?.label}
           </h3>
           <div className="flex items-center gap-2">
@@ -543,7 +543,7 @@ function ContentTab({ proposal, sections, onRefetch }: { proposal: any; sections
           className="flex-1 min-h-[400px] resize-none font-mono text-sm"
         />
         {editContent !== null && editContent !== (sectionMap[activeSection] ?? "") && (
-          <p className="text-xs text-amber-400">Unsaved changes</p>
+          <p className="text-xs text-amber-600">Unsaved changes</p>
         )}
       </div>
     </div>
@@ -846,13 +846,13 @@ function ShareTab({ proposal, onRefetch }: { proposal: any; onRefetch: () => voi
             </Button>
           </div>
           {!hasClientEmail && (
-            <p className="text-xs text-amber-400">
+            <p className="text-xs text-amber-600">
               Add a client email address in the Overview tab to enable "Send to Client".
             </p>
           )}
           {proposal.sentAt && (
             <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <CheckCircle2 className="size-3 text-emerald-400 shrink-0" />
+              <CheckCircle2 className="size-3 text-emerald-600 shrink-0" />
               Last sent {new Date(proposal.sentAt).toLocaleString()}
               {proposal.clientEmail && (
                 <span className="text-muted-foreground/60">to {proposal.clientEmail}</span>
@@ -908,7 +908,7 @@ function ShareTab({ proposal, onRefetch }: { proposal: any; onRefetch: () => voi
             <div className="bg-muted/40 rounded-lg p-3 border border-border text-sm">
               <p className="text-muted-foreground text-xs mb-1">Sending to</p>
               <p className="font-medium">{proposal.clientName}</p>
-              <p className="text-teal-400 text-xs">{proposal.clientEmail}</p>
+              <p className="text-teal-600 text-xs">{proposal.clientEmail}</p>
             </div>
             {/* Sending account picker */}
             <div>
@@ -1067,7 +1067,7 @@ function ScoreSparkline({ proposalId }: { proposalId: number }) {
                 return (
                   <div className="bg-popover border border-border rounded px-2 py-1 text-xs shadow-md">
                     <span className="text-muted-foreground">{d.date}</span>
-                    <span className="ml-2 font-semibold text-teal-400">{d.score}/100</span>
+                    <span className="ml-2 font-semibold text-teal-600">{d.score}/100</span>
                   </div>
                 );
               }}

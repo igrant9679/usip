@@ -62,7 +62,7 @@ import { useTheme } from "@/contexts/ThemeContext";
 import { Moon, Sun } from "lucide-react";
 
 // ── Accent colour context ────────────────────────────────────────────────────
-const AccentContext = createContext<string>("#60A5FA");
+const AccentContext = createContext<string>("#1D4ED8");
 export function useAccentColor() { return useContext(AccentContext); }
 
 type NavItem = { href: string; label: string; icon: any };
@@ -71,9 +71,9 @@ type NavGroup = { label: string; items: NavItem[]; color: string; activeColor: s
 const NAV: NavGroup[] = [
   {
     label: "Overview",
-    color: "#60A5FA",
-    activeColor: "#60A5FA",
-    activeBg: "rgba(96,165,250,0.12)",
+    color: "#1D4ED8",
+    activeColor: "#1D4ED8",
+    activeBg: "rgba(29,78,216,0.10)",
     items: [
       { href: "/", label: "Dashboard", icon: LayoutDashboard },
       { href: "/inbox", label: "Inbox", icon: Inbox },
@@ -83,9 +83,9 @@ const NAV: NavGroup[] = [
   },
   {
     label: "Revenue Engine",
-    color: "#34D399",
-    activeColor: "#34D399",
-    activeBg: "rgba(52,211,153,0.12)",
+    color: "#059669",
+    activeColor: "#059669",
+    activeBg: "rgba(5,150,105,0.10)",
     items: [
       { href: "/are", label: "ARE Hub", icon: Bot },
       { href: "/are/icp", label: "ICP Agent", icon: Cpu },
@@ -95,9 +95,9 @@ const NAV: NavGroup[] = [
   },
   {
     label: "Acquire",
-    color: "#FCD34D",
-    activeColor: "#FCD34D",
-    activeBg: "rgba(252,211,77,0.12)",
+    color: "#B45309",
+    activeColor: "#B45309",
+    activeBg: "rgba(180,83,9,0.10)",
     items: [
       { href: "/leads", label: "Leads", icon: Target },
       { href: "/contacts", label: "Contacts", icon: Users },
@@ -110,9 +110,9 @@ const NAV: NavGroup[] = [
   },
   {
     label: "Engage",
-    color: "#C084FC",
-    activeColor: "#C084FC",
-    activeBg: "rgba(192,132,252,0.12)",
+    color: "#7C3AED",
+    activeColor: "#7C3AED",
+    activeBg: "rgba(124,58,237,0.10)",
     items: [
       { href: "/segments", label: "Segments", icon: Filter },
       { href: "/segment-rules", label: "Segment Auto-Enroll", icon: Zap },
@@ -134,9 +134,9 @@ const NAV: NavGroup[] = [
   },
   {
     label: "Retain",
-    color: "#F87171",
-    activeColor: "#F87171",
-    activeBg: "rgba(248,113,113,0.12)",
+    color: "#DC2626",
+    activeColor: "#DC2626",
+    activeBg: "rgba(220,38,38,0.10)",
     items: [
       { href: "/customers", label: "Customers", icon: Heart },
       { href: "/renewals", label: "Renewals", icon: CalendarClock },
@@ -145,9 +145,9 @@ const NAV: NavGroup[] = [
   },
   {
     label: "Operate",
-    color: "#2DD4BF",
-    activeColor: "#2DD4BF",
-    activeBg: "rgba(45,212,191,0.12)",
+    color: "#0F766E",
+    activeColor: "#0F766E",
+    activeBg: "rgba(15,118,110,0.10)",
     items: [
       { href: "/tasks", label: "Tasks", icon: ListChecks },
       { href: "/workflows", label: "Workflows", icon: Workflow },
@@ -162,9 +162,9 @@ const NAV: NavGroup[] = [
   },
   {
     label: "Admin",
-    color: "#94A3B8",
-    activeColor: "#94A3B8",
-    activeBg: "rgba(148,163,184,0.12)",
+    color: "#475569",
+    activeColor: "#475569",
+    activeBg: "rgba(71,85,105,0.10)",
     items: [
       { href: "/team", label: "Team", icon: Users },
       { href: "/lead-scoring", label: "Lead Scoring", icon: Target },
@@ -202,7 +202,7 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
 
   // Derive current category accent from active route
   const activeGroup = effectiveNav.find(g => g.items.some(i => i.href === location || (i.href !== "/" && i.href !== homeDashboardHref && location.startsWith(i.href)) || i.href === location));
-  const accentColor = activeGroup?.color ?? "#60A5FA";
+  const accentColor = activeGroup?.color ?? "#1D4ED8";
 
   // close dropdowns/drawers on route change
   useEffect(() => {
@@ -228,7 +228,7 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
       )}>
         <div className="px-4 pt-4 pb-3 border-b border-white/10">
           <div className="flex items-center gap-2 mb-1">
-            <svg className="size-5 text-[#60A5FA] shrink-0" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2L4.09 12.97 12 12l-1 9 8.91-10.97L12 11l1-9z"/></svg>
+            <svg className="size-5 text-[#1D4ED8] shrink-0" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2L4.09 12.97 12 12l-1 9 8.91-10.97L12 11l1-9z"/></svg>
             <span className="text-[18px] font-bold tracking-tight text-white">Velocity</span>
           </div>
           <div className="text-[9.5px] text-[#A5B4FC] leading-tight pl-0.5">The Unified Revenue Intelligence Platform</div>
