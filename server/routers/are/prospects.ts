@@ -29,6 +29,7 @@ import {
   prospectIntelligence,
   prospectNotes,
   prospectQueue,
+  reevalRuns,
   users,
   workspaceMembers,
 } from "../../../drizzle/schema";
@@ -1095,6 +1096,46 @@ export const prospectsRouter = router({
           console.error("[reEvaluateAll] Failed for prospect", prospect.id, e);
         }
       }
+      // Log the run to reeval_runs for history tracking
+      try {
+        await db.insert(reevalRuns).values({
+          workspaceId: ctx.workspace.id,
+          campaignId: input.campaignId,
+          createdByUserId: ctx.user.id,
+          thresholdUsed: autoApproveThreshold,
+          processed: rejected.length,
+          requalified,
+        });
+      } catch (e) {
+        console.error("[reEvaluateAll] Failed to log run history", e);
+      }
       return { processed: rejected.length, requalified, threshold: autoApproveThreshold };
+    }),
+
+  getReevalHistory: workspaceProcedure
+    .input(z.object({ campaignId: z.number(), limit: z.number().min(1).max(50).default(20) }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
+      const rows = await db
+        .select({
+          id: reevalRuns.id,
+          thresholdUsed: reevalRuns.thresholdUsed,
+          processed: reevalRuns.processed,
+          requalified: reevalRuns.requalified,
+          runAt: reevalRuns.runAt,
+          runnerName: users.name,
+        })
+        .from(reevalRuns)
+        .leftJoin(users, eq(reevalRuns.createdByUserId, users.id))
+        .where(
+          and(
+            eq(reevalRuns.campaignId, input.campaignId),
+            eq(reevalRuns.workspaceId, ctx.workspace.id),
+          )
+        )
+        .orderBy(desc(reevalRuns.runAt))
+        .limit(input.limit);
+      return rows;
     }),
 });

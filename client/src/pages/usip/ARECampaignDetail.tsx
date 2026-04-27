@@ -14,6 +14,7 @@
  *   - Signal feed with sentiment colour coding and action badges
  */
 import { Shell, PageHeader, StatCard, EmptyState } from "@/components/usip/Shell";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -34,6 +35,7 @@ import { trpc } from "@/lib/trpc";
 import {
   Activity,
   ArrowLeft,
+  History,
   AtSign,
   BarChart2,
   Download,
@@ -72,8 +74,8 @@ import {
   XCircle,
   Zap,
 } from "lucide-react";
-import { useState, useRef } from "react";
-import { Link, useParams } from "wouter";
+import { useState, useRef, useEffect } from "react";
+import { Link, useParams, useLocation } from "wouter";
 import { toast } from "sonner";
 
 /* ─── constants ────────────────────────────────────────────────────────────── */
@@ -725,6 +727,7 @@ export default function ARECampaignDetail() {
   const { data: signals } = trpc.are.execution.getSignalLog.useQuery({ campaignId, limit: 50 });
   const { data: abVariants } = trpc.are.prospects.getAbVariants.useQuery({ campaignId });
   const { data: rejectionStats } = trpc.are.prospects.getRejectionStats.useQuery({ campaignId });
+  const { data: reevalHistory } = trpc.are.prospects.getReevalHistory.useQuery({ campaignId });
   const { data: csvData, refetch: fetchCsv } = trpc.are.prospects.exportRejections.useQuery(
     { campaignId },
     { enabled: false }
@@ -796,8 +799,28 @@ export default function ARECampaignDetail() {
   const [rejectDialogOpen, setRejectDialogOpen] = useState(false);
   const [reEvaluateAllConfirmOpen, setReEvaluateAllConfirmOpen] = useState(false);
   const [thresholdOverride, setThresholdOverride] = useState<number | null>(null);
-  const [reasonFilter, setReasonFilter] = useState<string | null>(null);
   const [showIcpSuggestion, setShowIcpSuggestion] = useState(false);
+  // URL-persisted reason filter
+  const [location, setLocation] = useLocation();
+  const urlParams = new URLSearchParams(typeof window !== "undefined" ? window.location.search : "");
+  const [reasonFilter, setReasonFilterState] = useState<string | null>(
+    urlParams.get("reason") || null
+  );
+  const setReasonFilter = (r: string | null) => {
+    setReasonFilterState(r);
+    const params = new URLSearchParams(window.location.search);
+    if (r) params.set("reason", r);
+    else params.delete("reason");
+    const newSearch = params.toString();
+    setLocation(window.location.pathname + (newSearch ? `?${newSearch}` : ""), { replace: true });
+  };
+  // Sync reasonFilter from URL on mount
+  useEffect(() => {
+    const p = new URLSearchParams(window.location.search);
+    const r = p.get("reason");
+    if (r !== reasonFilter) setReasonFilterState(r);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [rejectReason, setRejectReason] = useState("");
   const [dossierTab, setDossierTab] = useState<"intel" | "notes">("intel");
   const bulkApprove = trpc.are.prospects.bulkApprove.useMutation({
@@ -1508,11 +1531,62 @@ export default function ARECampaignDetail() {
                     Use this log to refine your ICP or adjust scraper sources.
                   </p>
                   <div className="flex items-center gap-2">
+                    {/* ── Run history popover ── */}
+                    <Popover>
+                      <PopoverTrigger asChild>
+                        <Button size="sm" variant="ghost" className="text-xs h-7 gap-1.5 text-muted-foreground">
+                          <History className="size-3" />
+                          History
+                          {(reevalHistory?.length ?? 0) > 0 && (
+                            <span className="ml-0.5 rounded-full bg-violet-500/20 text-violet-600 dark:text-violet-400 text-[10px] px-1.5 py-0 tabular-nums">
+                              {reevalHistory!.length}
+                            </span>
+                          )}
+                        </Button>
+                      </PopoverTrigger>
+                      <PopoverContent align="end" className="w-80 p-0">
+                        <div className="px-3 py-2 border-b">
+                          <p className="text-xs font-medium">Re-evaluation Run History</p>
+                          <p className="text-[10px] text-muted-foreground">Last {reevalHistory?.length ?? 0} runs for this campaign</p>
+                        </div>
+                        <div className="max-h-64 overflow-y-auto divide-y">
+                          {(reevalHistory?.length ?? 0) === 0 ? (
+                            <p className="text-[11px] text-muted-foreground text-center py-4">No runs yet</p>
+                          ) : reevalHistory!.map((run) => (
+                            <div key={run.id} className="px-3 py-2 text-[11px] flex items-start justify-between gap-2">
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-1.5">
+                                  <span className="font-medium tabular-nums">
+                                    {run.requalified > 0 ? (
+                                      <span className="text-emerald-600 dark:text-emerald-400">{run.requalified} re-qualified</span>
+                                    ) : (
+                                      <span className="text-muted-foreground">0 re-qualified</span>
+                                    )}
+                                  </span>
+                                  <span className="text-muted-foreground">/ {run.processed} scored</span>
+                                </div>
+                                <div className="text-[10px] text-muted-foreground mt-0.5">
+                                  Threshold: <span className="text-violet-600 dark:text-violet-400 font-medium">{run.thresholdUsed}</span>
+                                  {run.runnerName && <> · {run.runnerName}</>}
+                                </div>
+                              </div>
+                              <span className="text-[10px] text-muted-foreground shrink-0">
+                                {new Date(run.runAt).toLocaleDateString([], { month: "short", day: "numeric" })}
+                                {" "}{new Date(run.runAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </PopoverContent>
+                    </Popover>
                     <Button
                       size="sm"
                       variant="outline"
                       className="text-xs h-7 gap-1.5"
-                      onClick={() => setReEvaluateAllConfirmOpen(true)}
+                      onClick={() => {
+                        setReEvaluateAllConfirmOpen(true);
+                        setShowIcpSuggestion(false);
+                      }}
                       disabled={reEvaluateAll.isPending}
                     >
                       {reEvaluateAll.isPending ? (

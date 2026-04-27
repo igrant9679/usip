@@ -1779,3 +1779,11 @@
 - [x] UI: Inline threshold number input inside Re-evaluate All confirmation dialog (overrides campaign default for this run)
 - [x] UI: Rejection reason bar chart bars are clickable to filter the rejection list to that reason
 - [x] UI: Zero-requalified ICP suggestion banner after re-evaluation run with link to ICP Agent
+
+## Round 29 — URL reason filter, reeval run history, ICP banner auto-dismiss
+- [x] DB: reeval_runs table (id, campaignId, workspaceId, runAt, thresholdUsed, processed, requalified, createdByUserId)
+- [x] Server: reEvaluateAll logs each run to reeval_runs table
+- [x] Server: getReevalHistory procedure returns last 20 runs for a campaign
+- [x] UI: reasonFilter persisted in URL as ?reason= query param (read on mount, update on change)
+- [x] UI: Run history popover on Rejections tab header showing last 20 runs with timestamp, threshold, processed, requalified
+- [x] UI: ICP suggestion banner auto-dismissed when Re-evaluate All dialog opens

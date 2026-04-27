@@ -2774,3 +2774,23 @@ export const areScrapeJobs = mysqlTable(
   }),
 );
 export type AreScrapeJob = typeof areScrapeJobs.$inferSelect;
+
+// ── ARE Re-evaluation Run History ─────────────────────────────────────────────
+export const reevalRuns = mysqlTable(
+  "reeval_runs",
+  {
+    id: int("id").primaryKey().autoincrement(),
+    workspaceId: int("workspaceId").notNull(),
+    campaignId: int("campaignId").notNull(),
+    createdByUserId: int("createdByUserId"),
+    thresholdUsed: int("thresholdUsed").notNull(),
+    processed: int("processed").notNull().default(0),
+    requalified: int("requalified").notNull().default(0),
+    runAt: timestamp("runAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    byCampaign: index("ix_rr_campaign").on(t.campaignId),
+    byWs: index("ix_rr_ws").on(t.workspaceId),
+  }),
+);
+export type ReevalRun = typeof reevalRuns.$inferSelect;

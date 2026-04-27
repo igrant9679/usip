@@ -323,6 +323,13 @@
       "when": 1777222755987,
       "tag": "0045_smooth_doctor_octopus",
       "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "5",
+      "when": 1777265822548,
+      "tag": "0046_low_wolfsbane",
+      "breakpoints": true
     }
   ]
 }
