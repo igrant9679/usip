@@ -330,7 +330,7 @@ export default function EmailDrafts() {
 
   return (
     <Shell title="Email Drafts">
-      <PageHeader title="Email Drafts" description="AI-generated outbound that requires human review before send.">
+      <PageHeader title="Email Drafts" description="AI-generated outbound that requires human review before send." pageKey="email-drafts">
         <div className="flex items-center gap-1 bg-secondary rounded-md p-0.5">
           {(["pending_review", "approved", "sent", "rejected", "all", "bounced"] as const).map((f) => (
             <button

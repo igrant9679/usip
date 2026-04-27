@@ -150,7 +150,7 @@ export default function EmailAnalytics() {
   return (
     <Shell title="Email Analytics">
       <PageHeader
-        title="Email Analytics"
+        title="Email Analytics" pageKey="email-analytics"
         description="Delivery, open, and click metrics for all outbound emails."
       />
 

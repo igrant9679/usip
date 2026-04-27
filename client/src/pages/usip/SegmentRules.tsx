@@ -48,7 +48,7 @@ export default function SegmentRules() {
 
   return (
     <Shell>
-      <PageHeader title="Segment Auto-Enroll" description="Connect audience segments to sequences — contacts matching a segment are enrolled automatically every hour.">
+      <PageHeader title="Segment Auto-Enroll" description="Connect audience segments to sequences — contacts matching a segment are enrolled automatically every hour." pageKey="segment-rules">
         {isAdmin && (
           <Button size="sm" variant="outline" onClick={() => runNow.mutate()} disabled={runNow.isPending}>
             {runNow.isPending ? <Loader2 className="size-4 animate-spin mr-1" /> : <Play className="size-4 mr-1" />}

@@ -70,7 +70,7 @@ export default function Inbox() {
 
   return (
     <Shell title="Inbox">
-      <PageHeader title="Inbox" description="Email replies, mentions, AI alerts, churn flags, and workflow events.">
+      <PageHeader title="Inbox" description="Email replies, mentions, AI alerts, churn flags, and workflow events." pageKey="inbox">
         <Button variant="outline" className="bg-card" onClick={() => markAll.mutate()}>
           <CheckCheck className="size-4 mr-2" /> Mark all read
         </Button>

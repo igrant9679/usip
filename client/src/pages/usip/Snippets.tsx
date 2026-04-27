@@ -159,7 +159,7 @@ export default function SnippetsPage() {
   return (
     <Shell title="Snippet Library">
       <PageHeader
-        title="Snippet Library"
+        title="Snippet Library" pageKey="snippets"
         description="Reusable text blocks for quick insertion into emails and sequences"
       >
         <Button size="sm" onClick={openCreate}>

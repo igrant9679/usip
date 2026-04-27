@@ -1136,7 +1136,7 @@ export default function ProposalDetail() {
         </Button>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <h1 className="text-lg font-semibold truncate">{proposal.title}</h1>
+            <h1 className="text-lg font-semibold line-clamp-1" title={proposal.title}>{proposal.title}</h1>
             <StatusBadge status={proposal.status as ProposalStatus} />
             {(proposal as any).engagementScore > 0 && (
               <EngagementScoreBadge score={(proposal as any).engagementScore} />

@@ -241,7 +241,7 @@ export default function ImportContacts() {
   return (
     <Shell>
       <PageHeader
-        title="Import Contacts"
+        title="Import Contacts" pageKey="import-contacts"
         description="Upload a CSV file to import contacts into your workspace"
       />
 

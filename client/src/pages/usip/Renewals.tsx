@@ -24,7 +24,7 @@ export default function Renewals() {
 
   return (
     <Shell title="Renewals">
-      <PageHeader title="Renewal pipeline" description="Customers grouped by days to renewal." />
+      <PageHeader title="Renewal pipeline" description="Customers grouped by days to renewal." pageKey="renewals" />
       <div className="p-4 overflow-x-auto">
         <div className="flex gap-3 min-w-max">
           {STAGES.map((s) => {

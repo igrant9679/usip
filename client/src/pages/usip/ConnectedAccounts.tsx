@@ -283,7 +283,7 @@ export default function ConnectedAccounts() {
   return (
     <Shell>
       <PageHeader
-        title="Connected Accounts"
+        title="Connected Accounts" pageKey="connected-accounts"
         subtitle="Manage your multichannel connections — LinkedIn, email, messaging, and more"
         actions={
           <div className="flex gap-2">

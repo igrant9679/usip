@@ -351,7 +351,7 @@ export default function Dashboard() {
 
   return (
     <Shell title="Dashboard">
-      <PageHeader title="Dashboard" description="Your unified revenue intelligence overview.">
+      <PageHeader title="Dashboard" description="Your unified revenue intelligence overview." pageKey="dashboard">
         {/* Last refreshed + Refresh button */}
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <span>Updated {fmtRelative(lastRefreshed)}</span>

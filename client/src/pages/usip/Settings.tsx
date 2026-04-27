@@ -55,7 +55,7 @@ export default function Settings() {
 
   return (
     <Shell title="Settings">
-      <PageHeader title="Workspace settings" description="Administrative configuration for this workspace." />
+      <PageHeader title="Workspace settings" description="Administrative configuration for this workspace." pageKey="settings" />
       <div className="p-6 grid grid-cols-1 md:grid-cols-[220px_1fr] gap-6">
         {/* Tab nav */}
         <nav className="space-y-1">

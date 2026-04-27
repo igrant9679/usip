@@ -313,7 +313,7 @@ export default function Accounts() {
 
   return (
     <Shell title="Accounts">
-      <PageHeader title="Accounts" description="Companies you sell to. Parent → child rollup of ARR is computed automatically.">
+      <PageHeader title="Accounts" description="Companies you sell to. Parent → child rollup of ARR is computed automatically." pageKey="accounts">
         {someSelected && (
           <>
             <Button variant="outline" onClick={() => setSendEmailOpen(true)} className="gap-2">

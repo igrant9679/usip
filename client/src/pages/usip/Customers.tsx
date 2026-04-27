@@ -32,7 +32,7 @@ export default function Customers() {
 
   return (
     <Shell title="Customers">
-      <PageHeader title="Customers" description="Health, churn risk, expansion. Click a row for detail." />
+      <PageHeader title="Customers" description="Health, churn risk, expansion. Click a row for detail." pageKey="customers" />
       <div className="p-6 space-y-4">
         {kpis && (
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">

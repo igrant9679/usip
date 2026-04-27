@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Shell } from "@/components/usip/Shell";
+import { Shell, PageHeader } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -404,23 +404,13 @@ export default function AIPipelineQueue() {
 
   return (
     <Shell title="AI Pipeline">
-      <div className="p-6 space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-semibold flex items-center gap-2">
-            <Sparkles className="h-5 w-5 text-purple-500" />
-            AI Research Pipeline
-          </h1>
-          <p className="text-muted-foreground text-sm mt-1">
-            5-stage AI pipeline: Org Research → Contact Research → Fit Analysis → 3-Variant Drafts → Review Queue
-          </p>
-        </div>
+      <PageHeader title="AI Draft Queue" description="5-stage AI pipeline: Org Research → Contact Research → Fit Analysis → 3-Variant Drafts → Review Queue" pageKey="ai-pipeline">
         <Button variant="outline" size="sm" onClick={handleRefresh}>
           <RefreshCw className="h-4 w-4 mr-1" />
           Refresh
         </Button>
-      </div>
+      </PageHeader>
+      <div className="p-6 space-y-6">
 
       {/* Stats row */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">

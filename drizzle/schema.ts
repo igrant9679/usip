@@ -2794,3 +2794,19 @@ export const reevalRuns = mysqlTable(
   }),
 );
 export type ReevalRun = typeof reevalRuns.$inferSelect;
+
+// ── Page Descriptions (editable per-page subtitles) ───────────────────────────
+export const pageDescriptions = mysqlTable(
+  "page_descriptions",
+  {
+    id: int("id").primaryKey().autoincrement(),
+    pageKey: varchar("pageKey", { length: 100 }).notNull().unique(),
+    description: text("description").notNull(),
+    updatedByUserId: int("updatedByUserId"),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    byKey: index("ix_pd_key").on(t.pageKey),
+  }),
+);
+export type PageDescription = typeof pageDescriptions.$inferSelect;

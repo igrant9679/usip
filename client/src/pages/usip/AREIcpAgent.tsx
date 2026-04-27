@@ -588,7 +588,7 @@ export default function AREIcpAgent() {
     <Shell title="ICP Agent">
       {/* ── Header ── */}
       <PageHeader
-        title="ICP Agent"
+        title="ICP Agent" pageKey="are-icp-agent"
         description="Analyses every won and lost deal in your CRM using an LLM to infer your Ideal Customer Profile — continuously updated as new deals close."
       >
         {icp?.confidenceScore != null && (

@@ -1,4 +1,4 @@
-import { Shell } from "@/components/usip/Shell";
+import { Shell, PageHeader } from "@/components/usip/Shell";
 import { useState, useMemo, useEffect } from "react";
 import { useLocation, useSearch } from "wouter";
 import { trpc } from "@/lib/trpc";
@@ -567,17 +567,7 @@ export default function Proposals() {
   return (
     <Shell title="Proposals">
     <div className="flex flex-col h-full">
-      {/* Header */}
-      <div className="flex items-center justify-between px-6 py-4 border-b border-border shrink-0">
-        <div>
-          <h1 className="text-xl font-semibold text-foreground flex items-center gap-2">
-            <ClipboardList className="size-5 text-teal-600" />
-            Proposals
-          </h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            Create, manage, and track client proposals
-          </p>
-        </div>
+      <PageHeader title="Proposals" description="Create, manage, and track client proposals" pageKey="proposals">
         <div className="flex items-center gap-2">
           <Button
             variant="outline"
@@ -599,7 +589,7 @@ export default function Proposals() {
             New Proposal
           </Button>
         </div>
-      </div>
+      </PageHeader>
       {/* Bulk action bar */}
       {selectedIds.size > 0 && (
         <div className="flex items-center gap-3 px-6 py-2.5 bg-teal-500/10 border-b border-teal-500/30 shrink-0">

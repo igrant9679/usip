@@ -36,6 +36,7 @@ import { calendarRouter } from "./routers/calendar";
 import { proposalsRouter } from "./routers/proposals";
 import { unipileRouter } from "./routers/unipile";
 import { areRouter } from "./routers/are";
+import { pageDescriptionsRouter } from "./routers/pageDescriptions";
 
 export const appRouter = router({
   system: systemRouter,
@@ -106,6 +107,7 @@ export const appRouter = router({
   unipile: unipileRouter,
   proposals: proposalsRouter,
   are: areRouter,
+  pageDescriptions: pageDescriptionsRouter,
 });
 
 export type AppRouter = typeof appRouter;

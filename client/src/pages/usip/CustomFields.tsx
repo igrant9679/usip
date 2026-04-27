@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { trpc } from "@/lib/trpc";
-import { Shell } from "@/components/usip/Shell";
+import { Shell, PageHeader } from "@/components/usip/Shell";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -109,20 +109,12 @@ export default function CustomFields() {
 
   return (
     <Shell title="Custom Fields">
+      <PageHeader title="Custom Fields" description="Define additional fields for each entity type" pageKey="custom-fields">
+        <Button onClick={openAdd} size="sm">
+          <Plus className="h-4 w-4 mr-1" /> Add Field
+        </Button>
+      </PageHeader>
       <div className="p-6 max-w-4xl mx-auto space-y-6">
-        {/* Header */}
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <SlidersHorizontal className="h-6 w-6 text-purple-500" />
-            <div>
-              <h1 className="text-xl font-semibold">Custom Fields</h1>
-              <p className="text-muted-foreground text-sm">Define additional fields for each entity type</p>
-            </div>
-          </div>
-          <Button onClick={openAdd} size="sm">
-            <Plus className="h-4 w-4 mr-1" /> Add Field
-          </Button>
-        </div>
 
         {/* Entity tabs */}
         <div className="flex gap-2 flex-wrap">

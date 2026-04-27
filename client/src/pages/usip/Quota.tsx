@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react";
 import { trpc } from "@/lib/trpc";
-import { Shell } from "@/components/usip/Shell";
+import { Shell, PageHeader } from "@/components/usip/Shell";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -99,32 +99,24 @@ export default function Quota() {
 
   return (
     <Shell title="Quota Management">
-      <div className="p-6 max-w-5xl mx-auto space-y-6">
-        {/* Header */}
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <TrendingUp className="h-6 w-6 text-blue-500" />
-            <div>
-              <h1 className="text-xl font-semibold">Quota Management</h1>
-              <p className="text-muted-foreground text-sm">Set and track revenue, deal, and activity targets per rep</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-3">
-            <Select value={period} onValueChange={setPeriod}>
-              <SelectTrigger className="w-36">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {periodOptions.map((p) => (
-                  <SelectItem key={p} value={p}>{p}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Button onClick={openAdd} size="sm">
-              <Plus className="h-4 w-4 mr-1" /> Add Target
-            </Button>
-          </div>
+      <PageHeader title="Quota Management" description="Set and track revenue, deal, and activity targets per rep" pageKey="quota">
+        <div className="flex items-center gap-3">
+          <Select value={period} onValueChange={setPeriod}>
+            <SelectTrigger className="w-36">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {periodOptions.map((p) => (
+                <SelectItem key={p} value={p}>{p}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Button onClick={openAdd} size="sm">
+            <Plus className="h-4 w-4 mr-1" /> Add Target
+          </Button>
         </div>
+      </PageHeader>
+      <div className="p-6 max-w-5xl mx-auto space-y-6">
 
         {/* Quota cards */}
         {targets.length === 0 && (

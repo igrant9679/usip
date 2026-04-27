@@ -589,7 +589,7 @@ export default function Campaigns() {
 
   return (
     <Shell title="Campaigns">
-      <PageHeader title="Outreach Campaigns" description="Configure, launch, and analyze multi-step email campaigns.">
+      <PageHeader title="Outreach Campaigns" description="Configure, launch, and analyze multi-step email campaigns." pageKey="campaigns">
         <Button onClick={() => setOpenCreate(true)}>
           <Plus className="h-4 w-4 mr-1" /> New Campaign
         </Button>

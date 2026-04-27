@@ -94,7 +94,7 @@ export default function ARECampaigns() {
   return (
     <Shell title="ARE Campaigns">
       <PageHeader
-        title="Autonomous Campaigns"
+        title="Autonomous Campaigns" pageKey="are-campaigns"
         description="Each campaign runs its own AI pipeline: discover → enrich → sequence → execute → learn."
       >
         <Button onClick={() => setShowCreate(true)} className="gap-2">

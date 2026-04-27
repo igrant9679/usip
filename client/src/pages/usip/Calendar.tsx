@@ -460,7 +460,7 @@ export default function CalendarPage() {
 
   return (
     <Shell title="My Calendar">
-      <PageHeader title="My Calendar" description="View and manage meetings, calls, and events across all your connected calendars." />
+      <PageHeader title="My Calendar" description="View and manage meetings, calls, and events across all your connected calendars." pageKey="calendar" />
       <div className="h-[calc(100vh-8.5rem)] flex overflow-hidden">
         {/* Left panel */}
         <div className="w-56 shrink-0 border-r bg-muted/20 flex flex-col overflow-hidden">

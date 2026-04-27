@@ -15,7 +15,7 @@ export default function DashboardHome2() {
 
   return (
     <Shell title="Home 2">
-      <PageHeader title="Welcome back" description="Your unified pipeline, retention, and engagement overview." />
+      <PageHeader title="Welcome back" description="Your unified pipeline, retention, and engagement overview." pageKey="dashboard-home2" />
       <div className="p-6 space-y-6">
         {isLoading ? (
           <div className="flex items-center gap-2 text-muted-foreground"><Loader2 className="size-4 animate-spin" /> Loading workspace…</div>

@@ -56,7 +56,7 @@ export default function NotificationPrefs() {
 
   return (
     <Shell title="Notification Preferences">
-      <PageHeader title="Notification Preferences" description="Control which events trigger email notifications for your account.">
+      <PageHeader title="Notification Preferences" description="Control which events trigger email notifications for your account." pageKey="notification-prefs">
         <Button onClick={handleSave} disabled={!dirty || update.isPending}>
           {update.isPending ? "Saving…" : "Save preferences"}
         </Button>

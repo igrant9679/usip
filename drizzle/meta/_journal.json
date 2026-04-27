@@ -330,6 +330,13 @@
       "when": 1777265822548,
       "tag": "0046_low_wolfsbane",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "5",
+      "when": 1777318472324,
+      "tag": "0047_clear_rictor",
+      "breakpoints": true
     }
   ]
 }

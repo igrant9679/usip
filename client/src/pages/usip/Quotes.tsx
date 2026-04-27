@@ -33,7 +33,7 @@ export default function Quotes() {
 
   return (
     <Shell title="Quotes (CPQ)">
-      <PageHeader title="Quotes & proposals" description="Configure → price → quote. Generates a print-ready document.">
+      <PageHeader title="Quotes & proposals" description="Configure → price → quote. Generates a print-ready document." pageKey="quotes">
         <Button onClick={() => setOpenNew(true)}><Plus className="size-4" /> New quote</Button>
       </PageHeader>
       <div className="p-6">

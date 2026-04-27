@@ -753,7 +753,7 @@ export default function SendingAccounts() {
     <Shell title="Sending Accounts">
       <div className="space-y-6">
         <PageHeader
-          title="Sending Accounts"
+          title="Sending Accounts" pageKey="sending-accounts"
           description="Connect unlimited sending accounts across Gmail, Outlook, Amazon SES, or any SMTP provider."
         >
           <Button onClick={openAdd} className="gap-2">

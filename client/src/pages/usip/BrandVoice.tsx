@@ -160,7 +160,7 @@ export default function BrandVoicePage() {
   return (
     <Shell title="Brand Voice">
       <PageHeader
-        title="Brand Voice"
+        title="Brand Voice" pageKey="brand-voice"
         description="Define the tone, style, and persona for AI-generated emails"
       >
         <Button size="sm" onClick={handleSave} disabled={!isDirty || saveMutation.isPending}>

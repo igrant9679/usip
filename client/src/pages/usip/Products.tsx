@@ -15,7 +15,7 @@ export default function Products() {
 
   return (
     <Shell title="Product Catalog">
-      <PageHeader title="Product catalog" description="Used in quotes and as deal line items.">
+      <PageHeader title="Product catalog" description="Used in quotes and as deal line items." pageKey="products">
         <Button onClick={() => setOpen(true)}><Plus className="size-4" /> New product</Button>
       </PageHeader>
       <div className="p-6">

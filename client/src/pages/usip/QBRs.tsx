@@ -19,7 +19,7 @@ export default function QBRs() {
 
   return (
     <Shell title="QBRs">
-      <PageHeader title="Quarterly Business Reviews" description="Schedule, AI-prep, and complete QBRs.">
+      <PageHeader title="Quarterly Business Reviews" description="Schedule, AI-prep, and complete QBRs." pageKey="qbrs">
         <Button onClick={() => setOpen(true)}><Plus className="size-4" /> Schedule QBR</Button>
       </PageHeader>
       <div className="p-6 space-y-3">

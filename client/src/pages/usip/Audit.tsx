@@ -35,7 +35,7 @@ export default function Audit() {
 
   return (
     <Shell title="Audit log">
-      <PageHeader title="Audit log" description="All record creates, updates, and deletes with before/after values. Admin only." />
+      <PageHeader title="Audit log" description="All record creates, updates, and deletes with before/after values. Admin only." pageKey="audit" />
       <div className="p-6 space-y-3">
         <div className="flex flex-wrap items-center gap-2">
           {/* Entity type filter */}

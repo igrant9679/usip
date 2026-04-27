@@ -1820,3 +1820,15 @@
 - [x] Inbox page: uniform PageHeader with blue accent
 - [x] My Mailbox page: uniform PageHeader with blue accent
 - [x] My Calendar page: uniform PageHeader with blue accent
+
+## Round 32 — Uniform PageHeaders across all nav groups + editable descriptions
+- [x] DB: page_descriptions table (pageKey, description, updatedByUserId, updatedAt)
+- [x] Server: pageDescriptions.get and pageDescriptions.update procedures (admin-only update)
+- [x] Shell/PageHeader: line-clamp-1 + title tooltip on h1 (fix mobile truncation)
+- [x] Shell/PageHeader: inline edit pencil icon for description (admin only), saves to DB
+- [x] Revenue Engine pages: ARE Hub, ICP Agent, Campaigns, ARE Settings — add PageHeader (green accent)
+- [x] Acquire pages: Leads, Contacts, Import Contacts, Data Health, Accounts, Pipeline, Pipeline Alerts — add PageHeader (amber accent)
+- [x] Engage pages: Segments, Segment Auto-Enroll, Sequences, Email Drafts, Email Analytics, Opt-Out Management, Sending Accounts, Sender Pools, Email Builder, Snippet Library, AI Research Pipeline, AI Draft Queue, Unified Inbox, Connected Accounts, Social, Campaigns — add PageHeader (violet accent)
+- [x] Retain pages: Customers, Renewals, QBRs — add PageHeader (red accent)
+- [x] Operate pages: Tasks, Workflows, Dashboards, Products, Proposals, Quotes, Territories, Lead Routing, Quota Management — add PageHeader (teal accent)
+- [x] Admin pages: Team, Lead Scoring, Custom Fields, Prompt Templates, Brand Voice, Audit Log, SCIM, My LinkedIn, Settings — add PageHeader (slate accent)

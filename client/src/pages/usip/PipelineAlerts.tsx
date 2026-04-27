@@ -317,7 +317,7 @@ export default function PipelineAlerts() {
   return (
     <Shell title="Pipeline Alerts">
       <PageHeader
-        title="Pipeline Health Alerts"
+        title="Pipeline Health Alerts" pageKey="pipeline-alerts"
         description="Proactive alerts for at-risk opportunities — no activity, closing soon, missing contacts"
       >
         <Button variant="outline" size="sm" onClick={handleRefresh}>

@@ -392,7 +392,7 @@ export default function Dashboards() {
 
   return (
     <Shell>
-      <PageHeader title="Dashboards" description="Custom analytics dashboards with drag-to-resize widgets">
+      <PageHeader title="Dashboards" description="Custom analytics dashboards with drag-to-resize widgets" pageKey="dashboards">
         <Button size="sm" variant="outline" onClick={() => setOpenSched(true)}>
           <Send className="h-3.5 w-3.5 mr-1" /> Schedule
         </Button>

@@ -761,7 +761,7 @@ export default function Sequences() {
 
   return (
     <Shell title="Sequences">
-      <PageHeader title="Sequences" description="Multi-step outbound cadences with AI compose.">
+      <PageHeader title="Sequences" description="Multi-step outbound cadences with AI compose." pageKey="sequences">
         <Button onClick={() => setOpen(true)}><Plus className="size-4" /> New sequence</Button>
       </PageHeader>
       <div className="p-6 grid grid-cols-1 lg:grid-cols-3 gap-4">

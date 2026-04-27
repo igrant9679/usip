@@ -17,7 +17,7 @@ export default function Tasks() {
   });
   return (
     <Shell title="Tasks">
-      <PageHeader title="Tasks" description="What you need to do today and next.">
+      <PageHeader title="Tasks" description="What you need to do today and next." pageKey="tasks">
         <div className="flex items-center gap-1 bg-secondary rounded-md p-0.5">
           {(["open", "done", "all"] as const).map((f) => (
             <button key={f} onClick={() => setFilter(f)} className={`px-2 py-1 text-xs rounded ${filter === f ? "bg-card shadow-sm" : "text-muted-foreground"}`}>{f}</button>

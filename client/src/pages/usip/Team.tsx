@@ -344,7 +344,7 @@ export default function Team() {
 
   return (
     <Shell title="Team">
-      <PageHeader title="Workspace team" description="Members, roles, quotas, and access controls.">
+      <PageHeader title="Workspace team" description="Members, roles, quotas, and access controls." pageKey="team">
         {isAdmin && (
           <Button onClick={() => setInviteOpen(true)}>
             <UserPlus className="size-4" /> Invite

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Shell } from "@/components/usip/Shell";
+import { Shell, PageHeader } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -104,15 +104,8 @@ export default function ResearchPipeline() {
 
   return (
     <Shell title="Research Pipeline">
+      <PageHeader title="AI Research Pipeline" description="5-stage AI pipeline: prospect research → signals → angles → drafts → final" pageKey="research-pipeline" />
       <div className="p-6 max-w-5xl mx-auto space-y-6">
-      {/* Header */}
-      <div className="flex items-center gap-3">
-        <Sparkles className="h-6 w-6 text-emerald-500" />
-        <div>
-          <h1 className="text-xl font-semibold">AI Research-to-Draft Pipeline</h1>
-          <p className="text-muted-foreground text-sm">5-stage AI pipeline: prospect research → signals → angles → drafts → final</p>
-        </div>
-      </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Left: Start panel */}

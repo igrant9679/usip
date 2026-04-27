@@ -22,7 +22,7 @@ export default function SCIM() {
 
   return (
     <Shell title="SCIM">
-      <PageHeader title="SCIM provisioning" description="Connect Okta / Azure AD / Jumpcloud to provision users into this workspace.">
+      <PageHeader title="SCIM provisioning" description="Connect Okta / Azure AD / Jumpcloud to provision users into this workspace." pageKey="scim">
         <Button onClick={() => setOpen(true)}><Plus className="size-4" /> New provider</Button>
       </PageHeader>
       <div className="p-6 grid grid-cols-1 lg:grid-cols-2 gap-4">

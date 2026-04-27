@@ -235,7 +235,7 @@ export default function Leads() {
 
   return (
     <Shell title="Leads">
-      <PageHeader title="Leads" description="Inbound + outbound lead inbox with AI grading.">
+      <PageHeader title="Leads" description="Inbound + outbound lead inbox with AI grading." pageKey="leads">
         <Input placeholder="Search…" value={search} onChange={(e) => setSearch(e.target.value)} className="w-56" />
         {someSelected && (
           <>

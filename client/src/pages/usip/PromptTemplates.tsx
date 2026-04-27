@@ -149,7 +149,7 @@ export default function PromptTemplatesPage() {
   return (
     <Shell title="Prompt Templates">
       <PageHeader
-        title="Prompt Templates"
+        title="Prompt Templates" pageKey="prompt-templates"
         description="Versioned AI prompt templates for email generation — activate one per goal, use A/B groups for testing"
       >
         <Button size="sm" onClick={openCreate}>

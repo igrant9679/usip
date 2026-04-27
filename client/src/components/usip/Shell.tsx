@@ -55,12 +55,11 @@ import {
   Cpu,
   Radar,
 } from "lucide-react";
-import { ReactNode, useEffect, useState, createContext, useContext } from "react";
+import { ReactNode, useEffect, useState, useRef, createContext, useContext } from "react";
 import { Link, useLocation } from "wouter";
 import { PageTransition } from "@/components/PageTransition";
 import { useTheme } from "@/contexts/ThemeContext";
-import { Moon, Sun } from "lucide-react";
-
+import { Moon, Sun, Pencil, Check as CheckIcon, X as XIcon } from "lucide-react";
 // ── Accent colour context ────────────────────────────────────────────────────
 const AccentContext = createContext<string>("#1D4ED8");
 export function useAccentColor() { return useContext(AccentContext); }
@@ -402,8 +401,42 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
   );
 }
 
-export function PageHeader({ title, description, children }: { title: string; description?: string; children?: ReactNode }) {
+export function PageHeader({ title, description: defaultDescription, pageKey, children }: { title: string; description?: string; pageKey?: string; children?: ReactNode }) {
   const accent = useAccentColor();
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin" || user?.role === "super_admin";
+
+  // Load DB description if pageKey provided
+  const { data: dbDesc } = trpc.pageDescriptions.get.useQuery(
+    { pageKey: pageKey ?? "" },
+    { enabled: !!pageKey }
+  );
+  const updateDesc = trpc.pageDescriptions.update.useMutation();
+
+  const resolvedDescription = dbDesc?.description ?? defaultDescription;
+
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (editing) {
+      setDraft(resolvedDescription ?? "");
+      setTimeout(() => inputRef.current?.focus(), 0);
+    }
+  }, [editing]);
+
+  const handleSave = async () => {
+    if (!pageKey) return;
+    await updateDesc.mutateAsync({ pageKey, description: draft.trim() });
+    setEditing(false);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter") handleSave();
+    if (e.key === "Escape") setEditing(false);
+  };
+
   return (
     <div
       className="px-4 md:px-6 py-4 md:py-5 border-b flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4"
@@ -415,8 +448,43 @@ export function PageHeader({ title, description, children }: { title: string; de
       }}
     >
       <div className="flex-1 min-w-0">
-        <h1 className="text-lg md:text-xl font-semibold tracking-tight truncate" style={{ color: accent }}>{title}</h1>
-        {description && <p className="text-sm text-muted-foreground mt-0.5 line-clamp-2">{description}</p>}
+        <h1 className="text-lg md:text-xl font-semibold tracking-tight line-clamp-1" title={title} style={{ color: accent }}>{title}</h1>
+        <div className="flex items-center gap-1.5 mt-0.5 group/desc">
+          {editing ? (
+            <>
+              <input
+                ref={inputRef}
+                value={draft}
+                onChange={e => setDraft(e.target.value)}
+                onKeyDown={handleKeyDown}
+                maxLength={500}
+                className="flex-1 text-sm bg-transparent border-b border-muted-foreground/40 focus:border-foreground outline-none text-muted-foreground py-0.5 min-w-0"
+                placeholder="Add a page description…"
+              />
+              <button onClick={handleSave} className="shrink-0 p-0.5 rounded hover:bg-secondary text-emerald-600" title="Save">
+                <CheckIcon className="size-3.5" />
+              </button>
+              <button onClick={() => setEditing(false)} className="shrink-0 p-0.5 rounded hover:bg-secondary text-muted-foreground" title="Cancel">
+                <XIcon className="size-3.5" />
+              </button>
+            </>
+          ) : (
+            <>
+              {resolvedDescription && (
+                <p className="text-sm text-muted-foreground line-clamp-1" title={resolvedDescription}>{resolvedDescription}</p>
+              )}
+              {isAdmin && pageKey && (
+                <button
+                  onClick={() => setEditing(true)}
+                  className="shrink-0 p-0.5 rounded opacity-0 group-hover/desc:opacity-100 hover:bg-secondary text-muted-foreground transition-opacity"
+                  title="Edit description"
+                >
+                  <Pencil className="size-3" />
+                </button>
+              )}
+            </>
+          )}
+        </div>
       </div>
       {children && <div className="flex items-center gap-2 flex-wrap">{children}</div>}
     </div>

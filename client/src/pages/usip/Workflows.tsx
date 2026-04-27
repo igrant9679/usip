@@ -57,7 +57,7 @@ export default function Workflows() {
 
   return (
     <Shell title="Workflow Automation">
-      <PageHeader title="Workflow Automation" description="When something happens, do something. Conditions narrow it down.">
+      <PageHeader title="Workflow Automation" description="When something happens, do something. Conditions narrow it down." pageKey="workflows">
         <Button onClick={() => setOpenNew(true)}><Plus className="size-4" /> New rule</Button>
       </PageHeader>
       <div className="p-6 grid grid-cols-1 lg:grid-cols-3 gap-4">

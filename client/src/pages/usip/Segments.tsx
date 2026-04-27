@@ -406,7 +406,7 @@ export default function Segments() {
   return (
     <Shell title="Segments">
       <PageHeader
-        title="Segments"
+        title="Segments" pageKey="segments"
         description="Build rule-based contact filters to target the right audience for sequences and campaigns."
       >
         <Button size="sm" onClick={() => { setEditing(null); setBuilderOpen(true); }}>

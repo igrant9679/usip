@@ -59,7 +59,7 @@ export default function LeadRouting() {
 
   return (
     <Shell title="Lead Routing">
-      <PageHeader title="Lead Routing Engine" description="First matching rule wins (sorted by priority). Strategies: Round Robin, Geography, Industry, Direct.">
+      <PageHeader title="Lead Routing Engine" description="First matching rule wins (sorted by priority). Strategies: Round Robin, Geography, Industry, Direct." pageKey="lead-routing">
         <Button onClick={() => setEditing({ name: "", priority: ((rules?.length ?? 0) + 1) * 10, enabled: true, conditions: { all: [] }, strategy: "round_robin", targetUserIds: [] })}>
           <Plus className="size-4" /> New rule
         </Button>

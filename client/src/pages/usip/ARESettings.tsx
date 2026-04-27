@@ -193,7 +193,7 @@ export default function ARESettings() {
   return (
     <Shell title="ARE Settings">
       <PageHeader
-        title="ARE Settings"
+        title="ARE Settings" pageKey="are-settings"
         description="Global defaults for the Autonomous Revenue Engine. Campaign-level settings override these values."
       >
         <Badge variant="outline" className="text-[10px] px-2 py-0.5 border-emerald-500/30 text-emerald-600 bg-emerald-500/10 gap-1">

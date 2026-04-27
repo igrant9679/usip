@@ -365,7 +365,7 @@ export default function Pipeline() {
           </button>
         </div>
       )}
-      <PageHeader title="Pipeline" description="Drag cards between stages. Hover a card and click the brain icon to run AI analysis.">
+      <PageHeader title="Pipeline" description="Drag cards between stages. Hover a card and click the brain icon to run AI analysis." pageKey="pipeline">
         {/* View toggle */}
         <div className="flex items-center border rounded-md overflow-hidden text-sm">
           {(["board", "forecast"] as const).map((v) => (

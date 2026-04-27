@@ -264,7 +264,7 @@ export default function DataHealth() {
   return (
     <Shell title="Data Health">
       <PageHeader
-        title="Data Health"
+        title="Data Health" pageKey="data-health"
         description="Monitor the quality and completeness of your contact database."
       >
         <Button variant="outline" size="sm" onClick={() => { refetch(); refetchDupes(); }}>

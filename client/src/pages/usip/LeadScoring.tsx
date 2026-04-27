@@ -82,7 +82,7 @@ export default function LeadScoring() {
 
   return (
     <Shell title="Lead Scoring">
-      <PageHeader title="Lead Scoring Engine" description={`Three-component model. Current configuration max-possible = ${totalMax} pts (capped at 100). Default 40 + 30 + 30 = 100.`}>
+      <PageHeader title="Lead Scoring Engine" pageKey="lead-scoring" description={`Three-component model. Current configuration max-possible = ${totalMax} pts (capped at 100). Default 40 + 30 + 30 = 100.`}>
         <Button variant="outline" className="bg-card" onClick={() => recomputeAll.mutate()} disabled={recomputeAll.isPending}>
           <RefreshCw className={`size-4 ${recomputeAll.isPending ? "animate-spin" : ""}`} /> Recompute all
         </Button>

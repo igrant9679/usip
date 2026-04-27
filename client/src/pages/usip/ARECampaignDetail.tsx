@@ -921,6 +921,7 @@ export default function ARECampaignDetail() {
       {/* ── Header ── */}
       <PageHeader
         title={campaign.name}
+        pageKey="are-campaign-detail"
         description={campaign.description ?? undefined}
       >
         <Link href="/are/campaigns">
