@@ -3,7 +3,6 @@
  *
  * Accepts email + password, POSTs to /api/auth/password-login, and
  * redirects to the dashboard (or ?returnPath=) on success.
- * Provides a "Sign in with Manus" link back to the OAuth flow.
  */
 import { useState } from "react";
 import { useLocation } from "wouter";
@@ -12,7 +11,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Loader2, Eye, EyeOff, LogIn } from "lucide-react";
-import { getLoginUrl } from "@/const";
 
 export default function PasswordLogin() {
   const [, navigate] = useLocation();
@@ -69,7 +67,7 @@ export default function PasswordLogin() {
           <CardHeader className="text-center pb-2">
             <CardTitle className="text-xl text-white">Sign in to your account</CardTitle>
             <CardDescription className="text-white/50">
-              Enter the email and password you set when accepting your invitation.
+              Enter your email and password to continue.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-5 pt-2">
@@ -127,27 +125,6 @@ export default function PasswordLogin() {
                 )}
               </Button>
             </form>
-
-            <div className="relative">
-              <div className="absolute inset-0 flex items-center">
-                <span className="w-full border-t border-white/10" />
-              </div>
-              <div className="relative flex justify-center text-xs uppercase">
-                <span className="bg-transparent px-2 text-white/30">or</span>
-              </div>
-            </div>
-
-            <Button
-              variant="outline"
-              className="w-full border-white/20 text-white/70 hover:bg-white/10 hover:text-white bg-transparent"
-              onClick={() => { window.location.href = getLoginUrl(returnPath); }}
-            >
-              Sign in with Manus
-            </Button>
-
-            <p className="text-center text-xs text-white/30">
-              Password login is only available to members who set a password when accepting their invitation.
-            </p>
           </CardContent>
         </Card>
       </div>
