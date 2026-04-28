@@ -4,8 +4,6 @@ import { type Server } from "http";
 import { nanoid } from "nanoid";
 import path from "path";
 import { fileURLToPath } from "url";
-import { createServer as createViteServer } from "vite";
-import viteConfig from "../../vite.config";
 
 // import.meta.dirname is undefined in esbuild ESM bundles; derive it from import.meta.url instead
 const __dirname =
@@ -14,6 +12,13 @@ const __dirname =
     : path.dirname(fileURLToPath(import.meta.url));
 
 export async function setupVite(app: Express, server: Server) {
+  // Dynamic imports — only used in development.
+  // This prevents esbuild from statically inlining vite.config.ts (and all its
+  // Vite plugins) into the production bundle, which crashes on Node < 21.2
+  // because those plugins use import.meta.dirname internally.
+  const { createServer: createViteServer } = await import("vite");
+  const { default: viteConfig } = await import("../../vite.config");
+
   const serverOptions = {
     middlewareMode: true,
     hmr: { server },
