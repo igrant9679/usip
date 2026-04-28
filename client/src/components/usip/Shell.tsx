@@ -322,7 +322,6 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
         {/* Topbar */}
         <header
           className="h-14 border-b bg-card/60 backdrop-blur px-3 md:px-4 flex items-center gap-2 md:gap-3 sticky top-0 z-30"
-          style={{ boxShadow: `0 2px 0 0 ${accentColor}` }}
         >
           {/* Mobile hamburger */}
           <button
