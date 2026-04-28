@@ -4,7 +4,5 @@ buildCommand = "pnpm install --frozen-lockfile && pnpm build"
 
 [deploy]
 startCommand = "pnpm db:migrate && pnpm start"
-healthcheckPath = "/api/trpc/auth.me"
-healthcheckTimeout = 60
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3
