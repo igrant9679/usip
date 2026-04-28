@@ -2,7 +2,6 @@ import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Button } from "@/components/ui/button";
-import { getLoginUrl } from "@/const";
 import { WorkspaceProvider } from "@/contexts/WorkspaceContext";
 import NotFound from "@/pages/NotFound";
 import Accounts from "@/pages/usip/Accounts";
@@ -85,8 +84,7 @@ function Landing() {
         <h1 className="font-serif text-4xl leading-tight">Full-lifecycle revenue intelligence, from first touch to renewal.</h1>
         <p className="text-[#FAF8F2]/70 text-sm leading-relaxed">CRM, sequences, customer success, social, campaigns, custom dashboards, workflow automation, and CPQ. Multi-workspace, role-aware, AI-native.</p>
         <div className="flex flex-col gap-3">
-          <Button onClick={() => (window.location.href = getLoginUrl())} className="bg-[#14B89A] hover:bg-[#0FA086] text-black w-full">Sign in with Manus</Button>
-          <Button variant="outline" onClick={() => (window.location.href = "/login")} className="border-white/20 text-white/70 hover:bg-white/10 hover:text-white bg-transparent w-full">Sign in with password</Button>
+          <Button onClick={() => (window.location.href = "/login")} className="bg-[#14B89A] hover:bg-[#0FA086] text-black w-full">Sign in</Button>
         </div>
         <p className="text-[#FAF8F2]/40 text-xs">A demo workspace is provisioned automatically on first sign-in.</p>
       </div>
