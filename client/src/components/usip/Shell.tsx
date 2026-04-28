@@ -440,17 +440,11 @@ export function PageHeader({ title, description: defaultDescription, pageKey, ic
   return (
     <div
       className="px-4 md:px-6 py-4 md:py-5 border-b flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4"
-      style={{
-        borderLeftWidth: '4px',
-        borderLeftStyle: 'solid',
-        borderLeftColor: accent,
-        background: `linear-gradient(to right, ${accent}12 0%, transparent 60%)`,
-      }}
     >
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
           {icon && <span className="shrink-0" style={{ color: accent }}>{icon}</span>}
-          <h1 className="text-lg md:text-xl font-semibold tracking-tight line-clamp-1" title={title} style={{ color: accent }}>{title}</h1>
+          <h1 className="text-lg md:text-xl font-semibold tracking-tight line-clamp-1" title={title}>{title}</h1>
         </div>
         <div className="flex items-center gap-1.5 mt-0.5 group/desc">
           {editing ? (
