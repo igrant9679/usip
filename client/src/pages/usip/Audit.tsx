@@ -2,7 +2,7 @@ import { Button } from "@/components/ui/button";
 import { Section, StatusPill, fmtDate } from "@/components/usip/Common";
 import { EmptyState, PageHeader, Shell } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
-import { Activity, Download, User } from "lucide-react";
+import { Activity, ClipboardList, Download, User } from "lucide-react";
 import { useState } from "react";
 
 function downloadCsv(rows: any[], filename: string) {
@@ -35,7 +35,7 @@ export default function Audit() {
 
   return (
     <Shell title="Audit log">
-      <PageHeader title="Audit log" description="All record creates, updates, and deletes with before/after values. Admin only." pageKey="audit" />
+      <PageHeader title="Audit log" description="All record creates, updates, and deletes with before/after values. Admin only." pageKey="audit" icon={<ClipboardList className="size-5" />} />
       <div className="p-6 space-y-3">
         <div className="flex flex-wrap items-center gap-2">
           {/* Entity type filter */}
