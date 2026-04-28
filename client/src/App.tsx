@@ -55,7 +55,6 @@ import SegmentRules from "@/pages/usip/SegmentRules";
 import ConnectedAccounts from "@/pages/usip/ConnectedAccounts";
 import UnifiedInbox from "@/pages/usip/UnifiedInbox";
 import InviteAccept from "@/pages/InviteAccept";
-import PasswordLogin from "@/pages/PasswordLogin";
 import Proposals from "@/pages/usip/Proposals";
 import ProposalDetail from "@/pages/usip/ProposalDetail";
 import ProposalPortal from "@/pages/ProposalPortal";
@@ -64,29 +63,119 @@ import AREIcpAgent from "@/pages/usip/AREIcpAgent";
 import ARECampaigns from "@/pages/usip/ARECampaigns";
 import ARECampaignDetail from "@/pages/usip/ARECampaignDetail";
 import ARESettings from "@/pages/usip/ARESettings";
-import { Loader2 } from "lucide-react";
+import { Loader2, Eye, EyeOff, LogIn } from "lucide-react";
 import { Route, Switch, useLocation } from "wouter";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 
 const INVITE_RETURN_KEY = "usip_invite_return";
 
 function Landing() {
+  const params = new URLSearchParams(window.location.search);
+  const returnPath = params.get("returnPath") ?? "/";
+
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    if (!email.trim() || !password) {
+      setError("Please enter your email and password.");
+      return;
+    }
+    setLoading(true);
+    try {
+      const res = await fetch("/api/auth/password-login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ email: email.trim().toLowerCase(), password, returnPath }),
+        credentials: "include",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(data.error ?? "Login failed. Please try again.");
+        return;
+      }
+      window.location.href = data.redirect ?? returnPath;
+    } catch {
+      setError("Network error. Please check your connection and try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-[#0F1F1B] text-[#FAF8F2] px-6">
-      <div className="max-w-xl space-y-6">
-        <div className="flex items-center gap-2 mb-1">
-          <svg className="size-6 text-[#60A5FA] shrink-0" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2L4.09 12.97 12 12l-1 9 8.91-10.97L12 11l1-9z"/></svg>
-          <span className="text-3xl font-bold tracking-tight text-white">Velocity</span>
+      <div className="w-full max-w-sm space-y-6">
+        <div className="space-y-1">
+          <div className="flex items-center gap-2">
+            <svg className="size-6 text-[#60A5FA] shrink-0" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2L4.09 12.97 12 12l-1 9 8.91-10.97L12 11l1-9z"/></svg>
+            <span className="text-3xl font-bold tracking-tight text-white">Velocity</span>
+          </div>
+          <p className="text-[#A5B4FC] text-sm tracking-wide">The Unified Revenue Intelligence Platform</p>
         </div>
-        <p className="text-[#A5B4FC] text-sm tracking-wide">The Unified Revenue Intelligence Platform</p>
-        <h1 className="font-serif text-4xl leading-tight">Full-lifecycle revenue intelligence, from first touch to renewal.</h1>
-        <p className="text-[#FAF8F2]/70 text-sm leading-relaxed">CRM, sequences, customer success, social, campaigns, custom dashboards, workflow automation, and CPQ. Multi-workspace, role-aware, AI-native.</p>
-        <div className="flex flex-col gap-3">
-          <Button onClick={() => (window.location.href = "/login")} className="bg-[#14B89A] hover:bg-[#0FA086] text-black w-full">Sign in</Button>
-        </div>
-        <p className="text-[#FAF8F2]/40 text-xs">A demo workspace is provisioned automatically on first sign-in.</p>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="login-email" className="text-white/80">Email</Label>
+            <Input
+              id="login-email"
+              type="email"
+              placeholder="you@company.com"
+              value={email}
+              onChange={(e) => { setEmail(e.target.value); setError(null); }}
+              autoComplete="email"
+              className="bg-white/10 border-white/20 text-white placeholder:text-white/30 focus:border-[#14B89A]"
+              disabled={loading}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="login-password" className="text-white/80">Password</Label>
+            <div className="relative">
+              <Input
+                id="login-password"
+                type={showPassword ? "text" : "password"}
+                placeholder="Your password"
+                value={password}
+                onChange={(e) => { setPassword(e.target.value); setError(null); }}
+                autoComplete="current-password"
+                className="bg-white/10 border-white/20 text-white placeholder:text-white/30 focus:border-[#14B89A] pr-10"
+                disabled={loading}
+              />
+              <button
+                type="button"
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-white/40 hover:text-white/70"
+                onClick={() => setShowPassword((v) => !v)}
+                tabIndex={-1}
+              >
+                {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </button>
+            </div>
+          </div>
+          {error && (
+            <p className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-md px-3 py-2">
+              {error}
+            </p>
+          )}
+          <Button
+            type="submit"
+            className="w-full bg-[#14B89A] hover:bg-[#0FA086] text-black font-semibold"
+            disabled={loading}
+          >
+            {loading ? (
+              <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Signing in…</>
+            ) : (
+              <><LogIn className="mr-2 h-4 w-4" /> Sign in</>
+            )}
+          </Button>
+        </form>
       </div>
     </div>
   );
@@ -179,7 +268,6 @@ function Router() {
       <Route path="/are/settings"><AuthGate><ARESettings /></AuthGate></Route>
       <Route path="/p/:token"><ProposalPortal /></Route>
       <Route path="/invite/accept"><InviteAccept /></Route>
-      <Route path="/login"><PasswordLogin /></Route>
       <Route path="/404"><NotFound /></Route>
       <Route><NotFound /></Route>
     </Switch>
