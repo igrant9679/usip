@@ -1,6 +1,7 @@
 import { fmt$, fmtDate, StatusPill } from "@/components/usip/Common";
 import { PageHeader, Shell } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
+import { RefreshCw } from "lucide-react";
 import { useMemo } from "react";
 
 const STAGES = [
@@ -25,7 +26,7 @@ export default function Renewals() {
   return (
     <Shell title="Renewals">
       <PageHeader title="Renewal pipeline" description="Manage the full renewal cycle from early-warning flags through negotiation to signed renewals. Automate renewal reminders, track contract status, and surface expansion opportunities at renewal time." pageKey="renewals" 
-        icon={<RefreshCcw className="size-5" />}
+        icon={<RefreshCw className="size-5" />}
       />
       <div className="p-4 overflow-x-auto">
         <div className="flex gap-3 min-w-max">
