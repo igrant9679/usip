@@ -268,7 +268,7 @@ export default function DataHealth() {
         title="Data Health" pageKey="data-health"
         description="Monitor data quality across your CRM — duplicates, missing fields, and enrichment gaps."
         icon={<ShieldCheck className="size-5" />}
-        className="border"
+        className="border !py-8 md:!py-10"
         style={{ borderColor: accent, borderWidth: "2px" }}
       >
         <Button variant="outline" size="sm" onClick={() => { refetch(); refetchDupes(); }}>
