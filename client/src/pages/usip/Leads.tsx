@@ -10,7 +10,8 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { trpc } from "@/lib/trpc";
 import {
   Loader2, Plus, Sparkles, Target, UserCheck,
-  MoreHorizontal, Pencil, Trash2, Send, Tag, Megaphone, Wand2, Download, UserPlus
+  MoreHorizontal, Pencil, Trash2, Send, Tag, Megaphone, Wand2, Download, UserPlus,
+  Phone, Mail, Linkedin, Clock
 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -206,6 +207,10 @@ export default function Leads() {
   const utils = trpc.useUtils();
   const { data, isLoading } = trpc.leads.list.useQuery({ search });
 
+  const suggestNextAction = trpc.leadsAi.suggestNextAction.useMutation({
+    onSuccess: () => utils.leads.list.invalidate(),
+    onError: (e: any) => toast.error(e.message),
+  });
   const rescore = trpc.leadScoring.recompute.useMutation({
     onSuccess: () => { utils.leads.list.invalidate(); toast.success("Re-scored"); },
   });
@@ -280,6 +285,7 @@ export default function Leads() {
                   <th className="text-left px-3 py-2">Email</th>
                   <th className="text-left px-3 py-2">Source</th>
                   <th className="text-left px-3 py-2">Score</th>
+                  <th className="text-left px-3 py-2">Next Action</th>
                   <th className="text-left px-3 py-2">Status</th>
                   <th className="text-right px-3 py-2">Actions</th>
                 </tr>
@@ -299,6 +305,29 @@ export default function Leads() {
                       <span className="font-mono tabular-nums">{l.score}</span>
                       <span className={`ml-2 inline-block px-1.5 rounded text-xs ${GRADE_TONE[l.grade ?? "C"] ?? ""}`}>{l.grade ?? "—"}</span>
                       {(() => { const t = tierFromScore(l.score); return <span className={`ml-1 inline-block px-1.5 rounded text-xs ${TIER_TONE[t].cls}`}>{TIER_TONE[t].label}</span>; })()}
+                    </td>
+                    <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
+                      {(l as any).aiNextAction ? (
+                        <span
+                          title={(l as any).aiNextActionNote ?? ""}
+                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium cursor-default ${
+                            (l as any).aiNextAction === "call" ? "bg-violet-100 text-violet-800" :
+                            (l as any).aiNextAction === "email" ? "bg-blue-100 text-blue-800" :
+                            (l as any).aiNextAction === "linkedin" ? "bg-sky-100 text-sky-800" :
+                            "bg-slate-100 text-slate-700"
+                          }`}
+                        >
+                          {(l as any).aiNextAction === "call" && <Phone className="size-3" />}
+                          {(l as any).aiNextAction === "email" && <Mail className="size-3" />}
+                          {(l as any).aiNextAction === "linkedin" && <Linkedin className="size-3" />}
+                          {(l as any).aiNextAction === "wait" && <Clock className="size-3" />}
+                          {(l as any).aiNextAction}
+                        </span>
+                      ) : (
+                        <Button size="sm" variant="ghost" className="h-6 text-xs px-2" onClick={() => suggestNextAction.mutate({ leadId: l.id })} disabled={suggestNextAction.isPending}>
+                          <Sparkles className="size-3" /> Suggest
+                        </Button>
+                      )}
                     </td>
                     <td className="px-3 py-2 text-muted-foreground">{l.status}</td>
                     <td className="px-3 py-2 text-right space-x-1" onClick={(e) => e.stopPropagation()}>

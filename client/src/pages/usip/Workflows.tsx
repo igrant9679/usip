@@ -3,7 +3,7 @@ import { Switch } from "@/components/ui/switch";
 import { Field, fmtDate, FormDialog, Section, SelectField, StatusPill } from "@/components/usip/Common";
 import { EmptyState, PageHeader, Shell } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
-import { Play, Plus, Save, Trash2, Workflow, GitBranch } from "lucide-react";
+import { Play, Plus, Save, Trash2, Workflow, GitBranch, Sparkles } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
@@ -47,6 +47,10 @@ export default function Workflows() {
   const { data } = trpc.workflows.list.useQuery();
   const [selected, setSelected] = useState<number | null>(null);
   const [openNew, setOpenNew] = useState(false);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const suggestMut = trpc.workflowsAi.suggestWorkflows.useMutation({
+    onError: (e: any) => toast.error(e.message),
+  });
   const runs = trpc.workflows.runs.useQuery({ ruleId: selected ?? undefined });
   const create = trpc.workflows.create.useMutation({ onSuccess: () => { utils.workflows.list.invalidate(); setOpenNew(false); toast.success("Rule created"); } });
   const update = trpc.workflows.update.useMutation({ onSuccess: () => { utils.workflows.list.invalidate(); toast.success("Rule saved"); } });
@@ -60,8 +64,35 @@ export default function Workflows() {
       <PageHeader title="Workflow Automation" description="Automate repetitive actions with trigger-based workflow rules across the entire CRM. Workflows fire on record changes, time delays, or score thresholds and can update fields, send emails, or create tasks." pageKey="workflows"
         icon={<GitBranch className="size-5" />}
       >
+        <Button variant="outline" onClick={() => { suggestMut.mutate({}); setShowSuggestions(true); }} disabled={suggestMut.isPending}>
+          <Sparkles className="size-4" /> {suggestMut.isPending ? "Analysing…" : "AI suggestions"}
+        </Button>
         <Button onClick={() => setOpenNew(true)}><Plus className="size-4" /> New rule</Button>
       </PageHeader>
+      {/* AI Workflow Suggestions Panel */}
+      {showSuggestions && (suggestMut.data?.suggestions ?? []).length > 0 && (
+        <div className="mx-6 mt-4 rounded-lg border border-violet-200 bg-violet-50/60 p-4">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2 text-sm font-medium text-violet-800">
+              <Sparkles className="size-4" />
+              AI-suggested workflows based on your activity patterns
+            </div>
+            <button className="text-xs text-muted-foreground hover:text-foreground" onClick={() => setShowSuggestions(false)}>Dismiss</button>
+          </div>
+          <ul className="space-y-2">
+            {(suggestMut.data!.suggestions as any[]).map((s, i) => (
+              <li key={i} className="rounded border bg-white p-3 text-sm">
+                <div className="font-medium">{s.name}</div>
+                <div className="text-xs text-muted-foreground mt-0.5">{s.rationale}</div>
+                <div className="mt-1.5 flex gap-3 text-xs">
+                  <span className="text-muted-foreground">Trigger: <span className="font-medium text-foreground">{s.trigger}</span></span>
+                  <span className="text-muted-foreground">Action: <span className="font-medium text-foreground">{s.action}</span></span>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       <div className="p-6 grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="lg:col-span-1">
           <Section title={`Rules (${data?.length ?? 0})`}>

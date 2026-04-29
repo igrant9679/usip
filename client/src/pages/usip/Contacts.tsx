@@ -29,6 +29,7 @@ import {
   Megaphone,
   Download,
   Sparkles,
+  Flame,
 } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { toast } from "sonner";
@@ -809,6 +810,10 @@ export default function Contacts() {
     onSuccess: () => { utils.contacts.list.invalidate(); toast.success("Contact deleted"); },
     onError: (e: any) => toast.error(e.message),
   });
+  const scoreRelationship = trpc.contactsAi.scoreRelationshipStrength.useMutation({
+    onSuccess: () => utils.contacts.list.invalidate(),
+    onError: (e: any) => toast.error(e.message),
+  });
 
   const allIds = (data ?? []).map((c) => c.id);
   const allSelected = allIds.length > 0 && allIds.every((id) => selectedIds.has(id));
@@ -977,6 +982,7 @@ export default function Contacts() {
                   <th className="text-left px-3 py-2 w-28">Verified</th>
                   <th className="text-left px-3 py-2">Phone</th>
                   <th className="text-left px-3 py-2 w-24">Enriched</th>
+                  <th className="text-left px-3 py-2 w-24">Relationship</th>
                   <th className="px-3 py-2 w-10"></th>
                 </tr>
               </thead>
@@ -1038,6 +1044,34 @@ export default function Contacts() {
                           onClick={(e) => { e.stopPropagation(); setEnrichContactId(c.id); setEnrichOpen(true); }}
                         >
                           <Sparkles className="h-3 w-3" /> Enrich
+                        </button>
+                      )}
+                    </td>
+                    {/* Relationship strength heat indicator */}
+                    <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
+                      {(c as any).relStrengthScore != null ? (
+                        <div className="flex items-center gap-0.5" title={(c as any).relStrengthNote ?? ""}>
+                          {[1, 2, 3, 4, 5].map((i) => (
+                            <Flame
+                              key={i}
+                              className={`size-3 ${
+                                i <= Math.round(((c as any).relStrengthScore ?? 0) / 20)
+                                  ? (c as any).relStrengthScore >= 80 ? "text-rose-500"
+                                    : (c as any).relStrengthScore >= 60 ? "text-orange-500"
+                                    : (c as any).relStrengthScore >= 40 ? "text-amber-500"
+                                    : "text-yellow-300"
+                                  : "text-slate-200"
+                              }`}
+                            />
+                          ))}
+                        </div>
+                      ) : (
+                        <button
+                          className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-0.5 transition-colors"
+                          onClick={() => scoreRelationship.mutate({ contactId: c.id })}
+                          disabled={scoreRelationship.isPending}
+                        >
+                          <Sparkles className="size-3" /> Score
                         </button>
                       )}
                     </td>

@@ -61,6 +61,7 @@ interface EmailThread {
   labels: string[];
   accountId?: number;
   accountEmail?: string;
+  aiTriageLabel?: string | null;
 }
 
 interface EmailMessage {
@@ -640,6 +641,16 @@ function ThreadRow({ thread, selected, showAccountBadge, onSelect }: {
         {thread.messageCount > 1 && <Badge variant="secondary" className="text-[10px] h-4 px-1.5">{thread.messageCount}</Badge>}
         {showAccountBadge && thread.accountEmail && (
           <Badge variant="outline" className="text-[10px] h-4 px-1.5 font-normal truncate max-w-[140px]">{thread.accountEmail}</Badge>
+        )}
+        {thread.aiTriageLabel && (
+          <span className={`inline-flex items-center gap-0.5 text-[10px] h-4 px-1.5 rounded-full font-medium ${
+            thread.aiTriageLabel === "Urgent" ? "bg-red-100 text-red-700" :
+            thread.aiTriageLabel === "Follow-up needed" ? "bg-amber-100 text-amber-700" :
+            thread.aiTriageLabel === "FYI only" ? "bg-blue-100 text-blue-700" :
+            "bg-muted text-muted-foreground"
+          }`}>
+            <Sparkles className="size-2.5" /> {thread.aiTriageLabel}
+          </span>
         )}
       </div>
     </button>

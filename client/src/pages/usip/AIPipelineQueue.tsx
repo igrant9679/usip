@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Switch } from "@/components/ui/switch";
 import { Shell, PageHeader } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
@@ -387,6 +388,11 @@ export default function AIPipelineQueue() {
     onSuccess: (data) => { toast.success(`Sent ${data.sent} emails, ${data.failed} failed`); refetchDrafts(); refetchStats(); },
     onError: (e) => toast.error(e.message.includes("No active SMTP") ? "SMTP not configured — set up in Settings → Email Delivery" : e.message),
   });
+  const { data: autoSendSettings, refetch: refetchAutoSend } = trpc.emailAutoSend.getSettings.useQuery();
+  const updateAutoSend = trpc.emailAutoSend.updateSettings.useMutation({
+    onSuccess: () => { toast.success("Auto-send setting saved"); refetchAutoSend(); },
+    onError: (e: any) => toast.error(e.message),
+  });
 
   const handleRefresh = () => {
     refetchDrafts();
@@ -681,6 +687,23 @@ export default function AIPipelineQueue() {
               ) : null}
             </h2>
             <div className="flex items-center gap-2">
+            {/* Auto-send toggle */}
+            <div className="flex items-center gap-2 border rounded-md px-3 py-1.5 bg-muted/40">
+              <Switch
+                id="auto-send-toggle"
+                checked={autoSendSettings?.aiAutoSendEnabled ?? false}
+                onCheckedChange={(checked) =>
+                  updateAutoSend.mutate({
+                    aiAutoSendEnabled: checked,
+                    aiAutoSendScoreMin: autoSendSettings?.aiAutoSendScoreMin ?? 70,
+                    aiAutoSendConfidenceMin: autoSendSettings?.aiAutoSendConfidenceMin ?? 75,
+                  })
+                }
+              />
+              <label htmlFor="auto-send-toggle" className="text-xs text-muted-foreground cursor-pointer select-none whitespace-nowrap">
+                Auto-send approved
+              </label>
+            </div>
             {pendingDraftIds.length > 0 && (
               <Button
                 size="sm"

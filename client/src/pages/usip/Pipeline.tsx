@@ -7,7 +7,7 @@ import { Field, fmt$, FormDialog, SelectField } from "@/components/usip/Common";
 import { PageHeader, Shell } from "@/components/usip/Shell";
 import { RecordDrawer } from "@/components/usip/RecordDrawer";
 import { trpc } from "@/lib/trpc";
-import { ArrowRight, Brain, Download, Loader2, Plus, TrendingUp, Zap, Filter, X, User, KanbanSquare } from "lucide-react";
+import { ArrowRight, Brain, Download, Loader2, Plus, TrendingUp, Zap, Filter, X, User, KanbanSquare, Sparkles } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useLocation } from "wouter";
@@ -165,6 +165,11 @@ function DealCard({
 /* ─── Forecast View ─────────────────────────────────────────────────────── */
 function ForecastView() {
   const [selectedStages, setSelectedStages] = useState<string[]>([]);
+  const [commentary, setCommentary] = useState<string | null>(null);
+  const commentaryMut = trpc.forecastAi.generateCommentary.useMutation({
+    onSuccess: (r) => setCommentary(r.commentary),
+    onError: (e: any) => toast.error(e.message),
+  });
   // Unfiltered query to always have the full availableStages list for the filter UI
   const { data: allFc } = trpc.opportunities.forecast.useQuery(undefined);
   const availableStages = allFc?.availableStages ?? [];
@@ -320,6 +325,24 @@ function ForecastView() {
           No open opportunities to forecast. Add deals with close dates to see projections.
         </div>
       )}
+
+      {/* AI Forecast Commentary */}
+      <div className="rounded-lg border border-violet-200 bg-violet-50/60 p-4">
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center gap-2 text-sm font-medium text-violet-800">
+            <Sparkles className="size-4" />
+            AI Forecast Commentary
+          </div>
+          <Button size="sm" variant="outline" onClick={() => commentaryMut.mutate({})} disabled={commentaryMut.isPending}>
+            {commentaryMut.isPending ? <><Loader2 className="size-3.5 animate-spin" /> Generating…</> : "Generate"}
+          </Button>
+        </div>
+        {commentary ? (
+          <p className="text-sm text-foreground leading-relaxed whitespace-pre-wrap">{commentary}</p>
+        ) : (
+          <p className="text-xs text-muted-foreground italic">Click Generate to get an AI-written narrative summary of your current pipeline health, top risks, and recommended actions to hit quota.</p>
+        )}
+      </div>
     </div>
   );
 }

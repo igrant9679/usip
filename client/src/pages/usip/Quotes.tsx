@@ -2,11 +2,60 @@ import { Button } from "@/components/ui/button";
 import { Field, fmt$, fmtDate, FormDialog, Section, SelectField, StatusPill, TextareaField } from "@/components/usip/Common";
 import { EmptyState, PageHeader, Shell } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
-import { ExternalLink, FileText, Plus, Send, Trash2, Receipt } from "lucide-react";
+import { ExternalLink, FileText, Plus, Send, Trash2, Receipt, Sparkles, ChevronDown, ChevronUp } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
 type LineItem = { productId?: number; name: string; description?: string; quantity: number; unitPrice: number; discountPct: number };
+
+function AiPricingPanel({ quote }: { quote: any }) {
+  const utils = trpc.useUtils();
+  const [open, setOpen] = useState(false);
+  const score = trpc.quotesAi.recommendPricing.useMutation({
+    onSuccess: () => utils.quotes.list.invalidate(),
+    onError: (e: any) => toast.error(e.message),
+  });
+
+  const hasRec = quote.aiPriceMin != null;
+
+  return (
+    <div className="mt-1">
+      {hasRec ? (
+        <div>
+          <button
+            className="flex items-center gap-1 text-[11px] text-violet-600 hover:text-violet-700 transition-colors"
+            onClick={() => setOpen((v) => !v)}
+          >
+            <Sparkles className="size-3" />
+            AI pricing: {fmt$(Number(quote.aiPriceMin))}–{fmt$(Number(quote.aiPriceMax))}
+            {open ? <ChevronUp className="size-3" /> : <ChevronDown className="size-3" />}
+          </button>
+          {open && (
+            <div className="mt-1 rounded border bg-violet-50/60 p-2 text-xs space-y-1">
+              <div className="flex gap-4">
+                <div><span className="text-muted-foreground">Min: </span><span className="font-mono font-medium">{fmt$(Number(quote.aiPriceMin))}</span></div>
+                <div><span className="text-muted-foreground">Max: </span><span className="font-mono font-medium">{fmt$(Number(quote.aiPriceMax))}</span></div>
+                <div><span className="text-muted-foreground">Max discount: </span><span className="font-mono font-medium">{quote.aiDiscountCeil}%</span></div>
+              </div>
+              {quote.aiPriceRationale && (
+                <p className="text-muted-foreground leading-relaxed">{quote.aiPriceRationale}</p>
+              )}
+            </div>
+          )}
+        </div>
+      ) : (
+        <button
+          className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-violet-600 transition-colors"
+          onClick={() => score.mutate({ quoteId: quote.id })}
+          disabled={score.isPending}
+        >
+          <Sparkles className="size-3" />
+          {score.isPending ? "Analysing…" : "Get AI pricing recommendation"}
+        </button>
+      )}
+    </div>
+  );
+}
 
 export default function Quotes() {
   const utils = trpc.useUtils();
@@ -45,26 +94,30 @@ export default function Quotes() {
               {list.data!.map((q) => {
                 const o = oppMap.get(q.opportunityId);
                 return (
-                  <li key={q.id} className="p-3 flex items-center text-sm gap-3 min-w-0">
-                    <div className="min-w-0">
-                      <div className="font-mono tabular-nums text-xs text-muted-foreground">{q.quoteNumber}</div>
-                      <div className="font-medium truncate" title={o?.name ?? "—"}>{o?.name ?? "—"}</div>
+                  <li key={q.id} className="p-3 text-sm">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="min-w-0">
+                        <div className="font-mono tabular-nums text-xs text-muted-foreground">{q.quoteNumber}</div>
+                        <div className="font-medium truncate" title={o?.name ?? "—"}>{o?.name ?? "—"}</div>
+                      </div>
+                      <StatusPill tone={q.status === "accepted" ? "success" : q.status === "sent" ? "info" : q.status === "rejected" || q.status === "expired" ? "danger" : "muted"}>{q.status}</StatusPill>
+                      <div className="ml-auto font-mono tabular-nums whitespace-nowrap shrink-0">{fmt$(Number(q.total))}</div>
+                      <div className="text-xs text-muted-foreground whitespace-nowrap shrink-0">{fmtDate(q.expiresAt)}</div>
+                      <div className="flex gap-1">
+                        {!q.pdfUrl && <Button size="sm" variant="ghost" onClick={() => genPdf.mutate({ id: q.id })}>Generate</Button>}
+                        {q.pdfUrl && <Button size="sm" variant="ghost" onClick={() => window.open(q.pdfUrl!, "_blank")}><ExternalLink className="size-3.5" /></Button>}
+                        {q.status === "draft" && q.pdfUrl && <Button size="sm" variant="ghost" onClick={() => send.mutate({ id: q.id })}><Send className="size-3.5" /></Button>}
+                        {q.status === "sent" && (
+                          <>
+                            <Button size="sm" variant="ghost" onClick={() => setStatus.mutate({ id: q.id, status: "accepted" })}>Accept</Button>
+                            <Button size="sm" variant="ghost" onClick={() => setStatus.mutate({ id: q.id, status: "rejected" })}>Reject</Button>
+                          </>
+                        )}
+                        <Button size="sm" variant="ghost" onClick={() => del.mutate({ id: q.id })}><Trash2 className="size-3.5" /></Button>
+                      </div>
                     </div>
-                    <StatusPill tone={q.status === "accepted" ? "success" : q.status === "sent" ? "info" : q.status === "rejected" || q.status === "expired" ? "danger" : "muted"}>{q.status}</StatusPill>
-                    <div className="ml-auto font-mono tabular-nums whitespace-nowrap shrink-0">{fmt$(Number(q.total))}</div>
-                    <div className="text-xs text-muted-foreground whitespace-nowrap shrink-0">{fmtDate(q.expiresAt)}</div>
-                    <div className="flex gap-1">
-                      {!q.pdfUrl && <Button size="sm" variant="ghost" onClick={() => genPdf.mutate({ id: q.id })}>Generate</Button>}
-                      {q.pdfUrl && <Button size="sm" variant="ghost" onClick={() => window.open(q.pdfUrl!, "_blank")}><ExternalLink className="size-3.5" /></Button>}
-                      {q.status === "draft" && q.pdfUrl && <Button size="sm" variant="ghost" onClick={() => send.mutate({ id: q.id })}><Send className="size-3.5" /></Button>}
-                      {q.status === "sent" && (
-                        <>
-                          <Button size="sm" variant="ghost" onClick={() => setStatus.mutate({ id: q.id, status: "accepted" })}>Accept</Button>
-                          <Button size="sm" variant="ghost" onClick={() => setStatus.mutate({ id: q.id, status: "rejected" })}>Reject</Button>
-                        </>
-                      )}
-                      <Button size="sm" variant="ghost" onClick={() => del.mutate({ id: q.id })}><Trash2 className="size-3.5" /></Button>
-                    </div>
+                    {/* AI pricing recommendation */}
+                    <AiPricingPanel quote={q} />
                   </li>
                 );
               })}

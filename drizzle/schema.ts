@@ -147,6 +147,10 @@ export const contacts = mysqlTable(
     emailVerificationStatus: varchar("emailVerificationStatus", { length: 20 }), // safe|invalid|risky|catch_all|unknown
     emailVerifiedAt: timestamp("emailVerifiedAt"),
     emailVerificationData: json("emailVerificationData"), // full Reoon response
+    // Relationship strength (Migration 0050)
+    relStrengthScore: int("relStrengthScore"),
+    relStrengthLabel: varchar("relStrengthLabel", { length: 16 }),
+    relStrengthAt: timestamp("relStrengthAt"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
@@ -185,6 +189,10 @@ export const leads = mysqlTable(
     convertedOpportunityId: int("convertedOpportunityId"),
     ownerUserId: int("ownerUserId"),
     customFields: json("customFields"),
+    // AI next-action suggestion (Migration 0050)
+    aiNextAction: varchar("aiNextAction", { length: 40 }),
+    aiNextActionNote: text("aiNextActionNote"),
+    aiNextActionAt: timestamp("aiNextActionAt"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
@@ -455,6 +463,11 @@ export const customers = mysqlTable(
     npsHistory: json("npsHistory"),
     expansionPotential: decimal("expansionPotential", { precision: 14, scale: 2 }).default("0"),
     aiPlay: text("aiPlay"),
+    // AI churn-risk (Migration 0050)
+    churnRiskScore: int("churnRiskScore"),
+    churnRiskLabel: varchar("churnRiskLabel", { length: 16 }),
+    churnRiskRationale: text("churnRiskRationale"),
+    churnRiskScoredAt: timestamp("churnRiskScoredAt"),
     renewalStage: mysqlEnum("renewalStage", [
       "early",
       "ninety",
@@ -830,6 +843,12 @@ export const quotes = mysqlTable(
     pdfUrl: text("pdfUrl"),
     sentAt: timestamp("sentAt"),
     createdByUserId: int("createdByUserId"),
+    // AI pricing recommendation (Migration 0050)
+    aiPriceMin: decimal("aiPriceMin", { precision: 14, scale: 2 }),
+    aiPriceMax: decimal("aiPriceMax", { precision: 14, scale: 2 }),
+    aiDiscountCeil: decimal("aiDiscountCeil", { precision: 5, scale: 2 }),
+    aiPriceRationale: text("aiPriceRationale"),
+    aiPriceScoredAt: timestamp("aiPriceScoredAt"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
@@ -838,7 +857,6 @@ export const quotes = mysqlTable(
     uqNum: uniqueIndex("uq_quote_num").on(t.workspaceId, t.quoteNumber),
   }),
 );
-
 export const quoteLineItems = mysqlTable(
   "quote_line_items",
   {
@@ -1069,6 +1087,10 @@ export const workspaceSettings = mysqlTable("workspace_settings", {
   areNotifyOnMeetingBooked: boolean("areNotifyOnMeetingBooked").default(true).notNull(),
   areNotifyOnAutoApprove: boolean("areNotifyOnAutoApprove").default(false).notNull(),
   areNotifyOnIcpUpdate: boolean("areNotifyOnIcpUpdate").default(true).notNull(),
+  // AI auto-send toggle (Migration 0050)
+  aiAutoSendEnabled: boolean("aiAutoSendEnabled").default(false).notNull(),
+  aiAutoSendScoreMin: int("aiAutoSendScoreMin").default(70).notNull(),
+  aiAutoSendConfidenceMin: int("aiAutoSendConfidenceMin").default(75).notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
 export type WorkspaceSettings = typeof workspaceSettings.$inferSelect;
@@ -2972,3 +2994,62 @@ export const cloduraEnrichmentSettings = mysqlTable(
   },
 );
 export type CloduraEnrichmentSettings = typeof cloduraEnrichmentSettings.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   AI Feature Gap Tables (Migration 0050)
+   ────────────────────────────────────────────────────────────────────────── */
+
+// ── AI Workflow Suggestions ────────────────────────────────────────────────────
+export const aiWorkflowSuggestions = mysqlTable(
+  "ai_workflow_suggestions",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    title: varchar("title", { length: 200 }).notNull(),
+    description: text("description").notNull(),
+    triggerType: varchar("triggerType", { length: 60 }).notNull(),
+    triggerConfig: json("triggerConfig").notNull(),
+    conditions: json("conditions").notNull(),
+    actions: json("actions").notNull(),
+    dismissed: boolean("dismissed").notNull().default(false),
+    appliedRuleId: int("appliedRuleId"),
+    generatedAt: timestamp("generatedAt").defaultNow().notNull(),
+  },
+  (t) => ({ byWs: index("ix_aiws_ws").on(t.workspaceId) }),
+);
+export type AiWorkflowSuggestion = typeof aiWorkflowSuggestions.$inferSelect;
+
+// ── Forecast AI Commentary ─────────────────────────────────────────────────────
+export const forecastAiCommentary = mysqlTable(
+  "forecast_ai_commentary",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    periodLabel: varchar("periodLabel", { length: 20 }).notNull(),
+    commentary: text("commentary").notNull(),
+    highlights: json("highlights"),
+    generatedAt: timestamp("generatedAt").defaultNow().notNull(),
+  },
+  (t) => ({ byWs: index("ix_fac_ws").on(t.workspaceId, t.periodLabel) }),
+);
+export type ForecastAiCommentary = typeof forecastAiCommentary.$inferSelect;
+
+// ── Mailbox AI Triage ──────────────────────────────────────────────────────────
+export const mailboxAiTriage = mysqlTable(
+  "mailbox_ai_triage",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    accountId: int("accountId").notNull(),
+    threadId: varchar("threadId", { length: 255 }).notNull(),
+    triageLabel: varchar("triageLabel", { length: 20 }).notNull(),
+    confidence: int("confidence").notNull().default(80),
+    rationale: text("rationale"),
+    labelledAt: timestamp("labelledAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    uqTriage: uniqueIndex("uq_triage").on(t.workspaceId, t.accountId, t.threadId),
+    byWs: index("ix_triage_ws").on(t.workspaceId, t.accountId),
+  }),
+);
+export type MailboxAiTriage = typeof mailboxAiTriage.$inferSelect;

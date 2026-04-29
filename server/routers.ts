@@ -38,6 +38,7 @@ import { unipileRouter } from "./routers/unipile";
 import { areRouter } from "./routers/are";
 import { cloduraRouter } from "./routers/clodura";
 import { pageDescriptionsRouter } from "./routers/pageDescriptions";
+import { csAiRouter, leadsAiRouter, contactsAiRouter, quotesAiRouter, workflowsAiRouter, forecastAiRouter, mailboxAiRouter, emailAutoSendRouter } from "./routers/aiFeatures";
 
 export const appRouter = router({
   system: systemRouter,
@@ -110,6 +111,14 @@ export const appRouter = router({
   are: areRouter,
   clodura: cloduraRouter,
   pageDescriptions: pageDescriptionsRouter,
+  csAi: csAiRouter,
+  leadsAi: leadsAiRouter,
+  contactsAi: contactsAiRouter,
+  quotesAi: quotesAiRouter,
+  workflowsAi: workflowsAiRouter,
+  forecastAi: forecastAiRouter,
+  mailboxAi: mailboxAiRouter,
+  emailAutoSend: emailAutoSendRouter,
 });
 
 export type AppRouter = typeof appRouter;

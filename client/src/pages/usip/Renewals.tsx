@@ -1,8 +1,9 @@
 import { fmt$, fmtDate, StatusPill } from "@/components/usip/Common";
 import { PageHeader, Shell } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
-import { RefreshCw } from "lucide-react";
+import { RefreshCw, Sparkles, AlertTriangle } from "lucide-react";
 import { useMemo } from "react";
+import { toast } from "sonner";
 
 const STAGES = [
   { id: "secure", label: "Secure", tone: "success" as const },
@@ -15,7 +16,12 @@ const STAGES = [
 ];
 
 export default function Renewals() {
+  const utils = trpc.useUtils();
   const { data } = trpc.cs.renewalsBoard.useQuery();
+  const scoreChurn = trpc.csAi.scoreChurnRisk.useMutation({
+    onSuccess: () => utils.cs.renewalsBoard.invalidate(),
+    onError: (e: any) => toast.error(e.message),
+  });
   const grouped = useMemo(() => {
     const buckets: Record<string, any[]> = {};
     STAGES.forEach((s) => (buckets[s.id] = []));
@@ -25,7 +31,7 @@ export default function Renewals() {
 
   return (
     <Shell title="Renewals">
-      <PageHeader title="Renewal pipeline" description="Manage the full renewal cycle from early-warning flags through negotiation to signed renewals. Automate renewal reminders, track contract status, and surface expansion opportunities at renewal time." pageKey="renewals" 
+      <PageHeader title="Renewal pipeline" description="Manage the full renewal cycle from early-warning flags through negotiation to signed renewals. Automate renewal reminders, track contract status, and surface expansion opportunities at renewal time." pageKey="renewals"
         icon={<RefreshCw className="size-5" />}
       />
       <div className="p-4 overflow-x-auto">
@@ -50,6 +56,31 @@ export default function Renewals() {
                         </StatusPill>
                       </div>
                       <div className="text-[11px] text-muted-foreground mt-1">Renewal {fmtDate(c.renewalDate)}</div>
+
+                      {/* AI churn-risk score */}
+                      {(c as any).churnRiskScore != null ? (
+                        <div className={`mt-1.5 flex items-center gap-1 text-[11px] font-medium ${
+                          (c as any).churnRiskScore >= 70 ? "text-rose-600" :
+                          (c as any).churnRiskScore >= 40 ? "text-amber-600" :
+                          "text-emerald-600"
+                        }`}>
+                          <AlertTriangle className="size-3" />
+                          AI churn risk: {(c as any).churnRiskScore}%
+                          {(c as any).churnRiskRationale && (
+                            <span className="text-muted-foreground font-normal truncate ml-1" title={(c as any).churnRiskRationale}>
+                              · {(c as any).churnRiskRationale.slice(0, 40)}{(c as any).churnRiskRationale.length > 40 ? "…" : ""}
+                            </span>
+                          )}
+                        </div>
+                      ) : (
+                        <button
+                          className="mt-1.5 flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+                          onClick={() => scoreChurn.mutate({ customerId: c.id })}
+                          disabled={scoreChurn.isPending}
+                        >
+                          <Sparkles className="size-3" /> Score churn risk
+                        </button>
+                      )}
                     </div>
                   ))}
                 </div>
