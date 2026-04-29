@@ -3053,3 +3053,204 @@ export const mailboxAiTriage = mysqlTable(
   }),
 );
 export type MailboxAiTriage = typeof mailboxAiTriage.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Help Center + Guided Tour Learning Layer (Migration 0051)
+   ────────────────────────────────────────────────────────────────────────── */
+
+export const helpCategories = mysqlTable(
+  "help_categories",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    name: varchar("name", { length: 120 }).notNull(),
+    icon: varchar("icon", { length: 64 }).notNull().default("BookOpen"),
+    sortOrder: int("sortOrder").notNull().default(0),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({ byWs: index("ix_hcat_ws").on(t.workspaceId) }),
+);
+export type HelpCategory = typeof helpCategories.$inferSelect;
+
+export const helpArticles = mysqlTable(
+  "help_articles",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    categoryId: int("categoryId"),
+    slug: varchar("slug", { length: 200 }).notNull(),
+    title: varchar("title", { length: 300 }).notNull(),
+    summary: text("summary"),
+    bodyMarkdown: text("bodyMarkdown"),
+    tags: json("tags"),
+    status: mysqlEnum("status", ["draft", "published"]).notNull().default("draft"),
+    associatedTourId: int("associatedTourId"),
+    authorId: int("authorId"),
+    viewCount: int("viewCount").notNull().default(0),
+    helpfulCount: int("helpfulCount").notNull().default(0),
+    notHelpfulCount: int("notHelpfulCount").notNull().default(0),
+    pageKey: varchar("pageKey", { length: 120 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    uqSlug: uniqueIndex("uq_ha_ws_slug").on(t.workspaceId, t.slug),
+    byWs: index("ix_ha_ws").on(t.workspaceId),
+    byCat: index("ix_ha_cat").on(t.categoryId),
+  }),
+);
+export type HelpArticle = typeof helpArticles.$inferSelect;
+
+export const helpSearchLog = mysqlTable(
+  "help_search_log",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    userId: int("userId").notNull(),
+    query: varchar("query", { length: 500 }).notNull(),
+    resultsCount: int("resultsCount").notNull().default(0),
+    clickedResultId: int("clickedResultId"),
+    satisfied: boolean("satisfied"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    byWs: index("ix_hsl_ws").on(t.workspaceId),
+    byUser: index("ix_hsl_user").on(t.userId),
+  }),
+);
+
+export const aiHelpConversations = mysqlTable(
+  "ai_help_conversations",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    userId: int("userId").notNull(),
+    startedAt: timestamp("startedAt").defaultNow().notNull(),
+    lastMessageAt: timestamp("lastMessageAt").defaultNow().notNull(),
+  },
+  (t) => ({ byWsUser: index("ix_ahc_ws_user").on(t.workspaceId, t.userId) }),
+);
+export type AiHelpConversation = typeof aiHelpConversations.$inferSelect;
+
+export const aiHelpMessages = mysqlTable(
+  "ai_help_messages",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    conversationId: int("conversationId").notNull(),
+    role: mysqlEnum("role", ["user", "assistant"]).notNull(),
+    body: text("body").notNull(),
+    citedArticleIds: json("citedArticleIds"),
+    confidence: decimal("confidence", { precision: 5, scale: 2 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({ byConv: index("ix_ahm_conv").on(t.conversationId) }),
+);
+export type AiHelpMessage = typeof aiHelpMessages.$inferSelect;
+
+export const tours = mysqlTable(
+  "tours",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    name: varchar("name", { length: 200 }).notNull(),
+    description: text("description"),
+    type: mysqlEnum("type", ["onboarding", "feature", "whats_new", "custom"]).notNull().default("feature"),
+    roleTags: json("roleTags"),
+    estimatedMinutes: int("estimatedMinutes").notNull().default(3),
+    prerequisiteTourId: int("prerequisiteTourId"),
+    status: mysqlEnum("status", ["draft", "published"]).notNull().default("draft"),
+    createdBy: int("createdBy"),
+    pageKey: varchar("pageKey", { length: 120 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  (t) => ({ byWs: index("ix_tours_ws").on(t.workspaceId) }),
+);
+export type Tour = typeof tours.$inferSelect;
+
+export const tourSteps = mysqlTable(
+  "tour_steps",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    tourId: int("tourId").notNull(),
+    sortOrder: int("sortOrder").notNull().default(0),
+    targetSelector: varchar("targetSelector", { length: 500 }),
+    targetDataTourId: varchar("targetDataTourId", { length: 200 }),
+    title: varchar("title", { length: 300 }).notNull(),
+    bodyMarkdown: text("bodyMarkdown"),
+    visualTreatment: mysqlEnum("visualTreatment", ["spotlight", "pulse", "arrow", "coach"]).notNull().default("spotlight"),
+    advanceCondition: mysqlEnum("advanceCondition", ["next_button", "element_clicked", "form_field_filled", "route_changed", "custom_event"]).notNull().default("next_button"),
+    advanceConfig: json("advanceConfig"),
+    skipAllowed: boolean("skipAllowed").notNull().default(true),
+    backAllowed: boolean("backAllowed").notNull().default(true),
+    branchingRules: json("branchingRules"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({ byTour: index("ix_ts_tour").on(t.tourId) }),
+);
+export type TourStep = typeof tourSteps.$inferSelect;
+
+export const userTourProgress = mysqlTable(
+  "user_tour_progress",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    userId: int("userId").notNull(),
+    tourId: int("tourId").notNull(),
+    status: mysqlEnum("status", ["not_started", "in_progress", "completed", "skipped"]).notNull().default("not_started"),
+    currentStep: int("currentStep").notNull().default(0),
+    startedAt: timestamp("startedAt"),
+    completedAt: timestamp("completedAt"),
+    lastResumedAt: timestamp("lastResumedAt"),
+  },
+  (t) => ({
+    uqUserTour: uniqueIndex("uq_utp_user_tour").on(t.userId, t.tourId),
+    byWs: index("ix_utp_ws").on(t.workspaceId),
+  }),
+);
+export type UserTourProgress = typeof userTourProgress.$inferSelect;
+
+export const userLearningPreferences = mysqlTable(
+  "user_learning_preferences",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    userId: int("userId").notNull(),
+    showCoachMascot: boolean("showCoachMascot").notNull().default(true),
+    showProactiveHints: boolean("showProactiveHints").notNull().default(true),
+    completedOnboarding: boolean("completedOnboarding").notNull().default(false),
+    preferredTourSpeed: mysqlEnum("preferredTourSpeed", ["slow", "normal", "fast"]).notNull().default("normal"),
+    dontShowHints: boolean("dontShowHints").notNull().default(false),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  (t) => ({ uqWsUser: uniqueIndex("uq_ulp_ws_user").on(t.workspaceId, t.userId) }),
+);
+export type UserLearningPreferences = typeof userLearningPreferences.$inferSelect;
+
+export const helpArticleFeedback = mysqlTable(
+  "help_article_feedback",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    articleId: int("articleId").notNull(),
+    userId: int("userId").notNull(),
+    helpful: boolean("helpful").notNull(),
+    comment: text("comment"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({ byArticle: index("ix_haf_article").on(t.articleId) }),
+);
+export type HelpArticleFeedback = typeof helpArticleFeedback.$inferSelect;
+
+export const tourAchievements = mysqlTable(
+  "tour_achievements",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    userId: int("userId").notNull(),
+    tourId: int("tourId").notNull(),
+    badge: varchar("badge", { length: 120 }),
+    earnedAt: timestamp("earnedAt").defaultNow().notNull(),
+  },
+  (t) => ({ byWsUser: index("ix_ta_ws_user").on(t.workspaceId, t.userId) }),
+);
+export type TourAchievement = typeof tourAchievements.$inferSelect;

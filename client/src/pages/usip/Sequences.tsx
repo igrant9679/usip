@@ -767,7 +767,7 @@ export default function Sequences() {
       <PageHeader title="Sequences" description="Build multi-step email and task cadences to engage prospects at scale with personalised touchpoints. Set delays, branching conditions, and auto-stop rules to keep every sequence relevant." pageKey="sequences"
         icon={<ListOrdered className="size-5" />}
       >
-        <Button onClick={() => setOpen(true)}><Plus className="size-4" /> New sequence</Button>
+        <Button onClick={() => setOpen(true)} data-tour-id="sequences-new-button"><Plus className="size-4" /> New sequence</Button>
       </PageHeader>
       <div className="p-6 grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="lg:col-span-1">

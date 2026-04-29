@@ -953,7 +953,7 @@ export default function Contacts() {
         }} disabled={!data?.length}>
           <Download className="size-4" /> Export CSV
         </Button>
-        <Button onClick={() => setOpen(true)}>
+        <Button onClick={() => setOpen(true)} data-tour-id="contacts-new-button">
           <Plus className="size-4" /> New contact
         </Button>
       </PageHeader>

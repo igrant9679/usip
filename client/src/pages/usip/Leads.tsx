@@ -267,7 +267,7 @@ export default function Leads() {
         }} disabled={!data?.length}>
           <Download className="size-4" /> Export CSV
         </Button>
-        <Button onClick={() => setCreateOpen(true)}><Plus className="size-4" /> New lead</Button>
+        <Button onClick={() => setCreateOpen(true)} data-tour-id="leads-new-button"><Plus className="size-4" /> New lead</Button>
       </PageHeader>
       <div className="p-6">
         {isLoading ? <Loader2 className="animate-spin size-4" /> : (data ?? []).length === 0 ? (

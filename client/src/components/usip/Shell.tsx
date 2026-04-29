@@ -54,6 +54,8 @@ import {
   Bot,
   Cpu,
   Radar,
+  HelpCircle,
+  GraduationCap,
 } from "lucide-react";
 import { ReactNode, useEffect, useState, useRef, createContext, useContext } from "react";
 import { Link, useLocation } from "wouter";
@@ -189,6 +191,18 @@ const NAV: NavGroup[] = [
       { href: "/scim", label: "SCIM", icon: Zap },
       { href: "/my-linkedin", label: "My LinkedIn", icon: Linkedin },
       { href: "/settings", label: "Settings", icon: Settings },
+      { href: "/tour-builder", label: "Tour Builder", icon: GraduationCap },
+    ],
+  },
+  {
+    label: "Help",
+    color: "#0891b2",
+    darkColor: "#67e8f9",
+    activeColor: "#0891b2",
+    activeBg: "rgba(8,145,178,0.10)",
+    darkActiveBg: "rgba(103,232,249,0.12)",
+    items: [
+      { href: "/help", label: "Help Center", icon: HelpCircle },
     ],
   },
 ];

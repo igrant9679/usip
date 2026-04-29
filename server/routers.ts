@@ -39,6 +39,8 @@ import { areRouter } from "./routers/are";
 import { cloduraRouter } from "./routers/clodura";
 import { pageDescriptionsRouter } from "./routers/pageDescriptions";
 import { csAiRouter, leadsAiRouter, contactsAiRouter, quotesAiRouter, workflowsAiRouter, forecastAiRouter, mailboxAiRouter, emailAutoSendRouter } from "./routers/aiFeatures";
+import { helpCenterRouter } from "./routers/helpCenter";
+import { toursRouter } from "./routers/tours";
 
 export const appRouter = router({
   system: systemRouter,
@@ -119,6 +121,8 @@ export const appRouter = router({
   forecastAi: forecastAiRouter,
   mailboxAi: mailboxAiRouter,
   emailAutoSend: emailAutoSendRouter,
+  helpCenter: helpCenterRouter,
+  tours: toursRouter,
 });
 
 export type AppRouter = typeof appRouter;

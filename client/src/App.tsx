@@ -64,6 +64,10 @@ import AREIcpAgent from "@/pages/usip/AREIcpAgent";
 import ARECampaigns from "@/pages/usip/ARECampaigns";
 import ARECampaignDetail from "@/pages/usip/ARECampaignDetail";
 import ARESettings from "@/pages/usip/ARESettings";
+import HelpCenter from "@/pages/usip/HelpCenter";
+import TourBuilder from "@/pages/usip/TourBuilder";
+import { HelpButton } from "@/components/usip/HelpDrawer";
+import { TourEngineProvider } from "@/components/usip/TourEngine";
 import { Loader2, Eye, EyeOff, LogIn } from "lucide-react";
 import { Route, Switch, useLocation } from "wouter";
 import { useEffect, useState } from "react";
@@ -270,6 +274,8 @@ function Router() {
       <Route path="/are/settings"><AuthGate><ARESettings /></AuthGate></Route>
       <Route path="/p/:token"><ProposalPortal /></Route>
       <Route path="/invite/accept"><InviteAccept /></Route>
+      <Route path="/help"><AuthGate><HelpCenter /></AuthGate></Route>
+      <Route path="/tour-builder"><AuthGate><TourBuilder /></AuthGate></Route>
       <Route path="/404"><NotFound /></Route>
       <Route><NotFound /></Route>
     </Switch>
@@ -283,6 +289,8 @@ function App() {
         <TooltipProvider>
           <Toaster />
           <Router />
+          <HelpButton />
+          <TourEngineProvider />
         </TooltipProvider>
       </ThemeProvider>
     </ErrorBoundary>
