@@ -1,4 +1,4 @@
-import { Shell, PageHeader } from "@/components/usip/Shell";
+import { Shell, PageHeader, useAccentColor } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -261,13 +261,15 @@ export default function DataHealth() {
 
   const total = metrics?.total ?? 0;
 
+  const accent = useAccentColor();
   return (
     <Shell title="Data Health">
       <PageHeader
         title="Data Health" pageKey="data-health"
         description="Monitor data quality across your CRM — duplicates, missing fields, and enrichment gaps."
-      
         icon={<ShieldCheck className="size-5" />}
+        className="border"
+        style={{ borderColor: accent, borderWidth: "2px" }}
       >
         <Button variant="outline" size="sm" onClick={() => { refetch(); refetchDupes(); }}>
           <RefreshCw className="size-3.5 mr-1.5" />

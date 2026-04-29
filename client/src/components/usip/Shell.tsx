@@ -400,7 +400,7 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
   );
 }
 
-export function PageHeader({ title, description: defaultDescription, pageKey, icon, children }: { title: string; description?: string; pageKey?: string; icon?: ReactNode; children?: ReactNode }) {
+export function PageHeader({ title, description: defaultDescription, pageKey, icon, children, className, style }: { title: string; description?: string; pageKey?: string; icon?: ReactNode; children?: ReactNode; className?: string; style?: React.CSSProperties }) {
   const accent = useAccentColor();
   const { user } = useAuth();
   const isAdmin = user?.role === "admin" || user?.role === "super_admin";
@@ -438,7 +438,8 @@ export function PageHeader({ title, description: defaultDescription, pageKey, ic
 
   return (
     <div
-      className="px-4 md:px-6 py-4 md:py-5 border-b flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4"
+      className={`px-4 md:px-6 py-4 md:py-5 border-b flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4${className ? ` ${className}` : ""}`}
+      style={style}
     >
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
