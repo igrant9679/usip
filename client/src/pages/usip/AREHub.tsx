@@ -299,7 +299,7 @@ export default function AREHub() {
       {/* ── Header ── */}
       <PageHeader
         title="Autonomous Revenue Engine" pageKey="are-hub"
-        description="Command centre for your ARE engine — campaigns, ICP, and pipeline flow."
+        description="Command centre for your Autonomous Revenue Engine — monitor campaigns, ICP health, and pipeline flow. Track every prospect from discovery through to booked meeting."
       
         icon={<Rocket className="size-5" />}
       >

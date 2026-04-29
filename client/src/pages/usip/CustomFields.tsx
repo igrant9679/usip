@@ -109,7 +109,7 @@ export default function CustomFields() {
 
   return (
     <Shell title="Custom Fields">
-      <PageHeader title="Custom Fields" description="Extend CRM entities with custom fields for your sales process." pageKey="custom-fields"
+      <PageHeader title="Custom Fields" description="Extend CRM entities with custom fields tailored to your unique sales process. Add text, number, date, dropdown, and multi-select fields to contacts, accounts, and deals." pageKey="custom-fields"
         icon={<SlidersHorizontal className="size-5" />}
       >
         <Button onClick={openAdd} size="sm">

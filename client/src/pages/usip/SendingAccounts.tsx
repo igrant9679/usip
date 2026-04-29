@@ -754,7 +754,7 @@ export default function SendingAccounts() {
       <div className="space-y-6">
         <PageHeader
           title="Sending Accounts" pageKey="sending-accounts"
-          description="Connect and manage email accounts used for outbound sending."
+          description="Connect and manage the email accounts used for outbound sending across sequences and campaigns. Monitor deliverability health, warm-up status, and daily send limits for each account."
         
         icon={<AtSign className="size-5" />}
       >

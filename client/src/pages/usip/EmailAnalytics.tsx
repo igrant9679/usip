@@ -151,7 +151,7 @@ export default function EmailAnalytics() {
     <Shell title="Email Analytics">
       <PageHeader
         title="Email Analytics" pageKey="email-analytics"
-        description="Track open rates, click-through, reply rates, and deliverability."
+        description="Track open rates, click-through rates, reply rates, and deliverability across all campaigns and sequences. Identify top-performing subject lines and sending windows with AI-powered insights."
       
         icon={<BarChart2 className="size-5" />}
       />

@@ -392,7 +392,7 @@ export default function Dashboards() {
 
   return (
     <Shell>
-      <PageHeader title="Dashboards" description="Build custom dashboards with KPI widgets, charts, and live CRM data." pageKey="dashboards"
+      <PageHeader title="Dashboards" description="Build custom dashboards with KPI widgets, charts, and live CRM data pulled in real time. Share dashboards with your team or embed them in QBRs and executive reports." pageKey="dashboards"
         icon={<LayoutGrid className="size-5" />}
       >
         <Button size="sm" variant="outline" onClick={() => setOpenSched(true)}>

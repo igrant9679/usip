@@ -313,7 +313,7 @@ export default function Accounts() {
 
   return (
     <Shell title="Accounts">
-      <PageHeader title="Accounts" description="Manage company accounts, ARR rollup, and associated contacts and deals." pageKey="accounts"
+      <PageHeader title="Accounts" description="Manage company accounts with full hierarchy, ARR rollup, and associated contacts and deals. Track engagement history, health scores, and renewal risk in one place." pageKey="accounts"
         icon={<Building2 className="size-5" />}
       >
         {someSelected && (

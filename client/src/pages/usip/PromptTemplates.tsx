@@ -150,7 +150,7 @@ export default function PromptTemplatesPage() {
     <Shell title="Prompt Templates">
       <PageHeader
         title="Prompt Templates" pageKey="prompt-templates"
-        description="Manage AI prompt templates for the email composer, research, and ICP agent."
+        description="Manage AI prompt templates used across the email composer, research pipeline, and ICP agent. Customise system prompts, tone instructions, and output formats for each AI-powered feature."
       
         icon={<MessageSquare className="size-5" />}
       >

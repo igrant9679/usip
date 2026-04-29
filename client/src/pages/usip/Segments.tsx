@@ -407,7 +407,7 @@ export default function Segments() {
     <Shell title="Segments">
       <PageHeader
         title="Segments" pageKey="segments"
-        description="Build dynamic segments using CRM fields, signals, and AI scores."
+        description="Build dynamic audience segments using CRM fields, behaviour signals, and AI-generated scores. Segments update automatically and can be used as campaign audiences or workflow triggers."
       
         icon={<Filter className="size-5" />}
       >

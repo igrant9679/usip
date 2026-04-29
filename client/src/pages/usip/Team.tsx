@@ -344,7 +344,7 @@ export default function Team() {
 
   return (
     <Shell title="Team">
-      <PageHeader title="Workspace team" description="Manage team members, roles, permissions, and workspace access." pageKey="team"
+      <PageHeader title="Workspace team" description="Manage team members, roles, permissions, and workspace access controls. Invite new members, assign roles, view login history, and configure SSO and SCIM provisioning." pageKey="team"
         icon={<UsersRound className="size-5" />}
       >
         {isAdmin && (

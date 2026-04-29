@@ -117,7 +117,7 @@ export function EmailSuppressions() {
 
   return (
     <Shell>
-      <PageHeader title="Email Suppressions" description="Manage opt-outs, bounces, and suppression lists to protect sender reputation." pageKey="email-suppressions"
+      <PageHeader title="Email Suppressions" description="Manage opt-outs, hard bounces, and global suppression lists to protect your sender reputation. Suppressed addresses are automatically excluded from all future sequences and campaigns." pageKey="email-suppressions"
         icon={<Ban className="size-5" />}
       >
         <Button onClick={() => setAddOpen(true)} size="sm">

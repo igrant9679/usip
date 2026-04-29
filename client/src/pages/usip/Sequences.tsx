@@ -761,7 +761,7 @@ export default function Sequences() {
 
   return (
     <Shell title="Sequences">
-      <PageHeader title="Sequences" description="Build multi-step email and task cadences to engage prospects at scale." pageKey="sequences"
+      <PageHeader title="Sequences" description="Build multi-step email and task cadences to engage prospects at scale with personalised touchpoints. Set delays, branching conditions, and auto-stop rules to keep every sequence relevant." pageKey="sequences"
         icon={<ListOrdered className="size-5" />}
       >
         <Button onClick={() => setOpen(true)}><Plus className="size-4" /> New sequence</Button>

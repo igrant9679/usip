@@ -22,7 +22,7 @@ export default function SCIM() {
 
   return (
     <Shell title="SCIM">
-      <PageHeader title="SCIM provisioning" description="Configure SCIM 2.0 to sync users and groups from your identity provider." pageKey="scim"
+      <PageHeader title="SCIM provisioning" description="Configure SCIM 2.0 provisioning to automatically sync users and groups from your identity provider. Supports Okta, Azure AD, and any SCIM-compliant IdP for zero-touch user lifecycle management." pageKey="scim"
         icon={<Shield className="size-5" />}
       >
         <Button onClick={() => setOpen(true)}><Plus className="size-4" /> New provider</Button>

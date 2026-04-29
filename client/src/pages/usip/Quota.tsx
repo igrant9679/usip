@@ -99,7 +99,7 @@ export default function Quota() {
 
   return (
     <Shell title="Quota Management">
-      <PageHeader title="Quota Management" description="Set and track revenue, deal, and activity quotas per rep." pageKey="quota"
+      <PageHeader title="Quota Management" description="Set and track revenue, deal count, and activity quotas per rep and per period. Visualise attainment in real time and get early warnings when reps are trending below target." pageKey="quota"
         icon={<TrendingUp className="size-5" />}
       >
         <div className="flex items-center gap-3">

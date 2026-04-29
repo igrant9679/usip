@@ -33,7 +33,7 @@ export default function Quotes() {
 
   return (
     <Shell title="Quotes (CPQ)">
-      <PageHeader title="Quotes & proposals" description="Generate and manage price quotes linked to open opportunities." pageKey="quotes"
+      <PageHeader title="Quotes & proposals" description="Generate and manage price quotes linked directly to open opportunities. Add line items from your product catalogue, apply discounts, and send quotes for e-signature in one step." pageKey="quotes"
         icon={<Receipt className="size-5" />}
       >
         <Button onClick={() => setOpenNew(true)}><Plus className="size-4" /> New quote</Button>

@@ -161,7 +161,7 @@ export default function BrandVoicePage() {
     <Shell title="Brand Voice">
       <PageHeader
         title="Brand Voice" pageKey="brand-voice"
-        description="Define brand voice guidelines so AI-generated content stays on-message."
+        description="Define your brand voice guidelines so every piece of AI-generated content stays on-message. Set tone, vocabulary preferences, and words to avoid across all outreach and campaigns."
       
         icon={<Mic2 className="size-5" />}
       >

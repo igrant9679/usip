@@ -438,7 +438,7 @@ export function PageHeader({ title, description: defaultDescription, pageKey, ic
 
   return (
     <div
-      className={`px-4 md:px-6 py-8 md:py-10 min-h-[90px] border flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4${className ? ` ${className}` : ""}`}
+      className={`px-4 md:px-6 py-8 md:py-10 min-h-[120px] border flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4${className ? ` ${className}` : ""}`}
       style={{ border: `2px solid ${accent}`, ...style }}
     >
       <div className="flex-1 min-w-0">

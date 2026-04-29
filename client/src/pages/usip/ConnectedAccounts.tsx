@@ -283,7 +283,7 @@ export default function ConnectedAccounts() {
   return (
     <Shell>
       <PageHeader
-        title="Connected Accounts" description="Connect LinkedIn, email, and social accounts for outreach and engagement." pageKey="connected-accounts"
+        title="Connected Accounts" description="Connect your LinkedIn, email, and social accounts to power outreach, engagement tracking, and automated follow-ups. All connected accounts are synced in real time." pageKey="connected-accounts"
         subtitle="Manage your multichannel connections — LinkedIn, email, messaging, and more"
         actions={
           <div className="flex gap-2"

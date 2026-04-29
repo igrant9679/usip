@@ -1667,7 +1667,7 @@ export default function EmailBuilderPage() {
     <Shell title="Email Builder">
       <PageHeader
         title="Email Builder" pageKey="email-builder"
-        description="Design and preview HTML email templates with drag-and-drop blocks."
+        description="Design and preview HTML email templates using drag-and-drop content blocks. Build reusable layouts for campaigns, sequences, and one-off sends with live mobile preview."
       
         icon={<PenLine className="size-5" />}
       />

@@ -24,7 +24,7 @@ export default function Renewals() {
 
   return (
     <Shell title="Renewals">
-      <PageHeader title="Renewal pipeline" description="Manage the full renewal cycle — from early warnings to signed renewals." pageKey="renewals" 
+      <PageHeader title="Renewal pipeline" description="Manage the full renewal cycle from early-warning flags through negotiation to signed renewals. Automate renewal reminders, track contract status, and surface expansion opportunities at renewal time." pageKey="renewals" 
         icon={<RefreshCcw className="size-5" />}
       />
       <div className="p-4 overflow-x-auto">

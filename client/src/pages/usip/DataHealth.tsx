@@ -266,7 +266,7 @@ export default function DataHealth() {
     <Shell title="Data Health">
       <PageHeader
         title="Data Health" pageKey="data-health"
-        description="Monitor data quality — duplicates, missing fields, and enrichment gaps."
+        description="Monitor data quality across your entire CRM — surface duplicates, missing fields, and enrichment gaps. Run bulk fixes and enrichment jobs to keep your data clean and actionable."
         icon={<ShieldCheck className="size-5" />}
       >
         <Button variant="outline" size="sm" onClick={() => { refetch(); refetchDupes(); }}>

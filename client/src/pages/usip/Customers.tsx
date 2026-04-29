@@ -32,7 +32,7 @@ export default function Customers() {
 
   return (
     <Shell title="Customers">
-      <PageHeader title="Customers" description="Track health scores, renewal risk, NPS, and expansion potential." pageKey="customers" 
+      <PageHeader title="Customers" description="Track customer health scores, renewal risk, NPS trends, and expansion potential post-close. Identify at-risk accounts early and surface upsell opportunities before they go cold." pageKey="customers" 
         icon={<HeartHandshake className="size-5" />}
       />
       <div className="p-6 space-y-4">

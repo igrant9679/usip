@@ -57,7 +57,7 @@ export default function Workflows() {
 
   return (
     <Shell title="Workflow Automation">
-      <PageHeader title="Workflow Automation" description="Automate repetitive actions with trigger-based rules across the CRM." pageKey="workflows"
+      <PageHeader title="Workflow Automation" description="Automate repetitive actions with trigger-based workflow rules across the entire CRM. Workflows fire on record changes, time delays, or score thresholds and can update fields, send emails, or create tasks." pageKey="workflows"
         icon={<GitBranch className="size-5" />}
       >
         <Button onClick={() => setOpenNew(true)}><Plus className="size-4" /> New rule</Button>

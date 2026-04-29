@@ -56,7 +56,7 @@ export default function NotificationPrefs() {
 
   return (
     <Shell title="Notification Preferences">
-      <PageHeader title="Notification Preferences" description="Configure which events trigger in-app and email notifications." pageKey="notification-prefs"
+      <PageHeader title="Notification Preferences" description="Configure which events trigger in-app bell notifications and email digests for your account. Customise notification frequency, grouping, and delivery channel per event type." pageKey="notification-prefs"
         icon={<BellRing className="size-5" />}
       >
         <Button onClick={handleSave} disabled={!dirty || update.isPending}>

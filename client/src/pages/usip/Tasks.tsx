@@ -17,7 +17,7 @@ export default function Tasks() {
   });
   return (
     <Shell title="Tasks">
-      <PageHeader title="Tasks" description="Create, assign, and track tasks across deals, accounts, and customers." pageKey="tasks"
+      <PageHeader title="Tasks" description="Create, assign, and track tasks across every deal, account, and customer record in the CRM. Set due dates, priorities, and reminders so nothing falls through the cracks." pageKey="tasks"
         icon={<CheckSquare className="size-5" />}
       >
         <div className="flex items-center gap-1 bg-secondary rounded-md p-0.5">

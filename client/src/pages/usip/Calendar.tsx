@@ -460,7 +460,7 @@ export default function CalendarPage() {
 
   return (
     <Shell title="My Calendar">
-      <PageHeader title="My Calendar" description="Schedule and manage meetings, calls, and follow-ups across your pipeline." pageKey="calendar" 
+      <PageHeader title="My Calendar" description="Schedule and manage meetings, calls, and follow-ups across your entire pipeline. Connect your Google or Outlook calendar to sync events and receive smart scheduling suggestions." pageKey="calendar" 
         icon={<CalendarDays className="size-5" />}
       />
       <div className="h-[calc(100vh-8.5rem)] flex overflow-hidden">

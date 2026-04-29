@@ -48,7 +48,7 @@ export default function SegmentRules() {
 
   return (
     <Shell>
-      <PageHeader title="Segment Auto-Enroll" description="Define auto-enrolment rules that keep segments fresh as data changes." pageKey="segment-rules"
+      <PageHeader title="Segment Auto-Enroll" description="Define auto-enrolment rules that keep your audience segments fresh as CRM data changes. Rules evaluate on every record update so segments always reflect your latest criteria." pageKey="segment-rules"
         icon={<SlidersHorizontal className="size-5" />}
       >
         {isAdmin && (
