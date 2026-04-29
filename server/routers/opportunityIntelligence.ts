@@ -179,8 +179,14 @@ export const opportunityIntelligenceRouter = router({
                     },
                   },
                   winStory: { type: "string", description: "Short narrative of how this deal could be won" },
+                  suggestedStage: {
+                    type: "string",
+                    enum: ["discovery", "qualified", "proposal", "negotiation", "won", "none"],
+                    description: "The stage this deal should move to based on activity evidence. Return 'none' if the current stage is appropriate.",
+                  },
+                  suggestedStageRationale: { type: "string", description: "One or two sentences explaining why this stage change is recommended, or why no change is needed." },
                 },
-                required: ["winProbability", "winProbabilityRationale", "nextBestActions", "conversationSignals", "actionItems", "emailEffectivenessScore", "altSubjectLines", "winStory"],
+                required: ["winProbability", "winProbabilityRationale", "nextBestActions", "conversationSignals", "actionItems", "emailEffectivenessScore", "altSubjectLines", "winStory", "suggestedStage", "suggestedStageRationale"],
                 additionalProperties: false,
               },
             },
@@ -198,6 +204,8 @@ export const opportunityIntelligenceRouter = router({
           emailEffectivenessScore: 50,
           altSubjectLines: [],
           winStory: "",
+          suggestedStage: "none",
+          suggestedStageRationale: "",
         };
       }
 
@@ -213,6 +221,8 @@ export const opportunityIntelligenceRouter = router({
         altSubjectLines: result.altSubjectLines ?? [],
         winStory: result.winStory ?? "",
         outreachSequenceSuggestion: null,
+        suggestedStage: result.suggestedStage === "none" ? null : (result.suggestedStage ?? null),
+        suggestedStageRationale: result.suggestedStageRationale ?? null,
       });
 
       // Update opportunity winProb

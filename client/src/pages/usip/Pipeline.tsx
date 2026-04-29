@@ -7,7 +7,7 @@ import { Field, fmt$, FormDialog, SelectField } from "@/components/usip/Common";
 import { PageHeader, Shell } from "@/components/usip/Shell";
 import { RecordDrawer } from "@/components/usip/RecordDrawer";
 import { trpc } from "@/lib/trpc";
-import { Brain, Download, Loader2, Plus, TrendingUp, Zap, Filter, X, User, KanbanSquare } from "lucide-react";
+import { ArrowRight, Brain, Download, Loader2, Plus, TrendingUp, Zap, Filter, X, User, KanbanSquare } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useLocation } from "wouter";
@@ -46,14 +46,23 @@ function WinProbBadge({ prob, aiGenerated }: { prob: number; aiGenerated?: boole
 }
 
 function DealCard({
-  opp, intel, onOpen, onAnalyze, isAnalyzing,
+  opp, intel, onOpen, onAnalyze, isAnalyzing, onAcceptStage, isAccepting,
 }: {
   opp: any; intel: any | null; onOpen: () => void;
   onAnalyze: (e: React.MouseEvent) => void; isAnalyzing: boolean;
+  onAcceptStage: (e: React.MouseEvent, toStage: string) => void; isAccepting: boolean;
 }) {
   const winProb = intel ? Math.round(Number(intel.winProbability)) : opp.winProb;
   const nba: any[] = (intel?.nextBestActions as any) ?? [];
   const topNba = nba[0] ?? null;
+  // Only show suggestion if it's a different stage from current and not won/lost
+  const suggestedStage: string | null = intel?.suggestedStage ?? null;
+  const showStageSuggestion =
+    suggestedStage &&
+    suggestedStage !== opp.stage &&
+    suggestedStage !== "won" &&
+    suggestedStage !== "lost";
+  const stageLabel = (id: string) => STAGES.find((s) => s.id === id)?.label ?? id;
 
   return (
     <div
@@ -117,6 +126,37 @@ function DealCard({
 
       {!intel && (
         <p className="text-[10px] text-muted-foreground/60 mt-2 italic">No AI analysis yet</p>
+      )}
+
+      {showStageSuggestion && (
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div
+                className="mt-2 pt-2 border-t border-dashed flex items-center justify-between gap-1"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex items-center gap-1 min-w-0">
+                  <Brain className="size-3 shrink-0 text-violet-500" />
+                  <span className="text-[10px] text-violet-700 dark:text-violet-300 font-medium truncate">
+                    AI suggests: {stageLabel(suggestedStage!)}
+                  </span>
+                </div>
+                <button
+                  onClick={(e) => onAcceptStage(e, suggestedStage!)}
+                  disabled={isAccepting}
+                  className="shrink-0 flex items-center gap-0.5 text-[10px] font-semibold px-1.5 py-0.5 rounded bg-violet-100 text-violet-700 hover:bg-violet-200 dark:bg-violet-900/40 dark:text-violet-300 dark:hover:bg-violet-900/70 transition-colors disabled:opacity-50"
+                >
+                  {isAccepting ? <Loader2 className="size-2.5 animate-spin" /> : <ArrowRight className="size-2.5" />}
+                  Accept
+                </button>
+              </div>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" className="text-xs max-w-[220px]">
+              {intel?.suggestedStageRationale || "AI recommends advancing this deal."}
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       )}
     </div>
   );
@@ -305,6 +345,7 @@ export default function Pipeline() {
   }, [boardIntel]);
 
   const [analyzingIds, setAnalyzingIds] = useState<Set<number>>(new Set());
+  const [acceptingIds, setAcceptingIds] = useState<Set<number>>(new Set());
   const [view, setView] = useState<"board" | "forecast">("board");
 
   const generateIntel = trpc.oppIntelligence.generateIntelligence.useMutation({
@@ -324,6 +365,25 @@ export default function Pipeline() {
     e.stopPropagation();
     setAnalyzingIds((prev) => new Set(prev).add(opportunityId));
     generateIntel.mutate({ opportunityId });
+  };
+
+  const requestStageChange = trpc.oppIntelligence.requestStageChange.useMutation({
+    onSuccess: (_data, vars) => {
+      utils.opportunities.board.invalidate();
+      utils.oppIntelligence.getIntelligenceForBoard.invalidate();
+      setAcceptingIds((prev) => { const next = new Set(prev); next.delete(vars.opportunityId); return next; });
+      toast.success("Stage change submitted for approval");
+    },
+    onError: (e, vars) => {
+      setAcceptingIds((prev) => { const next = new Set(prev); next.delete(vars.opportunityId); return next; });
+      toast.error(e.message);
+    },
+  });
+
+  const handleAcceptStage = (e: React.MouseEvent, opportunityId: number, toStage: string) => {
+    e.stopPropagation();
+    setAcceptingIds((prev) => new Set(prev).add(opportunityId));
+    requestStageChange.mutate({ opportunityId, toStage, note: "Accepted AI stage suggestion" });
   };
 
   const setStage = trpc.opportunities.setStage.useMutation({
@@ -447,6 +507,8 @@ export default function Pipeline() {
                         })}
                         onAnalyze={(e) => handleAnalyze(e, o.id)}
                         isAnalyzing={analyzingIds.has(o.id)}
+                        onAcceptStage={(e, toStage) => handleAcceptStage(e, o.id, toStage)}
+                        isAccepting={acceptingIds.has(o.id)}
                       />
                     ))}
                   </div>

@@ -1410,6 +1410,9 @@ export const opportunityIntelligence = mysqlTable(
     altSubjectLines: json("altSubjectLines"), // [{subject, rationale}]
     winStory: text("winStory"),
     outreachSequenceSuggestion: json("outreachSequenceSuggestion"),
+    /** AI-suggested next stage (e.g. "proposal") — null means no change suggested */
+    suggestedStage: varchar("suggestedStage", { length: 64 }),
+    suggestedStageRationale: text("suggestedStageRationale"),
     generatedAt: timestamp("generatedAt").defaultNow().notNull(),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
