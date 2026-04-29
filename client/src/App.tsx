@@ -287,10 +287,11 @@ function App() {
     <ErrorBoundary>
       <ThemeProvider defaultTheme="light" switchable={true}>
         <TooltipProvider>
-          <Toaster />
-          <Router />
-          <HelpButton />
-          <TourEngineProvider />
+          <TourEngineProvider>
+            <Toaster />
+            <Router />
+            <HelpButton />
+          </TourEngineProvider>
         </TooltipProvider>
       </ThemeProvider>
     </ErrorBoundary>

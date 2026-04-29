@@ -24,6 +24,7 @@ import { registerUnipileWebhookRoutes } from "../unipileWebhook";
 import { registerCloduraWebhookRoutes } from "../services/clodura/webhooks";
 import { runCloduraEnrichmentWorker, purgeCloduraCaches } from "../workers/cloduraEnrichmentWorker";
 import { registerPasswordAuthRoutes } from "../passwordAuth";
+import { seedToursForAllWorkspaces } from "../seedTours";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -82,6 +83,13 @@ async function startServer() {
   server.listen(port, () => {
     console.log(`Server running on http://localhost:${port}/`);
   });
+
+  // Seed demo guided tours for all workspaces on startup (idempotent)
+  setTimeout(() => {
+    seedToursForAllWorkspaces().catch((e) =>
+      console.error("[SeedTours] startup seed failed:", e)
+    );
+  }, 15_000); // 15s delay to let DB settle
 
   // Daily email verification maintenance: snapshot + auto re-verify
   // Run once on startup (catches up if server was down), then every 24h
