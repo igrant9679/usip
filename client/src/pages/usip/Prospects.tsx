@@ -668,23 +668,22 @@ export default function ProspectsPage() {
   };
 
   return (
-    <div className="flex flex-col h-full">
+    <Shell title="Prospects">
       <PageHeader
         title="Prospects"
-        description="Outbound prospects sourced from Clodura.ai. Search, ingest, and promote to contacts."
-        actions={
-          <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={() => refetch()}>
-              <RefreshCw className="h-4 w-4 mr-2" />
-              Refresh
-            </Button>
-            <Button size="sm" onClick={() => setSearchOpen(true)}>
-              <Zap className="h-4 w-4 mr-2" />
-              Search Clodura
-            </Button>
-          </div>
-        }
-      />
+        description="Outbound prospects sourced from Clodura.ai."
+        pageKey="prospects"
+        icon={<Zap className="size-5" />}
+      >
+        <Button variant="outline" size="sm" onClick={() => refetch()}>
+          <RefreshCw className="h-4 w-4 mr-2" />
+          Refresh
+        </Button>
+        <Button size="sm" onClick={() => setSearchOpen(true)}>
+          <Zap className="h-4 w-4 mr-2" />
+          Search Clodura
+        </Button>
+      </PageHeader>
 
       <div className="flex-1 overflow-hidden flex flex-col p-6 gap-4">
         {/* Toolbar */}
@@ -912,6 +911,6 @@ export default function ProspectsPage() {
           <CloduraSearchPanel onClose={() => setSearchOpen(false)} />
         </SheetContent>
       </Sheet>
-    </div>
+    </Shell>
   );
 }
