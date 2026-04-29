@@ -1,6 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { Field, FormDialog, SelectField, StatusPill, TextareaField } from "@/components/usip/Common";
 import { EmptyState, PageHeader, Shell } from "@/components/usip/Shell";
+import { RichTextEditor } from "@/components/usip/RichTextEditor";
 import { trpc } from "@/lib/trpc";
 import { BarChart2, Check, ChevronDown, ChevronRight, Eye, FileText, MousePointer, Pencil, Send, Sparkles, Trash2, X, Zap, AlertTriangle, XCircle } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -251,12 +252,13 @@ function EditDraftDialog({ draft, open, onClose }: { draft: any | null; open: bo
           </div>
           <div className="space-y-1.5">
             <Label className="text-sm">Body</Label>
-            <Textarea
+            <RichTextEditor
               value={body}
-              onChange={(e) => setBody(e.target.value)}
-              rows={12}
-              className="resize-y font-mono text-sm"
+              onChange={(html) => setBody(html)}
               placeholder="Email body — use {{firstName}}, {{lastName}}, {{company}}, {{senderName}} as merge variables"
+              minHeight="280px"
+              maxHeight="500px"
+              compact
             />
             <p className="text-xs text-muted-foreground">Merge variables: <code>{"{{firstName}}"}</code> <code>{"{{lastName}}"}</code> <code>{"{{company}}"}</code> <code>{"{{senderName}}"}</code></p>
           </div>

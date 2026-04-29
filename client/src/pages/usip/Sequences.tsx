@@ -7,6 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Field, FormDialog, Section, SelectField, StatusPill, TextareaField } from "@/components/usip/Common";
 import { EmptyState, PageHeader, Shell } from "@/components/usip/Shell";
+import { RichTextEditor } from "@/components/usip/RichTextEditor";
 import { trpc } from "@/lib/trpc";
 import {
   Activity, GitBranch, Pause, Play, Plus, Power, CheckCircle2, XCircle,
@@ -186,13 +187,14 @@ function StepEditor({ steps, onChange, disabled }: { steps: Step[]; onChange: (s
                 onChange={(e) => updateStep(i, { subject: e.target.value })}
                 className="h-7 text-sm"
               />
-              <Textarea
-                placeholder="Body (optional — leave blank to compose with AI at send time)"
+              <RichTextEditor
                 value={step.body ?? ""}
+                onChange={(html) => updateStep(i, { body: html })}
+                placeholder="Body (optional — leave blank to compose with AI at send time)"
+                minHeight="80px"
+                maxHeight="300px"
+                compact
                 disabled={disabled}
-                onChange={(e) => updateStep(i, { body: e.target.value })}
-                rows={3}
-                className="text-sm resize-none"
               />
             </div>
           )}
@@ -213,13 +215,14 @@ function StepEditor({ steps, onChange, disabled }: { steps: Step[]; onChange: (s
           )}
 
           {step.type === "task" && (
-            <Textarea
+            <RichTextEditor
+              value={step.body ?? ""}
+              onChange={(html) => updateStep(i, { body: html })}
               placeholder="Task description"
-              value={step.body}
+              minHeight="60px"
+              maxHeight="200px"
+              compact
               disabled={disabled}
-              onChange={(e) => updateStep(i, { body: e.target.value })}
-              rows={2}
-              className="text-sm resize-none"
             />
           )}
         </div>

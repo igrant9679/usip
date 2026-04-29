@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { RichTextEditor } from "@/components/usip/RichTextEditor";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
@@ -536,11 +537,14 @@ function ContentTab({ proposal, sections, onRefetch }: { proposal: any; sections
             )}
           </div>
         </div>
-        <Textarea
+        <RichTextEditor
           value={currentContent}
-          onChange={(e) => setEditContent(e.target.value)}
+          onChange={(html) => setEditContent(html)}
           placeholder={`Write the ${SECTION_KEYS.find((s) => s.key === activeSection)?.label} section here, or use AI Generate to create a draft...`}
-          className="flex-1 min-h-[400px] resize-none font-mono text-sm"
+          minHeight="400px"
+          maxHeight="700px"
+          showCount
+          className="flex-1"
         />
         {editContent !== null && editContent !== (sectionMap[activeSection] ?? "") && (
           <p className="text-xs text-amber-600">Unsaved changes</p>
@@ -942,11 +946,14 @@ function ShareTab({ proposal, onRefetch }: { proposal: any; onRefetch: () => voi
             {/* Personal message */}
             <div>
               <Label>Personal message (optional)</Label>
-              <Textarea
+              <RichTextEditor
                 value={personalMessage}
-                onChange={(e) => setPersonalMessage(e.target.value)}
-                className="mt-1 min-h-[80px]"
+                onChange={(html) => setPersonalMessage(html)}
                 placeholder="Add a personal note to include in the email..."
+                minHeight="80px"
+                maxHeight="200px"
+                compact
+                className="mt-1"
               />
             </div>
             {/* Email preview toggle */}

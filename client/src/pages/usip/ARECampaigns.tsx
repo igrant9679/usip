@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { RichTextEditor } from "@/components/usip/RichTextEditor";
 import { Checkbox } from "@/components/ui/checkbox";
 import { trpc } from "@/lib/trpc";
 import {
@@ -195,12 +196,13 @@ export default function ARECampaigns() {
             </div>
             <div>
               <Label className="text-xs text-muted-foreground mb-1.5 block">Description (optional)</Label>
-              <Textarea
+              <RichTextEditor
                 value={form.description}
-                onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+                onChange={(html) => setForm((f) => ({ ...f, description: html }))}
                 placeholder="What is this campaign targeting?"
-                className="text-sm"
-                rows={2}
+                minHeight="60px"
+                maxHeight="200px"
+                compact
               />
             </div>
             <div className="grid grid-cols-2 gap-3">

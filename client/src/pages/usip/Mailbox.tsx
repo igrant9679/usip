@@ -21,6 +21,7 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
+import { RichTextEditor } from "@/components/usip/RichTextEditor";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -345,11 +346,13 @@ function ComposeDialog({ state, onClose }: { state: ComposeState; onClose: () =>
                 </div>
               </div>
             )}
-            <Textarea
+            <RichTextEditor
               value={body}
-              onChange={(e) => setBody(e.target.value)}
+              onChange={(html) => setBody(html)}
               placeholder="Write your message..."
-              className="min-h-[220px] font-mono text-sm"
+              minHeight="220px"
+              maxHeight="500px"
+              compact
             />
           </div>
           {(state.mode === "reply" || state.mode === "forward") && !aiLoading && (

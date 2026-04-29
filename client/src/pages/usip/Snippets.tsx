@@ -3,6 +3,7 @@
  */
 import { useState } from "react";
 import { Shell, PageHeader } from "@/components/usip/Shell";
+import { RichTextEditor } from "@/components/usip/RichTextEditor";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -307,11 +308,13 @@ export default function SnippetsPage() {
                   AI Generate
                 </Button>
               </div>
-              <Textarea
+              <RichTextEditor
                 value={form.bodyPlain}
-                onChange={(e) => setForm((f) => ({ ...f, bodyPlain: e.target.value }))}
+                onChange={(html) => setForm((f) => ({ ...f, bodyPlain: html }))}
                 placeholder="Your snippet text with {{firstName}} tokens…"
-                className="min-h-[140px] resize-y text-sm"
+                minHeight="140px"
+                maxHeight="350px"
+                compact
               />
               <div className="flex flex-wrap gap-1 mt-1">
                 {MERGE_TAGS.map((tag) => (
