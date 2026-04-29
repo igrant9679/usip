@@ -599,6 +599,14 @@ const PROVIDER_META: Record<string, { name: string; hint: string; builtIn?: bool
       { key: "secret", label: "Signing secret", type: "password" },
     ],
   },
+  clodura: {
+    name: "Clodura.ai",
+    hint: "Prospect search, email/phone reveal, and contact enrichment via the Clodura.ai People Intelligence API.",
+    docsUrl: "https://docs.clodura.ai",
+    configFields: [
+      { key: "apiKey", label: "API Key", type: "password" },
+    ],
+  },
 };
 
 const ALL_PROVIDERS = Object.keys(PROVIDER_META);

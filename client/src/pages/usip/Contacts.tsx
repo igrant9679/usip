@@ -28,6 +28,7 @@ import {
   Tag,
   Megaphone,
   Download,
+  Sparkles,
 } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { toast } from "sonner";
@@ -560,6 +561,214 @@ function EditContactDialog({ contact, open, onOpenChange, onSaved }: { contact: 
   );
 }
 
+/* ─── Enrich Diff-and-Approve Modal ────────────────────────────────────── */
+type DiffRow = {
+  fieldName: string;
+  label: string;
+  currentValue: string | null;
+  proposedValue: string | null;
+  isManuallyEdited: boolean;
+};
+
+function EnrichDiffModal({
+  contactId,
+  open,
+  onOpenChange,
+  onApplied,
+}: {
+  contactId: number | null;
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  onApplied: () => void;
+}) {
+  const [selectedFields, setSelectedFields] = useState<Set<string>>(new Set());
+
+  const preview = trpc.clodura.enrichPreview.useMutation({
+    onSuccess: (data) => {
+      if (data.eligible && data.diff) {
+        // Pre-select all non-manually-edited fields that have a proposed value
+        setSelectedFields(
+          new Set(
+            data.diff
+              .filter((r: DiffRow) => !r.isManuallyEdited)
+              .map((r: DiffRow) => r.fieldName),
+          ),
+        );
+      }
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const apply = trpc.clodura.enrichApply.useMutation({
+    onSuccess: (res) => {
+      toast.success(`Applied ${res.applied} field update${res.applied !== 1 ? "s" : ""}${res.skippedManuallyEdited ? ` (${res.skippedManuallyEdited} manually-edited fields skipped)` : ""}`);
+      onApplied();
+      onOpenChange(false);
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  // Trigger preview when modal opens
+  useEffect(() => {
+    if (open && contactId) {
+      preview.reset();
+      setSelectedFields(new Set());
+      preview.mutate({ contactId });
+    }
+  }, [open, contactId]);
+
+  const diff: DiffRow[] = (preview.data as any)?.diff ?? [];
+  const noMatch = (preview.data as any)?.noMatch;
+  const notEligible = (preview.data as any)?.eligible === false;
+
+  const toggleField = (fieldName: string) => {
+    setSelectedFields((prev) => {
+      const next = new Set(prev);
+      if (next.has(fieldName)) next.delete(fieldName);
+      else next.add(fieldName);
+      return next;
+    });
+  };
+
+  const handleApply = () => {
+    if (!contactId) return;
+    const fields = diff
+      .filter((r: DiffRow) => selectedFields.has(r.fieldName))
+      .map((r: DiffRow) => ({ fieldName: r.fieldName, newValue: r.proposedValue }));
+    apply.mutate({
+      contactId,
+      fields,
+      rawResponse: (preview.data as any)?.rawResponse,
+    });
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Enrich Contact with Clodura</DialogTitle>
+          <DialogDescription>
+            Review proposed field updates from Clodura.ai. Deselect any fields you don't want to apply.
+          </DialogDescription>
+        </DialogHeader>
+
+        {preview.isPending && (
+          <div className="flex items-center justify-center py-12 gap-3 text-muted-foreground">
+            <Loader2 className="h-5 w-5 animate-spin" />
+            <span className="text-sm">Fetching enrichment data…</span>
+          </div>
+        )}
+
+        {preview.isError && (
+          <div className="flex items-center gap-2 text-destructive text-sm py-4">
+            <AlertCircle className="h-4 w-4" />
+            {preview.error.message}
+          </div>
+        )}
+
+        {notEligible && (
+          <div className="text-sm text-muted-foreground py-4">
+            This contact doesn't have enough identifiers (LinkedIn URL, email, or name + company) for enrichment.
+          </div>
+        )}
+
+        {noMatch && (
+          <div className="flex items-center gap-2 text-muted-foreground text-sm py-4">
+            <AlertCircle className="h-4 w-4" />
+            No Clodura match found for this contact.
+          </div>
+        )}
+
+        {diff.length > 0 && (
+          <div className="space-y-2 max-h-[400px] overflow-y-auto">
+            <div className="grid grid-cols-[auto_1fr_1fr_1fr] gap-2 text-xs font-medium text-muted-foreground uppercase tracking-wide px-2">
+              <div className="w-5" />
+              <div>Field</div>
+              <div>Current</div>
+              <div>Proposed</div>
+            </div>
+            {diff.map((row: DiffRow) => (
+              <div
+                key={row.fieldName}
+                className={`grid grid-cols-[auto_1fr_1fr_1fr] gap-2 items-start rounded-md border px-2 py-2 text-sm cursor-pointer hover:bg-muted/50 ${
+                  row.isManuallyEdited ? "opacity-50" : ""
+                }`}
+                onClick={() => !row.isManuallyEdited && toggleField(row.fieldName)}
+              >
+                <input
+                  type="checkbox"
+                  checked={selectedFields.has(row.fieldName)}
+                  disabled={row.isManuallyEdited}
+                  onChange={() => toggleField(row.fieldName)}
+                  className="mt-0.5 rounded"
+                />
+                <div className="font-medium">
+                  {row.label}
+                  {row.isManuallyEdited && (
+                    <Badge variant="outline" className="ml-1 text-xs">manually edited</Badge>
+                  )}
+                </div>
+                <div className="text-muted-foreground truncate">{row.currentValue || <span className="italic">empty</span>}</div>
+                <div className="text-green-700 dark:text-green-400 truncate">{row.proposedValue}</div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {diff.length === 0 && !preview.isPending && !preview.isError && !notEligible && !noMatch && (
+          <div className="flex items-center gap-2 text-muted-foreground text-sm py-4">
+            <CheckCircle2 className="h-4 w-4 text-green-500" />
+            All fields are already up to date — no changes proposed.
+          </div>
+        )}
+
+        <div className="flex justify-end gap-2 pt-2">
+          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button
+            onClick={handleApply}
+            disabled={selectedFields.size === 0 || apply.isPending || preview.isPending}
+          >
+            {apply.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Sparkles className="h-4 w-4 mr-2" />}
+            Apply {selectedFields.size > 0 ? `${selectedFields.size} update${selectedFields.size !== 1 ? "s" : ""}` : ""}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/* ─── Bulk Enrich Confirm ──────────────────────────────────────────────── */
+function BulkEnrichConfirm({
+  contactIds,
+  onComplete,
+  onCancel,
+}: {
+  contactIds: number[];
+  onComplete: () => void;
+  onCancel: () => void;
+}) {
+  const bulk = trpc.clodura.enrichBulk.useMutation({
+    onSuccess: (res) => {
+      toast.success(`Queued ${res.queued} contact${res.queued !== 1 ? "s" : ""} for enrichment. Daily budget remaining: ${res.dailyBudgetRemaining}`);
+      onComplete();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  return (
+    <div className="flex justify-end gap-2 pt-2">
+      <Button variant="outline" onClick={onCancel}>Cancel</Button>
+      <Button
+        onClick={() => bulk.mutate({ contactIds, mode: "fill_empty" })}
+        disabled={bulk.isPending}
+      >
+        {bulk.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Sparkles className="h-4 w-4 mr-2" />}
+        Queue {contactIds.length} for enrichment
+      </Button>
+    </div>
+  );
+}
+
 /* ─── Main Contacts page ────────────────────────────────────────────────── */
 export default function Contacts() {
   const [search, setSearch] = useState("");
@@ -573,6 +782,10 @@ export default function Contacts() {
   const [addToSegmentOpen, setAddToSegmentOpen] = useState(false);
   const [editContact, setEditContact] = useState<any | null>(null);
   const [verifFilter, setVerifFilter] = useState<VerifFilter>("all");
+  const [enrichOpen, setEnrichOpen] = useState(false);
+  const [enrichContactId, setEnrichContactId] = useState<number | null>(null);
+  const [bulkEnrichOpen, setBulkEnrichOpen] = useState(false);
+  const [enrichmentFilter, setEnrichmentFilter] = useState<"all" | "enriched" | "not_enriched">("all");
 
   const utils = trpc.useUtils();
   const { data: rawContacts } = trpc.contacts.list.useQuery({ search });
@@ -622,6 +835,13 @@ export default function Contacts() {
   const verifiableIds = Array.from(selectedIds).filter((id) =>
     (data ?? []).find((c) => c.id === id && c.email),
   );
+
+  // Enrichment status filter (client-side)
+  const filteredData = enrichmentFilter === "all"
+    ? data
+    : enrichmentFilter === "enriched"
+      ? (data ?? []).filter((c) => (c as any).enrichedAt)
+      : (data ?? []).filter((c) => !(c as any).enrichedAt);
 
   return (
     <Shell title="Contacts">
@@ -708,6 +928,14 @@ export default function Contacts() {
               <Tag className="h-4 w-4 text-violet-500" />
               Add to Segment ({selectedIds.size})
             </Button>
+            <Button
+              variant="outline"
+              onClick={() => setBulkEnrichOpen(true)}
+              className="gap-2"
+            >
+              <Sparkles className="h-4 w-4 text-amber-500" />
+              Enrich ({selectedIds.size})
+            </Button>
           </>
         )}
         <Button variant="outline" onClick={() => {
@@ -748,6 +976,7 @@ export default function Contacts() {
                   <th className="text-left px-3 py-2">Email</th>
                   <th className="text-left px-3 py-2 w-28">Verified</th>
                   <th className="text-left px-3 py-2">Phone</th>
+                  <th className="text-left px-3 py-2 w-24">Enriched</th>
                   <th className="px-3 py-2 w-10"></th>
                 </tr>
               </thead>
@@ -797,6 +1026,21 @@ export default function Contacts() {
                       )}
                     </td>
                     <td className="px-3 py-2 text-muted-foreground">{c.phone}</td>
+                    <td className="px-3 py-2">
+                      {(c as any).enrichedAt ? (
+                        <Badge variant="secondary" className="text-xs gap-1">
+                          <Sparkles className="h-2.5 w-2.5 text-amber-500" />
+                          Enriched
+                        </Badge>
+                      ) : (
+                        <button
+                          className="text-xs text-amber-600 hover:text-amber-700 hover:underline flex items-center gap-0.5"
+                          onClick={(e) => { e.stopPropagation(); setEnrichContactId(c.id); setEnrichOpen(true); }}
+                        >
+                          <Sparkles className="h-3 w-3" /> Enrich
+                        </button>
+                      )}
+                    </td>
                     <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
@@ -817,6 +1061,9 @@ export default function Contacts() {
                           </DropdownMenuItem>
                           <DropdownMenuItem onClick={() => { setSelectedIds(new Set([c.id])); setAddToSegmentOpen(true); }}>
                             <Tag className="size-4 mr-2" />Add to Segment
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => { setEnrichContactId(c.id); setEnrichOpen(true); }}>
+                            <Sparkles className="size-4 mr-2 text-amber-500" />Enrich with Clodura
                           </DropdownMenuItem>
                           <DropdownMenuSeparator />
                           <DropdownMenuItem className="text-destructive" onClick={() => { if (confirm(`Delete ${c.firstName} ${c.lastName}?`)) deleteMut.mutate({ id: c.id }); }}>
@@ -923,6 +1170,33 @@ export default function Contacts() {
           onOpenChange={(v) => !v && setEditContact(null)}
           onSaved={() => { utils.contacts.list.invalidate(); setEditContact(null); }}
         />
+      )}
+
+      {/* Enrich diff-and-approve modal */}
+      <EnrichDiffModal
+        contactId={enrichContactId}
+        open={enrichOpen}
+        onOpenChange={(v) => { setEnrichOpen(v); if (!v) setEnrichContactId(null); }}
+        onApplied={() => utils.contacts.list.invalidate()}
+      />
+
+      {/* Bulk enrich confirmation dialog */}
+      {bulkEnrichOpen && (
+        <Dialog open={bulkEnrichOpen} onOpenChange={setBulkEnrichOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Bulk Enrich Contacts</DialogTitle>
+              <DialogDescription>
+                Queue {selectedIds.size} contact{selectedIds.size !== 1 ? "s" : ""} for Clodura enrichment. Each contact consumes 1 credit. The worker processes jobs every 2 minutes.
+              </DialogDescription>
+            </DialogHeader>
+            <BulkEnrichConfirm
+              contactIds={Array.from(selectedIds)}
+              onComplete={() => { setBulkEnrichOpen(false); setSelectedIds(new Set()); utils.contacts.list.invalidate(); }}
+              onCancel={() => setBulkEnrichOpen(false)}
+            />
+          </DialogContent>
+        </Dialog>
       )}
     </Shell>
   );

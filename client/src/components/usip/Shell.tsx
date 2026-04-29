@@ -105,6 +105,7 @@ const NAV: NavGroup[] = [
     darkActiveBg: "rgba(252,211,77,0.12)",
     items: [
       { href: "/leads", label: "Leads", icon: Target },
+      { href: "/prospects", label: "Prospects", icon: Radar },
       { href: "/contacts", label: "Contacts", icon: Users },
       { href: "/import", label: "Import Contacts", icon: Upload },
       { href: "/data-health", label: "Data Health", icon: BarChart3 },

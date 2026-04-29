@@ -21,6 +21,7 @@ import Inbox from "@/pages/usip/Inbox";
 import Mailbox from "@/pages/usip/Mailbox";
 import CalendarPage from "@/pages/usip/Calendar";
 import Leads from "@/pages/usip/Leads";
+import Prospects from "@/pages/usip/Prospects";
 import Pipeline from "@/pages/usip/Pipeline";
 import Products from "@/pages/usip/Products";
 import QBRs from "@/pages/usip/QBRs";
@@ -212,6 +213,7 @@ function Router() {
       <Route path="/mailbox"><AuthGate><Mailbox /></AuthGate></Route>
       <Route path="/calendar"><AuthGate><CalendarPage /></AuthGate></Route>
       <Route path="/leads"><AuthGate><Leads /></AuthGate></Route>
+      <Route path="/prospects"><AuthGate><Prospects /></AuthGate></Route>
       <Route path="/contacts"><AuthGate><Contacts /></AuthGate></Route>
       <Route path="/accounts"><AuthGate><Accounts /></AuthGate></Route>
       <Route path="/pipeline"><AuthGate><Pipeline /></AuthGate></Route>

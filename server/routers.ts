@@ -36,6 +36,7 @@ import { calendarRouter } from "./routers/calendar";
 import { proposalsRouter } from "./routers/proposals";
 import { unipileRouter } from "./routers/unipile";
 import { areRouter } from "./routers/are";
+import { cloduraRouter } from "./routers/clodura";
 import { pageDescriptionsRouter } from "./routers/pageDescriptions";
 
 export const appRouter = router({
@@ -107,6 +108,7 @@ export const appRouter = router({
   unipile: unipileRouter,
   proposals: proposalsRouter,
   are: areRouter,
+  clodura: cloduraRouter,
   pageDescriptions: pageDescriptionsRouter,
 });
 

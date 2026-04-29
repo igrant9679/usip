@@ -21,6 +21,8 @@ import { registerEmailTrackingRoutes } from "../emailTracking";
 import { startInboundReplyPoller } from "../inboundReplyPoller";
 import { expireInvitations, sendExpiryWarningEmails } from "../inviteExpiry";
 import { registerUnipileWebhookRoutes } from "../unipileWebhook";
+import { registerCloduraWebhookRoutes } from "../services/clodura/webhooks";
+import { runCloduraEnrichmentWorker, purgeCloduraCaches } from "../workers/cloduraEnrichmentWorker";
 import { registerPasswordAuthRoutes } from "../passwordAuth";
 
 function isPortAvailable(port: number): Promise<boolean> {
@@ -53,6 +55,7 @@ async function startServer() {
   registerScimRoutes(app);
   registerEmailTrackingRoutes(app);
   registerUnipileWebhookRoutes(app);
+  registerCloduraWebhookRoutes(app);
   registerPasswordAuthRoutes(app);
   // tRPC API
   app.use(
@@ -136,6 +139,24 @@ async function startServer() {
 
   // Inbound reply poller: check IMAP/Gmail inboxes every 60s for new replies
   startInboundReplyPoller();
+
+  // Clodura enrichment worker: process pending enrichment jobs every 2 minutes
+  const runEnrichmentWorker = () => {
+    runCloduraEnrichmentWorker().catch((e) =>
+      console.error("[CloduraEnrich] worker run failed:", e)
+    );
+  };
+  setTimeout(runEnrichmentWorker, 120_000); // first run after 2 min
+  setInterval(runEnrichmentWorker, 2 * 60 * 1000); // every 2 minutes
+
+  // Clodura cache purge: purge expired search cache and stale raw_response rows daily
+  const runCachePurge = () => {
+    purgeCloduraCaches().catch((e) =>
+      console.error("[CloduraCachePurge] purge failed:", e)
+    );
+  };
+  setTimeout(runCachePurge, 5 * 60_000); // first run after 5 min
+  setInterval(runCachePurge, 24 * 60 * 60 * 1000); // every 24h
 }
 
 startServer().catch(console.error);

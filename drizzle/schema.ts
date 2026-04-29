@@ -2810,3 +2810,162 @@ export const pageDescriptions = mysqlTable(
   }),
 );
 export type PageDescription = typeof pageDescriptions.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Clodura.ai — Prospect Search, Ingestion & Contact Enrichment (0048)
+   ────────────────────────────────────────────────────────────────────────── */
+
+// ── Standalone prospects table (Clodura-sourced outbound prospects) ───────────
+export const prospects = mysqlTable(
+  "prospects",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    cloduraPersonId: varchar("clodura_person_id", { length: 64 }).unique(),
+    cloduraOrgId: varchar("clodura_org_id", { length: 64 }),
+    cloduraSyncedAt: timestamp("clodura_synced_at"),
+    firstName: varchar("firstName", { length: 80 }).notNull(),
+    lastName: varchar("lastName", { length: 80 }).notNull(),
+    title: varchar("title", { length: 120 }),
+    seniority: varchar("seniority", { length: 64 }),
+    functionalArea: varchar("functional_area", { length: 64 }),
+    linkedinUrl: text("linkedin_url"),
+    email: varchar("email", { length: 320 }),
+    phone: varchar("phone", { length: 40 }),
+    city: varchar("city", { length: 80 }),
+    state: varchar("state", { length: 80 }),
+    country: varchar("country", { length: 80 }),
+    company: varchar("company", { length: 200 }),
+    companyDomain: varchar("company_domain", { length: 200 }),
+    industry: varchar("industry", { length: 80 }),
+    emailStatus: varchar("email_status", { length: 20 }), // verified|unverified|unavailable
+    emailRevealedAt: timestamp("email_revealed_at"),
+    phoneRevealedAt: timestamp("phone_revealed_at"),
+    linkedContactId: int("linked_contact_id"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    byWs: index("ix_pro_ws").on(t.workspaceId),
+    byEmail: index("ix_pro_email").on(t.email),
+  }),
+);
+export type Prospect = typeof prospects.$inferSelect;
+
+// ── Async reveal job tracking ─────────────────────────────────────────────────
+export const cloduraRevealJobs = mysqlTable(
+  "clodura_reveal_jobs",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    trackingId: varchar("tracking_id", { length: 128 }).unique().notNull(),
+    prospectId: int("prospect_id").notNull(),
+    kind: varchar("kind", { length: 10 }).notNull(), // email|phone
+    status: varchar("status", { length: 20 }).notNull().default("pending"),
+    requestedBy: int("requested_by"),
+    requestedAt: timestamp("requested_at").defaultNow().notNull(),
+    completedAt: timestamp("completed_at"),
+    error: text("error"),
+  },
+  (t) => ({
+    byProspect: index("ix_crj_prospect").on(t.prospectId),
+    byTracking: index("ix_crj_tracking").on(t.trackingId),
+  }),
+);
+export type CloduraRevealJob = typeof cloduraRevealJobs.$inferSelect;
+
+// ── Per-user saved search filters ─────────────────────────────────────────────
+export const cloduraSavedSearches = mysqlTable(
+  "clodura_saved_searches",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    userId: int("user_id").notNull(),
+    workspaceId: int("workspaceId").notNull(),
+    name: varchar("name", { length: 120 }),
+    filters: json("filters").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    byUser: index("ix_css_user").on(t.userId, t.workspaceId),
+  }),
+);
+export type CloduraSavedSearch = typeof cloduraSavedSearches.$inferSelect;
+
+// ── 24-hour search response cache ─────────────────────────────────────────────
+export const cloduraSearchCache = mysqlTable(
+  "clodura_search_cache",
+  {
+    cacheKey: varchar("cache_key", { length: 128 }).notNull(),
+    workspaceId: int("workspaceId").notNull(),
+    response: json("response").notNull(),
+    cachedAt: timestamp("cached_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    byWsCached: index("ix_csc_ws_cached").on(t.workspaceId, t.cachedAt),
+  }),
+);
+export type CloduraSearchCache = typeof cloduraSearchCache.$inferSelect;
+
+// ── Enrichment job tracking ────────────────────────────────────────────────────
+export const cloduraEnrichmentJobs = mysqlTable(
+  "clodura_enrichment_jobs",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    contactId: int("contact_id").notNull(),
+    trigger: varchar("trigger", { length: 20 }).notNull(), // manual|bulk|auto_on_create|scheduled
+    identifierSet: json("identifier_set").notNull(),
+    confidence: varchar("confidence", { length: 20 }),
+    status: varchar("status", { length: 20 }).notNull().default("pending"),
+    creditsConsumed: int("credits_consumed").default(0),
+    rawResponse: json("raw_response"),
+    rawResponsePurgedAt: timestamp("raw_response_purged_at"),
+    requestedBy: int("requested_by"),
+    requestedAt: timestamp("requested_at").defaultNow().notNull(),
+    completedAt: timestamp("completed_at"),
+    error: text("error"),
+  },
+  (t) => ({
+    byContact: index("ix_cej_contact").on(t.contactId),
+    byStatus: index("ix_cej_status").on(t.status, t.requestedAt),
+    byWs: index("ix_cej_ws").on(t.workspaceId),
+  }),
+);
+export type CloduraEnrichmentJob = typeof cloduraEnrichmentJobs.$inferSelect;
+
+// ── Field-level enrichment history ────────────────────────────────────────────
+export const contactEnrichmentHistory = mysqlTable(
+  "contact_enrichment_history",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    contactId: int("contact_id").notNull(),
+    enrichmentJobId: int("enrichment_job_id"),
+    fieldName: varchar("field_name", { length: 80 }).notNull(),
+    oldValue: text("old_value"),
+    newValue: text("new_value"),
+    appliedBy: int("applied_by"),
+    appliedAt: timestamp("applied_at").defaultNow().notNull(),
+    source: varchar("source", { length: 40 }).notNull().default("clodura_enrich"),
+  },
+  (t) => ({
+    byContact: index("ix_ceh_contact").on(t.contactId, t.appliedAt),
+    byWs: index("ix_ceh_ws").on(t.workspaceId),
+  }),
+);
+export type ContactEnrichmentHistory = typeof contactEnrichmentHistory.$inferSelect;
+
+// ── Per-workspace enrichment settings ─────────────────────────────────────────
+export const cloduraEnrichmentSettings = mysqlTable(
+  "clodura_enrichment_settings",
+  {
+    workspaceId: int("workspaceId").primaryKey(),
+    autoEnrichOnCreate: boolean("auto_enrich_on_create").notNull().default(false),
+    scheduledReenrichEnabled: boolean("scheduled_reenrich_enabled").notNull().default(false),
+    staleThresholdDays: int("stale_threshold_days").notNull().default(90),
+    dailyBudgetCap: int("daily_budget_cap").notNull().default(1500),
+    updatedBy: int("updated_by"),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  },
+);
+export type CloduraEnrichmentSettings = typeof cloduraEnrichmentSettings.$inferSelect;
