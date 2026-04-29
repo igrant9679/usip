@@ -2,6 +2,9 @@
 builder = "nixpacks"
 buildCommand = "pnpm install --frozen-lockfile && pnpm build"
 
+[build.nixpacksPlan.phases.setup]
+nixPkgs = ["nodejs_20"]
+
 [deploy]
 startCommand = "pnpm db:migrate && pnpm start"
 restartPolicyType = "on_failure"
