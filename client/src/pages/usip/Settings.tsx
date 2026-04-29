@@ -55,7 +55,7 @@ export default function Settings() {
 
   return (
     <Shell title="Settings">
-      <PageHeader title="Workspace settings" description="Workspace settings — general, billing, integrations, and notification preferences." pageKey="settings" 
+      <PageHeader title="Workspace settings" description="Workspace settings — general, billing, integrations, and notifications." pageKey="settings" 
         icon={<SettingsIcon className="size-5" />}
       />
       <div className="p-6 grid grid-cols-1 md:grid-cols-[220px_1fr] gap-6">

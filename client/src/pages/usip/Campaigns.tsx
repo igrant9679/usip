@@ -589,7 +589,7 @@ export default function Campaigns() {
 
   return (
     <Shell title="Campaigns">
-      <PageHeader title="Outreach Campaigns" description="Orchestrate multi-channel campaigns combining email sequences, social, and ads." pageKey="campaigns"
+      <PageHeader title="Outreach Campaigns" description="Orchestrate multi-channel campaigns across email, social, and ads." pageKey="campaigns"
         icon={<Layers3 className="size-5" />}
       >
         <Button onClick={() => setOpenCreate(true)}>

@@ -59,7 +59,7 @@ export default function LeadRouting() {
 
   return (
     <Shell title="Lead Routing">
-      <PageHeader title="Lead Routing Engine" description="Configure rules that automatically assign inbound leads to the right rep or team." pageKey="lead-routing"
+      <PageHeader title="Lead Routing Engine" description="Configure rules to auto-assign inbound leads to the right rep or team." pageKey="lead-routing"
         icon={<GitMerge className="size-5" />}
       >
         <Button onClick={() => setEditing({ name: "", priority: ((rules?.length ?? 0) + 1) * 10, enabled: true, conditions: { all: [] }, strategy: "round_robin", targetUserIds: [] })}>

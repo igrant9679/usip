@@ -318,7 +318,7 @@ export default function PipelineAlerts() {
     <Shell title="Pipeline Alerts">
       <PageHeader
         title="Pipeline Health Alerts" pageKey="pipeline-alerts"
-        description="Real-time alerts for stalled deals, at-risk accounts, and pipeline anomalies."
+        description="Real-time alerts for stalled deals, at-risk accounts, and anomalies."
       
         icon={<AlertTriangle className="size-5" />}
       >

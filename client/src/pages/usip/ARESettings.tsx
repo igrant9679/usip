@@ -194,7 +194,7 @@ export default function ARESettings() {
     <Shell title="ARE Settings">
       <PageHeader
         title="ARE Settings" pageKey="are-settings"
-        description="Configure ARE engine defaults — scoring thresholds, enrichment providers, and automation rules."
+        description="Configure ARE engine defaults — scoring, enrichment, and automation rules."
       
         icon={<Settings2 className="size-5" />}
       >

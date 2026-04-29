@@ -242,7 +242,7 @@ export default function ImportContacts() {
     <Shell>
       <PageHeader
         title="Import Contacts" pageKey="import-contacts"
-        description="Bulk-import contacts from CSV, enrichment providers, or third-party integrations."
+        description="Bulk-import contacts from CSV, enrichment providers, or integrations."
       
         icon={<Upload className="size-5" />}
       />

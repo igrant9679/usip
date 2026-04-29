@@ -462,7 +462,7 @@ export default function SenderPools() {
       <div className="space-y-6">
         <PageHeader
           title="Sender Pools" pageKey="sender-pools"
-          description="Group sending accounts into pools for load-balanced, reputation-safe delivery."
+          description="Group sending accounts into pools for load-balanced, safe delivery."
         
         icon={<Layers className="size-5" />}
       >

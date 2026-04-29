@@ -235,7 +235,7 @@ export default function Leads() {
 
   return (
     <Shell title="Leads">
-      <PageHeader title="Leads" description="Capture, score, and route inbound leads before they enter the CRM pipeline." pageKey="leads"
+      <PageHeader title="Leads" description="Capture, score, and route inbound leads before they enter the pipeline." pageKey="leads"
         icon={<UserPlus className="size-5" />}
       >
         <Input placeholder="Search…" value={search} onChange={(e) => setSearch(e.target.value)} className="w-56" />

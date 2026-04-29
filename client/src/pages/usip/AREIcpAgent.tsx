@@ -589,7 +589,7 @@ export default function AREIcpAgent() {
       {/* ── Header ── */}
       <PageHeader
         title="ICP Agent" pageKey="are-icp-agent"
-        description="Define and refine your Ideal Customer Profile to sharpen prospect qualification."
+        description="Define your Ideal Customer Profile to sharpen prospect qualification."
       
         icon={<Target className="size-5" />}
       >

@@ -160,7 +160,7 @@ export default function SnippetsPage() {
     <Shell title="Snippet Library">
       <PageHeader
         title="Snippet Library" pageKey="snippets"
-        description="Create reusable text snippets and personalisation tokens for email templates."
+        description="Create reusable text snippets and personalisation tokens for emails."
       
         icon={<Scissors className="size-5" />}
       >

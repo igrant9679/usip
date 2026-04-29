@@ -95,7 +95,7 @@ export default function ARECampaigns() {
     <Shell title="ARE Campaigns">
       <PageHeader
         title="Autonomous Campaigns" pageKey="are-campaigns"
-        description="Create and manage ARE campaigns that source, score, and sequence qualified prospects."
+        description="Create and manage ARE campaigns that source, score, and sequence prospects."
       
         icon={<Megaphone className="size-5" />}
       >

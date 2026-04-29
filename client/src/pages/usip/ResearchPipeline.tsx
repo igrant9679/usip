@@ -104,7 +104,7 @@ export default function ResearchPipeline() {
 
   return (
     <Shell title="Research Pipeline">
-      <PageHeader title="AI Research Pipeline" description="Run the 5-stage AI research pipeline: org signals → contact fit → angles → draft variants → review." pageKey="research-pipeline" 
+      <PageHeader title="AI Research Pipeline" description="Run the 5-stage AI pipeline: signals → fit → angles → drafts → review." pageKey="research-pipeline" 
         icon={<FlaskConical className="size-5" />}
       />
       <div className="p-6 max-w-5xl mx-auto space-y-6">

@@ -264,7 +264,7 @@ export default function UnifiedInbox() {
   return (
     <Shell>
       <PageHeader
-        title="Unified Inbox" description="A single inbox for all inbound replies across every connected email account." pageKey="unified-inbox"
+        title="Unified Inbox" description="A single inbox for all inbound replies across connected email accounts." pageKey="unified-inbox"
         subtitle="All your conversations across every channel in one place"
         actions={
           <div className="flex gap-2"

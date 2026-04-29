@@ -19,7 +19,7 @@ export default function QBRs() {
 
   return (
     <Shell title="QBRs">
-      <PageHeader title="Quarterly Business Reviews" description="Prepare, schedule, and record Quarterly Business Reviews with AI-generated talking points." pageKey="qbrs"
+      <PageHeader title="Quarterly Business Reviews" description="Prepare and record Quarterly Business Reviews with AI talking points." pageKey="qbrs"
         icon={<Presentation className="size-5" />}
       >
         <Button onClick={() => setOpen(true)}><Plus className="size-4" /> Schedule QBR</Button>

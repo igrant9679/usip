@@ -330,7 +330,7 @@ export default function EmailDrafts() {
 
   return (
     <Shell title="Email Drafts">
-      <PageHeader title="Email Drafts" description="Review, approve, and send AI-generated email drafts before they leave your outbox." pageKey="email-drafts"
+      <PageHeader title="Email Drafts" description="Review, approve, and send AI-generated drafts before they leave your outbox." pageKey="email-drafts"
         icon={<FileText className="size-5" />}
       >
         <div className="flex items-center gap-1 bg-secondary rounded-md p-0.5">

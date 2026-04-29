@@ -365,7 +365,7 @@ export default function Pipeline() {
           </button>
         </div>
       )}
-      <PageHeader title="Pipeline" description="Visualise and advance open opportunities across every stage of your sales funnel." pageKey="pipeline"
+      <PageHeader title="Pipeline" description="Visualise and advance open opportunities across every pipeline stage." pageKey="pipeline"
         icon={<KanbanSquare className="size-5" />}
       >
         {/* View toggle */}
