@@ -228,72 +228,78 @@ function AskAITab({ pageKey }: { pageKey: string }) {
 
 /* ─── Guided Tours Tab ───────────────────────────────────────────────────── */
 
-function ToursTab({ pageKey }: { pageKey: string }) {
+const TOUR_TYPE_LABEL: Record<string, string> = {
+  onboarding: "🎓 Onboarding",
+  feature: "⭐ Feature",
+  whats_new: "🆕 What's New",
+  custom: "🏆 Custom",
+};
+
+/** Top-level component so React hooks are called at the correct level. */
+function TourCard({
+  tour,
+  prog,
+}: {
+  tour: any;
+  prog?: { status: string } | undefined;
+}) {
   const { startTour } = useTourEngine();
   const utils = trpc.useUtils();
+  const [loading, setLoading] = useState(false);
+  const isCompleted = prog?.status === "completed";
+  const isInProgress = prog?.status === "in_progress";
+
+  const handleStart = useCallback(async () => {
+    setLoading(true);
+    try {
+      const full = await utils.tours.get.fetch({ id: tour.id });
+      startTour(full);
+    } catch {
+      // fall back silently
+    } finally {
+      setLoading(false);
+    }
+  }, [tour.id, utils, startTour]);
+
+  return (
+    <div className="rounded-lg border border-gray-100 bg-white px-3 py-2.5 flex items-start gap-3">
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <span className="text-xs text-violet-500 font-medium">
+            {TOUR_TYPE_LABEL[tour.type] ?? tour.type}
+          </span>
+          {isCompleted && (
+            <span className="text-xs bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full">✓ Done</span>
+          )}
+          {isInProgress && (
+            <span className="text-xs bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full">In progress</span>
+          )}
+        </div>
+        <p className="text-sm font-medium text-gray-800 mt-0.5 line-clamp-1">{tour.name}</p>
+        {tour.description && (
+          <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">{tour.description}</p>
+        )}
+        {tour.estimatedMinutes && (
+          <p className="text-xs text-gray-400 mt-1">~{tour.estimatedMinutes} min</p>
+        )}
+      </div>
+      <button
+        onClick={handleStart}
+        disabled={loading}
+        className="flex-shrink-0 px-3 py-1.5 text-xs font-medium text-violet-600 border border-violet-200 hover:bg-violet-50 rounded-lg disabled:opacity-50"
+      >
+        {loading ? "Loading…" : isCompleted ? "Replay" : isInProgress ? "Resume" : "Start"}
+      </button>
+    </div>
+  );
+}
+
+function ToursTab({ pageKey }: { pageKey: string }) {
   const { data: recommended } = trpc.tours.getRecommended.useQuery({ pageKey });
   const { data: allTours } = trpc.tours.list.useQuery({ type: "all", status: "published" });
   const { data: myProgress } = trpc.tours.getMyProgress.useQuery();
 
   const progressMap = Object.fromEntries((myProgress ?? []).map((p) => [p.tourId, p]));
-
-  const typeLabel: Record<string, string> = {
-    onboarding: "🎓 Onboarding",
-    feature: "⭐ Feature",
-    whats_new: "🆕 What's New",
-    custom: "🏆 Custom",
-  };
-
-  function TourCard({ tour }: { tour: any }) {
-    const prog = progressMap[tour.id];
-    const isCompleted = prog?.status === "completed";
-    const isInProgress = prog?.status === "in_progress";
-    const [loading, setLoading] = useState(false);
-
-    const handleStart = useCallback(async () => {
-      setLoading(true);
-      try {
-        const full = await utils.tours.get.fetch({ id: tour.id });
-        startTour(full);
-      } catch {
-        // fall back silently
-      } finally {
-        setLoading(false);
-      }
-    }, [tour.id]);
-
-    return (
-      <div className="rounded-lg border border-gray-100 bg-white px-3 py-2.5 flex items-start gap-3">
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-1.5 flex-wrap">
-            <span className="text-xs text-violet-500 font-medium">
-              {typeLabel[tour.type] ?? tour.type}
-            </span>
-            {isCompleted && (
-              <span className="text-xs bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full">✓ Done</span>
-            )}
-            {isInProgress && (
-              <span className="text-xs bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full">In progress</span>
-            )}
-          </div>
-          <p className="text-sm font-medium text-gray-800 mt-0.5 line-clamp-1">{tour.name}</p>
-          {tour.description && (
-            <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">{tour.description}</p>
-          )}
-          {tour.estimatedMinutes && (
-            <p className="text-xs text-gray-400 mt-1">~{tour.estimatedMinutes} min</p>
-          )}
-        </div>
-        <button
-          onClick={handleStart}
-          disabled={loading}
-          className="flex-shrink-0 px-3 py-1.5 text-xs font-medium text-violet-600 border border-violet-200 hover:bg-violet-50 rounded-lg disabled:opacity-50"
-        >
-          {loading ? "Loading…" : isCompleted ? "Replay" : isInProgress ? "Resume" : "Start"}
-        </button>
-      </div>
-    );
-  }
 
   return (
     <div className="flex flex-col gap-4">
@@ -304,7 +310,7 @@ function ToursTab({ pageKey }: { pageKey: string }) {
           </p>
           <div className="flex flex-col gap-2">
             {recommended.map((tour) => (
-              <TourCard key={tour.id} tour={tour} />
+              <TourCard key={tour.id} tour={tour} prog={progressMap[tour.id]} />
             ))}
           </div>
         </div>
@@ -317,7 +323,7 @@ function ToursTab({ pageKey }: { pageKey: string }) {
           </p>
           <div className="flex flex-col gap-2">
             {allTours.map((tour) => (
-              <TourCard key={tour.id} tour={tour} />
+              <TourCard key={tour.id} tour={tour} prog={progressMap[tour.id]} />
             ))}
           </div>
         </div>

@@ -409,128 +409,19 @@ function AdminTab() {
   const { data: categories } = trpc.helpCenter.listCategories.useQuery();
   const { data: insights } = trpc.helpCenter.getInsights.useQuery();
 
-  const createMut = trpc.helpCenter.createArticle.useMutation({
-    onSuccess: () => { toast.success("Article created"); refetch(); setEditArticle(null); setIsNew(false); },
-    onError: (e) => toast.error(e.message),
-  });
-  const updateMut = trpc.helpCenter.updateArticle.useMutation({
-    onSuccess: () => { toast.success("Article updated"); refetch(); setEditArticle(null); },
-    onError: (e) => toast.error(e.message),
-  });
   const deleteMut = trpc.helpCenter.deleteArticle.useMutation({
     onSuccess: () => { toast.success("Article deleted"); refetch(); },
     onError: (e) => toast.error(e.message),
   });
 
-  function ArticleForm() {
-    const [form, setForm] = useState({
-      title: editArticle?.title ?? "",
-      slug: editArticle?.slug ?? "",
-      summary: editArticle?.summary ?? "",
-      bodyMarkdown: editArticle?.bodyMarkdown ?? "",
-      categoryId: editArticle?.categoryId?.toString() ?? "",
-      status: editArticle?.status ?? "draft",
-      pageKeys: editArticle?.pageKeys ?? [],
-      readingTimeMinutes: editArticle?.readingTimeMinutes?.toString() ?? "",
-    });
-
-    function save() {
-      const payload = {
-        title: form.title,
-        slug: form.slug || form.title.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, ""),
-        summary: form.summary || undefined,
-        bodyMarkdown: form.bodyMarkdown,
-        categoryId: form.categoryId ? parseInt(form.categoryId) : undefined,
-        status: form.status as "draft" | "published" | "archived",
-        pageKeys: form.pageKeys,
-        readingTimeMinutes: form.readingTimeMinutes ? parseInt(form.readingTimeMinutes) : undefined,
-      };
-      if (isNew) {
-        createMut.mutate(payload);
-      } else {
-        updateMut.mutate({ id: editArticle.id, ...payload });
-      }
-    }
-
-    return (
-      <div className="flex flex-col gap-4">
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <Label>Title</Label>
-            <Input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="Article title" />
-          </div>
-          <div>
-            <Label>Slug</Label>
-            <Input value={form.slug} onChange={(e) => setForm({ ...form, slug: e.target.value })} placeholder="auto-generated-from-title" />
-          </div>
-        </div>
-        <div>
-          <Label>Summary</Label>
-          <Input value={form.summary} onChange={(e) => setForm({ ...form, summary: e.target.value })} placeholder="One-line description shown in search results" />
-        </div>
-        <div>
-          <Label>Body (Markdown)</Label>
-          <Textarea
-            value={form.bodyMarkdown}
-            onChange={(e) => setForm({ ...form, bodyMarkdown: e.target.value })}
-            rows={12}
-            placeholder="Write article content in Markdown…"
-            className="font-mono text-xs"
-          />
-        </div>
-        <div className="grid grid-cols-3 gap-4">
-          <div>
-            <Label>Category</Label>
-            <Select value={form.categoryId} onValueChange={(v) => setForm({ ...form, categoryId: v })}>
-              <SelectTrigger><SelectValue placeholder="Select category" /></SelectTrigger>
-              <SelectContent>
-                {categories?.map((c) => (
-                  <SelectItem key={c.id} value={c.id.toString()}>{c.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div>
-            <Label>Status</Label>
-            <Select value={form.status} onValueChange={(v) => setForm({ ...form, status: v })}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="draft">Draft</SelectItem>
-                <SelectItem value="published">Published</SelectItem>
-                <SelectItem value="archived">Archived</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div>
-            <Label>Reading time (min)</Label>
-            <Input
-              type="number"
-              value={form.readingTimeMinutes}
-              onChange={(e) => setForm({ ...form, readingTimeMinutes: e.target.value })}
-              placeholder="5"
-            />
-          </div>
-        </div>
-        <div className="flex gap-2 justify-end">
-          <Button variant="outline" onClick={() => { setEditArticle(null); setIsNew(false); }}>Cancel</Button>
-          <Button
-            className="bg-violet-600 hover:bg-violet-700 text-white"
-            onClick={save}
-            disabled={createMut.isPending || updateMut.isPending}
-          >
-            {(createMut.isPending || updateMut.isPending) && <Loader2 className="h-3 w-3 animate-spin mr-1" />}
-            {isNew ? "Create Article" : "Save Changes"}
-          </Button>
-        </div>
-      </div>
-    );
-  }
+  const handleSaved = () => { refetch(); setEditArticle(null); setIsNew(false); };
+  const handleCancel = () => { setEditArticle(null); setIsNew(false); };
 
   if (editArticle !== null || isNew) {
     return (
       <div>
         <button
-          onClick={() => { setEditArticle(null); setIsNew(false); }}
+          onClick={handleCancel}
           className="text-xs text-violet-500 hover:text-violet-700 mb-4 flex items-center gap-1"
         >
           ← Back to articles
@@ -538,7 +429,13 @@ function AdminTab() {
         <h3 className="text-sm font-semibold text-gray-800 mb-4">
           {isNew ? "New Article" : `Edit: ${editArticle.title}`}
         </h3>
-        <ArticleForm />
+        <ArticleForm
+          editArticle={editArticle}
+          isNew={isNew}
+          categories={categories}
+          onCancel={handleCancel}
+          onSaved={handleSaved}
+        />
       </div>
     );
   }
@@ -691,6 +588,129 @@ function AdminTab() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/* ─── Article Form (top-level to satisfy React hooks rules) ─────────────── */
+
+interface ArticleFormProps {
+  editArticle: any | null;
+  isNew: boolean;
+  categories: { id: number; name: string }[] | undefined;
+  onCancel: () => void;
+  onSaved: () => void;
+}
+
+function ArticleForm({ editArticle, isNew, categories, onCancel, onSaved }: ArticleFormProps) {
+  const [form, setForm] = useState({
+    title: editArticle?.title ?? "",
+    slug: editArticle?.slug ?? "",
+    summary: editArticle?.summary ?? "",
+    bodyMarkdown: editArticle?.bodyMarkdown ?? "",
+    categoryId: editArticle?.categoryId?.toString() ?? "",
+    status: editArticle?.status ?? "draft",
+    pageKeys: editArticle?.pageKeys ?? [],
+    readingTimeMinutes: editArticle?.readingTimeMinutes?.toString() ?? "",
+  });
+
+  const createMut = trpc.helpCenter.createArticle.useMutation({
+    onSuccess: () => { toast.success("Article created"); onSaved(); },
+    onError: (e) => toast.error(e.message),
+  });
+  const updateMut = trpc.helpCenter.updateArticle.useMutation({
+    onSuccess: () => { toast.success("Article updated"); onSaved(); },
+    onError: (e) => toast.error(e.message),
+  });
+
+  function save() {
+    const payload = {
+      title: form.title,
+      slug: form.slug || form.title.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, ""),
+      summary: form.summary || undefined,
+      bodyMarkdown: form.bodyMarkdown,
+      categoryId: form.categoryId ? parseInt(form.categoryId) : undefined,
+      status: form.status as "draft" | "published" | "archived",
+      pageKeys: form.pageKeys,
+      readingTimeMinutes: form.readingTimeMinutes ? parseInt(form.readingTimeMinutes) : undefined,
+    };
+    if (isNew) {
+      createMut.mutate(payload);
+    } else {
+      updateMut.mutate({ id: editArticle.id, ...payload });
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <Label>Title</Label>
+          <Input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="Article title" />
+        </div>
+        <div>
+          <Label>Slug</Label>
+          <Input value={form.slug} onChange={(e) => setForm({ ...form, slug: e.target.value })} placeholder="auto-generated-from-title" />
+        </div>
+      </div>
+      <div>
+        <Label>Summary</Label>
+        <Input value={form.summary} onChange={(e) => setForm({ ...form, summary: e.target.value })} placeholder="One-line description shown in search results" />
+      </div>
+      <div>
+        <Label>Body (Markdown)</Label>
+        <Textarea
+          value={form.bodyMarkdown}
+          onChange={(e) => setForm({ ...form, bodyMarkdown: e.target.value })}
+          rows={12}
+          placeholder="Write article content in Markdown…"
+          className="font-mono text-xs"
+        />
+      </div>
+      <div className="grid grid-cols-3 gap-4">
+        <div>
+          <Label>Category</Label>
+          <Select value={form.categoryId} onValueChange={(v) => setForm({ ...form, categoryId: v })}>
+            <SelectTrigger><SelectValue placeholder="Select category" /></SelectTrigger>
+            <SelectContent>
+              {categories?.map((c) => (
+                <SelectItem key={c.id} value={c.id.toString()}>{c.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div>
+          <Label>Status</Label>
+          <Select value={form.status} onValueChange={(v) => setForm({ ...form, status: v })}>
+            <SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="draft">Draft</SelectItem>
+              <SelectItem value="published">Published</SelectItem>
+              <SelectItem value="archived">Archived</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div>
+          <Label>Reading time (min)</Label>
+          <Input
+            type="number"
+            value={form.readingTimeMinutes}
+            onChange={(e) => setForm({ ...form, readingTimeMinutes: e.target.value })}
+            placeholder="5"
+          />
+        </div>
+      </div>
+      <div className="flex gap-2 justify-end">
+        <Button variant="outline" onClick={onCancel}>Cancel</Button>
+        <Button
+          className="bg-violet-600 hover:bg-violet-700 text-white"
+          onClick={save}
+          disabled={createMut.isPending || updateMut.isPending}
+        >
+          {(createMut.isPending || updateMut.isPending) && <Loader2 className="h-3 w-3 animate-spin mr-1" />}
+          {isNew ? "Create Article" : "Save Changes"}
+        </Button>
+      </div>
     </div>
   );
 }
