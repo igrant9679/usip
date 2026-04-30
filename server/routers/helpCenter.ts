@@ -124,26 +124,27 @@ export const helpCenterRouter = router({
     .input(
       z.object({
         query: z.string().min(1).max(500),
+        categoryId: z.number().optional(),
         limit: z.number().min(1).max(20).default(8),
       }),
     )
     .query(async ({ ctx, input }) => {
       const db = await requireDb();
       const q = `%${input.query}%`;
+      const searchConditions: any[] = [
+        eq(helpArticles.workspaceId, ctx.workspace.id),
+        eq(helpArticles.status, "published"),
+        or(
+          like(helpArticles.title, q),
+          like(helpArticles.summary, q),
+          like(helpArticles.bodyMarkdown, q),
+        ),
+      ];
+      if (input.categoryId) searchConditions.push(eq(helpArticles.categoryId, input.categoryId));
       const results = await db
         .select()
         .from(helpArticles)
-        .where(
-          and(
-            eq(helpArticles.workspaceId, ctx.workspace.id),
-            eq(helpArticles.status, "published"),
-            or(
-              like(helpArticles.title, q),
-              like(helpArticles.summary, q),
-              like(helpArticles.bodyMarkdown, q),
-            ),
-          ),
-        )
+        .where(and(...searchConditions))
         .orderBy(desc(helpArticles.viewCount))
         .limit(input.limit);
       // Log the search
@@ -183,9 +184,11 @@ export const helpCenterRouter = router({
         summary: z.string().max(500).optional(),
         bodyMarkdown: z.string().optional(),
         tags: z.array(z.string()).optional(),
-        status: z.enum(["draft", "published"]).default("draft"),
+        status: z.enum(["draft", "published", "archived"]).default("draft"),
         associatedTourId: z.number().optional(),
         pageKey: z.string().max(120).optional(),
+        pageKeys: z.array(z.string()).optional(),
+        readingTimeMinutes: z.number().int().min(1).max(120).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -549,9 +552,11 @@ Keep the article under 600 words. Be friendly and action-oriented.`,
         summary: z.string().max(500).optional(),
         bodyMarkdown: z.string().optional(),
         tags: z.array(z.string()).optional(),
-        status: z.enum(["draft", "published"]).default("draft"),
+        status: z.enum(["draft", "published", "archived"]).default("draft"),
         associatedTourId: z.number().optional(),
         pageKey: z.string().max(120).optional(),
+        pageKeys: z.array(z.string()).optional(),
+        readingTimeMinutes: z.number().int().min(1).max(120).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -571,9 +576,11 @@ Keep the article under 600 words. Be friendly and action-oriented.`,
         summary: z.string().max(500).optional(),
         bodyMarkdown: z.string().optional(),
         tags: z.array(z.string()).optional(),
-        status: z.enum(["draft", "published"]).optional(),
+        status: z.enum(["draft", "published", "archived"]).optional(),
         associatedTourId: z.number().optional(),
         pageKey: z.string().max(120).optional(),
+        pageKeys: z.array(z.string()).optional(),
+        readingTimeMinutes: z.number().int().min(1).max(120).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
