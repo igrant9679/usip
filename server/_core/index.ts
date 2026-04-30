@@ -25,7 +25,6 @@ import { registerCloduraWebhookRoutes } from "../services/clodura/webhooks";
 import { runCloduraEnrichmentWorker, purgeCloduraCaches } from "../workers/cloduraEnrichmentWorker";
 import { registerPasswordAuthRoutes } from "../passwordAuth";
 import { seedToursForAllWorkspaces } from "../seedTours";
-import { runRawMigrations } from "./rawMigrations";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -47,13 +46,6 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 }
 
 async function startServer() {
-  // Run any unapplied raw SQL migrations BEFORE wiring up routes/queries.
-  // This heals production databases where the Drizzle journal stopped at
-  // 0047 and newer SQL files (0048+) never executed via `drizzle-kit
-  // migrate`. Designed to never throw — failures are logged and the server
-  // still starts so the rest of the app remains accessible.
-  await runRawMigrations();
-
   const app = express();
   const server = createServer(app);
   // Configure body parser with larger size limit for file uploads
