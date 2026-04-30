@@ -25,6 +25,7 @@ import { registerCloduraWebhookRoutes } from "../services/clodura/webhooks";
 import { runCloduraEnrichmentWorker, purgeCloduraCaches } from "../workers/cloduraEnrichmentWorker";
 import { registerPasswordAuthRoutes } from "../passwordAuth";
 import { seedToursForAllWorkspaces } from "../seedTours";
+import { runRawMigrations } from "./rawMigrations";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -84,6 +85,14 @@ async function startServer() {
     console.log(`Server running on http://localhost:${port}/`);
   });
 
+  // Run any unapplied raw SQL migrations in the background after startup.
+  // Fire-and-forget: never blocks server startup or healthcheck.
+  // 5s delay to let the DB connection pool settle first.
+  setTimeout(() => {
+    runRawMigrations().catch((e) =>
+      console.error("[RawMigrations] unhandled error:", e)
+    );
+  }, 5_000);
   // Seed demo guided tours for all workspaces on startup (idempotent)
   setTimeout(() => {
     seedToursForAllWorkspaces().catch((e) =>
