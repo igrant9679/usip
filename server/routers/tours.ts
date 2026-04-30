@@ -358,4 +358,73 @@ export const toursRouter = router({
       completionByTour,
     };
   }),
+
+  // ── Aliases so TourBuilder.tsx (create/update/delete) maps to the same logic ──
+  create: adminWsProcedure
+    .input(
+      z.object({
+        name: z.string().min(1).max(200),
+        description: z.string().optional(),
+        type: z.enum(["onboarding", "feature", "whats_new", "custom"]).default("feature"),
+        roleTags: z.array(z.string()).optional(),
+        estimatedMinutes: z.number().min(1).max(60).default(3),
+        status: z.enum(["draft", "published"]).default("draft"),
+        pageKey: z.string().max(120).optional(),
+        steps: z.array(z.any()).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const db = await requireDb();
+      const { steps, ...rest } = input;
+      const payload = { ...rest, workspaceId: ctx.workspace.id, createdBy: ctx.user.id };
+      const [res] = await db.insert(tours).values(payload);
+      const tourId = (res as any).insertId as number;
+      if (steps && tourId) {
+        for (const step of steps) {
+          const { id: _id, ...stepRest } = step;
+          await db.insert(tourSteps).values({ ...stepRest, tourId });
+        }
+      }
+      return { id: tourId };
+    }),
+
+  update: adminWsProcedure
+    .input(
+      z.object({
+        id: z.number(),
+        name: z.string().min(1).max(200).optional(),
+        description: z.string().optional(),
+        type: z.enum(["onboarding", "feature", "whats_new", "custom"]).optional(),
+        roleTags: z.array(z.string()).optional(),
+        estimatedMinutes: z.number().min(1).max(60).optional(),
+        status: z.enum(["draft", "published"]).optional(),
+        pageKey: z.string().max(120).optional(),
+        steps: z.array(z.any()).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const db = await requireDb();
+      const { id, steps, ...rest } = input;
+      await db.update(tours).set(rest).where(and(eq(tours.id, id), eq(tours.workspaceId, ctx.workspace.id)));
+      if (steps) {
+        for (const step of steps) {
+          const { id: stepId, ...stepRest } = step;
+          if (stepId) {
+            await db.update(tourSteps).set(stepRest).where(and(eq(tourSteps.id, stepId), eq(tourSteps.tourId, id)));
+          } else {
+            await db.insert(tourSteps).values({ ...stepRest, tourId: id });
+          }
+        }
+      }
+      return { id };
+    }),
+
+  delete: adminWsProcedure
+    .input(z.object({ id: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await requireDb();
+      await db.delete(tourSteps).where(eq(tourSteps.tourId, input.id));
+      await db.delete(tours).where(and(eq(tours.id, input.id), eq(tours.workspaceId, ctx.workspace.id)));
+      return { ok: true };
+    }),
 });

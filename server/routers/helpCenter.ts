@@ -538,4 +538,48 @@ Keep the article under 600 words. Be friendly and action-oriented.`,
         });
       }
     }),
+
+  // ── Aliases so HelpCenter.tsx (createArticle/updateArticle) maps to upsertArticle ──
+  createArticle: adminWsProcedure
+    .input(
+      z.object({
+        categoryId: z.number().optional(),
+        slug: z.string().min(1).max(200),
+        title: z.string().min(1).max(300),
+        summary: z.string().max(500).optional(),
+        bodyMarkdown: z.string().optional(),
+        tags: z.array(z.string()).optional(),
+        status: z.enum(["draft", "published"]).default("draft"),
+        associatedTourId: z.number().optional(),
+        pageKey: z.string().max(120).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const db = await requireDb();
+      const payload = { ...input, workspaceId: ctx.workspace.id, authorId: ctx.user.id, tags: input.tags ?? [] };
+      const [res] = await db.insert(helpArticles).values(payload);
+      return { id: (res as any).insertId as number };
+    }),
+
+  updateArticle: adminWsProcedure
+    .input(
+      z.object({
+        id: z.number(),
+        categoryId: z.number().optional(),
+        slug: z.string().min(1).max(200).optional(),
+        title: z.string().min(1).max(300).optional(),
+        summary: z.string().max(500).optional(),
+        bodyMarkdown: z.string().optional(),
+        tags: z.array(z.string()).optional(),
+        status: z.enum(["draft", "published"]).optional(),
+        associatedTourId: z.number().optional(),
+        pageKey: z.string().max(120).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const db = await requireDb();
+      const { id, ...rest } = input;
+      await db.update(helpArticles).set(rest).where(and(eq(helpArticles.id, id), eq(helpArticles.workspaceId, ctx.workspace.id)));
+      return { id };
+    }),
 });

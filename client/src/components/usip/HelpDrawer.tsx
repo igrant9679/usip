@@ -9,7 +9,7 @@
  * Context-aware: uses `pageKey` from current route to filter articles and tours.
  */
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { trpc } from "../../lib/trpc";
 import { useTourEngine } from "./TourEngine";
@@ -230,6 +230,7 @@ function AskAITab({ pageKey }: { pageKey: string }) {
 
 function ToursTab({ pageKey }: { pageKey: string }) {
   const { startTour } = useTourEngine();
+  const utils = trpc.useUtils();
   const { data: recommended } = trpc.tours.getRecommended.useQuery({ pageKey });
   const { data: allTours } = trpc.tours.list.useQuery({ type: "all", status: "published" });
   const { data: myProgress } = trpc.tours.getMyProgress.useQuery();
@@ -247,6 +248,19 @@ function ToursTab({ pageKey }: { pageKey: string }) {
     const prog = progressMap[tour.id];
     const isCompleted = prog?.status === "completed";
     const isInProgress = prog?.status === "in_progress";
+    const [loading, setLoading] = useState(false);
+
+    const handleStart = useCallback(async () => {
+      setLoading(true);
+      try {
+        const full = await utils.tours.get.fetch({ id: tour.id });
+        startTour(full);
+      } catch {
+        // fall back silently
+      } finally {
+        setLoading(false);
+      }
+    }, [tour.id]);
 
     return (
       <div className="rounded-lg border border-gray-100 bg-white px-3 py-2.5 flex items-start gap-3">
@@ -271,10 +285,11 @@ function ToursTab({ pageKey }: { pageKey: string }) {
           )}
         </div>
         <button
-          onClick={() => startTour(tour)}
-          className="flex-shrink-0 px-3 py-1.5 text-xs font-medium text-violet-600 border border-violet-200 hover:bg-violet-50 rounded-lg"
+          onClick={handleStart}
+          disabled={loading}
+          className="flex-shrink-0 px-3 py-1.5 text-xs font-medium text-violet-600 border border-violet-200 hover:bg-violet-50 rounded-lg disabled:opacity-50"
         >
-          {isCompleted ? "Replay" : isInProgress ? "Resume" : "Start"}
+          {loading ? "Loading…" : isCompleted ? "Replay" : isInProgress ? "Resume" : "Start"}
         </button>
       </div>
     );

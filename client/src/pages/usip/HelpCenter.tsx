@@ -32,7 +32,7 @@ import {
   ThumbsUp,
   Trash2,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 /* ─── Types ──────────────────────────────────────────────────────────────── */
@@ -289,8 +289,36 @@ function AskAITab() {
 
 /* ─── Guided Tours Tab ───────────────────────────────────────────────────── */
 
-function ToursTab() {
+/** Fetches the full tour (with steps) then hands it to the TourEngine. */
+function TourStartButton({ tourId, label }: { tourId: number; label: string }) {
   const { startTour } = useTourEngine();
+  const utils = trpc.useUtils();
+  const [loading, setLoading] = useState(false);
+  const handleStart = useCallback(async () => {
+    setLoading(true);
+    try {
+      const full = await utils.tours.get.fetch({ id: tourId });
+      startTour(full);
+    } catch {
+      // fall back silently
+    } finally {
+      setLoading(false);
+    }
+  }, [tourId, startTour, utils]);
+  return (
+    <Button
+      size="sm"
+      variant="outline"
+      className="text-violet-600 border-violet-200 hover:bg-violet-50 h-7 text-xs"
+      onClick={handleStart}
+      disabled={loading}
+    >
+      {loading ? "Loading…" : label}
+    </Button>
+  );
+}
+
+function ToursTab() {
   const { data: allTours } = trpc.tours.list.useQuery({ type: "all", status: "published" });
   const { data: myProgress } = trpc.tours.getMyProgress.useQuery();
 
@@ -347,14 +375,10 @@ function ToursTab() {
                     ) : (
                       <span />
                     )}
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="text-violet-600 border-violet-200 hover:bg-violet-50 h-7 text-xs"
-                      onClick={() => startTour(tour)}
-                    >
-                      {isCompleted ? "Replay" : isInProgress ? "Resume" : "Start"}
-                    </Button>
+                    <TourStartButton
+                      tourId={tour.id}
+                      label={isCompleted ? "Replay" : isInProgress ? "Resume" : "Start"}
+                    />
                   </div>
                 </div>
               );
