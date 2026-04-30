@@ -115,7 +115,7 @@ function BrowseTab() {
       {/* Article grid */}
       {displayArticles && displayArticles.length === 0 && (
         <EmptyState
-          icon={<BookOpen className="h-8 w-8 text-gray-300" />}
+          icon={BookOpen}
           title="No articles found"
           description="Try a different search term or category"
         />
@@ -389,7 +389,7 @@ function ToursTab() {
 
       {(!allTours || allTours.length === 0) && (
         <EmptyState
-          icon={<GraduationCap className="h-8 w-8 text-gray-300" />}
+          icon={GraduationCap}
           title="No tours yet"
           description="Admins can create guided tours in the Admin tab"
         />
@@ -513,7 +513,7 @@ function AdminTab() {
           ))}
           {(!articles || articles.length === 0) && (
             <EmptyState
-              icon={<BookOpen className="h-8 w-8 text-gray-300" />}
+              icon={BookOpen}
               title="No articles yet"
               description="Click New Article to create your first help article"
             />

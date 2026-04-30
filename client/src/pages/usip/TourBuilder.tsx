@@ -473,7 +473,7 @@ export default function TourBuilderPage() {
       <div className="px-6 pb-8">
         {(!tours || tours.length === 0) && (
           <EmptyState
-            icon={<GraduationCap className="h-8 w-8 text-gray-300" />}
+            icon={GraduationCap}
             title="No tours yet"
             description="Click New Tour to create your first guided tour"
           />
