@@ -33,15 +33,14 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { useAccentColor } from "@/components/usip/Shell";
 
 /* ─── Shared palette ─────────────────────────────────────────────────────── */
-const COLORS = [
+const PALETTE = [
   "#14B89A", "#3B82F6", "#F59E0B", "#EF4444", "#8B5CF6",
   "#EC4899", "#10B981", "#F97316", "#06B6D4", "#84CC16",
 ];
 
-const STAGE_COLORS: Record<string, string> = {
+const STAGE_PALETTE: Record<string, string> = {
   discovery: "#3B82F6",
   qualified: "#8B5CF6",
   proposal: "#F59E0B",
@@ -417,9 +416,6 @@ export interface DashboardChartRendererProps {
 }
 
 export function DashboardChartRenderer({ data, height }: DashboardChartRendererProps) {
-  const accent = useAccentColor();
-  // Build a palette where the primary series uses the category accent color
-  const PALETTE = [accent, "#3B82F6", "#F59E0B", "#EF4444", "#8B5CF6", "#EC4899", "#10B981", "#F97316", "#06B6D4", "#84CC16"];
   if (!data) return <EmptyChart />;
   const type = data.type as string;
 
