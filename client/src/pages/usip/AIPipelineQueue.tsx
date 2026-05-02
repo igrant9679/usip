@@ -421,7 +421,7 @@ export default function AIPipelineQueue() {
       <div className="p-6 space-y-6">
 
       {/* Stats row */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4" data-tour-id="ai-queue-stats">
         {loadingStats ? (
           Array.from({ length: 4 }).map((_, i) => (
             <Card key={i}>
@@ -675,7 +675,7 @@ export default function AIPipelineQueue() {
         </div>
 
         {/* Right: Draft Review Queue */}
-        <div className="lg:col-span-2 space-y-4">
+        <div className="lg:col-span-2 space-y-4" data-tour-id="ai-queue-draft-list">
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-semibold flex items-center gap-2">
               <Mail className="h-5 w-5" />
@@ -706,6 +706,7 @@ export default function AIPipelineQueue() {
             </div>
             {pendingDraftIds.length > 0 && (
               <Button
+                data-tour-id="ai-queue-approve-all"
                 size="sm"
                 onClick={() => bulkApprove.mutate({ draftIds: pendingDraftIds })}
                 disabled={bulkApprove.isPending}

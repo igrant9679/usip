@@ -35,7 +35,7 @@ export default function Renewals() {
         icon={<RefreshCw className="size-5" />}
       />
       <div className="p-4 overflow-x-auto">
-        <div className="flex gap-3 min-w-max">
+        <div className="flex gap-3 min-w-max" data-tour-id="renewals-board">
           {STAGES.map((s) => {
             const items = grouped[s.id] ?? [];
             const total = items.reduce((sum, c) => sum + Number(c.arr ?? 0), 0);
@@ -74,6 +74,7 @@ export default function Renewals() {
                         </div>
                       ) : (
                         <button
+                          data-tour-id="renewals-score-churn"
                           className="mt-1.5 flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
                           onClick={() => scoreChurn.mutate({ customerId: c.id })}
                           disabled={scoreChurn.isPending}

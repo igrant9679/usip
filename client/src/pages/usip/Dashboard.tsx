@@ -368,7 +368,7 @@ export default function Dashboard() {
       <div className="p-6 space-y-6">
 
         {/* ── Row 1: Live stat cards with goal progress ── */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4" data-tour-id="dashboard-kpi-grid">
           <MBStatCard
             label="Pipeline Value"
             value={fmt$(stats?.pipelineValue ?? 0)}
@@ -443,7 +443,7 @@ export default function Dashboard() {
         {/* ── Row 2: Revenue chart + Win/Loss donut ── */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           {/* Revenue chart — 2/3 width */}
-          <div className="lg:col-span-2 rounded-xl border bg-card">
+          <div className="lg:col-span-2 rounded-xl border bg-card" data-tour-id="dashboard-revenue-chart">
             <div className="px-5 py-4 border-b flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <TrendingUp className="size-4" style={{ color: accent }} />
@@ -704,7 +704,7 @@ export default function Dashboard() {
         {/* ── Row 4: Recent Opps + AI Drafts ── */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           {/* Recent Opportunities */}
-          <div className="rounded-xl border bg-card">
+          <div className="rounded-xl border bg-card" data-tour-id="dashboard-recent-opps">
             <div className="px-5 py-3.5 border-b flex items-center">
               <div className="text-sm font-semibold">Recent Opportunities</div>
               <Link href="/pipeline" className="ml-auto text-xs flex items-center gap-1" style={{ color: accent }}>

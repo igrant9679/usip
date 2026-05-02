@@ -3178,6 +3178,7 @@ export const tourSteps = mysqlTable(
     sortOrder: int("sortOrder").notNull().default(0),
     targetSelector: varchar("targetSelector", { length: 500 }),
     targetDataTourId: varchar("targetDataTourId", { length: 200 }),
+    routeTo: varchar("routeTo", { length: 200 }),
     title: varchar("title", { length: 300 }).notNull(),
     bodyMarkdown: text("bodyMarkdown"),
     visualTreatment: mysqlEnum("visualTreatment", ["spotlight", "pulse", "arrow", "coach"]).notNull().default("spotlight"),

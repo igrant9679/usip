@@ -252,7 +252,7 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
         />
       )}
       {/* Sidebar */}
-      <aside className={cn(
+      <aside data-tour-id="sidebar-nav" className={cn(
         "w-60 shrink-0 bg-sidebar text-sidebar-foreground flex flex-col",
         "fixed inset-y-0 left-0 z-50 transform transition-transform duration-200 md:translate-x-0 md:static md:transform-none",
         mobileOpen ? "translate-x-0" : "-translate-x-full",

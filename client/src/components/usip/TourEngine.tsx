@@ -9,6 +9,7 @@
  *  - Achievement toast on completion
  *  - Proactive trigger: shows a "Start tour?" nudge when user first visits a page
  *  - Supports advance conditions: next_button, element_clicked, route_changed
+ *  - Route navigation: each step can declare routeTo to navigate before spotlighting
  */
 
 import React, {
@@ -19,6 +20,7 @@ import React, {
   useRef,
   useState,
 } from "react";
+import { useLocation } from "wouter";
 import { trpc } from "../../lib/trpc";
 
 /* ─── Types ─────────────────────────────────────────────────────────────── */
@@ -28,6 +30,8 @@ export type TourStep = {
   sortOrder: number;
   targetSelector?: string;
   targetDataTourId?: string;
+  /** If set, the engine navigates to this route before spotlighting the target. */
+  routeTo?: string;
   title: string;
   bodyMarkdown?: string;
   visualTreatment?: "spotlight" | "pulse" | "arrow" | "coach";
@@ -366,10 +370,25 @@ export function TourEngineProvider({ children }: { children: React.ReactNode }) 
   const [targetRect, setTargetRect] = useState<DOMRect | null>(null);
   const [achievementBadge, setAchievementBadge] = useState<string | null>(null);
   const rafRef = useRef<number>(0);
+  const [, navigate] = useLocation();
 
   const completeMut = trpc.tours.completeTour.useMutation();
   const skipMut = trpc.tours.skipTour.useMutation();
   const advanceMut = trpc.tours.advanceStep.useMutation();
+
+  /**
+   * Navigate to a step's routeTo path if it differs from the current URL,
+   * then wait two animation frames for the new page to mount before the
+   * spotlight RAF loop tries to find the target element.
+   */
+  const navigateToStep = useCallback(
+    (step: TourStep, currentPath: string) => {
+      if (step.routeTo && step.routeTo !== currentPath) {
+        navigate(step.routeTo);
+      }
+    },
+    [navigate],
+  );
 
   // Find target element for current step
   const findTarget = useCallback((step: TourStep): Element | null => {
@@ -418,10 +437,18 @@ export function TourEngineProvider({ children }: { children: React.ReactNode }) 
     return () => el.removeEventListener("click", handler);
   });
 
-  const startTour = useCallback((tour: Tour) => {
-    setActiveTour(tour);
-    setCurrentStepIndex(0);
-  }, []);
+  const startTour = useCallback(
+    (tour: Tour) => {
+      setActiveTour(tour);
+      setCurrentStepIndex(0);
+      // Navigate to the first step's route if specified
+      const firstStep = tour.steps[0];
+      if (firstStep?.routeTo) {
+        navigate(firstStep.routeTo);
+      }
+    },
+    [navigate],
+  );
 
   const endTour = useCallback(() => {
     if (!activeTour) return;
@@ -448,14 +475,24 @@ export function TourEngineProvider({ children }: { children: React.ReactNode }) 
     }
     advanceMut.mutate({ tourId: activeTour.id, stepIndex: next });
     setCurrentStepIndex(next);
-  }, [activeTour, currentStepIndex, endTour, advanceMut]);
+    // Navigate to the next step's route if specified
+    const nextStepData = activeTour.steps[next];
+    if (nextStepData?.routeTo) {
+      navigate(nextStepData.routeTo);
+    }
+  }, [activeTour, currentStepIndex, endTour, advanceMut, navigate]);
 
   const prevStep = useCallback(() => {
     if (!activeTour || currentStepIndex === 0) return;
     const prev = currentStepIndex - 1;
     advanceMut.mutate({ tourId: activeTour.id, stepIndex: prev });
     setCurrentStepIndex(prev);
-  }, [activeTour, currentStepIndex, advanceMut]);
+    // Navigate to the previous step's route if specified
+    const prevStepData = activeTour.steps[prev];
+    if (prevStepData?.routeTo) {
+      navigate(prevStepData.routeTo);
+    }
+  }, [activeTour, currentStepIndex, advanceMut, navigate]);
 
   const skipTour = useCallback(() => {
     if (!activeTour) return;
@@ -464,6 +501,9 @@ export function TourEngineProvider({ children }: { children: React.ReactNode }) 
     setTargetRect(null);
     cancelAnimationFrame(rafRef.current);
   }, [activeTour, skipMut]);
+
+  // Suppress unused-variable warning for navigateToStep (used by external callers via context if needed)
+  void navigateToStep;
 
   const currentStep = activeTour?.steps[currentStepIndex];
 

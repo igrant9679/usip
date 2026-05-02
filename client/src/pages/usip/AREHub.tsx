@@ -318,7 +318,7 @@ export default function AREHub() {
       <div className="p-4 md:p-6 space-y-8 max-w-7xl mx-auto">
 
         {/* ── Pipeline Funnel Metrics ── */}
-        <section>
+        <section data-tour-id="are-funnel-metrics">
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Pipeline Funnel</h2>
             {loadingCampaigns && <Loader2 className="size-3.5 animate-spin text-muted-foreground" />}
@@ -373,7 +373,7 @@ export default function AREHub() {
         </section>
 
         {/* ── AI Agents ── */}
-        <section>
+        <section data-tour-id="are-agents-section">
           <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">AI Agents</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             {AGENTS.map((a) => <AgentCard key={a.name} {...a} />)}
@@ -384,7 +384,7 @@ export default function AREHub() {
         <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
 
           {/* Active campaigns — 3/5 */}
-          <section className="lg:col-span-3 space-y-3">
+          <section className="lg:col-span-3 space-y-3" data-tour-id="are-active-campaigns">
             <div className="flex items-center justify-between">
               <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                 Active Campaigns
@@ -454,7 +454,7 @@ export default function AREHub() {
           </section>
 
           {/* Signal feed — 2/5 */}
-          <section className="lg:col-span-2">
+          <section className="lg:col-span-2" data-tour-id="are-signal-feed">
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Live Signals</h2>
               {loadingSignals && <Loader2 className="size-3.5 animate-spin text-muted-foreground" />}

@@ -87,6 +87,7 @@ export const toursRouter = router({
               sortOrder: z.number(),
               targetSelector: z.string().max(500).optional(),
               targetDataTourId: z.string().max(200).optional(),
+              routeTo: z.string().max(200).optional(),
               title: z.string().min(1).max(300),
               bodyMarkdown: z.string().optional(),
               visualTreatment: z.enum(["spotlight", "pulse", "arrow", "coach"]).default("spotlight"),

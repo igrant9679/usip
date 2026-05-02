@@ -452,7 +452,7 @@ export default function Pipeline() {
         icon={<KanbanSquare className="size-5" />}
       >
         {/* View toggle */}
-        <div className="flex items-center border rounded-md overflow-hidden text-sm">
+        <div className="flex items-center border rounded-md overflow-hidden text-sm" data-tour-id="pipeline-view-toggle">
           {(["board", "forecast"] as const).map((v) => (
             <button
               key={v}
@@ -477,14 +477,14 @@ export default function Pipeline() {
         }} disabled={!data?.length}>
           <Download className="size-4" /> Export CSV
         </Button>
-        <Button onClick={() => setAddOpen(true)}><Plus className="size-4" /> New opportunity</Button>
+        <Button onClick={() => setAddOpen(true)} data-tour-id="pipeline-new-button"><Plus className="size-4" /> New opportunity</Button>
       </PageHeader>
 
       {view === "forecast" ? (
         <ForecastView />
       ) : (
         <div className="p-4 overflow-x-auto">
-          <div className="flex gap-3 min-w-max">
+          <div className="flex gap-3 min-w-max" data-tour-id="pipeline-board">
             {STAGES.map((s) => {
               const items = grouped[s.id] ?? [];
               const total = items.reduce((sum, o) => sum + Number(o.value ?? 0), 0);
