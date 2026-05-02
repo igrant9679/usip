@@ -432,16 +432,17 @@ export async function seedToursForAllWorkspaces(): Promise<void> {
   if (!db) return;
 
   // ── Self-healing: ensure routeTo column exists (migration 0054) ─────────────
-  // The rawMigrations runner may have marked this as applied before the column
-  // was actually created (e.g. due to a lock timeout or tracking-table race).
-  // ADD COLUMN IF NOT EXISTS is idempotent so this is always safe to run.
+  // Uses a SELECT probe to check existence first, then plain ADD COLUMN
+  // (without IF NOT EXISTS — not supported on MySQL < 8.0.3).
   try {
     await db.execute(sql`SELECT routeTo FROM tour_steps LIMIT 0`);
     // column exists — nothing to do
   } catch {
     try {
+      // Plain ADD COLUMN — safe because we only reach here when the column
+      // genuinely doesn't exist (the SELECT above would have succeeded otherwise).
       await db.execute(
-        sql`ALTER TABLE \`tour_steps\` ADD COLUMN IF NOT EXISTS \`routeTo\` varchar(200) NULL`,
+        sql`ALTER TABLE \`tour_steps\` ADD COLUMN \`routeTo\` varchar(200) NULL`,
       );
       console.log("[SeedTours] Applied routeTo column (self-heal)");
     } catch (alterErr) {

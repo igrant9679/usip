@@ -294,7 +294,9 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
   {
     name: "0054_tour_step_route.sql",
     statements: [
-      `ALTER TABLE \`tour_steps\` ADD COLUMN IF NOT EXISTS \`routeTo\` varchar(200) NULL`,
+      // Plain ADD COLUMN — IF NOT EXISTS is not supported on MySQL < 8.0.3.
+      // errno 1060 (ER_DUP_FIELDNAME) is in TOLERATED_ERRNOS so re-runs are safe.
+      `ALTER TABLE \`tour_steps\` ADD COLUMN \`routeTo\` varchar(200) NULL`,
     ],
   },
 ];
