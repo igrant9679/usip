@@ -476,13 +476,22 @@ export async function seedToursForAllWorkspaces(): Promise<void> {
       }
       console.log(`[SeedTours] Seeded ${DEMO_TOURS.length} tours for workspace ${ws.id}`);
     } else {
-      // ── Option B re-seed: patch existing steps that have no routeTo ─────────
-      // Only touches steps where routeTo IS NULL (the old broken seed).
-      // Steps an admin has already edited (routeTo is set) are left untouched.
+      // ── Option B re-seed: patch existing steps that have stale selectors ──────
+      // Uses raw SQL so it works whether or not migration 0054 has added routeTo.
+      // Detects stale steps by checking targetDataTourId against the seed values.
       const existingTours = await db
         .select({ id: tours.id, name: tours.name })
         .from(tours)
         .where(eq(tours.workspaceId, ws.id));
+
+      // Check if routeTo column exists yet
+      let routeToExists = false;
+      try {
+        await db.execute(sql`SELECT routeTo FROM tour_steps LIMIT 0`);
+        routeToExists = true;
+      } catch {
+        // column not yet added by migration 0054
+      }
 
       let patchedCount = 0;
       for (const existingTour of existingTours) {
@@ -490,28 +499,31 @@ export async function seedToursForAllWorkspaces(): Promise<void> {
         const seed = DEMO_TOURS.find((s) => s.name === existingTour.name);
         if (!seed) continue;
 
-        // Get steps that still have routeTo = NULL
-        const staleSteps = await db
-          .select({ id: tourSteps.id, sortOrder: tourSteps.sortOrder })
-          .from(tourSteps)
-          .where(and(eq(tourSteps.tourId, existingTour.id), isNull(tourSteps.routeTo)));
+        // Get all steps for this tour via raw SQL (avoids column-not-found errors)
+        const [rawSteps] = await db.execute(
+          sql`SELECT id, sortOrder, targetDataTourId FROM tour_steps WHERE tourId = ${existingTour.id} ORDER BY sortOrder`,
+        ) as unknown as [Array<{id: number; sortOrder: number; targetDataTourId: string | null}>, unknown];
 
-        for (const staleStep of staleSteps) {
-          const seedStep = seed.steps[staleStep.sortOrder];
+        for (const rawStep of rawSteps ?? []) {
+          const seedStep = seed.steps[rawStep.sortOrder];
           if (!seedStep) continue;
-          await db
-            .update(tourSteps)
-            .set({
-              targetDataTourId: seedStep.targetDataTourId ?? null,
-              targetSelector: seedStep.targetSelector ?? null,
-              routeTo: seedStep.routeTo,
-            })
-            .where(eq(tourSteps.id, staleStep.id));
+          // Always patch: all existing steps were seeded before routeTo existed
+          // and have wrong targetSelector values that need to be corrected.
+
+          if (routeToExists) {
+            await db.execute(
+              sql`UPDATE tour_steps SET targetDataTourId = ${seedStep.targetDataTourId ?? null}, targetSelector = ${seedStep.targetSelector ?? null}, routeTo = ${seedStep.routeTo} WHERE id = ${rawStep.id}`,
+            );
+          } else {
+            await db.execute(
+              sql`UPDATE tour_steps SET targetDataTourId = ${seedStep.targetDataTourId ?? null}, targetSelector = ${seedStep.targetSelector ?? null} WHERE id = ${rawStep.id}`,
+            );
+          }
           patchedCount++;
         }
       }
       if (patchedCount > 0) {
-        console.log(`[SeedTours] Patched ${patchedCount} stale steps for workspace ${ws.id}`);
+        console.log(`[SeedTours] Patched ${patchedCount} stale steps for workspace ${ws.id} (routeToExists=${routeToExists})`);
       }
     }
   }
