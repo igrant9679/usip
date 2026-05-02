@@ -216,6 +216,16 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
   const { workspaces, current, switchTo, isLoading } = useWorkspace();
   const [wsOpen, setWsOpen] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const navRef = useRef<HTMLElement>(null);
+  // Preserve sidebar scroll position across route changes so clicking a nav
+  // item deep in the list never causes the sidebar to jump back to the top.
+  const navScrollRef = useRef<number>(0);
+  useEffect(() => {
+    const el = navRef.current;
+    if (!el) return;
+    // Restore scroll position immediately after re-render from route change
+    el.scrollTop = navScrollRef.current;
+  }, [location]);
   const { data: unread } = trpc.notifications.unreadCount.useQuery(undefined, { enabled: !!current, refetchInterval: 30_000 });
   const { theme, toggleTheme } = useTheme();
 
@@ -265,10 +275,18 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
           <div className="text-[9.5px] text-[#A5B4FC] leading-tight pl-0.5">The Unified Revenue Intelligence Platform</div>
         </div>
 
-        <nav className="flex-1 overflow-y-auto py-3 px-0 space-y-2">
+        <nav
+          ref={navRef}
+          className="flex-1 overflow-y-auto py-3 px-0 space-y-2"
+          onScroll={(e) => { navScrollRef.current = (e.currentTarget as HTMLElement).scrollTop; }}
+        >
           {effectiveNav.map((group) => {
             const gc = isDark ? group.darkColor : group.color;
             const gBg = isDark ? group.darkActiveBg : group.activeBg;
+            // Collect all hrefs in this group so we can detect prefix collisions.
+            // An item is only active via startsWith when no sibling has a longer
+            // href that also matches — this prevents /are matching /are/icp etc.
+            const groupHrefs = group.items.map((i) => i.href);
             return (
             <div key={group.label}>
               {/* Section header with left stripe */}
@@ -285,7 +303,18 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
               </div>
               <div className="space-y-0.5 pl-0">
                 {group.items.map((item) => {
-                  const active = location === item.href || (item.href !== "/" && location.startsWith(item.href));
+                  // An item is active if:
+                  //   1. Exact match, OR
+                  //   2. location starts with item.href AND no sibling href is a
+                  //      longer prefix of location (prevents /are matching /are/icp).
+                  const isExact = location === item.href;
+                  const isPrefixMatch =
+                    item.href !== "/" &&
+                    location.startsWith(item.href) &&
+                    !groupHrefs.some(
+                      (h) => h !== item.href && h.startsWith(item.href) && location.startsWith(h),
+                    );
+                  const active = isExact || isPrefixMatch;
                   const Icon = item.icon;
                   // Inactive icon: use group color at 70% opacity (cc) for minimum legibility
                   const inactiveIconColor = gc + 'cc';
