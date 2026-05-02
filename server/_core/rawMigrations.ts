@@ -289,6 +289,14 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
       `ALTER TABLE \`help_articles\` MODIFY COLUMN \`status\` enum('draft','published','archived') NOT NULL DEFAULT 'draft'`,
     ],
   },
+
+  // ── 0054: Tour step routeTo column ────────────────────────────────────────
+  {
+    name: "0054_tour_step_route.sql",
+    statements: [
+      `ALTER TABLE \`tour_steps\` ADD COLUMN IF NOT EXISTS \`routeTo\` varchar(200) NULL`,
+    ],
+  },
 ];
 
 // ---------------------------------------------------------------------------
