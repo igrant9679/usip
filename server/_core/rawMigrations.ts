@@ -78,24 +78,26 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
         \`updatedAt\` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,
         CONSTRAINT \`prospects_id\` PRIMARY KEY(\`id\`)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
-      `CREATE INDEX IF NOT EXISTS \`ix_pro_ws\` ON \`prospects\` (\`workspaceId\`)`,
-      `ALTER TABLE \`contacts\` ADD COLUMN IF NOT EXISTS \`source_prospect_id\` int`,
-      `ALTER TABLE \`contacts\` ADD COLUMN IF NOT EXISTS \`clodura_person_id\` varchar(64)`,
-      `ALTER TABLE \`contacts\` ADD COLUMN IF NOT EXISTS \`clodura_org_id\` varchar(64)`,
-      `ALTER TABLE \`contacts\` ADD COLUMN IF NOT EXISTS \`functional_area\` varchar(64)`,
-      `ALTER TABLE \`contacts\` ADD COLUMN IF NOT EXISTS \`industry\` varchar(80)`,
-      `ALTER TABLE \`contacts\` ADD COLUMN IF NOT EXISTS \`company_domain\` varchar(200)`,
-      `ALTER TABLE \`contacts\` ADD COLUMN IF NOT EXISTS \`company_employee_size\` varchar(40)`,
-      `ALTER TABLE \`contacts\` ADD COLUMN IF NOT EXISTS \`company_revenue\` varchar(40)`,
-      `ALTER TABLE \`contacts\` ADD COLUMN IF NOT EXISTS \`company_founded_year\` int`,
-      `ALTER TABLE \`contacts\` ADD COLUMN IF NOT EXISTS \`company_phone\` varchar(40)`,
-      `ALTER TABLE \`contacts\` ADD COLUMN IF NOT EXISTS \`company_city\` varchar(80)`,
-      `ALTER TABLE \`contacts\` ADD COLUMN IF NOT EXISTS \`company_state\` varchar(80)`,
-      `ALTER TABLE \`contacts\` ADD COLUMN IF NOT EXISTS \`company_country\` varchar(80)`,
-      `ALTER TABLE \`contacts\` ADD COLUMN IF NOT EXISTS \`enriched_at\` timestamp`,
-      `ALTER TABLE \`contacts\` ADD COLUMN IF NOT EXISTS \`enrichment_status\` varchar(20)`,
-      `ALTER TABLE \`contacts\` ADD COLUMN IF NOT EXISTS \`enrichment_confidence\` varchar(20)`,
-      `ALTER TABLE \`contacts\` ADD COLUMN IF NOT EXISTS \`manually_edited_fields\` json DEFAULT ('[]')`,
+      // CREATE INDEX IF NOT EXISTS is not supported on MySQL < 8.0.3 — use plain, tolerate errno 1061.
+      `CREATE INDEX \`ix_pro_ws\` ON \`prospects\` (\`workspaceId\`)`,
+      // Plain ADD COLUMN — IF NOT EXISTS not supported on MySQL < 8.0.3. errno 1060 is tolerated.
+      `ALTER TABLE \`contacts\` ADD COLUMN \`source_prospect_id\` int`,
+      `ALTER TABLE \`contacts\` ADD COLUMN \`clodura_person_id\` varchar(64)`,
+      `ALTER TABLE \`contacts\` ADD COLUMN \`clodura_org_id\` varchar(64)`,
+      `ALTER TABLE \`contacts\` ADD COLUMN \`functional_area\` varchar(64)`,
+      `ALTER TABLE \`contacts\` ADD COLUMN \`industry\` varchar(80)`,
+      `ALTER TABLE \`contacts\` ADD COLUMN \`company_domain\` varchar(200)`,
+      `ALTER TABLE \`contacts\` ADD COLUMN \`company_employee_size\` varchar(40)`,
+      `ALTER TABLE \`contacts\` ADD COLUMN \`company_revenue\` varchar(40)`,
+      `ALTER TABLE \`contacts\` ADD COLUMN \`company_founded_year\` int`,
+      `ALTER TABLE \`contacts\` ADD COLUMN \`company_phone\` varchar(40)`,
+      `ALTER TABLE \`contacts\` ADD COLUMN \`company_city\` varchar(80)`,
+      `ALTER TABLE \`contacts\` ADD COLUMN \`company_state\` varchar(80)`,
+      `ALTER TABLE \`contacts\` ADD COLUMN \`company_country\` varchar(80)`,
+      `ALTER TABLE \`contacts\` ADD COLUMN \`enriched_at\` timestamp`,
+      `ALTER TABLE \`contacts\` ADD COLUMN \`enrichment_status\` varchar(20)`,
+      `ALTER TABLE \`contacts\` ADD COLUMN \`enrichment_confidence\` varchar(20)`,
+      `ALTER TABLE \`contacts\` ADD COLUMN \`manually_edited_fields\` json DEFAULT ('[]')`,
     ],
   },
 
@@ -103,9 +105,10 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
   {
     name: "0049_opp_suggested_stage.sql",
     statements: [
-      `ALTER TABLE \`opportunities\` ADD COLUMN IF NOT EXISTS \`suggestedStage\` varchar(80)`,
-      `ALTER TABLE \`opportunities\` ADD COLUMN IF NOT EXISTS \`suggestedStageReason\` text`,
-      `ALTER TABLE \`opportunities\` ADD COLUMN IF NOT EXISTS \`suggestedStageAt\` timestamp`,
+      // Plain ADD COLUMN — IF NOT EXISTS not supported on MySQL < 8.0.3. errno 1060 is tolerated.
+      `ALTER TABLE \`opportunities\` ADD COLUMN \`suggestedStage\` varchar(80)`,
+      `ALTER TABLE \`opportunities\` ADD COLUMN \`suggestedStageReason\` text`,
+      `ALTER TABLE \`opportunities\` ADD COLUMN \`suggestedStageAt\` timestamp`,
     ],
   },
 
@@ -113,14 +116,15 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
   {
     name: "0050_ai_features.sql",
     statements: [
-      `ALTER TABLE \`workspaces\` ADD COLUMN IF NOT EXISTS \`aiEnabled\` tinyint(1) NOT NULL DEFAULT 1`,
-      `ALTER TABLE \`workspaces\` ADD COLUMN IF NOT EXISTS \`aiModel\` varchar(80)`,
-      `ALTER TABLE \`workspaces\` ADD COLUMN IF NOT EXISTS \`aiProvider\` varchar(40)`,
-      `ALTER TABLE \`workspaces\` ADD COLUMN IF NOT EXISTS \`aiApiKey\` varchar(500)`,
-      `ALTER TABLE \`workspaces\` ADD COLUMN IF NOT EXISTS \`aiSystemPrompt\` text`,
-      `ALTER TABLE \`contacts\` ADD COLUMN IF NOT EXISTS \`aiSummary\` text`,
-      `ALTER TABLE \`contacts\` ADD COLUMN IF NOT EXISTS \`aiSummarizedAt\` timestamp`,
-      `ALTER TABLE \`opportunities\` ADD COLUMN IF NOT EXISTS \`aiInsight\` text`,
+      // Plain ADD COLUMN — IF NOT EXISTS not supported on MySQL < 8.0.3. errno 1060 is tolerated.
+      `ALTER TABLE \`workspaces\` ADD COLUMN \`aiEnabled\` tinyint(1) NOT NULL DEFAULT 1`,
+      `ALTER TABLE \`workspaces\` ADD COLUMN \`aiModel\` varchar(80)`,
+      `ALTER TABLE \`workspaces\` ADD COLUMN \`aiProvider\` varchar(40)`,
+      `ALTER TABLE \`workspaces\` ADD COLUMN \`aiApiKey\` varchar(500)`,
+      `ALTER TABLE \`workspaces\` ADD COLUMN \`aiSystemPrompt\` text`,
+      `ALTER TABLE \`contacts\` ADD COLUMN \`aiSummary\` text`,
+      `ALTER TABLE \`contacts\` ADD COLUMN \`aiSummarizedAt\` timestamp`,
+      `ALTER TABLE \`opportunities\` ADD COLUMN \`aiInsight\` text`,
     ],
   },
 
@@ -283,8 +287,9 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
   {
     name: "0053_help_articles_extras.sql",
     statements: [
-      `ALTER TABLE \`help_articles\` ADD COLUMN IF NOT EXISTS \`readingTimeMinutes\` int NULL`,
-      `ALTER TABLE \`help_articles\` ADD COLUMN IF NOT EXISTS \`pageKeys\` json NULL`,
+      // Plain ADD COLUMN — IF NOT EXISTS not supported on MySQL < 8.0.3. errno 1060 is tolerated.
+      `ALTER TABLE \`help_articles\` ADD COLUMN \`readingTimeMinutes\` int NULL`,
+      `ALTER TABLE \`help_articles\` ADD COLUMN \`pageKeys\` json NULL`,
       // MODIFY COLUMN for enum extension — tolerated if already has 'archived'
       `ALTER TABLE \`help_articles\` MODIFY COLUMN \`status\` enum('draft','published','archived') NOT NULL DEFAULT 'draft'`,
     ],
