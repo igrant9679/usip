@@ -431,6 +431,24 @@ export async function seedToursForAllWorkspaces(): Promise<void> {
   const db = await getDb();
   if (!db) return;
 
+  // ── Self-healing: ensure routeTo column exists (migration 0054) ─────────────
+  // The rawMigrations runner may have marked this as applied before the column
+  // was actually created (e.g. due to a lock timeout or tracking-table race).
+  // ADD COLUMN IF NOT EXISTS is idempotent so this is always safe to run.
+  try {
+    await db.execute(sql`SELECT routeTo FROM tour_steps LIMIT 0`);
+    // column exists — nothing to do
+  } catch {
+    try {
+      await db.execute(
+        sql`ALTER TABLE \`tour_steps\` ADD COLUMN IF NOT EXISTS \`routeTo\` varchar(200) NULL`,
+      );
+      console.log("[SeedTours] Applied routeTo column (self-heal)");
+    } catch (alterErr) {
+      console.error("[SeedTours] Could not add routeTo column:", (alterErr as Error)?.message);
+    }
+  }
+
   // Get all workspaces
   const allWorkspaces = await db.select({ id: workspaces.id }).from(workspaces);
 
