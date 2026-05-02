@@ -1,5 +1,5 @@
 /**
- * TourEngine — guided tour overlay system
+ * TourEngine — guided tour overlay system (v2)
  *
  * Features:
  *  - Semi-transparent overlay with spotlight cutout around target element
@@ -9,7 +9,7 @@
  *  - Achievement toast on completion
  *  - Proactive trigger: shows a "Start tour?" nudge when user first visits a page
  *  - Supports advance conditions: next_button, element_clicked, route_changed
- *  - Route navigation: each step can declare routeTo to navigate before spotlighting
+ *  - Route navigation: each step declares routeTo to navigate before spotlighting
  */
 
 import React, {
