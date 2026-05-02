@@ -70,14 +70,15 @@ export const toursRouter = router({
           .where(eq(tourSteps.tourId, input.id))
           .orderBy(tourSteps.sortOrder);
       } catch {
-        // Fallback: select without routeTo for pre-migration databases
-        const raw = await db.execute(
+        // Fallback: select without routeTo for pre-migration databases.
+        // db.execute() in Drizzle MySQL returns a tuple: [rows[], fields].
+        const [fallbackRows] = await db.execute(
           sql`SELECT id, tourId, sortOrder, targetSelector, targetDataTourId,
                   title, bodyMarkdown, visualTreatment, advanceCondition,
                   advanceConfig, skipAllowed, backAllowed, branchingRules, createdAt
            FROM tour_steps WHERE tourId = ${input.id} ORDER BY sortOrder`,
-        ) as unknown as { rows: Record<string, unknown>[] };
-        steps = (raw.rows ?? []) as typeof tourSteps.$inferSelect[];
+        ) as unknown as [Record<string, unknown>[], unknown];
+        steps = (fallbackRows ?? []) as typeof tourSteps.$inferSelect[];
       }
       return { ...tour, steps };
     }),
