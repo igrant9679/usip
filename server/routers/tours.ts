@@ -60,11 +60,25 @@ export const toursRouter = router({
         .where(and(eq(tours.id, input.id), eq(tours.workspaceId, ctx.workspace.id)))
         .limit(1);
       if (!tour) throw new TRPCError({ code: "NOT_FOUND" });
-      const steps = await db
-        .select()
-        .from(tourSteps)
-        .where(eq(tourSteps.tourId, input.id))
-        .orderBy(tourSteps.sortOrder);
+      // Select explicit columns so the query degrades gracefully if routeTo
+      // column hasn't been added by migration 0054 yet.
+      let steps: typeof tourSteps.$inferSelect[] = [];
+      try {
+        steps = await db
+          .select()
+          .from(tourSteps)
+          .where(eq(tourSteps.tourId, input.id))
+          .orderBy(tourSteps.sortOrder);
+      } catch {
+        // Fallback: select without routeTo for pre-migration databases
+        const raw = await db.execute(
+          sql`SELECT id, tourId, sortOrder, targetSelector, targetDataTourId,
+                  title, bodyMarkdown, visualTreatment, advanceCondition,
+                  advanceConfig, skipAllowed, backAllowed, branchingRules, createdAt
+           FROM tour_steps WHERE tourId = ${input.id} ORDER BY sortOrder`,
+        ) as unknown as { rows: Record<string, unknown>[] };
+        steps = (raw.rows ?? []) as typeof tourSteps.$inferSelect[];
+      }
       return { ...tour, steps };
     }),
 
