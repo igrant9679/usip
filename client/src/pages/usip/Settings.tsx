@@ -181,7 +181,7 @@ function SmtpTab({ canEdit }: { canEdit: boolean }) {
         <div className="grid grid-cols-2 gap-3">
           <div className="col-span-2">
             <Label>SMTP Host</Label>
-            <Input placeholder="smtp.gmail.com" value={host} onChange={(e) => setHost(e.target.value)} disabled={!canEdit} />
+            <Input placeholder="mail.yourdomain.com" value={host} onChange={(e) => setHost(e.target.value)} disabled={!canEdit} />
           </div>
           <div>
             <Label>Port</Label>
@@ -240,7 +240,7 @@ function SmtpTab({ canEdit }: { canEdit: boolean }) {
           </div>
         )}
         <p className="text-xs text-muted-foreground">
-          Common settings: Gmail → smtp.gmail.com:587 (STARTTLS), port 465 (TLS). Outlook → smtp.office365.com:587. SendGrid → smtp.sendgrid.net:587 (username: apikey).
+          Common settings: Outlook → smtp.office365.com:587 (STARTTLS). SendGrid → smtp.sendgrid.net:587 (username: apikey). Mailpool → your assigned SMTP host:587 (STARTTLS).
         </p>
       </div>
     </Section>

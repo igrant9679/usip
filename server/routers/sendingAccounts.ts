@@ -1,7 +1,7 @@
 /**
  * sendingAccounts.ts — tRPC router for multi-provider sending accounts + sender pools
  *
- * Sending accounts: gmail_oauth | outlook_oauth | amazon_ses | generic_smtp
+ * Sending accounts: outlook_oauth | amazon_ses | generic_smtp
  * Sender pools: named groups with round_robin | weighted | random rotation
  */
 import { TRPCError } from "@trpc/server";
@@ -55,7 +55,7 @@ export async function testSmtpConnection(params: {
 }): Promise<{ ok: boolean; error?: string }> {
   const { provider } = params;
 
-  if (provider === "gmail_oauth" || provider === "outlook_oauth") {
+  if (provider === "outlook_oauth") {
     if (!params.oauthAccessToken) {
       return { ok: false, error: "OAuth access token is required" };
     }
@@ -147,7 +147,7 @@ export function pickAccountFromPool(
 
 const AccountCreateInput = z.object({
   name: z.string().min(1).max(120),
-  provider: z.enum(["gmail_oauth", "outlook_oauth", "amazon_ses", "generic_smtp"]),
+  provider: z.enum(["outlook_oauth", "amazon_ses", "generic_smtp"]),
   fromEmail: z.string().email(),
   fromName: z.string().max(120).optional(),
   replyTo: z.string().email().optional(),

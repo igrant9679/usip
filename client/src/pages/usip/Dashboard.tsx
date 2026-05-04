@@ -678,7 +678,6 @@ export default function Dashboard() {
                     MESSENGER: "#0084FF",
                     TELEGRAM: "#2AABEE",
                     TWITTER: "#000000",
-                    GOOGLE: "#EA4335",
                     MICROSOFT: "#0078D4",
                     IMAP: "#6B7280",
                   };

@@ -84,35 +84,6 @@ export const calendarRouter = router({
       return { id: (inserted as any).insertId };
     }),
 
-  /** Connect a Google Calendar account */
-  connectGoogle: workspaceProcedure
-    .input(z.object({
-      label: z.string().optional(),
-      email: z.string().email().optional(),
-      oauthAccessToken: z.string(),
-      oauthRefreshToken: z.string(),
-      oauthTokenExpiry: z.date().optional(),
-      calendarId: z.string().default("primary"),
-    }))
-    .mutation(async ({ ctx, input }) => {
-      const db = await getDb();
-      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      const [inserted] = await db.insert(calendarAccounts).values({
-        workspaceId: ctx.workspace.id,
-        userId: ctx.user.id,
-        provider: "google",
-        label: input.label ?? "Google Calendar",
-        email: input.email,
-        oauthAccessToken: input.oauthAccessToken,
-        oauthRefreshToken: input.oauthRefreshToken,
-        oauthTokenExpiry: input.oauthTokenExpiry,
-        oauthScope: "https://www.googleapis.com/auth/calendar",
-        calendarId: input.calendarId,
-        syncEnabled: true,
-      });
-      return { id: (inserted as any).insertId };
-    }),
-
   /** Connect a Microsoft 365 / Outlook calendar account via OAuth tokens */
   connectOutlookOAuth: workspaceProcedure
     .input(z.object({

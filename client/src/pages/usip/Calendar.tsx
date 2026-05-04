@@ -32,10 +32,10 @@ import { Streamdown } from "streamdown";
 
 // ─── Connect Calendar Dialog ───────────────────────────────────────────────────
 
-type CalendarProvider = "google" | "outlook_oauth" | "outlook_caldav" | "apple_caldav" | "generic_caldav";
+type CalendarProvider = "outlook_oauth" | "outlook_caldav" | "apple_caldav" | "generic_caldav";
 
 function ConnectCalendarDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const [provider, setProvider] = useState<CalendarProvider>("google");
+  const [provider, setProvider] = useState<CalendarProvider>("outlook_oauth");
   const [label, setLabel] = useState("");
   const [email, setEmail] = useState("");
   // CalDAV fields
@@ -51,10 +51,6 @@ function ConnectCalendarDialog({ open, onClose }: { open: boolean; onClose: () =
     onSuccess: () => { toast.success("Calendar connected"); onClose(); },
     onError: (e) => toast.error(e.message),
   });
-  const connectGoogle = trpc.calendar.connectGoogle.useMutation({
-    onSuccess: () => { toast.success("Google Calendar connected"); onClose(); },
-    onError: (e) => toast.error(e.message),
-  });
   const connectOutlookOAuth = trpc.calendar.connectOutlookOAuth.useMutation({
     onSuccess: () => { toast.success("Outlook Calendar connected"); onClose(); },
     onError: (e) => toast.error(e.message),
@@ -66,9 +62,9 @@ function ConnectCalendarDialog({ open, onClose }: { open: boolean; onClose: () =
     generic_caldav: "",
   };
 
-  const isOAuth = provider === "google" || provider === "outlook_oauth";
+  const isOAuth = provider === "outlook_oauth";
   const isCalDAV = !isOAuth;
-  const isPending = connectCalDAV.isPending || connectGoogle.isPending || connectOutlookOAuth.isPending;
+  const isPending = connectCalDAV.isPending || connectOutlookOAuth.isPending;
 
   function handleConnect() {
     if (isOAuth) {
@@ -76,11 +72,7 @@ function ConnectCalendarDialog({ open, onClose }: { open: boolean; onClose: () =
         toast.error("Access token and refresh token are required");
         return;
       }
-      if (provider === "google") {
-        connectGoogle.mutate({ label: label || undefined, email: email || undefined, oauthAccessToken: accessToken, oauthRefreshToken: refreshToken, calendarId: calendarId || "primary" });
-      } else {
-        connectOutlookOAuth.mutate({ label: label || undefined, email: email || undefined, oauthAccessToken: accessToken, oauthRefreshToken: refreshToken, calendarId: calendarId || "primary" });
-      }
+      connectOutlookOAuth.mutate({ label: label || undefined, email: email || undefined, oauthAccessToken: accessToken, oauthRefreshToken: refreshToken, calendarId: calendarId || "primary" });
     } else {
       if (!caldavUrl.trim() || !username.trim() || !password.trim()) {
         toast.error("CalDAV URL, username, and password are required");
@@ -104,7 +96,6 @@ function ConnectCalendarDialog({ open, onClose }: { open: boolean; onClose: () =
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="google">Google Calendar (OAuth)</SelectItem>
                 <SelectItem value="outlook_oauth">Microsoft 365 / Outlook (OAuth)</SelectItem>
                 <SelectItem value="outlook_caldav">Microsoft Outlook (CalDAV)</SelectItem>
                 <SelectItem value="apple_caldav">Apple Calendar (iCloud CalDAV)</SelectItem>
@@ -124,11 +115,7 @@ function ConnectCalendarDialog({ open, onClose }: { open: boolean; onClose: () =
           {isOAuth && (
             <>
               <div className="rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground space-y-1">
-                {provider === "google" ? (
-                  <p>Obtain tokens from the <strong>Google OAuth 2.0 Playground</strong> (oauth2.googleapis.com/tokeninfo) or your Google Cloud Console app. Required scope: <code>https://www.googleapis.com/auth/calendar</code></p>
-                ) : (
-                  <p>Obtain tokens from the <strong>Microsoft Azure Portal</strong> (portal.azure.com) or Microsoft OAuth 2.0 Playground. Required scope: <code>Calendars.ReadWrite offline_access</code></p>
-                )}
+                <p>Obtain tokens from the <strong>Microsoft Azure Portal</strong> (portal.azure.com) or Microsoft OAuth 2.0 Playground. Required scope: <code>Calendars.ReadWrite offline_access</code></p>
               </div>
               <div className="space-y-1">
                 <Label>Access Token</Label>

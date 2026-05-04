@@ -1,11 +1,9 @@
 /**
  * calendarAdapter.ts — Unified calendar adapter for Rep Calendar (Feature 73)
  *
- * GoogleCalendarAdapter : Google Calendar via googleapis
- * CalDAVAdapter         : Outlook Calendar, Apple Calendar, generic CalDAV via tsdav
+ * CalDAVAdapter: Outlook Calendar, Apple Calendar, generic CalDAV via tsdav
  */
 
-import { google } from "googleapis";
 import { createDAVClient } from "tsdav";
 import type { CalendarAccount } from "../drizzle/schema";
 import { decryptField } from "./emailAdapter";
@@ -49,112 +47,6 @@ export interface CalendarAdapter {
   createEvent(calendarId: string, event: CalendarEventInput): Promise<CalendarEventResult>;
   updateEvent(calendarId: string, externalId: string, event: Partial<CalendarEventInput>): Promise<CalendarEventResult>;
   deleteEvent(calendarId: string, externalId: string): Promise<void>;
-}
-
-/* ─── Google Calendar Adapter ────────────────────────────────────────────── */
-
-export class GoogleCalendarAdapter implements CalendarAdapter {
-  private calendar: ReturnType<typeof google.calendar>;
-
-  constructor(account: CalendarAccount) {
-    const oauth2Client = new google.auth.OAuth2(
-      process.env.GOOGLE_CLIENT_ID,
-      process.env.GOOGLE_CLIENT_SECRET,
-    );
-    oauth2Client.setCredentials({
-      access_token: account.oauthAccessToken,
-      refresh_token: account.oauthRefreshToken,
-      expiry_date: account.oauthTokenExpiry ? new Date(account.oauthTokenExpiry).getTime() : undefined,
-    });
-    this.calendar = google.calendar({ version: "v3", auth: oauth2Client });
-  }
-
-  async listCalendars(): Promise<CalendarInfo[]> {
-    const res = await this.calendar.calendarList.list();
-    return (res.data.items ?? []).map((c) => ({
-      id: c.id ?? "",
-      name: c.summary ?? "",
-      description: c.description ?? undefined,
-      color: c.backgroundColor ?? undefined,
-      primary: c.primary ?? false,
-    }));
-  }
-
-  async listEvents(calendarId: string, from: Date, to: Date): Promise<CalendarEventResult[]> {
-    const res = await this.calendar.events.list({
-      calendarId,
-      timeMin: from.toISOString(),
-      timeMax: to.toISOString(),
-      singleEvents: true,
-      orderBy: "startTime",
-      maxResults: 500,
-    });
-    return (res.data.items ?? []).map((e) => this._mapEvent(e));
-  }
-
-  async createEvent(calendarId: string, event: CalendarEventInput): Promise<CalendarEventResult> {
-    const res = await this.calendar.events.insert({
-      calendarId,
-      requestBody: this._toGoogleEvent(event),
-    });
-    return this._mapEvent(res.data);
-  }
-
-  async updateEvent(calendarId: string, externalId: string, event: Partial<CalendarEventInput>): Promise<CalendarEventResult> {
-    const res = await this.calendar.events.patch({
-      calendarId,
-      eventId: externalId,
-      requestBody: this._toGoogleEvent(event as CalendarEventInput),
-    });
-    return this._mapEvent(res.data);
-  }
-
-  async deleteEvent(calendarId: string, externalId: string): Promise<void> {
-    await this.calendar.events.delete({ calendarId, eventId: externalId });
-  }
-
-  private _toGoogleEvent(event: Partial<CalendarEventInput>): any {
-    const body: any = {};
-    if (event.title) body.summary = event.title;
-    if (event.description) body.description = event.description;
-    if (event.location) body.location = event.location;
-    if (event.startAt) {
-      body.start = event.allDay
-        ? { date: event.startAt.toISOString().split("T")[0] }
-        : { dateTime: event.startAt.toISOString() };
-    }
-    if (event.endAt) {
-      body.end = event.allDay
-        ? { date: event.endAt.toISOString().split("T")[0] }
-        : { dateTime: event.endAt.toISOString() };
-    }
-    if (event.attendees) {
-      body.attendees = event.attendees.map((a) => ({ email: a.email, displayName: a.name }));
-    }
-    if (event.meetingUrl) {
-      body.description = (body.description ? body.description + "\n\n" : "") + `Meeting URL: ${event.meetingUrl}`;
-    }
-    return body;
-  }
-
-  private _mapEvent(e: any): CalendarEventResult {
-    const startRaw = e.start?.dateTime ?? e.start?.date ?? "";
-    const endRaw = e.end?.dateTime ?? e.end?.date ?? "";
-    const allDay = !e.start?.dateTime;
-    return {
-      externalId: e.id ?? "",
-      title: e.summary ?? "(no title)",
-      description: e.description ?? undefined,
-      location: e.location ?? undefined,
-      meetingUrl: e.hangoutLink ?? e.conferenceData?.entryPoints?.[0]?.uri ?? undefined,
-      startAt: new Date(startRaw),
-      endAt: new Date(endRaw),
-      allDay,
-      attendees: (e.attendees ?? []).map((a: any) => ({
-        email: a.email ?? "", name: a.displayName ?? undefined, responseStatus: a.responseStatus ?? undefined,
-      })),
-    };
-  }
 }
 
 /* ─── CalDAV Adapter (Outlook, Apple, generic) ───────────────────────────── */
@@ -308,6 +200,5 @@ export class CalDAVAdapter implements CalendarAdapter {
 /* ─── Factory ────────────────────────────────────────────────────────────── */
 
 export function createCalendarAdapter(account: CalendarAccount): CalendarAdapter {
-  if (account.provider === "google") return new GoogleCalendarAdapter(account);
   return new CalDAVAdapter(account);
 }

@@ -37,7 +37,6 @@ export const PROVIDER_META: Record<
   MESSENGER: { label: "Messenger", color: "#0084FF", icon: "messenger" },
   TELEGRAM: { label: "Telegram", color: "#2AABEE", icon: "telegram" },
   TWITTER: { label: "X (Twitter)", color: "#000000", icon: "twitter" },
-  GOOGLE: { label: "Gmail", color: "#EA4335", icon: "gmail" },
   MICROSOFT: { label: "Outlook", color: "#0078D4", icon: "outlook" },
   IMAP: { label: "IMAP Email", color: "#6B7280", icon: "mail" },
 };
@@ -49,7 +48,6 @@ const ALL_PROVIDERS = [
   "MESSENGER",
   "TELEGRAM",
   "TWITTER",
-  "GOOGLE",
   "MICROSOFT",
   "IMAP",
 ];

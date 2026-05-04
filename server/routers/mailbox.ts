@@ -2,7 +2,7 @@
  * mailbox.ts — tRPC router for Rep Mailbox (Feature 73)
  *
  * Procedures:
- *   mailbox.listAccounts  — list sending accounts with IMAP/Gmail configured for this rep
+ *   mailbox.listAccounts  — list sending accounts with IMAP configured for this rep
  *   mailbox.listFolders   — list folders/labels for an account
  *   mailbox.listThreads   — paginated thread list for a folder
  *   mailbox.getThread     — full message list for a thread
@@ -50,7 +50,7 @@ async function getAccount(accountId: number, workspaceId: number) {
 }
 
 export const mailboxRouter = router({
-  /** List sending accounts that have inbox access (Gmail OAuth or IMAP configured) */
+  /** List sending accounts that have inbox access (IMAP configured) */
   listAccounts: workspaceProcedure
     .input(z.object({ repUserId: z.number().optional() }))
     .query(async ({ ctx, input }) => {
@@ -73,13 +73,13 @@ export const mailboxRouter = router({
           eq(sendingAccounts.workspaceId, ctx.workspace.id)
         );
       return accounts
-        .filter((a) => a.provider === "gmail_oauth" || !!a.hasImap)
+        .filter((a) => !!a.hasImap)
         .map((a) => ({
           id: a.id,
           name: a.name,
           email: a.email,
           provider: a.provider,
-          inboxEnabled: a.provider === "gmail_oauth" || !!a.hasImap,
+          inboxEnabled: true,
         }));
     }),
 

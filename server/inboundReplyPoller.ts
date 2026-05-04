@@ -1,7 +1,7 @@
 /**
  * inboundReplyPoller.ts — IMAP polling job for inbound reply detection (Feature 73)
  *
- * Runs every 60 seconds per connected IMAP/Gmail account.
+ * Runs every 60 seconds per connected IMAP account.
  * For each new message:
  *   1. Matches it to an outbound draft via In-Reply-To / References headers
  *   2. Inserts a row into email_replies
@@ -13,7 +13,6 @@
 
 import { ImapFlow } from "imapflow";
 import { simpleParser } from "mailparser";
-import { google } from "googleapis";
 import { getDb } from "./db";
 import {
   sendingAccounts,
@@ -61,87 +60,18 @@ async function pollAllAccounts() {
       .select()
       .from(sendingAccounts);
     const imapAccounts = accounts.filter(
-      (a) =>
-        // Has explicit IMAP credentials (any provider) — prefer IMAP path
-        (a.imapHost && a.imapUsername && a.imapPassword) ||
-        // Gmail OAuth without IMAP override — use Gmail API path
-        (a.provider === "gmail_oauth" && a.oauthAccessToken && a.oauthRefreshToken)
+      (a) => !!(a.imapHost && a.imapUsername && a.imapPassword)
     );
 
     for (const account of imapAccounts) {
       try {
-        // If IMAP credentials are set, always use IMAP (even for gmail_oauth)
-        const useImap = !!(account.imapHost && account.imapUsername && account.imapPassword);
-        if (!useImap && account.provider === "gmail_oauth") {
-          await pollGmailAccount(account);
-        } else {
-          await pollImapAccount(account);
-        }
+        await pollImapAccount(account);
       } catch (err: any) {
         console.error(`[InboundPoller] Error polling account ${account.id} (${account.fromEmail}):`, err.message);
       }
     }
   } catch (err: any) {
     console.error("[InboundPoller] Fatal error in pollAllAccounts:", err.message);
-  }
-}
-
-async function pollGmailAccount(account: any) {
-  const oauth2Client = new google.auth.OAuth2(
-    process.env.GOOGLE_CLIENT_ID,
-    process.env.GOOGLE_CLIENT_SECRET,
-  );
-  oauth2Client.setCredentials({
-    access_token: account.oauthAccessToken,
-    refresh_token: account.oauthRefreshToken,
-  });
-  const gmail = google.gmail({ version: "v1", auth: oauth2Client });
-
-  // Fetch unread messages in INBOX from the last 24h
-  const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-  const res = await gmail.users.messages.list({
-    userId: "me",
-    q: `in:inbox is:unread after:${Math.floor(since.getTime() / 1000)}`,
-    maxResults: 50,
-  });
-
-  for (const msgRef of res.data.messages ?? []) {
-    try {
-      // Check if already processed
-      const db2 = await getDb();
-      if (!db2) continue;
-      const existing = await db2.select({ id: emailReplies.id }).from(emailReplies)
-        .where(eq(emailReplies.gmailMessageId, msgRef.id!));
-      if (existing.length > 0) continue;
-
-      const msg = await gmail.users.messages.get({ userId: "me", id: msgRef.id!, format: "FULL" });
-      const headers = msg.data.payload?.headers ?? [];
-      const getH = (n: string) => headers.find((h) => h.name?.toLowerCase() === n.toLowerCase())?.value ?? "";
-
-      const inReplyTo = getH("In-Reply-To");
-      const references = getH("References");
-      const fromRaw = getH("From");
-      const fromMatch = fromRaw.match(/^"?([^"<]*)"?\s*<?([^>]*)>?$/);
-      const fromEmail = fromMatch?.[2]?.trim() ?? fromRaw;
-      const fromName = fromMatch?.[1]?.trim() ?? "";
-      const subject = getH("Subject");
-      const bodyHtml = extractGmailBody(msg.data.payload, "text/html");
-      const bodyText = extractGmailBody(msg.data.payload, "text/plain");
-      const receivedAt = new Date(parseInt(msg.data.internalDate ?? "0"));
-
-      await processInboundReply({
-        workspaceId: account.workspaceId,
-        sendingAccountId: account.id,
-        userId: account.userId,
-        fromEmail, fromName, subject, bodyText, bodyHtml,
-        messageId: getH("Message-ID"),
-        inReplyTo, references,
-        gmailMessageId: msgRef.id!,
-        receivedAt,
-      });
-    } catch (err: any) {
-      console.error(`[InboundPoller] Error processing Gmail message ${msgRef.id}:`, err.message);
-    }
   }
 }
 
@@ -214,7 +144,6 @@ interface InboundReplyData {
   inReplyTo: string;
   references: string;
   imapUid?: number;
-  gmailMessageId?: string;
   receivedAt: Date;
 }
 
@@ -271,7 +200,6 @@ async function processInboundReply(data: InboundReplyData) {
     leadId: matchedLeadId,
     accountId: matchedAccountId,
     imapUid: data.imapUid,
-    gmailMessageId: data.gmailMessageId,
     receivedAt: data.receivedAt,
   });
 
@@ -327,9 +255,3 @@ async function processInboundReply(data: InboundReplyData) {
   console.log(`[InboundPoller] Processed reply from ${data.fromEmail} (draft: ${matchedDraft?.id ?? "unmatched"})`);
 }
 
-function extractGmailBody(payload: any, mimeType: string): string {
-  if (!payload) return "";
-  if (payload.mimeType === mimeType && payload.body?.data) return Buffer.from(payload.body.data, "base64").toString("utf8");
-  for (const part of payload.parts ?? []) { const f = extractGmailBody(part, mimeType); if (f) return f; }
-  return "";
-}

@@ -1,14 +1,12 @@
 /**
  * emailAdapter.ts — Unified email adapter for Rep Mailbox (Feature 73)
  *
- * GmailAdapter  : Google Workspace via Gmail REST API (googleapis)
  * ImapSmtpAdapter: Mailpool own SMTP/IMAP, generic IMAP/SMTP (imapflow + nodemailer)
  */
 
 import nodemailer from "nodemailer";
 import { ImapFlow } from "imapflow";
 import { simpleParser } from "mailparser";
-import { google } from "googleapis";
 import type { SendingAccount } from "../drizzle/schema";
 import { createDecipheriv, createCipheriv, randomBytes } from "crypto";
 
@@ -96,214 +94,6 @@ export interface EmailAdapter {
   moveToTrash(messageId: string): Promise<void>;
   moveToFolder(messageId: string, destFolder: string, currentFolder?: string): Promise<void>;
   listFolders(): Promise<EmailFolder[]>;
-}
-
-/* ─── Gmail Adapter ──────────────────────────────────────────────────────── */
-
-export class GmailAdapter implements EmailAdapter {
-  private gmail: ReturnType<typeof google.gmail>;
-
-  constructor(account: SendingAccount) {
-    const oauth2Client = new google.auth.OAuth2(
-      process.env.GOOGLE_CLIENT_ID,
-      process.env.GOOGLE_CLIENT_SECRET,
-    );
-    oauth2Client.setCredentials({
-      access_token: account.oauthAccessToken,
-      refresh_token: account.oauthRefreshToken,
-      expiry_date: account.oauthTokenExpiry ? new Date(account.oauthTokenExpiry).getTime() : undefined,
-    });
-    this.gmail = google.gmail({ version: "v1", auth: oauth2Client });
-  }
-
-  async listThreads(folder = "INBOX", pageToken?: string, maxResults = 50): Promise<{ threads: EmailThread[]; nextPageToken?: string }> {
-    const labelMap: Record<string, string> = { INBOX: "INBOX", SENT: "SENT", DRAFTS: "DRAFT", TRASH: "TRASH", SPAM: "SPAM" };
-    const labelId = labelMap[folder.toUpperCase()] ?? "INBOX";
-    const res = await this.gmail.users.threads.list({ userId: "me", labelIds: [labelId], maxResults, pageToken });
-    const threadList = res.data.threads ?? [];
-    const threads: EmailThread[] = [];
-    await Promise.all(
-      threadList.slice(0, 20).map(async (t) => {
-        try {
-          const detail = await this.gmail.users.threads.get({ userId: "me", id: t.id!, format: "METADATA", metadataHeaders: ["Subject", "From", "Date"] });
-          const msgs = detail.data.messages ?? [];
-          const last = msgs[msgs.length - 1];
-          const headers = last?.payload?.headers ?? [];
-          const getH = (n: string) => headers.find((h) => h.name?.toLowerCase() === n.toLowerCase())?.value ?? "";
-          const fromRaw = getH("From");
-          const fromMatch = fromRaw.match(/^"?([^"<]*)"?\s*<?([^>]*)>?$/);
-          threads.push({
-            threadId: t.id!,
-            subject: getH("Subject") || "(no subject)",
-            snippet: detail.data.snippet ?? "",
-            fromEmail: fromMatch?.[2]?.trim() ?? fromRaw,
-            fromName: fromMatch?.[1]?.trim() ?? "",
-            date: new Date(parseInt(last?.internalDate ?? "0")),
-            unread: (last?.labelIds ?? []).includes("UNREAD"),
-            messageCount: msgs.length,
-            labels: last?.labelIds ?? [],
-          });
-        } catch { /* skip */ }
-      })
-    );
-    return { threads, nextPageToken: res.data.nextPageToken ?? undefined };
-  }
-
-  async getThread(threadId: string): Promise<EmailMessage[]> {
-    const res = await this.gmail.users.threads.get({ userId: "me", id: threadId, format: "FULL" });
-    return (res.data.messages ?? []).map((msg) => {
-      const headers = msg.payload?.headers ?? [];
-      const getH = (n: string) => headers.find((h) => h.name?.toLowerCase() === n.toLowerCase())?.value ?? "";
-      const fromRaw = getH("From");
-      const fromMatch = fromRaw.match(/^"?([^"<]*)"?\s*<?([^>]*)>?$/);
-      return {
-        messageId: msg.id!,
-        threadId,
-        subject: getH("Subject") || "(no subject)",
-        fromEmail: fromMatch?.[2]?.trim() ?? fromRaw,
-        fromName: fromMatch?.[1]?.trim() ?? "",
-        toEmail: getH("To"),
-        ccEmail: getH("Cc") || undefined,
-        date: new Date(parseInt(msg.internalDate ?? "0")),
-        bodyText: this._extractBody(msg.payload, "text/plain"),
-        bodyHtml: this._extractBody(msg.payload, "text/html"),
-        attachments: this._extractAttachments(msg.payload),
-        inReplyTo: getH("In-Reply-To") || undefined,
-        references: getH("References") || undefined,
-        unread: (msg.labelIds ?? []).includes("UNREAD"),
-      };
-    });
-  }
-
-  async sendEmail(input: SendEmailInput): Promise<{ messageId: string; threadId?: string }> {
-    let rawBody: string;
-    const boundary = `boundary_${Date.now()}`;
-    if (input.attachments?.length) {
-      const parts = [
-        `--${boundary}\r\nContent-Type: text/html; charset=utf-8\r\n\r\n${input.bodyHtml}`,
-        ...input.attachments.map((a) =>
-          `--${boundary}\r\nContent-Type: ${a.contentType}; name="${a.filename}"\r\nContent-Disposition: attachment; filename="${a.filename}"\r\nContent-Transfer-Encoding: base64\r\n\r\n${a.content}`
-        ),
-        `--${boundary}--`,
-      ];
-      const headers = [
-        `From: ${input.fromName ? `"${input.fromName}" <${input.fromEmail}>` : input.fromEmail}`,
-        `To: ${input.to}`,
-        `Subject: ${input.subject}`,
-        `MIME-Version: 1.0`,
-        `Content-Type: multipart/mixed; boundary="${boundary}"`,
-      ];
-      if (input.cc) headers.push(`Cc: ${input.cc}`);
-      if (input.inReplyTo) headers.push(`In-Reply-To: ${input.inReplyTo}`);
-      if (input.references) headers.push(`References: ${input.references}`);
-      rawBody = headers.join("\r\n") + "\r\n\r\n" + parts.join("\r\n");
-    } else {
-      const headers = [
-        `From: ${input.fromName ? `"${input.fromName}" <${input.fromEmail}>` : input.fromEmail}`,
-        `To: ${input.to}`,
-        `Subject: ${input.subject}`,
-        `Content-Type: text/html; charset=utf-8`,
-        `MIME-Version: 1.0`,
-      ];
-      if (input.cc) headers.push(`Cc: ${input.cc}`);
-      if (input.inReplyTo) headers.push(`In-Reply-To: ${input.inReplyTo}`);
-      if (input.references) headers.push(`References: ${input.references}`);
-      rawBody = headers.join("\r\n") + "\r\n\r\n" + input.bodyHtml;
-    }
-    const raw = Buffer.from(rawBody).toString("base64url");
-    const res = await this.gmail.users.messages.send({ userId: "me", requestBody: { raw, threadId: input.replyToThreadId } });
-    return { messageId: res.data.id!, threadId: res.data.threadId ?? undefined };
-  }
-
-  async markRead(messageId: string, read: boolean): Promise<void> {
-    await this.gmail.users.messages.modify({
-      userId: "me", id: messageId,
-      requestBody: read ? { removeLabelIds: ["UNREAD"] } : { addLabelIds: ["UNREAD"] },
-    });
-  }
-
-  async moveToTrash(messageId: string): Promise<void> {
-    await this.gmail.users.messages.trash({ userId: "me", id: messageId });
-  }
-
-  async moveToFolder(messageId: string, destFolder: string, _currentFolder?: string): Promise<void> {
-    // Map common folder names to Gmail label IDs
-    const labelMap: Record<string, string> = { INBOX: "INBOX", SENT: "SENT", DRAFTS: "DRAFT", TRASH: "TRASH", SPAM: "SPAM" };
-    const destLabel = labelMap[destFolder.toUpperCase()] ?? destFolder;
-    const removeLabels = ["INBOX", "TRASH", "SPAM"].filter((l) => l !== destLabel);
-    await this.gmail.users.messages.modify({
-      userId: "me", id: messageId,
-      requestBody: { addLabelIds: destLabel ? [destLabel] : [], removeLabelIds: removeLabels },
-    });
-  }
-
-  async searchThreads(query: string, _folder?: string, maxResults = 20): Promise<{ threads: EmailThread[] }> {
-    const res = await this.gmail.users.threads.list({ userId: "me", q: query, maxResults });
-    const threadList = res.data.threads ?? [];
-    const threads: EmailThread[] = [];
-    await Promise.all(
-      threadList.slice(0, maxResults).map(async (t) => {
-        try {
-          const detail = await this.gmail.users.threads.get({ userId: "me", id: t.id!, format: "METADATA", metadataHeaders: ["Subject", "From", "Date"] });
-          const msgs = detail.data.messages ?? [];
-          const last = msgs[msgs.length - 1];
-          const headers = last?.payload?.headers ?? [];
-          const getH = (n: string) => headers.find((h) => h.name?.toLowerCase() === n.toLowerCase())?.value ?? "";
-          const fromRaw = getH("From");
-          const fromMatch = fromRaw.match(/^"?([^"<]*)"?\s*<?([^>]*)>?$/);
-          threads.push({
-            threadId: t.id!, subject: getH("Subject") || "(no subject)", snippet: detail.data.snippet ?? "",
-            fromEmail: fromMatch?.[2]?.trim() ?? fromRaw, fromName: fromMatch?.[1]?.trim() ?? "",
-            date: new Date(parseInt(last?.internalDate ?? "0")), unread: (last?.labelIds ?? []).includes("UNREAD"),
-            messageCount: msgs.length, labels: last?.labelIds ?? [],
-          });
-        } catch { /* skip */ }
-      })
-    );
-    return { threads };
-  }
-
-  async getAttachment(messageId: string, attachmentId: string): Promise<{ data: Buffer; contentType: string; filename: string }> {
-    const res = await this.gmail.users.messages.attachments.get({ userId: "me", messageId, id: attachmentId });
-    const data = Buffer.from(res.data.data ?? "", "base64url");
-    const msgRes = await this.gmail.users.messages.get({ userId: "me", id: messageId, format: "FULL" });
-    const filename = this._findAttachmentFilename(msgRes.data.payload, attachmentId) ?? "attachment";
-    return { data, contentType: "application/octet-stream", filename };
-  }
-
-  private _findAttachmentFilename(payload: any, attachmentId: string): string | null {
-    if (!payload) return null;
-    for (const part of payload.parts ?? []) {
-      if (part.body?.attachmentId === attachmentId) return part.filename ?? null;
-      const found = this._findAttachmentFilename(part, attachmentId);
-      if (found) return found;
-    }
-    return null;
-  }
-
-  async listFolders(): Promise<EmailFolder[]> {
-    const res = await this.gmail.users.labels.list({ userId: "me" });
-    return (res.data.labels ?? []).map((l) => ({
-      name: l.name ?? "", path: l.id ?? "", unreadCount: l.messagesUnread ?? 0, totalCount: l.messagesTotal ?? 0,
-    }));
-  }
-
-  private _extractBody(payload: any, mimeType: string): string {
-    if (!payload) return "";
-    if (payload.mimeType === mimeType && payload.body?.data) return Buffer.from(payload.body.data, "base64").toString("utf8");
-    for (const part of payload.parts ?? []) { const f = this._extractBody(part, mimeType); if (f) return f; }
-    return "";
-  }
-
-  private _extractAttachments(payload: any): Array<{ filename: string; contentType: string; size: number }> {
-    const result: Array<{ filename: string; contentType: string; size: number }> = [];
-    if (!payload) return result;
-    for (const part of payload.parts ?? []) {
-      if (part.filename && part.body?.attachmentId) result.push({ filename: part.filename, contentType: part.mimeType ?? "", size: part.body.size ?? 0 });
-      result.push(...this._extractAttachments(part));
-    }
-    return result;
-  }
 }
 
 /* ─── IMAP/SMTP Adapter (Mailpool own servers, generic IMAP) ─────────────── */
@@ -487,11 +277,5 @@ export class ImapSmtpAdapter implements EmailAdapter {
 /* ─── Factory ────────────────────────────────────────────────────────────── */
 
 export function createEmailAdapter(account: SendingAccount): EmailAdapter {
-  // If explicit IMAP credentials are set, always use IMAP (even for gmail_oauth accounts
-  // where the user has configured IMAP instead of relying on the OAuth token).
-  if (account.imapHost && account.imapUsername && account.imapPassword) {
-    return new ImapSmtpAdapter(account);
-  }
-  if (account.provider === "gmail_oauth") return new GmailAdapter(account);
   return new ImapSmtpAdapter(account);
 }

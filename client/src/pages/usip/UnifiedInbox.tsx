@@ -38,7 +38,6 @@ const PROVIDER_COLORS: Record<string, string> = {
   MESSENGER: "#0084FF",
   TELEGRAM:  "#2AABEE",
   TWITTER:   "#000000",
-  GOOGLE:    "#EA4335",
   MICROSOFT: "#0078D4",
   IMAP:      "#6B7280",
 };
@@ -50,7 +49,6 @@ const PROVIDER_LABELS: Record<string, string> = {
   MESSENGER: "Messenger",
   TELEGRAM:  "Telegram",
   TWITTER:   "X",
-  GOOGLE:    "Gmail",
   MICROSOFT: "Outlook",
   IMAP:      "Email",
 };
@@ -62,7 +60,6 @@ const PROVIDER_EMOJI: Record<string, string> = {
   MESSENGER: "💙",
   TELEGRAM:  "✈️",
   TWITTER:   "𝕏",
-  GOOGLE:    "📧",
   MICROSOFT: "📨",
   IMAP:      "📮",
 };

@@ -1951,7 +1951,7 @@ export type EmailSuppression = typeof emailSuppressions.$inferSelect;
 
 /* ──────────────────────────────────────────────────────────────────────────
    Sending Accounts — multi-provider email sending infrastructure (Feature 64)
-   Supports: gmail_oauth, outlook_oauth, amazon_ses, generic_smtp
+   Supports: outlook_oauth, amazon_ses, generic_smtp
    ────────────────────────────────────────────────────────────────────────── */
 export const sendingAccounts = mysqlTable(
   "sending_accounts",
@@ -1960,7 +1960,6 @@ export const sendingAccounts = mysqlTable(
     workspaceId: int("workspaceId").notNull(),
     name: varchar("name", { length: 120 }).notNull(),
     provider: mysqlEnum("provider", [
-      "gmail_oauth",
       "outlook_oauth",
       "amazon_ses",
       "generic_smtp",
@@ -2129,7 +2128,6 @@ export const calendarAccounts = mysqlTable(
     workspaceId: int("workspaceId").notNull(),
     userId: int("userId").notNull(),
     provider: mysqlEnum("provider", [
-      "google",
       "outlook_oauth",
       "outlook_caldav",
       "apple_caldav",

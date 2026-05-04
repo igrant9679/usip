@@ -43,7 +43,7 @@ import {
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type Provider = "gmail_oauth" | "outlook_oauth" | "amazon_ses" | "generic_smtp";
+type Provider = "outlook_oauth" | "amazon_ses" | "generic_smtp";
 type WarmupStatus = "not_started" | "in_progress" | "complete";
 type ConnectionStatus = "connected" | "error" | "untested";
 type ReputationTier = "excellent" | "good" | "fair" | "poor";
@@ -96,7 +96,6 @@ const defaultForm: AccountForm = {
 
 /** Default IMAP host/port hints per provider */
 const IMAP_DEFAULTS: Record<Provider, { host: string; port: string }> = {
-  gmail_oauth: { host: "imap.gmail.com", port: "993" },
   outlook_oauth: { host: "outlook.office365.com", port: "993" },
   amazon_ses: { host: "", port: "993" },
   generic_smtp: { host: "", port: "993" },
@@ -105,21 +104,18 @@ const IMAP_DEFAULTS: Record<Provider, { host: string; port: string }> = {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const PROVIDER_LABELS: Record<Provider, string> = {
-  gmail_oauth: "Gmail (OAuth)",
   outlook_oauth: "Outlook / M365 (OAuth)",
   amazon_ses: "Amazon SES",
   generic_smtp: "Generic SMTP",
 };
 
 const PROVIDER_ICONS: Record<Provider, string> = {
-  gmail_oauth: "G",
   outlook_oauth: "O",
   amazon_ses: "A",
   generic_smtp: "S",
 };
 
 const PROVIDER_COLORS: Record<Provider, string> = {
-  gmail_oauth: "bg-red-100 text-red-700",
   outlook_oauth: "bg-blue-100 text-blue-700",
   amazon_ses: "bg-orange-100 text-orange-700",
   generic_smtp: "bg-zinc-100 text-zinc-700",
@@ -300,7 +296,7 @@ function AccountFormDialog({
     }
   }
 
-  const isOAuth = form.provider === "gmail_oauth" || form.provider === "outlook_oauth";
+  const isOAuth = form.provider === "outlook_oauth";
   const isSES = form.provider === "amazon_ses";
   const isSMTP = form.provider === "generic_smtp";
   const isBusy = createMutation.isPending || updateMutation.isPending || existingAccount.isLoading;
@@ -504,11 +500,7 @@ function AccountFormDialog({
                   Office 365: host <strong>outlook.office365.com</strong>, port <strong>993</strong>, SSL on. Use an App Password if MFA is enabled.
                 </p>
               )}
-              {form.provider === "gmail_oauth" && (
-                <p className="text-xs text-red-600 bg-red-50 rounded px-2 py-1">
-                  Gmail: host <strong>imap.gmail.com</strong>, port <strong>993</strong>, SSL on. Use an App Password from myaccount.google.com.
-                </p>
-              )}
+
               <div className="grid grid-cols-3 gap-3">
                 <div className="col-span-2 space-y-1.5">
                   <Label>IMAP host</Label>

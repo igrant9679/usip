@@ -54,7 +54,6 @@ const PROVIDERS = [
   { id: "MESSENGER", label: "Messenger",   color: "#0084FF", bg: "bg-[#0084FF]", textColor: "text-white", emoji: "💙", description: "Facebook Messenger" },
   { id: "TELEGRAM",  label: "Telegram",    color: "#2AABEE", bg: "bg-[#2AABEE]", textColor: "text-white", emoji: "✈️", description: "Channels and direct messages" },
   { id: "TWITTER",   label: "X (Twitter)", color: "#000000", bg: "bg-black",     textColor: "text-white", emoji: "𝕏", description: "Direct messages" },
-  { id: "GOOGLE",    label: "Gmail",       color: "#EA4335", bg: "bg-[#EA4335]", textColor: "text-white", emoji: "📧", description: "Full email inbox sync" },
   { id: "MICROSOFT", label: "Outlook",     color: "#0078D4", bg: "bg-[#0078D4]", textColor: "text-white", emoji: "📨", description: "Microsoft 365 / Outlook" },
   { id: "IMAP",      label: "IMAP Email",  color: "#6B7280", bg: "bg-gray-500",  textColor: "text-white", emoji: "📮", description: "Any IMAP-compatible email" },
 ];

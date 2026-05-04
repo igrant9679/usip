@@ -900,7 +900,7 @@ export default function MailboxPage() {
                 </>
               ) : (
                 <p className="text-xs text-muted-foreground px-2 py-2">
-                  No inbox-enabled accounts. Configure Gmail OAuth or IMAP in Sending Accounts.
+                  No inbox-enabled accounts. Configure IMAP in Sending Accounts.
                 </p>
               )}
 
