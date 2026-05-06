@@ -41,6 +41,7 @@ import { pageDescriptionsRouter } from "./routers/pageDescriptions";
 import { csAiRouter, leadsAiRouter, contactsAiRouter, quotesAiRouter, workflowsAiRouter, forecastAiRouter, mailboxAiRouter, emailAutoSendRouter } from "./routers/aiFeatures";
 import { helpCenterRouter } from "./routers/helpCenter";
 import { toursRouter } from "./routers/tours";
+import { mindmapsRouter } from "./routers/mindmaps";
 
 export const appRouter = router({
   system: systemRouter,
@@ -123,6 +124,7 @@ export const appRouter = router({
   emailAutoSend: emailAutoSendRouter,
   helpCenter: helpCenterRouter,
   tours: toursRouter,
+  mindmaps: mindmapsRouter,
 });
 
 export type AppRouter = typeof appRouter;

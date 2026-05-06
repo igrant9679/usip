@@ -304,6 +304,48 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
       `ALTER TABLE \`tour_steps\` ADD COLUMN \`routeTo\` varchar(200) NULL`,
     ],
   },
+
+  // ── 0055: Mindmaps ────────────────────────────────────────────────────────
+  {
+    name: "0055_mindmaps.sql",
+    statements: [
+      `CREATE TABLE IF NOT EXISTS \`mindmaps\` (
+        \`id\` int NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        \`workspaceId\` int NOT NULL,
+        \`name\` varchar(240) NOT NULL,
+        \`description\` text NULL,
+        \`createdByUserId\` int NOT NULL,
+        \`createdAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        \`updatedAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        INDEX \`ix_mindmap_ws\` (\`workspaceId\`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS \`mindmap_nodes\` (
+        \`id\` varchar(64) NOT NULL PRIMARY KEY,
+        \`mindmapId\` int NOT NULL,
+        \`workspaceId\` int NOT NULL,
+        \`type\` enum('root','topic','subtopic','task','note','idea') NOT NULL DEFAULT 'topic',
+        \`label\` varchar(240) NOT NULL,
+        \`notes\` text NULL,
+        \`posX\` int NOT NULL DEFAULT 0,
+        \`posY\` int NOT NULL DEFAULT 0,
+        \`color\` varchar(30) NULL,
+        \`parentId\` varchar(64) NULL,
+        \`linkedEntityType\` varchar(30) NULL,
+        \`linkedEntityId\` int NULL,
+        \`createdAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        INDEX \`ix_mmnode_map\` (\`mindmapId\`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS \`mindmap_edges\` (
+        \`id\` varchar(64) NOT NULL PRIMARY KEY,
+        \`mindmapId\` int NOT NULL,
+        \`workspaceId\` int NOT NULL,
+        \`source\` varchar(64) NOT NULL,
+        \`target\` varchar(64) NOT NULL,
+        \`label\` varchar(120) NULL,
+        INDEX \`ix_mmedge_map\` (\`mindmapId\`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+    ],
+  },
 ];
 
 // ---------------------------------------------------------------------------

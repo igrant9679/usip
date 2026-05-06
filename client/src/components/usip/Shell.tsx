@@ -56,6 +56,7 @@ import {
   Radar,
   HelpCircle,
   GraduationCap,
+  GitFork,
 } from "lucide-react";
 import { ReactNode, useEffect, useState, useRef, createContext, useContext } from "react";
 import { Link, useLocation } from "wouter";
@@ -164,6 +165,7 @@ const NAV: NavGroup[] = [
     darkActiveBg: "rgba(94,234,212,0.12)",
     items: [
       { href: "/tasks", label: "Tasks", icon: ListChecks },
+      { href: "/mindmaps", label: "Mindmaps", icon: GitFork },
       { href: "/workflows", label: "Workflows", icon: Workflow },
       { href: "/dashboards", label: "Dashboards", icon: PieChart },
       { href: "/products", label: "Products", icon: Package },

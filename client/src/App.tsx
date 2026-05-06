@@ -66,6 +66,8 @@ import ARECampaignDetail from "@/pages/usip/ARECampaignDetail";
 import ARESettings from "@/pages/usip/ARESettings";
 import HelpCenter from "@/pages/usip/HelpCenter";
 import TourBuilder from "@/pages/usip/TourBuilder";
+import Mindmaps from "@/pages/usip/Mindmaps";
+import MindmapCanvas from "@/pages/usip/MindmapCanvas";
 import { HelpButton } from "@/components/usip/HelpDrawer";
 import { TourEngineProvider } from "@/components/usip/TourEngine";
 import { Loader2, Eye, EyeOff, LogIn } from "lucide-react";
@@ -276,6 +278,8 @@ function Router() {
       <Route path="/invite/accept"><InviteAccept /></Route>
       <Route path="/help"><AuthGate><HelpCenter /></AuthGate></Route>
       <Route path="/tour-builder"><AuthGate><TourBuilder /></AuthGate></Route>
+      <Route path="/mindmaps"><AuthGate><Mindmaps /></AuthGate></Route>
+      <Route path="/mindmaps/:id"><AuthGate><MindmapCanvas /></AuthGate></Route>
       <Route path="/404"><NotFound /></Route>
       <Route><NotFound /></Route>
     </Switch>

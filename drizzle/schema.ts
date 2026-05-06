@@ -3255,3 +3255,56 @@ export const tourAchievements = mysqlTable(
   (t) => ({ byWsUser: index("ix_ta_ws_user").on(t.workspaceId, t.userId) }),
 );
 export type TourAchievement = typeof tourAchievements.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Mindmaps
+   ────────────────────────────────────────────────────────────────────────── */
+export const mindmaps = mysqlTable(
+  "mindmaps",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    name: varchar("name", { length: 240 }).notNull(),
+    description: text("description"),
+    createdByUserId: int("createdByUserId").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({ byWs: index("ix_mindmap_ws").on(t.workspaceId) }),
+);
+export type Mindmap = typeof mindmaps.$inferSelect;
+
+export const mindmapNodes = mysqlTable(
+  "mindmap_nodes",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(), // client-generated UUID
+    mindmapId: int("mindmapId").notNull(),
+    workspaceId: int("workspaceId").notNull(),
+    type: mysqlEnum("type", ["root", "topic", "subtopic", "task", "note", "idea"]).default("topic").notNull(),
+    label: varchar("label", { length: 240 }).notNull(),
+    notes: text("notes"),
+    posX: int("posX").default(0).notNull(),
+    posY: int("posY").default(0).notNull(),
+    color: varchar("color", { length: 30 }),
+    parentId: varchar("parentId", { length: 64 }),
+    linkedEntityType: varchar("linkedEntityType", { length: 30 }),
+    linkedEntityId: int("linkedEntityId"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({ byMap: index("ix_mmnode_map").on(t.mindmapId) }),
+);
+export type MindmapNode = typeof mindmapNodes.$inferSelect;
+
+export const mindmapEdges = mysqlTable(
+  "mindmap_edges",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    mindmapId: int("mindmapId").notNull(),
+    workspaceId: int("workspaceId").notNull(),
+    source: varchar("source", { length: 64 }).notNull(),
+    target: varchar("target", { length: 64 }).notNull(),
+    label: varchar("label", { length: 120 }),
+  },
+  (t) => ({ byMap: index("ix_mmedge_map").on(t.mindmapId) }),
+);
+export type MindmapEdge = typeof mindmapEdges.$inferSelect;
