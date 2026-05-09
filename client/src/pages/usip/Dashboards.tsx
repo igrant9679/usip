@@ -426,7 +426,7 @@ export default function Dashboards() {
                         <LayoutDashboard className="h-3 w-3 shrink-0 text-primary" />
                         <span className="truncate">{p.label}</span>
                         {isCurrentHome
-                          ? <Home className="h-3 w-3 ml-auto text-amber-400" title="Your home dashboard" />
+                          ? <span title="Your home dashboard"><Home className="h-3 w-3 ml-auto text-amber-400" /></span>
                           : <span className="ml-auto text-[10px] text-muted-foreground/60">System</span>
                         }
                       </Link>

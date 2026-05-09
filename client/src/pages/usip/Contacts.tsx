@@ -810,7 +810,7 @@ export default function Contacts() {
     onSuccess: () => { utils.contacts.list.invalidate(); toast.success("Contact deleted"); },
     onError: (e: any) => toast.error(e.message),
   });
-  const scoreRelationship = trpc.contactsAi.scoreRelationshipStrength.useMutation({
+  const scoreRelationship = trpc.contactsAi.scoreRelStrength.useMutation({
     onSuccess: () => utils.contacts.list.invalidate(),
     onError: (e: any) => toast.error(e.message),
   });

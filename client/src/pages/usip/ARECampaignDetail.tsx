@@ -298,10 +298,10 @@ function IntelligenceDossier({ prospect }: { prospect: any }) {
         </div>
         <Separator orientation="vertical" className="h-10" />
         <div>
-          <div className="text-sm font-medium capitalize">{intel.recommendedChannel ?? "email"}</div>
+          <div className="text-sm font-medium capitalize">{typeof intel.recommendedChannel === "string" ? intel.recommendedChannel : "email"}</div>
           <div className="text-[10px] text-muted-foreground">Recommended channel</div>
         </div>
-        {intel.recommendedTiming && (
+        {typeof intel.recommendedTiming === "string" && intel.recommendedTiming.length > 0 && (
           <>
             <Separator orientation="vertical" className="h-10" />
             <div>
@@ -313,7 +313,7 @@ function IntelligenceDossier({ prospect }: { prospect: any }) {
       </div>
 
       {/* Company one-liner */}
-      {intel.companyOneLiner && (
+      {typeof intel.companyOneLiner === "string" && intel.companyOneLiner.length > 0 && (
         <blockquote className="border-l-4 border-primary/40 pl-3 py-1 text-sm text-muted-foreground italic">
           {intel.companyOneLiner}
         </blockquote>

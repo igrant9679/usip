@@ -282,27 +282,26 @@ export default function ConnectedAccounts() {
   return (
     <Shell>
       <PageHeader
-        title="Connected Accounts" description="Connect your LinkedIn, email, and social accounts to power outreach, engagement tracking, and automated follow-ups. All connected accounts are synced in real time." pageKey="connected-accounts"
-        subtitle="Manage your multichannel connections — LinkedIn, email, messaging, and more"
-        actions={
-          <div className="flex gap-2"
+        title="Connected Accounts"
+        description="Connect your LinkedIn, email, and social accounts to power outreach, engagement tracking, and automated follow-ups. All connected accounts are synced in real time."
+        pageKey="connected-accounts"
         icon={<Link2 className="size-5" />}
       >
-            <Button variant="outline" size="sm" onClick={() => refetch()}>
-              <RefreshCw className="h-4 w-4 mr-2" />
-              Refresh
-            </Button>
-            <Button
-              size="sm"
-              className="bg-violet-600 hover:bg-violet-700 text-white"
-              onClick={() => setConnectOpen(true)}
-            >
-              <Plus className="h-4 w-4 mr-2" />
-              Connect Account
-            </Button>
-          </div>
-        }
-      />
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={() => refetch()}>
+            <RefreshCw className="h-4 w-4 mr-2" />
+            Refresh
+          </Button>
+          <Button
+            size="sm"
+            className="bg-violet-600 hover:bg-violet-700 text-white"
+            onClick={() => setConnectOpen(true)}
+          >
+            <Plus className="h-4 w-4 mr-2" />
+            Connect Account
+          </Button>
+        </div>
+      </PageHeader>
       {/* Connecting banner - shown while auth tab is open */}
       {isConnecting && (
         <div className="mx-6 mt-4 flex items-center gap-3 rounded-lg border border-amber-400/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-700">
@@ -353,7 +352,7 @@ export default function ConnectedAccounts() {
               <div key={acc.unipileAccountId} className="flex items-center justify-between gap-3 rounded-md border border-amber-300/50 bg-amber-50/60 px-3 py-2">
                 <div className="flex items-center gap-2 min-w-0">
                   <span className="text-xs font-medium text-amber-900 uppercase tracking-wide">{acc.provider}</span>
-                  <span className="text-amber-800 truncate">{acc.accountName || acc.unipileAccountId}</span>
+                  <span className="text-amber-800 truncate">{acc.displayName || acc.unipileAccountId}</span>
                   <Badge variant="outline" className="text-xs border-amber-400 text-amber-700 bg-amber-100 shrink-0">
                     {acc.status === "CREDENTIALS" ? "Token expired" : acc.status === "ERROR" ? "Error" : "Stopped"}
                   </Badge>

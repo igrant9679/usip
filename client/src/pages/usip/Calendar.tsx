@@ -220,7 +220,18 @@ function EventDialog({
     { enabled: showOppPicker }
   );
   const summarizeMeeting = trpc.calendar.summarizeMeeting.useMutation({
-    onSuccess: (data) => { setAiSummary(data.summary); toast.success("Meeting summary generated"); },
+    onSuccess: (data) => {
+      // The summary may come back as the raw LLM choice content, which can
+      // be a string or a multi-part content array. Coerce to string for
+      // setState (which is typed string | null).
+      const text = typeof data.summary === "string"
+        ? data.summary
+        : Array.isArray(data.summary)
+          ? data.summary.map((p: { type?: string; text?: string }) => p?.type === "text" ? (p.text ?? "") : "").join("")
+          : "";
+      setAiSummary(text);
+      toast.success("Meeting summary generated");
+    },
     onError: (e) => toast.error(e.message),
   });
   const pushSummary = trpc.calendar.pushSummaryToOpportunity.useMutation({
@@ -466,8 +477,8 @@ export default function CalendarPage() {
               <Plus className="size-3.5 mr-2" /> New Event
             </Button>
 
-            {/* Manager rep selector */}
-            {isManager && teamData?.members?.length && (
+            {/* Manager rep selector — team.list returns an array directly */}
+            {isManager && teamData && teamData.length > 0 && (
               <Select
                 value={repUserId?.toString() ?? "me"}
                 onValueChange={(v) => {
@@ -481,7 +492,7 @@ export default function CalendarPage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="me">My Calendar</SelectItem>
-                  {teamData.members.map((m: any) => (
+                  {teamData.map((m: any) => (
                     <SelectItem key={m.userId} value={m.userId.toString()}>
                       {m.name ?? m.email}
                     </SelectItem>
