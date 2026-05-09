@@ -7,7 +7,9 @@ import { TRPCError } from "@trpc/server";
 
 // Base URL is overridable via env so the hostname can be corrected without a
 // redeploy if Clodura's docs prescribe a different host than the default.
-const CLODURA_BASE = process.env.CLODURA_BASE_URL || "https://api.clodura.ai/api/v1";
+// Strip any trailing slash so concatenation with `/path` always yields a
+// single-slash URL.
+const CLODURA_BASE = (process.env.CLODURA_BASE_URL || "https://api.clodura.ai/api/v1").replace(/\/+$/, "");
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 500;
 
@@ -65,6 +67,9 @@ async function cloduraFetch<T>(
         ...fetchOptions,
         headers: {
           "Content-Type": "application/json",
+          // Match the documented curl example exactly — Clodura may key
+          // route resolution on Accept (some API gateways do).
+          Accept: "application/json",
           "x-api-key": key,
           ...(fetchOptions.headers ?? {}),
         },
@@ -92,9 +97,16 @@ async function cloduraFetch<T>(
         const message =
           (parsed as { message?: string })?.message ??
           (rawText && rawText.length < 300 ? rawText : `HTTP ${res.status}`);
-        // Include the final URL (post-redirect) so misrouted requests are obvious.
-        const finalUrl = res.url && res.url !== url ? ` (final url=${res.url})` : "";
-        throw new CloduraError(res.status, `${message}${finalUrl}`, parsed ?? rawText);
+        // Surface enough context to debug 404s with empty bodies:
+        //   - which URL we actually sent to (env var is invisible otherwise)
+        //   - the final URL after any redirects
+        //   - the `server` / `cf-ray` headers — reveals if it's Clodura vs Cloudflare
+        const server = res.headers.get("server") ?? "";
+        const cfRay = res.headers.get("cf-ray") ?? "";
+        const final = res.url && res.url !== url ? ` final=${res.url}` : "";
+        const tag = [server && `server=${server}`, cfRay && `cf-ray=${cfRay}`].filter(Boolean).join(" ");
+        const ctx = ` [sent=${url}${final}${tag ? ` ${tag}` : ""}]`;
+        throw new CloduraError(res.status, `${message}${ctx}`, parsed ?? rawText);
       }
 
       return res.json() as Promise<T>;
