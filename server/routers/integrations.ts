@@ -11,6 +11,7 @@ import { workspaceIntegrations } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { router } from "../_core/trpc";
+import { getCredits, CloduraError } from "../services/clodura/client";
 
 const PROVIDERS = [
   "manus_oauth",
@@ -20,6 +21,7 @@ const PROVIDERS = [
   "llm",
   "google_maps",
   "webhook",
+  "clodura",
 ] as const;
 type Provider = (typeof PROVIDERS)[number];
 
@@ -158,6 +160,40 @@ export const integrationsRouter = router({
           const key = (row?.config as any)?.publishableKey;
           result = key ? "Stripe publishable key is set." : "No Stripe keys configured.";
           success = Boolean(key);
+        } else if (input.provider === "clodura") {
+          const [row] = await db
+            .select()
+            .from(workspaceIntegrations)
+            .where(
+              and(
+                eq(workspaceIntegrations.workspaceId, ctx.workspace.id),
+                eq(workspaceIntegrations.provider, "clodura"),
+              ),
+            );
+          const apiKey = (row?.config as any)?.apiKey;
+          if (!apiKey) {
+            result = "No Clodura API key configured.";
+            success = false;
+          } else {
+            // /account/credits is the cheapest authenticated endpoint —
+            // costs no credits and validates auth + connectivity in one call.
+            try {
+              const credits = await getCredits(apiKey);
+              result = `Connected. Credits remaining: ${credits.remaining} / ${credits.total}.`;
+              success = true;
+            } catch (e) {
+              if (e instanceof CloduraError) {
+                if (e.statusCode === 401 || e.statusCode === 403) {
+                  result = "Invalid Clodura API key.";
+                } else {
+                  result = `Clodura test failed: ${e.message}`;
+                }
+              } else {
+                result = `Clodura test failed: ${(e as Error).message}`;
+              }
+              success = false;
+            }
+          }
         } else {
           result = `No test handler for provider "${input.provider}".`;
           success = false;
