@@ -5,9 +5,28 @@
  */
 import { TRPCError } from "@trpc/server";
 
-const CLODURA_BASE = "https://api.clodura.ai/api/v1";
+// Base URL is overridable via env so the hostname can be corrected without a
+// redeploy if Clodura's docs prescribe a different host than the default.
+const CLODURA_BASE = process.env.CLODURA_BASE_URL || "https://api.clodura.ai/api/v1";
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 500;
+
+/** Pull the most useful detail out of a thrown error for diagnostics. */
+function describeError(e: unknown): string {
+  const err = e as Error & { cause?: { code?: string; message?: string; errno?: string; hostname?: string } };
+  const parts: string[] = [];
+  if (err.message) parts.push(err.message);
+  const cause = err.cause;
+  if (cause) {
+    const causeBits: string[] = [];
+    if (cause.code) causeBits.push(cause.code);
+    if (cause.errno) causeBits.push(`errno=${cause.errno}`);
+    if (cause.hostname) causeBits.push(`host=${cause.hostname}`);
+    if (cause.message && cause.message !== err.message) causeBits.push(cause.message);
+    if (causeBits.length > 0) parts.push(`(${causeBits.join(", ")})`);
+  }
+  return parts.join(" ");
+}
 
 export class CloduraError extends Error {
   constructor(
@@ -75,12 +94,13 @@ async function cloduraFetch<T>(
       return res.json() as Promise<T>;
     } catch (e) {
       if (e instanceof CloduraError) throw e;
+      const detail = describeError(e);
       if (attempt < retries - 1) {
         await new Promise((r) => setTimeout(r, RETRY_DELAY_MS * Math.pow(2, attempt)));
-        lastError = new CloduraError(0, (e as Error).message);
+        lastError = new CloduraError(0, detail);
         continue;
       }
-      throw new CloduraError(0, (e as Error).message);
+      throw new CloduraError(0, `${detail} — url=${url}`);
     }
   }
   throw lastError ?? new CloduraError(0, "Unknown error");
