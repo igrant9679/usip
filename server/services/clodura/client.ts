@@ -86,9 +86,15 @@ async function cloduraFetch<T>(
 
       // Never retry on 4xx
       if (!res.ok) {
-        let body: unknown;
-        try { body = await res.json(); } catch { body = await res.text().catch(() => null); }
-        throw new CloduraError(res.status, (body as any)?.message ?? `HTTP ${res.status}`, body);
+        const rawText = await res.text().catch(() => "");
+        let parsed: unknown = null;
+        try { parsed = JSON.parse(rawText); } catch { /* leave as null */ }
+        const message =
+          (parsed as { message?: string })?.message ??
+          (rawText && rawText.length < 300 ? rawText : `HTTP ${res.status}`);
+        // Include the final URL (post-redirect) so misrouted requests are obvious.
+        const finalUrl = res.url && res.url !== url ? ` (final url=${res.url})` : "";
+        throw new CloduraError(res.status, `${message}${finalUrl}`, parsed ?? rawText);
       }
 
       return res.json() as Promise<T>;
