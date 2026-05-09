@@ -6,10 +6,10 @@
 import { TRPCError } from "@trpc/server";
 
 // Base URL is overridable via env so the hostname can be corrected without a
-// redeploy if Clodura's docs prescribe a different host than the default.
+// redeploy. Default matches the official docs (Clodura API Reference Guide v1).
 // Strip any trailing slash so concatenation with `/path` always yields a
 // single-slash URL.
-const CLODURA_BASE = (process.env.CLODURA_BASE_URL || "https://api.clodura.ai/api/v1").replace(/\/+$/, "");
+const CLODURA_BASE = (process.env.CLODURA_BASE_URL || "https://app.clodura.ai/api/v1").replace(/\/+$/, "");
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 500;
 
@@ -218,7 +218,7 @@ export async function revealEmail(
   params: CloduraRevealEmailParams,
   apiKey?: string,
 ): Promise<CloduraRevealResponse> {
-  return cloduraFetch<CloduraRevealResponse>("/people/reveal/email", {
+  return cloduraFetch<CloduraRevealResponse>("/search/people/email/match", {
     method: "POST",
     body: JSON.stringify(params),
     apiKey,
@@ -230,7 +230,7 @@ export async function revealPhone(
   params: CloduraRevealEmailParams,
   apiKey?: string,
 ): Promise<CloduraRevealResponse> {
-  return cloduraFetch<CloduraRevealResponse>("/people/reveal/phone", {
+  return cloduraFetch<CloduraRevealResponse>("/search/people/phone/match", {
     method: "POST",
     body: JSON.stringify(params),
     apiKey,
@@ -238,18 +238,25 @@ export async function revealPhone(
 }
 
 /* ─── Credits ─────────────────────────────────────────────────────────────── */
+// Per Clodura API Reference v1, the response shape varies by plan:
+//   Free Forever / Max / PAYG: { remainingCredits: number }
+//   Prospect / Prospect Pro:    { contactsView, maxContacts, directDials, maxDirectDials }
 export interface CloduraCreditsResponse {
-  remaining: number;
-  used: number;
-  total: number;
-  resetAt?: string;
+  remainingCredits?: number;
+  contactsView?: number;
+  maxContacts?: number | string;
+  directDials?: number;
+  maxDirectDials?: number;
 }
 
 export async function getCredits(apiKey?: string): Promise<CloduraCreditsResponse> {
-  return cloduraFetch<CloduraCreditsResponse>("/account/credits", { apiKey });
+  return cloduraFetch<CloduraCreditsResponse>("/credits", { method: "GET", apiKey });
 }
 
 /* ─── Taxonomies ──────────────────────────────────────────────────────────── */
+// NOTE: This endpoint is NOT documented in the Clodura API Reference Guide v1.
+// It was added speculatively. Calls will likely return 404 until Clodura
+// publishes a real taxonomy API. Callers should handle CloduraError(404).
 export type TaxonomyType = "seniority" | "functional" | "industry" | "technology" | "country" | "employeeSize" | "revenue";
 
 export async function getTaxonomy(
@@ -300,7 +307,7 @@ export async function enrichContact(
   apiKey?: string,
 ): Promise<CloduraEnrichResponse | null> {
   try {
-    const res = await cloduraFetch<{ data: CloduraEnrichResponse[] }>("/people/enrich", {
+    const res = await cloduraFetch<{ data: CloduraEnrichResponse[] }>("/cleanup/enrich", {
       method: "POST",
       body: JSON.stringify(params),
       apiKey,

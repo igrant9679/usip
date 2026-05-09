@@ -255,12 +255,28 @@ function CloduraSearchPanel({ onClose }: { onClose: () => void }) {
               Find and ingest prospects from the Clodura.ai database
             </SheetDescription>
           </div>
-          {credits.data && (
-            <div className="text-right">
-              <div className="text-xs text-muted-foreground">Credits remaining</div>
-              <div className="text-sm font-semibold tabular-nums">{credits.data.remaining.toLocaleString()}</div>
-            </div>
-          )}
+          {credits.data && (() => {
+            // Clodura's /credits response shape varies by plan:
+            //   Free/Max/PAYG:        { remainingCredits }
+            //   Prospect/Prospect Pro: { contactsView, maxContacts }
+            const c = credits.data as {
+              remainingCredits?: number;
+              contactsView?: number;
+              maxContacts?: number | string;
+            };
+            const remaining =
+              typeof c.remainingCredits === "number"
+                ? c.remainingCredits
+                : typeof c.contactsView === "number" && typeof c.maxContacts === "number"
+                  ? Math.max(c.maxContacts - c.contactsView, 0)
+                  : null;
+            return remaining === null ? null : (
+              <div className="text-right">
+                <div className="text-xs text-muted-foreground">Credits remaining</div>
+                <div className="text-sm font-semibold tabular-nums">{remaining.toLocaleString()}</div>
+              </div>
+            );
+          })()}
         </div>
       </SheetHeader>
 

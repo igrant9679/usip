@@ -165,7 +165,8 @@ export async function runCloduraEnrichmentWorker(): Promise<void> {
 
       // Call Clodura enrichContact API
       const identifierSet = job.identifierSet as Record<string, string>;
-      const raw = await enrichContact(apiKey, identifierSet);
+      // enrichContact signature is (params, apiKey) — argument order matters.
+      const raw = await enrichContact(identifierSet, apiKey);
 
       if (!raw || !raw.personId) {
         // No match

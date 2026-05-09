@@ -11,7 +11,7 @@ import { workspaceIntegrations } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { router } from "../_core/trpc";
-import { searchPeople, CloduraError } from "../services/clodura/client";
+import { getCredits, CloduraError } from "../services/clodura/client";
 
 const PROVIDERS = [
   "manus_oauth",
@@ -175,16 +175,18 @@ export const integrationsRouter = router({
             result = "No Clodura API key configured.";
             success = false;
           } else {
-            // /people/search is the canonical documented endpoint. Use a filter
-            // expected to return zero results so we don't spend credits pulling
-            // contact data — but the call itself may still consume 1 credit
-            // depending on plan. This validates host + auth + path in one go.
+            // GET /credits is the documented zero-cost connectivity check
+            // (per Clodura API Reference Guide v1, section 2.4). Validates
+            // host + auth + path without consuming any credits.
             try {
-              const res = await searchPeople(
-                { firstName: "__usip_test_zzzz_no_match__", perPage: 25 },
-                apiKey,
-              );
-              result = `Connected. Search API reachable (returned ${res.total} results).`;
+              const credits = await getCredits(apiKey);
+              if (typeof credits.remainingCredits === "number") {
+                result = `Connected. Credits remaining: ${credits.remainingCredits}.`;
+              } else if (typeof credits.contactsView === "number") {
+                result = `Connected. Contacts viewed: ${credits.contactsView}/${credits.maxContacts ?? "?"}, phones: ${credits.directDials ?? 0}/${credits.maxDirectDials ?? "?"}.`;
+              } else {
+                result = "Connected.";
+              }
               success = true;
             } catch (e) {
               if (e instanceof CloduraError) {
