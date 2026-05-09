@@ -11,7 +11,7 @@ import { workspaceIntegrations } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { router } from "../_core/trpc";
-import { getCredits, CloduraError } from "../services/clodura/client";
+import { getCredits, searchPeople, CloduraError } from "../services/clodura/client";
 
 const PROVIDERS = [
   "manus_oauth",
@@ -178,9 +178,23 @@ export const integrationsRouter = router({
             result = "No Clodura API key configured.";
             success = false;
           } else {
-            // GET /credits is the documented zero-cost connectivity check
-            // (per Clodura API Reference Guide v1, section 2.4). Validates
-            // host + auth + path without consuming any credits.
+            // Two-step probe:
+            //   1. Try GET /credits (zero-cost, documented for most plans).
+            //   2. If that 404s (e.g. Lifetime / LTD plans where /credits
+            //      isn't exposed), fall through to a tiny /search/people
+            //      call which is universal across plans. Costs 1 credit
+            //      per click — acceptable per user.
+            const formatAuthError = (e: CloduraError, label: string) => {
+              const hint = `(key length=${apiKey.length})`;
+              if (e.statusCode === 401 || e.statusCode === 403) {
+                return `Invalid Clodura API key: ${e.message} ${hint}`;
+              }
+              if (e.statusCode === 402) {
+                return `Clodura credits exhausted: ${e.message}`;
+              }
+              return `Clodura test failed via ${label} (HTTP ${e.statusCode}): ${e.message}`;
+            };
+
             try {
               const credits = await getCredits(apiKey);
               if (typeof credits.remainingCredits === "number") {
@@ -191,25 +205,42 @@ export const integrationsRouter = router({
                 result = "Connected.";
               }
               success = true;
-            } catch (e) {
-              if (e instanceof CloduraError) {
-                // Always include Clodura's own error message — it carries
-                // detail like "API key suspended" or "Plan does not allow"
-                // that we'd otherwise hide.
-                const keyHint = `(key length=${apiKey.length})`;
-                if (e.statusCode === 401 || e.statusCode === 403) {
-                  result = `Invalid Clodura API key: ${e.message} ${keyHint}`;
-                } else if (e.statusCode === 404) {
-                  result = `Clodura endpoint not found: ${e.message}. Verify CLODURA_BASE_URL.`;
-                } else if (e.statusCode === 402) {
-                  result = `Clodura credits exhausted: ${e.message}`;
-                } else {
-                  result = `Clodura test failed (HTTP ${e.statusCode}): ${e.message}`;
+            } catch (creditsErr) {
+              const isCloduraErr = creditsErr instanceof CloduraError;
+              // /credits 404 → plan probably doesn't expose it. Fall back
+              // to /search/people — universal across plans. Any other 4xx
+              // (auth, plan) propagates without a second call.
+              if (isCloduraErr && (creditsErr as CloduraError).statusCode === 404) {
+                try {
+                  await searchPeople(
+                    { firstName: "__usip_connectivity_probe__", perPage: 25 },
+                    apiKey,
+                  );
+                  result = "Connected. Search API reachable (1 credit consumed for probe).";
+                  success = true;
+                } catch (searchErr) {
+                  if (searchErr instanceof CloduraError) {
+                    // 404 on a 0-result search is Clodura's "success-empty"
+                    // signal per their HTTP code table — count it as connected.
+                    if (searchErr.statusCode === 404) {
+                      result = "Connected. Search API reachable (no matches for probe filter).";
+                      success = true;
+                    } else {
+                      result = formatAuthError(searchErr, "search/people");
+                      success = false;
+                    }
+                  } else {
+                    result = `Clodura test failed: ${(searchErr as Error).message}`;
+                    success = false;
+                  }
                 }
+              } else if (isCloduraErr) {
+                result = formatAuthError(creditsErr as CloduraError, "credits");
+                success = false;
               } else {
-                result = `Clodura test failed: ${(e as Error).message}`;
+                result = `Clodura test failed: ${(creditsErr as Error).message}`;
+                success = false;
               }
-              success = false;
             }
           }
         } else {
