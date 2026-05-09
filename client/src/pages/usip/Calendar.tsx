@@ -212,8 +212,11 @@ function EventDialog({
   });
   const [showOppPicker, setShowOppPicker] = useState(false);
   const [selectedOppId, setSelectedOppId] = useState<number | null>(null);
+  // opportunities.list doesn't accept a limit — its input shape is
+  // { stage?, ownerOnly? }. Pass undefined so the workspace's full set
+  // is returned (already sorted by updatedAt on the server).
   const { data: opportunitiesList = [] } = trpc.opportunities.list.useQuery(
-    { limit: 100 },
+    undefined,
     { enabled: showOppPicker }
   );
   const summarizeMeeting = trpc.calendar.summarizeMeeting.useMutation({

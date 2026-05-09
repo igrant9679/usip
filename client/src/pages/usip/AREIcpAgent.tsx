@@ -484,7 +484,7 @@ function VersionRow({ v, isActive, onRestore, isRestoring }: { v: any; isActive:
             )}
           </div>
           <div className="text-xs text-muted-foreground mt-0.5">
-            {new Date(v.createdAt).toLocaleDateString([], {
+            {new Date(v.generatedAt).toLocaleDateString([], {
               year: "numeric",
               month: "short",
               day: "numeric",
@@ -573,14 +573,18 @@ export default function AREIcpAgent() {
   const geos = parseJsonArray(icp?.targetGeographies);
   const techStack = parseJsonArray(icp?.targetTechStack);
   const antiPatterns = parseJsonArray(icp?.antiPatterns);
+  // `buyingTriggers` and `painPoints` are not columns on icpProfiles — they're
+  // either embedded in topConversionSignals (a JSON blob) or planned/legacy
+  // fields. Cast through unknown so the parser tolerates absence; if the AI
+  // ever populates them via a future migration the same code keeps working.
   const buyingTriggers = parseJsonArrayOfObj<{ trigger: string; weight: number }>(
-    icp?.buyingTriggers
+    (icp as { buyingTriggers?: unknown } | null | undefined)?.buyingTriggers
   );
   const painPoints = parseJsonArrayOfObj<{
     pain: string;
     evidence: string;
     frequency: number;
-  }>(icp?.painPoints);
+  }>((icp as { painPoints?: unknown } | null | undefined)?.painPoints);
 
   const maxWeight = buyingTriggers.reduce((m, t) => Math.max(m, t.weight ?? 0), 0) || 1;
 
@@ -669,7 +673,7 @@ export default function AREIcpAgent() {
             </section>
 
             {/* ── AI Rationale ── */}
-            {icp.icpRationale && (
+            {icp.aiRationale && (
               <section>
                 <div className="flex items-center gap-2 mb-3">
                   <Brain className="size-4 text-violet-500" />
@@ -678,7 +682,7 @@ export default function AREIcpAgent() {
                 <Card className="bg-muted/30 border-dashed">
                   <CardContent className="pt-4 pb-4">
                     <p className="text-sm text-muted-foreground leading-relaxed">
-                      {icp.icpRationale}
+                      {icp.aiRationale}
                     </p>
                   </CardContent>
                 </Card>
@@ -827,7 +831,7 @@ export default function AREIcpAgent() {
                   history={history.map(h => ({
                     version: h.version,
                     confidenceScore: h.confidenceScore ?? 0,
-                    generatedAt: h.createdAt ? String(h.createdAt) : "",
+                    generatedAt: h.generatedAt ? String(h.generatedAt) : "",
                   }))}
                 />
               )}

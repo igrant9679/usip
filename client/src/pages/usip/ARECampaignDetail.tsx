@@ -1285,19 +1285,25 @@ export default function ARECampaignDetail() {
             ) : (
               <div className="space-y-2">
                 {signals.map((s) => {
-                  const color = SIGNAL_COLORS[s.sentiment] ?? SIGNAL_COLORS.neutral;
-                  const actionLabel = s.actionTaken && s.actionTaken !== "no_action"
-                    ? s.actionTaken.replace(/_/g, " ")
+                  // Server columns are nullable / typed as `unknown` for JSON
+                  // fields. Coerce to string and fall back where needed.
+                  const sentimentStr = typeof s.sentiment === "string" ? s.sentiment : "";
+                  const color = (sentimentStr && SIGNAL_COLORS[sentimentStr]) ?? SIGNAL_COLORS.neutral;
+                  const actionTakenStr = typeof s.actionTaken === "string" ? s.actionTaken : "";
+                  const actionLabel = actionTakenStr && actionTakenStr !== "no_action"
+                    ? actionTakenStr.replace(/_/g, " ")
                     : null;
+                  const sentimentReasonStr = typeof s.sentimentReason === "string" ? s.sentimentReason : "";
+                  const signalTypeStr = typeof s.signalType === "string" ? s.signalType : "";
                   return (
                     <div key={s.id} className="flex items-start gap-3 rounded-xl border bg-card px-4 py-3">
                       <div className="size-2 rounded-full mt-2 shrink-0" style={{ backgroundColor: color }} />
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
-                          <span className="text-sm font-medium capitalize">{s.signalType.replace(/_/g, " ")}</span>
+                          <span className="text-sm font-medium capitalize">{signalTypeStr.replace(/_/g, " ")}</span>
                           <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 border-0 capitalize"
                             style={{ backgroundColor: color + "22", color }}>
-                            {s.sentiment}
+                            {sentimentStr}
                           </Badge>
                           {actionLabel && (
                             <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 border-emerald-500/30 text-emerald-600 bg-emerald-500/10">
@@ -1305,8 +1311,8 @@ export default function ARECampaignDetail() {
                             </Badge>
                           )}
                         </div>
-                        {s.sentimentReason && (
-                          <div className="text-xs text-muted-foreground mt-0.5">{s.sentimentReason}</div>
+                        {sentimentReasonStr && (
+                          <div className="text-xs text-muted-foreground mt-0.5">{sentimentReasonStr}</div>
                         )}
                       </div>
                       <div className="text-[10px] text-muted-foreground shrink-0 mt-0.5">
