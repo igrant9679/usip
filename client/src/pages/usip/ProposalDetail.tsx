@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef } from "react";
 import { useLocation, useParams, Link } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
@@ -435,6 +435,7 @@ function ContentTab({ proposal, sections, onRefetch }: { proposal: any; sections
   const [activeSection, setActiveSection] = useState(SECTION_KEYS[0].key);
   const [editContent, setEditContent] = useState<string | null>(null);
   const [generating, setGenerating] = useState(false);
+  const abortRef = useRef<AbortController | null>(null);
 
   const sectionMap = useMemo(() => {
     const m: Record<string, string> = {};
@@ -458,24 +459,98 @@ function ContentTab({ proposal, sections, onRefetch }: { proposal: any; sections
     onError: (e) => toast.error(e.message),
   });
 
-  const generateContent = trpc.proposals.generateSectionContent.useMutation({
-    onSuccess: (data) => { setEditContent(data.content); setGenerating(false); },
-    onError: (e) => { toast.error(e.message); setGenerating(false); },
-  });
+  // Streaming generation via /api/proposals/:id/section/:key/stream — replaces
+  // the prior `generateSectionContent` tRPC mutation. Text appears in the
+  // editor as it arrives; on completion the user can review and click Save.
+  async function handleGenerate() {
+    // Cancel any in-flight stream
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
 
-  function handleGenerate() {
     setGenerating(true);
-    generateContent.mutate({
-      proposalId: proposal.id,
-      sectionKey: activeSection,
-      context: {
-        clientName: proposal.clientName,
-        orgAbbr: proposal.orgAbbr ?? undefined,
-        projectType: proposal.projectType ?? undefined,
-        description: proposal.description ?? undefined,
-        budget: proposal.budget ? Number(proposal.budget) : undefined,
-      },
-    });
+    setEditContent(""); // clear any prior content; stream will fill in
+
+    const wsId =
+      typeof window !== "undefined"
+        ? window.localStorage.getItem("usip:workspaceId")
+        : null;
+
+    try {
+      const res = await fetch(
+        `/api/proposals/${proposal.id}/section/${activeSection}/stream`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "text/event-stream",
+            ...(wsId ? { "x-workspace-id": wsId } : {}),
+          },
+          credentials: "include",
+          signal: controller.signal,
+          body: JSON.stringify({
+            context: {
+              clientName: proposal.clientName,
+              orgAbbr: proposal.orgAbbr ?? undefined,
+              projectType: proposal.projectType ?? undefined,
+              description: proposal.description ?? undefined,
+              budget: proposal.budget ? Number(proposal.budget) : undefined,
+            },
+          }),
+        },
+      );
+
+      if (!res.ok || !res.body) {
+        const errText = await res.text().catch(() => "");
+        throw new Error(errText || `Stream failed: ${res.status}`);
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let accumulated = "";
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        let nl: number;
+        while ((nl = buffer.indexOf("\n")) !== -1) {
+          const rawLine = buffer.slice(0, nl).replace(/\r$/, "");
+          buffer = buffer.slice(nl + 1);
+          if (!rawLine.startsWith("data:")) continue;
+          const data = rawLine.slice(5).trimStart();
+          if (!data) continue;
+          try {
+            const ev = JSON.parse(data) as
+              | { type: "delta"; text: string }
+              | { type: "done" }
+              | { type: "error"; error: string };
+            if (ev.type === "delta") {
+              accumulated += ev.text;
+              setEditContent(accumulated);
+            } else if (ev.type === "error") {
+              toast.error(ev.error);
+            }
+          } catch {
+            // ignore malformed events / heartbeats
+          }
+        }
+      }
+    } catch (err) {
+      if (!controller.signal.aborted) {
+        toast.error(err instanceof Error ? err.message : "Generation failed");
+      }
+    } finally {
+      setGenerating(false);
+      if (abortRef.current === controller) abortRef.current = null;
+    }
+  }
+
+  function handleStop() {
+    abortRef.current?.abort();
+    setGenerating(false);
   }
 
   function handleSave() {
@@ -524,6 +599,16 @@ function ContentTab({ proposal, sections, onRefetch }: { proposal: any; sections
               <Sparkles className="size-3.5" />
               {generating ? "Generating..." : "AI Generate"}
             </Button>
+            {generating && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleStop}
+                className="gap-1.5"
+              >
+                Stop
+              </Button>
+            )}
             {editContent !== null && (
               <Button
                 size="sm"
