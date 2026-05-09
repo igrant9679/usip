@@ -171,19 +171,91 @@ function ComposeDialog({ state, onClose }: { state: ComposeState; onClose: () =>
   const [cc, setCc] = useState(state.cc);
   const [aiLoading, setAiLoading] = useState(false);
 
-  const aiDraftReply = trpc.mailbox.aiDraftReply.useMutation({
-    onSuccess: (data) => { setBody(data.body); setAiLoading(false); },
-    onError: (e) => { toast.error("AI draft failed: " + e.message); setAiLoading(false); },
-  });
-  const aiDraftForward = trpc.mailbox.aiDraftForward.useMutation({
-    onSuccess: (data) => { setBody(data.body); setAiLoading(false); },
-    onError: (e) => { toast.error("AI draft failed: " + e.message); setAiLoading(false); },
-  });
+  // Streaming AI draft — replaces the aiDraftReply / aiDraftForward
+  // mutations. Tokens fill the body live so the user sees the draft
+  // appearing as the model generates it.
+  const aiAbortRef = useRef<AbortController | null>(null);
+
+  const streamAIDraft = async (
+    endpoint: "draft-reply" | "draft-forward",
+    payload: Record<string, unknown>,
+  ) => {
+    aiAbortRef.current?.abort();
+    const controller = new AbortController();
+    aiAbortRef.current = controller;
+
+    setBody("");
+    setAiLoading(true);
+
+    const wsId =
+      typeof window !== "undefined"
+        ? window.localStorage.getItem("usip:workspaceId")
+        : null;
+
+    let accumulated = "";
+    try {
+      const res = await fetch(`/api/mailbox/${endpoint}/stream`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "text/event-stream",
+          ...(wsId ? { "x-workspace-id": wsId } : {}),
+        },
+        credentials: "include",
+        signal: controller.signal,
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok || !res.body) {
+        const errText = await res.text().catch(() => "");
+        throw new Error(errText || `Stream failed: ${res.status}`);
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        let nl: number;
+        while ((nl = buffer.indexOf("\n")) !== -1) {
+          const rawLine = buffer.slice(0, nl).replace(/\r$/, "");
+          buffer = buffer.slice(nl + 1);
+          if (!rawLine.startsWith("data:")) continue;
+          const data = rawLine.slice(5).trimStart();
+          if (!data) continue;
+          try {
+            const ev = JSON.parse(data) as
+              | { type: "delta"; text: string }
+              | { type: "done" }
+              | { type: "error"; error: string };
+            if (ev.type === "delta") {
+              accumulated += ev.text;
+              setBody(accumulated);
+            } else if (ev.type === "error") {
+              toast.error("AI draft failed: " + ev.error);
+            }
+          } catch {
+            // ignore malformed events / heartbeats
+          }
+        }
+      }
+    } catch (err) {
+      if (!controller.signal.aborted) {
+        toast.error("AI draft failed: " + (err instanceof Error ? err.message : "unknown error"));
+      }
+    } finally {
+      setAiLoading(false);
+      if (aiAbortRef.current === controller) aiAbortRef.current = null;
+    }
+  };
 
   useEffect(() => {
     if (state.mode === "reply" && state.threadMessages?.length) {
-      setAiLoading(true);
-      aiDraftReply.mutate({
+      streamAIDraft("draft-reply", {
         accountId: state.accountId,
         messages: state.threadMessages.map((m) => ({
           fromEmail: m.fromEmail, fromName: m.fromName, toEmail: m.toEmail,
@@ -192,8 +264,7 @@ function ComposeDialog({ state, onClose }: { state: ComposeState; onClose: () =>
         })),
       });
     } else if (state.mode === "forward" && state.originalMessage) {
-      setAiLoading(true);
-      aiDraftForward.mutate({
+      streamAIDraft("draft-forward", {
         accountId: state.accountId,
         originalMessage: {
           fromEmail: state.originalMessage.fromEmail,
@@ -204,6 +275,8 @@ function ComposeDialog({ state, onClose }: { state: ComposeState; onClose: () =>
         },
       });
     }
+    return () => { aiAbortRef.current?.abort(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const sendNew = trpc.mailbox.sendNew.useMutation({
@@ -235,9 +308,8 @@ function ComposeDialog({ state, onClose }: { state: ComposeState; onClose: () =>
   }
 
   function regenerateAI() {
-    setAiLoading(true);
     if (state.mode === "reply" && state.threadMessages?.length) {
-      aiDraftReply.mutate({
+      streamAIDraft("draft-reply", {
         accountId: state.accountId,
         messages: state.threadMessages.map((m) => ({
           fromEmail: m.fromEmail, fromName: m.fromName, toEmail: m.toEmail,
@@ -245,7 +317,7 @@ function ComposeDialog({ state, onClose }: { state: ComposeState; onClose: () =>
         })),
       });
     } else if (state.mode === "forward" && state.originalMessage) {
-      aiDraftForward.mutate({
+      streamAIDraft("draft-forward", {
         accountId: state.accountId,
         originalMessage: {
           fromEmail: state.originalMessage.fromEmail,
@@ -255,6 +327,11 @@ function ComposeDialog({ state, onClose }: { state: ComposeState; onClose: () =>
         },
       });
     }
+  }
+
+  function stopAI() {
+    aiAbortRef.current?.abort();
+    setAiLoading(false);
   }
 
   const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
@@ -339,14 +416,6 @@ function ComposeDialog({ state, onClose }: { state: ComposeState; onClose: () =>
             <Input value={subject} onChange={(e) => setSubject(e.target.value)} />
           </div>
           <div className="relative">
-            {aiLoading && (
-              <div className="absolute inset-0 bg-background/80 flex items-center justify-center rounded-md z-10">
-                <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <Sparkles className="size-4 animate-pulse text-primary" />
-                  Generating AI draft...
-                </div>
-              </div>
-            )}
             <RichTextEditor
               value={body}
               onChange={(html) => setBody(html)}
@@ -355,11 +424,21 @@ function ComposeDialog({ state, onClose }: { state: ComposeState; onClose: () =>
               maxHeight="500px"
               compact
             />
+            {aiLoading && (
+              <div className="absolute top-2 right-2 flex items-center gap-1.5 text-xs text-muted-foreground bg-background/90 px-2 py-1 rounded-md border z-10">
+                <Sparkles className="size-3 animate-pulse text-primary" />
+                Streaming…
+              </div>
+            )}
           </div>
-          {(state.mode === "reply" || state.mode === "forward") && !aiLoading && (
-            <Button variant="outline" size="sm" className="gap-1.5" onClick={regenerateAI}>
-              <Sparkles className="size-3.5" /> Regenerate AI draft
-            </Button>
+          {(state.mode === "reply" || state.mode === "forward") && (
+            aiLoading ? (
+              <Button variant="ghost" size="sm" onClick={stopAI}>Stop</Button>
+            ) : (
+              <Button variant="outline" size="sm" className="gap-1.5" onClick={regenerateAI}>
+                <Sparkles className="size-3.5" /> Regenerate AI draft
+              </Button>
+            )
           )}
 
           {/* File attachments */}
