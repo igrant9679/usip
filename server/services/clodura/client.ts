@@ -67,10 +67,12 @@ async function cloduraFetch<T>(
         ...fetchOptions,
         headers: {
           "Content-Type": "application/json",
-          // Match the documented curl example exactly — Clodura may key
-          // route resolution on Accept (some API gateways do).
           Accept: "application/json",
           "x-api-key": key,
+          // Cloudflare-fronted APIs often reject Node's default User-Agent as
+          // bot traffic. Send something explicit so 403s reflect real
+          // app-level decisions, not WAF false positives.
+          "User-Agent": "USIP-Clodura-Client/1.0 (+https://github.com/igrant9679/usip)",
           ...(fetchOptions.headers ?? {}),
         },
         signal: AbortSignal.timeout(30_000),
