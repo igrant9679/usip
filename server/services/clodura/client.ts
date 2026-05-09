@@ -172,7 +172,7 @@ export async function searchPeople(
     throw new CloduraError(400, "You may specify at most 10 company domains per search.");
   }
 
-  return cloduraFetch<CloduraSearchResponse>("/people/search", {
+  return cloduraFetch<CloduraSearchResponse>("/search/people", {
     method: "POST",
     body: JSON.stringify({
       ...params,
