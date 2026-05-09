@@ -84,6 +84,8 @@ function Landing() {
   const params = new URLSearchParams(window.location.search);
   const returnPath = params.get("returnPath") ?? "/";
 
+  const [mode, setMode] = useState<"signin" | "signup">("signin");
+  const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -97,17 +99,31 @@ function Landing() {
       setError("Please enter your email and password.");
       return;
     }
+    if (mode === "signup" && password.length < 8) {
+      setError("Password must be at least 8 characters.");
+      return;
+    }
     setLoading(true);
     try {
-      const res = await fetch("/api/auth/password-login", {
+      const endpoint = mode === "signup" ? "/api/auth/register" : "/api/auth/password-login";
+      const body: Record<string, string> = {
+        email: email.trim().toLowerCase(),
+        password,
+        returnPath,
+      };
+      if (mode === "signup" && name.trim()) body.name = name.trim();
+
+      const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({ email: email.trim().toLowerCase(), password, returnPath }),
+        body: JSON.stringify(body),
         credentials: "include",
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setError(data.error ?? "Login failed. Please try again.");
+        setError(
+          data.error ?? (mode === "signup" ? "Sign-up failed. Please try again." : "Login failed. Please try again."),
+        );
         return;
       }
       window.location.href = data.redirect ?? returnPath;
@@ -130,6 +146,21 @@ function Landing() {
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
+          {mode === "signup" && (
+            <div className="space-y-2">
+              <Label htmlFor="signup-name" className="text-white/80">Name</Label>
+              <Input
+                id="signup-name"
+                type="text"
+                placeholder="Your name"
+                value={name}
+                onChange={(e) => { setName(e.target.value); setError(null); }}
+                autoComplete="name"
+                className="bg-white/10 border-white/20 text-white placeholder:text-white/30 focus:border-[#14B89A]"
+                disabled={loading}
+              />
+            </div>
+          )}
           <div className="space-y-2">
             <Label htmlFor="login-email" className="text-white/80">Email</Label>
             <Input
@@ -149,10 +180,10 @@ function Landing() {
               <Input
                 id="login-password"
                 type={showPassword ? "text" : "password"}
-                placeholder="Your password"
+                placeholder={mode === "signup" ? "At least 8 characters" : "Your password"}
                 value={password}
                 onChange={(e) => { setPassword(e.target.value); setError(null); }}
-                autoComplete="current-password"
+                autoComplete={mode === "signup" ? "new-password" : "current-password"}
                 className="bg-white/10 border-white/20 text-white placeholder:text-white/30 focus:border-[#14B89A] pr-10"
                 disabled={loading}
               />
@@ -177,12 +208,38 @@ function Landing() {
             disabled={loading}
           >
             {loading ? (
-              <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Signing in…</>
+              <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> {mode === "signup" ? "Creating account…" : "Signing in…"}</>
             ) : (
-              <><LogIn className="mr-2 h-4 w-4" /> Sign in</>
+              <><LogIn className="mr-2 h-4 w-4" /> {mode === "signup" ? "Create account" : "Sign in"}</>
             )}
           </Button>
         </form>
+
+        <p className="text-sm text-white/60 text-center">
+          {mode === "signin" ? (
+            <>
+              Don't have an account?{" "}
+              <button
+                type="button"
+                className="text-[#14B89A] hover:underline font-medium"
+                onClick={() => { setMode("signup"); setError(null); }}
+              >
+                Create one
+              </button>
+            </>
+          ) : (
+            <>
+              Already have an account?{" "}
+              <button
+                type="button"
+                className="text-[#14B89A] hover:underline font-medium"
+                onClick={() => { setMode("signin"); setError(null); }}
+              >
+                Sign in
+              </button>
+            </>
+          )}
+        </p>
       </div>
     </div>
   );

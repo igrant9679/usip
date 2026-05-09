@@ -274,8 +274,8 @@ export default function InviteAccept() {
             </CardTitle>
             <CardDescription className="text-base mt-1">
               {passwordSetupOnly
-                ? "Set a password so you can sign in directly without going through the Manus portal every time."
-                : "Set a password for your new account so you can sign in directly, or skip this step and use your existing sign-in method."
+                ? "Set a password so you can sign in directly."
+                : "Set a password for your new account so you can sign in."
               }
             </CardDescription>
           </CardHeader>
@@ -467,7 +467,7 @@ export default function InviteAccept() {
 
           <p className="text-center text-xs text-muted-foreground">
             {passwordSetupOnly
-              ? "Password login is optional — you can always sign in via the Manus portal instead."
+              ? "Password is required to sign in to your account."
               : "By accepting, you agree to join this workspace and its data policies."
             }
           </p>

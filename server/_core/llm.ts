@@ -1,5 +1,14 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { eq } from "drizzle-orm";
+import { workspaceSettings } from "../../drizzle/schema";
+import { getDb } from "../db";
+import { tryDecryptSecret } from "./crypto";
 import { ENV } from "./env";
+import { getRequestWorkspaceId } from "./requestContext";
+
+// ---------------------------------------------------------------------------
+// Public types — kept stable so existing 24 call sites do not change.
+// ---------------------------------------------------------------------------
 
 export type Role = "system" | "user" | "assistant" | "tool" | "function";
 
@@ -56,6 +65,8 @@ export type ToolChoice =
   | ToolChoiceByName
   | ToolChoiceExplicit;
 
+export type ProviderName = "anthropic" | "openai" | "gemini";
+
 export type InvokeParams = {
   messages: Message[];
   tools?: Tool[];
@@ -67,6 +78,23 @@ export type InvokeParams = {
   output_schema?: OutputSchema;
   responseFormat?: ResponseFormat;
   response_format?: ResponseFormat;
+  // New (optional) — per-call provider/model override.
+  provider?: ProviderName;
+  model?: string;
+  temperature?: number;
+  // BYOK — when set, the workspace's configured API key + model are used in
+  // preference to the server-level env vars. Falls back to env on any miss.
+  workspaceId?: number;
+};
+
+type ResolvedCreds = {
+  anthropicApiKey: string;
+  openaiApiKey: string;
+  geminiApiKey: string;
+  anthropicModel: string;
+  openaiModel: string;
+  geminiModel: string;
+  defaultProvider: string;
 };
 
 export type ToolCall = {
@@ -112,6 +140,16 @@ export type ResponseFormat =
   | { type: "json_schema"; json_schema: JsonSchema };
 
 // ---------------------------------------------------------------------------
+// Default model per provider. Override per-call via params.model.
+// ---------------------------------------------------------------------------
+
+const DEFAULT_MODELS: Record<ProviderName, string> = {
+  anthropic: "claude-haiku-4-5-20251001",
+  openai: "gpt-4o-mini",
+  gemini: "gemini-2.5-flash",
+};
+
+// ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------
 
@@ -131,7 +169,7 @@ const normalizeContentPart = (
   throw new Error("Unsupported message content part");
 };
 
-const normalizeMessage = (message: Message) => {
+const normalizeMessageOpenAI = (message: Message) => {
   const { role, name, tool_call_id } = message;
 
   if (role === "tool" || role === "function") {
@@ -150,7 +188,7 @@ const normalizeMessage = (message: Message) => {
   return { role, name, content: contentParts };
 };
 
-const normalizeToolChoice = (
+const normalizeToolChoiceOpenAI = (
   toolChoice: ToolChoice | undefined,
   tools: Tool[] | undefined
 ): "none" | "auto" | ToolChoiceExplicit | undefined => {
@@ -224,16 +262,70 @@ const normalizeResponseFormat = ({
 };
 
 // ---------------------------------------------------------------------------
-// Anthropic path
+// Credential resolution — workspace BYOK overrides env defaults.
 // ---------------------------------------------------------------------------
 
-/**
- * Calls the Anthropic Messages API and normalises the response into the same
- * InvokeResult shape used by the Manus Forge path, so all callers remain
- * unchanged.
- */
-async function invokeViaAnthropic(params: InvokeParams): Promise<InvokeResult> {
-  const client = new Anthropic({ apiKey: ENV.anthropicApiKey });
+const ENV_CREDS: ResolvedCreds = {
+  anthropicApiKey: ENV.anthropicApiKey,
+  openaiApiKey: ENV.openaiApiKey,
+  geminiApiKey: ENV.geminiApiKey,
+  anthropicModel: DEFAULT_MODELS.anthropic,
+  openaiModel: DEFAULT_MODELS.openai,
+  geminiModel: DEFAULT_MODELS.gemini,
+  defaultProvider: ENV.aiDefaultProvider,
+};
+
+async function loadCreds(workspaceId?: number): Promise<ResolvedCreds> {
+  if (!workspaceId) return ENV_CREDS;
+  try {
+    const db = await getDb();
+    const rows = await db
+      .select({
+        anthropicApiKeyEnc: workspaceSettings.anthropicApiKeyEnc,
+        openaiApiKeyEnc: workspaceSettings.openaiApiKeyEnc,
+        geminiApiKeyEnc: workspaceSettings.geminiApiKeyEnc,
+        anthropicModel: workspaceSettings.anthropicModel,
+        openaiModel: workspaceSettings.openaiModel,
+        geminiModel: workspaceSettings.geminiModel,
+        aiDefaultProvider: workspaceSettings.aiDefaultProvider,
+      })
+      .from(workspaceSettings)
+      .where(eq(workspaceSettings.workspaceId, workspaceId))
+      .limit(1);
+
+    const row = rows[0];
+    if (!row) return ENV_CREDS;
+
+    return {
+      anthropicApiKey:
+        tryDecryptSecret(row.anthropicApiKeyEnc) || ENV.anthropicApiKey,
+      openaiApiKey: tryDecryptSecret(row.openaiApiKeyEnc) || ENV.openaiApiKey,
+      geminiApiKey: tryDecryptSecret(row.geminiApiKeyEnc) || ENV.geminiApiKey,
+      anthropicModel: row.anthropicModel || DEFAULT_MODELS.anthropic,
+      openaiModel: row.openaiModel || DEFAULT_MODELS.openai,
+      geminiModel: row.geminiModel || DEFAULT_MODELS.gemini,
+      defaultProvider: row.aiDefaultProvider || ENV.aiDefaultProvider,
+    };
+  } catch (err) {
+    console.error("[llm] loadCreds failed, falling back to env:", err);
+    return ENV_CREDS;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Anthropic
+// ---------------------------------------------------------------------------
+
+async function invokeViaAnthropic(
+  params: InvokeParams,
+  creds: ResolvedCreds
+): Promise<InvokeResult> {
+  if (!creds.anthropicApiKey) {
+    throw new Error(
+      "Anthropic API key is not configured (workspace or ANTHROPIC_API_KEY env)"
+    );
+  }
+  const client = new Anthropic({ apiKey: creds.anthropicApiKey });
 
   const {
     messages,
@@ -242,9 +334,10 @@ async function invokeViaAnthropic(params: InvokeParams): Promise<InvokeResult> {
     tool_choice,
     maxTokens,
     max_tokens,
+    model,
+    temperature,
   } = params;
 
-  // Separate system messages from the conversation messages
   const systemParts: string[] = [];
   const conversationMessages: Anthropic.MessageParam[] = [];
 
@@ -257,7 +350,7 @@ async function invokeViaAnthropic(params: InvokeParams): Promise<InvokeResult> {
           .join("\n")
       );
     } else {
-      const normalized = normalizeMessage(msg);
+      const normalized = normalizeMessageOpenAI(msg);
       conversationMessages.push(
         normalized as unknown as Anthropic.MessageParam
       );
@@ -266,7 +359,6 @@ async function invokeViaAnthropic(params: InvokeParams): Promise<InvokeResult> {
 
   const systemPrompt = systemParts.join("\n\n") || undefined;
 
-  // Build tool definitions for Anthropic format
   const anthropicTools: Anthropic.Tool[] | undefined =
     tools && tools.length > 0
       ? tools.map(t => ({
@@ -279,8 +371,11 @@ async function invokeViaAnthropic(params: InvokeParams): Promise<InvokeResult> {
         }))
       : undefined;
 
-  // Map tool_choice
-  let anthropicToolChoice: Anthropic.ToolChoiceAuto | Anthropic.ToolChoiceAny | Anthropic.ToolChoiceTool | undefined;
+  let anthropicToolChoice:
+    | Anthropic.ToolChoiceAuto
+    | Anthropic.ToolChoiceAny
+    | Anthropic.ToolChoiceTool
+    | undefined;
   const tc = toolChoice || tool_choice;
   if (tc && anthropicTools) {
     if (tc === "auto") {
@@ -290,22 +385,25 @@ async function invokeViaAnthropic(params: InvokeParams): Promise<InvokeResult> {
     } else if (tc !== "none" && "name" in tc) {
       anthropicToolChoice = { type: "tool", name: tc.name };
     } else if (tc !== "none" && "type" in tc) {
-      anthropicToolChoice = { type: "tool", name: (tc as ToolChoiceExplicit).function.name };
+      anthropicToolChoice = {
+        type: "tool",
+        name: (tc as ToolChoiceExplicit).function.name,
+      };
     }
   }
 
   const requestedMaxTokens = maxTokens ?? max_tokens ?? 4096;
 
   const response = await client.messages.create({
-    model: "claude-3-5-haiku-20241022",
+    model: model ?? creds.anthropicModel,
     max_tokens: requestedMaxTokens,
+    ...(typeof temperature === "number" ? { temperature } : {}),
     ...(systemPrompt ? { system: systemPrompt } : {}),
     messages: conversationMessages,
     ...(anthropicTools ? { tools: anthropicTools } : {}),
     ...(anthropicToolChoice ? { tool_choice: anthropicToolChoice } : {}),
   });
 
-  // Normalise Anthropic response → InvokeResult
   const textContent = response.content
     .filter((b): b is Anthropic.TextBlock => b.type === "text")
     .map(b => b.text)
@@ -340,23 +438,24 @@ async function invokeViaAnthropic(params: InvokeParams): Promise<InvokeResult> {
     usage: {
       prompt_tokens: response.usage.input_tokens,
       completion_tokens: response.usage.output_tokens,
-      total_tokens: response.usage.input_tokens + response.usage.output_tokens,
+      total_tokens:
+        response.usage.input_tokens + response.usage.output_tokens,
     },
   };
 }
 
 // ---------------------------------------------------------------------------
-// Manus Forge (OpenAI-compatible) path — kept as fallback
+// OpenAI (native — no proxy)
 // ---------------------------------------------------------------------------
 
-const resolveApiUrl = () =>
-  ENV.forgeApiUrl && ENV.forgeApiUrl.trim().length > 0
-    ? `${ENV.forgeApiUrl.replace(/\/$/, "")}/v1/chat/completions`
-    : "https://forge.manus.im/v1/chat/completions";
-
-async function invokeViaForge(params: InvokeParams): Promise<InvokeResult> {
-  if (!ENV.forgeApiKey) {
-    throw new Error("Neither ANTHROPIC_API_KEY nor BUILT_IN_FORGE_API_KEY is configured");
+async function invokeViaOpenAI(
+  params: InvokeParams,
+  creds: ResolvedCreds
+): Promise<InvokeResult> {
+  if (!creds.openaiApiKey) {
+    throw new Error(
+      "OpenAI API key is not configured (workspace or OPENAI_API_KEY env)"
+    );
   }
 
   const {
@@ -368,18 +467,27 @@ async function invokeViaForge(params: InvokeParams): Promise<InvokeResult> {
     output_schema,
     responseFormat,
     response_format,
+    maxTokens,
+    max_tokens,
+    model,
+    temperature,
   } = params;
 
   const payload: Record<string, unknown> = {
-    model: "gemini-2.5-flash",
-    messages: messages.map(normalizeMessage),
+    model: model ?? creds.openaiModel,
+    messages: messages.map(normalizeMessageOpenAI),
+    max_tokens: maxTokens ?? max_tokens ?? 4096,
   };
+
+  if (typeof temperature === "number") {
+    payload.temperature = temperature;
+  }
 
   if (tools && tools.length > 0) {
     payload.tools = tools;
   }
 
-  const normalizedToolChoice = normalizeToolChoice(
+  const normalizedToolChoice = normalizeToolChoiceOpenAI(
     toolChoice || tool_choice,
     tools
   );
@@ -387,25 +495,21 @@ async function invokeViaForge(params: InvokeParams): Promise<InvokeResult> {
     payload.tool_choice = normalizedToolChoice;
   }
 
-  payload.max_tokens = 32768;
-  payload.thinking = { budget_tokens: 128 };
-
   const normalizedResponseFormat = normalizeResponseFormat({
     responseFormat,
     response_format,
     outputSchema,
     output_schema,
   });
-
   if (normalizedResponseFormat) {
     payload.response_format = normalizedResponseFormat;
   }
 
-  const response = await fetch(resolveApiUrl(), {
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      authorization: `Bearer ${ENV.forgeApiKey}`,
+      authorization: `Bearer ${creds.openaiApiKey}`,
     },
     body: JSON.stringify(payload),
   });
@@ -413,7 +517,7 @@ async function invokeViaForge(params: InvokeParams): Promise<InvokeResult> {
   if (!response.ok) {
     const errorText = await response.text();
     throw new Error(
-      `LLM invoke failed: ${response.status} ${response.statusText} – ${errorText}`
+      `OpenAI invoke failed: ${response.status} ${response.statusText} – ${errorText}`
     );
   }
 
@@ -421,12 +525,180 @@ async function invokeViaForge(params: InvokeParams): Promise<InvokeResult> {
 }
 
 // ---------------------------------------------------------------------------
-// Public entry point — routes to Anthropic when key is present
+// Google Gemini (native generateContent REST API)
 // ---------------------------------------------------------------------------
 
-export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
-  if (ENV.anthropicApiKey && ENV.anthropicApiKey.trim().length > 0) {
-    return invokeViaAnthropic(params);
+type GeminiPart = { text: string } | { inlineData: { mimeType: string; data: string } };
+type GeminiContent = { role: "user" | "model"; parts: GeminiPart[] };
+
+async function invokeViaGemini(
+  params: InvokeParams,
+  creds: ResolvedCreds
+): Promise<InvokeResult> {
+  if (!creds.geminiApiKey) {
+    throw new Error(
+      "Gemini API key is not configured (workspace or GEMINI_API_KEY env)"
+    );
   }
-  return invokeViaForge(params);
+
+  const {
+    messages,
+    maxTokens,
+    max_tokens,
+    model,
+    temperature,
+    responseFormat,
+    response_format,
+    outputSchema,
+    output_schema,
+  } = params;
+
+  const systemParts: string[] = [];
+  const contents: GeminiContent[] = [];
+
+  for (const msg of messages) {
+    const partsAsText = ensureArray(msg.content)
+      .map(p => {
+        if (typeof p === "string") return p;
+        if (p.type === "text") return p.text;
+        return "";
+      })
+      .filter(Boolean)
+      .join("\n");
+
+    if (msg.role === "system") {
+      systemParts.push(partsAsText);
+      continue;
+    }
+
+    contents.push({
+      role: msg.role === "assistant" ? "model" : "user",
+      parts: [{ text: partsAsText }],
+    });
+  }
+
+  const generationConfig: Record<string, unknown> = {
+    maxOutputTokens: maxTokens ?? max_tokens ?? 4096,
+  };
+  if (typeof temperature === "number") {
+    generationConfig.temperature = temperature;
+  }
+
+  // JSON mode
+  const fmt = responseFormat || response_format;
+  const schema = outputSchema || output_schema;
+  if (fmt?.type === "json_object" || fmt?.type === "json_schema" || schema) {
+    generationConfig.responseMimeType = "application/json";
+    if (fmt?.type === "json_schema") {
+      generationConfig.responseSchema = fmt.json_schema.schema;
+    } else if (schema) {
+      generationConfig.responseSchema = schema.schema;
+    }
+  }
+
+  const payload: Record<string, unknown> = {
+    contents,
+    generationConfig,
+  };
+  if (systemParts.length > 0) {
+    payload.systemInstruction = {
+      role: "system",
+      parts: [{ text: systemParts.join("\n\n") }],
+    };
+  }
+
+  const chosenModel = model ?? creds.geminiModel;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
+    chosenModel
+  )}:generateContent?key=${encodeURIComponent(creds.geminiApiKey)}`;
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(
+      `Gemini invoke failed: ${response.status} ${response.statusText} – ${errorText}`
+    );
+  }
+
+  type GeminiResponse = {
+    candidates?: Array<{
+      content?: { parts?: Array<{ text?: string }>; role?: string };
+      finishReason?: string;
+    }>;
+    usageMetadata?: {
+      promptTokenCount?: number;
+      candidatesTokenCount?: number;
+      totalTokenCount?: number;
+    };
+  };
+
+  const data = (await response.json()) as GeminiResponse;
+  const candidate = data.candidates?.[0];
+  const text =
+    candidate?.content?.parts?.map(p => p.text ?? "").join("") ?? "";
+
+  return {
+    id: `gemini-${Date.now()}`,
+    created: Math.floor(Date.now() / 1000),
+    model: chosenModel,
+    choices: [
+      {
+        index: 0,
+        message: { role: "assistant", content: text },
+        finish_reason: candidate?.finishReason ?? null,
+      },
+    ],
+    usage: {
+      prompt_tokens: data.usageMetadata?.promptTokenCount ?? 0,
+      completion_tokens: data.usageMetadata?.candidatesTokenCount ?? 0,
+      total_tokens: data.usageMetadata?.totalTokenCount ?? 0,
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Provider selection
+// ---------------------------------------------------------------------------
+
+function resolveProvider(
+  explicit: ProviderName | undefined,
+  creds: ResolvedCreds
+): ProviderName {
+  if (explicit) return explicit;
+  const preferred = (creds.defaultProvider ?? "").toLowerCase();
+  if (preferred === "openai" && creds.openaiApiKey) return "openai";
+  if (preferred === "gemini" && creds.geminiApiKey) return "gemini";
+  if (preferred === "anthropic" && creds.anthropicApiKey) return "anthropic";
+
+  // Fallback order: Anthropic → OpenAI → Gemini.
+  if (creds.anthropicApiKey) return "anthropic";
+  if (creds.openaiApiKey) return "openai";
+  if (creds.geminiApiKey) return "gemini";
+
+  throw new Error(
+    "No AI provider configured. Set a workspace key in Settings → Integrations, or ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY in env."
+  );
+}
+
+export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
+  // Resolution order for workspaceId:
+  //   1. explicit params.workspaceId (background jobs, tests)
+  //   2. async-local store set by workspaceProcedure middleware (every tRPC call)
+  //   3. undefined → env-only credentials
+  const workspaceId = params.workspaceId ?? getRequestWorkspaceId();
+  const creds = await loadCreds(workspaceId);
+  const provider = resolveProvider(params.provider, creds);
+  switch (provider) {
+    case "anthropic":
+      return invokeViaAnthropic(params, creds);
+    case "openai":
+      return invokeViaOpenAI(params, creds);
+    case "gemini":
+      return invokeViaGemini(params, creds);
+  }
 }

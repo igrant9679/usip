@@ -573,10 +573,12 @@ function NotificationsTab({ settings, save, canEdit }: { settings: any; save: (v
 
 /* ─── Provider metadata ──────────────────────────────────────────────── */
 const PROVIDER_META: Record<string, { name: string; hint: string; builtIn?: boolean; configFields?: { key: string; label: string; type?: string }[]; docsUrl?: string }> = {
-  manus_oauth: { name: "Manus OAuth", hint: "Primary authentication — always connected via the platform.", builtIn: true },
-  data_api: { name: "Manus Data API Hub", hint: "Bulk enrichment + news / funding signals. Built-in, no setup required.", builtIn: true },
-  llm: { name: "LLM Provider", hint: "AI email compose, lead scoring, research pipeline. Built-in via platform key.", builtIn: true },
-  google_maps: { name: "Google Maps", hint: "Geocoding + routing via Manus proxy. No API key required.", builtIn: true },
+  google_maps: {
+    name: "Google Maps",
+    hint: "Geocoding + routing. Requires a Google Maps Platform API key.",
+    docsUrl: "https://console.cloud.google.com/google/maps-apis/credentials",
+    configFields: [{ key: "apiKey", label: "API Key", type: "password" }],
+  },
   scim: {
     name: "SCIM 2.0",
     hint: "Provision users + groups from Okta, Entra ID, or any SCIM-compatible IdP.",
@@ -744,11 +746,166 @@ function IntegrationsTab() {
           </ul>
         )}
       </Section>
+      {/* AI Providers (BYOK) */}
+      <AIProvidersSection isAdmin={isAdmin} />
       {/* Email Verification Settings */}
       <EmailVerificationSettingsSection isAdmin={isAdmin} />
       {/* Slack / Teams / System Sender */}
       <WorkspaceMessagingSection isAdmin={isAdmin} />
     </>
+  );
+}
+
+/* ─── AI Providers (BYOK) ─────────────────────────────────────────────────── */
+const AI_PROVIDERS = [
+  {
+    id: "anthropic" as const,
+    name: "Anthropic (Claude)",
+    hint: "Powers AI email compose, lead scoring, churn risk, proposal generation.",
+    docsUrl: "https://console.anthropic.com/settings/keys",
+    modelPlaceholder: "claude-haiku-4-5-20251001",
+  },
+  {
+    id: "openai" as const,
+    name: "OpenAI",
+    hint: "Alternative provider for email compose, scoring, and research.",
+    docsUrl: "https://platform.openai.com/api-keys",
+    modelPlaceholder: "gpt-4o-mini",
+  },
+  {
+    id: "gemini" as const,
+    name: "Google Gemini",
+    hint: "Alternative provider via Google AI Studio.",
+    docsUrl: "https://aistudio.google.com/app/apikey",
+    modelPlaceholder: "gemini-2.5-flash",
+  },
+];
+
+function AIProvidersSection({ isAdmin }: { isAdmin: boolean }) {
+  const utils = trpc.useUtils();
+  const credsQ = trpc.aiCredentials.get.useQuery();
+  const upsertMut = trpc.aiCredentials.upsert.useMutation({
+    onSuccess: () => { utils.aiCredentials.get.invalidate(); toast.success("Saved"); },
+    onError: (e) => toast.error(e.message),
+  });
+  const setDefaultMut = trpc.aiCredentials.setDefaultProvider.useMutation({
+    onSuccess: () => { utils.aiCredentials.get.invalidate(); toast.success("Default updated"); },
+    onError: (e) => toast.error(e.message),
+  });
+  const testMut = trpc.aiCredentials.test.useMutation({
+    onSuccess: (d) => toast.success(`OK — ${d.model} (${d.latencyMs}ms)`),
+    onError: (e) => toast.error(e.message),
+  });
+
+  const [drafts, setDrafts] = useState<Record<string, { apiKey: string; model: string }>>({});
+  const setDraft = (id: string, patch: Partial<{ apiKey: string; model: string }>) =>
+    setDrafts((d) => ({ ...d, [id]: { apiKey: "", model: "", ...d[id], ...patch } }));
+
+  const data = credsQ.data;
+
+  return (
+    <Section title="AI Providers" description="Bring your own API keys for Anthropic, OpenAI, or Gemini. Keys are encrypted at rest. Falls back to server-level keys if none set.">
+      {credsQ.isLoading ? (
+        <div className="p-6 flex justify-center"><Loader2 className="size-5 animate-spin text-muted-foreground" /></div>
+      ) : (
+        <div className="divide-y">
+          {AI_PROVIDERS.map((p) => {
+            const cur = data?.[p.id];
+            const draft = drafts[p.id] ?? { apiKey: "", model: cur?.model ?? "" };
+            return (
+              <div key={p.id} className="px-4 py-3">
+                <div className="flex items-center gap-3">
+                  {cur?.configured
+                    ? <CheckCircle2 className="size-4 text-green-600" />
+                    : <div className="size-4 rounded-full border-2 border-muted-foreground/30" />}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium">{p.name}</span>
+                      {cur?.configured && (
+                        <span className="text-[10px] font-mono bg-muted text-muted-foreground px-1.5 py-0.5 rounded">
+                          {cur.masked}
+                        </span>
+                      )}
+                      {data?.defaultProvider === p.id && (
+                        <span className="text-[10px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full">default</span>
+                      )}
+                    </div>
+                    <div className="text-xs text-muted-foreground">{p.hint}</div>
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <Button size="sm" variant="ghost" asChild>
+                      <a href={p.docsUrl} target="_blank" rel="noreferrer"><ExternalLink className="size-3.5" /></a>
+                    </Button>
+                    {cur?.configured && (
+                      <Button
+                        size="sm" variant="ghost"
+                        disabled={testMut.isPending}
+                        onClick={() => testMut.mutate({ provider: p.id })}
+                      >
+                        {testMut.isPending && testMut.variables?.provider === p.id
+                          ? <Loader2 className="size-3.5 animate-spin" />
+                          : <TestTube2 className="size-3.5" />}
+                        Test
+                      </Button>
+                    )}
+                    {isAdmin && data?.defaultProvider !== p.id && cur?.configured && (
+                      <Button
+                        size="sm" variant="outline"
+                        onClick={() => setDefaultMut.mutate({ provider: p.id })}
+                      >Set default</Button>
+                    )}
+                  </div>
+                </div>
+
+                {isAdmin && (
+                  <div className="mt-3 ml-7 grid grid-cols-1 md:grid-cols-2 gap-2">
+                    <div className="space-y-1">
+                      <Label className="text-xs">API Key</Label>
+                      <Input
+                        type="password"
+                        value={draft.apiKey}
+                        onChange={(e) => setDraft(p.id, { apiKey: e.target.value })}
+                        placeholder={cur?.configured ? "Enter to replace" : "sk-..."}
+                        className="h-8 text-xs"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs">Model (optional)</Label>
+                      <Input
+                        value={draft.model}
+                        onChange={(e) => setDraft(p.id, { model: e.target.value })}
+                        placeholder={p.modelPlaceholder}
+                        className="h-8 text-xs"
+                      />
+                    </div>
+                    <div className="md:col-span-2 flex gap-2">
+                      <Button
+                        size="sm"
+                        disabled={upsertMut.isPending || (!draft.apiKey && draft.model === (cur?.model ?? ""))}
+                        onClick={() => {
+                          upsertMut.mutate({
+                            provider: p.id,
+                            ...(draft.apiKey ? { apiKey: draft.apiKey } : {}),
+                            model: draft.model,
+                          });
+                          setDraft(p.id, { apiKey: "" });
+                        }}
+                      >Save</Button>
+                      {cur?.configured && (
+                        <Button
+                          size="sm" variant="ghost" className="text-destructive"
+                          onClick={() => upsertMut.mutate({ provider: p.id, apiKey: "" })}
+                        >Clear key</Button>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </Section>
   );
 }
 

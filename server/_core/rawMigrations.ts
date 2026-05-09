@@ -346,6 +346,22 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
     ],
   },
+
+  // ── 0056: BYOK AI provider credentials ─────────────────────────────────────
+  // Plain ADD COLUMNs; errno 1060 (ER_DUP_FIELDNAME) is tolerated for re-runs.
+  // API key columns hold AES-256-GCM ciphertext — never raw keys.
+  {
+    name: "0056_byok_ai_credentials.sql",
+    statements: [
+      `ALTER TABLE \`workspace_settings\` ADD COLUMN \`anthropicApiKeyEnc\` text NULL`,
+      `ALTER TABLE \`workspace_settings\` ADD COLUMN \`openaiApiKeyEnc\` text NULL`,
+      `ALTER TABLE \`workspace_settings\` ADD COLUMN \`geminiApiKeyEnc\` text NULL`,
+      `ALTER TABLE \`workspace_settings\` ADD COLUMN \`anthropicModel\` varchar(128) NULL`,
+      `ALTER TABLE \`workspace_settings\` ADD COLUMN \`openaiModel\` varchar(128) NULL`,
+      `ALTER TABLE \`workspace_settings\` ADD COLUMN \`geminiModel\` varchar(128) NULL`,
+      `ALTER TABLE \`workspace_settings\` ADD COLUMN \`aiDefaultProvider\` varchar(32) NULL`,
+    ],
+  },
 ];
 
 // ---------------------------------------------------------------------------

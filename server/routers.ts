@@ -42,6 +42,7 @@ import { csAiRouter, leadsAiRouter, contactsAiRouter, quotesAiRouter, workflowsA
 import { helpCenterRouter } from "./routers/helpCenter";
 import { toursRouter } from "./routers/tours";
 import { mindmapsRouter } from "./routers/mindmaps";
+import { aiCredentialsRouter } from "./routers/aiCredentials";
 
 export const appRouter = router({
   system: systemRouter,
@@ -125,6 +126,7 @@ export const appRouter = router({
   helpCenter: helpCenterRouter,
   tours: toursRouter,
   mindmaps: mindmapsRouter,
+  aiCredentials: aiCredentialsRouter,
 });
 
 export type AppRouter = typeof appRouter;

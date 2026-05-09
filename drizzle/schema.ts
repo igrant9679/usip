@@ -1091,6 +1091,15 @@ export const workspaceSettings = mysqlTable("workspace_settings", {
   aiAutoSendEnabled: boolean("aiAutoSendEnabled").default(false).notNull(),
   aiAutoSendScoreMin: int("aiAutoSendScoreMin").default(70).notNull(),
   aiAutoSendConfidenceMin: int("aiAutoSendConfidenceMin").default(75).notNull(),
+  // BYOK AI provider credentials (Migration 0056). API keys are stored as
+  // AES-256-GCM ciphertext in `iv:ciphertext:authTag` hex form — see server/_core/crypto.ts.
+  anthropicApiKeyEnc: text("anthropicApiKeyEnc"),
+  openaiApiKeyEnc: text("openaiApiKeyEnc"),
+  geminiApiKeyEnc: text("geminiApiKeyEnc"),
+  anthropicModel: varchar("anthropicModel", { length: 128 }),
+  openaiModel: varchar("openaiModel", { length: 128 }),
+  geminiModel: varchar("geminiModel", { length: 128 }),
+  aiDefaultProvider: varchar("aiDefaultProvider", { length: 32 }), // 'anthropic' | 'openai' | 'gemini'
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
 export type WorkspaceSettings = typeof workspaceSettings.$inferSelect;

@@ -8,6 +8,7 @@ import { and, eq } from "drizzle-orm";
 import { workspaceMembers, workspaces, type WorkspaceMember, type Workspace } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { protectedProcedure } from "./trpc";
+import { runWithRequestContext } from "./requestContext";
 
 export type WorkspaceCtxExtension = {
   workspace: Workspace;
@@ -64,9 +65,12 @@ export const workspaceProcedure = protectedProcedure.use(async ({ ctx, next }) =
   const headerVal = ctx.req.headers["x-workspace-id"];
   const headerStr = Array.isArray(headerVal) ? headerVal[0] : headerVal;
   const { workspace, member } = await resolveWorkspace(ctx.user.id, headerStr);
-  return next({
-    ctx: { ...ctx, workspace, member },
-  });
+  // Stash workspaceId in async-local storage so downstream code (notably
+  // invokeLLM) can pick up the active workspace without threading it through.
+  return runWithRequestContext(
+    { workspaceId: workspace.id, userId: ctx.user.id },
+    () => next({ ctx: { ...ctx, workspace, member } })
+  );
 });
 
 /** Role hierarchy: super_admin > admin > manager > rep */

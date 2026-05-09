@@ -9,8 +9,9 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
-interface ManusDialogProps {
+interface LoginDialogProps {
   title?: string;
+  description?: string;
   logo?: string;
   open?: boolean;
   onLogin: () => void;
@@ -18,14 +19,20 @@ interface ManusDialogProps {
   onClose?: () => void;
 }
 
-export function ManusDialog({
-  title,
+/**
+ * Modal that prompts the user to sign in. Use for "session expired" or
+ * gated-action prompts. The actual login flow is rendered by the Landing
+ * component at the app root — this dialog just provides a CTA to navigate there.
+ */
+export function LoginDialog({
+  title = "Please sign in",
+  description = "You'll be redirected to the sign-in page.",
   logo,
   open = false,
   onLogin,
   onOpenChange,
   onClose,
-}: ManusDialogProps) {
+}: LoginDialogProps) {
   const [internalOpen, setInternalOpen] = useState(open);
 
   useEffect(() => {
@@ -40,7 +47,6 @@ export function ManusDialog({
     } else {
       setInternalOpen(nextOpen);
     }
-
     if (!nextOpen) {
       onClose?.();
     }
@@ -55,32 +61,23 @@ export function ManusDialog({
         <div className="flex flex-col items-center gap-2 p-5 pt-12">
           {logo ? (
             <div className="w-16 h-16 bg-white rounded-xl border border-[rgba(0,0,0,0.08)] flex items-center justify-center">
-              <img
-                src={logo}
-                alt="Dialog graphic"
-                className="w-10 h-10 rounded-md"
-              />
+              <img src={logo} alt="" className="w-10 h-10 rounded-md" />
             </div>
           ) : null}
-
-          {/* Title and subtitle */}
-          {title ? (
-            <DialogTitle className="text-xl font-semibold text-[#34322d] leading-[26px] tracking-[-0.44px]">
-              {title}
-            </DialogTitle>
-          ) : null}
+          <DialogTitle className="text-xl font-semibold text-[#34322d] leading-[26px] tracking-[-0.44px]">
+            {title}
+          </DialogTitle>
           <DialogDescription className="text-sm text-[#858481] leading-5 tracking-[-0.154px]">
-            Please login with Manus to continue
+            {description}
           </DialogDescription>
         </div>
 
         <DialogFooter className="px-5 py-5">
-          {/* Login button */}
           <Button
             onClick={onLogin}
             className="w-full h-10 bg-[#1a1a19] hover:bg-[#1a1a19]/90 text-white rounded-[10px] text-sm font-medium leading-5 tracking-[-0.154px]"
           >
-            Login with Manus
+            Sign in
           </Button>
         </DialogFooter>
       </DialogContent>
