@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# Cancel in-progress runs for the same ref so a newer push supersedes an older one.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Typecheck + tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    # Match railway.toml ([deploy] runs on Node 20).
+    env:
+      NODE_VERSION: "20"
+      # Required by tests that probe env-dependent code paths.
+      NODE_ENV: test
+      # Stub out env vars that some tests/imports read at module load time.
+      # Real values aren't needed because tests mock external services and
+      # the in-memory rate limiter skips when NODE_ENV=test.
+      JWT_SECRET: ci-stub-jwt-secret
+      DATABASE_URL: mysql://stub:stub@localhost:3306/stub
+      ANTHROPIC_API_KEY: ""
+      OPENAI_API_KEY: ""
+      GEMINI_API_KEY: ""
+      ENCRYPTION_KEY: ci-stub-encryption-key-must-be-non-empty
+      UNIPILE_API_KEY: ci-stub-unipile-api-key
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          # Pinned to the version in package.json's `packageManager` field
+          # so CI matches local dev / Railway exactly.
+          version: 10.4.1
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm check
+
+      - name: Tests
+        run: pnpm test
