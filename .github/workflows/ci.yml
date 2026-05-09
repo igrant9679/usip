@@ -53,16 +53,22 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # Typecheck runs but is non-blocking until the codebase reaches zero
-      # pre-existing TS errors. Annotations remain visible on every run so
-      # new regressions surface in the PR review UI even though they don't
-      # fail the workflow yet. Drop continue-on-error once the count is 0.
+      # Typecheck runs but is intentionally non-blocking. The codebase has
+      # a baseline of latent type errors (extensive UI/schema drift); 40+
+      # were cleared in the initial cleanup pass, the rest are accepted as
+      # the working baseline. Annotations remain visible on every run so
+      # new errors surface in the PR review UI alongside the existing
+      # ones — devs are expected to fix any annotation they introduce or
+      # that lands in code they touch.
+      #
+      # To upgrade to strict mode later: drop continue-on-error and clear
+      # the remaining baseline annotations in a dedicated cleanup PR.
       - name: Typecheck
         run: pnpm check
         continue-on-error: true
 
       # Tests are strictly blocking — runtime regressions should fail CI.
-      # Use `if: always()` so they still run even if typecheck errored.
+      # `if: always()` ensures tests run even if typecheck errored.
       - name: Tests
         if: always()
         run: pnpm test
