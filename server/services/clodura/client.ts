@@ -254,16 +254,20 @@ export async function getCredits(apiKey?: string): Promise<CloduraCreditsRespons
 }
 
 /* ─── Taxonomies ──────────────────────────────────────────────────────────── */
-// NOTE: This endpoint is NOT documented in the Clodura API Reference Guide v1.
-// It was added speculatively. Calls will likely return 404 until Clodura
-// publishes a real taxonomy API. Callers should handle CloduraError(404).
+// Path is /api/v1/search/taxonomy. The exact way to pass `type` (query string,
+// path segment, or POST body) isn't yet confirmed against a curl example —
+// going with `?type=...` query string as the most common REST convention.
+// If a curl example shows otherwise, swap accordingly.
 export type TaxonomyType = "seniority" | "functional" | "industry" | "technology" | "country" | "employeeSize" | "revenue";
 
 export async function getTaxonomy(
   type: TaxonomyType,
   apiKey?: string,
 ): Promise<string[]> {
-  const res = await cloduraFetch<{ data: string[] }>(`/taxonomies/${type}`, { apiKey });
+  const res = await cloduraFetch<{ data: string[] }>(
+    `/search/taxonomy?type=${encodeURIComponent(type)}`,
+    { apiKey },
+  );
   return res.data;
 }
 
