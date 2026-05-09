@@ -5,7 +5,15 @@
  */
 import { describe, it, expect } from "vitest";
 
-describe("Unipile credentials", () => {
+// Smoke test — requires real Unipile credentials to make a live API call.
+// Skip in CI / when env vars are CI stubs (workflow sets a sentinel value
+// `ci-stub-unipile-api-key`). To run locally, export real values for both
+// UNIPILE_API_KEY and UNIPILE_DSN before invoking `pnpm test`.
+const apiKey = process.env.UNIPILE_API_KEY ?? "";
+const dsn = process.env.UNIPILE_DSN ?? "";
+const isStub = !apiKey || !dsn || apiKey.startsWith("ci-stub-");
+
+describe.skipIf(isStub)("Unipile credentials", () => {
   it("UNIPILE_API_KEY and UNIPILE_DSN env vars are set", () => {
     expect(process.env.UNIPILE_API_KEY, "UNIPILE_API_KEY must be set").toBeTruthy();
     expect(process.env.UNIPILE_DSN, "UNIPILE_DSN must be set").toBeTruthy();

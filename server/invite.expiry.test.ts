@@ -18,11 +18,14 @@ describe("expireInvitations", () => {
   });
 
   it("should handle a null DB gracefully without throwing", async () => {
-    const { expireInvitations } = await import("./inviteExpiry");
-    // Mock getDb to return null
+    // vi.doMock has no effect on already-loaded modules — the previous
+    // it() block imported inviteExpiry which captured the real getDb
+    // reference. Reset the registry first, then mock, then re-import.
+    vi.resetModules();
     vi.doMock("./db", () => ({ getDb: async () => null }));
-    // Should not throw
+    const { expireInvitations } = await import("./inviteExpiry");
     await expect(expireInvitations()).resolves.toBeUndefined();
+    vi.doUnmock("./db");
   });
 });
 
