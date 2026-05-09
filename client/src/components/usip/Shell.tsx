@@ -449,7 +449,9 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
 export function PageHeader({ title, description: defaultDescription, pageKey, icon, children, className, style }: { title: string; description?: string; pageKey?: string; icon?: ReactNode; children?: ReactNode; className?: string; style?: React.CSSProperties }) {
   const accent = useAccentColor();
   const { user } = useAuth();
-  const isAdmin = user?.role === "admin" || user?.role === "super_admin";
+  // users.role is a global "user" | "admin" enum — workspace-level
+  // super_admin lives on workspace_members.role, accessed via useWorkspace().
+  const isAdmin = user?.role === "admin";
 
   // Load DB description if pageKey provided
   const { data: dbDesc } = trpc.pageDescriptions.get.useQuery(

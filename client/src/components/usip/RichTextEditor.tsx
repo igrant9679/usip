@@ -13,7 +13,7 @@
  */
 
 import { useCallback, useEffect } from "react";
-import { useEditor, EditorContent, BubbleMenu } from "@tiptap/react";
+import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import { Underline } from "@tiptap/extension-underline";
 import { Link } from "@tiptap/extension-link";
@@ -126,7 +126,8 @@ export function RichTextEditor({
     if (!editor) return;
     const current = editor.getHTML();
     if (value !== current) {
-      editor.commands.setContent(value ?? "", false);
+      // TipTap v3 changed setContent's 2nd arg from boolean to options object.
+      editor.commands.setContent(value ?? "", { emitUpdate: false });
     }
   }, [value, editor]);
 

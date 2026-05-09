@@ -57,7 +57,7 @@ const ROLE_LABELS: Record<string, string> = {
 
 export default function InviteAccept() {
   const [, navigate] = useLocation();
-  const { user, isLoading: authLoading } = useAuth();
+  const { user, loading: authLoading } = useAuth();
 
   // Extract token from URL
   const params = new URLSearchParams(window.location.search);

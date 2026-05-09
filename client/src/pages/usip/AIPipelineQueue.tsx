@@ -388,8 +388,8 @@ export default function AIPipelineQueue() {
     onSuccess: (data) => { toast.success(`Sent ${data.sent} emails, ${data.failed} failed`); refetchDrafts(); refetchStats(); },
     onError: (e) => toast.error(e.message.includes("No active SMTP") ? "SMTP not configured — set up in Settings → Email Delivery" : e.message),
   });
-  const { data: autoSendSettings, refetch: refetchAutoSend } = trpc.emailAutoSend.getSettings.useQuery();
-  const updateAutoSend = trpc.emailAutoSend.updateSettings.useMutation({
+  const { data: autoSendSettings, refetch: refetchAutoSend } = trpc.emailAutoSend.getAutoSendSettings.useQuery();
+  const updateAutoSend = trpc.emailAutoSend.updateAutoSendSettings.useMutation({
     onSuccess: () => { toast.success("Auto-send setting saved"); refetchAutoSend(); },
     onError: (e: any) => toast.error(e.message),
   });

@@ -12,7 +12,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { trpc } from "../../lib/trpc";
-import { useTourEngine } from "./TourEngine";
+import { useTourEngine, type Tour } from "./TourEngine";
 
 /* ─── helpers ────────────────────────────────────────────────────────────── */
 
@@ -36,7 +36,7 @@ function timeSince(dateStr: string | Date) {
 function SearchTab({ pageKey }: { pageKey: string }) {
   const [query, setQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
-  const timerRef = useRef<ReturnType<typeof setTimeout>>();
+  const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   useEffect(() => {
     clearTimeout(timerRef.current);
@@ -253,7 +253,10 @@ function TourCard({
     setLoading(true);
     try {
       const full = await utils.tours.get.fetch({ id: tour.id });
-      startTour(full);
+      // The fetch returns DB-shaped rows whose `branchingRules` is `unknown`.
+      // The Tour type the engine expects is a strict subset — cast is safe
+      // because the engine only reads the fields declared on Tour/TourStep.
+      startTour(full as unknown as Tour);
     } catch {
       // fall back silently
     } finally {

@@ -699,7 +699,7 @@ export function RecordDrawer({
   subtitle?: string;
   headerExtras?: React.ReactNode;
 }) {
-  const [tab, setTab] = useState<"overview" | "timeline" | "opp-timeline" | "call" | "meeting" | "note" | "files" | "score" | "intelligence" | "verify" | "brief" | "email" | "enrich">("overview");
+  const [tab, setTab] = useState<"overview" | "timeline" | "opp-timeline" | "call" | "meeting" | "note" | "files" | "score" | "intelligence" | "verify" | "brief" | "email" | "enrich" | "linkedin">("overview");
   const [emailSubject, setEmailSubject] = useState("");
   const [emailBody, setEmailBody] = useState("");
   const [emailAiPrompt, setEmailAiPrompt] = useState("");
@@ -1369,11 +1369,12 @@ function LinkedInActionsPanel({
             className="bg-[#0A66C2] hover:bg-[#0856a8] text-white"
             disabled={!selectedAccountId || !profileId.trim() || sendInvite.isPending}
             onClick={() => sendInvite.mutate({
-              accountId: selectedAccountId,
-              linkedinProfileId: profileId.trim(),
+              unipileAccountId: selectedAccountId,
+              recipientProviderId: profileId.trim(),
+              recipientName: name,
               message: inviteMessage || undefined,
-              relatedType: relatedType as any,
-              relatedId,
+              ...(relatedType === "contact" ? { linkedContactId: relatedId } : {}),
+              ...(relatedType === "lead" ? { linkedLeadId: relatedId } : {}),
             })}
           >
             {sendInvite.isPending ? <Loader2 className="size-3.5 animate-spin mr-1" /> : <UserPlus className="size-3.5 mr-1" />}
@@ -1400,11 +1401,12 @@ function LinkedInActionsPanel({
             className="bg-[#0A66C2] hover:bg-[#0856a8] text-white"
             disabled={!selectedAccountId || !profileId.trim() || !dmText.trim() || sendDm.isPending}
             onClick={() => sendDm.mutate({
-              accountId: selectedAccountId,
+              unipileAccountId: selectedAccountId,
               chatId: profileId.trim(),
               text: dmText.trim(),
-              relatedType: relatedType as any,
-              relatedId,
+              ...(relatedType === "contact" ? { linkedContactId: relatedId } : {}),
+              ...(relatedType === "lead" ? { linkedLeadId: relatedId } : {}),
+              ...(relatedType === "opportunity" ? { linkedOpportunityId: relatedId } : {}),
             })}
           >
             {sendDm.isPending ? <Loader2 className="size-3.5 animate-spin mr-1" /> : <Send className="size-3.5 mr-1" />}
