@@ -11,7 +11,7 @@ import { workspaceIntegrations } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { router } from "../_core/trpc";
-import { getCredits, CloduraError } from "../services/clodura/client";
+import { searchPeople, CloduraError } from "../services/clodura/client";
 
 const PROVIDERS = [
   "manus_oauth",
@@ -175,18 +175,25 @@ export const integrationsRouter = router({
             result = "No Clodura API key configured.";
             success = false;
           } else {
-            // /account/credits is the cheapest authenticated endpoint —
-            // costs no credits and validates auth + connectivity in one call.
+            // /people/search is the canonical documented endpoint. Use a filter
+            // expected to return zero results so we don't spend credits pulling
+            // contact data — but the call itself may still consume 1 credit
+            // depending on plan. This validates host + auth + path in one go.
             try {
-              const credits = await getCredits(apiKey);
-              result = `Connected. Credits remaining: ${credits.remaining} / ${credits.total}.`;
+              const res = await searchPeople(
+                { firstName: "__usip_test_zzzz_no_match__", perPage: 25 },
+                apiKey,
+              );
+              result = `Connected. Search API reachable (returned ${res.total} results).`;
               success = true;
             } catch (e) {
               if (e instanceof CloduraError) {
                 if (e.statusCode === 401 || e.statusCode === 403) {
                   result = "Invalid Clodura API key.";
+                } else if (e.statusCode === 404) {
+                  result = `Clodura endpoint not found: ${e.message}. Verify CLODURA_BASE_URL.`;
                 } else {
-                  result = `Clodura test failed: ${e.message}`;
+                  result = `Clodura test failed (HTTP ${e.statusCode}): ${e.message}`;
                 }
               } else {
                 result = `Clodura test failed: ${(e as Error).message}`;
