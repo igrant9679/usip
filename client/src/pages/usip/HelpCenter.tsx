@@ -15,7 +15,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { EmptyState, PageHeader, Shell } from "@/components/usip/Shell";
-import { useTourEngine } from "@/components/usip/TourEngine";
+import { useTourEngine, type Tour } from "@/components/usip/TourEngine";
 import { trpc } from "@/lib/trpc";
 import {
   BookOpen,
@@ -45,7 +45,7 @@ function BrowseTab() {
   const [query, setQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<number | null>(null);
-  const timerRef = useRef<ReturnType<typeof setTimeout>>();
+  const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   useEffect(() => {
     clearTimeout(timerRef.current);
@@ -146,9 +146,9 @@ function BrowseTab() {
               {article.readingTimeMinutes && (
                 <span className="text-xs text-gray-400">{article.readingTimeMinutes} min read</span>
               )}
-              {article.helpfulYes !== undefined && (article.helpfulYes + article.helpfulNo) > 0 && (
+              {(article.helpfulCount + article.notHelpfulCount) > 0 && (
                 <span className="text-xs text-gray-400">
-                  👍 {Math.round((article.helpfulYes / (article.helpfulYes + article.helpfulNo)) * 100)}%
+                  👍 {Math.round((article.helpfulCount / (article.helpfulCount + article.notHelpfulCount)) * 100)}%
                 </span>
               )}
             </div>
@@ -298,7 +298,9 @@ function TourStartButton({ tourId, label }: { tourId: number; label: string }) {
     setLoading(true);
     try {
       const full = await utils.tours.get.fetch({ id: tourId });
-      startTour(full);
+      // DB rows have `branchingRules: unknown`; the engine reads only the
+      // declared TourStep fields so the cast is safe.
+      startTour(full as unknown as Tour);
     } catch {
       // fall back silently
     } finally {
@@ -529,7 +531,8 @@ function AdminTab() {
               <span className="text-lg">{cat.icon ?? "📁"}</span>
               <div className="flex-1">
                 <p className="text-sm font-medium text-gray-800">{cat.name}</p>
-                {cat.description && <p className="text-xs text-gray-500">{cat.description}</p>}
+                {/* helpCategories has no `description` column. If/when one
+                    is added via migration, render it here. */}
               </div>
             </div>
           ))}
