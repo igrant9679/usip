@@ -27,6 +27,7 @@ import { registerPasswordAuthRoutes } from "../passwordAuth";
 import { registerLLMStreamRoutes } from "../llmStreamRoute";
 import { registerProposalsStreamRoutes } from "../proposalsStreamRoute";
 import { registerEmailBuilderStreamRoutes } from "../emailBuilderStreamRoute";
+import { registerAccountBriefsStreamRoutes } from "../accountBriefsStreamRoute";
 import { seedToursForAllWorkspaces } from "../seedTours";
 import { runRawMigrations } from "./rawMigrations";
 
@@ -65,6 +66,7 @@ async function startServer() {
   registerLLMStreamRoutes(app);
   registerProposalsStreamRoutes(app);
   registerEmailBuilderStreamRoutes(app);
+  registerAccountBriefsStreamRoutes(app);
   // tRPC API
   app.use(
     "/api/trpc",
