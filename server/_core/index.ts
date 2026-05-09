@@ -26,6 +26,7 @@ import { runCloduraEnrichmentWorker, purgeCloduraCaches } from "../workers/clodu
 import { registerPasswordAuthRoutes } from "../passwordAuth";
 import { registerLLMStreamRoutes } from "../llmStreamRoute";
 import { registerProposalsStreamRoutes } from "../proposalsStreamRoute";
+import { registerEmailBuilderStreamRoutes } from "../emailBuilderStreamRoute";
 import { seedToursForAllWorkspaces } from "../seedTours";
 import { runRawMigrations } from "./rawMigrations";
 
@@ -63,6 +64,7 @@ async function startServer() {
   registerPasswordAuthRoutes(app);
   registerLLMStreamRoutes(app);
   registerProposalsStreamRoutes(app);
+  registerEmailBuilderStreamRoutes(app);
   // tRPC API
   app.use(
     "/api/trpc",

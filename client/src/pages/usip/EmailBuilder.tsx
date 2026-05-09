@@ -942,7 +942,83 @@ function Builder({ templateId }: { templateId: number }) {
   const duplicateMutation = trpc.emailTemplates.duplicate.useMutation({
     onSuccess: (data) => { toast.success("Duplicated"); navigate(`/email-builder/${data.id}`); },
   });
-  const rewriteMutation = trpc.emailTemplates.rewriteBlock.useMutation();
+  // Streaming AI rewrite — replaces the rewriteBlock tRPC mutation. Updates
+  // the block in real-time as tokens arrive so the user sees the rewrite
+  // happening live.
+  const [rewriting, setRewriting] = useState(false);
+  const rewriteAbortRef = useRef<AbortController | null>(null);
+
+  const streamRewrite = useCallback(
+    async (
+      content: string,
+      instruction: "rewrite" | "shorten" | "lengthen" | "make_formal" | "make_casual",
+      onDelta: (accumulated: string) => void,
+    ): Promise<string> => {
+      rewriteAbortRef.current?.abort();
+      const controller = new AbortController();
+      rewriteAbortRef.current = controller;
+
+      const wsId =
+        typeof window !== "undefined"
+          ? window.localStorage.getItem("usip:workspaceId")
+          : null;
+
+      let accumulated = "";
+      try {
+        const res = await fetch("/api/email-builder/rewrite/stream", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "text/event-stream",
+            ...(wsId ? { "x-workspace-id": wsId } : {}),
+          },
+          credentials: "include",
+          signal: controller.signal,
+          body: JSON.stringify({ content, instruction }),
+        });
+
+        if (!res.ok || !res.body) {
+          const errText = await res.text().catch(() => "");
+          throw new Error(errText || `Stream failed: ${res.status}`);
+        }
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+
+          let nl: number;
+          while ((nl = buffer.indexOf("\n")) !== -1) {
+            const rawLine = buffer.slice(0, nl).replace(/\r$/, "");
+            buffer = buffer.slice(nl + 1);
+            if (!rawLine.startsWith("data:")) continue;
+            const data = rawLine.slice(5).trimStart();
+            if (!data) continue;
+            try {
+              const ev = JSON.parse(data) as
+                | { type: "delta"; text: string }
+                | { type: "done" }
+                | { type: "error"; error: string };
+              if (ev.type === "delta") {
+                accumulated += ev.text;
+                onDelta(accumulated);
+              } else if (ev.type === "error") {
+                toast.error(ev.error);
+              }
+            } catch { /* ignore malformed events */ }
+          }
+        }
+      } finally {
+        if (rewriteAbortRef.current === controller) rewriteAbortRef.current = null;
+      }
+      return accumulated;
+    },
+    [],
+  );
   const suggestSubjectsMutation = trpc.emailTemplates.suggestSubjects.useMutation({
     onError: (e) => toast.error(e.message),
   });
@@ -1525,25 +1601,52 @@ function Builder({ templateId }: { templateId: number }) {
                     onChange={(props) => updateBlock(selectedBlock.id, props)}
                     onInsertMergeTag={insertMergeTag}
                   />
-                  {/* AI rewrite for text blocks */}
+                  {/* AI rewrite for text blocks — streams tokens into the block live */}
                   {(selectedBlock.type === "text" || selectedBlock.type === "header") && !isReadOnly && (
                     <>
                       <Separator className="my-3" />
-                      <p className="text-xs font-semibold mb-2 flex items-center gap-1"><Wand2 size={11} /> AI Rewrite</p>
+                      <div className="flex items-center justify-between mb-2">
+                        <p className="text-xs font-semibold flex items-center gap-1"><Wand2 size={11} /> AI Rewrite</p>
+                        {rewriting && (
+                          <button
+                            onClick={() => { rewriteAbortRef.current?.abort(); setRewriting(false); }}
+                            className="text-[10px] text-muted-foreground hover:text-foreground"
+                          >
+                            Stop
+                          </button>
+                        )}
+                      </div>
                       <div className="flex flex-wrap gap-1">
                         {(["rewrite", "shorten", "lengthen", "make_formal", "make_casual"] as const).map((instr) => (
                           <button
                             key={instr}
-                            disabled={rewriteMutation.isPending}
+                            disabled={rewriting}
                             onClick={async () => {
-                              const content = selectedBlock.type === "text"
+                              const isText = selectedBlock.type === "text";
+                              const original = isText
                                 ? String(selectedBlock.props.content ?? "")
                                 : String(selectedBlock.props.headline ?? "");
-                              const result = await rewriteMutation.mutateAsync({ content, instruction: instr });
-                              if (selectedBlock.type === "text") {
-                                updateBlock(selectedBlock.id, { ...selectedBlock.props, content: result.content });
-                              } else {
-                                updateBlock(selectedBlock.id, { ...selectedBlock.props, headline: result.content });
+                              if (!original.trim()) {
+                                toast.error("Add some content to rewrite first");
+                                return;
+                              }
+                              const blockId = selectedBlock.id;
+                              const baseProps = selectedBlock.props;
+                              setRewriting(true);
+                              try {
+                                await streamRewrite(original, instr, (accum) => {
+                                  if (isText) {
+                                    updateBlock(blockId, { ...baseProps, content: accum });
+                                  } else {
+                                    updateBlock(blockId, { ...baseProps, headline: accum });
+                                  }
+                                });
+                              } catch (err) {
+                                if (!rewriteAbortRef.current?.signal.aborted) {
+                                  toast.error(err instanceof Error ? err.message : "Rewrite failed");
+                                }
+                              } finally {
+                                setRewriting(false);
                               }
                             }}
                             className="text-[10px] bg-muted hover:bg-primary/10 hover:text-primary rounded px-2 py-1 transition-colors disabled:opacity-50 capitalize"
