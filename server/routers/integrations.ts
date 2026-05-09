@@ -170,7 +170,10 @@ export const integrationsRouter = router({
                 eq(workspaceIntegrations.provider, "clodura"),
               ),
             );
-          const apiKey = (row?.config as any)?.apiKey;
+          // Trim defensively — pasted keys often carry trailing whitespace
+          // or newlines that cause silent auth failures.
+          const rawKey = (row?.config as any)?.apiKey;
+          const apiKey = typeof rawKey === "string" ? rawKey.trim() : "";
           if (!apiKey) {
             result = "No Clodura API key configured.";
             success = false;
@@ -190,10 +193,16 @@ export const integrationsRouter = router({
               success = true;
             } catch (e) {
               if (e instanceof CloduraError) {
+                // Always include Clodura's own error message — it carries
+                // detail like "API key suspended" or "Plan does not allow"
+                // that we'd otherwise hide.
+                const keyHint = `(key length=${apiKey.length})`;
                 if (e.statusCode === 401 || e.statusCode === 403) {
-                  result = "Invalid Clodura API key.";
+                  result = `Invalid Clodura API key: ${e.message} ${keyHint}`;
                 } else if (e.statusCode === 404) {
                   result = `Clodura endpoint not found: ${e.message}. Verify CLODURA_BASE_URL.`;
+                } else if (e.statusCode === 402) {
+                  result = `Clodura credits exhausted: ${e.message}`;
                 } else {
                   result = `Clodura test failed (HTTP ${e.statusCode}): ${e.message}`;
                 }
