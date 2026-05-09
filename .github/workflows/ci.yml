@@ -40,9 +40,8 @@ jobs:
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
         with:
-          # Pinned to the version in package.json's `packageManager` field
-          # so CI matches local dev / Railway exactly.
-          version: 10.4.1
+          # Version is read from package.json's `packageManager` field —
+          # passing `version:` here would conflict with that source.
           run_install: false
 
       - name: Set up Node.js
