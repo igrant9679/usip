@@ -5,7 +5,7 @@
  * Sender pools: named groups with round_robin | weighted | random rotation
  */
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { getDb } from "../db";
 import {
@@ -183,10 +183,20 @@ export const sendingAccountsRouter = router({
     const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const wsId = ctx.workspace.id;
+    // /sending-accounts is the workspace's *outreach* infrastructure
+    // (shared SMTP for sequences/campaigns). Unipile-bridged personal
+    // M365 mailboxes — identified by unipileAccountId being non-null —
+    // are excluded here; they appear in /my-mailbox + /my-calendar
+    // filtered to their owner instead.
     const accounts = await db
       .select()
       .from(sendingAccounts)
-      .where(eq(sendingAccounts.workspaceId, wsId))
+      .where(
+        and(
+          eq(sendingAccounts.workspaceId, wsId),
+          isNull(sendingAccounts.unipileAccountId),
+        ),
+      )
       .orderBy(desc(sendingAccounts.createdAt));
 
     const today = todayUtc();
@@ -530,7 +540,7 @@ export const senderPoolsRouter = router({
       if (!pool) throw new TRPCError({ code: "NOT_FOUND" });
 
       const [account] = await db
-        .select({ id: sendingAccounts.id })
+        .select({ id: sendingAccounts.id, unipileAccountId: sendingAccounts.unipileAccountId })
         .from(sendingAccounts)
         .where(
           and(
@@ -539,6 +549,15 @@ export const senderPoolsRouter = router({
           ),
         );
       if (!account) throw new TRPCError({ code: "NOT_FOUND", message: "Account not found" });
+      // Unipile-bridged personal M365 mailboxes cannot be added to a
+      // sender pool — those are for personal inbox/calendar access, not
+      // shared outreach sending.
+      if (account.unipileAccountId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Personal Microsoft accounts can't be added to a sender pool. Use a workspace IMAP/SMTP account.",
+        });
+      }
 
       const [maxPos] = await db
         .select({ pos: sql<number>`COALESCE(MAX(position), -1)` })

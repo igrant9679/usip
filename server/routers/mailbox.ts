@@ -19,8 +19,8 @@ import { router } from "../_core/trpc";
 import { workspaceProcedure, managerProcedure, roleRank } from "../_core/workspace";
 import { TRPCError } from "@trpc/server";
 import { getDb } from "../db";
-import { sendingAccounts } from "../../drizzle/schema";
-import { eq, and } from "drizzle-orm";
+import { sendingAccounts, unipileAccounts } from "../../drizzle/schema";
+import { eq, and, isNotNull } from "drizzle-orm";
 import { createEmailAdapter } from "../emailAdapter";
 import { invokeLLM } from "../_core/llm";
 
@@ -50,42 +50,54 @@ async function getAccount(accountId: number, workspaceId: number) {
 }
 
 export const mailboxRouter = router({
-  /** List sending accounts that have inbox access (IMAP configured) */
+  /**
+   * List inbox-enabled sending accounts for the current user.
+   *
+   * /my-mailbox shows the rep's *personal* inbox(es). The dropdown is
+   * filtered to:
+   *   - Unipile-bridged accounts whose underlying unipile_accounts row
+   *     belongs to ctx.user.id (each user only sees their own M365 mailbox)
+   *   - any plain-IMAP rows in the workspace are NOT listed here, since
+   *     IMAP/SMTP accounts are shared outreach infrastructure used by
+   *     sequences/campaigns — not personal mailboxes. (If/when per-user
+   *     IMAP becomes a feature, this filter can widen.)
+   *
+   * Managers may pass repUserId to view another rep's personal mailbox.
+   */
   listAccounts: workspaceProcedure
     .input(z.object({ repUserId: z.number().optional() }))
     .query(async ({ ctx, input }) => {
-      // repUserId is accepted for API compatibility but sending_accounts has no userId column;
-      // all accounts in the workspace are shown (filtered by IMAP/OAuth capability below).
-      resolveTargetUser(ctx, input.repUserId); // permission check only
+      const targetUserId = resolveTargetUser(ctx, input.repUserId);
       const db = await getDb();
       if (!db) return [];
-      const accounts = await db
+      const rows = await db
         .select({
           id: sendingAccounts.id,
           name: sendingAccounts.name,
           email: sendingAccounts.fromEmail,
           provider: sendingAccounts.provider,
-          hasImap: sendingAccounts.imapHost,
-          hasOauth: sendingAccounts.oauthAccessToken,
           unipileAccountId: sendingAccounts.unipileAccountId,
         })
         .from(sendingAccounts)
+        .innerJoin(
+          unipileAccounts,
+          eq(unipileAccounts.unipileAccountId, sendingAccounts.unipileAccountId),
+        )
         .where(
-          eq(sendingAccounts.workspaceId, ctx.workspace.id)
+          and(
+            eq(sendingAccounts.workspaceId, ctx.workspace.id),
+            isNotNull(sendingAccounts.unipileAccountId),
+            eq(unipileAccounts.userId, targetUserId),
+          ),
         );
-      // An account is inbox-enabled if it has IMAP credentials OR is bridged
-      // to a Unipile-managed account (provider routing handles the rest).
-      return accounts
-        .filter((a) => !!a.hasImap || !!a.unipileAccountId)
-        .map((a) => ({
-          id: a.id,
-          name: a.name,
-          email: a.email,
-          provider: a.provider,
-          inboxEnabled: true,
-          /** True if this row is bridged to Unipile. UI may surface a badge. */
-          unipileBridged: !!a.unipileAccountId,
-        }));
+      return rows.map((a) => ({
+        id: a.id,
+        name: a.name,
+        email: a.email,
+        provider: a.provider,
+        inboxEnabled: true,
+        unipileBridged: true,
+      }));
     }),
 
   /** List folders/labels for an account */
