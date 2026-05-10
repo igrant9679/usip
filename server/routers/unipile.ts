@@ -82,16 +82,16 @@ export const unipileRouter = router({
       const expiresOn = new Date(Date.now() + 30 * 60 * 1000).toISOString(); // 30 min
 
       // Unipile's hosted-auth-link endpoint accepts `providers` as a single
-      // string (specific provider name, or "*" for all). Arrays are rejected
-      // with "Expected union value". Coerce:
-      //   - exactly one selected → send that provider name
-      //   - zero or multiple selected → send "*" and let the user pick in
-      //     the hosted wizard
-      // Multi-channel single-shot connection isn't supported by their API.
-      const providerArg: string =
-        input.providers && input.providers.length === 1
-          ? input.providers[0]
-          : "*";
+      // string. Their docs / SDK example only verifies "*" (all providers)
+      // — sending a specific provider name like "MICROSOFT" still triggers
+      // "Expected union value" against their schema. Going with "*" for now
+      // and letting the user pick the channel inside the hosted wizard;
+      // the UI multi-select serves as an in-app shortlist hint only.
+      //
+      // The frontend's input.providers array is currently ignored; revisit
+      // if Unipile clarifies the per-provider request shape (it may need to
+      // be `[{ provider: "MICROSOFT", scopes: [...] }]` or similar).
+      const providerArg: string = "*";
 
       const result = await generateHostedAuthLink({
         type: input.reconnectAccountId ? "reconnect" : "create",
