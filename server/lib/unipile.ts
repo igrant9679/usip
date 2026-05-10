@@ -23,6 +23,8 @@ async function unipileFetch<T = unknown>(
 ): Promise<T> {
   const { apiKey, dsn } = getConfig();
   const url = `${dsn}/api/v1${path}`;
+  const method = options.method ?? "GET";
+  const startedAt = Date.now();
   const res = await fetch(url, {
     ...options,
     headers: {
@@ -31,11 +33,32 @@ async function unipileFetch<T = unknown>(
       ...(options.headers ?? {}),
     },
   });
+  const elapsedMs = Date.now() - startedAt;
   if (!res.ok) {
     const body = await res.text().catch(() => "");
-    throw new Error(`Unipile ${options.method ?? "GET"} ${path} → ${res.status}: ${body}`);
+    console.error(`[Unipile] ${method} ${path} → ${res.status} in ${elapsedMs}ms: ${body.slice(0, 300)}`);
+    throw new Error(`Unipile ${method} ${path} → ${res.status}: ${body}`);
   }
-  return res.json() as Promise<T>;
+  // Diagnostic logging — successful calls. Cheap and only fires per request.
+  // For list responses, peek at the items count to surface "0 results" cases
+  // that would otherwise be invisible (the empty-mailbox failure mode).
+  const responseText = await res.text();
+  let parsed: T;
+  try {
+    parsed = JSON.parse(responseText) as T;
+  } catch (e) {
+    console.error(`[Unipile] ${method} ${path} → 200 but unparseable JSON (${responseText.length} bytes)`);
+    throw e;
+  }
+  const p = parsed as unknown as { items?: unknown[]; object?: string };
+  const summary =
+    Array.isArray(p?.items)
+      ? `items=${p.items.length}${p.object ? ` (${p.object})` : ""}`
+      : p?.object
+        ? p.object
+        : "ok";
+  console.log(`[Unipile] ${method} ${path} → ${res.status} ${summary} in ${elapsedMs}ms`);
+  return parsed;
 }
 
 // ─── Hosted Auth Wizard ───────────────────────────────────────────────────────

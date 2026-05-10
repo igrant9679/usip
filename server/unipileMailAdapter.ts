@@ -130,6 +130,9 @@ export class UnipileMailAdapter implements EmailAdapter {
     pageToken?: string,
     maxResults = 50,
   ): Promise<{ threads: EmailThread[]; nextPageToken?: string }> {
+    console.log(
+      `[UnipileMailAdapter] listThreads account=${this.unipileAccountId} folder=${folder} pageToken=${pageToken ?? "(none)"} max=${maxResults}`,
+    );
     const res = await listEmails({
       accountId: this.unipileAccountId,
       folder,
@@ -137,6 +140,9 @@ export class UnipileMailAdapter implements EmailAdapter {
       limit: maxResults,
       metaOnly: true,
     });
+    console.log(
+      `[UnipileMailAdapter] listThreads received ${res.items.length} emails, cursor=${res.cursor ?? "(none)"}`,
+    );
 
     // Group by thread_id; keep the newest email per thread.
     const byThread = new Map<string, { newest: UnipileEmail; count: number }>();
