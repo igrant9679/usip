@@ -339,6 +339,48 @@ export interface UnipileEmailListResponse {
   cursor?: string | null;
 }
 
+/**
+ * Push payload from Unipile's "New email" webhook (source=email).
+ * Documented at https://developer.unipile.com/docs/webhook-new-email
+ * Fires for mail_received / mail_sent / mail_moved.
+ *
+ * Note: there is no top-level thread_id field on this payload — Unipile
+ * exposes thread_id only on the GET /emails endpoint. If we need threading
+ * for cache-served reads we'll need to fetch the canonical email afterward.
+ */
+export interface MailWebhookPayload {
+  email_id: string;
+  account_id: string;
+  event: "mail_received" | "mail_sent" | "mail_moved";
+  webhook_name?: string;
+  date: string;
+  from_attendee?: UnipileAttendee;
+  to_attendees?: UnipileAttendee[];
+  cc_attendees?: UnipileAttendee[];
+  bcc_attendees?: UnipileAttendee[];
+  reply_to_attendees?: UnipileAttendee[];
+  provider_id?: string;
+  message_id?: string;
+  has_attachments?: boolean;
+  subject?: string;
+  body?: string;
+  body_plain?: string;
+  attachments?: Array<{
+    id?: string;
+    name?: string;
+    extension?: string;
+    size?: number;
+    mime?: string;
+  }>;
+  folders?: string[];
+  role?: UnipileEmailRole;
+  read_date?: string | null;
+  is_complete?: boolean;
+  in_reply_to?: { message_id?: string; id?: string };
+  tracking_id?: string;
+  origin?: "unipile" | "external";
+}
+
 export interface UnipileFolder {
   object: "Folder";
   id: string;

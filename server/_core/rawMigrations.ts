@@ -378,6 +378,49 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
       `ALTER TABLE \`calendar_accounts\` ADD COLUMN \`unipileAccountId\` varchar(64) NULL`,
     ],
   },
+  // ── 0058: Unipile email webhook cache ────────────────────────────────────
+  // Local write-through cache populated by POST /api/unipile/mail-webhook.
+  // Used by UnipileMailAdapter as a fallback when /emails returns items=0,
+  // and as the canonical real-time source going forward.
+  {
+    name: "0058_unipile_emails_cache.sql",
+    statements: [
+      `CREATE TABLE IF NOT EXISTS \`unipile_emails_cache\` (
+        \`id\` int AUTO_INCREMENT NOT NULL,
+        \`workspaceId\` int NOT NULL,
+        \`unipileAccountId\` varchar(200) NOT NULL,
+        \`emailId\` varchar(200) NOT NULL,
+        \`threadId\` varchar(200),
+        \`providerMessageId\` varchar(500),
+        \`subject\` text,
+        \`fromName\` varchar(320),
+        \`fromEmail\` varchar(320),
+        \`toJson\` json,
+        \`ccJson\` json,
+        \`bccJson\` json,
+        \`replyToJson\` json,
+        \`bodyHtml\` text,
+        \`bodyPlain\` text,
+        \`attachmentsJson\` json,
+        \`foldersJson\` json,
+        \`role\` varchar(40),
+        \`hasAttachments\` boolean NOT NULL DEFAULT false,
+        \`readDate\` timestamp NULL,
+        \`inReplyToId\` varchar(200),
+        \`emailDate\` timestamp NULL,
+        \`origin\` varchar(20),
+        \`trackingId\` varchar(200),
+        \`lastEvent\` varchar(30),
+        \`rawJson\` json,
+        \`createdAt\` timestamp NOT NULL DEFAULT (now()),
+        \`updatedAt\` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,
+        CONSTRAINT \`unipile_emails_cache_id\` PRIMARY KEY(\`id\`),
+        CONSTRAINT \`uq_uec_emailid\` UNIQUE (\`emailId\`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE INDEX \`ix_uec_account_date\` ON \`unipile_emails_cache\` (\`workspaceId\`, \`unipileAccountId\`, \`emailDate\`)`,
+      `CREATE INDEX \`ix_uec_thread\` ON \`unipile_emails_cache\` (\`threadId\`)`,
+    ],
+  },
 ];
 
 // ---------------------------------------------------------------------------

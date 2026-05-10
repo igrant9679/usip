@@ -23,9 +23,14 @@ import {
   calendarAccounts,
   sendingAccounts,
   unipileAccounts,
+  unipileEmailsCache,
   users,
 } from "../drizzle/schema";
-import { generateHostedAuthLink, getUnipileAccount } from "./lib/unipile";
+import {
+  generateHostedAuthLink,
+  getUnipileAccount,
+  type MailWebhookPayload,
+} from "./lib/unipile";
 
 // Statuses that mean the account needs re-authentication
 const EXPIRED_STATUSES = new Set(["CREDENTIALS", "ERROR", "STOPPED"]);
@@ -379,6 +384,134 @@ export function registerUnipileWebhookRoutes(app: Express) {
         );
       } catch (err) {
         console.error("[UnipileStatusWebhook] Error processing status-webhook:", err);
+      }
+    },
+  );
+
+  // ─── 3. Email events webhook (mail_received / mail_sent / mail_moved) ─────
+  /**
+   * POST /api/unipile/mail-webhook
+   *
+   * Registered against Unipile as a source=email webhook. Fires in real time
+   * whenever a connected account receives, sends, or moves an email.
+   *
+   * On every event we upsert into `unipile_emails_cache` keyed on `email_id`.
+   * UnipileMailAdapter reads from this cache as a fallback when /emails
+   * returns 0 items (the "sync hasn't indexed history" failure mode).
+   *
+   * The webhook owner is identified by looking up `account_id` in our
+   * `unipile_accounts` table — that gives us workspaceId for tenancy.
+   */
+  app.post(
+    "/api/unipile/mail-webhook",
+    async (req: Request, res: Response) => {
+      // Ack immediately so Unipile doesn't retry.
+      res.status(200).json({ ok: true });
+
+      try {
+        const payload = req.body as MailWebhookPayload;
+        if (!payload?.email_id || !payload?.account_id || !payload?.event) {
+          console.warn(
+            "[UnipileMailWebhook] Missing required fields:",
+            JSON.stringify(payload).slice(0, 300),
+          );
+          return;
+        }
+
+        const { email_id, account_id, event } = payload;
+
+        const db = await getDb();
+
+        // Resolve the local unipile_accounts row for tenancy.
+        const [acct] = await db
+          .select({
+            id: unipileAccounts.id,
+            workspaceId: unipileAccounts.workspaceId,
+          })
+          .from(unipileAccounts)
+          .where(eq(unipileAccounts.unipileAccountId, account_id))
+          .limit(1);
+
+        if (!acct) {
+          console.warn(
+            `[UnipileMailWebhook] No local unipile_accounts row for account_id=${account_id} (email_id=${email_id} event=${event})`,
+          );
+          return;
+        }
+
+        const emailDate = payload.date ? new Date(payload.date) : null;
+        const readDate = payload.read_date ? new Date(payload.read_date) : null;
+        const fromName = payload.from_attendee?.display_name ?? null;
+        const fromEmail = payload.from_attendee?.identifier ?? null;
+
+        // Upsert by email_id. We can't use INSERT ... ON DUPLICATE here via
+        // Drizzle's typed builder cleanly, so check-then-update is fine — the
+        // unique constraint on emailId guards against races (the second
+        // insert would fail and we'd just log it).
+        const [existing] = await db
+          .select({ id: unipileEmailsCache.id })
+          .from(unipileEmailsCache)
+          .where(eq(unipileEmailsCache.emailId, email_id))
+          .limit(1);
+
+        const baseFields = {
+          workspaceId: acct.workspaceId,
+          unipileAccountId: account_id,
+          providerMessageId: payload.message_id ?? null,
+          subject: payload.subject ?? null,
+          fromName,
+          fromEmail,
+          toJson: payload.to_attendees ?? null,
+          ccJson: payload.cc_attendees ?? null,
+          bccJson: payload.bcc_attendees ?? null,
+          replyToJson: payload.reply_to_attendees ?? null,
+          bodyHtml: payload.body ?? null,
+          bodyPlain: payload.body_plain ?? null,
+          attachmentsJson: payload.attachments ?? null,
+          foldersJson: payload.folders ?? null,
+          role: payload.role ?? null,
+          hasAttachments: Boolean(payload.has_attachments),
+          readDate,
+          inReplyToId: payload.in_reply_to?.id ?? null,
+          emailDate,
+          origin: payload.origin ?? null,
+          trackingId: payload.tracking_id ?? null,
+          lastEvent: event,
+          rawJson: payload,
+        };
+
+        if (existing) {
+          // On mail_moved we mostly care about folders/role; on mail_received
+          // and mail_sent we still want body/subject etc. (in case the first
+          // event was incomplete and a later one fills it in).
+          await db
+            .update(unipileEmailsCache)
+            .set(baseFields)
+            .where(eq(unipileEmailsCache.id, existing.id));
+          console.log(
+            `[UnipileMailWebhook] ${event} updated cache id=${existing.id} email_id=${email_id}`,
+          );
+        } else {
+          try {
+            await db.insert(unipileEmailsCache).values({
+              emailId: email_id,
+              ...baseFields,
+            });
+            console.log(
+              `[UnipileMailWebhook] ${event} inserted cache email_id=${email_id} from=${fromEmail ?? "(none)"} subject="${(payload.subject ?? "").slice(0, 60)}"`,
+            );
+          } catch (insertErr) {
+            // Likely a race on the unique key — second event for the same
+            // email_id arriving while we were inserting. Safe to ignore;
+            // the next event will update the row.
+            console.warn(
+              `[UnipileMailWebhook] Insert race for email_id=${email_id}:`,
+              insertErr,
+            );
+          }
+        }
+      } catch (err) {
+        console.error("[UnipileMailWebhook] Error processing mail-webhook:", err);
       }
     },
   );

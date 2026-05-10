@@ -20,11 +20,12 @@ import {
   getLinkedInProfile,
   listChats,
   listUnipileAccounts,
+  registerWebhook,
   sendLinkedInInvitation,
   sendMessage,
 } from "../lib/unipile";
 import { router } from "../_core/trpc";
-import { workspaceProcedure } from "../_core/workspace";
+import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 
 // ─── Provider metadata ────────────────────────────────────────────────────────
 
@@ -520,4 +521,38 @@ export const unipileRouter = router({
       byProvider,
     };
   }),
+
+  /**
+   * One-time admin action: register Unipile's mail webhook to point at our
+   * /api/unipile/mail-webhook endpoint. Returns the Unipile webhook id.
+   *
+   * Idempotent on Unipile's side per request_url+source; if you call this
+   * twice you may get back two webhook ids — list/delete via Unipile
+   * dashboard if you need to clean up.
+   *
+   * Admin-only because it affects every account connected to this DSN.
+   */
+  registerMailWebhook: adminWsProcedure
+    .input(z.object({ origin: z.string().optional() }).default({}))
+    .mutation(async ({ input }) => {
+      const appBase = (
+        process.env.MANUS_APP_URL ||
+        input.origin ||
+        process.env.VITE_FRONTEND_FORGE_API_URL ||
+        ""
+      ).replace(/\/$/, "");
+      if (!appBase) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message:
+            "MANUS_APP_URL is not set — Unipile needs a reachable webhook URL.",
+        });
+      }
+      const requestUrl = `${appBase}/api/unipile/mail-webhook`;
+      const result = await registerWebhook({
+        requestUrl,
+        source: "email",
+      });
+      return { webhookId: result.id, requestUrl };
+    }),
 });

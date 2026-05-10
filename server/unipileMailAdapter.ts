@@ -19,7 +19,9 @@
  * The bridged sending_accounts row's `unipileAccountId` column points at the
  * underlying Unipile account UUID. All API calls scope to that account.
  */
-import type { SendingAccount } from "../drizzle/schema";
+import { and, desc, eq, like, or } from "drizzle-orm";
+import { getDb } from "./db";
+import { unipileEmailsCache, type SendingAccount } from "../drizzle/schema";
 import type {
   EmailAdapter,
   EmailFolder,
@@ -68,6 +70,87 @@ function attendeesFromCsv(csv: string | undefined): UnipileAttendee[] {
     .map((s) => s.trim())
     .filter((s) => s.length > 0)
     .map((email) => ({ identifier: email }));
+}
+
+/* ─── Local cache fallback helpers ────────────────────────────────────────
+ *
+ * Unipile's /emails endpoint sometimes returns items=0 for accounts whose
+ * historical sync hasn't completed (Unipile-side state). The mail webhook
+ * (POST /api/unipile/mail-webhook) populates unipile_emails_cache in real
+ * time, so we serve from that table when the API gives us nothing.
+ *
+ * The cache only contains emails received after webhook registration —
+ * it's NOT a historical backfill. But for the "I just connected and want
+ * to see new mail arrive" path, it works without needing Unipile's
+ * server-side sync.
+ */
+
+type CacheRow = typeof unipileEmailsCache.$inferSelect;
+
+/** Stringify a Unipile attendee JSON column into "email1, email2". */
+function attendeesJsonToCsv(json: unknown): string {
+  if (!Array.isArray(json)) return "";
+  return (json as UnipileAttendee[])
+    .map((a) => a.identifier)
+    .filter((s) => typeof s === "string" && s.length > 0)
+    .join(", ");
+}
+
+function cacheRowToThread(row: CacheRow): EmailThread {
+  const folders = Array.isArray(row.foldersJson) ? (row.foldersJson as string[]) : [];
+  return {
+    threadId: row.threadId ?? row.emailId,
+    subject: row.subject ?? "",
+    snippet: htmlToSnippet(row.bodyHtml ?? row.bodyPlain ?? ""),
+    fromEmail: row.fromEmail ?? "",
+    fromName: row.fromName ?? "",
+    date: row.emailDate ?? row.createdAt,
+    unread: row.readDate === null,
+    messageCount: 1,
+    labels: folders,
+  };
+}
+
+function cacheRowToMessage(row: CacheRow): EmailMessage {
+  const attachments = Array.isArray(row.attachmentsJson)
+    ? (row.attachmentsJson as Array<{ name?: string; mime?: string; size?: number }>)
+    : [];
+  return {
+    messageId: row.emailId,
+    threadId: row.threadId ?? row.emailId,
+    subject: row.subject ?? "",
+    fromEmail: row.fromEmail ?? "",
+    fromName: row.fromName ?? "",
+    toEmail: attendeesJsonToCsv(row.toJson),
+    ccEmail: attendeesJsonToCsv(row.ccJson) || undefined,
+    date: row.emailDate ?? row.createdAt,
+    bodyText: row.bodyPlain ?? "",
+    bodyHtml: row.bodyHtml ?? "",
+    attachments: attachments.map((a) => ({
+      filename: a.name ?? "attachment",
+      contentType: a.mime ?? "application/octet-stream",
+      size: a.size ?? 0,
+    })),
+    inReplyTo: undefined,
+    references: undefined,
+    unread: row.readDate === null,
+  };
+}
+
+/**
+ * Best-effort folder match against the cache row's foldersJson array.
+ * INBOX is the common default; case-insensitive substring match handles
+ * provider quirks (e.g. "INBOX", "Inbox", "Boîte de réception" — we
+ * accept the canonical English form for folder=INBOX).
+ */
+function cacheRowMatchesFolder(row: CacheRow, folder: string | undefined): boolean {
+  if (!folder) return true;
+  const wanted = folder.toLowerCase();
+  // INBOX is the role-default — also accept the "inbox" role marker so
+  // we surface mail even when the provider labels the folder differently.
+  if (wanted === "inbox" && row.role === "inbox") return true;
+  const folders = Array.isArray(row.foldersJson) ? (row.foldersJson as string[]) : [];
+  return folders.some((f) => typeof f === "string" && f.toLowerCase() === wanted);
 }
 
 function unipileEmailToMessage(email: UnipileEmail): EmailMessage {
@@ -173,10 +256,65 @@ export class UnipileMailAdapter implements EmailAdapter {
       }))
       .sort((a, b) => b.date.getTime() - a.date.getTime());
 
+    // ── Fallback: serve from the webhook-fed cache when Unipile gave us
+    // nothing. Only triggers on a clean empty page with no cursor (i.e.
+    // the user's *first* page of an unsynced mailbox). Once /emails
+    // starts returning items, this path goes silent.
+    if (threads.length === 0 && !res.cursor) {
+      const cacheThreads = await this.cacheFallbackListThreads(folder, maxResults);
+      if (cacheThreads.length > 0) {
+        console.log(
+          `[UnipileMailAdapter] listThreads serving ${cacheThreads.length} threads from webhook cache (Unipile /emails returned 0)`,
+        );
+        return { threads: cacheThreads, nextPageToken: undefined };
+      }
+    }
+
     return {
       threads,
       nextPageToken: res.cursor ?? undefined,
     };
+  }
+
+  /** Cache-only path: read recent emails from unipile_emails_cache. */
+  private async cacheFallbackListThreads(
+    folder: string,
+    maxResults: number,
+  ): Promise<EmailThread[]> {
+    const db = await getDb();
+    // Pull a generous window then filter by folder client-side — folders
+    // is a JSON column so we can't WHERE on it portably. maxResults*4 is
+    // enough headroom for typical folder distributions.
+    const rows = await db
+      .select()
+      .from(unipileEmailsCache)
+      .where(eq(unipileEmailsCache.unipileAccountId, this.unipileAccountId))
+      .orderBy(desc(unipileEmailsCache.emailDate))
+      .limit(maxResults * 4);
+
+    // Group by thread id and pick the newest per thread.
+    const byThread = new Map<string, { newest: CacheRow; count: number }>();
+    for (const row of rows) {
+      if (!cacheRowMatchesFolder(row, folder)) continue;
+      const tid = row.threadId ?? row.emailId;
+      const cur = byThread.get(tid);
+      if (!cur) {
+        byThread.set(tid, { newest: row, count: 1 });
+      } else {
+        cur.count += 1;
+        const curDate = (cur.newest.emailDate ?? cur.newest.createdAt).getTime();
+        const newDate = (row.emailDate ?? row.createdAt).getTime();
+        if (newDate > curDate) cur.newest = row;
+      }
+    }
+
+    return Array.from(byThread.values())
+      .map(({ newest, count }) => ({
+        ...cacheRowToThread(newest),
+        messageCount: count,
+      }))
+      .sort((a, b) => b.date.getTime() - a.date.getTime())
+      .slice(0, maxResults);
   }
 
   /**
@@ -217,6 +355,35 @@ export class UnipileMailAdapter implements EmailAdapter {
         messageCount: 1,
         labels: e.folders ?? [],
       }));
+
+    // Cache fallback — same logic as listThreads, but with text matching
+    // against subject / from across cached rows for this account.
+    if (threads.length === 0) {
+      const db = await getDb();
+      const likeQ = `%${query}%`;
+      const cacheRows = await db
+        .select()
+        .from(unipileEmailsCache)
+        .where(
+          and(
+            eq(unipileEmailsCache.unipileAccountId, this.unipileAccountId),
+            or(
+              like(unipileEmailsCache.subject, likeQ),
+              like(unipileEmailsCache.fromEmail, likeQ),
+              like(unipileEmailsCache.fromName, likeQ),
+            ),
+          ),
+        )
+        .orderBy(desc(unipileEmailsCache.emailDate))
+        .limit(maxResults);
+      if (cacheRows.length > 0) {
+        console.log(
+          `[UnipileMailAdapter] searchThreads serving ${cacheRows.length} matches from webhook cache`,
+        );
+        return { threads: cacheRows.map(cacheRowToThread) };
+      }
+    }
+
     return { threads };
   }
 
@@ -238,9 +405,34 @@ export class UnipileMailAdapter implements EmailAdapter {
         .map(unipileEmailToMessage)
         .sort((a, b) => a.date.getTime() - b.date.getTime());
     }
-    // Fallback: maybe the caller passed an email id rather than a thread id.
+    // Fallback 1: maybe the caller passed an email id rather than a thread id.
     const single = await getEmail(threadId, this.unipileAccountId).catch(() => null);
-    return single ? [unipileEmailToMessage(single)] : [];
+    if (single) return [unipileEmailToMessage(single)];
+
+    // Fallback 2: serve from local webhook cache. Match on either
+    // threadId (Unipile thread id, if known) or emailId (the caller may
+    // pass either since unipile_emails_cache rows have both columns).
+    const db = await getDb();
+    const cacheRows = await db
+      .select()
+      .from(unipileEmailsCache)
+      .where(
+        and(
+          eq(unipileEmailsCache.unipileAccountId, this.unipileAccountId),
+          or(
+            eq(unipileEmailsCache.threadId, threadId),
+            eq(unipileEmailsCache.emailId, threadId),
+          ),
+        ),
+      )
+      .orderBy(unipileEmailsCache.emailDate);
+    if (cacheRows.length > 0) {
+      console.log(
+        `[UnipileMailAdapter] getThread serving ${cacheRows.length} messages from webhook cache for threadId=${threadId}`,
+      );
+      return cacheRows.map(cacheRowToMessage);
+    }
+    return [];
   }
 
   /** Binary attachment download. */

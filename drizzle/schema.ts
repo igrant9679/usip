@@ -2287,6 +2287,64 @@ export const unipileInvites = mysqlTable(
 );
 export type UnipileInvite = typeof unipileInvites.$inferSelect;
 
+/**
+ * unipile_emails_cache — Webhook-fed local cache of email events.
+ *
+ * Populated by POST /api/unipile/mail-webhook on mail_received / mail_sent /
+ * mail_moved. The UnipileMailAdapter falls back to this table when Unipile's
+ * /emails endpoint returns 0 items (the "sync hasn't indexed history" failure
+ * mode). Once /emails comes online for an account, this cache continues to
+ * serve as a write-through layer for real-time updates without polling.
+ *
+ * Note: this is NOT a full historical archive — only emails that arrived
+ * after the webhook was registered. Historical mail requires Unipile's
+ * server-side sync to complete.
+ */
+export const unipileEmailsCache = mysqlTable(
+  "unipile_emails_cache",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    unipileAccountId: varchar("unipileAccountId", { length: 200 }).notNull(),
+    emailId: varchar("emailId", { length: 200 }).notNull(),
+    threadId: varchar("threadId", { length: 200 }),
+    providerMessageId: varchar("providerMessageId", { length: 500 }),
+    subject: text("subject"),
+    fromName: varchar("fromName", { length: 320 }),
+    fromEmail: varchar("fromEmail", { length: 320 }),
+    toJson: json("toJson"),
+    ccJson: json("ccJson"),
+    bccJson: json("bccJson"),
+    replyToJson: json("replyToJson"),
+    bodyHtml: text("bodyHtml"),
+    bodyPlain: text("bodyPlain"),
+    attachmentsJson: json("attachmentsJson"),
+    foldersJson: json("foldersJson"),
+    role: varchar("role", { length: 40 }),
+    hasAttachments: boolean("hasAttachments").default(false).notNull(),
+    readDate: timestamp("readDate"),
+    inReplyToId: varchar("inReplyToId", { length: 200 }),
+    emailDate: timestamp("emailDate"),
+    origin: varchar("origin", { length: 20 }),
+    trackingId: varchar("trackingId", { length: 200 }),
+    lastEvent: varchar("lastEvent", { length: 30 }),
+    rawJson: json("rawJson"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    uqEmailId: uniqueIndex("uq_uec_emailid").on(t.emailId),
+    byAccountDate: index("ix_uec_account_date").on(
+      t.workspaceId,
+      t.unipileAccountId,
+      t.emailDate,
+    ),
+    byThread: index("ix_uec_thread").on(t.threadId),
+  }),
+);
+export type UnipileEmailCache = typeof unipileEmailsCache.$inferSelect;
+export type InsertUnipileEmailCache = typeof unipileEmailsCache.$inferInsert;
+
 /* ──────────────────────────────────────────────────────────────────────────
    Member Permissions
    ────────────────────────────────────────────────────────────────────────── */
