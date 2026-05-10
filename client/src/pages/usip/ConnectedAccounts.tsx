@@ -41,7 +41,8 @@ import {
   Wifi,
   WifiOff,
   TriangleAlert,
-  XCircle, Link2
+  XCircle, Link2,
+  Webhook,
 } from "lucide-react";
 
 
@@ -216,6 +217,21 @@ export default function ConnectedAccounts() {
     onError: (err) => toast.error("Failed to disconnect", { description: err.message }),
   });
   const generateLink = trpc.unipile.generateConnectLink.useMutation();
+  // One-time admin action: register Unipile's source=email webhook so new
+  // mail events are pushed to /api/unipile/mail-webhook in real time. This
+  // unblocks the "/emails returns 0 items" failure mode by populating
+  // unipile_emails_cache the moment messages arrive. Admin-only on the
+  // server (adminWsProcedure) — non-admins get a permission toast.
+  const registerMailWebhook = trpc.unipile.registerMailWebhook.useMutation({
+    onSuccess: (data) => {
+      toast.success("Mail webhook registered", {
+        description: `Unipile will now push new email to ${data.requestUrl} (webhook id ${data.webhookId.slice(0, 8)}…). Send yourself a test message to verify.`,
+      });
+    },
+    onError: (err) => {
+      toast.error("Failed to register mail webhook", { description: err.message });
+    },
+  });
   const [isReconnectingAll, setIsReconnectingAll] = useState(false);
   const handleReconnectAll = async () => {
     const expired = accounts.filter((a) => EXPIRED_STATUSES.has(a.status));
@@ -291,6 +307,20 @@ export default function ConnectedAccounts() {
           <Button variant="outline" size="sm" onClick={() => refetch()}>
             <RefreshCw className="h-4 w-4 mr-2" />
             Refresh
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => registerMailWebhook.mutate({ origin: window.location.origin })}
+            disabled={registerMailWebhook.isPending}
+            title="One-time setup: tell Unipile to push new email events to this app in real time. Admin-only. Safe to call again if needed."
+          >
+            {registerMailWebhook.isPending ? (
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            ) : (
+              <Webhook className="h-4 w-4 mr-2" />
+            )}
+            Register mail webhook
           </Button>
           <Button
             size="sm"
