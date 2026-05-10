@@ -47,7 +47,16 @@ export interface HostedAuthLinkResponse {
 
 export async function generateHostedAuthLink(params: {
   type: "create" | "reconnect";
-  providers: string[] | "*";
+  /**
+   * Either a single provider name (e.g. "MICROSOFT", "LINKEDIN") or "*" for
+   * all providers. Per Unipile's documented hosted-auth-link API the field
+   * is a string, NOT an array — sending `["MICROSOFT"]` triggers
+   * "Expected union value" because their schema rejects arrays here.
+   *
+   * Multi-select callers should either fan out one call per provider, or
+   * pass "*" and let the user pick inside the wizard.
+   */
+  providers: string;
   expiresOn: string; // ISO 8601
   notifyUrl: string;
   successRedirectUrl?: string;

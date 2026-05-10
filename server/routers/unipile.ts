@@ -81,9 +81,21 @@ export const unipileRouter = router({
       const successRedirectUrl = `${appBase}/connected-accounts?connected=1`;
       const expiresOn = new Date(Date.now() + 30 * 60 * 1000).toISOString(); // 30 min
 
+      // Unipile's hosted-auth-link endpoint accepts `providers` as a single
+      // string (specific provider name, or "*" for all). Arrays are rejected
+      // with "Expected union value". Coerce:
+      //   - exactly one selected → send that provider name
+      //   - zero or multiple selected → send "*" and let the user pick in
+      //     the hosted wizard
+      // Multi-channel single-shot connection isn't supported by their API.
+      const providerArg: string =
+        input.providers && input.providers.length === 1
+          ? input.providers[0]
+          : "*";
+
       const result = await generateHostedAuthLink({
         type: input.reconnectAccountId ? "reconnect" : "create",
-        providers: input.providers ?? ALL_PROVIDERS,
+        providers: providerArg,
         expiresOn,
         notifyUrl,
         successRedirectUrl,
