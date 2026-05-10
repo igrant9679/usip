@@ -1972,10 +1972,6 @@ export const sendingAccounts = mysqlTable(
       "outlook_oauth",
       "amazon_ses",
       "generic_smtp",
-      // Bridge to a row in unipile_accounts (Unipile-managed Microsoft mail).
-      // When this value is set, IMAP/SMTP credential fields are NULL and the
-      // adapter factory routes through UnipileMailAdapter.
-      "unipile_microsoft",
     ]).notNull(),
     fromEmail: varchar("fromEmail", { length: 320 }).notNull(),
     fromName: varchar("fromName", { length: 120 }),
@@ -2147,10 +2143,6 @@ export const calendarAccounts = mysqlTable(
       "outlook_caldav",
       "apple_caldav",
       "generic_caldav",
-      // Bridge to a row in unipile_accounts (Unipile-managed Microsoft calendar).
-      // When this value is set, CalDAV credential fields are NULL and the
-      // calendar adapter factory routes through UnipileCalendarAdapter.
-      "unipile_microsoft",
     ]).notNull(),
     label: varchar("label", { length: 120 }),
     email: varchar("email", { length: 320 }),

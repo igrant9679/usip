@@ -364,16 +364,18 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
   },
 
   // ── 0057: Unipile bridge column on sending_accounts + calendar_accounts ───
-  // ADD COLUMN errno 1060 tolerated. The MODIFY COLUMN statements widen the
-  // provider enum to include 'unipile_microsoft'; if the new value already
-  // exists (re-run) MySQL is a no-op without erroring.
+  // Plain ADD COLUMN unipileAccountId — errno 1060 (ER_DUP_FIELDNAME) is
+  // tolerated for re-runs. The previous iteration of this migration also
+  // ran MODIFY COLUMN to widen the provider enum with 'unipile_microsoft',
+  // but that triggered MySQL strict-mode errno 1265 "Data truncated for
+  // column 'provider' at row 1" on production data. The architecture was
+  // changed instead to reuse existing enum values for bridged rows, so
+  // those MODIFYs are no longer needed.
   {
     name: "0057_unipile_bridge.sql",
     statements: [
       `ALTER TABLE \`sending_accounts\` ADD COLUMN \`unipileAccountId\` varchar(64) NULL`,
-      `ALTER TABLE \`sending_accounts\` MODIFY COLUMN \`provider\` enum('outlook_oauth','amazon_ses','generic_smtp','unipile_microsoft') NOT NULL`,
       `ALTER TABLE \`calendar_accounts\` ADD COLUMN \`unipileAccountId\` varchar(64) NULL`,
-      `ALTER TABLE \`calendar_accounts\` MODIFY COLUMN \`provider\` enum('outlook_oauth','outlook_caldav','apple_caldav','generic_caldav','unipile_microsoft') NOT NULL`,
     ],
   },
 ];

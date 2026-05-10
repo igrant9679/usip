@@ -139,7 +139,11 @@ export function registerUnipileWebhookRoutes(app: Express) {
         // Only Microsoft accounts get bridged into sending_accounts +
         // calendar_accounts so the standard /mailbox and /calendar UIs can
         // surface them. LinkedIn / WhatsApp / etc. are left alone.
-        if (acct.type === "MICROSOFT") {
+        //
+        // Unipile uses "OUTLOOK" as the type label for Microsoft 365
+        // accounts (verified via webhook log). "MICROSOFT" is also
+        // accepted to be safe against future renames.
+        if (acct.type === "OUTLOOK" || acct.type === "MICROSOFT") {
           // displayName may be an email for Microsoft accounts (the
           // username field in connection_params.MICROSOFT.username is
           // typically the user's email). Use it as fromEmail; if it
@@ -170,7 +174,12 @@ export function registerUnipileWebhookRoutes(app: Express) {
               await db.insert(sendingAccounts).values({
                 workspaceId,
                 name: bridgeName,
-                provider: "unipile_microsoft",
+                // Use the existing 'outlook_oauth' enum value rather than
+                // adding a new one — avoids a MODIFY ENUM migration that
+                // hits MySQL's strict-mode data-truncated check (errno
+                // 1265). The unipileAccountId column is the actual
+                // discriminator the adapter factory reads.
+                provider: "outlook_oauth",
                 fromEmail,
                 unipileAccountId: account_id,
               });
@@ -206,7 +215,12 @@ export function registerUnipileWebhookRoutes(app: Express) {
               await db.insert(calendarAccounts).values({
                 workspaceId,
                 userId,
-                provider: "unipile_microsoft",
+                // Use the existing 'outlook_oauth' enum value rather than
+                // adding a new one — avoids a MODIFY ENUM migration that
+                // hits MySQL's strict-mode data-truncated check (errno
+                // 1265). The unipileAccountId column is the actual
+                // discriminator the adapter factory reads.
+                provider: "outlook_oauth",
                 label: bridgeName,
                 email: looksLikeEmail ? displayName! : null,
                 unipileAccountId: account_id,
