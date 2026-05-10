@@ -250,3 +250,260 @@ export async function registerWebhook(params: {
     }),
   });
 }
+
+// ─── Email API ────────────────────────────────────────────────────────────────
+// All endpoints documented in Unipile's OpenAPI spec under /api/v1/emails*
+// and /api/v1/folders*. Verified against the spec fetched 2026-05-10.
+
+export interface UnipileAttendee {
+  display_name?: string;
+  identifier: string; // email address
+  identifier_type?: string;
+}
+
+export type UnipileEmailRole =
+  | "inbox"
+  | "sent"
+  | "archive"
+  | "drafts"
+  | "trash"
+  | "spam"
+  | "all"
+  | "important"
+  | "starred"
+  | "unknown";
+
+export interface UnipileEmail {
+  object: "Email";
+  id: string;
+  deprecated_id?: string;
+  account_id: string;
+  /** Provider type: MAIL / GOOGLE / OUTLOOK / EXCHANGE / GOOGLE_OAUTH / ICLOUD */
+  type: string;
+  date: string;
+  role: UnipileEmailRole;
+  folders: string[];
+  folderIds: string[];
+  /** ISO datetime of first API read; null = unread. */
+  read_date: string | null;
+  message_id: string;
+  provider_id: string;
+  /** Present on "full" kind responses (meta_only=false). */
+  subject?: string;
+  body?: string;
+  body_plain?: string;
+  from_attendee?: UnipileAttendee;
+  to_attendees?: UnipileAttendee[];
+  cc_attendees?: UnipileAttendee[];
+  bcc_attendees?: UnipileAttendee[];
+  reply_to_attendees?: UnipileAttendee[];
+  has_attachments?: boolean;
+  attachments?: Array<{
+    id: string;
+    name: string;
+    extension?: string;
+    size?: number;
+    mime?: string;
+  }>;
+  /** Server-assigned thread id used by GET /emails?thread_id=… */
+  thread_id?: string;
+  headers?: Array<{ name: string; value: string }>;
+}
+
+export interface UnipileEmailListResponse {
+  object: "EmailList";
+  items: UnipileEmail[];
+  cursor?: string | null;
+}
+
+export interface UnipileFolder {
+  object: "Folder";
+  id: string;
+  name: string;
+  account_id: string;
+  /** inbox / sent / archive / drafts / trash / spam etc., or custom label. */
+  role?: string;
+  /** Per-folder counts when included. */
+  status?: { total?: number; unread?: number };
+  /** Provider-specific id. */
+  provider_id?: string;
+}
+
+export interface UnipileFolderListResponse {
+  object: "FolderList";
+  items: UnipileFolder[];
+}
+
+/** GET /api/v1/emails — list emails for an account. Cursor-paginated. */
+export async function listEmails(params: {
+  accountId: string;
+  folder?: string;
+  threadId?: string;
+  cursor?: string;
+  limit?: number;
+  before?: string;
+  after?: string;
+  /** When true, body fields are omitted (kind=1_meta) — faster for thread lists. */
+  metaOnly?: boolean;
+  includeHeaders?: boolean;
+  excludeFolders?: string[];
+  any_email?: string;
+  to?: string;
+  from?: string;
+}): Promise<UnipileEmailListResponse> {
+  const qs = new URLSearchParams();
+  qs.set("account_id", params.accountId);
+  if (params.folder) qs.set("folder", params.folder);
+  if (params.threadId) qs.set("thread_id", params.threadId);
+  if (params.cursor) qs.set("cursor", params.cursor);
+  if (params.limit !== undefined) qs.set("limit", String(params.limit));
+  if (params.before) qs.set("before", params.before);
+  if (params.after) qs.set("after", params.after);
+  if (params.metaOnly !== undefined) qs.set("meta_only", String(params.metaOnly));
+  if (params.includeHeaders !== undefined) qs.set("include_headers", String(params.includeHeaders));
+  if (params.any_email) qs.set("any_email", params.any_email);
+  if (params.to) qs.set("to", params.to);
+  if (params.from) qs.set("from", params.from);
+  for (const f of params.excludeFolders ?? []) qs.append("exclude_folders", f);
+  return unipileFetch<UnipileEmailListResponse>(`/emails?${qs.toString()}`);
+}
+
+/** GET /api/v1/emails/{email_id} — full email by id (accepts Unipile id or provider id). */
+export async function getEmail(
+  emailId: string,
+  accountId?: string,
+): Promise<UnipileEmail> {
+  const qs = accountId ? `?account_id=${encodeURIComponent(accountId)}` : "";
+  return unipileFetch<UnipileEmail>(`/emails/${encodeURIComponent(emailId)}${qs}`);
+}
+
+/**
+ * POST /api/v1/emails — send a new email.
+ *
+ * Critical: this endpoint uses multipart/form-data, NOT JSON.
+ * `to` / `cc` / `bcc` / `from` / `tracking_options` are JSON-stringified
+ * into form fields per Unipile's convention. Attachments are uploaded as
+ * file parts named `attachments`.
+ *
+ * `reply_to` (when set) wires the new email into the same thread as the
+ * email being replied to — server-side threading, we just pass the id.
+ */
+export async function sendEmail(params: {
+  accountId: string;
+  to: UnipileAttendee[];
+  body: string;
+  subject?: string;
+  cc?: UnipileAttendee[];
+  bcc?: UnipileAttendee[];
+  from?: UnipileAttendee;
+  replyTo?: string;
+  customHeaders?: Array<{ name: string; value: string }>;
+  trackingOptions?: { opens?: boolean; links?: boolean; label?: string; custom_domain?: string };
+  attachments?: Array<{ filename: string; contentType: string; content: string /* base64 */ }>;
+}): Promise<{ object: "EmailSent"; tracking_id: string; provider_id: string | null }> {
+  const form = new FormData();
+  form.append("account_id", params.accountId);
+  form.append("to", JSON.stringify(params.to));
+  form.append("body", params.body);
+  if (params.subject !== undefined) form.append("subject", params.subject);
+  if (params.cc) form.append("cc", JSON.stringify(params.cc));
+  if (params.bcc) form.append("bcc", JSON.stringify(params.bcc));
+  if (params.from) form.append("from", JSON.stringify(params.from));
+  if (params.replyTo) form.append("reply_to", params.replyTo);
+  if (params.customHeaders) form.append("custom_headers", JSON.stringify(params.customHeaders));
+  if (params.trackingOptions) {
+    form.append("tracking_options", JSON.stringify(params.trackingOptions));
+  }
+  for (const att of params.attachments ?? []) {
+    const bytes = Buffer.from(att.content, "base64");
+    const blob = new Blob([bytes], { type: att.contentType });
+    form.append("attachments", blob, att.filename);
+  }
+  return unipileFetchMultipart<{ object: "EmailSent"; tracking_id: string; provider_id: string | null }>(
+    "/emails",
+    "POST",
+    form,
+  );
+}
+
+/** PUT /api/v1/emails/{email_id} — mark unread, move folders, set Outlook categories. */
+export async function updateEmail(
+  emailId: string,
+  params: { unread?: boolean; folders?: string[]; categories?: string[] },
+  accountId?: string,
+): Promise<{ object: "EmailUpdated" }> {
+  const qs = accountId ? `?account_id=${encodeURIComponent(accountId)}` : "";
+  return unipileFetch<{ object: "EmailUpdated" }>(`/emails/${encodeURIComponent(emailId)}${qs}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  });
+}
+
+/** DELETE /api/v1/emails/{email_id} — moves the email to Trash. */
+export async function deleteEmail(
+  emailId: string,
+  accountId?: string,
+): Promise<{ object: "EmailDeleted" }> {
+  const qs = accountId ? `?account_id=${encodeURIComponent(accountId)}` : "";
+  return unipileFetch<{ object: "EmailDeleted" }>(`/emails/${encodeURIComponent(emailId)}${qs}`, {
+    method: "DELETE",
+  });
+}
+
+/**
+ * GET /api/v1/emails/{email_id}/attachments/{attachment_id} — binary download.
+ *
+ * Returns the raw bytes plus the resolved Content-Type / filename via
+ * Content-Disposition (if the provider sent one).
+ */
+export async function getEmailAttachment(
+  emailId: string,
+  attachmentId: string,
+): Promise<{ data: Buffer; contentType: string; filename: string }> {
+  const { apiKey, dsn } = getConfig();
+  const url = `${dsn}/api/v1/emails/${encodeURIComponent(emailId)}/attachments/${encodeURIComponent(attachmentId)}`;
+  const res = await fetch(url, {
+    headers: { "X-API-KEY": apiKey, Accept: "application/octet-stream" },
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`Unipile GET attachment → ${res.status}: ${body}`);
+  }
+  const ct = res.headers.get("content-type") ?? "application/octet-stream";
+  const disp = res.headers.get("content-disposition") ?? "";
+  const filenameMatch = disp.match(/filename="?([^";]+)"?/i);
+  const filename = filenameMatch?.[1] ?? "attachment";
+  const buf = Buffer.from(await res.arrayBuffer());
+  return { data: buf, contentType: ct, filename };
+}
+
+/** GET /api/v1/folders — list folders for an account. */
+export async function listFolders(accountId: string): Promise<UnipileFolderListResponse> {
+  const qs = new URLSearchParams({ account_id: accountId });
+  return unipileFetch<UnipileFolderListResponse>(`/folders?${qs.toString()}`);
+}
+
+// ─── Multipart helper (POST /emails uses form-data, not JSON) ────────────────
+async function unipileFetchMultipart<T>(
+  path: string,
+  method: string,
+  form: FormData,
+): Promise<T> {
+  const { apiKey, dsn } = getConfig();
+  const res = await fetch(`${dsn}/api/v1${path}`, {
+    method,
+    headers: {
+      // Don't set Content-Type — node's fetch sets it with the
+      // multipart boundary automatically based on the FormData body.
+      "X-API-KEY": apiKey,
+      Accept: "application/json",
+    },
+    body: form,
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`Unipile ${method} ${path} → ${res.status}: ${body}`);
+  }
+  return res.json() as Promise<T>;
+}
