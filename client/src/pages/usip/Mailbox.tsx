@@ -783,7 +783,7 @@ function SingleAccountThreadList({ accountId, folder, selectedId, onSelect }: {
       ) : !threads.length ? (
         <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground gap-2 p-4">
           <MailOpen className="size-8 opacity-30" />
-          <p className="text-xs text-center">{debouncedQuery ? `No results for "${debouncedQuery}"` : `${folder} is empty.`}</p>
+          <p className="text-xs text-center">{debouncedQuery ? `No results for "${debouncedQuery}"` : "This folder is empty."}</p>
         </div>
       ) : (
         <ScrollArea className="flex-1">
@@ -944,7 +944,11 @@ export default function MailboxPage() {
               </Select>
             )}
           </div>
-          <ScrollArea className="flex-1">
+          {/* min-h-0 is required for flex children inside an
+              overflow-hidden parent — without it the intrinsic height of
+              the folder list prevents flex-1 from clipping, so the
+              scrollbar never appears. */}
+          <ScrollArea className="flex-1 min-h-0">
             <div className="p-2 space-y-0.5">
               <button
                 onClick={() => { setSelectedView({ type: "central" }); setSelectedFolder("INBOX"); clearThread(); }}
