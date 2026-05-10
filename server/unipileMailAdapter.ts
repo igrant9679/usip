@@ -429,25 +429,48 @@ export class UnipileMailAdapter implements EmailAdapter {
    * (some providers don't expose thread_id for older messages).
    */
   async getThread(threadId: string, folder?: string): Promise<EmailMessage[]> {
-    const res = await listEmails({
-      accountId: this.unipileAccountId,
-      threadId,
-      folder,
-      limit: 100,
-      metaOnly: false,
-    });
-    if (res.items.length > 0) {
-      return res.items
+    console.log(
+      `[UnipileMailAdapter] getThread threadId=${threadId} folder=${folder ?? "(none)"}`,
+    );
+
+    // Step 1: try Unipile's thread endpoint. Wrap in try/catch — Unipile
+    // rejects unknown thread_ids with 4xx (it doesn't return empty), so
+    // an unknown id would throw and skip the cache fallback below.
+    let unipileItems: UnipileEmail[] = [];
+    try {
+      const res = await listEmails({
+        accountId: this.unipileAccountId,
+        threadId,
+        folder,
+        limit: 100,
+        metaOnly: false,
+      });
+      unipileItems = res.items;
+    } catch (err) {
+      console.log(
+        `[UnipileMailAdapter] getThread Unipile /emails?thread_id rejected (likely unknown thread): ${err instanceof Error ? err.message.slice(0, 200) : String(err)}`,
+      );
+    }
+    if (unipileItems.length > 0) {
+      console.log(
+        `[UnipileMailAdapter] getThread serving ${unipileItems.length} messages from Unipile`,
+      );
+      return unipileItems
         .map(unipileEmailToMessage)
         .sort((a, b) => a.date.getTime() - b.date.getTime());
     }
-    // Fallback 1: maybe the caller passed an email id rather than a thread id.
-    const single = await getEmail(threadId, this.unipileAccountId).catch(() => null);
-    if (single) return [unipileEmailToMessage(single)];
 
-    // Fallback 2: serve from local webhook cache. Match on either
-    // threadId (Unipile thread id, if known) or emailId (the caller may
-    // pass either since unipile_emails_cache rows have both columns).
+    // Step 2: maybe the caller passed an email id rather than a thread id.
+    // Wrapped in .catch — 404 here is expected for cache-only emails.
+    const single = await getEmail(threadId, this.unipileAccountId).catch(() => null);
+    if (single) {
+      console.log(`[UnipileMailAdapter] getThread serving 1 message via Unipile getEmail`);
+      return [unipileEmailToMessage(single)];
+    }
+
+    // Step 3: local webhook cache. Match on either threadId column (Unipile
+    // thread id, if known) or emailId column (the Mailbox UI passes the
+    // emailId we returned from listThreads when there's no real threadId).
     const db = await getDb();
     const cacheRows = await db
       .select()
@@ -462,10 +485,10 @@ export class UnipileMailAdapter implements EmailAdapter {
         ),
       )
       .orderBy(unipileEmailsCache.emailDate);
+    console.log(
+      `[UnipileMailAdapter] getThread cache query returned ${cacheRows.length} rows for threadId=${threadId}`,
+    );
     if (cacheRows.length > 0) {
-      console.log(
-        `[UnipileMailAdapter] getThread serving ${cacheRows.length} messages from webhook cache for threadId=${threadId}`,
-      );
       return cacheRows.map(cacheRowToMessage);
     }
     return [];
