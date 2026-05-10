@@ -256,14 +256,18 @@ export async function registerWebhook(params: {
   requestUrl: string;
   source: "messaging" | "email" | "account_status" | "relation";
   secretKey?: string;
-}): Promise<{ id: string }> {
+}): Promise<{ id: string | null; raw: unknown }> {
   const headers: Array<{ key: string; value: string }> = [
     { key: "Content-Type", value: "application/json" },
   ];
   if (params.secretKey) {
     headers.push({ key: "Unipile-Auth", value: params.secretKey });
   }
-  return unipileFetch<{ id: string }>("/webhooks", {
+  // Unipile's POST /webhooks response shape isn't documented consistently:
+  // we've seen { id }, { webhook_id }, { object: "Webhook", id }, and even
+  // a bare 201 with no body in different SDK versions. Capture the raw
+  // response and return the id with a best-effort lookup.
+  const raw = await unipileFetch<Record<string, unknown>>("/webhooks", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -272,6 +276,16 @@ export async function registerWebhook(params: {
       headers,
     }),
   });
+  console.log(
+    `[Unipile] registerWebhook raw response: ${JSON.stringify(raw).slice(0, 500)}`,
+  );
+  const id =
+    (typeof raw?.id === "string" ? raw.id : null) ??
+    (typeof raw?.webhook_id === "string" ? (raw.webhook_id as string) : null) ??
+    (typeof (raw as { data?: { id?: string } })?.data?.id === "string"
+      ? ((raw as { data: { id: string } }).data.id)
+      : null);
+  return { id, raw };
 }
 
 // ─── Email API ────────────────────────────────────────────────────────────────

@@ -224,8 +224,15 @@ export default function ConnectedAccounts() {
   // server (adminWsProcedure) — non-admins get a permission toast.
   const registerMailWebhook = trpc.unipile.registerMailWebhook.useMutation({
     onSuccess: (data) => {
+      // Unipile's POST /webhooks response shape varies (sometimes id is at the
+      // top level, sometimes nested under webhook_id, sometimes absent on
+      // success). Guard against undefined so a missing id doesn't crash the
+      // toast and get surfaced as an error.
+      const idHint = data?.webhookId
+        ? `webhook id ${String(data.webhookId).slice(0, 8)}…`
+        : "registration accepted";
       toast.success("Mail webhook registered", {
-        description: `Unipile will now push new email to ${data.requestUrl} (webhook id ${data.webhookId.slice(0, 8)}…). Send yourself a test message to verify.`,
+        description: `Unipile will now push new email to ${data?.requestUrl ?? "your app"} (${idHint}). Send yourself a test message to verify.`,
       });
     },
     onError: (err) => {

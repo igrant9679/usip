@@ -553,6 +553,9 @@ export const unipileRouter = router({
         requestUrl,
         source: "email",
       });
-      return { webhookId: result.id, requestUrl };
+      // result.id may be null if Unipile's response shape doesn't include
+      // one (we've observed at least three variants). The toast on the
+      // client handles that gracefully.
+      return { webhookId: result.id, requestUrl, raw: result.raw };
     }),
 });
