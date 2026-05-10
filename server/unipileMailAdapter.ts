@@ -138,19 +138,55 @@ function cacheRowToMessage(row: CacheRow): EmailMessage {
 }
 
 /**
- * Best-effort folder match against the cache row's foldersJson array.
- * INBOX is the common default; case-insensitive substring match handles
- * provider quirks (e.g. "INBOX", "Inbox", "Boîte de réception" — we
- * accept the canonical English form for folder=INBOX).
+ * Folder match heuristic for cache rows.
+ *
+ * Mailbox can call listThreads with three different folder shapes:
+ *   1. "INBOX" — the canonical alias we use as the default
+ *   2. "Inbox" / "Sent" / "Trash" — the human folder names that show up in
+ *      the webhook payload's `folders` array
+ *   3. Opaque Unipile folder IDs (e.g. "0SqztReUV5qRVAcZ2jR5WQ") — what
+ *      /folders returns as folder.id, what the Mailbox UI passes after a
+ *      user clicks a folder in the sidebar
+ *
+ * The webhook payload only gives us human names, never folder IDs. So
+ * shape (3) can never exact-match — we treat it as "probably the inbox"
+ * (the most common case) and fall back to role matching.
+ *
+ * To distinguish inbox-ish folder IDs from sent/trash IDs we'd need to
+ * cache the /folders response and look up role per id. For now, looseness
+ * here only matters until Unipile's historical sync recovers — once
+ * /emails returns rows, this whole code path goes silent.
  */
 function cacheRowMatchesFolder(row: CacheRow, folder: string | undefined): boolean {
   if (!folder) return true;
   const wanted = folder.toLowerCase();
-  // INBOX is the role-default — also accept the "inbox" role marker so
-  // we surface mail even when the provider labels the folder differently.
-  if (wanted === "inbox" && row.role === "inbox") return true;
+
+  // Canonical inbox aliases (case-insensitive) match anything with role=inbox.
+  if (wanted === "inbox" || wanted === "[gmail]/inbox") {
+    return row.role === "inbox";
+  }
+  // Other well-known role aliases.
+  if (wanted === "sent" || wanted === "[gmail]/sent mail") return row.role === "sent";
+  if (wanted === "trash" || wanted === "[gmail]/trash") return row.role === "trash";
+  if (wanted === "drafts" || wanted === "[gmail]/drafts") return row.role === "drafts";
+  if (wanted === "spam" || wanted === "[gmail]/spam") return row.role === "spam";
+
+  // Exact match against any folder name the webhook recorded.
   const folders = Array.isArray(row.foldersJson) ? (row.foldersJson as string[]) : [];
-  return folders.some((f) => typeof f === "string" && f.toLowerCase() === wanted);
+  if (folders.some((f) => typeof f === "string" && f.toLowerCase() === wanted)) {
+    return true;
+  }
+
+  // Opaque Unipile folder ID (no '/', no space, looks like base64ish) —
+  // we can't tell from the id alone which role it maps to. Treat as
+  // inbox-equivalent so the cache fallback at least surfaces new mail
+  // for the most common case. If you click "Sent" in the UI and see
+  // received mail here, that's the loose-match cost.
+  if (/^[A-Za-z0-9_\-]{16,}$/.test(folder)) {
+    return row.role === "inbox";
+  }
+
+  return false;
 }
 
 function unipileEmailToMessage(email: UnipileEmail): EmailMessage {
