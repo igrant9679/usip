@@ -277,5 +277,14 @@ export class ImapSmtpAdapter implements EmailAdapter {
 /* ─── Factory ────────────────────────────────────────────────────────────── */
 
 export function createEmailAdapter(account: SendingAccount): EmailAdapter {
+  // Bridged Unipile-managed accounts are detected by the unipileAccountId
+  // column being set (regardless of the legacy provider value, in case this
+  // row was migrated from a stub `outlook_oauth` provider).
+  if (account.unipileAccountId) {
+    // Lazy import to avoid pulling Unipile types into IMAP-only call sites.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { UnipileMailAdapter } = require("./unipileMailAdapter") as typeof import("./unipileMailAdapter");
+    return new UnipileMailAdapter(account);
+  }
   return new ImapSmtpAdapter(account);
 }

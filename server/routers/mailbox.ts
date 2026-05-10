@@ -67,19 +67,24 @@ export const mailboxRouter = router({
           provider: sendingAccounts.provider,
           hasImap: sendingAccounts.imapHost,
           hasOauth: sendingAccounts.oauthAccessToken,
+          unipileAccountId: sendingAccounts.unipileAccountId,
         })
         .from(sendingAccounts)
         .where(
           eq(sendingAccounts.workspaceId, ctx.workspace.id)
         );
+      // An account is inbox-enabled if it has IMAP credentials OR is bridged
+      // to a Unipile-managed account (provider routing handles the rest).
       return accounts
-        .filter((a) => !!a.hasImap)
+        .filter((a) => !!a.hasImap || !!a.unipileAccountId)
         .map((a) => ({
           id: a.id,
           name: a.name,
           email: a.email,
           provider: a.provider,
           inboxEnabled: true,
+          /** True if this row is bridged to Unipile. UI may surface a badge. */
+          unipileBridged: !!a.unipileAccountId,
         }));
     }),
 

@@ -200,5 +200,13 @@ export class CalDAVAdapter implements CalendarAdapter {
 /* ─── Factory ────────────────────────────────────────────────────────────── */
 
 export function createCalendarAdapter(account: CalendarAccount): CalendarAdapter {
+  // Bridged Unipile-managed accounts are detected by the unipileAccountId
+  // column being set. Lazy import to avoid pulling Unipile types into
+  // CalDAV-only call sites.
+  if (account.unipileAccountId) {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { UnipileCalendarAdapter } = require("./unipileCalendarAdapter") as typeof import("./unipileCalendarAdapter");
+    return new UnipileCalendarAdapter(account);
+  }
   return new CalDAVAdapter(account);
 }

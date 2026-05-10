@@ -362,6 +362,20 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
       `ALTER TABLE \`workspace_settings\` ADD COLUMN \`aiDefaultProvider\` varchar(32) NULL`,
     ],
   },
+
+  // ── 0057: Unipile bridge column on sending_accounts + calendar_accounts ───
+  // ADD COLUMN errno 1060 tolerated. The MODIFY COLUMN statements widen the
+  // provider enum to include 'unipile_microsoft'; if the new value already
+  // exists (re-run) MySQL is a no-op without erroring.
+  {
+    name: "0057_unipile_bridge.sql",
+    statements: [
+      `ALTER TABLE \`sending_accounts\` ADD COLUMN \`unipileAccountId\` varchar(64) NULL`,
+      `ALTER TABLE \`sending_accounts\` MODIFY COLUMN \`provider\` enum('outlook_oauth','amazon_ses','generic_smtp','unipile_microsoft') NOT NULL`,
+      `ALTER TABLE \`calendar_accounts\` ADD COLUMN \`unipileAccountId\` varchar(64) NULL`,
+      `ALTER TABLE \`calendar_accounts\` MODIFY COLUMN \`provider\` enum('outlook_oauth','outlook_caldav','apple_caldav','generic_caldav','unipile_microsoft') NOT NULL`,
+    ],
+  },
 ];
 
 // ---------------------------------------------------------------------------

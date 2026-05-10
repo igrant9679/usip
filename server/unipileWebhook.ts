@@ -19,7 +19,12 @@
 import type { Express, Request, Response } from "express";
 import { and, eq } from "drizzle-orm";
 import { getDb } from "./db";
-import { unipileAccounts, users } from "../drizzle/schema";
+import {
+  calendarAccounts,
+  sendingAccounts,
+  unipileAccounts,
+  users,
+} from "../drizzle/schema";
 import { generateHostedAuthLink, getUnipileAccount } from "./lib/unipile";
 
 // Statuses that mean the account needs re-authentication
@@ -128,6 +133,94 @@ export function registerUnipileWebhookRoutes(app: Express) {
           console.log(
             `[UnipileWebhook] Inserted new account ${account_id} (${acct.type}) for userId=${userId}`,
           );
+        }
+
+        // ── Auto-bridge for Microsoft (mail + calendar) ─────────────────
+        // Only Microsoft accounts get bridged into sending_accounts +
+        // calendar_accounts so the standard /mailbox and /calendar UIs can
+        // surface them. LinkedIn / WhatsApp / etc. are left alone.
+        if (acct.type === "MICROSOFT") {
+          // displayName may be an email for Microsoft accounts (the
+          // username field in connection_params.MICROSOFT.username is
+          // typically the user's email). Use it as fromEmail; if it
+          // doesn't look like an email, fall back to a placeholder so
+          // the NOT NULL constraint is satisfied.
+          const looksLikeEmail = displayName && /@/.test(displayName);
+          const fromEmail = looksLikeEmail ? displayName! : `${account_id}@unipile.local`;
+          const bridgeName = displayName ?? `Microsoft (${account_id.slice(0, 8)})`;
+
+          // sending_accounts bridge — upsert by unipileAccountId.
+          try {
+            const [existingSend] = await db
+              .select({ id: sendingAccounts.id })
+              .from(sendingAccounts)
+              .where(
+                and(
+                  eq(sendingAccounts.workspaceId, workspaceId),
+                  eq(sendingAccounts.unipileAccountId, account_id),
+                ),
+              )
+              .limit(1);
+            if (existingSend) {
+              await db
+                .update(sendingAccounts)
+                .set({ name: bridgeName, fromEmail })
+                .where(eq(sendingAccounts.id, existingSend.id));
+            } else {
+              await db.insert(sendingAccounts).values({
+                workspaceId,
+                name: bridgeName,
+                provider: "unipile_microsoft",
+                fromEmail,
+                unipileAccountId: account_id,
+              });
+              console.log(
+                `[UnipileWebhook] Bridged sending_accounts row for Unipile ${account_id}`,
+              );
+            }
+          } catch (bridgeErr) {
+            console.error(
+              "[UnipileWebhook] sending_accounts bridge failed:",
+              bridgeErr,
+            );
+          }
+
+          // calendar_accounts bridge — upsert by unipileAccountId.
+          try {
+            const [existingCal] = await db
+              .select({ id: calendarAccounts.id })
+              .from(calendarAccounts)
+              .where(
+                and(
+                  eq(calendarAccounts.workspaceId, workspaceId),
+                  eq(calendarAccounts.unipileAccountId, account_id),
+                ),
+              )
+              .limit(1);
+            if (existingCal) {
+              await db
+                .update(calendarAccounts)
+                .set({ label: bridgeName, email: looksLikeEmail ? displayName! : null })
+                .where(eq(calendarAccounts.id, existingCal.id));
+            } else {
+              await db.insert(calendarAccounts).values({
+                workspaceId,
+                userId,
+                provider: "unipile_microsoft",
+                label: bridgeName,
+                email: looksLikeEmail ? displayName! : null,
+                unipileAccountId: account_id,
+              });
+              console.log(
+                `[UnipileWebhook] Bridged calendar_accounts row for Unipile ${account_id}`,
+              );
+            }
+          } catch (bridgeErr) {
+            console.error(
+              "[UnipileWebhook] calendar_accounts bridge failed:",
+              bridgeErr,
+            );
+          }
         }
       } catch (err) {
         console.error("[UnipileWebhook] Error processing account-webhook:", err);

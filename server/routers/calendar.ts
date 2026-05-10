@@ -40,7 +40,7 @@ export const calendarRouter = router({
       const targetUserId = resolveTargetUser(ctx, input.repUserId);
       const db = await getDb();
       if (!db) return [];
-      return db
+      const rows = await db
         .select({
           id: calendarAccounts.id,
           provider: calendarAccounts.provider,
@@ -50,10 +50,13 @@ export const calendarRouter = router({
           syncEnabled: calendarAccounts.syncEnabled,
           lastSyncAt: calendarAccounts.lastSyncAt,
           lastSyncError: calendarAccounts.lastSyncError,
+          unipileAccountId: calendarAccounts.unipileAccountId,
         })
         .from(calendarAccounts)
         .where(and(eq(calendarAccounts.workspaceId, ctx.workspace.id), eq(calendarAccounts.userId, targetUserId)))
         .orderBy(desc(calendarAccounts.createdAt));
+      // Surface bridged-Unipile flag for UI badges; CalDAV rows have it null.
+      return rows.map((r) => ({ ...r, unipileBridged: !!r.unipileAccountId }));
     }),
 
   /** Connect a CalDAV calendar account (Outlook, Apple, generic) */
