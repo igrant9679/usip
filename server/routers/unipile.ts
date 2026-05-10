@@ -23,7 +23,8 @@ import {
   sendLinkedInInvitation,
   sendMessage,
 } from "../lib/unipile";
-import { protectedProcedure, router } from "../_core/trpc";
+import { router } from "../_core/trpc";
+import { workspaceProcedure } from "../_core/workspace";
 
 // ─── Provider metadata ────────────────────────────────────────────────────────
 
@@ -59,7 +60,7 @@ export const unipileRouter = router({
    * Generate a Hosted Auth Wizard link for the current user.
    * The frontend redirects the user to the returned URL.
    */
-  generateConnectLink: protectedProcedure
+  generateConnectLink: workspaceProcedure
     .input(
       z.object({
         providers: z.array(z.string()).optional(), // defaults to all
@@ -76,7 +77,7 @@ export const unipileRouter = router({
         process.env.VITE_FRONTEND_FORGE_API_URL ||
         ""
       ).replace(/\/$/, "");
-      const notifyUrl = `${appBase}/api/unipile/account-webhook?userId=${ctx.user.id}&workspaceId=${ctx.workspaceId}`;
+      const notifyUrl = `${appBase}/api/unipile/account-webhook?userId=${ctx.user.id}&workspaceId=${ctx.workspace.id}`;
       const successRedirectUrl = `${appBase}/connected-accounts?connected=1`;
       const expiresOn = new Date(Date.now() + 30 * 60 * 1000).toISOString(); // 30 min
 
@@ -95,14 +96,14 @@ export const unipileRouter = router({
   /**
    * List all Unipile accounts connected by the current user.
    */
-  listConnectedAccounts: protectedProcedure.query(async ({ ctx }) => {
+  listConnectedAccounts: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
     const rows = await db
       .select()
       .from(unipileAccounts)
       .where(
         and(
-          eq(unipileAccounts.workspaceId, ctx.workspaceId),
+          eq(unipileAccounts.workspaceId, ctx.workspace.id),
           eq(unipileAccounts.userId, ctx.user.id),
         ),
       )
@@ -113,7 +114,7 @@ export const unipileRouter = router({
   /**
    * Disconnect (delete) a Unipile account.
    */
-  disconnectAccount: protectedProcedure
+  disconnectAccount: workspaceProcedure
     .input(z.object({ unipileAccountId: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
@@ -146,7 +147,7 @@ export const unipileRouter = router({
   /**
    * Get the unified inbox: recent chats across all connected accounts.
    */
-  getInbox: protectedProcedure
+  getInbox: workspaceProcedure
     .input(
       z.object({
         provider: z.string().optional(),
@@ -162,7 +163,7 @@ export const unipileRouter = router({
         .from(unipileAccounts)
         .where(
           and(
-            eq(unipileAccounts.workspaceId, ctx.workspaceId),
+            eq(unipileAccounts.workspaceId, ctx.workspace.id),
             eq(unipileAccounts.userId, ctx.user.id),
           ),
         );
@@ -198,7 +199,7 @@ export const unipileRouter = router({
   /**
    * Get messages for a specific chat.
    */
-  getChatMessages: protectedProcedure
+  getChatMessages: workspaceProcedure
     .input(
       z.object({
         chatId: z.string(),
@@ -217,7 +218,7 @@ export const unipileRouter = router({
   /**
    * Send a message via Unipile (to existing chat or new chat).
    */
-  sendMessage: protectedProcedure
+  sendMessage: workspaceProcedure
     .input(
       z.object({
         chatId: z.string().optional(),
@@ -255,7 +256,7 @@ export const unipileRouter = router({
 
       // Store message record
       await db.insert(unipileMessages).values({
-        workspaceId: ctx.workspaceId,
+        workspaceId: ctx.workspace.id,
         unipileAccountId: input.unipileAccountId,
         provider: account.provider,
         chatId: input.chatId ?? result.id,
@@ -273,7 +274,7 @@ export const unipileRouter = router({
       const relatedType = input.linkedOpportunityId ? "opportunity" : input.linkedLeadId ? "lead" : "contact";
       if (relatedId) {
         await db.insert(activities).values({
-          workspaceId: ctx.workspaceId,
+          workspaceId: ctx.workspace.id,
           type: "email",
           relatedType,
           relatedId,
@@ -289,7 +290,7 @@ export const unipileRouter = router({
   /**
    * Send a LinkedIn connection invitation.
    */
-  sendLinkedInInvite: protectedProcedure
+  sendLinkedInInvite: workspaceProcedure
     .input(
       z.object({
         unipileAccountId: z.string(),
@@ -323,7 +324,7 @@ export const unipileRouter = router({
 
       // Store invite record
       await db.insert(unipileInvites).values({
-        workspaceId: ctx.workspaceId,
+        workspaceId: ctx.workspace.id,
         userId: ctx.user.id,
         unipileAccountId: input.unipileAccountId,
         recipientProviderId: input.recipientProviderId,
@@ -339,7 +340,7 @@ export const unipileRouter = router({
       const invRelatedType = input.linkedLeadId ? "lead" : "contact";
       if (invRelatedId) {
         await db.insert(activities).values({
-          workspaceId: ctx.workspaceId,
+          workspaceId: ctx.workspace.id,
           type: "linkedin",
           relatedType: invRelatedType,
           relatedId: invRelatedId,
@@ -354,7 +355,7 @@ export const unipileRouter = router({
   /**
    * Look up a LinkedIn profile by provider ID.
    */
-  getLinkedInProfile: protectedProcedure
+  getLinkedInProfile: workspaceProcedure
     .input(
       z.object({
         unipileAccountId: z.string(),
@@ -382,7 +383,7 @@ export const unipileRouter = router({
   /**
    * Get stored messages for a contact/lead/opportunity (from DB, not Unipile API).
    */
-  getStoredMessages: protectedProcedure
+  getStoredMessages: workspaceProcedure
     .input(
       z.object({
         linkedContactId: z.number().optional(),
@@ -393,7 +394,7 @@ export const unipileRouter = router({
     )
     .query(async ({ ctx, input }) => {
       const db = await getDb();
-      const conditions = [eq(unipileMessages.workspaceId, ctx.workspaceId)];
+      const conditions = [eq(unipileMessages.workspaceId, ctx.workspace.id)];
       if (input.linkedContactId)
         conditions.push(eq(unipileMessages.linkedContactId, input.linkedContactId));
       if (input.linkedLeadId)
@@ -412,7 +413,7 @@ export const unipileRouter = router({
   /**
    * Get stored LinkedIn invites for a contact/lead.
    */
-  getStoredInvites: protectedProcedure
+  getStoredInvites: workspaceProcedure
     .input(
       z.object({
         linkedContactId: z.number().optional(),
@@ -421,7 +422,7 @@ export const unipileRouter = router({
     )
     .query(async ({ ctx, input }) => {
       const db = await getDb();
-      const conditions = [eq(unipileInvites.workspaceId, ctx.workspaceId)];
+      const conditions = [eq(unipileInvites.workspaceId, ctx.workspace.id)];
       if (input.linkedContactId)
         conditions.push(eq(unipileInvites.linkedContactId, input.linkedContactId));
       if (input.linkedLeadId)
@@ -440,7 +441,7 @@ export const unipileRouter = router({
    * Returns: messages sent (last 30d), connections made (accepted invites),
    * acceptance rate %, and messages-by-provider breakdown.
    */
-  metrics: protectedProcedure.query(async ({ ctx }) => {
+  metrics: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
     const since30d = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
@@ -450,7 +451,7 @@ export const unipileRouter = router({
       .from(unipileMessages)
       .where(
         and(
-          eq(unipileMessages.workspaceId, ctx.workspaceId),
+          eq(unipileMessages.workspaceId, ctx.workspace.id),
           eq(unipileMessages.direction, "outbound"),
           gte(unipileMessages.createdAt, since30d),
         ),
@@ -461,7 +462,7 @@ export const unipileRouter = router({
     const [invTotalRow] = await db
       .select({ total: count() })
       .from(unipileInvites)
-      .where(eq(unipileInvites.workspaceId, ctx.workspaceId));
+      .where(eq(unipileInvites.workspaceId, ctx.workspace.id));
     const invitesTotal = Number(invTotalRow?.total ?? 0);
 
     const [invAcceptedRow] = await db
@@ -469,7 +470,7 @@ export const unipileRouter = router({
       .from(unipileInvites)
       .where(
         and(
-          eq(unipileInvites.workspaceId, ctx.workspaceId),
+          eq(unipileInvites.workspaceId, ctx.workspace.id),
           eq(unipileInvites.status, "accepted"),
         ),
       );
@@ -486,7 +487,7 @@ export const unipileRouter = router({
       .from(unipileMessages)
       .where(
         and(
-          eq(unipileMessages.workspaceId, ctx.workspaceId),
+          eq(unipileMessages.workspaceId, ctx.workspace.id),
           eq(unipileMessages.direction, "outbound"),
           gte(unipileMessages.createdAt, since30d),
         ),
