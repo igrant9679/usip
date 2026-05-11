@@ -22,6 +22,7 @@ import { registerEmailTrackingRoutes } from "../emailTracking";
 import { startInboundReplyPoller } from "../inboundReplyPoller";
 import { expireInvitations, sendExpiryWarningEmails } from "../inviteExpiry";
 import { registerUnipileWebhookRoutes } from "../unipileWebhook";
+import { registerUnsubscribeRoute } from "../unsubscribe";
 import { registerCloduraWebhookRoutes } from "../services/clodura/webhooks";
 import { runCloduraEnrichmentWorker, purgeCloduraCaches } from "../workers/cloduraEnrichmentWorker";
 import { registerPasswordAuthRoutes } from "../passwordAuth";
@@ -63,6 +64,7 @@ async function startServer() {
   registerScimRoutes(app);
   registerEmailTrackingRoutes(app);
   registerUnipileWebhookRoutes(app);
+  registerUnsubscribeRoute(app);
   registerCloduraWebhookRoutes(app);
   registerPasswordAuthRoutes(app);
   registerLLMStreamRoutes(app);

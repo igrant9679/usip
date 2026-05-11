@@ -29,6 +29,79 @@ import {
   users,
 } from "../drizzle/schema";
 import { processInboundReply } from "./inboundReplyPoller";
+import { processBounceEvent } from "./emailTracking";
+
+/**
+ * Detect whether an inbound webhook payload looks like a bounce notification
+ * (a Delivery Status Notification / mailer-daemon reply). When it does,
+ * extract the original recipient and return it so we can route the event
+ * to processBounceEvent.
+ *
+ * Heuristics — all conservative, false negatives preferred over false
+ * positives so we don't accidentally suppress a real reply:
+ *   - sender = mailer-daemon / postmaster / bounce / noreply
+ *   - OR subject begins with the typical DSN phrasings
+ *   - body contains Final-Recipient: or Original-Recipient: with an email
+ */
+function detectBounce(payload: {
+  from_attendee?: { identifier?: string };
+  subject?: string;
+  body_plain?: string;
+  body?: string;
+}): { bouncedEmail: string; bounceType: "hard" | "soft" | "spam"; message: string } | null {
+  const senderId = (payload.from_attendee?.identifier ?? "").toLowerCase();
+  const senderLooksBouncy =
+    /^(mailer-daemon|postmaster|noreply|no-reply|bounce[s]?|delivery)@/.test(senderId);
+
+  const subj = (payload.subject ?? "").toLowerCase();
+  const subjectLooksBouncy =
+    /^(undeliverable|mail delivery (?:failure|failed)|delivery status notification|returned mail|failure notice|delivery failed|undelivered mail returned)/.test(
+      subj,
+    );
+
+  if (!senderLooksBouncy && !subjectLooksBouncy) return null;
+
+  // Pull bodyPlain (preferred) or strip tags from body for regex.
+  const rawBody =
+    (payload.body_plain && payload.body_plain.length > 0
+      ? payload.body_plain
+      : (payload.body ?? "").replace(/<[^>]+>/g, " "));
+
+  // Final-Recipient / Original-Recipient (RFC 3464 DSN format) wins;
+  // fall back to any email address in the first ~2000 chars of the body
+  // that isn't the bounce sender itself.
+  let bouncedEmail: string | null = null;
+  const finalRcptMatch = rawBody.match(
+    /(?:final-recipient|original-recipient)\s*:\s*[^;\n]*;\s*([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})/i,
+  );
+  if (finalRcptMatch) {
+    bouncedEmail = finalRcptMatch[1].toLowerCase();
+  } else {
+    const anyEmail = rawBody.slice(0, 2000).match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g);
+    if (anyEmail) {
+      for (const candidate of anyEmail) {
+        const lower = candidate.toLowerCase();
+        if (lower !== senderId && !lower.endsWith("@unipile.local")) {
+          bouncedEmail = lower;
+          break;
+        }
+      }
+    }
+  }
+  if (!bouncedEmail) return null;
+
+  // Classify hard vs soft. Body usually contains an SMTP code like "5.1.1"
+  // (permanent) or "4.x.x" (temporary). Spam complaints are rare via DSN
+  // — usually arrive via the provider's spam-complaint webhook instead.
+  const status = rawBody.match(/(?:status|smtp code)\s*:?\s*([45]\.\d+\.\d+)/i);
+  const bounceType: "hard" | "soft" =
+    status && status[1].startsWith("4") ? "soft" : "hard";
+
+  // Short message for the bounceMessage column (subject + first 256 chars of body).
+  const message = `${payload.subject ?? "(no subject)"} — ${rawBody.replace(/\s+/g, " ").slice(0, 256)}`;
+
+  return { bouncedEmail, bounceType, message };
+}
 import {
   generateHostedAuthLink,
   getUnipileAccount,
@@ -514,6 +587,46 @@ export function registerUnipileWebhookRoutes(app: Express) {
               `[UnipileMailWebhook] Insert race for email_id=${email_id}:`,
               insertErr,
             );
+          }
+        }
+
+        // ── Bounce detection (mail_received only) ─────────────────────
+        // Run before reply attachment — a DSN looks like a reply at the
+        // envelope level but should be processed as a bounce instead.
+        if (event === "mail_received") {
+          const bounce = detectBounce(payload);
+          if (bounce) {
+            try {
+              await processBounceEvent(db, {
+                email: bounce.bouncedEmail,
+                bounceType: bounce.bounceType,
+                message: bounce.message,
+                timestamp: emailDate ?? new Date(),
+              });
+              console.log(
+                `[UnipileMailWebhook] bounce ${bounce.bounceType} for ${bounce.bouncedEmail} (from=${fromEmail ?? "?"} subj="${(payload.subject ?? "").slice(0, 60)}")`,
+              );
+              // Also pause any active sequence enrollment for that recipient
+              // and mark the contact's email verification status invalid on
+              // hard bounces, so future enrollments skip them.
+              if (bounce.bounceType === "hard") {
+                const { contacts } = await import("../drizzle/schema");
+                await db
+                  .update(contacts)
+                  .set({
+                    emailVerificationStatus: "invalid",
+                    emailVerifiedAt: new Date(),
+                  })
+                  .where(eq(contacts.email, bounce.bouncedEmail));
+              }
+            } catch (bounceErr) {
+              console.error(
+                `[UnipileMailWebhook] processBounceEvent failed for ${bounce.bouncedEmail}:`,
+                bounceErr,
+              );
+            }
+            // Bounce handled — skip the reply-attachment path below.
+            return;
           }
         }
 

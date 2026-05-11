@@ -28,6 +28,25 @@ import { getDb } from "../db";
 import { createEmailAdapter } from "../emailAdapter";
 import { router } from "../_core/trpc";
 import { repProcedure, workspaceProcedure } from "../_core/workspace";
+import { isSuppressed, makeUnsubscribeUrl } from "../unsubscribe";
+
+function getAppBaseUrl(): string {
+  return (
+    process.env.MANUS_APP_URL ||
+    process.env.VITE_FRONTEND_FORGE_API_URL ||
+    "https://getvelocityai.app"
+  ).replace(/\/$/, "");
+}
+
+function unsubscribeFooterHtml(unsubscribeUrl: string): string {
+  return `<p style="margin:32px 0 0;color:#9ca3af;font-size:11px;text-align:center;line-height:1.5">
+    Don't want these emails? <a href="${unsubscribeUrl}" style="color:#9ca3af;text-decoration:underline">Unsubscribe</a>
+  </p>`;
+}
+
+function unsubscribeFooterText(unsubscribeUrl: string): string {
+  return `\n\n—\nUnsubscribe: ${unsubscribeUrl}`;
+}
 
 /** Minimal HTML-escaper for wrapping plain-text bodies into a simple HTML mail. */
 function escapeHtml(s: string): string {
@@ -552,6 +571,17 @@ export const contactsRouter = router({
           });
           continue;
         }
+        // Suppression check — skip silently with a clear reason in the
+        // result array. Recipients on the suppression list (unsubscribed,
+        // bounced, or admin-added) never receive outbound mail.
+        if (await isSuppressed(ctx.workspace.id, contact.email)) {
+          results.push({
+            contactId: contact.id,
+            status: "skipped",
+            reason: "Recipient is on the email suppression list (unsubscribed or bounced)",
+          });
+          continue;
+        }
 
         // Substitute {{merge_fields}} per recipient. Done in plain text
         // BEFORE the HTML wrap, otherwise escapeHtml would corrupt the
@@ -594,7 +624,9 @@ export const contactsRouter = router({
         const sigHtmlBlock = workspaceSignature
           ? `<div style="margin-top:18px;color:#555;line-height:1.4">${workspaceSignature.split("\n").map(escapeHtml).join("<br>")}</div>`
           : "";
-        const fullBodyHtml = bodyHtmlBlock + sigHtmlBlock;
+        const unsubscribeUrl = makeUnsubscribeUrl(getAppBaseUrl(), ctx.workspace.id, contact.email);
+        const fullBodyHtml = bodyHtmlBlock + sigHtmlBlock + unsubscribeFooterHtml(unsubscribeUrl);
+        const fullBodyText = renderedBodyText + unsubscribeFooterText(unsubscribeUrl);
 
         let sentMessageId: string | undefined;
         let deliveryError: string | undefined;
@@ -605,7 +637,7 @@ export const contactsRouter = router({
             to: contact.email,
             subject: renderedSubject,
             bodyHtml: fullBodyHtml,
-            bodyText: renderedBodyText,
+            bodyText: fullBodyText,
             // Sales touch — enable open/click tracking. Webhook events
             // flow back via /api/unipile/email-tracking-webhook and bump
             // openCount / clickCount on the matching emailDrafts row.
@@ -997,6 +1029,16 @@ export const leadsRouter = router({
       if (!lead.email)
         throw new TRPCError({ code: "BAD_REQUEST", message: "Lead has no email address" });
 
+      // Suppression check — refuse to send if lead.email is on the
+      // workspace's suppression list. Surface a clear error rather than
+      // silently dropping (the lead path sends to a single recipient).
+      if (await isSuppressed(ctx.workspace.id, lead.email)) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: `${lead.email} has unsubscribed or is on the suppression list.`,
+        });
+      }
+
       // ── Resolve sending account (same precedence as contacts path) ────
       let fromAccount: typeof sendingAccounts.$inferSelect | undefined;
       if (input.fromAccountId) {
@@ -1094,12 +1136,14 @@ export const leadsRouter = router({
           : renderedBody;
       const bodyHtmlBlock = renderedBody
         .split("\n")
-        .map((line) => `<p style="margin:0 0 8px">${escapeHtml(line)}</p>`)
+        .map((line) => `<p style="margin:0 0 8px">${escapeHtmlWithLinks(line)}</p>`)
         .join("");
       const sigHtmlBlock = workspaceSignature
         ? `<div style="margin-top:18px;color:#555;line-height:1.4">${workspaceSignature.split("\n").map(escapeHtml).join("<br>")}</div>`
         : "";
-      const fullBodyHtml = bodyHtmlBlock + sigHtmlBlock;
+      const unsubscribeUrl = makeUnsubscribeUrl(getAppBaseUrl(), ctx.workspace.id, lead.email);
+      const fullBodyHtml = bodyHtmlBlock + sigHtmlBlock + unsubscribeFooterHtml(unsubscribeUrl);
+      const fullBodyText = renderedBodyText + unsubscribeFooterText(unsubscribeUrl);
 
       let sentMessageId: string | undefined;
       let deliveryError: string | undefined;
@@ -1110,7 +1154,7 @@ export const leadsRouter = router({
           to: lead.email,
           subject: renderedSubject,
           bodyHtml: fullBodyHtml,
-          bodyText: renderedBodyText,
+          bodyText: fullBodyText,
           track: true,
         });
         sentMessageId = sendRes.messageId;

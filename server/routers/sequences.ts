@@ -6,6 +6,28 @@ import { recordAudit } from "../audit";
 import { getDb } from "../db";
 import { createEmailAdapter } from "../emailAdapter";
 import { invokeLLM } from "../_core/llm";
+import { isSuppressed, makeUnsubscribeUrl } from "../unsubscribe";
+
+/** App base URL for outbound footer links. Same env precedence as Unipile webhook URLs. */
+function getAppBaseUrl(): string {
+  return (
+    process.env.MANUS_APP_URL ||
+    process.env.VITE_FRONTEND_FORGE_API_URL ||
+    "https://getvelocityai.app"
+  ).replace(/\/$/, "");
+}
+
+/** Footer block appended to outbound HTML — single unsubscribe link, muted styling. */
+function unsubscribeFooterHtml(unsubscribeUrl: string): string {
+  return `<p style="margin:32px 0 0;color:#9ca3af;font-size:11px;text-align:center;line-height:1.5">
+    Don't want these emails? <a href="${unsubscribeUrl}" style="color:#9ca3af;text-decoration:underline">Unsubscribe</a>
+  </p>`;
+}
+
+/** Footer line appended to outbound plain text. Plain URL is fine — clients auto-link. */
+function unsubscribeFooterText(unsubscribeUrl: string): string {
+  return `\n\n—\nUnsubscribe: ${unsubscribeUrl}`;
+}
 import { router } from "../_core/trpc";
 import { repProcedure, workspaceProcedure } from "../_core/workspace";
 
@@ -640,6 +662,30 @@ export async function deliverEmailDraft(params: {
     });
   }
 
+  // ── Suppression check ────────────────────────────────────────────
+  // Don't send to recipients who unsubscribed, bounced, or were
+  // manually added to email_suppressions. Mark the draft rejected so
+  // it falls out of the pending queue and surfaces the reason in audit.
+  if (await isSuppressed(workspaceId, toEmail)) {
+    await db
+      .update(emailDrafts)
+      .set({ status: "rejected", reviewedByUserId: userId })
+      .where(eq(emailDrafts.id, draft.id));
+    await recordAudit({
+      workspaceId,
+      actorUserId: userId,
+      action: "update",
+      entityType: "email_draft",
+      entityId: draft.id,
+      after: { deliveryStatus: "suppressed", recipient: toEmail, reason: "on email_suppressions list" },
+    });
+    console.log(`[deliverEmailDraft] draft ${draft.id} → suppressed (${toEmail})`);
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: `Recipient ${toEmail} has unsubscribed or is on the suppression list. Draft marked rejected.`,
+    });
+  }
+
   // ── Resolve sending account ──────────────────────────────────────
   let fromAccount: typeof sendingAccounts.$inferSelect | undefined;
   if (draft.sequenceId) {
@@ -728,7 +774,13 @@ export async function deliverEmailDraft(params: {
   const sigHtmlBlock = sig
     ? `<div style="margin-top:18px;color:#555;line-height:1.4">${sig.split("\n").map(escapeHtml).join("<br>")}</div>`
     : "";
-  const fullBodyHtml = bodyHtmlBlock + sigHtmlBlock;
+  // Compliance footer — single tracked unsubscribe link per recipient.
+  // Idempotent token (workspaceId + email + HMAC), so resending the same
+  // draft produces the same URL.
+  const unsubscribeUrl = makeUnsubscribeUrl(getAppBaseUrl(), workspaceId, toEmail);
+  const unsubFooterHtml = unsubscribeFooterHtml(unsubscribeUrl);
+  const fullBodyHtml = bodyHtmlBlock + sigHtmlBlock + unsubFooterHtml;
+  const fullBodyText = renderedBodyText + unsubscribeFooterText(unsubscribeUrl);
 
   // ── Deliver ──────────────────────────────────────────────────────
   let sentMessageId: string | undefined;
@@ -740,7 +792,7 @@ export async function deliverEmailDraft(params: {
       to: toEmail,
       subject: renderedSubject,
       bodyHtml: fullBodyHtml,
-      bodyText: renderedBodyText,
+      bodyText: fullBodyText,
       track: true,
     });
     sentMessageId = sendRes.messageId;
