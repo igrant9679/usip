@@ -43,6 +43,7 @@ import {
   TriangleAlert,
   XCircle, Link2,
   Webhook,
+  CalendarClock,
 } from "lucide-react";
 
 
@@ -239,6 +240,19 @@ export default function ConnectedAccounts() {
       toast.error("Failed to register mail webhook", { description: err.message });
     },
   });
+  const registerCalendarWebhook = trpc.unipile.registerCalendarWebhook.useMutation({
+    onSuccess: (data) => {
+      const idHint = data?.webhookId
+        ? `webhook id ${String(data.webhookId).slice(0, 8)}…`
+        : "registration accepted";
+      toast.success("Calendar webhook registered", {
+        description: `Unipile will push event create/update/delete events to ${data?.requestUrl ?? "your app"} (${idHint}).`,
+      });
+    },
+    onError: (err) => {
+      toast.error("Failed to register calendar webhook", { description: err.message });
+    },
+  });
   const [isReconnectingAll, setIsReconnectingAll] = useState(false);
   const handleReconnectAll = async () => {
     const expired = accounts.filter((a) => EXPIRED_STATUSES.has(a.status));
@@ -328,6 +342,20 @@ export default function ConnectedAccounts() {
               <Webhook className="h-4 w-4 mr-2" />
             )}
             Register mail webhook
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => registerCalendarWebhook.mutate({ origin: window.location.origin })}
+            disabled={registerCalendarWebhook.isPending}
+            title="One-time setup: tell Unipile to push calendar event create/update/delete to this app in real time. Admin-only."
+          >
+            {registerCalendarWebhook.isPending ? (
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            ) : (
+              <CalendarClock className="h-4 w-4 mr-2" />
+            )}
+            Register calendar webhook
           </Button>
           <Button
             size="sm"

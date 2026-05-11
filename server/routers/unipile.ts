@@ -558,4 +558,33 @@ export const unipileRouter = router({
       // client handles that gracefully.
       return { webhookId: result.id, requestUrl, raw: result.raw };
     }),
+
+  /**
+   * One-time admin action: register Unipile's calendar_event webhook so
+   * calendar_event_created / _updated / _deleted events stream into
+   * /api/unipile/calendar-webhook. Same idempotency caveat as mail.
+   */
+  registerCalendarWebhook: adminWsProcedure
+    .input(z.object({ origin: z.string().optional() }).default({}))
+    .mutation(async ({ input }) => {
+      const appBase = (
+        process.env.MANUS_APP_URL ||
+        input.origin ||
+        process.env.VITE_FRONTEND_FORGE_API_URL ||
+        ""
+      ).replace(/\/$/, "");
+      if (!appBase) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message:
+            "MANUS_APP_URL is not set — Unipile needs a reachable webhook URL.",
+        });
+      }
+      const requestUrl = `${appBase}/api/unipile/calendar-webhook`;
+      const result = await registerWebhook({
+        requestUrl,
+        source: "calendar_event",
+      });
+      return { webhookId: result.id, requestUrl, raw: result.raw };
+    }),
 });

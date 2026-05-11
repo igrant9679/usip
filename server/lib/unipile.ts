@@ -252,9 +252,22 @@ export async function getLinkedInProfile(
 
 // ─── Webhooks ─────────────────────────────────────────────────────────────────
 
+/**
+ * Source values accepted by POST /api/v1/webhooks. Verified against
+ * Unipile's OpenAPI spec; older "relation" was renamed to "users".
+ * Email tracking is a separate source from email — different payloads.
+ */
+export type UnipileWebhookSource =
+  | "messaging"
+  | "email"
+  | "email_tracking"
+  | "account_status"
+  | "users"
+  | "calendar_event";
+
 export async function registerWebhook(params: {
   requestUrl: string;
-  source: "messaging" | "email" | "account_status" | "relation";
+  source: UnipileWebhookSource;
   secretKey?: string;
 }): Promise<{ id: string | null; raw: unknown }> {
   const headers: Array<{ key: string; value: string }> = [
@@ -561,6 +574,275 @@ export async function getEmailAttachment(
 export async function listFolders(accountId: string): Promise<UnipileFolderListResponse> {
   const qs = new URLSearchParams({ account_id: accountId });
   return unipileFetch<UnipileFolderListResponse>(`/folders?${qs.toString()}`);
+}
+
+// ─── Calendar API ─────────────────────────────────────────────────────────────
+// Verified against Unipile's OpenAPI spec (fetched 2026-05-10):
+//   GET    /api/v1/calendars
+//   GET    /api/v1/calendars/{calendar_id}
+//   GET    /api/v1/calendars/{calendar_id}/events
+//   POST   /api/v1/calendars/{calendar_id}/events
+//   GET    /api/v1/calendars/{calendar_id}/events/{event_id}
+//   PATCH  /api/v1/calendars/{calendar_id}/events/{event_id}
+//   DELETE /api/v1/calendars/{calendar_id}/events/{event_id}
+//
+// Note: list responses use `data` (NOT `items` like the email API) and
+// `next_cursor` (NOT `cursor`). Don't mix the two.
+
+export interface UnipileCalendar {
+  object?: string;
+  id: string;
+  version?: string;
+  name: string;
+  description?: string;
+  is_read_only?: boolean;
+  is_owned_by_user?: boolean;
+  is_default?: boolean;
+  is_primary?: boolean;
+  access_role?: string;
+  etag?: string;
+  background_color?: string;
+  foreground_color?: string;
+  sync_activated?: boolean;
+  sync_token?: string;
+  timezone?: string;
+}
+
+export interface UnipileCalendarListResponse {
+  data: UnipileCalendar[];
+  next_cursor?: string | null;
+}
+
+/**
+ * Event start/end are an anyOf: timed events use { date_time, time_zone };
+ * all-day events use { date } where date is "YYYY-MM-DD" in the calendar's
+ * timezone (Unipile doesn't include the time zone for all-day events).
+ */
+export type UnipileEventTimestamp =
+  | { date_time: string; time_zone?: string }
+  | { date: string };
+
+export interface UnipileEventAttendee {
+  email: string;
+  display_name?: string;
+  comment?: string;
+  is_organizer?: boolean;
+  is_optional?: boolean;
+  is_resource?: boolean;
+  type?: string;
+  response_status?: string;
+}
+
+export type UnipileConferenceProvider = "google_meet" | "zoom" | "teams" | "unknown";
+
+export interface UnipileEvent {
+  object?: string;
+  id: string;
+  master_event_id?: string;
+  calendar_id?: string;
+  created_at?: string;
+  updated_at?: string;
+  title: string;
+  body?: string;
+  location?: string;
+  is_cancelled?: boolean;
+  is_all_day?: boolean;
+  is_attendees_list_hidden?: boolean;
+  attendees?: UnipileEventAttendee[];
+  start: UnipileEventTimestamp;
+  end: UnipileEventTimestamp;
+  recurrence?: string[];
+  organizer?: { email?: string; display_name?: string };
+  conference?: { provider?: UnipileConferenceProvider; url?: string };
+  visibility?: string;
+  transparency?: string;
+  event_type?: string;
+  guests_can_modify?: boolean;
+}
+
+export interface UnipileEventListResponse {
+  data: UnipileEvent[];
+  next_cursor?: string | null;
+}
+
+/** GET /api/v1/calendars?account_id=... */
+export async function listCalendars(
+  accountId: string,
+  opts: { cursor?: string; limit?: number } = {},
+): Promise<UnipileCalendarListResponse> {
+  const qs = new URLSearchParams({ account_id: accountId });
+  if (opts.cursor) qs.set("cursor", opts.cursor);
+  if (opts.limit) qs.set("limit", String(opts.limit));
+  return unipileFetch<UnipileCalendarListResponse>(`/calendars?${qs.toString()}`);
+}
+
+/** GET /api/v1/calendars/{calendar_id}?account_id=... */
+export async function getCalendar(
+  calendarId: string,
+  accountId: string,
+): Promise<UnipileCalendar> {
+  const qs = new URLSearchParams({ account_id: accountId });
+  return unipileFetch<UnipileCalendar>(
+    `/calendars/${encodeURIComponent(calendarId)}?${qs.toString()}`,
+  );
+}
+
+/**
+ * GET /api/v1/calendars/{calendar_id}/events?account_id=...&start=...&end=...
+ * Both `start` and `end` are ISO datetime strings — anything overlapping the
+ * window comes back. Recurring events are expanded by default unless you
+ * pass expand_recurring=false.
+ */
+export async function listCalendarEvents(params: {
+  accountId: string;
+  calendarId: string;
+  start?: string;
+  end?: string;
+  cursor?: string;
+  limit?: number;
+  expandRecurring?: boolean;
+}): Promise<UnipileEventListResponse> {
+  const qs = new URLSearchParams({ account_id: params.accountId });
+  if (params.start) qs.set("start", params.start);
+  if (params.end) qs.set("end", params.end);
+  if (params.cursor) qs.set("cursor", params.cursor);
+  if (params.limit) qs.set("limit", String(params.limit));
+  if (params.expandRecurring === false) qs.set("expand_recurring", "false");
+  return unipileFetch<UnipileEventListResponse>(
+    `/calendars/${encodeURIComponent(params.calendarId)}/events?${qs.toString()}`,
+  );
+}
+
+/** GET /api/v1/calendars/{calendar_id}/events/{event_id}?account_id=... */
+export async function getCalendarEvent(
+  calendarId: string,
+  eventId: string,
+  accountId: string,
+): Promise<UnipileEvent> {
+  const qs = new URLSearchParams({ account_id: accountId });
+  return unipileFetch<UnipileEvent>(
+    `/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}?${qs.toString()}`,
+  );
+}
+
+/**
+ * POST /api/v1/calendars/{calendar_id}/events?account_id=...
+ * Returns { object: "EventCreated", event_id }.
+ */
+export async function createCalendarEvent(params: {
+  accountId: string;
+  calendarId: string;
+  title: string;
+  body?: string;
+  location?: string;
+  start: UnipileEventTimestamp;
+  end: UnipileEventTimestamp;
+  attendees?: Array<{ email: string }>;
+  conference?: { provider: UnipileConferenceProvider; url?: string };
+  notify?: boolean;
+  guestsCanModify?: boolean;
+  visibility?: string;
+  transparency?: string;
+  recurrence?: string[];
+}): Promise<{ object: string; event_id: string }> {
+  const qs = new URLSearchParams({ account_id: params.accountId });
+  const body: Record<string, unknown> = {
+    title: params.title,
+    start: params.start,
+    end: params.end,
+    attendees: params.attendees ?? [],
+  };
+  if (params.body !== undefined) body.body = params.body;
+  if (params.location !== undefined) body.location = params.location;
+  if (params.conference) body.conference = params.conference;
+  if (params.notify !== undefined) body.notify = params.notify;
+  if (params.guestsCanModify !== undefined) body.guests_can_modify = params.guestsCanModify;
+  if (params.visibility) body.visibility = params.visibility;
+  if (params.transparency) body.transparency = params.transparency;
+  if (params.recurrence) body.recurrence = params.recurrence;
+  return unipileFetch<{ object: string; event_id: string }>(
+    `/calendars/${encodeURIComponent(params.calendarId)}/events?${qs.toString()}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  );
+}
+
+/** PATCH /api/v1/calendars/{calendar_id}/events/{event_id}?account_id=... */
+export async function updateCalendarEvent(params: {
+  accountId: string;
+  calendarId: string;
+  eventId: string;
+  title?: string;
+  body?: string;
+  location?: string;
+  start?: UnipileEventTimestamp;
+  end?: UnipileEventTimestamp;
+  attendees?: Array<{ email: string }>;
+  conference?: { provider: UnipileConferenceProvider; url?: string };
+  notify?: boolean;
+  guestsCanModify?: boolean;
+  visibility?: string;
+  transparency?: string;
+  recurrence?: string[];
+}): Promise<{ object: string }> {
+  const qs = new URLSearchParams({ account_id: params.accountId });
+  const body: Record<string, unknown> = {};
+  if (params.title !== undefined) body.title = params.title;
+  if (params.body !== undefined) body.body = params.body;
+  if (params.location !== undefined) body.location = params.location;
+  if (params.start !== undefined) body.start = params.start;
+  if (params.end !== undefined) body.end = params.end;
+  if (params.attendees !== undefined) body.attendees = params.attendees;
+  if (params.conference) body.conference = params.conference;
+  if (params.notify !== undefined) body.notify = params.notify;
+  if (params.guestsCanModify !== undefined) body.guests_can_modify = params.guestsCanModify;
+  if (params.visibility) body.visibility = params.visibility;
+  if (params.transparency) body.transparency = params.transparency;
+  if (params.recurrence) body.recurrence = params.recurrence;
+  return unipileFetch<{ object: string }>(
+    `/calendars/${encodeURIComponent(params.calendarId)}/events/${encodeURIComponent(params.eventId)}?${qs.toString()}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  );
+}
+
+/**
+ * Push payload from Unipile's "Calendar Events" webhook (source=calendar_event).
+ * Fires for calendar_event_created / calendar_event_updated / calendar_event_deleted.
+ * Created/updated carry the full event body; deleted carries only id + calendar_id.
+ */
+export type CalendarWebhookPayload =
+  | (UnipileEvent & {
+      event: "calendar_event_created" | "calendar_event_updated";
+      webhook_name?: string;
+      account_id: string;
+      color?: string;
+    })
+  | {
+      event: "calendar_event_deleted";
+      webhook_name?: string;
+      account_id: string;
+      id: string;
+      calendar_id: string;
+    };
+
+/** DELETE /api/v1/calendars/{calendar_id}/events/{event_id}?account_id=... */
+export async function deleteCalendarEvent(params: {
+  accountId: string;
+  calendarId: string;
+  eventId: string;
+}): Promise<{ object: string }> {
+  const qs = new URLSearchParams({ account_id: params.accountId });
+  return unipileFetch<{ object: string }>(
+    `/calendars/${encodeURIComponent(params.calendarId)}/events/${encodeURIComponent(params.eventId)}?${qs.toString()}`,
+    { method: "DELETE" },
+  );
 }
 
 // ─── Multipart helper (POST /emails uses form-data, not JSON) ────────────────

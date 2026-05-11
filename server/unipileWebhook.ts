@@ -29,6 +29,7 @@ import {
 import {
   generateHostedAuthLink,
   getUnipileAccount,
+  type CalendarWebhookPayload,
   type MailWebhookPayload,
 } from "./lib/unipile";
 
@@ -512,6 +513,71 @@ export function registerUnipileWebhookRoutes(app: Express) {
         }
       } catch (err) {
         console.error("[UnipileMailWebhook] Error processing mail-webhook:", err);
+      }
+    },
+  );
+
+  // ─── 4. Calendar events webhook ───────────────────────────────────────────
+  /**
+   * POST /api/unipile/calendar-webhook
+   *
+   * Registered against Unipile as a source=calendar_event webhook. Fires
+   * on calendar_event_created / calendar_event_updated / calendar_event_deleted.
+   *
+   * For now the handler just logs — calendar reads come live from
+   * /api/v1/calendars/{id}/events via UnipileCalendarAdapter, so there's no
+   * cache fallback to maintain. We resolve the account_id to a local
+   * unipile_accounts row to confirm ownership before logging, then bail
+   * if it's not ours.
+   *
+   * If we ever see the same indexing failure mode here that we saw on the
+   * email API, we can layer a unipile_events_cache table on this handler
+   * the same way Track 2 layered unipile_emails_cache on mail-webhook.
+   */
+  app.post(
+    "/api/unipile/calendar-webhook",
+    async (req: Request, res: Response) => {
+      res.status(200).json({ ok: true });
+
+      try {
+        const payload = req.body as CalendarWebhookPayload;
+        if (!payload?.event || !payload?.account_id) {
+          console.warn(
+            "[UnipileCalendarWebhook] Missing required fields:",
+            JSON.stringify(payload).slice(0, 300),
+          );
+          return;
+        }
+
+        const db = await getDb();
+        const [acct] = await db
+          .select({
+            id: unipileAccounts.id,
+            workspaceId: unipileAccounts.workspaceId,
+          })
+          .from(unipileAccounts)
+          .where(eq(unipileAccounts.unipileAccountId, payload.account_id))
+          .limit(1);
+
+        if (!acct) {
+          console.warn(
+            `[UnipileCalendarWebhook] No local unipile_accounts row for account_id=${payload.account_id} (event=${payload.event})`,
+          );
+          return;
+        }
+
+        if (payload.event === "calendar_event_deleted") {
+          console.log(
+            `[UnipileCalendarWebhook] ${payload.event} cal=${payload.calendar_id} event=${payload.id} (workspace=${acct.workspaceId})`,
+          );
+        } else {
+          const titleSnippet = (payload.title ?? "").slice(0, 60);
+          console.log(
+            `[UnipileCalendarWebhook] ${payload.event} cal=${payload.calendar_id ?? "?"} event=${payload.id} title="${titleSnippet}" (workspace=${acct.workspaceId})`,
+          );
+        }
+      } catch (err) {
+        console.error("[UnipileCalendarWebhook] Error processing calendar-webhook:", err);
       }
     },
   );
