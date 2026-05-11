@@ -99,6 +99,8 @@ function unipileEventToResult(ev: UnipileEvent): CalendarEventResult {
 export class UnipileCalendarAdapter implements CalendarAdapter {
   private account: CalendarAccount;
   protected readonly unipileAccountId: string;
+  /** Cached primary-calendar id so we don't re-list on every call. */
+  private primaryCalendarIdCache: string | null = null;
 
   constructor(account: CalendarAccount) {
     this.account = account;
@@ -112,6 +114,35 @@ export class UnipileCalendarAdapter implements CalendarAdapter {
 
   protected getAccount(): CalendarAccount {
     return this.account;
+  }
+
+  /**
+   * Translate the legacy `"primary"` alias (a Google Calendar convention
+   * the rest of the app uses) into a real Unipile calendar id. Unipile
+   * 404s on the literal string `"primary"`; we pick the calendar marked
+   * is_primary, then is_default, then the first one returned.
+   *
+   * Cached on the instance so we don't hit /calendars before every read.
+   */
+  private async resolveCalendarId(calendarId: string): Promise<string> {
+    if (calendarId !== "primary") return calendarId;
+    if (this.primaryCalendarIdCache) return this.primaryCalendarIdCache;
+    const res = await listCalendars(this.unipileAccountId);
+    const cals = res.data ?? [];
+    const picked =
+      cals.find((c) => c.is_primary) ??
+      cals.find((c) => c.is_default) ??
+      cals[0];
+    if (!picked) {
+      throw new Error(
+        `No calendars returned for Unipile account ${this.unipileAccountId} — cannot resolve "primary"`,
+      );
+    }
+    this.primaryCalendarIdCache = picked.id;
+    console.log(
+      `[UnipileCalendarAdapter] resolved "primary" → ${picked.id} (${picked.name})`,
+    );
+    return picked.id;
   }
 
   /** GET /calendars — every calendar the connected user can see. */
@@ -138,12 +169,13 @@ export class UnipileCalendarAdapter implements CalendarAdapter {
     from: Date,
     to: Date,
   ): Promise<CalendarEventResult[]> {
+    const realId = await this.resolveCalendarId(calendarId);
     console.log(
-      `[UnipileCalendarAdapter] listEvents account=${this.unipileAccountId} cal=${calendarId} ${from.toISOString()}..${to.toISOString()}`,
+      `[UnipileCalendarAdapter] listEvents account=${this.unipileAccountId} cal=${realId}${calendarId !== realId ? ` (alias=${calendarId})` : ""} ${from.toISOString()}..${to.toISOString()}`,
     );
     const res = await listCalendarEvents({
       accountId: this.unipileAccountId,
-      calendarId,
+      calendarId: realId,
       start: from.toISOString(),
       end: to.toISOString(),
       limit: 250,
@@ -156,6 +188,7 @@ export class UnipileCalendarAdapter implements CalendarAdapter {
     calendarId: string,
     event: CalendarEventInput,
   ): Promise<CalendarEventResult> {
+    const realId = await this.resolveCalendarId(calendarId);
     const allDay = event.allDay ?? false;
     const conference = event.meetingUrl
       ? {
@@ -166,7 +199,7 @@ export class UnipileCalendarAdapter implements CalendarAdapter {
 
     const res = await createCalendarEvent({
       accountId: this.unipileAccountId,
-      calendarId,
+      calendarId: realId,
       title: event.title,
       body: event.description,
       location: event.location,
@@ -203,6 +236,7 @@ export class UnipileCalendarAdapter implements CalendarAdapter {
     externalId: string,
     event: Partial<CalendarEventInput>,
   ): Promise<CalendarEventResult> {
+    const realId = await this.resolveCalendarId(calendarId);
     const allDay = event.allDay ?? false;
     const conference = event.meetingUrl
       ? {
@@ -213,7 +247,7 @@ export class UnipileCalendarAdapter implements CalendarAdapter {
 
     await updateCalendarEvent({
       accountId: this.unipileAccountId,
-      calendarId,
+      calendarId: realId,
       eventId: externalId,
       title: event.title,
       body: event.description,
@@ -242,9 +276,10 @@ export class UnipileCalendarAdapter implements CalendarAdapter {
 
   /** DELETE /calendars/{id}/events/{event_id} */
   async deleteEvent(calendarId: string, externalId: string): Promise<void> {
+    const realId = await this.resolveCalendarId(calendarId);
     await deleteCalendarEvent({
       accountId: this.unipileAccountId,
-      calendarId,
+      calendarId: realId,
       eventId: externalId,
     });
   }
