@@ -31,6 +31,8 @@ export const users = mysqlTable("users", {
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),
   passwordHash: text("passwordHash"),
+  /** Per-user override for outbound email signature. Overrides workspaceSettings.emailSignature when set. */
+  emailSignature: text("emailSignature"),
 });
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;

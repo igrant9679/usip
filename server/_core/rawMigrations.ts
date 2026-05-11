@@ -513,6 +513,17 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0060: Per-user email signature override ───────────────────────────────
+  // Adds users.emailSignature so each rep can override the workspace
+  // default (workspaceSettings.emailSignature). Send path prefers the
+  // user value when present, otherwise falls back to the workspace value.
+  {
+    name: "0060_user_email_signature.sql",
+    statements: [
+      `ALTER TABLE \`users\` ADD COLUMN \`emailSignature\` text`,
+    ],
+  },
+
   // ── 0058: Unipile email webhook cache ────────────────────────────────────
   // Local write-through cache populated by POST /api/unipile/mail-webhook.
   // Used by UnipileMailAdapter as a fallback when /emails returns items=0,

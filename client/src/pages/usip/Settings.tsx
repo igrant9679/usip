@@ -7,7 +7,7 @@ import { Section, StatusPill, fmt$ } from "@/components/usip/Common";
 import { PageHeader, Shell, StatCard } from "@/components/usip/Shell";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { trpc } from "@/lib/trpc";
-import { AlertTriangle, Bell, Building2, CheckCircle2, CreditCard, Download, ExternalLink, Loader2, Mail, Palette, Plug, ShieldCheck, TestTube2, Trash2, XCircle, Zap, Settings as SettingsIcon } from "lucide-react";
+import { AlertTriangle, Bell, Building2, CheckCircle2, CreditCard, Download, ExternalLink, Loader2, Mail, Palette, Plug, ShieldCheck, TestTube2, Trash2, User, XCircle, Zap, Settings as SettingsIcon } from "lucide-react";
 import { useReduceMotion } from "@/components/PageTransition";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -16,6 +16,7 @@ type NotifyPolicy = Record<string, { inApp: boolean; email: boolean }>;
 
 const TABS = [
   { id: "general", label: "General", icon: Building2 },
+  { id: "my-profile", label: "My Profile", icon: User },
   { id: "branding", label: "Branding", icon: Palette },
   { id: "security", label: "Security", icon: ShieldCheck },
   { id: "notifications", label: "Notifications", icon: Bell },
@@ -116,6 +117,7 @@ export default function Settings() {
           </Section>
 
           {tab === "general" && <GeneralTab settings={settings.data} save={save.mutate} canEdit={isAdmin} summary={summary.data} />}
+          {tab === "my-profile" && <MyProfileTab workspaceSignature={settings.data?.emailSignature ?? ""} />}
           {tab === "branding" && <BrandingTab settings={settings.data} save={save.mutate} canEdit={isAdmin} />}
           {tab === "security" && <SecurityTab settings={settings.data} save={save.mutate} canEdit={isAdmin} />}
           {tab === "notifications" && <NotificationsTab settings={settings.data} save={save.mutate} canEdit={isAdmin} />}
@@ -365,6 +367,76 @@ function GeneralTab({
         <StatCard label="Customers" value={summary?.customers ?? 0} />
       </div>
     </>
+  );
+}
+
+/**
+ * My Profile tab — per-user settings. Currently just the signature
+ * override; if blank, the workspace default (Branding → Default signature)
+ * is used on outbound mail.
+ */
+function MyProfileTab({ workspaceSignature }: { workspaceSignature: string }) {
+  const utils = trpc.useUtils();
+  const q = trpc.profile.getMySignature.useQuery();
+  const [sig, setSig] = useState<string>("");
+  useEffect(() => {
+    if (q.data) setSig(q.data.emailSignature ?? "");
+  }, [q.data]);
+  const save = trpc.profile.updateMySignature.useMutation({
+    onSuccess: () => {
+      utils.profile.getMySignature.invalidate();
+      toast.success("Signature saved");
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const hasOverride = sig.trim().length > 0;
+  return (
+    <Section
+      title="My email signature"
+      description="Overrides the workspace default for emails you send. Leave blank to use the workspace default."
+      right={
+        <Button
+          size="sm"
+          onClick={() => save.mutate({ emailSignature: sig })}
+          disabled={save.isPending}
+        >
+          {save.isPending ? <Loader2 className="size-3 mr-1 animate-spin" /> : null}
+          Save
+        </Button>
+      }
+    >
+      <div className="p-4 space-y-3">
+        <div className="space-y-1">
+          <Label>Your signature</Label>
+          <textarea
+            className="w-full min-h-32 rounded-md border bg-transparent px-3 py-2 text-sm font-mono"
+            value={sig}
+            onChange={(e) => setSig(e.target.value)}
+            placeholder={
+              workspaceSignature ||
+              "Best,\nYour Name\nYour Title, Your Company"
+            }
+          />
+          <p className="text-xs text-muted-foreground">
+            {hasOverride
+              ? "Outbound mail will use this signature."
+              : workspaceSignature
+                ? "Currently using the workspace default (shown as placeholder)."
+                : "No workspace default configured. Set one in Branding, or add yours here."}
+          </p>
+        </div>
+        {workspaceSignature ? (
+          <div className="rounded-md border bg-muted/40 p-3">
+            <div className="text-xs font-medium text-muted-foreground mb-1">
+              Workspace default
+            </div>
+            <pre className="text-xs whitespace-pre-wrap font-sans">
+              {workspaceSignature}
+            </pre>
+          </div>
+        ) : null}
+      </div>
+    </Section>
   );
 }
 

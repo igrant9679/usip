@@ -425,25 +425,34 @@ export const contactsRouter = router({
           ),
         );
 
-      // Sender identity for {{senderName}} / {{senderEmail}}.
+      // Sender identity for {{senderName}} / {{senderEmail}} + per-user
+      // signature override.
       const [senderRow] = await db
-        .select({ name: users.name, email: users.email })
+        .select({
+          name: users.name,
+          email: users.email,
+          emailSignature: users.emailSignature,
+        })
         .from(users)
         .where(eq(users.id, ctx.user.id))
         .limit(1);
       const senderName = senderRow?.name ?? fromAccount.fromName ?? fromAccount.name ?? "";
       const senderEmail = senderRow?.email ?? fromAccount.fromEmail ?? "";
 
-      // Workspace-level default signature (editable in Settings → Default
-      // signature). Substituted into {{signature}} tokens; if the body
-      // doesn't include the token, we auto-append it so the default always
-      // shows up. Empty/null = no signature appended.
+      // Signature resolution: prefer the sender's per-user override
+      // (users.emailSignature) over the workspace default
+      // (workspace_settings.emailSignature). Empty/null on both = no
+      // signature appended.
       const [wsSettings] = await db
         .select({ emailSignature: workspaceSettings.emailSignature })
         .from(workspaceSettings)
         .where(eq(workspaceSettings.workspaceId, ctx.workspace.id))
         .limit(1);
-      const workspaceSignature = (wsSettings?.emailSignature ?? "").trim();
+      const userSignature = senderRow?.emailSignature?.trim() ?? "";
+      const workspaceSignature =
+        userSignature.length > 0
+          ? userSignature
+          : (wsSettings?.emailSignature ?? "").trim();
       const bodyMentionsSignatureToken = /\{\{\s*signature\s*\}\}/i.test(input.body);
 
       const results: {

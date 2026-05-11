@@ -19,15 +19,17 @@ import { router } from "../_core/trpc";
 import { workspaceProcedure, managerProcedure, roleRank } from "../_core/workspace";
 import { TRPCError } from "@trpc/server";
 import { getDb } from "../db";
-import { sendingAccounts, unipileAccounts, workspaceSettings } from "../../drizzle/schema";
+import { sendingAccounts, unipileAccounts, users, workspaceSettings } from "../../drizzle/schema";
 import { eq, and, isNotNull } from "drizzle-orm";
 import { createEmailAdapter } from "../emailAdapter";
 import { invokeLLM } from "../_core/llm";
 
 /**
- * Append the workspace's default signature to outbound HTML / text if it
- * isn't already present in the body. Skips silently if no signature is
- * configured.
+ * Append the rep's email signature to outbound HTML / text if it isn't
+ * already present in the body. Prefers the per-user override
+ * (users.emailSignature) over the workspace default
+ * (workspace_settings.emailSignature). Skips silently if no signature is
+ * configured at either level.
  *
  * HTML rendering uses <br> between lines (not per-line <p>) so Outlook
  * doesn't add paragraph-spacing between each line of the signature —
@@ -36,17 +38,27 @@ import { invokeLLM } from "../_core/llm";
  */
 async function appendSignature(
   workspaceId: number,
+  userId: number,
   bodyHtml: string,
   bodyText: string | undefined,
 ): Promise<{ bodyHtml: string; bodyText: string | undefined }> {
   const db = await getDb();
   if (!db) return { bodyHtml, bodyText };
-  const [ws] = await db
-    .select({ emailSignature: workspaceSettings.emailSignature })
-    .from(workspaceSettings)
-    .where(eq(workspaceSettings.workspaceId, workspaceId))
+  const [userRow] = await db
+    .select({ emailSignature: users.emailSignature })
+    .from(users)
+    .where(eq(users.id, userId))
     .limit(1);
-  const sig = (ws?.emailSignature ?? "").trim();
+  const userSig = (userRow?.emailSignature ?? "").trim();
+  let sig = userSig;
+  if (!sig) {
+    const [ws] = await db
+      .select({ emailSignature: workspaceSettings.emailSignature })
+      .from(workspaceSettings)
+      .where(eq(workspaceSettings.workspaceId, workspaceId))
+      .limit(1);
+    sig = (ws?.emailSignature ?? "").trim();
+  }
   if (!sig) return { bodyHtml, bodyText };
   // Already present (rough check — the user pasted it manually, or a
   // template already contains it). Don't double-append.
@@ -198,7 +210,7 @@ export const mailboxRouter = router({
     .mutation(async ({ ctx, input }) => {
       const acc = await getAccount(input.accountId, ctx.workspace.id);
       const adapter = createEmailAdapter(acc);
-      const withSig = await appendSignature(ctx.workspace.id, input.bodyHtml, input.bodyText);
+      const withSig = await appendSignature(ctx.workspace.id, ctx.user.id, input.bodyHtml, input.bodyText);
       return adapter.sendEmail({
         fromEmail: acc.fromEmail,
         fromName: acc.fromName ?? acc.name,
@@ -233,7 +245,7 @@ export const mailboxRouter = router({
     .mutation(async ({ ctx, input }) => {
       const acc = await getAccount(input.accountId, ctx.workspace.id);
       const adapter = createEmailAdapter(acc);
-      const withSig = await appendSignature(ctx.workspace.id, input.bodyHtml, input.bodyText);
+      const withSig = await appendSignature(ctx.workspace.id, ctx.user.id, input.bodyHtml, input.bodyText);
       return adapter.sendEmail({
         fromEmail: acc.fromEmail,
         fromName: acc.fromName ?? acc.name,
