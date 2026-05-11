@@ -434,6 +434,18 @@ export const contactsRouter = router({
       const senderName = senderRow?.name ?? fromAccount.fromName ?? fromAccount.name ?? "";
       const senderEmail = senderRow?.email ?? fromAccount.fromEmail ?? "";
 
+      // Workspace-level default signature (editable in Settings → Default
+      // signature). Substituted into {{signature}} tokens; if the body
+      // doesn't include the token, we auto-append it so the default always
+      // shows up. Empty/null = no signature appended.
+      const [wsSettings] = await db
+        .select({ emailSignature: workspaceSettings.emailSignature })
+        .from(workspaceSettings)
+        .where(eq(workspaceSettings.workspaceId, ctx.workspace.id))
+        .limit(1);
+      const workspaceSignature = (wsSettings?.emailSignature ?? "").trim();
+      const bodyMentionsSignatureToken = /\{\{\s*signature\s*\}\}/i.test(input.body);
+
       const results: {
         contactId: number;
         status: "sent" | "skipped" | "failed";
@@ -465,9 +477,18 @@ export const contactsRouter = router({
           accountName: contact.accountName ?? "",
           senderName,
           senderEmail,
+          signature: workspaceSignature,
         };
         const renderedSubject = renderMergeFields(input.subject, mergeVars);
-        const renderedBody = renderMergeFields(input.body, mergeVars);
+        let renderedBody = renderMergeFields(input.body, mergeVars);
+
+        // If the body didn't explicitly include {{signature}} but the
+        // workspace has one configured, auto-append it. This way the
+        // "Default signature" setting actually shows up on outbound mail
+        // even when the AI prompt didn't think to include the token.
+        if (!bodyMentionsSignatureToken && workspaceSignature) {
+          renderedBody = `${renderedBody.replace(/\s+$/, "")}\n\n${workspaceSignature}`;
+        }
 
         let sentMessageId: string | undefined;
         let deliveryError: string | undefined;

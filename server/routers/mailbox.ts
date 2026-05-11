@@ -19,10 +19,45 @@ import { router } from "../_core/trpc";
 import { workspaceProcedure, managerProcedure, roleRank } from "../_core/workspace";
 import { TRPCError } from "@trpc/server";
 import { getDb } from "../db";
-import { sendingAccounts, unipileAccounts } from "../../drizzle/schema";
+import { sendingAccounts, unipileAccounts, workspaceSettings } from "../../drizzle/schema";
 import { eq, and, isNotNull } from "drizzle-orm";
 import { createEmailAdapter } from "../emailAdapter";
 import { invokeLLM } from "../_core/llm";
+
+/**
+ * Append the workspace's default signature to outbound HTML / text if it
+ * isn't already present in the body. Skips silently if no signature is
+ * configured. The HTML version wraps the plain-text signature in
+ * <p> tags + line breaks so Outlook clients render it correctly.
+ */
+async function appendSignature(
+  workspaceId: number,
+  bodyHtml: string,
+  bodyText: string | undefined,
+): Promise<{ bodyHtml: string; bodyText: string | undefined }> {
+  const db = await getDb();
+  if (!db) return { bodyHtml, bodyText };
+  const [ws] = await db
+    .select({ emailSignature: workspaceSettings.emailSignature })
+    .from(workspaceSettings)
+    .where(eq(workspaceSettings.workspaceId, workspaceId))
+    .limit(1);
+  const sig = (ws?.emailSignature ?? "").trim();
+  if (!sig) return { bodyHtml, bodyText };
+  // Already present (rough check — the user pasted it manually, or a
+  // template already contains it). Don't double-append.
+  if (bodyHtml.includes(sig) || (bodyText && bodyText.includes(sig))) {
+    return { bodyHtml, bodyText };
+  }
+  const sigHtml = sig
+    .split("\n")
+    .map((line) => `<p style="margin:0">${line.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</p>`)
+    .join("");
+  return {
+    bodyHtml: `${bodyHtml}<br><div style="margin-top:16px;color:#555">${sigHtml}</div>`,
+    bodyText: bodyText ? `${bodyText}\n\n${sig}` : undefined,
+  };
+}
 
 /** Resolve which userId to operate as (managers can view rep inboxes) */
 function resolveTargetUser(
@@ -160,13 +195,14 @@ export const mailboxRouter = router({
     .mutation(async ({ ctx, input }) => {
       const acc = await getAccount(input.accountId, ctx.workspace.id);
       const adapter = createEmailAdapter(acc);
+      const withSig = await appendSignature(ctx.workspace.id, input.bodyHtml, input.bodyText);
       return adapter.sendEmail({
         fromEmail: acc.fromEmail,
         fromName: acc.fromName ?? acc.name,
         to: input.to,
         subject: input.subject,
-        bodyHtml: input.bodyHtml,
-        bodyText: input.bodyText,
+        bodyHtml: withSig.bodyHtml,
+        bodyText: withSig.bodyText,
         cc: input.cc,
         bcc: input.bcc,
         attachments: input.attachments,
@@ -194,13 +230,14 @@ export const mailboxRouter = router({
     .mutation(async ({ ctx, input }) => {
       const acc = await getAccount(input.accountId, ctx.workspace.id);
       const adapter = createEmailAdapter(acc);
+      const withSig = await appendSignature(ctx.workspace.id, input.bodyHtml, input.bodyText);
       return adapter.sendEmail({
         fromEmail: acc.fromEmail,
         fromName: acc.fromName ?? acc.name,
         to: input.to,
         subject: input.subject,
-        bodyHtml: input.bodyHtml,
-        bodyText: input.bodyText,
+        bodyHtml: withSig.bodyHtml,
+        bodyText: withSig.bodyText,
         cc: input.cc,
         inReplyTo: input.inReplyTo,
         references: input.references,
