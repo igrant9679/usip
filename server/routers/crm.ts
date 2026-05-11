@@ -39,6 +39,31 @@ function escapeHtml(s: string): string {
     .replace(/'/g, "&#39;");
 }
 
+/**
+ * Replace `{{merge_field}}` tokens with per-recipient values.
+ *
+ * Token matching is case-insensitive and tolerant of common variants
+ * (firstName / first_name / FirstName all map to the same value).
+ * Unknown tokens are left as-is rather than blanking out — that way a
+ * user typo is visible instead of silently producing weird output.
+ *
+ * Operates on the raw string, so call this BEFORE HTML-wrapping the body.
+ */
+function renderMergeFields(template: string, vars: Record<string, string | null | undefined>): string {
+  if (!template) return template;
+  // Normalize lookup keys to lowercase + strip underscores for forgiving matches.
+  const norm = (s: string) => s.toLowerCase().replace(/[_\s]/g, "");
+  const lookup = new Map<string, string>();
+  for (const [k, v] of Object.entries(vars)) {
+    if (v == null) continue;
+    lookup.set(norm(k), v);
+  }
+  return template.replace(/\{\{\s*([a-zA-Z0-9_\s]+?)\s*\}\}/g, (match, name: string) => {
+    const hit = lookup.get(norm(name));
+    return hit ?? match;
+  });
+}
+
 /* ──────────────────────────────────────────────────────────────────────── */
 
 export const accountsRouter = router({
@@ -381,21 +406,33 @@ export const contactsRouter = router({
 
       const adapter = createEmailAdapter(fromAccount);
 
-      // ── 2. Fetch target contacts ──────────────────────────────────────
+      // ── 2. Fetch target contacts (with linked account name for merge fields)
       const rows = await db
         .select({
           id: contacts.id,
           email: contacts.email,
           firstName: contacts.firstName,
           lastName: contacts.lastName,
+          title: contacts.title,
+          accountName: accounts.name,
         })
         .from(contacts)
+        .leftJoin(accounts, eq(accounts.id, contacts.accountId))
         .where(
           and(
             eq(contacts.workspaceId, ctx.workspace.id),
             inArray(contacts.id, input.contactIds),
           ),
         );
+
+      // Sender identity for {{senderName}} / {{senderEmail}}.
+      const [senderRow] = await db
+        .select({ name: users.name, email: users.email })
+        .from(users)
+        .where(eq(users.id, ctx.user.id))
+        .limit(1);
+      const senderName = senderRow?.name ?? fromAccount.fromName ?? fromAccount.name ?? "";
+      const senderEmail = senderRow?.email ?? fromAccount.fromEmail ?? "";
 
       const results: {
         contactId: number;
@@ -415,6 +452,23 @@ export const contactsRouter = router({
           continue;
         }
 
+        // Substitute {{merge_fields}} per recipient. Done in plain text
+        // BEFORE the HTML wrap, otherwise escapeHtml would corrupt the
+        // token delimiters and the regex would no longer match.
+        const mergeVars: Record<string, string> = {
+          firstName: contact.firstName ?? "",
+          lastName: contact.lastName ?? "",
+          fullName: [contact.firstName, contact.lastName].filter(Boolean).join(" "),
+          email: contact.email ?? "",
+          title: contact.title ?? "",
+          company: contact.accountName ?? "",
+          accountName: contact.accountName ?? "",
+          senderName,
+          senderEmail,
+        };
+        const renderedSubject = renderMergeFields(input.subject, mergeVars);
+        const renderedBody = renderMergeFields(input.body, mergeVars);
+
         let sentMessageId: string | undefined;
         let deliveryError: string | undefined;
         try {
@@ -422,15 +476,15 @@ export const contactsRouter = router({
             fromEmail: fromAccount.fromEmail,
             fromName: fromAccount.fromName ?? fromAccount.name,
             to: contact.email,
-            subject: input.subject,
+            subject: renderedSubject,
             // emailDrafts.body is plain text in practice; render it as both
             // text and a minimal HTML wrapper so Outlook clients render
             // line breaks correctly.
-            bodyHtml: input.body
+            bodyHtml: renderedBody
               .split("\n")
               .map((line) => `<p style="margin:0 0 8px">${escapeHtml(line)}</p>`)
               .join(""),
-            bodyText: input.body,
+            bodyText: renderedBody,
           });
           sentMessageId = sendRes.messageId;
         } catch (err) {
@@ -441,15 +495,17 @@ export const contactsRouter = router({
         }
 
         // Only create the emailDraft + activity rows on successful delivery.
-        // emailDrafts.status doesn't have a "failed" enum value yet (will be
-        // added in migration 0059); for now, failures surface only in the
-        // API response and audit log so the user can retry.
+        // Persist the RENDERED subject/body (not the template with raw
+        // {{tokens}}), so the contact timeline reflects what was actually
+        // sent. emailDrafts.status doesn't have a "failed" enum value yet
+        // (future migration); for now, failures surface only in the API
+        // response + audit log so the user can retry.
         if (sentMessageId) {
           await db.insert(emailDrafts).values({
             workspaceId: ctx.workspace.id,
             toContactId: contact.id,
-            subject: input.subject,
-            body: input.body,
+            subject: renderedSubject,
+            body: renderedBody,
             status: "sent",
             aiGenerated: input.aiGenerated,
             createdByUserId: ctx.user.id,
@@ -460,8 +516,8 @@ export const contactsRouter = router({
             type: "email",
             relatedType: "contact",
             relatedId: contact.id,
-            subject: input.subject,
-            body: input.body,
+            subject: renderedSubject,
+            body: renderedBody,
             actorUserId: ctx.user.id,
             occurredAt: new Date(),
           });
