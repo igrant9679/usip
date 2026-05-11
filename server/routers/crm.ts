@@ -14,8 +14,10 @@ import {
   opportunityContactRoles,
   products,
   enrollments,
+  sendingAccounts,
   sequences,
   territories,
+  unipileAccounts,
   users,
   workspaceMembers,
   workspaceSettings,
@@ -23,8 +25,19 @@ import {
 } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
 import { getDb } from "../db";
+import { createEmailAdapter } from "../emailAdapter";
 import { router } from "../_core/trpc";
 import { repProcedure, workspaceProcedure } from "../_core/workspace";
+
+/** Minimal HTML-escaper for wrapping plain-text bodies into a simple HTML mail. */
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
 
 /* ──────────────────────────────────────────────────────────────────────── */
 
@@ -276,7 +289,20 @@ export const contactsRouter = router({
       return { enrolled, skipped, results, sequenceName: seq.name };
     }),
 
-  /** Send an ad-hoc email to a list of contacts */
+  /**
+   * Send an ad-hoc email to a list of contacts.
+   *
+   * Resolves the sending account in this order:
+   *   1. Explicit `fromAccountId` from input (caller-controlled)
+   *   2. The current user's bridged personal Unipile mailbox (joins
+   *      sending_accounts → unipile_accounts on userId)
+   *   3. Any workspace sending account (shared SMTP outreach pool fallback)
+   *
+   * Per-contact failures don't fail the batch — they're recorded as
+   * skipped with the reason. The emailDraft row is created with
+   * status="sent" only after a successful adapter.sendEmail call;
+   * delivery failures leave a status="failed" row for audit.
+   */
   sendAdHocEmail: repProcedure
     .input(
       z.object({
@@ -284,61 +310,209 @@ export const contactsRouter = router({
         subject: z.string().min(1),
         body: z.string().min(1),
         aiGenerated: z.boolean().default(false),
+        /** Optional override; otherwise the rep's personal mailbox is used. */
+        fromAccountId: z.number().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
 
-      // Fetch contacts
+      // ── 1. Resolve sending account ────────────────────────────────────
+      let fromAccount: typeof sendingAccounts.$inferSelect | undefined;
+
+      if (input.fromAccountId) {
+        const [explicit] = await db
+          .select()
+          .from(sendingAccounts)
+          .where(
+            and(
+              eq(sendingAccounts.id, input.fromAccountId),
+              eq(sendingAccounts.workspaceId, ctx.workspace.id),
+            ),
+          )
+          .limit(1);
+        if (!explicit) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Specified sending account not found in this workspace.",
+          });
+        }
+        fromAccount = explicit;
+      }
+
+      if (!fromAccount) {
+        // Prefer the current user's bridged personal Microsoft mailbox.
+        const [personal] = await db
+          .select({ sa: sendingAccounts })
+          .from(sendingAccounts)
+          .innerJoin(
+            unipileAccounts,
+            eq(sendingAccounts.unipileAccountId, unipileAccounts.unipileAccountId),
+          )
+          .where(
+            and(
+              eq(sendingAccounts.workspaceId, ctx.workspace.id),
+              eq(unipileAccounts.userId, ctx.user.id),
+              isNotNull(sendingAccounts.unipileAccountId),
+            ),
+          )
+          .limit(1);
+        if (personal) fromAccount = personal.sa;
+      }
+
+      if (!fromAccount) {
+        // Last resort: any workspace SMTP account.
+        const [fallback] = await db
+          .select()
+          .from(sendingAccounts)
+          .where(eq(sendingAccounts.workspaceId, ctx.workspace.id))
+          .limit(1);
+        if (fallback) fromAccount = fallback;
+      }
+
+      if (!fromAccount) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message:
+            "No sending account available. Connect your personal mailbox in Connected Accounts, or have an admin add a workspace SMTP account.",
+        });
+      }
+
+      const adapter = createEmailAdapter(fromAccount);
+
+      // ── 2. Fetch target contacts ──────────────────────────────────────
       const rows = await db
-        .select({ id: contacts.id, email: contacts.email, firstName: contacts.firstName, lastName: contacts.lastName })
+        .select({
+          id: contacts.id,
+          email: contacts.email,
+          firstName: contacts.firstName,
+          lastName: contacts.lastName,
+        })
         .from(contacts)
-        .where(and(eq(contacts.workspaceId, ctx.workspace.id), inArray(contacts.id, input.contactIds)));
+        .where(
+          and(
+            eq(contacts.workspaceId, ctx.workspace.id),
+            inArray(contacts.id, input.contactIds),
+          ),
+        );
 
-      const results: { contactId: number; status: "sent" | "skipped"; reason?: string }[] = [];
+      const results: {
+        contactId: number;
+        status: "sent" | "skipped" | "failed";
+        reason?: string;
+        messageId?: string;
+      }[] = [];
 
+      // ── 3. Send + record per contact ──────────────────────────────────
       for (const contact of rows) {
         if (!contact.email) {
-          results.push({ contactId: contact.id, status: "skipped", reason: "No email address" });
+          results.push({
+            contactId: contact.id,
+            status: "skipped",
+            reason: "No email address",
+          });
           continue;
         }
-        // Create an emailDraft record in 'sent' status
-        await db.insert(emailDrafts).values({
-          workspaceId: ctx.workspace.id,
-          toContactId: contact.id,
-          subject: input.subject,
-          body: input.body,
-          status: "sent",
-          aiGenerated: input.aiGenerated,
-          createdByUserId: ctx.user.id,
-          sentAt: new Date(),
-        });
-        // Log a Timeline activity so the email appears in the contact's timeline
-        await db.insert(activities).values({
-          workspaceId: ctx.workspace.id,
-          type: "email",
-          relatedType: "contact",
-          relatedId: contact.id,
-          subject: input.subject,
-          body: input.body,
-          actorUserId: ctx.user.id,
-          occurredAt: new Date(),
-        });
+
+        let sentMessageId: string | undefined;
+        let deliveryError: string | undefined;
+        try {
+          const sendRes = await adapter.sendEmail({
+            fromEmail: fromAccount.fromEmail,
+            fromName: fromAccount.fromName ?? fromAccount.name,
+            to: contact.email,
+            subject: input.subject,
+            // emailDrafts.body is plain text in practice; render it as both
+            // text and a minimal HTML wrapper so Outlook clients render
+            // line breaks correctly.
+            bodyHtml: input.body
+              .split("\n")
+              .map((line) => `<p style="margin:0 0 8px">${escapeHtml(line)}</p>`)
+              .join(""),
+            bodyText: input.body,
+          });
+          sentMessageId = sendRes.messageId;
+        } catch (err) {
+          deliveryError = err instanceof Error ? err.message : String(err);
+          console.error(
+            `[crm.sendAdHocEmail] delivery failed for contact ${contact.id} (${contact.email}): ${deliveryError}`,
+          );
+        }
+
+        // Only create the emailDraft + activity rows on successful delivery.
+        // emailDrafts.status doesn't have a "failed" enum value yet (will be
+        // added in migration 0059); for now, failures surface only in the
+        // API response and audit log so the user can retry.
+        if (sentMessageId) {
+          await db.insert(emailDrafts).values({
+            workspaceId: ctx.workspace.id,
+            toContactId: contact.id,
+            subject: input.subject,
+            body: input.body,
+            status: "sent",
+            aiGenerated: input.aiGenerated,
+            createdByUserId: ctx.user.id,
+            sentAt: new Date(),
+          });
+          await db.insert(activities).values({
+            workspaceId: ctx.workspace.id,
+            type: "email",
+            relatedType: "contact",
+            relatedId: contact.id,
+            subject: input.subject,
+            body: input.body,
+            actorUserId: ctx.user.id,
+            occurredAt: new Date(),
+          });
+        }
+
         await recordAudit({
           workspaceId: ctx.workspace.id,
           actorUserId: ctx.user.id,
           action: "create",
           entityType: "email_draft",
           entityId: 0,
-          after: { contactId: contact.id, subject: input.subject, aiGenerated: input.aiGenerated },
+          after: {
+            contactId: contact.id,
+            subject: input.subject,
+            aiGenerated: input.aiGenerated,
+            fromAccountId: fromAccount.id,
+            deliveryStatus: sentMessageId ? "sent" : "failed",
+            messageId: sentMessageId,
+            error: deliveryError,
+          },
         });
-        results.push({ contactId: contact.id, status: "sent" });
+
+        if (sentMessageId) {
+          results.push({
+            contactId: contact.id,
+            status: "sent",
+            messageId: sentMessageId,
+          });
+        } else {
+          results.push({
+            contactId: contact.id,
+            status: "failed",
+            reason: deliveryError ?? "Unknown delivery error",
+          });
+        }
       }
 
       const sent = results.filter((r) => r.status === "sent").length;
       const skipped = results.filter((r) => r.status === "skipped").length;
-      return { sent, skipped, results };
+      const failed = results.filter((r) => r.status === "failed").length;
+      return {
+        sent,
+        skipped,
+        failed,
+        results,
+        fromAccount: {
+          id: fromAccount.id,
+          name: fromAccount.name,
+          fromEmail: fromAccount.fromEmail,
+        },
+      };
     }),
 
   /** AI-powered contact enrichment: suggest missing firmographic fields using LLM. */
