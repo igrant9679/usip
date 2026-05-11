@@ -610,15 +610,19 @@ export function registerUnipileWebhookRoutes(app: Express) {
 
       try {
         const payload = req.body as EmailTrackingWebhookPayload;
-        if (!payload?.tracking_id || !payload?.type) {
+        // Unipile's runtime payload uses `event` for the event type;
+        // when we register via our tRPC helper we also map a `type`
+        // alias. Accept either so dashboard-registered webhooks work.
+        const rawType = payload?.type ?? payload?.event;
+        if (!payload?.tracking_id || !rawType) {
           console.warn(
-            "[UnipileTrackingWebhook] Missing tracking_id or type:",
+            "[UnipileTrackingWebhook] Missing tracking_id or event/type:",
             JSON.stringify(payload).slice(0, 300),
           );
           return;
         }
 
-        const type = payload.type.toLowerCase();
+        const type = rawType.toLowerCase();
         const isOpen = /open/.test(type); // mail_opened / opened / open
         const isClick = /click/.test(type); // mail_link_clicked / link_clicked / click
         if (!isOpen && !isClick) {

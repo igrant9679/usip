@@ -837,12 +837,20 @@ export async function updateCalendarEvent(params: {
  * emailDrafts.trackingToken at send time.
  */
 export interface EmailTrackingWebhookPayload {
+  /**
+   * Event type. Unipile's runtime field is `event` ("mail_opened" /
+   * "mail_link_clicked"). When we register via our tRPC helper we also
+   * request a `type` alias in the data config, so handlers should accept
+   * either — dashboard-registered webhooks only provide `event`.
+   */
+  event?: string;
   type?: string;
   tracking_id?: string;
   date?: string;
   email_id?: string;
+  event_id?: string;
   account_id?: string;
-  url?: string;
+  url?: string | null;
   label?: string;
   ip?: string;
   user_agent?: string;
