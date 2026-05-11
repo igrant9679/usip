@@ -221,6 +221,14 @@ export default function Leads() {
     onSuccess: () => { utils.leads.list.invalidate(); toast.success("Lead deleted"); },
     onError: (e: any) => toast.error(e.message),
   });
+  const bulkDeleteMut = trpc.leads.bulkDelete.useMutation({
+    onSuccess: (res) => {
+      utils.leads.list.invalidate();
+      setSelectedIds(new Set());
+      toast.success(`${res.deleted} lead${res.deleted === 1 ? "" : "s"} deleted`);
+    },
+    onError: (e: any) => toast.error(e.message),
+  });
 
   const allIds = (data ?? []).map((l) => l.id);
   const allSelected = allIds.length > 0 && allIds.every((id) => selectedIds.has(id));
@@ -254,6 +262,19 @@ export default function Leads() {
             </Button>
             <Button variant="outline" onClick={() => setAddToSegmentOpen(true)} className="gap-2">
               <Tag className="h-4 w-4 text-violet-500" />Add to Segment ({selectedIds.size})
+            </Button>
+            <Button
+              variant="outline"
+              className="gap-2 text-destructive border-destructive/40 hover:bg-destructive/10"
+              onClick={() => {
+                const ids = Array.from(selectedIds);
+                if (confirm(`Delete ${ids.length} lead${ids.length === 1 ? "" : "s"}? This cannot be undone.`)) {
+                  bulkDeleteMut.mutate({ ids });
+                }
+              }}
+              disabled={bulkDeleteMut.isPending}
+            >
+              <Trash2 className="h-4 w-4" />Delete ({selectedIds.size})
             </Button>
           </>
         )}

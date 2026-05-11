@@ -294,6 +294,15 @@ export default function Accounts() {
     onSuccess: () => { utils.accounts.list.invalidate(); utils.accounts.hierarchy.invalidate(); toast.success("Account deleted"); },
     onError: (e: any) => toast.error(e.message),
   });
+  const bulkDeleteMut = trpc.accounts.bulkDelete.useMutation({
+    onSuccess: (res) => {
+      utils.accounts.list.invalidate();
+      utils.accounts.hierarchy.invalidate();
+      setSelectedIds(new Set());
+      toast.success(`${res.deleted} account${res.deleted === 1 ? "" : "s"} deleted`);
+    },
+    onError: (e: any) => toast.error(e.message),
+  });
 
   const allIds = (list ?? []).map((a) => a.id);
   const allSelected = allIds.length > 0 && allIds.every((id) => selectedIds.has(id));
@@ -326,6 +335,19 @@ export default function Accounts() {
             </Button>
             <Button variant="outline" onClick={() => setAddToSegmentOpen(true)} className="gap-2">
               <Tag className="h-4 w-4 text-violet-500" />Add to Segment ({selectedIds.size})
+            </Button>
+            <Button
+              variant="outline"
+              className="gap-2 text-destructive border-destructive/40 hover:bg-destructive/10"
+              onClick={() => {
+                const ids = Array.from(selectedIds);
+                if (confirm(`Delete ${ids.length} account${ids.length === 1 ? "" : "s"}? This cannot be undone.`)) {
+                  bulkDeleteMut.mutate({ ids });
+                }
+              }}
+              disabled={bulkDeleteMut.isPending}
+            >
+              <Trash2 className="h-4 w-4" />Delete ({selectedIds.size})
             </Button>
           </>
         )}

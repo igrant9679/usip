@@ -817,6 +817,14 @@ export default function Contacts() {
     onSuccess: () => { utils.contacts.list.invalidate(); toast.success("Contact deleted"); },
     onError: (e: any) => toast.error(e.message),
   });
+  const bulkDeleteMut = trpc.contacts.bulkDelete.useMutation({
+    onSuccess: (res) => {
+      utils.contacts.list.invalidate();
+      setSelectedIds(new Set());
+      toast.success(`${res.deleted} contact${res.deleted === 1 ? "" : "s"} deleted`);
+    },
+    onError: (e: any) => toast.error(e.message),
+  });
   const scoreRelationship = trpc.contactsAi.scoreRelStrength.useMutation({
     onSuccess: () => utils.contacts.list.invalidate(),
     onError: (e: any) => toast.error(e.message),
@@ -947,6 +955,20 @@ export default function Contacts() {
             >
               <Sparkles className="h-4 w-4 text-amber-500" />
               Enrich ({selectedIds.size})
+            </Button>
+            <Button
+              variant="outline"
+              className="gap-2 text-destructive border-destructive/40 hover:bg-destructive/10"
+              onClick={() => {
+                const ids = Array.from(selectedIds);
+                if (confirm(`Delete ${ids.length} contact${ids.length === 1 ? "" : "s"}? This cannot be undone.`)) {
+                  bulkDeleteMut.mutate({ ids });
+                }
+              }}
+              disabled={bulkDeleteMut.isPending}
+            >
+              <Trash2 className="h-4 w-4" />
+              Delete ({selectedIds.size})
             </Button>
           </>
         )}

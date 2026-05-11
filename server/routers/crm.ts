@@ -152,6 +152,21 @@ export const accountsRouter = router({
     return { ok: true };
   }),
 
+  bulkDelete: repProcedure
+    .input(z.object({ ids: z.array(z.number()).min(1).max(500) }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const rows = await db
+        .select({ id: accounts.id })
+        .from(accounts)
+        .where(and(eq(accounts.workspaceId, ctx.workspace.id), inArray(accounts.id, input.ids)));
+      if (rows.length === 0) return { deleted: 0 };
+      await db.delete(accounts).where(and(eq(accounts.workspaceId, ctx.workspace.id), inArray(accounts.id, rows.map((r) => r.id))));
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "delete", entityType: "account_bulk", entityId: 0, after: { ids: rows.map((r) => r.id) } });
+      return { deleted: rows.length };
+    }),
+
   /** Detail view: account row + all associated contacts. */
   getWithContacts: workspaceProcedure
     .input(z.object({ id: z.number() }))
@@ -225,6 +240,21 @@ export const contactsRouter = router({
     await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "delete", entityType: "contact", entityId: input.id, before });
     return { ok: true };
   }),
+
+  bulkDelete: repProcedure
+    .input(z.object({ ids: z.array(z.number()).min(1).max(500) }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const rows = await db
+        .select({ id: contacts.id })
+        .from(contacts)
+        .where(and(eq(contacts.workspaceId, ctx.workspace.id), inArray(contacts.id, input.ids)));
+      if (rows.length === 0) return { deleted: 0 };
+      await db.delete(contacts).where(and(eq(contacts.workspaceId, ctx.workspace.id), inArray(contacts.id, rows.map((r) => r.id))));
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "delete", entityType: "contact_bulk", entityId: 0, after: { ids: rows.map((r) => r.id) } });
+      return { deleted: rows.length };
+    }),
 
   /** Detail view: contact row + joined account row. */
   getWithAccount: workspaceProcedure
@@ -765,6 +795,21 @@ export const leadsRouter = router({
     await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "delete", entityType: "lead", entityId: input.id, before });
     return { ok: true };
   }),
+
+  bulkDelete: repProcedure
+    .input(z.object({ ids: z.array(z.number()).min(1).max(500) }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const rows = await db
+        .select({ id: leads.id })
+        .from(leads)
+        .where(and(eq(leads.workspaceId, ctx.workspace.id), inArray(leads.id, input.ids)));
+      if (rows.length === 0) return { deleted: 0 };
+      await db.delete(leads).where(and(eq(leads.workspaceId, ctx.workspace.id), inArray(leads.id, rows.map((r) => r.id))));
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "delete", entityType: "lead_bulk", entityId: 0, after: { ids: rows.map((r) => r.id) } });
+      return { deleted: rows.length };
+    }),
 
   /** Convert a lead → account + contact (+ optional opportunity). */
   convert: repProcedure
