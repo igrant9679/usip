@@ -260,7 +260,11 @@ async function scheduleReEnrichment(): Promise<void> {
   const enabledSettings = await db
     .select()
     .from(cloduraEnrichmentSettings)
-    .where(eq(cloduraEnrichmentSettings.autoReEnrichEnabled, true));
+    // Column name on the schema is scheduledReenrichEnabled (mapped to
+    // `scheduled_reenrich_enabled` in MySQL). Older code referenced a
+    // nonexistent `autoReEnrichEnabled` which Drizzle silently expanded to
+    // `undefined`, producing `WHERE  = ?` and a parse error every 2 minutes.
+    .where(eq(cloduraEnrichmentSettings.scheduledReenrichEnabled, true));
 
   if (enabledSettings.length === 0) return;
 
