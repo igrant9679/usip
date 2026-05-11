@@ -378,6 +378,49 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
       `ALTER TABLE \`calendar_accounts\` ADD COLUMN \`unipileAccountId\` varchar(64) NULL`,
     ],
   },
+  // ── 0058: Unipile email webhook cache ────────────────────────────────────
+  // Local write-through cache populated by POST /api/unipile/mail-webhook.
+  // Used by UnipileMailAdapter as a fallback when /emails returns items=0,
+  // and as the canonical real-time source going forward.
+  {
+    name: "0058_unipile_emails_cache.sql",
+    statements: [
+      `CREATE TABLE IF NOT EXISTS \`unipile_emails_cache\` (
+        \`id\` int AUTO_INCREMENT NOT NULL,
+        \`workspaceId\` int NOT NULL,
+        \`unipileAccountId\` varchar(200) NOT NULL,
+        \`emailId\` varchar(200) NOT NULL,
+        \`threadId\` varchar(200),
+        \`providerMessageId\` varchar(500),
+        \`subject\` text,
+        \`fromName\` varchar(320),
+        \`fromEmail\` varchar(320),
+        \`toJson\` json,
+        \`ccJson\` json,
+        \`bccJson\` json,
+        \`replyToJson\` json,
+        \`bodyHtml\` text,
+        \`bodyPlain\` text,
+        \`attachmentsJson\` json,
+        \`foldersJson\` json,
+        \`role\` varchar(40),
+        \`hasAttachments\` boolean NOT NULL DEFAULT false,
+        \`readDate\` timestamp NULL,
+        \`inReplyToId\` varchar(200),
+        \`emailDate\` timestamp NULL,
+        \`origin\` varchar(20),
+        \`trackingId\` varchar(200),
+        \`lastEvent\` varchar(30),
+        \`rawJson\` json,
+        \`createdAt\` timestamp NOT NULL DEFAULT (now()),
+        \`updatedAt\` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,
+        CONSTRAINT \`unipile_emails_cache_id\` PRIMARY KEY(\`id\`),
+        CONSTRAINT \`uq_uec_emailid\` UNIQUE (\`emailId\`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE INDEX \`ix_uec_account_date\` ON \`unipile_emails_cache\` (\`workspaceId\`, \`unipileAccountId\`, \`emailDate\`)`,
+      `CREATE INDEX \`ix_uec_thread\` ON \`unipile_emails_cache\` (\`threadId\`)`,
+    ],
+  },
   // ── 0059: Schema drift catch-up ──────────────────────────────────────────
   // The embedded port of 0050_ai_features.sql shipped only a fraction of
   // the original SQL (just aiSummary on contacts + aiInsight on
@@ -513,17 +556,6 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
-  // ── 0061: Track which sending account dispatched each emailDraft ─────────
-  // Needed by the pool-aware send-resolution path: enforcing per-account
-  // dailySendLimit requires knowing which account each sent draft used.
-  {
-    name: "0061_email_drafts_sending_account.sql",
-    statements: [
-      `ALTER TABLE \`email_drafts\` ADD COLUMN \`sendingAccountId\` int`,
-      `CREATE INDEX \`ix_ed_sending_account\` ON \`email_drafts\` (\`sendingAccountId\`)`,
-    ],
-  },
-
   // ── 0060: Per-user email signature override ───────────────────────────────
   // Adds users.emailSignature so each rep can override the workspace
   // default (workspaceSettings.emailSignature). Send path prefers the
@@ -535,49 +567,64 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
-  // ── 0058: Unipile email webhook cache ────────────────────────────────────
-  // Local write-through cache populated by POST /api/unipile/mail-webhook.
-  // Used by UnipileMailAdapter as a fallback when /emails returns items=0,
-  // and as the canonical real-time source going forward.
+  // ── 0061: Track which sending account dispatched each emailDraft ─────────
+  // Needed by the pool-aware send-resolution path: enforcing per-account
+  // dailySendLimit requires knowing which account each sent draft used.
   {
-    name: "0058_unipile_emails_cache.sql",
+    name: "0061_email_drafts_sending_account.sql",
     statements: [
-      `CREATE TABLE IF NOT EXISTS \`unipile_emails_cache\` (
-        \`id\` int AUTO_INCREMENT NOT NULL,
-        \`workspaceId\` int NOT NULL,
-        \`unipileAccountId\` varchar(200) NOT NULL,
-        \`emailId\` varchar(200) NOT NULL,
-        \`threadId\` varchar(200),
-        \`providerMessageId\` varchar(500),
-        \`subject\` text,
-        \`fromName\` varchar(320),
-        \`fromEmail\` varchar(320),
-        \`toJson\` json,
-        \`ccJson\` json,
-        \`bccJson\` json,
-        \`replyToJson\` json,
-        \`bodyHtml\` text,
-        \`bodyPlain\` text,
-        \`attachmentsJson\` json,
-        \`foldersJson\` json,
-        \`role\` varchar(40),
-        \`hasAttachments\` boolean NOT NULL DEFAULT false,
-        \`readDate\` timestamp NULL,
-        \`inReplyToId\` varchar(200),
-        \`emailDate\` timestamp NULL,
-        \`origin\` varchar(20),
-        \`trackingId\` varchar(200),
-        \`lastEvent\` varchar(30),
-        \`rawJson\` json,
-        \`createdAt\` timestamp NOT NULL DEFAULT (now()),
-        \`updatedAt\` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,
-        CONSTRAINT \`unipile_emails_cache_id\` PRIMARY KEY(\`id\`),
-        CONSTRAINT \`uq_uec_emailid\` UNIQUE (\`emailId\`)
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
-      `CREATE INDEX \`ix_uec_account_date\` ON \`unipile_emails_cache\` (\`workspaceId\`, \`unipileAccountId\`, \`emailDate\`)`,
-      `CREATE INDEX \`ix_uec_thread\` ON \`unipile_emails_cache\` (\`threadId\`)`,
+      `ALTER TABLE \`email_drafts\` ADD COLUMN \`sendingAccountId\` int`,
+      `CREATE INDEX \`ix_ed_sending_account\` ON \`email_drafts\` (\`sendingAccountId\`)`,
     ],
   },
+
+  // ── 0062: Schema-drift audit pass — three items missed by earlier ports ──
+  // 1. clodura_reveal_jobs (was in 0048 SQL but not ported into rawMigrations).
+  //    Inserted into by the Clodura "Reveal email/phone" buttons; without
+  //    the table those mutations would 500.
+  // 2. clodura_saved_searches (also from 0048, also missed). Used by the
+  //    Prospects page's saved-filter chips.
+  // 3. opportunity_intelligence.suggestedStage + suggestedStageRationale.
+  //    Original 0049 SQL added these to opportunity_intelligence; the
+  //    rawMigrations port mistakenly added different-named columns on
+  //    `opportunities` instead. Schema.ts references opportunity_intelligence
+  //    so any reader of those fields gets undefined.
+  {
+    name: "0062_drift_audit_pass.sql",
+    statements: [
+      `CREATE TABLE IF NOT EXISTS \`clodura_reveal_jobs\` (
+        \`id\` int AUTO_INCREMENT NOT NULL,
+        \`tracking_id\` varchar(128) NOT NULL,
+        \`prospect_id\` int NOT NULL,
+        \`kind\` varchar(10) NOT NULL,
+        \`status\` varchar(20) NOT NULL DEFAULT 'pending',
+        \`requested_by\` int,
+        \`requested_at\` timestamp NOT NULL DEFAULT (now()),
+        \`completed_at\` timestamp NULL,
+        \`error\` text,
+        CONSTRAINT \`clodura_reveal_jobs_id\` PRIMARY KEY(\`id\`),
+        CONSTRAINT \`uq_crj_tracking\` UNIQUE (\`tracking_id\`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE INDEX \`ix_crj_prospect\` ON \`clodura_reveal_jobs\` (\`prospect_id\`)`,
+      `CREATE INDEX \`ix_crj_tracking\` ON \`clodura_reveal_jobs\` (\`tracking_id\`)`,
+
+      `CREATE TABLE IF NOT EXISTS \`clodura_saved_searches\` (
+        \`id\` int AUTO_INCREMENT NOT NULL,
+        \`user_id\` int NOT NULL,
+        \`workspaceId\` int NOT NULL,
+        \`name\` varchar(120),
+        \`filters\` json NOT NULL,
+        \`createdAt\` timestamp NOT NULL DEFAULT (now()),
+        \`updatedAt\` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,
+        CONSTRAINT \`clodura_saved_searches_id\` PRIMARY KEY(\`id\`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE INDEX \`ix_css_user\` ON \`clodura_saved_searches\` (\`user_id\`, \`workspaceId\`)`,
+
+      `ALTER TABLE \`opportunity_intelligence\` ADD COLUMN \`suggestedStage\` varchar(64)`,
+      `ALTER TABLE \`opportunity_intelligence\` ADD COLUMN \`suggestedStageRationale\` text`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------
