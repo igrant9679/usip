@@ -1,7 +1,7 @@
 import { TRPCError } from "@trpc/server";
-import { and, count, desc, eq, isNotNull, sql } from "drizzle-orm";
+import { and, count, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { z } from "zod";
-import { accounts, activities, contacts, emailDrafts, enrollments, leads, sendingAccounts, sequenceAbVariants, sequenceEdges, sequenceNodes, sequences, unipileAccounts, users, workspaceSettings } from "../../drizzle/schema";
+import { accounts, activities, campaigns, contacts, emailDrafts, enrollments, leads, senderPoolMembers, sendingAccounts, sequenceAbVariants, sequenceEdges, sequenceNodes, sequences, unipileAccounts, users, workspaceSettings } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
 import { getDb } from "../db";
 import { createEmailAdapter } from "../emailAdapter";
@@ -44,6 +44,156 @@ function escapeHtmlWithLinks(s: string): string {
     if (!p) return _m;
     return `<a href="${escapeHtml(p.url)}" style="color:#2563eb;text-decoration:underline">${escapeHtml(p.label)}</a>`;
   });
+}
+
+/**
+ * Pick a sending account for a sequence/campaign-driven draft based on
+ * the campaign's configured senderType + rotation strategy. Returns
+ * null if the draft isn't sequence-bound or no live campaign owns its
+ * sequence — caller then falls back to personal mailbox / workspace
+ * default.
+ *
+ * Rotation strategies (current implementation):
+ *   round_robin → pick the pool member with the LOWEST sent-today
+ *                 count (naturally rotates without separate state).
+ *   weighted    → weighted random by senderPoolMembers.weight.
+ *   random      → uniform random across enabled members.
+ *
+ * Per-account dailySendLimit IS enforced — accounts at or above their
+ * limit are skipped. The "lowest count" round-robin reads sentToday
+ * via a one-shot count query against email_drafts so we don't need a
+ * separate counter table.
+ */
+async function pickAccountForSequenceDraft(
+  db: Awaited<ReturnType<typeof getDb>>,
+  workspaceId: number,
+  sequenceId: number,
+): Promise<typeof sendingAccounts.$inferSelect | null> {
+  if (!db) return null;
+
+  // Find the most recent live/scheduled campaign that uses this sequence.
+  const [camp] = await db
+    .select({
+      senderType: campaigns.senderType,
+      sendingAccountId: campaigns.sendingAccountId,
+      senderPoolId: campaigns.senderPoolId,
+      rotationStrategy: campaigns.rotationStrategy,
+    })
+    .from(campaigns)
+    .where(
+      and(
+        eq(campaigns.workspaceId, workspaceId),
+        eq(campaigns.sequenceId, sequenceId),
+        inArray(campaigns.status, ["live", "scheduled"]),
+      ),
+    )
+    .orderBy(desc(campaigns.id))
+    .limit(1);
+
+  if (!camp) return null;
+
+  // senderType=account: just use it.
+  if (camp.senderType === "account" && camp.sendingAccountId) {
+    const [acct] = await db
+      .select()
+      .from(sendingAccounts)
+      .where(
+        and(
+          eq(sendingAccounts.id, camp.sendingAccountId),
+          eq(sendingAccounts.workspaceId, workspaceId),
+        ),
+      )
+      .limit(1);
+    return acct ?? null;
+  }
+
+  // senderType=pool: pick a member per the campaign's rotation strategy.
+  if (camp.senderType === "pool" && camp.senderPoolId) {
+    const members = await db
+      .select({
+        accountId: senderPoolMembers.accountId,
+        weight: senderPoolMembers.weight,
+        position: senderPoolMembers.position,
+      })
+      .from(senderPoolMembers)
+      .where(eq(senderPoolMembers.poolId, camp.senderPoolId));
+    if (members.length === 0) return null;
+
+    const accountIds = members.map((m) => m.accountId);
+    const accountRows = await db
+      .select()
+      .from(sendingAccounts)
+      .where(
+        and(
+          eq(sendingAccounts.workspaceId, workspaceId),
+          inArray(sendingAccounts.id, accountIds),
+          eq(sendingAccounts.enabled, true),
+        ),
+      );
+    if (accountRows.length === 0) return null;
+
+    // Today's send count per account (drafts sent today with that account).
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const sentTodayRows = await db
+      .select({
+        accountId: emailDrafts.sendingAccountId,
+        cnt: sql<number>`COUNT(*)`,
+      })
+      .from(emailDrafts)
+      .where(
+        and(
+          eq(emailDrafts.workspaceId, workspaceId),
+          eq(emailDrafts.status, "sent"),
+          inArray(emailDrafts.sendingAccountId, accountIds),
+          sql`${emailDrafts.sentAt} >= ${todayStart}`,
+        ),
+      )
+      .groupBy(emailDrafts.sendingAccountId);
+    const sentToday = new Map(sentTodayRows.map((r) => [r.accountId, Number(r.cnt) || 0]));
+
+    // Filter out accounts at/over their dailySendLimit.
+    const eligible = accountRows.filter((a) => {
+      const used = sentToday.get(a.id) ?? 0;
+      return used < (a.dailySendLimit ?? 500);
+    });
+    if (eligible.length === 0) {
+      console.warn(
+        `[pickAccountForSequenceDraft] all pool ${camp.senderPoolId} members at/over daily limit`,
+      );
+      return null;
+    }
+
+    const strat = camp.rotationStrategy ?? "round_robin";
+
+    if (strat === "random") {
+      return eligible[Math.floor(Math.random() * eligible.length)];
+    }
+    if (strat === "weighted") {
+      const memberWeight = new Map(members.map((m) => [m.accountId, m.weight]));
+      const totalW = eligible.reduce(
+        (s, a) => s + (memberWeight.get(a.id) ?? 10),
+        0,
+      );
+      let pick = Math.random() * totalW;
+      for (const a of eligible) {
+        pick -= memberWeight.get(a.id) ?? 10;
+        if (pick <= 0) return a;
+      }
+      return eligible[eligible.length - 1];
+    }
+    // round_robin: lowest sent-today count (ties broken by position).
+    const memberPosition = new Map(members.map((m) => [m.accountId, m.position]));
+    eligible.sort((a, b) => {
+      const aSent = sentToday.get(a.id) ?? 0;
+      const bSent = sentToday.get(b.id) ?? 0;
+      if (aSent !== bSent) return aSent - bSent;
+      return (memberPosition.get(a.id) ?? 0) - (memberPosition.get(b.id) ?? 0);
+    });
+    return eligible[0];
+  }
+
+  return null;
 }
 
 /** Merge-field renderer (same forgiving matcher as crm.ts). */
@@ -601,21 +751,44 @@ DO NOT
       });
     }
 
-    // ── Resolve sending account (same precedence as crm.sendAdHocEmail) ──
+    // ── Resolve sending account ──────────────────────────────────────
+    // Priority for sequence-bound drafts:
+    //   1. Pool/account assigned by the campaign owning this sequence
+    //      (honors rotation strategy + per-account dailySendLimit)
+    //   2. Rep's bridged personal Unipile mailbox
+    //   3. Any workspace SMTP fallback
+    // Non-sequence drafts skip step 1 and go straight to 2/3.
     let fromAccount: typeof sendingAccounts.$inferSelect | undefined;
-    const [personal] = await db
-      .select({ sa: sendingAccounts })
-      .from(sendingAccounts)
-      .innerJoin(unipileAccounts, eq(sendingAccounts.unipileAccountId, unipileAccounts.unipileAccountId))
-      .where(
-        and(
-          eq(sendingAccounts.workspaceId, ctx.workspace.id),
-          eq(unipileAccounts.userId, ctx.user.id),
-          isNotNull(sendingAccounts.unipileAccountId),
-        ),
-      )
-      .limit(1);
-    if (personal) fromAccount = personal.sa;
+    if (draft.sequenceId) {
+      const picked = await pickAccountForSequenceDraft(
+        db,
+        ctx.workspace.id,
+        draft.sequenceId,
+      );
+      if (picked) {
+        fromAccount = picked;
+        console.log(
+          `[emailDrafts.send] draft ${draft.id} sequence ${draft.sequenceId} → pool/account ${picked.id} (${picked.fromEmail})`,
+        );
+      }
+    }
+    // Step 2: rep's bridged personal Unipile mailbox (skipped if step 1 hit).
+    if (!fromAccount) {
+      const [personal] = await db
+        .select({ sa: sendingAccounts })
+        .from(sendingAccounts)
+        .innerJoin(unipileAccounts, eq(sendingAccounts.unipileAccountId, unipileAccounts.unipileAccountId))
+        .where(
+          and(
+            eq(sendingAccounts.workspaceId, ctx.workspace.id),
+            eq(unipileAccounts.userId, ctx.user.id),
+            isNotNull(sendingAccounts.unipileAccountId),
+          ),
+        )
+        .limit(1);
+      if (personal) fromAccount = personal.sa;
+    }
+    // Step 3: any workspace SMTP account (last-resort fallback).
     if (!fromAccount) {
       const [fallback] = await db
         .select()
@@ -712,6 +885,9 @@ DO NOT
           reviewedByUserId: ctx.user.id,
           trackingToken: sentMessageId.slice(0, 64),
           toEmail,
+          // Track which sending account dispatched this — read by
+          // pickAccountForSequenceDraft to enforce per-account daily limits.
+          sendingAccountId: fromAccount.id,
         })
         .where(eq(emailDrafts.id, draft.id));
 
@@ -742,6 +918,8 @@ DO NOT
         deliveryStatus: sentMessageId ? "sent" : "failed",
         messageId: sentMessageId,
         fromAccountId: fromAccount.id,
+        fromAccountName: fromAccount.name,
+        fromAccountEmail: fromAccount.fromEmail,
         error: deliveryError,
       },
     });

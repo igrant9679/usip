@@ -513,6 +513,17 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0061: Track which sending account dispatched each emailDraft ─────────
+  // Needed by the pool-aware send-resolution path: enforcing per-account
+  // dailySendLimit requires knowing which account each sent draft used.
+  {
+    name: "0061_email_drafts_sending_account.sql",
+    statements: [
+      `ALTER TABLE \`email_drafts\` ADD COLUMN \`sendingAccountId\` int`,
+      `CREATE INDEX \`ix_ed_sending_account\` ON \`email_drafts\` (\`sendingAccountId\`)`,
+    ],
+  },
+
   // ── 0060: Per-user email signature override ───────────────────────────────
   // Adds users.emailSignature so each rep can override the workspace
   // default (workspaceSettings.emailSignature). Send path prefers the

@@ -425,6 +425,8 @@ export const emailDrafts = mysqlTable(
     reviewedByUserId: int("reviewedByUserId"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     sentAt: timestamp("sentAt"),
+    /** Which sending_accounts row the message was dispatched from. */
+    sendingAccountId: int("sendingAccountId"),
     trackingToken: varchar("trackingToken", { length: 64 }), // unique token for open/click tracking
     openCount: int("openCount").default(0).notNull(),
     clickCount: int("clickCount").default(0).notNull(),
