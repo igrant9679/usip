@@ -480,15 +480,32 @@ export const contactsRouter = router({
           signature: workspaceSignature,
         };
         const renderedSubject = renderMergeFields(input.subject, mergeVars);
-        let renderedBody = renderMergeFields(input.body, mergeVars);
+        // Render body WITHOUT signature substitution first — we want to
+        // wrap body paragraphs and signature lines with different spacing,
+        // so we need to render them as separate HTML blocks below.
+        const mergeVarsNoSig = { ...mergeVars, signature: "" };
+        const renderedBody = renderMergeFields(input.body, mergeVarsNoSig);
 
-        // If the body didn't explicitly include {{signature}} but the
-        // workspace has one configured, auto-append it. This way the
-        // "Default signature" setting actually shows up on outbound mail
-        // even when the AI prompt didn't think to include the token.
-        if (!bodyMentionsSignatureToken && workspaceSignature) {
-          renderedBody = `${renderedBody.replace(/\s+$/, "")}\n\n${workspaceSignature}`;
-        }
+        // The plain-text version always includes the signature inline.
+        const renderedBodyText =
+          bodyMentionsSignatureToken
+            ? renderMergeFields(input.body, mergeVars)
+            : workspaceSignature
+              ? `${renderedBody.replace(/\s+$/, "")}\n\n${workspaceSignature}`
+              : renderedBody;
+
+        // Build the HTML body in two distinct blocks so Outlook doesn't
+        // apply paragraph-spacing inside the signature:
+        //   <p>body line</p><p>body line</p>... (margin: 0 0 8px)
+        //   <div>sig line<br>sig line<br>...</div> (line-height 1.4)
+        const bodyHtmlBlock = renderedBody
+          .split("\n")
+          .map((line) => `<p style="margin:0 0 8px">${escapeHtml(line)}</p>`)
+          .join("");
+        const sigHtmlBlock = workspaceSignature
+          ? `<div style="margin-top:18px;color:#555;line-height:1.4">${workspaceSignature.split("\n").map(escapeHtml).join("<br>")}</div>`
+          : "";
+        const fullBodyHtml = bodyHtmlBlock + sigHtmlBlock;
 
         let sentMessageId: string | undefined;
         let deliveryError: string | undefined;
@@ -498,14 +515,8 @@ export const contactsRouter = router({
             fromName: fromAccount.fromName ?? fromAccount.name,
             to: contact.email,
             subject: renderedSubject,
-            // emailDrafts.body is plain text in practice; render it as both
-            // text and a minimal HTML wrapper so Outlook clients render
-            // line breaks correctly.
-            bodyHtml: renderedBody
-              .split("\n")
-              .map((line) => `<p style="margin:0 0 8px">${escapeHtml(line)}</p>`)
-              .join(""),
-            bodyText: renderedBody,
+            bodyHtml: fullBodyHtml,
+            bodyText: renderedBodyText,
           });
           sentMessageId = sendRes.messageId;
         } catch (err) {
@@ -526,7 +537,7 @@ export const contactsRouter = router({
             workspaceId: ctx.workspace.id,
             toContactId: contact.id,
             subject: renderedSubject,
-            body: renderedBody,
+            body: renderedBodyText,
             status: "sent",
             aiGenerated: input.aiGenerated,
             createdByUserId: ctx.user.id,
@@ -538,7 +549,7 @@ export const contactsRouter = router({
             relatedType: "contact",
             relatedId: contact.id,
             subject: renderedSubject,
-            body: renderedBody,
+            body: renderedBodyText,
             actorUserId: ctx.user.id,
             occurredAt: new Date(),
           });

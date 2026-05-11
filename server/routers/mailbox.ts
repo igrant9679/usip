@@ -27,8 +27,12 @@ import { invokeLLM } from "../_core/llm";
 /**
  * Append the workspace's default signature to outbound HTML / text if it
  * isn't already present in the body. Skips silently if no signature is
- * configured. The HTML version wraps the plain-text signature in
- * <p> tags + line breaks so Outlook clients render it correctly.
+ * configured.
+ *
+ * HTML rendering uses <br> between lines (not per-line <p>) so Outlook
+ * doesn't add paragraph-spacing between each line of the signature —
+ * sigs look right when they're tight. The outer <div> carries the
+ * single ~18px gap that separates body from signature.
  */
 async function appendSignature(
   workspaceId: number,
@@ -49,12 +53,11 @@ async function appendSignature(
   if (bodyHtml.includes(sig) || (bodyText && bodyText.includes(sig))) {
     return { bodyHtml, bodyText };
   }
-  const sigHtml = sig
-    .split("\n")
-    .map((line) => `<p style="margin:0">${line.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</p>`)
-    .join("");
+  const escape = (s: string) =>
+    s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const sigHtml = sig.split("\n").map(escape).join("<br>");
   return {
-    bodyHtml: `${bodyHtml}<br><div style="margin-top:16px;color:#555">${sigHtml}</div>`,
+    bodyHtml: `${bodyHtml}<div style="margin-top:18px;color:#555;line-height:1.4">${sigHtml}</div>`,
     bodyText: bodyText ? `${bodyText}\n\n${sig}` : undefined,
   };
 }
