@@ -131,7 +131,7 @@ async function pollImapAccount(account: any) {
   }
 }
 
-interface InboundReplyData {
+export interface InboundReplyData {
   workspaceId: number;
   sendingAccountId: number;
   userId?: number;
@@ -144,10 +144,12 @@ interface InboundReplyData {
   inReplyTo: string;
   references: string;
   imapUid?: number;
+  /** Set when the reply arrived via the Unipile webhook so we have a stable de-dup key. */
+  unipileEmailId?: string;
   receivedAt: Date;
 }
 
-async function processInboundReply(data: InboundReplyData) {
+export async function processInboundReply(data: InboundReplyData) {
   const db = await getDb();
   if (!db) return;
   // 1. Match to outbound draft via In-Reply-To or References

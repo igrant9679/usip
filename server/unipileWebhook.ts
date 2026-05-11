@@ -22,11 +22,13 @@ import { getDb } from "./db";
 import {
   calendarAccounts,
   emailDrafts,
+  emailReplies,
   sendingAccounts,
   unipileAccounts,
   unipileEmailsCache,
   users,
 } from "../drizzle/schema";
+import { processInboundReply } from "./inboundReplyPoller";
 import {
   generateHostedAuthLink,
   getUnipileAccount,
@@ -511,6 +513,94 @@ export function registerUnipileWebhookRoutes(app: Express) {
             console.warn(
               `[UnipileMailWebhook] Insert race for email_id=${email_id}:`,
               insertErr,
+            );
+          }
+        }
+
+        // ── Inbound reply attachment (mail_received only) ─────────────
+        // Hand off to the shared processInboundReply helper so the
+        // Unipile-bridged path produces the same email_replies row +
+        // Timeline activity + sequence-pause + notification as the IMAP
+        // poller. Skip if:
+        //   - not a received event (sent/moved don't represent replies)
+        //   - the sender is one of our own sending accounts (own outbound
+        //     showing up because the user sent from another device)
+        //   - we already processed this email_id (re-fire / duplicate webhook)
+        if (event === "mail_received" && fromEmail) {
+          try {
+            // Resolve the bridged sendingAccounts row — email_replies
+            // requires sendingAccountId NOT NULL.
+            const [sendAcct] = await db
+              .select({ id: sendingAccounts.id, fromEmail: sendingAccounts.fromEmail })
+              .from(sendingAccounts)
+              .where(
+                and(
+                  eq(sendingAccounts.workspaceId, acct.workspaceId),
+                  eq(sendingAccounts.unipileAccountId, account_id),
+                ),
+              )
+              .limit(1);
+
+            if (!sendAcct) {
+              // No bridge row — likely a Unipile account that hasn't been
+              // bridged into sending_accounts. Reply tracking would need
+              // an account id; skip silently.
+            } else if (
+              fromEmail.toLowerCase() === (sendAcct.fromEmail ?? "").toLowerCase()
+            ) {
+              // Our own outbound flowing back in (e.g. user sent from
+              // Outlook desktop). Don't process as a reply.
+            } else {
+              // Dedup on provider message_id within this workspace.
+              const providerMsgId = payload.message_id ?? "";
+              if (providerMsgId) {
+                const [dup] = await db
+                  .select({ id: emailReplies.id })
+                  .from(emailReplies)
+                  .where(
+                    and(
+                      eq(emailReplies.workspaceId, acct.workspaceId),
+                      eq(emailReplies.messageId, providerMsgId),
+                    ),
+                  )
+                  .limit(1);
+                if (dup) {
+                  // Already recorded this reply; skip.
+                  return;
+                }
+              }
+
+              // Find a workspace user to attribute the activity to —
+              // prefer the user who owns the bridged Unipile account.
+              const [acctRow] = await db
+                .select({ userId: unipileAccounts.userId })
+                .from(unipileAccounts)
+                .where(eq(unipileAccounts.unipileAccountId, account_id))
+                .limit(1);
+
+              await processInboundReply({
+                workspaceId: acct.workspaceId,
+                sendingAccountId: sendAcct.id,
+                userId: acctRow?.userId,
+                fromEmail,
+                fromName: fromName ?? "",
+                subject: payload.subject ?? "",
+                bodyText: payload.body_plain ?? "",
+                bodyHtml: payload.body ?? "",
+                messageId: providerMsgId,
+                inReplyTo: payload.in_reply_to?.message_id ?? "",
+                references: "",
+                unipileEmailId: email_id,
+                receivedAt: emailDate ?? new Date(),
+              });
+              console.log(
+                `[UnipileMailWebhook] mail_received → processInboundReply email_id=${email_id} from=${fromEmail}`,
+              );
+            }
+          } catch (replyErr) {
+            console.error(
+              `[UnipileMailWebhook] processInboundReply failed for email_id=${email_id}:`,
+              replyErr,
             );
           }
         }
