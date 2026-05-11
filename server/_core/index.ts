@@ -15,6 +15,7 @@ import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 import { runDailyVerificationMaintenance } from "../routers/emailVerification";
 import { processEnrollments } from "../sequenceEngine";
+import { autoSendForAllWorkspaces } from "../routers/sequences";
 import { runNightlyBatch } from "../nightlyBatch";
 import { runSegmentEnrollmentForAllWorkspaces } from "../routers/segmentRules"; // eslint-disable-line
 import { registerEmailTrackingRoutes } from "../emailTracking";
@@ -122,9 +123,21 @@ async function startServer() {
 
   // Sequence execution engine: process active enrollments every 5 minutes
   const runSequenceEngine = () => {
-    processEnrollments().catch((e) =>
-      console.error("[SequenceEngine] cron run failed:", e)
-    );
+    processEnrollments()
+      .catch((e) => console.error("[SequenceEngine] cron run failed:", e))
+      .then(() =>
+        // Right after each enrollment tick, fire the auto-send pass so any
+        // drafts the engine just created can dispatch without waiting for
+        // a human if the workspace has aiAutoSendEnabled + threshold met.
+        autoSendForAllWorkspaces().then((res) => {
+          if (res.dispatched > 0 || res.failed > 0) {
+            console.log(
+              `[autoSend] tick complete — dispatched=${res.dispatched} skipped=${res.skipped} failed=${res.failed} (${res.workspacesProcessed} workspace${res.workspacesProcessed === 1 ? "" : "s"})`,
+            );
+          }
+        }),
+      )
+      .catch((e) => console.error("[autoSend] cron run failed:", e));
   };
   setTimeout(runSequenceEngine, 60_000); // first run after 60s
   setInterval(runSequenceEngine, 5 * 60 * 1000); // every 5 minutes

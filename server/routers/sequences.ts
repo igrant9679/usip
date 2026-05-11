@@ -1,7 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { and, count, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { z } from "zod";
-import { accounts, activities, campaigns, contacts, emailDrafts, enrollments, leads, senderPoolMembers, sendingAccounts, sequenceAbVariants, sequenceEdges, sequenceNodes, sequences, unipileAccounts, users, workspaceSettings } from "../../drizzle/schema";
+import { accounts, activities, campaigns, contacts, emailDrafts, enrollments, leads, senderPoolMembers, sendingAccounts, sequenceAbVariants, sequenceEdges, sequenceNodes, sequences, unipileAccounts, users, workspaces, workspaceSettings } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
 import { getDb } from "../db";
 import { createEmailAdapter } from "../emailAdapter";
@@ -517,6 +517,433 @@ export const sequencesRouter = router({
 
 /* ─── Email Drafts ────────────────────────────────────────────────────── */
 
+/**
+ * Send an emailDrafts row through the EmailAdapter — the unified
+ * delivery path for both the manual Approve & Send button and the
+ * auto-send worker.
+ *
+ * Behavior:
+ *  - Resolves recipient (draft.toEmail → linked contact → linked lead).
+ *  - Resolves sending account (campaign pool if sequence-bound → rep's
+ *    bridged personal Unipile mailbox → any workspace SMTP fallback).
+ *  - Renders merge fields, prefers per-user signature over workspace
+ *    default, anchor-wraps URLs for click tracking.
+ *  - Opts in to Unipile open/click tracking and persists the returned
+ *    tracking_id on emailDrafts.trackingToken.
+ *  - Updates emailDrafts row + writes a Timeline activity on the
+ *    linked record + audit log.
+ *  - Returns alreadySent:true (without re-sending) for already-sent drafts.
+ *  - Throws TRPCError on hard failures (no recipient, no account, etc.)
+ *    so the manual mutation surfaces it; the auto-send worker catches.
+ *
+ * `userId` is the actor — the manual path passes ctx.user.id; the
+ * auto-send worker passes draft.createdByUserId.
+ */
+export async function deliverEmailDraft(params: {
+  workspaceId: number;
+  userId: number;
+  draftId: number;
+}): Promise<{ ok: true; messageId?: string; alreadySent?: boolean; sentAt?: Date | null }> {
+  const { workspaceId, userId, draftId } = params;
+  const db = await getDb();
+  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+
+  const [draft] = await db
+    .select()
+    .from(emailDrafts)
+    .where(and(eq(emailDrafts.id, draftId), eq(emailDrafts.workspaceId, workspaceId)))
+    .limit(1);
+  if (!draft) throw new TRPCError({ code: "NOT_FOUND" });
+  if (draft.status === "sent") {
+    return { ok: true, alreadySent: true, sentAt: draft.sentAt };
+  }
+
+  // ── Resolve recipient ─────────────────────────────────────────────
+  let toEmail = draft.toEmail ?? null;
+  let firstName: string | null = null;
+  let lastName: string | null = null;
+  let title: string | null = null;
+  let company: string | null = null;
+  if (!toEmail && draft.toContactId) {
+    const [c] = await db
+      .select({
+        email: contacts.email,
+        firstName: contacts.firstName,
+        lastName: contacts.lastName,
+        title: contacts.title,
+        accountName: accounts.name,
+      })
+      .from(contacts)
+      .leftJoin(accounts, eq(accounts.id, contacts.accountId))
+      .where(and(eq(contacts.id, draft.toContactId), eq(contacts.workspaceId, workspaceId)))
+      .limit(1);
+    if (c) {
+      toEmail = c.email ?? null;
+      firstName = c.firstName ?? null;
+      lastName = c.lastName ?? null;
+      title = c.title ?? null;
+      company = c.accountName ?? null;
+    }
+  } else if (!toEmail && draft.toLeadId) {
+    const [l] = await db
+      .select()
+      .from(leads)
+      .where(and(eq(leads.id, draft.toLeadId), eq(leads.workspaceId, workspaceId)))
+      .limit(1);
+    if (l) {
+      toEmail = l.email ?? null;
+      firstName = l.firstName ?? null;
+      lastName = l.lastName ?? null;
+      title = l.title ?? null;
+      company = l.company ?? null;
+    }
+  } else if (draft.toContactId) {
+    const [c] = await db
+      .select({
+        firstName: contacts.firstName,
+        lastName: contacts.lastName,
+        title: contacts.title,
+        accountName: accounts.name,
+      })
+      .from(contacts)
+      .leftJoin(accounts, eq(accounts.id, contacts.accountId))
+      .where(and(eq(contacts.id, draft.toContactId), eq(contacts.workspaceId, workspaceId)))
+      .limit(1);
+    if (c) {
+      firstName = c.firstName ?? null;
+      lastName = c.lastName ?? null;
+      title = c.title ?? null;
+      company = c.accountName ?? null;
+    }
+  } else if (draft.toLeadId) {
+    const [l] = await db
+      .select({
+        firstName: leads.firstName,
+        lastName: leads.lastName,
+        title: leads.title,
+        company: leads.company,
+      })
+      .from(leads)
+      .where(and(eq(leads.id, draft.toLeadId), eq(leads.workspaceId, workspaceId)))
+      .limit(1);
+    if (l) {
+      firstName = l.firstName ?? null;
+      lastName = l.lastName ?? null;
+      title = l.title ?? null;
+      company = l.company ?? null;
+    }
+  }
+  if (!toEmail) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Draft has no recipient email and the linked contact/lead has none either.",
+    });
+  }
+
+  // ── Resolve sending account ──────────────────────────────────────
+  let fromAccount: typeof sendingAccounts.$inferSelect | undefined;
+  if (draft.sequenceId) {
+    const picked = await pickAccountForSequenceDraft(db, workspaceId, draft.sequenceId);
+    if (picked) {
+      fromAccount = picked;
+      console.log(
+        `[deliverEmailDraft] draft ${draft.id} sequence ${draft.sequenceId} → pool/account ${picked.id} (${picked.fromEmail})`,
+      );
+    }
+  }
+  if (!fromAccount) {
+    const [personal] = await db
+      .select({ sa: sendingAccounts })
+      .from(sendingAccounts)
+      .innerJoin(unipileAccounts, eq(sendingAccounts.unipileAccountId, unipileAccounts.unipileAccountId))
+      .where(
+        and(
+          eq(sendingAccounts.workspaceId, workspaceId),
+          eq(unipileAccounts.userId, userId),
+          isNotNull(sendingAccounts.unipileAccountId),
+        ),
+      )
+      .limit(1);
+    if (personal) fromAccount = personal.sa;
+  }
+  if (!fromAccount) {
+    const [fallback] = await db
+      .select()
+      .from(sendingAccounts)
+      .where(eq(sendingAccounts.workspaceId, workspaceId))
+      .limit(1);
+    if (fallback) fromAccount = fallback;
+  }
+  if (!fromAccount) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "No sending account available. Connect your mailbox or have an admin add a workspace SMTP.",
+    });
+  }
+  const adapter = createEmailAdapter(fromAccount);
+
+  // Sender + signature precedence (user → workspace).
+  const [senderRow] = await db
+    .select({ name: users.name, email: users.email, emailSignature: users.emailSignature })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+  const senderName = senderRow?.name ?? fromAccount.fromName ?? fromAccount.name ?? "";
+  const senderEmail = senderRow?.email ?? fromAccount.fromEmail ?? "";
+  const [wsSettings] = await db
+    .select({ emailSignature: workspaceSettings.emailSignature })
+    .from(workspaceSettings)
+    .where(eq(workspaceSettings.workspaceId, workspaceId))
+    .limit(1);
+  const userSignature = senderRow?.emailSignature?.trim() ?? "";
+  const sig =
+    userSignature.length > 0 ? userSignature : (wsSettings?.emailSignature ?? "").trim();
+  const bodyMentionsSignatureToken = /\{\{\s*signature\s*\}\}/i.test(draft.body ?? "");
+
+  // Render merge fields.
+  const mergeVars: Record<string, string> = {
+    firstName: firstName ?? "",
+    lastName: lastName ?? "",
+    fullName: [firstName, lastName].filter(Boolean).join(" "),
+    email: toEmail,
+    title: title ?? "",
+    company: company ?? "",
+    accountName: company ?? "",
+    senderName,
+    senderEmail,
+    signature: sig,
+  };
+  const renderedSubject = renderMergeFields(draft.subject ?? "", mergeVars);
+  const mergeVarsNoSig = { ...mergeVars, signature: "" };
+  const renderedBody = renderMergeFields(draft.body ?? "", mergeVarsNoSig);
+  const renderedBodyText = bodyMentionsSignatureToken
+    ? renderMergeFields(draft.body ?? "", mergeVars)
+    : sig
+      ? `${renderedBody.replace(/\s+$/, "")}\n\n${sig}`
+      : renderedBody;
+  const bodyHtmlBlock = renderedBody
+    .split("\n")
+    .map((line) => `<p style="margin:0 0 8px">${escapeHtmlWithLinks(line)}</p>`)
+    .join("");
+  const sigHtmlBlock = sig
+    ? `<div style="margin-top:18px;color:#555;line-height:1.4">${sig.split("\n").map(escapeHtml).join("<br>")}</div>`
+    : "";
+  const fullBodyHtml = bodyHtmlBlock + sigHtmlBlock;
+
+  // ── Deliver ──────────────────────────────────────────────────────
+  let sentMessageId: string | undefined;
+  let deliveryError: string | undefined;
+  try {
+    const sendRes = await adapter.sendEmail({
+      fromEmail: fromAccount.fromEmail,
+      fromName: fromAccount.fromName ?? fromAccount.name,
+      to: toEmail,
+      subject: renderedSubject,
+      bodyHtml: fullBodyHtml,
+      bodyText: renderedBodyText,
+      track: true,
+    });
+    sentMessageId = sendRes.messageId;
+  } catch (err) {
+    deliveryError = err instanceof Error ? err.message : String(err);
+    console.error(
+      `[deliverEmailDraft] delivery failed for draft ${draft.id} (${toEmail}): ${deliveryError}`,
+    );
+  }
+
+  if (sentMessageId) {
+    await db
+      .update(emailDrafts)
+      .set({
+        status: "sent",
+        subject: renderedSubject,
+        body: renderedBodyText,
+        sentAt: new Date(),
+        reviewedByUserId: userId,
+        trackingToken: sentMessageId.slice(0, 64),
+        toEmail,
+        sendingAccountId: fromAccount.id,
+      })
+      .where(eq(emailDrafts.id, draft.id));
+
+    const relatedType = draft.toContactId ? "contact" : draft.toLeadId ? "lead" : null;
+    const relatedId = draft.toContactId ?? draft.toLeadId;
+    if (relatedType && relatedId) {
+      await db.insert(activities).values({
+        workspaceId,
+        type: "email",
+        relatedType,
+        relatedId,
+        subject: renderedSubject,
+        body: renderedBodyText,
+        actorUserId: userId,
+        occurredAt: new Date(),
+      });
+    }
+  }
+
+  await recordAudit({
+    workspaceId,
+    actorUserId: userId,
+    action: "update",
+    entityType: "email_draft",
+    entityId: draft.id,
+    after: {
+      deliveryStatus: sentMessageId ? "sent" : "failed",
+      messageId: sentMessageId,
+      fromAccountId: fromAccount.id,
+      fromAccountName: fromAccount.name,
+      fromAccountEmail: fromAccount.fromEmail,
+      error: deliveryError,
+    },
+  });
+
+  if (!sentMessageId) {
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: deliveryError ?? "Unknown delivery error",
+    });
+  }
+  return { ok: true, messageId: sentMessageId };
+}
+
+/**
+ * Worker: scan each workspace with aiAutoSendEnabled=true and dispatch
+ * any sequence-bound pending_review drafts whose recipient meets the
+ * configured score threshold.
+ *
+ * Eligibility per draft:
+ *   - status = "pending_review"
+ *   - aiGenerated = true (only auto-send AI work, not human drafts)
+ *   - sequenceId IS NOT NULL (only outreach paths, not ad-hoc compose)
+ *   - linked lead.score >= aiAutoSendScoreMin, OR
+ *   - linked contact.relStrengthScore >= aiAutoSendScoreMin
+ *
+ * aiAutoSendConfidenceMin is currently unenforceable — no aiConfidence
+ * column on emailDrafts yet. Falls through as "pass" with a one-time
+ * warn log per worker run to make the gap visible.
+ */
+export async function autoSendForAllWorkspaces(): Promise<{
+  workspacesProcessed: number;
+  dispatched: number;
+  skipped: number;
+  failed: number;
+}> {
+  const db = await getDb();
+  if (!db) return { workspacesProcessed: 0, dispatched: 0, skipped: 0, failed: 0 };
+
+  const enabledWs = await db
+    .select({
+      workspaceId: workspaceSettings.workspaceId,
+      aiAutoSendScoreMin: workspaceSettings.aiAutoSendScoreMin,
+      aiAutoSendConfidenceMin: workspaceSettings.aiAutoSendConfidenceMin,
+    })
+    .from(workspaceSettings)
+    .where(eq(workspaceSettings.aiAutoSendEnabled, true));
+
+  if (enabledWs.length === 0) {
+    return { workspacesProcessed: 0, dispatched: 0, skipped: 0, failed: 0 };
+  }
+
+  let dispatched = 0;
+  let skipped = 0;
+  let failed = 0;
+  let confidenceWarned = false;
+
+  for (const ws of enabledWs) {
+    const scoreMin = ws.aiAutoSendScoreMin ?? 70;
+
+    const candidateDrafts = await db
+      .select({
+        id: emailDrafts.id,
+        toContactId: emailDrafts.toContactId,
+        toLeadId: emailDrafts.toLeadId,
+        createdByUserId: emailDrafts.createdByUserId,
+      })
+      .from(emailDrafts)
+      .where(
+        and(
+          eq(emailDrafts.workspaceId, ws.workspaceId),
+          eq(emailDrafts.status, "pending_review"),
+          eq(emailDrafts.aiGenerated, true),
+          isNotNull(emailDrafts.sequenceId),
+        ),
+      )
+      .limit(50); // bounded per workspace per tick
+
+    if (candidateDrafts.length === 0) continue;
+    if (!confidenceWarned && (ws.aiAutoSendConfidenceMin ?? 0) > 0) {
+      console.warn(
+        `[autoSend] workspace ${ws.workspaceId} has aiAutoSendConfidenceMin=${ws.aiAutoSendConfidenceMin} but no aiConfidence column on emailDrafts — gating on score only.`,
+      );
+      confidenceWarned = true;
+    }
+
+    for (const draft of candidateDrafts) {
+      // Score gate
+      let recipientScore: number | null = null;
+      if (draft.toLeadId) {
+        const [l] = await db
+          .select({ score: leads.score })
+          .from(leads)
+          .where(eq(leads.id, draft.toLeadId))
+          .limit(1);
+        recipientScore = l?.score ?? null;
+      } else if (draft.toContactId) {
+        const [c] = await db
+          .select({ score: contacts.relStrengthScore })
+          .from(contacts)
+          .where(eq(contacts.id, draft.toContactId))
+          .limit(1);
+        recipientScore = c?.score ?? null;
+      }
+      if (recipientScore === null || recipientScore < scoreMin) {
+        skipped++;
+        continue;
+      }
+
+      // Actor: prefer draft.createdByUserId, fall back to workspace owner.
+      // Used by deliverEmailDraft to look up the personal Unipile mailbox
+      // and to attribute the activity/audit rows.
+      let actorUserId = draft.createdByUserId ?? null;
+      if (!actorUserId) {
+        const [owner] = await db
+          .select({ ownerUserId: workspaces.ownerUserId })
+          .from(workspaces)
+          .where(eq(workspaces.id, ws.workspaceId))
+          .limit(1);
+        actorUserId = owner?.ownerUserId ?? null;
+      }
+      if (!actorUserId) {
+        skipped++;
+        console.warn(
+          `[autoSend] no actor user for draft ${draft.id} in workspace ${ws.workspaceId} — skipping`,
+        );
+        continue;
+      }
+
+      try {
+        await deliverEmailDraft({
+          workspaceId: ws.workspaceId,
+          userId: actorUserId,
+          draftId: draft.id,
+        });
+        dispatched++;
+        console.log(
+          `[autoSend] ws ${ws.workspaceId} draft ${draft.id} dispatched (score=${recipientScore} ≥ ${scoreMin})`,
+        );
+      } catch (err) {
+        failed++;
+        console.error(
+          `[autoSend] ws ${ws.workspaceId} draft ${draft.id} failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+  }
+
+  return { workspacesProcessed: enabledWs.length, dispatched, skipped, failed };
+}
+
 export const emailDraftsRouter = router({
   list: workspaceProcedure.input(z.object({ status: z.enum(["pending_review", "approved", "rejected", "sent"]).optional() }).optional()).query(async ({ ctx, input }) => {
     const db = await getDb();
@@ -655,283 +1082,13 @@ DO NOT
    * contact or lead email. Sender resolution mirrors crm.sendAdHocEmail.
    */
   send: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-    const db = await getDb();
-    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-
-    const [draft] = await db
-      .select()
-      .from(emailDrafts)
-      .where(and(eq(emailDrafts.id, input.id), eq(emailDrafts.workspaceId, ctx.workspace.id)))
-      .limit(1);
-    if (!draft) throw new TRPCError({ code: "NOT_FOUND" });
-    if (draft.status === "sent") {
-      return { ok: true, alreadySent: true, sentAt: draft.sentAt };
-    }
-
-    // ── Resolve recipient ─────────────────────────────────────────────
-    let toEmail = draft.toEmail ?? null;
-    let firstName: string | null = null;
-    let lastName: string | null = null;
-    let title: string | null = null;
-    let company: string | null = null;
-    if (!toEmail && draft.toContactId) {
-      const [c] = await db
-        .select({
-          email: contacts.email,
-          firstName: contacts.firstName,
-          lastName: contacts.lastName,
-          title: contacts.title,
-          accountName: accounts.name,
-        })
-        .from(contacts)
-        .leftJoin(accounts, eq(accounts.id, contacts.accountId))
-        .where(and(eq(contacts.id, draft.toContactId), eq(contacts.workspaceId, ctx.workspace.id)))
-        .limit(1);
-      if (c) {
-        toEmail = c.email ?? null;
-        firstName = c.firstName ?? null;
-        lastName = c.lastName ?? null;
-        title = c.title ?? null;
-        company = c.accountName ?? null;
-      }
-    } else if (!toEmail && draft.toLeadId) {
-      const [l] = await db
-        .select()
-        .from(leads)
-        .where(and(eq(leads.id, draft.toLeadId), eq(leads.workspaceId, ctx.workspace.id)))
-        .limit(1);
-      if (l) {
-        toEmail = l.email ?? null;
-        firstName = l.firstName ?? null;
-        lastName = l.lastName ?? null;
-        title = l.title ?? null;
-        company = l.company ?? null;
-      }
-    } else if (draft.toContactId) {
-      // toEmail set but we still want merge-field data
-      const [c] = await db
-        .select({
-          firstName: contacts.firstName,
-          lastName: contacts.lastName,
-          title: contacts.title,
-          accountName: accounts.name,
-        })
-        .from(contacts)
-        .leftJoin(accounts, eq(accounts.id, contacts.accountId))
-        .where(and(eq(contacts.id, draft.toContactId), eq(contacts.workspaceId, ctx.workspace.id)))
-        .limit(1);
-      if (c) {
-        firstName = c.firstName ?? null;
-        lastName = c.lastName ?? null;
-        title = c.title ?? null;
-        company = c.accountName ?? null;
-      }
-    } else if (draft.toLeadId) {
-      const [l] = await db
-        .select({
-          firstName: leads.firstName,
-          lastName: leads.lastName,
-          title: leads.title,
-          company: leads.company,
-        })
-        .from(leads)
-        .where(and(eq(leads.id, draft.toLeadId), eq(leads.workspaceId, ctx.workspace.id)))
-        .limit(1);
-      if (l) {
-        firstName = l.firstName ?? null;
-        lastName = l.lastName ?? null;
-        title = l.title ?? null;
-        company = l.company ?? null;
-      }
-    }
-    if (!toEmail) {
-      throw new TRPCError({
-        code: "BAD_REQUEST",
-        message: "Draft has no recipient email and the linked contact/lead has none either.",
-      });
-    }
-
-    // ── Resolve sending account ──────────────────────────────────────
-    // Priority for sequence-bound drafts:
-    //   1. Pool/account assigned by the campaign owning this sequence
-    //      (honors rotation strategy + per-account dailySendLimit)
-    //   2. Rep's bridged personal Unipile mailbox
-    //   3. Any workspace SMTP fallback
-    // Non-sequence drafts skip step 1 and go straight to 2/3.
-    let fromAccount: typeof sendingAccounts.$inferSelect | undefined;
-    if (draft.sequenceId) {
-      const picked = await pickAccountForSequenceDraft(
-        db,
-        ctx.workspace.id,
-        draft.sequenceId,
-      );
-      if (picked) {
-        fromAccount = picked;
-        console.log(
-          `[emailDrafts.send] draft ${draft.id} sequence ${draft.sequenceId} → pool/account ${picked.id} (${picked.fromEmail})`,
-        );
-      }
-    }
-    // Step 2: rep's bridged personal Unipile mailbox (skipped if step 1 hit).
-    if (!fromAccount) {
-      const [personal] = await db
-        .select({ sa: sendingAccounts })
-        .from(sendingAccounts)
-        .innerJoin(unipileAccounts, eq(sendingAccounts.unipileAccountId, unipileAccounts.unipileAccountId))
-        .where(
-          and(
-            eq(sendingAccounts.workspaceId, ctx.workspace.id),
-            eq(unipileAccounts.userId, ctx.user.id),
-            isNotNull(sendingAccounts.unipileAccountId),
-          ),
-        )
-        .limit(1);
-      if (personal) fromAccount = personal.sa;
-    }
-    // Step 3: any workspace SMTP account (last-resort fallback).
-    if (!fromAccount) {
-      const [fallback] = await db
-        .select()
-        .from(sendingAccounts)
-        .where(eq(sendingAccounts.workspaceId, ctx.workspace.id))
-        .limit(1);
-      if (fallback) fromAccount = fallback;
-    }
-    if (!fromAccount) {
-      throw new TRPCError({
-        code: "PRECONDITION_FAILED",
-        message: "No sending account available. Connect your mailbox or have an admin add a workspace SMTP.",
-      });
-    }
-    const adapter = createEmailAdapter(fromAccount);
-
-    // Sender + signature precedence (user → workspace).
-    const [senderRow] = await db
-      .select({ name: users.name, email: users.email, emailSignature: users.emailSignature })
-      .from(users)
-      .where(eq(users.id, ctx.user.id))
-      .limit(1);
-    const senderName = senderRow?.name ?? fromAccount.fromName ?? fromAccount.name ?? "";
-    const senderEmail = senderRow?.email ?? fromAccount.fromEmail ?? "";
-    const [wsSettings] = await db
-      .select({ emailSignature: workspaceSettings.emailSignature })
-      .from(workspaceSettings)
-      .where(eq(workspaceSettings.workspaceId, ctx.workspace.id))
-      .limit(1);
-    const userSignature = senderRow?.emailSignature?.trim() ?? "";
-    const sig =
-      userSignature.length > 0 ? userSignature : (wsSettings?.emailSignature ?? "").trim();
-    const bodyMentionsSignatureToken = /\{\{\s*signature\s*\}\}/i.test(draft.body ?? "");
-
-    // Render merge fields.
-    const mergeVars: Record<string, string> = {
-      firstName: firstName ?? "",
-      lastName: lastName ?? "",
-      fullName: [firstName, lastName].filter(Boolean).join(" "),
-      email: toEmail,
-      title: title ?? "",
-      company: company ?? "",
-      accountName: company ?? "",
-      senderName,
-      senderEmail,
-      signature: sig,
-    };
-    const renderedSubject = renderMergeFields(draft.subject ?? "", mergeVars);
-    const mergeVarsNoSig = { ...mergeVars, signature: "" };
-    const renderedBody = renderMergeFields(draft.body ?? "", mergeVarsNoSig);
-    const renderedBodyText = bodyMentionsSignatureToken
-      ? renderMergeFields(draft.body ?? "", mergeVars)
-      : sig
-        ? `${renderedBody.replace(/\s+$/, "")}\n\n${sig}`
-        : renderedBody;
-    const bodyHtmlBlock = renderedBody
-      .split("\n")
-      .map((line) => `<p style="margin:0 0 8px">${escapeHtmlWithLinks(line)}</p>`)
-      .join("");
-    const sigHtmlBlock = sig
-      ? `<div style="margin-top:18px;color:#555;line-height:1.4">${sig.split("\n").map(escapeHtml).join("<br>")}</div>`
-      : "";
-    const fullBodyHtml = bodyHtmlBlock + sigHtmlBlock;
-
-    // ── Deliver ──────────────────────────────────────────────────────
-    let sentMessageId: string | undefined;
-    let deliveryError: string | undefined;
-    try {
-      const sendRes = await adapter.sendEmail({
-        fromEmail: fromAccount.fromEmail,
-        fromName: fromAccount.fromName ?? fromAccount.name,
-        to: toEmail,
-        subject: renderedSubject,
-        bodyHtml: fullBodyHtml,
-        bodyText: renderedBodyText,
-        track: true,
-      });
-      sentMessageId = sendRes.messageId;
-    } catch (err) {
-      deliveryError = err instanceof Error ? err.message : String(err);
-      console.error(
-        `[emailDrafts.send] delivery failed for draft ${draft.id} (${toEmail}): ${deliveryError}`,
-      );
-    }
-
-    if (sentMessageId) {
-      await db
-        .update(emailDrafts)
-        .set({
-          status: "sent",
-          subject: renderedSubject,
-          body: renderedBodyText,
-          sentAt: new Date(),
-          reviewedByUserId: ctx.user.id,
-          trackingToken: sentMessageId.slice(0, 64),
-          toEmail,
-          // Track which sending account dispatched this — read by
-          // pickAccountForSequenceDraft to enforce per-account daily limits.
-          sendingAccountId: fromAccount.id,
-        })
-        .where(eq(emailDrafts.id, draft.id));
-
-      // Timeline activity on the linked record.
-      const relatedType = draft.toContactId ? "contact" : draft.toLeadId ? "lead" : null;
-      const relatedId = draft.toContactId ?? draft.toLeadId;
-      if (relatedType && relatedId) {
-        await db.insert(activities).values({
-          workspaceId: ctx.workspace.id,
-          type: "email",
-          relatedType,
-          relatedId,
-          subject: renderedSubject,
-          body: renderedBodyText,
-          actorUserId: ctx.user.id,
-          occurredAt: new Date(),
-        });
-      }
-    }
-
-    await recordAudit({
+    return deliverEmailDraft({
       workspaceId: ctx.workspace.id,
-      actorUserId: ctx.user.id,
-      action: "update",
-      entityType: "email_draft",
-      entityId: draft.id,
-      after: {
-        deliveryStatus: sentMessageId ? "sent" : "failed",
-        messageId: sentMessageId,
-        fromAccountId: fromAccount.id,
-        fromAccountName: fromAccount.name,
-        fromAccountEmail: fromAccount.fromEmail,
-        error: deliveryError,
-      },
+      userId: ctx.user.id,
+      draftId: input.id,
     });
-
-    if (!sentMessageId) {
-      throw new TRPCError({
-        code: "INTERNAL_SERVER_ERROR",
-        message: deliveryError ?? "Unknown delivery error",
-      });
-    }
-    return { ok: true, messageId: sentMessageId };
   }),
+
 
   update: repProcedure.input(z.object({ id: z.number(), subject: z.string(), body: z.string() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
