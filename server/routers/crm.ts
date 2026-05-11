@@ -40,6 +40,35 @@ function escapeHtml(s: string): string {
 }
 
 /**
+ * Escape HTML, then turn http(s) URLs into proper <a href> anchors.
+ *
+ * Important for Unipile click tracking: the provider rewrites the href
+ * of every <a> tag at send time into a tracked redirect. Plain-text
+ * URLs (auto-linked by the email client at display time) bypass that
+ * rewrite, so a click never fires the email_tracking webhook.
+ *
+ * The URL regex is intentionally conservative — only http/https schemes,
+ * stops at whitespace and common punctuation. Trailing `.,;:)` gets
+ * stripped so sentences like "see https://x.com." don't include the dot
+ * in the anchor.
+ */
+function escapeHtmlWithLinks(s: string): string {
+  const urlRe = /(https?:\/\/[^\s<>"']+)/g;
+  // Escape first, then walk the escaped string finding URLs to anchor-wrap.
+  // Safe because URL chars (no <, >, &, ", ') aren't HTML-escaped.
+  return escapeHtml(s).replace(urlRe, (raw) => {
+    // Pull off trailing punctuation that's almost certainly sentence-final.
+    let url = raw;
+    let trailing = "";
+    while (/[.,;:)\]!?]$/.test(url)) {
+      trailing = url.slice(-1) + trailing;
+      url = url.slice(0, -1);
+    }
+    return `<a href="${url}" style="color:#2563eb;text-decoration:underline">${url}</a>${trailing}`;
+  });
+}
+
+/**
  * Replace `{{merge_field}}` tokens with per-recipient values.
  *
  * Token matching is case-insensitive and tolerant of common variants
@@ -539,7 +568,7 @@ export const contactsRouter = router({
         //   <div>sig line<br>sig line<br>...</div> (line-height 1.4)
         const bodyHtmlBlock = renderedBody
           .split("\n")
-          .map((line) => `<p style="margin:0 0 8px">${escapeHtml(line)}</p>`)
+          .map((line) => `<p style="margin:0 0 8px">${escapeHtmlWithLinks(line)}</p>`)
           .join("");
         const sigHtmlBlock = workspaceSignature
           ? `<div style="margin-top:18px;color:#555;line-height:1.4">${workspaceSignature.split("\n").map(escapeHtml).join("<br>")}</div>`
