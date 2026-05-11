@@ -170,10 +170,24 @@ const AccountCreateInput = z.object({
   warmupStatus: z.enum(["not_started", "in_progress", "complete"]).default("not_started"),
 });
 
+const PoolMemberInput = z.object({
+  accountId: z.number().int(),
+  weight: z.number().int().min(1).max(100).default(10),
+  /** UI uses "priority"; DB column is `position`. Either key accepted. */
+  priority: z.number().int().optional(),
+  position: z.number().int().optional(),
+});
+
 const PoolCreateInput = z.object({
   name: z.string().min(1).max(120),
   description: z.string().optional(),
   rotationStrategy: z.enum(["round_robin", "weighted", "random"]).default("round_robin"),
+  /**
+   * Members can be set in one shot when creating/updating a pool. The
+   * UI takes this path; the separate addMember/removeMember endpoints
+   * exist for incremental edits but aren't currently used by the page.
+   */
+  members: z.array(PoolMemberInput).optional(),
 });
 
 // ─── Sending Accounts Router ─────────────────────────────────────────────────
@@ -473,11 +487,63 @@ export const senderPoolsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // Pool row first — strip `members` since it isn't a senderPools column.
+      const { members, ...poolFields } = input;
       const [result] = await db.insert(senderPools).values({
         workspaceId: ctx.workspace.id,
-        ...input,
+        ...poolFields,
       });
-      return { id: (result as any).insertId as number };
+      const poolId = (result as any).insertId as number;
+
+      // Members second — validate each is a real workspace account AND
+      // not a personal Unipile-bridged mailbox (same rule as addMember).
+      if (members && members.length > 0) {
+        const accountIds = members.map((m) => m.accountId);
+        const validAccounts = await db
+          .select({ id: sendingAccounts.id, unipileAccountId: sendingAccounts.unipileAccountId })
+          .from(sendingAccounts)
+          .where(
+            and(
+              eq(sendingAccounts.workspaceId, ctx.workspace.id),
+              inArray(sendingAccounts.id, accountIds),
+            ),
+          );
+        const validMap = new Map(validAccounts.map((a) => [a.id, a]));
+        const rejected: number[] = [];
+        const memberRows = members
+          .map((m, idx) => {
+            const acct = validMap.get(m.accountId);
+            if (!acct) {
+              rejected.push(m.accountId);
+              return null;
+            }
+            if (acct.unipileAccountId) {
+              // Skip Unipile-bridged personal mailboxes silently rather
+              // than failing the whole pool create — they shouldn't have
+              // been selectable in the UI.
+              rejected.push(m.accountId);
+              return null;
+            }
+            return {
+              workspaceId: ctx.workspace.id,
+              poolId,
+              accountId: m.accountId,
+              weight: m.weight ?? 10,
+              position: m.position ?? m.priority ?? idx,
+            };
+          })
+          .filter((r): r is NonNullable<typeof r> => r !== null);
+        if (memberRows.length > 0) {
+          await db.insert(senderPoolMembers).values(memberRows);
+        }
+        if (rejected.length > 0) {
+          console.warn(
+            `[senderPools.create] pool ${poolId} skipped ${rejected.length} member(s) not in workspace or personal-mailbox-bridged: ${rejected.join(",")}`,
+          );
+        }
+      }
+
+      return { id: poolId, memberCount: members?.length ?? 0 };
     }),
 
   update: workspaceProcedure
@@ -485,16 +551,66 @@ export const senderPoolsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      const { id, ...rest } = input;
-      await db
-        .update(senderPools)
-        .set(rest)
-        .where(
-          and(
-            eq(senderPools.id, id),
-            eq(senderPools.workspaceId, ctx.workspace.id),
-          ),
-        );
+      const { id, members, ...rest } = input;
+      // Verify ownership before mutating either pool or members.
+      const [existing] = await db
+        .select({ id: senderPools.id })
+        .from(senderPools)
+        .where(and(eq(senderPools.id, id), eq(senderPools.workspaceId, ctx.workspace.id)))
+        .limit(1);
+      if (!existing) throw new TRPCError({ code: "NOT_FOUND" });
+
+      // Pool fields (name / description / rotationStrategy). Skip the
+      // db.update call entirely if there's nothing to set — empty SET
+      // throws on some MySQL versions.
+      if (Object.keys(rest).length > 0) {
+        await db
+          .update(senderPools)
+          .set(rest)
+          .where(
+            and(
+              eq(senderPools.id, id),
+              eq(senderPools.workspaceId, ctx.workspace.id),
+            ),
+          );
+      }
+
+      // Members: if the caller passed an array (even empty), treat it
+      // as the authoritative new list — delete then re-insert. If
+      // members is undefined, leave existing members alone.
+      if (members !== undefined) {
+        await db.delete(senderPoolMembers).where(eq(senderPoolMembers.poolId, id));
+        if (members.length > 0) {
+          const accountIds = members.map((m) => m.accountId);
+          const validAccounts = await db
+            .select({ id: sendingAccounts.id, unipileAccountId: sendingAccounts.unipileAccountId })
+            .from(sendingAccounts)
+            .where(
+              and(
+                eq(sendingAccounts.workspaceId, ctx.workspace.id),
+                inArray(sendingAccounts.id, accountIds),
+              ),
+            );
+          const validMap = new Map(validAccounts.map((a) => [a.id, a]));
+          const memberRows = members
+            .map((m, idx) => {
+              const acct = validMap.get(m.accountId);
+              if (!acct || acct.unipileAccountId) return null;
+              return {
+                workspaceId: ctx.workspace.id,
+                poolId: id,
+                accountId: m.accountId,
+                weight: m.weight ?? 10,
+                position: m.position ?? m.priority ?? idx,
+              };
+            })
+            .filter((r): r is NonNullable<typeof r> => r !== null);
+          if (memberRows.length > 0) {
+            await db.insert(senderPoolMembers).values(memberRows);
+          }
+        }
+      }
+
       return { ok: true };
     }),
 
