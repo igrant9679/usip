@@ -378,6 +378,141 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
       `ALTER TABLE \`calendar_accounts\` ADD COLUMN \`unipileAccountId\` varchar(64) NULL`,
     ],
   },
+  // ── 0059: Schema drift catch-up ──────────────────────────────────────────
+  // The embedded port of 0050_ai_features.sql shipped only a fraction of
+  // the original SQL (just aiSummary on contacts + aiInsight on
+  // opportunities). The rest — relStrength on contacts, churnRisk on
+  // customers, aiNextAction on leads, aiPrice on quotes, aiAutoSend on
+  // workspace_settings, and three new AI tables — never made it to prod
+  // and silently broke INSERT contacts ("Unknown column 'relStrengthScore'")
+  // plus SELECT workspace_settings ("Unknown column 'aiAutoSendEnabled'").
+  //
+  // Clodura enrichment tables (jobs/history/settings) were also referenced
+  // by the schema and worker code but had no migration. Adding them here
+  // stops the "Table 'usip.clodura_enrichment_jobs' doesn't exist" loop in
+  // the background enrichment worker.
+  //
+  // All statements use ADD COLUMN / CREATE TABLE IF NOT EXISTS and rely on
+  // the runner's TOLERATED_ERRNOS set (1050/1060/1061) so re-runs are safe.
+  {
+    name: "0059_schema_drift_catchup.sql",
+    statements: [
+      // contacts: relationship strength (was section 3 of 0050)
+      `ALTER TABLE \`contacts\` ADD COLUMN \`relStrengthScore\` int`,
+      `ALTER TABLE \`contacts\` ADD COLUMN \`relStrengthLabel\` varchar(16)`,
+      `ALTER TABLE \`contacts\` ADD COLUMN \`relStrengthAt\` timestamp NULL`,
+      // customers: churn risk (was section 1 of 0050)
+      `ALTER TABLE \`customers\` ADD COLUMN \`churnRiskScore\` int`,
+      `ALTER TABLE \`customers\` ADD COLUMN \`churnRiskLabel\` varchar(16)`,
+      `ALTER TABLE \`customers\` ADD COLUMN \`churnRiskRationale\` text`,
+      `ALTER TABLE \`customers\` ADD COLUMN \`churnRiskScoredAt\` timestamp NULL`,
+      // leads: next-action suggestion (was section 2 of 0050)
+      `ALTER TABLE \`leads\` ADD COLUMN \`aiNextAction\` varchar(40)`,
+      `ALTER TABLE \`leads\` ADD COLUMN \`aiNextActionNote\` text`,
+      `ALTER TABLE \`leads\` ADD COLUMN \`aiNextActionAt\` timestamp NULL`,
+      // quotes: AI pricing (was section 4 of 0050)
+      `ALTER TABLE \`quotes\` ADD COLUMN \`aiPriceMin\` decimal(14,2)`,
+      `ALTER TABLE \`quotes\` ADD COLUMN \`aiPriceMax\` decimal(14,2)`,
+      `ALTER TABLE \`quotes\` ADD COLUMN \`aiDiscountCeil\` decimal(5,2)`,
+      `ALTER TABLE \`quotes\` ADD COLUMN \`aiPriceRationale\` text`,
+      `ALTER TABLE \`quotes\` ADD COLUMN \`aiPriceScoredAt\` timestamp NULL`,
+      // workspace_settings: auto-send toggle (was section 5 of 0050)
+      `ALTER TABLE \`workspace_settings\` ADD COLUMN \`aiAutoSendEnabled\` boolean NOT NULL DEFAULT FALSE`,
+      `ALTER TABLE \`workspace_settings\` ADD COLUMN \`aiAutoSendScoreMin\` int NOT NULL DEFAULT 70`,
+      `ALTER TABLE \`workspace_settings\` ADD COLUMN \`aiAutoSendConfidenceMin\` int NOT NULL DEFAULT 75`,
+      // ai_workflow_suggestions (was section 6 of 0050)
+      `CREATE TABLE IF NOT EXISTS \`ai_workflow_suggestions\` (
+        \`id\` int AUTO_INCREMENT NOT NULL,
+        \`workspaceId\` int NOT NULL,
+        \`title\` varchar(200) NOT NULL,
+        \`description\` text NOT NULL,
+        \`triggerType\` varchar(60) NOT NULL,
+        \`triggerConfig\` json NOT NULL,
+        \`conditions\` json NOT NULL,
+        \`actions\` json NOT NULL,
+        \`dismissed\` boolean NOT NULL DEFAULT FALSE,
+        \`appliedRuleId\` int,
+        \`generatedAt\` timestamp NOT NULL DEFAULT (now()),
+        CONSTRAINT \`ai_workflow_suggestions_id\` PRIMARY KEY (\`id\`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE INDEX \`ix_aiws_ws\` ON \`ai_workflow_suggestions\` (\`workspaceId\`)`,
+      // forecast_ai_commentary (was section 7 of 0050)
+      `CREATE TABLE IF NOT EXISTS \`forecast_ai_commentary\` (
+        \`id\` int AUTO_INCREMENT NOT NULL,
+        \`workspaceId\` int NOT NULL,
+        \`periodLabel\` varchar(20) NOT NULL,
+        \`commentary\` text NOT NULL,
+        \`highlights\` json,
+        \`generatedAt\` timestamp NOT NULL DEFAULT (now()),
+        CONSTRAINT \`forecast_ai_commentary_id\` PRIMARY KEY (\`id\`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE INDEX \`ix_fac_ws\` ON \`forecast_ai_commentary\` (\`workspaceId\`, \`periodLabel\`)`,
+      // mailbox_ai_triage (was section 8 of 0050)
+      `CREATE TABLE IF NOT EXISTS \`mailbox_ai_triage\` (
+        \`id\` int AUTO_INCREMENT NOT NULL,
+        \`workspaceId\` int NOT NULL,
+        \`accountId\` int NOT NULL,
+        \`threadId\` varchar(255) NOT NULL,
+        \`triageLabel\` varchar(20) NOT NULL,
+        \`confidence\` int NOT NULL DEFAULT 80,
+        \`rationale\` text,
+        \`labelledAt\` timestamp NOT NULL DEFAULT (now()),
+        CONSTRAINT \`mailbox_ai_triage_id\` PRIMARY KEY (\`id\`),
+        CONSTRAINT \`uq_triage\` UNIQUE (\`workspaceId\`, \`accountId\`, \`threadId\`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE INDEX \`ix_triage_ws\` ON \`mailbox_ai_triage\` (\`workspaceId\`, \`accountId\`)`,
+      // clodura_enrichment_jobs — referenced by background worker but never
+      // had a migration. Worker run failures appear once a minute in logs.
+      `CREATE TABLE IF NOT EXISTS \`clodura_enrichment_jobs\` (
+        \`id\` int AUTO_INCREMENT NOT NULL,
+        \`workspaceId\` int NOT NULL,
+        \`contact_id\` int NOT NULL,
+        \`trigger\` varchar(20) NOT NULL,
+        \`identifier_set\` json NOT NULL,
+        \`confidence\` varchar(20),
+        \`status\` varchar(20) NOT NULL DEFAULT 'pending',
+        \`credits_consumed\` int DEFAULT 0,
+        \`raw_response\` json,
+        \`raw_response_purged_at\` timestamp NULL,
+        \`requested_by\` int,
+        \`requested_at\` timestamp NOT NULL DEFAULT (now()),
+        \`completed_at\` timestamp NULL,
+        \`error\` text,
+        CONSTRAINT \`clodura_enrichment_jobs_id\` PRIMARY KEY (\`id\`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE INDEX \`ix_cej_contact\` ON \`clodura_enrichment_jobs\` (\`contact_id\`)`,
+      `CREATE INDEX \`ix_cej_status\` ON \`clodura_enrichment_jobs\` (\`status\`, \`requested_at\`)`,
+      `CREATE INDEX \`ix_cej_ws\` ON \`clodura_enrichment_jobs\` (\`workspaceId\`)`,
+      // contact_enrichment_history (companion to clodura_enrichment_jobs)
+      `CREATE TABLE IF NOT EXISTS \`contact_enrichment_history\` (
+        \`id\` int AUTO_INCREMENT NOT NULL,
+        \`workspaceId\` int NOT NULL,
+        \`contact_id\` int NOT NULL,
+        \`enrichment_job_id\` int,
+        \`field_name\` varchar(80) NOT NULL,
+        \`old_value\` text,
+        \`new_value\` text,
+        \`applied_by\` int,
+        \`applied_at\` timestamp NOT NULL DEFAULT (now()),
+        \`source\` varchar(40) NOT NULL DEFAULT 'clodura_enrich',
+        CONSTRAINT \`contact_enrichment_history_id\` PRIMARY KEY (\`id\`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE INDEX \`ix_ceh_contact\` ON \`contact_enrichment_history\` (\`contact_id\`, \`applied_at\`)`,
+      `CREATE INDEX \`ix_ceh_ws\` ON \`contact_enrichment_history\` (\`workspaceId\`)`,
+      // clodura_enrichment_settings (per-workspace knobs)
+      `CREATE TABLE IF NOT EXISTS \`clodura_enrichment_settings\` (
+        \`workspaceId\` int NOT NULL,
+        \`auto_enrich_on_create\` boolean NOT NULL DEFAULT FALSE,
+        \`scheduled_reenrich_enabled\` boolean NOT NULL DEFAULT FALSE,
+        \`stale_threshold_days\` int NOT NULL DEFAULT 90,
+        \`daily_budget_cap\` int NOT NULL DEFAULT 1500,
+        \`updated_by\` int,
+        \`updated_at\` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,
+        CONSTRAINT \`clodura_enrichment_settings_workspaceId\` PRIMARY KEY (\`workspaceId\`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+    ],
+  },
+
   // ── 0058: Unipile email webhook cache ────────────────────────────────────
   // Local write-through cache populated by POST /api/unipile/mail-webhook.
   // Used by UnipileMailAdapter as a fallback when /emails returns items=0,
