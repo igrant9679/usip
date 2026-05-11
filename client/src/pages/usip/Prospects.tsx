@@ -646,6 +646,30 @@ export default function ProspectsPage() {
     onError: (e) => toast.error(e.message),
   });
 
+  const deleteProspect = trpc.clodura.deleteProspect.useMutation({
+    onSuccess: (res) => {
+      toast.success(
+        res.hadLinkedContact
+          ? "Prospect deleted (linked contact kept — delete via Contacts if you want it gone too)"
+          : "Prospect deleted",
+      );
+      utils.clodura.listProspects.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const bulkDeleteProspects = trpc.clodura.bulkDeleteProspects.useMutation({
+    onSuccess: (res) => {
+      toast.success(
+        res.hadLinkedContacts > 0
+          ? `${res.deleted} prospects deleted (${res.hadLinkedContacts} had linked contacts — kept intact)`
+          : `${res.deleted} prospects deleted`,
+      );
+      setSelectedIds(new Set());
+      utils.clodura.listProspects.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
   const revealPhone = trpc.clodura.revealPhone.useMutation({
     onSuccess: () => toast.success("Phone reveal requested — you'll be notified when it's ready"),
     onError: (e) => toast.error(e.message),
@@ -733,6 +757,21 @@ export default function ProspectsPage() {
               <Button size="sm" variant="outline" onClick={handleBulkPromote} disabled={promote.isPending}>
                 <UserPlus className="h-4 w-4 mr-2" />
                 Promote {selectedIds.size} to contacts
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="text-destructive border-destructive/40 hover:bg-destructive/10"
+                onClick={() => {
+                  const ids = Array.from(selectedIds);
+                  if (confirm(`Delete ${ids.length} prospect${ids.length !== 1 ? "s" : ""}? Promoted contacts will be kept.`)) {
+                    bulkDeleteProspects.mutate({ prospectIds: ids });
+                  }
+                }}
+                disabled={bulkDeleteProspects.isPending}
+              >
+                <Trash2 className="h-4 w-4 mr-2" />
+                Delete {selectedIds.size}
               </Button>
             </>
           )}
@@ -889,6 +928,19 @@ export default function ProspectsPage() {
                             Reveal phone
                           </DropdownMenuItem>
                         )}
+                        <DropdownMenuItem
+                          className="text-destructive"
+                          onClick={() => {
+                            const label = `${p.firstName} ${p.lastName}`.trim() || "this prospect";
+                            const warn = p.linkedContactId
+                              ? `Delete ${label}? They've been promoted to a contact — the contact row will be kept.`
+                              : `Delete ${label}?`;
+                            if (confirm(warn)) deleteProspect.mutate({ prospectId: p.id });
+                          }}
+                        >
+                          <Trash2 className="h-4 w-4 mr-2" />
+                          Delete
+                        </DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </TableCell>

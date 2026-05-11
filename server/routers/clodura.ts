@@ -372,6 +372,85 @@ export const cloduraRouter = router({
       return { data: rows, total: Number(total), page: input.page, perPage: input.perPage };
     }),
 
+  /* ── Delete prospect ─────────────────────────────────────────────────────
+   * Removes the prospect row only. If the prospect was promoted to a
+   * contact (linkedContactId is set), the contact row remains untouched —
+   * delete contacts via contacts.delete if you want them gone too. This
+   * keeps the action reversible-by-re-ingest and avoids cascading surprises.
+   */
+  deleteProspect: workspaceProcedure
+    .input(z.object({ prospectId: z.number().int() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [before] = await db
+        .select()
+        .from(prospects)
+        .where(
+          and(
+            eq(prospects.id, input.prospectId),
+            eq(prospects.workspaceId, ctx.workspace.id),
+          ),
+        )
+        .limit(1);
+      if (!before) throw new TRPCError({ code: "NOT_FOUND" });
+      await db
+        .delete(prospects)
+        .where(
+          and(
+            eq(prospects.id, input.prospectId),
+            eq(prospects.workspaceId, ctx.workspace.id),
+          ),
+        );
+      await recordAudit({
+        workspaceId: ctx.workspace.id,
+        actorUserId: ctx.user.id,
+        action: "delete",
+        entityType: "prospect",
+        entityId: input.prospectId,
+        before,
+      });
+      return { ok: true, hadLinkedContact: Boolean(before.linkedContactId) };
+    }),
+
+  /** Bulk-delete prospects by id list. */
+  bulkDeleteProspects: workspaceProcedure
+    .input(z.object({ prospectIds: z.array(z.number().int()).min(1).max(500) }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const rows = await db
+        .select({ id: prospects.id, linkedContactId: prospects.linkedContactId })
+        .from(prospects)
+        .where(
+          and(
+            eq(prospects.workspaceId, ctx.workspace.id),
+            inArray(prospects.id, input.prospectIds),
+          ),
+        );
+      if (rows.length === 0) return { deleted: 0, hadLinkedContacts: 0 };
+      await db
+        .delete(prospects)
+        .where(
+          and(
+            eq(prospects.workspaceId, ctx.workspace.id),
+            inArray(prospects.id, rows.map((r) => r.id)),
+          ),
+        );
+      await recordAudit({
+        workspaceId: ctx.workspace.id,
+        actorUserId: ctx.user.id,
+        action: "delete",
+        entityType: "prospect_bulk",
+        entityId: 0,
+        after: { ids: rows.map((r) => r.id) },
+      });
+      return {
+        deleted: rows.length,
+        hadLinkedContacts: rows.filter((r) => r.linkedContactId).length,
+      };
+    }),
+
   /* ── Promote prospect to contact ─────────────────────────────────────── */
   promoteToContact: workspaceProcedure
     .input(z.object({ prospectId: z.number().int() }))
