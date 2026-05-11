@@ -920,6 +920,11 @@ export const leadsRouter = router({
   }),
 
   /** Send an ad-hoc email to a lead and log it in the timeline */
+  /**
+   * Send an ad-hoc email to a single lead. Same delivery path as
+   * contacts.sendAdHocEmail — adapter resolution, merge-field rendering,
+   * signature append, tracking opt-in — just sourced from the lead row.
+   */
   sendAdHocEmail: repProcedure
     .input(
       z.object({
@@ -927,44 +932,199 @@ export const leadsRouter = router({
         subject: z.string().min(1),
         body: z.string().min(1),
         aiGenerated: z.boolean().default(false),
+        fromAccountId: z.number().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      const [lead] = await db.select().from(leads).where(and(eq(leads.id, input.leadId), eq(leads.workspaceId, ctx.workspace.id)));
+
+      const [lead] = await db
+        .select()
+        .from(leads)
+        .where(and(eq(leads.id, input.leadId), eq(leads.workspaceId, ctx.workspace.id)));
       if (!lead) throw new TRPCError({ code: "NOT_FOUND" });
-      if (!lead.email) throw new TRPCError({ code: "BAD_REQUEST", message: "Lead has no email address" });
-      // Create emailDraft record
-      await db.insert(emailDrafts).values({
-        workspaceId: ctx.workspace.id,
-        subject: input.subject,
-        body: input.body,
-        status: "sent",
-        aiGenerated: input.aiGenerated,
-        createdByUserId: ctx.user.id,
-        sentAt: new Date(),
-      });
-      // Log a Timeline activity on the lead record
-      await db.insert(activities).values({
-        workspaceId: ctx.workspace.id,
-        type: "email",
-        relatedType: "lead",
-        relatedId: input.leadId,
-        subject: input.subject,
-        body: input.body,
-        actorUserId: ctx.user.id,
-        occurredAt: new Date(),
-      });
+      if (!lead.email)
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Lead has no email address" });
+
+      // ── Resolve sending account (same precedence as contacts path) ────
+      let fromAccount: typeof sendingAccounts.$inferSelect | undefined;
+      if (input.fromAccountId) {
+        const [explicit] = await db
+          .select()
+          .from(sendingAccounts)
+          .where(
+            and(
+              eq(sendingAccounts.id, input.fromAccountId),
+              eq(sendingAccounts.workspaceId, ctx.workspace.id),
+            ),
+          )
+          .limit(1);
+        if (!explicit) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Specified sending account not found in this workspace.",
+          });
+        }
+        fromAccount = explicit;
+      }
+      if (!fromAccount) {
+        const [personal] = await db
+          .select({ sa: sendingAccounts })
+          .from(sendingAccounts)
+          .innerJoin(
+            unipileAccounts,
+            eq(sendingAccounts.unipileAccountId, unipileAccounts.unipileAccountId),
+          )
+          .where(
+            and(
+              eq(sendingAccounts.workspaceId, ctx.workspace.id),
+              eq(unipileAccounts.userId, ctx.user.id),
+              isNotNull(sendingAccounts.unipileAccountId),
+            ),
+          )
+          .limit(1);
+        if (personal) fromAccount = personal.sa;
+      }
+      if (!fromAccount) {
+        const [fallback] = await db
+          .select()
+          .from(sendingAccounts)
+          .where(eq(sendingAccounts.workspaceId, ctx.workspace.id))
+          .limit(1);
+        if (fallback) fromAccount = fallback;
+      }
+      if (!fromAccount) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message:
+            "No sending account available. Connect your personal mailbox in Connected Accounts, or have an admin add a workspace SMTP account.",
+        });
+      }
+      const adapter = createEmailAdapter(fromAccount);
+
+      // Sender + signature precedence (user override → workspace default).
+      const [senderRow] = await db
+        .select({ name: users.name, email: users.email, emailSignature: users.emailSignature })
+        .from(users)
+        .where(eq(users.id, ctx.user.id))
+        .limit(1);
+      const senderName = senderRow?.name ?? fromAccount.fromName ?? fromAccount.name ?? "";
+      const senderEmail = senderRow?.email ?? fromAccount.fromEmail ?? "";
+      const [wsSettings] = await db
+        .select({ emailSignature: workspaceSettings.emailSignature })
+        .from(workspaceSettings)
+        .where(eq(workspaceSettings.workspaceId, ctx.workspace.id))
+        .limit(1);
+      const userSignature = senderRow?.emailSignature?.trim() ?? "";
+      const workspaceSignature =
+        userSignature.length > 0 ? userSignature : (wsSettings?.emailSignature ?? "").trim();
+      const bodyMentionsSignatureToken = /\{\{\s*signature\s*\}\}/i.test(input.body);
+
+      // Merge fields (leads carry their own company string — no join).
+      const mergeVars: Record<string, string> = {
+        firstName: lead.firstName ?? "",
+        lastName: lead.lastName ?? "",
+        fullName: [lead.firstName, lead.lastName].filter(Boolean).join(" "),
+        email: lead.email ?? "",
+        title: lead.title ?? "",
+        company: lead.company ?? "",
+        accountName: lead.company ?? "",
+        senderName,
+        senderEmail,
+        signature: workspaceSignature,
+      };
+      const renderedSubject = renderMergeFields(input.subject, mergeVars);
+      const mergeVarsNoSig = { ...mergeVars, signature: "" };
+      const renderedBody = renderMergeFields(input.body, mergeVarsNoSig);
+      const renderedBodyText = bodyMentionsSignatureToken
+        ? renderMergeFields(input.body, mergeVars)
+        : workspaceSignature
+          ? `${renderedBody.replace(/\s+$/, "")}\n\n${workspaceSignature}`
+          : renderedBody;
+      const bodyHtmlBlock = renderedBody
+        .split("\n")
+        .map((line) => `<p style="margin:0 0 8px">${escapeHtml(line)}</p>`)
+        .join("");
+      const sigHtmlBlock = workspaceSignature
+        ? `<div style="margin-top:18px;color:#555;line-height:1.4">${workspaceSignature.split("\n").map(escapeHtml).join("<br>")}</div>`
+        : "";
+      const fullBodyHtml = bodyHtmlBlock + sigHtmlBlock;
+
+      let sentMessageId: string | undefined;
+      let deliveryError: string | undefined;
+      try {
+        const sendRes = await adapter.sendEmail({
+          fromEmail: fromAccount.fromEmail,
+          fromName: fromAccount.fromName ?? fromAccount.name,
+          to: lead.email,
+          subject: renderedSubject,
+          bodyHtml: fullBodyHtml,
+          bodyText: renderedBodyText,
+          track: true,
+        });
+        sentMessageId = sendRes.messageId;
+      } catch (err) {
+        deliveryError = err instanceof Error ? err.message : String(err);
+        console.error(
+          `[leads.sendAdHocEmail] delivery failed for lead ${lead.id} (${lead.email}): ${deliveryError}`,
+        );
+      }
+
+      if (sentMessageId) {
+        await db.insert(emailDrafts).values({
+          workspaceId: ctx.workspace.id,
+          toLeadId: lead.id,
+          toEmail: lead.email,
+          subject: renderedSubject,
+          body: renderedBodyText,
+          status: "sent",
+          aiGenerated: input.aiGenerated,
+          createdByUserId: ctx.user.id,
+          sentAt: new Date(),
+          trackingToken: sentMessageId.slice(0, 64),
+        });
+        await db.insert(activities).values({
+          workspaceId: ctx.workspace.id,
+          type: "email",
+          relatedType: "lead",
+          relatedId: lead.id,
+          subject: renderedSubject,
+          body: renderedBodyText,
+          actorUserId: ctx.user.id,
+          occurredAt: new Date(),
+        });
+      }
+
       await recordAudit({
         workspaceId: ctx.workspace.id,
         actorUserId: ctx.user.id,
         action: "create",
         entityType: "email_draft",
         entityId: 0,
-        after: { leadId: input.leadId, subject: input.subject, aiGenerated: input.aiGenerated },
+        after: {
+          leadId: lead.id,
+          subject: renderedSubject,
+          aiGenerated: input.aiGenerated,
+          fromAccountId: fromAccount.id,
+          deliveryStatus: sentMessageId ? "sent" : "failed",
+          messageId: sentMessageId,
+          error: deliveryError,
+        },
       });
-      return { ok: true };
+
+      if (sentMessageId) {
+        return {
+          ok: true,
+          status: "sent" as const,
+          messageId: sentMessageId,
+          fromAccount: { id: fromAccount.id, name: fromAccount.name, fromEmail: fromAccount.fromEmail },
+        };
+      }
+      throw new TRPCError({
+        code: "INTERNAL_SERVER_ERROR",
+        message: deliveryError ?? "Unknown delivery error",
+      });
     }),
 });
 
