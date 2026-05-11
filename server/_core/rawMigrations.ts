@@ -625,6 +625,18 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0063: emailDrafts.stepIndex for per-step sequence analytics ──────────
+  // Without this we can't reconstruct which sequence step a draft was
+  // created for after the enrollment.currentStep advances. Populated by
+  // the sequence engine at draft-creation time.
+  {
+    name: "0063_email_drafts_step_index.sql",
+    statements: [
+      `ALTER TABLE \`email_drafts\` ADD COLUMN \`stepIndex\` int`,
+      `CREATE INDEX \`ix_ed_seq_step\` ON \`email_drafts\` (\`sequenceId\`, \`stepIndex\`)`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

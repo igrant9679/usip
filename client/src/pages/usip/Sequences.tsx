@@ -745,7 +745,90 @@ function SequencePerformancePanel({ sequenceId }: { sequenceId: number }) {
           </div>
         </Section>
       )}
+
+      <SequenceStepBreakdown sequenceId={sequenceId} />
     </div>
+  );
+}
+
+/**
+ * Per-step performance table — one row per email step in the sequence,
+ * showing sent / unique opens / unique clicks / replies / bounces and
+ * their rates as % bars. Surfaces where a sequence's funnel is leaking.
+ */
+function SequenceStepBreakdown({ sequenceId }: { sequenceId: number }) {
+  const { data, isLoading } = trpc.sequences.getStepAnalytics.useQuery({ sequenceId });
+  if (isLoading) {
+    return (
+      <Section title="Per-step performance">
+        <div className="p-3 text-sm text-muted-foreground">Loading step breakdown…</div>
+      </Section>
+    );
+  }
+  const steps = (data?.steps ?? []).filter((s: any) => s.stepType === "email" || s.stepIndex === -1 || s.sent > 0);
+  if (steps.length === 0) {
+    return (
+      <Section title="Per-step performance">
+        <div className="p-3 text-sm text-muted-foreground">
+          No email steps have sent yet — once drafts go out, this will break down by step.
+        </div>
+      </Section>
+    );
+  }
+  // Color thresholds: green if good, amber if mid, muted otherwise.
+  const tone = (rate: number, good: number, mid: number) =>
+    rate >= good ? "text-emerald-600" : rate >= mid ? "text-amber-600" : "text-muted-foreground";
+  const bounceTone = (rate: number) =>
+    rate > 5 ? "text-rose-600" : rate > 2 ? "text-amber-600" : rate > 0 ? "text-emerald-600" : "text-muted-foreground";
+
+  return (
+    <Section title="Per-step performance">
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-[11px] text-muted-foreground uppercase tracking-wide border-b">
+              <th className="text-left py-2 pl-3 pr-2 font-medium">Step</th>
+              <th className="text-right px-2 font-medium">Sent</th>
+              <th className="text-right px-2 font-medium">Opens</th>
+              <th className="text-right px-2 font-medium">Clicks</th>
+              <th className="text-right px-2 font-medium">Replies</th>
+              <th className="text-right pr-3 pl-2 font-medium">Bounced</th>
+            </tr>
+          </thead>
+          <tbody>
+            {steps.map((s: any) => (
+              <tr key={s.stepIndex} className="border-b last:border-b-0 hover:bg-muted/40">
+                <td className="py-2 pl-3 pr-2">
+                  <div className="text-xs font-medium">
+                    {s.stepIndex === -1 ? "—" : `Step ${s.stepIndex + 1}`}
+                  </div>
+                  <div className="text-[11px] text-muted-foreground truncate max-w-[260px]" title={s.stepLabel}>
+                    {s.stepLabel}
+                  </div>
+                </td>
+                <td className="text-right px-2 tabular-nums font-mono">{s.sent}</td>
+                <td className="text-right px-2 tabular-nums">
+                  <span className={tone(s.openRate, 30, 15)}>{s.uniqueOpens}</span>
+                  <span className="text-[11px] text-muted-foreground ml-1">({s.openRate}%)</span>
+                </td>
+                <td className="text-right px-2 tabular-nums">
+                  <span className={tone(s.clickRate, 5, 2)}>{s.uniqueClicks}</span>
+                  <span className="text-[11px] text-muted-foreground ml-1">({s.clickRate}%)</span>
+                </td>
+                <td className="text-right px-2 tabular-nums">
+                  <span className={tone(s.replyRate, 5, 2)}>{s.replied}</span>
+                  <span className="text-[11px] text-muted-foreground ml-1">({s.replyRate}%)</span>
+                </td>
+                <td className="text-right pr-3 pl-2 tabular-nums">
+                  <span className={bounceTone(s.bounceRate)}>{s.bounced}</span>
+                  <span className="text-[11px] text-muted-foreground ml-1">({s.bounceRate}%)</span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Section>
   );
 }
 

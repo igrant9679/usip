@@ -1,7 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { and, count, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { z } from "zod";
-import { accounts, activities, campaigns, contacts, emailDrafts, enrollments, leads, senderPoolMembers, sendingAccounts, sequenceAbVariants, sequenceEdges, sequenceNodes, sequences, unipileAccounts, users, workspaces, workspaceSettings } from "../../drizzle/schema";
+import { accounts, activities, campaigns, contacts, emailDrafts, emailReplies, enrollments, leads, senderPoolMembers, sendingAccounts, sequenceAbVariants, sequenceEdges, sequenceNodes, sequences, unipileAccounts, users, workspaces, workspaceSettings } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
 import { getDb } from "../db";
 import { createEmailAdapter } from "../emailAdapter";
@@ -534,6 +534,166 @@ export const sequencesRouter = router({
       }));
 
       return results;
+    }),
+
+  /**
+   * Per-step performance breakdown for a single sequence.
+   * Groups drafts by stepIndex (populated by the engine at insert time)
+   * and rolls up sent / opens / clicks / bounces / replies + their rates.
+   *
+   * Drafts created before migration 0063 have stepIndex=null and are
+   * bucketed under a synthetic "(unknown step)" entry so old data still
+   * shows up but stays visually distinct.
+   */
+  getStepAnalytics: workspaceProcedure
+    .input(z.object({ sequenceId: z.number() }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+
+      const [seq] = await db
+        .select()
+        .from(sequences)
+        .where(and(eq(sequences.id, input.sequenceId), eq(sequences.workspaceId, ctx.workspace.id)))
+        .limit(1);
+      if (!seq) throw new TRPCError({ code: "NOT_FOUND" });
+      const steps = (seq.steps as Array<{ type: string; subject?: string }>) ?? [];
+
+      const drafts = await db
+        .select({
+          stepIndex: emailDrafts.stepIndex,
+          status: emailDrafts.status,
+          openCount: emailDrafts.openCount,
+          clickCount: emailDrafts.clickCount,
+          bouncedAt: emailDrafts.bouncedAt,
+          toEmail: emailDrafts.toEmail,
+        })
+        .from(emailDrafts)
+        .where(
+          and(
+            eq(emailDrafts.workspaceId, ctx.workspace.id),
+            eq(emailDrafts.sequenceId, seq.id),
+          ),
+        );
+
+      // Build per-step rollup. -1 sentinel = legacy drafts with no stepIndex.
+      const byStep = new Map<number, {
+        sent: number; uniqueOpens: number; uniqueClicks: number;
+        totalOpens: number; totalClicks: number; bounced: number; replied: number;
+      }>();
+
+      for (const d of drafts) {
+        const idx = d.stepIndex ?? -1;
+        const bucket = byStep.get(idx) ?? {
+          sent: 0, uniqueOpens: 0, uniqueClicks: 0,
+          totalOpens: 0, totalClicks: 0, bounced: 0, replied: 0,
+        };
+        if (d.status === "sent") bucket.sent += 1;
+        const oc = d.openCount ?? 0;
+        const cc = d.clickCount ?? 0;
+        bucket.totalOpens += oc;
+        bucket.totalClicks += cc;
+        if (oc > 0) bucket.uniqueOpens += 1;
+        if (cc > 0) bucket.uniqueClicks += 1;
+        if (d.bouncedAt) bucket.bounced += 1;
+        byStep.set(idx, bucket);
+      }
+
+      // Reply counts via email_replies — match by draftId via the matched
+      // drafts (rather than re-querying, just count rows whose draftId
+      // links to one of our drafts). Cheap one-shot query.
+      const draftIds = (await db
+        .select({ id: emailDrafts.id, stepIndex: emailDrafts.stepIndex })
+        .from(emailDrafts)
+        .where(
+          and(
+            eq(emailDrafts.workspaceId, ctx.workspace.id),
+            eq(emailDrafts.sequenceId, seq.id),
+          ),
+        ));
+      const idToStep = new Map(draftIds.map((d) => [d.id, d.stepIndex ?? -1]));
+      if (draftIds.length > 0) {
+        const replyRows = await db
+          .select({ draftId: emailReplies.draftId })
+          .from(emailReplies)
+          .where(
+            and(
+              eq(emailReplies.workspaceId, ctx.workspace.id),
+              inArray(
+                emailReplies.draftId,
+                draftIds.map((d) => d.id),
+              ),
+            ),
+          );
+        for (const r of replyRows) {
+          if (r.draftId == null) continue;
+          const step = idToStep.get(r.draftId);
+          if (step === undefined) continue;
+          const bucket = byStep.get(step);
+          if (bucket) bucket.replied += 1;
+        }
+      }
+
+      // Output: one row per defined step in the sequence + a row for
+      // legacy/unknown drafts when applicable. Always emit a row for
+      // each step (even with all zeros) so the UI can render the full
+      // ladder. AB variants are skipped in this pass — separate query.
+      const out: Array<{
+        stepIndex: number;
+        stepType: string;
+        stepLabel: string;
+        sent: number;
+        uniqueOpens: number;
+        uniqueClicks: number;
+        bounced: number;
+        replied: number;
+        openRate: number;
+        clickRate: number;
+        replyRate: number;
+        bounceRate: number;
+      }> = [];
+
+      for (let i = 0; i < steps.length; i++) {
+        const s = steps[i];
+        const b = byStep.get(i) ?? {
+          sent: 0, uniqueOpens: 0, uniqueClicks: 0,
+          totalOpens: 0, totalClicks: 0, bounced: 0, replied: 0,
+        };
+        out.push({
+          stepIndex: i,
+          stepType: s?.type ?? "unknown",
+          stepLabel: s?.type === "email" ? (s.subject ?? `Email step ${i + 1}`) : `${s?.type ?? "?"} step ${i + 1}`,
+          sent: b.sent,
+          uniqueOpens: b.uniqueOpens,
+          uniqueClicks: b.uniqueClicks,
+          bounced: b.bounced,
+          replied: b.replied,
+          openRate: b.sent > 0 ? Math.round((b.uniqueOpens / b.sent) * 100) : 0,
+          clickRate: b.sent > 0 ? Math.round((b.uniqueClicks / b.sent) * 100) : 0,
+          replyRate: b.sent > 0 ? Math.round((b.replied / b.sent) * 100) : 0,
+          bounceRate: b.sent > 0 ? Math.round((b.bounced / b.sent) * 100) : 0,
+        });
+      }
+
+      const legacy = byStep.get(-1);
+      if (legacy && legacy.sent > 0) {
+        out.push({
+          stepIndex: -1,
+          stepType: "unknown",
+          stepLabel: "(legacy / pre-0063 drafts)",
+          sent: legacy.sent,
+          uniqueOpens: legacy.uniqueOpens,
+          uniqueClicks: legacy.uniqueClicks,
+          bounced: legacy.bounced,
+          replied: legacy.replied,
+          openRate: legacy.sent > 0 ? Math.round((legacy.uniqueOpens / legacy.sent) * 100) : 0,
+          clickRate: legacy.sent > 0 ? Math.round((legacy.uniqueClicks / legacy.sent) * 100) : 0,
+          replyRate: legacy.sent > 0 ? Math.round((legacy.replied / legacy.sent) * 100) : 0,
+          bounceRate: legacy.sent > 0 ? Math.round((legacy.bounced / legacy.sent) * 100) : 0,
+        });
+      }
+
+      return { sequenceId: seq.id, sequenceName: seq.name, steps: out };
     }),
 });
 

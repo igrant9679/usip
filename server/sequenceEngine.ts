@@ -202,7 +202,10 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
               .set({ sentCount: chosen.sentCount + 1 })
               .where(eq(sequenceAbVariants.id, chosen.id));
           }
-          // Create email draft for review
+          // Create email draft for review.
+          // stepIndex captures which sequence step this draft was generated
+          // for, since enrollment.currentStep will advance before the draft
+          // is read by the analytics view.
           await db.insert(emailDrafts).values({
             workspaceId: enrollment.workspaceId,
             subject: draftSubject,
@@ -212,6 +215,7 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
             toEmail,
             sequenceId: enrollment.sequenceId,
             enrollmentId: enrollment.id,
+            stepIndex,
             status: "pending_review",
             aiGenerated: false,
           });
