@@ -1,12 +1,65 @@
 import { TRPCError } from "@trpc/server";
-import { and, count, desc, eq, sql } from "drizzle-orm";
+import { and, count, desc, eq, isNotNull, sql } from "drizzle-orm";
 import { z } from "zod";
-import { contacts, emailDrafts, enrollments, leads, sequenceAbVariants, sequenceEdges, sequenceNodes, sequences, workspaceSettings } from "../../drizzle/schema";
+import { accounts, activities, contacts, emailDrafts, enrollments, leads, sendingAccounts, sequenceAbVariants, sequenceEdges, sequenceNodes, sequences, unipileAccounts, users, workspaceSettings } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
 import { getDb } from "../db";
+import { createEmailAdapter } from "../emailAdapter";
 import { invokeLLM } from "../_core/llm";
 import { router } from "../_core/trpc";
 import { repProcedure, workspaceProcedure } from "../_core/workspace";
+
+/** Minimal HTML-escaper (duplicated from crm.ts — separate router). */
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+/** Same anchor wrapper used in crm.ts for click-tracking. */
+function escapeHtmlWithLinks(s: string): string {
+  const placeholders: Array<{ label: string; url: string }> = [];
+  const mdRe = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g;
+  const withSentinels = s.replace(mdRe, (_m, label: string, url: string) => {
+    const i = placeholders.length;
+    placeholders.push({ label, url });
+    return `@MD${i}@`;
+  });
+  let escaped = escapeHtml(withSentinels);
+  const urlRe = /(https?:\/\/[^\s<>"']+)/g;
+  escaped = escaped.replace(urlRe, (raw) => {
+    let url = raw;
+    let trailing = "";
+    while (/[.,;:)\]!?]$/.test(url)) {
+      trailing = url.slice(-1) + trailing;
+      url = url.slice(0, -1);
+    }
+    return `<a href="${url}" style="color:#2563eb;text-decoration:underline">${url}</a>${trailing}`;
+  });
+  return escaped.replace(/@MD(\d+)@/g, (_m, idxStr: string) => {
+    const p = placeholders[Number(idxStr)];
+    if (!p) return _m;
+    return `<a href="${escapeHtml(p.url)}" style="color:#2563eb;text-decoration:underline">${escapeHtml(p.label)}</a>`;
+  });
+}
+
+/** Merge-field renderer (same forgiving matcher as crm.ts). */
+function renderMergeFields(template: string, vars: Record<string, string | null | undefined>): string {
+  if (!template) return template;
+  const norm = (s: string) => s.toLowerCase().replace(/[_\s]/g, "");
+  const lookup = new Map<string, string>();
+  for (const [k, v] of Object.entries(vars)) {
+    if (v == null) continue;
+    lookup.set(norm(k), v);
+  }
+  return template.replace(/\{\{\s*([a-zA-Z0-9_\s]+?)\s*\}\}/g, (match, name: string) => {
+    const hit = lookup.get(norm(name));
+    return hit ?? match;
+  });
+}
 
 const stepSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("email"), subject: z.string(), body: z.string().optional() }),
@@ -441,12 +494,265 @@ DO NOT
     return { ok: true };
   }),
 
-  /** "Send" — for v1 we mark it sent without an actual SMTP relay. */
+  /**
+   * Deliver an emailDrafts row through the EmailAdapter — the path used
+   * for both "Approve & Send" on a pending_review draft and the sequence
+   * runner's auto-send (once that's wired). Same merge-field, signature,
+   * and tracking pipeline as crm.sendAdHocEmail so behavior is uniform
+   * across all outbound sales touches.
+   *
+   * Recipient resolution: draft.toEmail wins; falling back to the linked
+   * contact or lead email. Sender resolution mirrors crm.sendAdHocEmail.
+   */
   send: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    await db.update(emailDrafts).set({ status: "sent", sentAt: new Date() }).where(and(eq(emailDrafts.id, input.id), eq(emailDrafts.workspaceId, ctx.workspace.id)));
-    return { ok: true };
+
+    const [draft] = await db
+      .select()
+      .from(emailDrafts)
+      .where(and(eq(emailDrafts.id, input.id), eq(emailDrafts.workspaceId, ctx.workspace.id)))
+      .limit(1);
+    if (!draft) throw new TRPCError({ code: "NOT_FOUND" });
+    if (draft.status === "sent") {
+      return { ok: true, alreadySent: true, sentAt: draft.sentAt };
+    }
+
+    // ── Resolve recipient ─────────────────────────────────────────────
+    let toEmail = draft.toEmail ?? null;
+    let firstName: string | null = null;
+    let lastName: string | null = null;
+    let title: string | null = null;
+    let company: string | null = null;
+    if (!toEmail && draft.toContactId) {
+      const [c] = await db
+        .select({
+          email: contacts.email,
+          firstName: contacts.firstName,
+          lastName: contacts.lastName,
+          title: contacts.title,
+          accountName: accounts.name,
+        })
+        .from(contacts)
+        .leftJoin(accounts, eq(accounts.id, contacts.accountId))
+        .where(and(eq(contacts.id, draft.toContactId), eq(contacts.workspaceId, ctx.workspace.id)))
+        .limit(1);
+      if (c) {
+        toEmail = c.email ?? null;
+        firstName = c.firstName ?? null;
+        lastName = c.lastName ?? null;
+        title = c.title ?? null;
+        company = c.accountName ?? null;
+      }
+    } else if (!toEmail && draft.toLeadId) {
+      const [l] = await db
+        .select()
+        .from(leads)
+        .where(and(eq(leads.id, draft.toLeadId), eq(leads.workspaceId, ctx.workspace.id)))
+        .limit(1);
+      if (l) {
+        toEmail = l.email ?? null;
+        firstName = l.firstName ?? null;
+        lastName = l.lastName ?? null;
+        title = l.title ?? null;
+        company = l.company ?? null;
+      }
+    } else if (draft.toContactId) {
+      // toEmail set but we still want merge-field data
+      const [c] = await db
+        .select({
+          firstName: contacts.firstName,
+          lastName: contacts.lastName,
+          title: contacts.title,
+          accountName: accounts.name,
+        })
+        .from(contacts)
+        .leftJoin(accounts, eq(accounts.id, contacts.accountId))
+        .where(and(eq(contacts.id, draft.toContactId), eq(contacts.workspaceId, ctx.workspace.id)))
+        .limit(1);
+      if (c) {
+        firstName = c.firstName ?? null;
+        lastName = c.lastName ?? null;
+        title = c.title ?? null;
+        company = c.accountName ?? null;
+      }
+    } else if (draft.toLeadId) {
+      const [l] = await db
+        .select({
+          firstName: leads.firstName,
+          lastName: leads.lastName,
+          title: leads.title,
+          company: leads.company,
+        })
+        .from(leads)
+        .where(and(eq(leads.id, draft.toLeadId), eq(leads.workspaceId, ctx.workspace.id)))
+        .limit(1);
+      if (l) {
+        firstName = l.firstName ?? null;
+        lastName = l.lastName ?? null;
+        title = l.title ?? null;
+        company = l.company ?? null;
+      }
+    }
+    if (!toEmail) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "Draft has no recipient email and the linked contact/lead has none either.",
+      });
+    }
+
+    // ── Resolve sending account (same precedence as crm.sendAdHocEmail) ──
+    let fromAccount: typeof sendingAccounts.$inferSelect | undefined;
+    const [personal] = await db
+      .select({ sa: sendingAccounts })
+      .from(sendingAccounts)
+      .innerJoin(unipileAccounts, eq(sendingAccounts.unipileAccountId, unipileAccounts.unipileAccountId))
+      .where(
+        and(
+          eq(sendingAccounts.workspaceId, ctx.workspace.id),
+          eq(unipileAccounts.userId, ctx.user.id),
+          isNotNull(sendingAccounts.unipileAccountId),
+        ),
+      )
+      .limit(1);
+    if (personal) fromAccount = personal.sa;
+    if (!fromAccount) {
+      const [fallback] = await db
+        .select()
+        .from(sendingAccounts)
+        .where(eq(sendingAccounts.workspaceId, ctx.workspace.id))
+        .limit(1);
+      if (fallback) fromAccount = fallback;
+    }
+    if (!fromAccount) {
+      throw new TRPCError({
+        code: "PRECONDITION_FAILED",
+        message: "No sending account available. Connect your mailbox or have an admin add a workspace SMTP.",
+      });
+    }
+    const adapter = createEmailAdapter(fromAccount);
+
+    // Sender + signature precedence (user → workspace).
+    const [senderRow] = await db
+      .select({ name: users.name, email: users.email, emailSignature: users.emailSignature })
+      .from(users)
+      .where(eq(users.id, ctx.user.id))
+      .limit(1);
+    const senderName = senderRow?.name ?? fromAccount.fromName ?? fromAccount.name ?? "";
+    const senderEmail = senderRow?.email ?? fromAccount.fromEmail ?? "";
+    const [wsSettings] = await db
+      .select({ emailSignature: workspaceSettings.emailSignature })
+      .from(workspaceSettings)
+      .where(eq(workspaceSettings.workspaceId, ctx.workspace.id))
+      .limit(1);
+    const userSignature = senderRow?.emailSignature?.trim() ?? "";
+    const sig =
+      userSignature.length > 0 ? userSignature : (wsSettings?.emailSignature ?? "").trim();
+    const bodyMentionsSignatureToken = /\{\{\s*signature\s*\}\}/i.test(draft.body ?? "");
+
+    // Render merge fields.
+    const mergeVars: Record<string, string> = {
+      firstName: firstName ?? "",
+      lastName: lastName ?? "",
+      fullName: [firstName, lastName].filter(Boolean).join(" "),
+      email: toEmail,
+      title: title ?? "",
+      company: company ?? "",
+      accountName: company ?? "",
+      senderName,
+      senderEmail,
+      signature: sig,
+    };
+    const renderedSubject = renderMergeFields(draft.subject ?? "", mergeVars);
+    const mergeVarsNoSig = { ...mergeVars, signature: "" };
+    const renderedBody = renderMergeFields(draft.body ?? "", mergeVarsNoSig);
+    const renderedBodyText = bodyMentionsSignatureToken
+      ? renderMergeFields(draft.body ?? "", mergeVars)
+      : sig
+        ? `${renderedBody.replace(/\s+$/, "")}\n\n${sig}`
+        : renderedBody;
+    const bodyHtmlBlock = renderedBody
+      .split("\n")
+      .map((line) => `<p style="margin:0 0 8px">${escapeHtmlWithLinks(line)}</p>`)
+      .join("");
+    const sigHtmlBlock = sig
+      ? `<div style="margin-top:18px;color:#555;line-height:1.4">${sig.split("\n").map(escapeHtml).join("<br>")}</div>`
+      : "";
+    const fullBodyHtml = bodyHtmlBlock + sigHtmlBlock;
+
+    // ── Deliver ──────────────────────────────────────────────────────
+    let sentMessageId: string | undefined;
+    let deliveryError: string | undefined;
+    try {
+      const sendRes = await adapter.sendEmail({
+        fromEmail: fromAccount.fromEmail,
+        fromName: fromAccount.fromName ?? fromAccount.name,
+        to: toEmail,
+        subject: renderedSubject,
+        bodyHtml: fullBodyHtml,
+        bodyText: renderedBodyText,
+        track: true,
+      });
+      sentMessageId = sendRes.messageId;
+    } catch (err) {
+      deliveryError = err instanceof Error ? err.message : String(err);
+      console.error(
+        `[emailDrafts.send] delivery failed for draft ${draft.id} (${toEmail}): ${deliveryError}`,
+      );
+    }
+
+    if (sentMessageId) {
+      await db
+        .update(emailDrafts)
+        .set({
+          status: "sent",
+          subject: renderedSubject,
+          body: renderedBodyText,
+          sentAt: new Date(),
+          reviewedByUserId: ctx.user.id,
+          trackingToken: sentMessageId.slice(0, 64),
+          toEmail,
+        })
+        .where(eq(emailDrafts.id, draft.id));
+
+      // Timeline activity on the linked record.
+      const relatedType = draft.toContactId ? "contact" : draft.toLeadId ? "lead" : null;
+      const relatedId = draft.toContactId ?? draft.toLeadId;
+      if (relatedType && relatedId) {
+        await db.insert(activities).values({
+          workspaceId: ctx.workspace.id,
+          type: "email",
+          relatedType,
+          relatedId,
+          subject: renderedSubject,
+          body: renderedBodyText,
+          actorUserId: ctx.user.id,
+          occurredAt: new Date(),
+        });
+      }
+    }
+
+    await recordAudit({
+      workspaceId: ctx.workspace.id,
+      actorUserId: ctx.user.id,
+      action: "update",
+      entityType: "email_draft",
+      entityId: draft.id,
+      after: {
+        deliveryStatus: sentMessageId ? "sent" : "failed",
+        messageId: sentMessageId,
+        fromAccountId: fromAccount.id,
+        error: deliveryError,
+      },
+    });
+
+    if (!sentMessageId) {
+      throw new TRPCError({
+        code: "INTERNAL_SERVER_ERROR",
+        message: deliveryError ?? "Unknown delivery error",
+      });
+    }
+    return { ok: true, messageId: sentMessageId };
   }),
 
   update: repProcedure.input(z.object({ id: z.number(), subject: z.string(), body: z.string() })).mutation(async ({ ctx, input }) => {
