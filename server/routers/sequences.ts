@@ -356,7 +356,12 @@ export const emailDraftsRouter = router({
       try {
         const out = await invokeLLM({
           messages: [
-            { role: "system", content: `You write short B2B sales emails. Tone: ${input.tone}. Output JSON only with keys subject, body. Body should be plain text, max ~120 words, with a clear ask.` },
+            {
+              role: "system",
+              content: `You write short B2B sales emails. Tone: ${input.tone}. Output JSON only with keys subject, body. Body should be plain text, max ~120 words, with a clear ask.
+
+When including a hyperlink (call to action, case study, calendar link, etc.), write it as a Markdown link: [readable text](https://full-url). Bare URLs work too but Markdown links render with a friendlier label. Do not include the signature — it will be appended automatically. Use {{firstName}} for the recipient's first name when appropriate.`,
+            },
             { role: "user", content: `${contextLine}\n\nGoal: ${input.prompt}` },
           ],
           response_format: {

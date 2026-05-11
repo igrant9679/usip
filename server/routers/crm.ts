@@ -40,24 +40,37 @@ function escapeHtml(s: string): string {
 }
 
 /**
- * Escape HTML, then turn http(s) URLs into proper <a href> anchors.
+ * Escape HTML, then turn URLs into proper <a href> anchors.
+ *
+ * Two link forms are recognized, in order:
+ *   1. Markdown: [readable text](https://url) — preferred for AI output,
+ *      lets the recipient see "case study" instead of a long URL
+ *   2. Bare http(s) URLs — auto-linked with the URL itself as the label
  *
  * Important for Unipile click tracking: the provider rewrites the href
  * of every <a> tag at send time into a tracked redirect. Plain-text
  * URLs (auto-linked by the email client at display time) bypass that
  * rewrite, so a click never fires the email_tracking webhook.
- *
- * The URL regex is intentionally conservative — only http/https schemes,
- * stops at whitespace and common punctuation. Trailing `.,;:)` gets
- * stripped so sentences like "see https://x.com." don't include the dot
- * in the anchor.
  */
 function escapeHtmlWithLinks(s: string): string {
+  // Stash markdown links first so the bare-URL pass doesn't double-process
+  // the URL portion inside them. We replace each [label](url) with a
+  // sentinel, escape the rest of the string, then restore as anchors.
+  const placeholders: Array<{ label: string; url: string }> = [];
+  const mdRe = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g;
+  const withSentinels = s.replace(mdRe, (_m, label: string, url: string) => {
+    const i = placeholders.length;
+    placeholders.push({ label, url });
+    return `@MD${i}@`;
+  });
+
+  let escaped = escapeHtml(withSentinels);
+
+  // Pass 1: auto-anchor bare URLs. Must run BEFORE restoring markdown
+  // sentinels so the bare-URL regex doesn't match the URL inside an
+  // inserted anchor's href and produce nested <a> tags.
   const urlRe = /(https?:\/\/[^\s<>"']+)/g;
-  // Escape first, then walk the escaped string finding URLs to anchor-wrap.
-  // Safe because URL chars (no <, >, &, ", ') aren't HTML-escaped.
-  return escapeHtml(s).replace(urlRe, (raw) => {
-    // Pull off trailing punctuation that's almost certainly sentence-final.
+  escaped = escaped.replace(urlRe, (raw) => {
     let url = raw;
     let trailing = "";
     while (/[.,;:)\]!?]$/.test(url)) {
@@ -65,6 +78,14 @@ function escapeHtmlWithLinks(s: string): string {
       url = url.slice(0, -1);
     }
     return `<a href="${url}" style="color:#2563eb;text-decoration:underline">${url}</a>${trailing}`;
+  });
+
+  // Pass 2: restore markdown sentinels as proper anchors. Both label
+  // and url get HTML-escaped on the way out for safety.
+  return escaped.replace(/@MD(\d+)@/g, (_m, idxStr: string) => {
+    const p = placeholders[Number(idxStr)];
+    if (!p) return _m;
+    return `<a href="${escapeHtml(p.url)}" style="color:#2563eb;text-decoration:underline">${escapeHtml(p.label)}</a>`;
   });
 }
 
