@@ -6,7 +6,7 @@
  * Manager access: managers can select a rep to view their calendar
  */
 
-import { useState, useRef, useCallback, useMemo } from "react";
+import { useState, useRef, useCallback, useMemo, useEffect } from "react";
 import FullCalendar from "@fullcalendar/react";
 import dayGridPlugin from "@fullcalendar/daygrid";
 import timeGridPlugin from "@fullcalendar/timegrid";
@@ -410,6 +410,22 @@ export default function CalendarPage() {
     { from: dateRange.from, to: dateRange.to, repUserId, accountId: selectedAccountId ?? undefined },
     { enabled: true }
   );
+  // Fetch the actual calendars under the selected account so the user can
+  // pick a specific one (Work, Personal, Holidays, etc.) instead of always
+  // writing to "primary". The adapter still accepts "primary" as a sentinel
+  // and resolves it server-side, so falling back is safe.
+  const { data: calendarsForAccount } = trpc.calendar.listCalendars.useQuery(
+    { accountId: selectedAccountId ?? 0, repUserId },
+    { enabled: !!selectedAccountId },
+  );
+  // Auto-pick the primary calendar (is_primary → is_default → first) when the
+  // user selects an account. Only runs once per account change.
+  useEffect(() => {
+    if (!calendarsForAccount || calendarsForAccount.length === 0) return;
+    const primary =
+      calendarsForAccount.find((c: any) => c.primary) ?? calendarsForAccount[0];
+    setSelectedCalendarId(primary.id ?? "primary");
+  }, [calendarsForAccount, selectedAccountId]);
   const { data: teamData } = trpc.team.list.useQuery(undefined, { enabled: true });
   const syncEvents = trpc.calendar.syncEvents.useMutation({
     onSuccess: (d) => { toast.success(`Synced ${d.synced} events`); refetchEvents(); },
@@ -516,27 +532,58 @@ export default function CalendarPage() {
               <div className="flex justify-center py-2"><Loader2 className="size-4 animate-spin text-muted-foreground" /></div>
             ) : accounts?.length ? (
               accounts.map((acc: any) => (
-                <div
-                  key={acc.id}
-                  className={cn(
-                    "flex items-center gap-2 px-2 py-1.5 rounded-md text-xs cursor-pointer transition-colors group",
-                    selectedAccountId === acc.id ? "bg-primary/10 text-primary" : "hover:bg-muted text-muted-foreground"
-                  )}
-                  onClick={() => setSelectedAccountId(acc.id)}
-                >
-                  <CalendarDays className="size-3 shrink-0" />
-                  <div className="flex-1 min-w-0">
-                    <div className="truncate">{acc.label ?? acc.email ?? acc.provider}</div>
-                    <div className="text-[10px] opacity-60">{acc.provider.replace("_caldav", "")}</div>
+                <div key={acc.id}>
+                  <div
+                    className={cn(
+                      "flex items-center gap-2 px-2 py-1.5 rounded-md text-xs cursor-pointer transition-colors group",
+                      selectedAccountId === acc.id ? "bg-primary/10 text-primary" : "hover:bg-muted text-muted-foreground"
+                    )}
+                    onClick={() => setSelectedAccountId(acc.id)}
+                  >
+                    <CalendarDays className="size-3 shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <div className="truncate">{acc.label ?? acc.email ?? acc.provider}</div>
+                      <div className="text-[10px] opacity-60">{acc.provider.replace("_caldav", "")}</div>
+                    </div>
+                    {!repUserId && (
+                      <button
+                        className="opacity-0 group-hover:opacity-100 hover:text-destructive"
+                        onClick={(e) => { e.stopPropagation(); disconnectAccount.mutate({ accountId: acc.id }); }}
+                        title="Disconnect"
+                      >
+                        <Trash2 className="size-3" />
+                      </button>
+                    )}
                   </div>
-                  {!repUserId && (
-                    <button
-                      className="opacity-0 group-hover:opacity-100 hover:text-destructive"
-                      onClick={(e) => { e.stopPropagation(); disconnectAccount.mutate({ accountId: acc.id }); }}
-                      title="Disconnect"
-                    >
-                      <Trash2 className="size-3" />
-                    </button>
+                  {/* Per-account calendar picker — shown only for the selected account.
+                      Lets the user route create/update/delete to a non-primary calendar
+                      (Work / Personal / Holidays etc.). */}
+                  {selectedAccountId === acc.id && calendarsForAccount && calendarsForAccount.length > 0 && (
+                    <div className="ml-5 mt-1 mb-1 flex flex-col gap-0.5">
+                      {calendarsForAccount.map((cal: any) => (
+                        <button
+                          key={cal.id}
+                          type="button"
+                          onClick={() => setSelectedCalendarId(cal.id)}
+                          className={cn(
+                            "flex items-center gap-2 px-2 py-1 rounded text-[11px] text-left transition-colors",
+                            selectedCalendarId === cal.id
+                              ? "bg-primary/15 text-primary font-medium"
+                              : "hover:bg-muted text-muted-foreground"
+                          )}
+                          title={cal.description ?? cal.name}
+                        >
+                          <span
+                            className="inline-block size-2 rounded-full shrink-0"
+                            style={{ backgroundColor: cal.color ?? "#9ca3af" }}
+                          />
+                          <span className="truncate flex-1">{cal.name}</span>
+                          {cal.primary && (
+                            <span className="text-[9px] uppercase tracking-wide opacity-70">primary</span>
+                          )}
+                        </button>
+                      ))}
+                    </div>
                   )}
                 </div>
               ))
