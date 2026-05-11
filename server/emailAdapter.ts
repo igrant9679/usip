@@ -82,6 +82,13 @@ export interface SendEmailInput {
   fromEmail: string;
   /** Base64-encoded file attachments */
   attachments?: Array<{ filename: string; contentType: string; content: string }>;
+  /**
+   * Enable open/click tracking via the provider (Unipile only — IMAP path
+   * has no equivalent). Defaults to false to preserve the "personal
+   * mailbox doesn't get tracked" rule; sales touches (sendAdHocEmail,
+   * sequence sends) should opt in by passing track:true.
+   */
+  track?: boolean;
 }
 
 export interface EmailAdapter {

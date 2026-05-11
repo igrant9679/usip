@@ -21,6 +21,7 @@ import { and, eq } from "drizzle-orm";
 import { getDb } from "./db";
 import {
   calendarAccounts,
+  emailDrafts,
   sendingAccounts,
   unipileAccounts,
   unipileEmailsCache,
@@ -30,8 +31,10 @@ import {
   generateHostedAuthLink,
   getUnipileAccount,
   type CalendarWebhookPayload,
+  type EmailTrackingWebhookPayload,
   type MailWebhookPayload,
 } from "./lib/unipile";
+import { sql } from "drizzle-orm";
 
 // Statuses that mean the account needs re-authentication
 const EXPIRED_STATUSES = new Set(["CREDENTIALS", "ERROR", "STOPPED"]);
@@ -578,6 +581,97 @@ export function registerUnipileWebhookRoutes(app: Express) {
         }
       } catch (err) {
         console.error("[UnipileCalendarWebhook] Error processing calendar-webhook:", err);
+      }
+    },
+  );
+
+  // ─── 5. Email tracking webhook (opens / clicks) ───────────────────────────
+  /**
+   * POST /api/unipile/email-tracking-webhook
+   *
+   * Registered against Unipile as a source=email_tracking webhook with
+   * events=[mail_opened, mail_link_clicked]. Fires once per recipient
+   * open and once per recipient click.
+   *
+   * Matching: at send time crm.sendAdHocEmail persists the Unipile
+   * `tracking_id` returned by POST /emails into emailDrafts.trackingToken.
+   * We look the row up by that token and bump openCount or clickCount
+   * (plus the last-event timestamp) atomically via raw SQL so concurrent
+   * webhooks don't clobber each other.
+   *
+   * Event-type matching is forgiving — Unipile has used "mail_opened" /
+   * "mail_link_clicked" in the spec but we also accept shorter variants
+   * just in case the runtime field differs.
+   */
+  app.post(
+    "/api/unipile/email-tracking-webhook",
+    async (req: Request, res: Response) => {
+      res.status(200).json({ ok: true });
+
+      try {
+        const payload = req.body as EmailTrackingWebhookPayload;
+        if (!payload?.tracking_id || !payload?.type) {
+          console.warn(
+            "[UnipileTrackingWebhook] Missing tracking_id or type:",
+            JSON.stringify(payload).slice(0, 300),
+          );
+          return;
+        }
+
+        const type = payload.type.toLowerCase();
+        const isOpen = /open/.test(type); // mail_opened / opened / open
+        const isClick = /click/.test(type); // mail_link_clicked / link_clicked / click
+        if (!isOpen && !isClick) {
+          console.warn(
+            `[UnipileTrackingWebhook] Unknown event type "${payload.type}" — ignoring`,
+          );
+          return;
+        }
+
+        const eventDate = payload.date ? new Date(payload.date) : new Date();
+        const db = await getDb();
+
+        // Atomic increment + last-event timestamp via raw SQL. Drizzle's
+        // typed update builder doesn't accept column arithmetic cleanly,
+        // and we want this to be race-safe against concurrent opens.
+        if (isOpen) {
+          const [result] = await db.execute(
+            sql`UPDATE \`email_drafts\`
+                SET \`openCount\` = \`openCount\` + 1,
+                    \`lastOpenedAt\` = ${eventDate}
+                WHERE \`trackingToken\` = ${payload.tracking_id}`,
+          );
+          const affected = (result as { affectedRows?: number })?.affectedRows ?? 0;
+          console.log(
+            `[UnipileTrackingWebhook] open tracking_id=${payload.tracking_id} → updated ${affected} draft(s)${payload.ip ? ` ip=${payload.ip}` : ""}`,
+          );
+          if (affected === 0) {
+            console.warn(
+              `[UnipileTrackingWebhook] open with no matching emailDrafts row (tracking_id=${payload.tracking_id})`,
+            );
+          }
+        } else {
+          const [result] = await db.execute(
+            sql`UPDATE \`email_drafts\`
+                SET \`clickCount\` = \`clickCount\` + 1,
+                    \`lastClickedAt\` = ${eventDate}
+                WHERE \`trackingToken\` = ${payload.tracking_id}`,
+          );
+          const affected = (result as { affectedRows?: number })?.affectedRows ?? 0;
+          console.log(
+            `[UnipileTrackingWebhook] click tracking_id=${payload.tracking_id} url=${payload.url ?? "?"} → updated ${affected} draft(s)`,
+          );
+          if (affected === 0) {
+            console.warn(
+              `[UnipileTrackingWebhook] click with no matching emailDrafts row (tracking_id=${payload.tracking_id})`,
+            );
+          }
+        }
+      } catch (err) {
+        console.error(
+          "[UnipileTrackingWebhook] Error processing email-tracking-webhook:",
+          err,
+        );
       }
     },
   );

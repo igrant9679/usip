@@ -556,6 +556,10 @@ export const contactsRouter = router({
             subject: renderedSubject,
             bodyHtml: fullBodyHtml,
             bodyText: renderedBodyText,
+            // Sales touch — enable open/click tracking. Webhook events
+            // flow back via /api/unipile/email-tracking-webhook and bump
+            // openCount / clickCount on the matching emailDrafts row.
+            track: true,
           });
           sentMessageId = sendRes.messageId;
         } catch (err) {
@@ -581,6 +585,11 @@ export const contactsRouter = router({
             aiGenerated: input.aiGenerated,
             createdByUserId: ctx.user.id,
             sentAt: new Date(),
+            // Persist Unipile's tracking_id so the email-tracking webhook
+            // can match opens/clicks back to this row by trackingToken.
+            // Cap at 64 chars to match the column width — Unipile ids
+            // we've seen are 22 chars but column is varchar(64).
+            trackingToken: sentMessageId.slice(0, 64),
           });
           await db.insert(activities).values({
             workspaceId: ctx.workspace.id,

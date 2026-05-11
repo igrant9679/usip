@@ -269,6 +269,16 @@ export async function registerWebhook(params: {
   requestUrl: string;
   source: UnipileWebhookSource;
   secretKey?: string;
+  /**
+   * Optional event filter (only some sources accept this — email_tracking
+   * uses it to subscribe to "mail_opened" and/or "mail_link_clicked").
+   */
+  events?: string[];
+  /**
+   * Optional field mapping (only some sources accept this — email_tracking
+   * uses it to declare which fields show up in the push payload).
+   */
+  data?: Array<{ name: string; key: string }>;
 }): Promise<{ id: string | null; raw: unknown }> {
   const headers: Array<{ key: string; value: string }> = [
     { key: "Content-Type", value: "application/json" },
@@ -280,14 +290,17 @@ export async function registerWebhook(params: {
   // we've seen { id }, { webhook_id }, { object: "Webhook", id }, and even
   // a bare 201 with no body in different SDK versions. Capture the raw
   // response and return the id with a best-effort lookup.
+  const body: Record<string, unknown> = {
+    request_url: params.requestUrl,
+    source: params.source,
+    headers,
+  };
+  if (params.events) body.events = params.events;
+  if (params.data) body.data = params.data;
   const raw = await unipileFetch<Record<string, unknown>>("/webhooks", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      request_url: params.requestUrl,
-      source: params.source,
-      headers,
-    }),
+    body: JSON.stringify(body),
   });
   console.log(
     `[Unipile] registerWebhook raw response: ${JSON.stringify(raw).slice(0, 500)}`,
@@ -810,6 +823,31 @@ export async function updateCalendarEvent(params: {
       body: JSON.stringify(body),
     },
   );
+}
+
+/**
+ * Push payload from Unipile's "Email Tracking" webhook (source=email_tracking).
+ *
+ * The webhook configuration's `data` array controls which fields show up
+ * in the body. registerEmailTrackingWebhook below requests:
+ *   type, tracking_id, date, email_id, account_id, url, label, ip, user_agent
+ *
+ * `type` is the event name — observed values: "mail_opened" /
+ * "mail_link_clicked". `tracking_id` is what we stored on
+ * emailDrafts.trackingToken at send time.
+ */
+export interface EmailTrackingWebhookPayload {
+  type?: string;
+  tracking_id?: string;
+  date?: string;
+  email_id?: string;
+  account_id?: string;
+  url?: string;
+  label?: string;
+  ip?: string;
+  user_agent?: string;
+  /** Webhook name configured on registration — handy for log triage. */
+  webhook_name?: string;
 }
 
 /**

@@ -44,6 +44,7 @@ import {
   XCircle, Link2,
   Webhook,
   CalendarClock,
+  Activity,
 } from "lucide-react";
 
 
@@ -253,6 +254,19 @@ export default function ConnectedAccounts() {
       toast.error("Failed to register calendar webhook", { description: err.message });
     },
   });
+  const registerEmailTrackingWebhook = trpc.unipile.registerEmailTrackingWebhook.useMutation({
+    onSuccess: (data) => {
+      const idHint = data?.webhookId
+        ? `webhook id ${String(data.webhookId).slice(0, 8)}…`
+        : "registration accepted";
+      toast.success("Email tracking webhook registered", {
+        description: `Unipile will push open + click events to ${data?.requestUrl ?? "your app"} (${idHint}). Counts will appear on emailDrafts after the next outbound sales touch.`,
+      });
+    },
+    onError: (err) => {
+      toast.error("Failed to register email tracking webhook", { description: err.message });
+    },
+  });
   const [isReconnectingAll, setIsReconnectingAll] = useState(false);
   const handleReconnectAll = async () => {
     const expired = accounts.filter((a) => EXPIRED_STATUSES.has(a.status));
@@ -356,6 +370,20 @@ export default function ConnectedAccounts() {
               <CalendarClock className="h-4 w-4 mr-2" />
             )}
             Register calendar webhook
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => registerEmailTrackingWebhook.mutate({ origin: window.location.origin })}
+            disabled={registerEmailTrackingWebhook.isPending}
+            title="One-time setup: tell Unipile to push email open + click events to this app. Counts populate emailDrafts.openCount / clickCount. Admin-only."
+          >
+            {registerEmailTrackingWebhook.isPending ? (
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            ) : (
+              <Activity className="h-4 w-4 mr-2" />
+            )}
+            Register tracking webhook
           </Button>
           <Button
             size="sm"

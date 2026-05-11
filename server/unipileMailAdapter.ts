@@ -519,9 +519,15 @@ export class UnipileMailAdapter implements EmailAdapter {
       // Velocity's adapter interface uses inReplyTo for the Message-ID
       // header, not the email id — most callers pass replyToThreadId.
       replyTo: input.replyToThreadId,
-      // Personal-mailbox path: do not track. Outreach SMTP uses Velocity's
-      // own pixel-and-redirect tracking via emailTracking.ts.
-      trackingOptions: { opens: false, links: false },
+      // Tracking is opt-in via SendEmailInput.track. Sales touches
+      // (sendAdHocEmail, sequence sends) pass track:true so Unipile inserts
+      // open/click pixels + link redirects; the resulting opens/clicks
+      // flow back via /api/unipile/email-tracking-webhook and increment
+      // emailDrafts.openCount / clickCount. Mailbox manual sends leave
+      // it false so personal email doesn't get tracked.
+      trackingOptions: input.track
+        ? { opens: true, links: true }
+        : { opens: false, links: false },
       attachments: input.attachments,
     });
     return { messageId: res.tracking_id, threadId: undefined };
