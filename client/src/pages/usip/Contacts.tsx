@@ -804,6 +804,13 @@ export default function Contacts() {
       setOpen(false);
       toast.success("Contact added");
     },
+    // Without an onError the user sees zero feedback when the server rejects
+    // (e.g. permission denied, schema drift, duplicate email). Surface the
+    // server message via toast and keep the dialog open so they can retry.
+    onError: (e) => {
+      console.error("[contacts.create] error:", e);
+      toast.error("Failed to add contact", { description: e.message });
+    },
   });
 
   const deleteMut = trpc.contacts.delete.useMutation({
