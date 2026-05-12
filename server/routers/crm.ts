@@ -29,6 +29,7 @@ import { createEmailAdapter } from "../emailAdapter";
 import { router } from "../_core/trpc";
 import { repProcedure, workspaceProcedure } from "../_core/workspace";
 import { isSuppressed, makeUnsubscribeUrl } from "../unsubscribe";
+import { assertSendAllowed } from "../sendLimits";
 
 function getAppBaseUrl(): string {
   return (
@@ -631,6 +632,10 @@ export const contactsRouter = router({
         let sentMessageId: string | undefined;
         let deliveryError: string | undefined;
         try {
+          // Workspace + per-account cap gate (assertSendAllowed throws
+          // TRPCError, caught below and recorded as a failed result so
+          // the bulk send doesn't abort on a single cap-hit).
+          await assertSendAllowed(ctx.workspace.id, fromAccount.id);
           const sendRes = await adapter.sendEmail({
             fromEmail: fromAccount.fromEmail,
             fromName: fromAccount.fromName ?? fromAccount.name,
@@ -1148,6 +1153,7 @@ export const leadsRouter = router({
       let sentMessageId: string | undefined;
       let deliveryError: string | undefined;
       try {
+        await assertSendAllowed(ctx.workspace.id, fromAccount.id);
         const sendRes = await adapter.sendEmail({
           fromEmail: fromAccount.fromEmail,
           fromName: fromAccount.fromName ?? fromAccount.name,

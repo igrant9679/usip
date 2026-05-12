@@ -23,6 +23,7 @@ import { sendingAccounts, unipileAccounts, users, workspaceSettings } from "../.
 import { eq, and, isNotNull } from "drizzle-orm";
 import { createEmailAdapter } from "../emailAdapter";
 import { invokeLLM } from "../_core/llm";
+import { assertSendAllowed } from "../sendLimits";
 
 /**
  * Append the rep's email signature to outbound HTML / text if it isn't
@@ -210,6 +211,9 @@ export const mailboxRouter = router({
     .mutation(async ({ ctx, input }) => {
       const acc = await getAccount(input.accountId, ctx.workspace.id);
       const adapter = createEmailAdapter(acc);
+      // Cap gate before signature so a blocked send produces a clear
+      // error instead of doing the (slow) signature build for nothing.
+      await assertSendAllowed(ctx.workspace.id, acc.id);
       const withSig = await appendSignature(ctx.workspace.id, ctx.user.id, input.bodyHtml, input.bodyText);
       return adapter.sendEmail({
         fromEmail: acc.fromEmail,
@@ -245,6 +249,9 @@ export const mailboxRouter = router({
     .mutation(async ({ ctx, input }) => {
       const acc = await getAccount(input.accountId, ctx.workspace.id);
       const adapter = createEmailAdapter(acc);
+      // Cap gate before signature so a blocked send produces a clear
+      // error instead of doing the (slow) signature build for nothing.
+      await assertSendAllowed(ctx.workspace.id, acc.id);
       const withSig = await appendSignature(ctx.workspace.id, ctx.user.id, input.bodyHtml, input.bodyText);
       return adapter.sendEmail({
         fromEmail: acc.fromEmail,

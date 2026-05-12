@@ -8,6 +8,7 @@ import { createEmailAdapter } from "../emailAdapter";
 import { invokeLLM } from "../_core/llm";
 import { isSuppressed, makeUnsubscribeUrl } from "../unsubscribe";
 import { bumpCampaignCounter } from "../campaignCounters";
+import { assertSendAllowed } from "../sendLimits";
 
 /** App base URL for outbound footer links. Same env precedence as Unipile webhook URLs. */
 function getAppBaseUrl(): string {
@@ -1007,6 +1008,12 @@ export async function deliverEmailDraft(params: {
   const unsubFooterHtml = unsubscribeFooterHtml(unsubscribeUrl);
   const fullBodyHtml = bodyHtmlBlock + sigHtmlBlock + unsubFooterHtml;
   const fullBodyText = renderedBodyText + unsubscribeFooterText(unsubscribeUrl);
+
+  // Daily-cap gate — throws TOO_MANY_REQUESTS if either the
+  // workspace-wide or per-account cap would be breached. Lives BEFORE
+  // the adapter call so we don't dispatch and then realize we
+  // shouldn't have.
+  await assertSendAllowed(workspaceId, fromAccount.id);
 
   // ── Deliver ──────────────────────────────────────────────────────
   let sentMessageId: string | undefined;
