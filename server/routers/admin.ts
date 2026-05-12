@@ -136,7 +136,10 @@ export const settingsRouter = router({
     };
   }),
 
-  updateAreSettings: workspaceProcedure
+  // Workspace-wide ARE config (autonomy mode, daily cap, auto-approve
+  // thresholds, notifications) — admin-only to match the rest of the
+  // workspace-settings router.
+  updateAreSettings: adminWsProcedure
     .input(z.object({
       areDefaultAutonomyMode: z.enum(["full", "batch_approval", "review_release"]).optional(),
       areDefaultDailySendCap: z.number().int().min(1).max(500).optional(),

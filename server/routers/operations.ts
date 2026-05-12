@@ -36,7 +36,7 @@ import { recordAudit } from "../audit";
 import { getDb } from "../db";
 import { invokeLLM } from "../_core/llm";
 import { router } from "../_core/trpc";
-import { adminWsProcedure, repProcedure, workspaceProcedure } from "../_core/workspace";
+import { adminWsProcedure, managerProcedure, repProcedure, workspaceProcedure } from "../_core/workspace";
 import { storagePut } from "../storage";
 import { buildTransporter, decrypt } from "./smtpConfig";
 
@@ -181,7 +181,9 @@ export const workflowsRouter = router({
     return r ?? null;
   }),
 
-  create: workspaceProcedure
+  // Workflow rules fire external webhooks (Slack/Teams) and create records.
+  // Manager-gated to prevent any reader from posting to those endpoints.
+  create: managerProcedure
     .input(z.object({
       name: z.string().min(1),
       description: z.string().optional(),
@@ -198,21 +200,21 @@ export const workflowsRouter = router({
       return { id: Number((r as any)[0]?.insertId ?? 0) };
     }),
 
-  update: workspaceProcedure.input(z.object({ id: z.number(), patch: z.record(z.string(), z.any()) })).mutation(async ({ ctx, input }) => {
+  update: managerProcedure.input(z.object({ id: z.number(), patch: z.record(z.string(), z.any()) })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     await db.update(workflowRules).set(input.patch).where(and(eq(workflowRules.id, input.id), eq(workflowRules.workspaceId, ctx.workspace.id)));
     return { ok: true };
   }),
 
-  toggle: workspaceProcedure.input(z.object({ id: z.number(), enabled: z.boolean() })).mutation(async ({ ctx, input }) => {
+  toggle: managerProcedure.input(z.object({ id: z.number(), enabled: z.boolean() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     await db.update(workflowRules).set({ enabled: input.enabled }).where(and(eq(workflowRules.id, input.id), eq(workflowRules.workspaceId, ctx.workspace.id)));
     return { ok: true };
   }),
 
-  delete: workspaceProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
+  delete: managerProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     await db.delete(workflowRules).where(and(eq(workflowRules.id, input.id), eq(workflowRules.workspaceId, ctx.workspace.id)));
@@ -627,7 +629,10 @@ export const campaignsRouter = router({
     };
   }),
 
-  create: workspaceProcedure.input(z.object({
+  // Campaign CRUD + lifecycle (launch/pause/delete/updateOutreach) is
+  // rep-gated — these mutations create records, blast mail, and can
+  // affect revenue attribution. Viewers shouldn't touch them.
+  create: repProcedure.input(z.object({
     name: z.string().min(1),
     objective: z.string().optional(),
     description: z.string().optional(),
@@ -669,7 +674,7 @@ export const campaignsRouter = router({
   }),
 
   /** Launch checklist enforcement: returns the checklist; refuses to launch if any not done. */
-  launch: workspaceProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
+  launch: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const [c] = await db.select().from(campaigns).where(and(eq(campaigns.id, input.id), eq(campaigns.workspaceId, ctx.workspace.id)));
@@ -714,7 +719,7 @@ export const campaignsRouter = router({
     return { ok: true };
   }),
 
-  delete: workspaceProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
+  delete: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     await db.delete(campaigns).where(and(eq(campaigns.id, input.id), eq(campaigns.workspaceId, ctx.workspace.id)));
@@ -722,7 +727,7 @@ export const campaignsRouter = router({
   }),
 
   /** Update outreach-specific fields (audience, sequence, sender, throttle, A/B) */
-  updateOutreach: workspaceProcedure.input(z.object({
+  updateOutreach: repProcedure.input(z.object({
     id: z.number(),
     audienceType: z.enum(["contacts", "segment"]).optional(),
     audienceIds: z.array(z.number()).optional(),
@@ -744,7 +749,7 @@ export const campaignsRouter = router({
   }),
 
   /** Pause a live campaign */
-  pause: workspaceProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
+  pause: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     await db.update(campaigns).set({ status: "paused" }).where(and(eq(campaigns.id, input.id), eq(campaigns.workspaceId, ctx.workspace.id)));
@@ -846,7 +851,8 @@ export const dashboardsRouter = router({
     return { ok: true };
   }),
 
-  delete: workspaceProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
+  // Shared dashboards — rep-gated so a viewer can't blow away a team's work.
+  delete: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     await db.delete(dashboardWidgets).where(eq(dashboardWidgets.dashboardId, input.id));
@@ -889,7 +895,7 @@ export const dashboardsRouter = router({
     return { ok: true };
   }),
 
-  deleteWidget: workspaceProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
+  deleteWidget: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     await db.delete(dashboardWidgets).where(and(eq(dashboardWidgets.id, input.id), eq(dashboardWidgets.workspaceId, ctx.workspace.id)));
@@ -942,7 +948,9 @@ export const dashboardsRouter = router({
   }),
 
   /** Send dashboard report now via SMTP. */
-  sendScheduleNow: workspaceProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
+  // Sending a scheduled report blasts email to its distribution list.
+  // Rep-gated to keep viewers from triggering bulk sends.
+  sendScheduleNow: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const [sched] = await db.select().from(reportSchedules).where(and(eq(reportSchedules.id, input.id), eq(reportSchedules.workspaceId, ctx.workspace.id)));
@@ -981,7 +989,7 @@ export const dashboardsRouter = router({
     return { ok: true, sentAt };
   }),
 
-  deleteSchedule: workspaceProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
+  deleteSchedule: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     await db.delete(reportSchedules).where(and(eq(reportSchedules.id, input.id), eq(reportSchedules.workspaceId, ctx.workspace.id)));

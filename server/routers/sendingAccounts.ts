@@ -15,7 +15,7 @@ import {
   sendingAccounts,
 } from "../../drizzle/schema";
 import { router } from "../_core/trpc";
-import { workspaceProcedure } from "../_core/workspace";
+import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -271,7 +271,9 @@ export const sendingAccountsRouter = router({
       };
     }),
 
-  create: workspaceProcedure
+  // Sending accounts hold SMTP/IMAP credentials + per-account daily
+  // send caps. Admin-gated to match the SMTP-config peer endpoints.
+  create: adminWsProcedure
     .input(AccountCreateInput)
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
@@ -284,7 +286,7 @@ export const sendingAccountsRouter = router({
       return { id: (result as any).insertId as number };
     }),
 
-  update: workspaceProcedure
+  update: adminWsProcedure
     .input(AccountCreateInput.partial().extend({ id: z.number().int() }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
@@ -302,7 +304,7 @@ export const sendingAccountsRouter = router({
       return { ok: true };
     }),
 
-  delete: workspaceProcedure
+  delete: adminWsProcedure
     .input(z.object({ id: z.number().int() }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
@@ -394,7 +396,7 @@ export const sendingAccountsRouter = router({
         .limit(input.days);
     }),
 
-  toggleEnabled: workspaceProcedure
+  toggleEnabled: adminWsProcedure
     .input(z.object({ id: z.number().int(), enabled: z.boolean() }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
@@ -614,7 +616,9 @@ export const senderPoolsRouter = router({
       return { ok: true };
     }),
 
-  delete: workspaceProcedure
+  // Sender pools control which SMTP accounts an entire campaign sends from.
+  // Admin-gated for parity with sending-account CRUD.
+  delete: adminWsProcedure
     .input(z.object({ id: z.number().int() }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();

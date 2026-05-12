@@ -1378,7 +1378,7 @@ export const sequenceAbRouter = router({
     }),
 
   /** Create a new A/B variant for a step */
-  create: workspaceProcedure
+  create: repProcedure
     .input(z.object({
       sequenceId: z.number(),
       stepIndex: z.number().int().min(0),
@@ -1407,7 +1407,7 @@ export const sequenceAbRouter = router({
     }),
 
   /** Update an existing variant */
-  update: workspaceProcedure
+  update: repProcedure
     .input(z.object({
       id: z.number(),
       subject: z.string().optional(),
@@ -1428,7 +1428,7 @@ export const sequenceAbRouter = router({
     }),
 
   /** Delete a variant */
-  delete: workspaceProcedure
+  delete: repProcedure
     .input(z.object({ id: z.number() }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
@@ -1468,7 +1468,7 @@ export const sequenceAbRouter = router({
     }),
 
   /** Manually promote a variant as winner for a step */
-  promoteWinner: workspaceProcedure
+  promoteWinner: repProcedure
     .input(z.object({ sequenceId: z.number(), stepIndex: z.number().int().min(0), winnerId: z.number() }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
@@ -1492,7 +1492,7 @@ export const sequenceAbRouter = router({
     }),
 
   /** Update min-sends threshold for auto-promotion on a variant */
-  setMinSends: workspaceProcedure
+  setMinSends: repProcedure
     .input(z.object({ id: z.number(), minSendsForPromotion: z.number().int().min(1).max(10000) }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
