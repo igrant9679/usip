@@ -7,6 +7,7 @@ import { getDb } from "../db";
 import { createEmailAdapter } from "../emailAdapter";
 import { invokeLLM } from "../_core/llm";
 import { isSuppressed, makeUnsubscribeUrl } from "../unsubscribe";
+import { bumpCampaignCounter } from "../campaignCounters";
 
 /** App base URL for outbound footer links. Same env precedence as Unipile webhook URLs. */
 function getAppBaseUrl(): string {
@@ -1006,6 +1007,12 @@ export async function deliverEmailDraft(params: {
         actorUserId: userId,
         occurredAt: new Date(),
       });
+    }
+
+    // Bump campaign totalSent if this draft belongs to a campaign-driven
+    // sequence. Silently no-ops for ad-hoc / unparented drafts.
+    if (draft.sequenceId) {
+      await bumpCampaignCounter(workspaceId, draft.sequenceId, "totalSent");
     }
   }
 

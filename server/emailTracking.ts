@@ -1135,7 +1135,11 @@ export async function processBounceEvent(
     ? and(eq(draftsTable.toEmail, event.email), eq(draftsTable.workspaceId, event.workspaceId))
     : eq(draftsTable.toEmail, event.email);
   const [draft] = await db
-    .select({ id: draftsTable.id, workspaceId: draftsTable.workspaceId })
+    .select({
+      id: draftsTable.id,
+      workspaceId: draftsTable.workspaceId,
+      sequenceId: draftsTable.sequenceId,
+    })
     .from(draftsTable)
     .where(whereClause)
     .orderBy(desc(draftsTable.sentAt))
@@ -1180,6 +1184,14 @@ export async function processBounceEvent(
         notes: event.message?.slice(0, 512) ?? null,
       });
     }
+  }
+
+  // Bump the parent campaign's totalBounced if this draft was part of a
+  // campaign-driven sequence. Spam complaints count too — they're the
+  // worst kind of negative engagement.
+  if (draft?.sequenceId && workspaceId > 0) {
+    const { bumpCampaignCounter } = await import("./campaignCounters");
+    await bumpCampaignCounter(workspaceId, draft.sequenceId, "totalBounced");
   }
 
   console.log(`[BounceWebhook] Processed ${event.bounceType} bounce for ${event.email}`);

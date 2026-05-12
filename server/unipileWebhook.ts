@@ -30,6 +30,7 @@ import {
 } from "../drizzle/schema";
 import { processInboundReply } from "./inboundReplyPoller";
 import { processBounceEvent } from "./emailTracking";
+import { bumpCampaignCounter } from "./campaignCounters";
 
 /**
  * Detect whether an inbound webhook payload looks like a bounce notification
@@ -850,6 +851,18 @@ export function registerUnipileWebhookRoutes(app: Express) {
         const eventDate = payload.date ? new Date(payload.date) : new Date();
         const db = await getDb();
 
+        // Look up the draft FIRST so we can also bump the parent
+        // campaign's counter after the draft counter goes up.
+        const [draft] = await db
+          .select({
+            id: emailDrafts.id,
+            workspaceId: emailDrafts.workspaceId,
+            sequenceId: emailDrafts.sequenceId,
+          })
+          .from(emailDrafts)
+          .where(eq(emailDrafts.trackingToken, payload.tracking_id))
+          .limit(1);
+
         // Atomic increment + last-event timestamp via raw SQL. Drizzle's
         // typed update builder doesn't accept column arithmetic cleanly,
         // and we want this to be race-safe against concurrent opens.
@@ -868,6 +881,8 @@ export function registerUnipileWebhookRoutes(app: Express) {
             console.warn(
               `[UnipileTrackingWebhook] open with no matching emailDrafts row (tracking_id=${payload.tracking_id})`,
             );
+          } else if (draft?.sequenceId) {
+            await bumpCampaignCounter(draft.workspaceId, draft.sequenceId, "totalOpened");
           }
         } else {
           const [result] = await db.execute(
@@ -884,6 +899,8 @@ export function registerUnipileWebhookRoutes(app: Express) {
             console.warn(
               `[UnipileTrackingWebhook] click with no matching emailDrafts row (tracking_id=${payload.tracking_id})`,
             );
+          } else if (draft?.sequenceId) {
+            await bumpCampaignCounter(draft.workspaceId, draft.sequenceId, "totalClicked");
           }
         }
       } catch (err) {

@@ -27,6 +27,7 @@ import {
 } from "../drizzle/schema";
 import { eq, and, or, desc, inArray, isNull } from "drizzle-orm";
 import { decryptField } from "./emailAdapter";
+import { bumpCampaignCounter } from "./campaignCounters";
 
 let pollerInterval: ReturnType<typeof setInterval> | null = null;
 let isPolling = false;
@@ -278,9 +279,16 @@ export async function processInboundReply(data: InboundReplyData) {
     }
   }
 
-  // 6. Increment campaigns.totalReplied if draft belongs to a campaign (via sequenceId → campaign)
-  // emailDrafts links to sequences, not campaigns directly — skip for now
-  // (campaigns track replies via their own stats aggregation)
+  // 6. Increment campaigns.totalReplied if the matched draft belongs to
+  //    a campaign-driven sequence. Goes through bumpCampaignCounter which
+  //    handles the sequenceId → campaign lookup + safe raw SQL increment.
+  if (matchedDraft?.sequenceId) {
+    await bumpCampaignCounter(
+      data.workspaceId,
+      matchedDraft.sequenceId,
+      "totalReplied",
+    );
+  }
 
   // 7. Log an activity
   if (matchedContactId || matchedLeadId) {
