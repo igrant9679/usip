@@ -186,13 +186,21 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
               ),
             );
           if (variants.length > 0) {
-            // Weighted random selection based on splitPct
+            // Weighted random selection based on splitPct. Guard against
+            // all-zero weights (Math.random() * 0 = 0, loop never
+            // decrements past zero, always picks variants[0] → silent
+            // unfairness). Fall back to uniform random when every
+            // variant has splitPct=0.
             const totalWeight = variants.reduce((s, v) => s + v.splitPct, 0);
-            let rand = Math.random() * totalWeight;
             let chosen = variants[0];
-            for (const v of variants) {
-              rand -= v.splitPct;
-              if (rand <= 0) { chosen = v; break; }
+            if (totalWeight <= 0) {
+              chosen = variants[Math.floor(Math.random() * variants.length)];
+            } else {
+              let rand = Math.random() * totalWeight;
+              for (const v of variants) {
+                rand -= v.splitPct;
+                if (rand <= 0) { chosen = v; break; }
+              }
             }
             draftSubject = chosen.subject;
             draftBody = chosen.body;

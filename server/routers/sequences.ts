@@ -115,7 +115,9 @@ async function pickAccountForSequenceDraft(
 
   if (!camp) return null;
 
-  // senderType=account: just use it.
+  // senderType=account: use the single configured account. Skip if it's
+  // disabled (matches the pool path's filter) — a disabled account
+  // shouldn't dispatch even when it's the campaign's only sender.
   if (camp.senderType === "account" && camp.sendingAccountId) {
     const [acct] = await db
       .select()
@@ -124,6 +126,7 @@ async function pickAccountForSequenceDraft(
         and(
           eq(sendingAccounts.id, camp.sendingAccountId),
           eq(sendingAccounts.workspaceId, workspaceId),
+          eq(sendingAccounts.enabled, true),
         ),
       )
       .limit(1);
@@ -1458,10 +1461,20 @@ export const sequenceAbRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      // Verify sequence belongs to workspace
-      const [seq] = await db.select({ id: sequences.id }).from(sequences)
+      // Verify sequence belongs to workspace AND is editable. The canvas
+      // and steps editors are locked when status=active/archived;
+      // variant CRUD should match — otherwise reps can shift A/B copy
+      // mid-flight while the engine is randomly picking variants and
+      // results become uninterpretable.
+      const [seq] = await db.select({ id: sequences.id, status: sequences.status }).from(sequences)
         .where(and(eq(sequences.id, input.sequenceId), eq(sequences.workspaceId, ctx.workspace.id)));
       if (!seq) throw new TRPCError({ code: "NOT_FOUND", message: "Sequence not found" });
+      if (seq.status === "active" || seq.status === "archived") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Cannot add variants while sequence is running. Pause it first.",
+        });
+      }
       const [inserted] = await db.insert(sequenceAbVariants).values({
         workspaceId: ctx.workspace.id,
         sequenceId: input.sequenceId,
@@ -1486,8 +1499,28 @@ export const sequenceAbRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // Same live-sequence lock as create — block edits while the
+      // engine is randomly picking variants in-flight.
+      const [v] = await db
+        .select({ sequenceId: sequenceAbVariants.sequenceId })
+        .from(sequenceAbVariants)
+        .where(and(eq(sequenceAbVariants.id, input.id), eq(sequenceAbVariants.workspaceId, ctx.workspace.id)))
+        .limit(1);
+      if (!v) throw new TRPCError({ code: "NOT_FOUND" });
+      const [seq] = await db
+        .select({ status: sequences.status })
+        .from(sequences)
+        .where(and(eq(sequences.id, v.sequenceId), eq(sequences.workspaceId, ctx.workspace.id)))
+        .limit(1);
+      if (seq && (seq.status === "active" || seq.status === "archived")) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Cannot edit variants while sequence is running. Pause it first.",
+        });
+      }
+
       const { id, ...rest } = input;
-      const patch = Object.fromEntries(Object.entries(rest).filter(([, v]) => v !== undefined));
+      const patch = Object.fromEntries(Object.entries(rest).filter(([, value]) => value !== undefined));
       if (Object.keys(patch).length > 0) {
         await db.update(sequenceAbVariants).set(patch)
           .where(and(eq(sequenceAbVariants.id, id), eq(sequenceAbVariants.workspaceId, ctx.workspace.id)));
@@ -1501,6 +1534,24 @@ export const sequenceAbRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [v] = await db
+        .select({ sequenceId: sequenceAbVariants.sequenceId })
+        .from(sequenceAbVariants)
+        .where(and(eq(sequenceAbVariants.id, input.id), eq(sequenceAbVariants.workspaceId, ctx.workspace.id)))
+        .limit(1);
+      if (v) {
+        const [seq] = await db
+          .select({ status: sequences.status })
+          .from(sequences)
+          .where(and(eq(sequences.id, v.sequenceId), eq(sequences.workspaceId, ctx.workspace.id)))
+          .limit(1);
+        if (seq && (seq.status === "active" || seq.status === "archived")) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Cannot delete variants while sequence is running. Pause it first.",
+          });
+        }
+      }
       await db.delete(sequenceAbVariants)
         .where(and(eq(sequenceAbVariants.id, input.id), eq(sequenceAbVariants.workspaceId, ctx.workspace.id)));
       return { ok: true };

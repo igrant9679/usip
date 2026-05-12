@@ -548,7 +548,13 @@ export default function CalendarPage() {
                     {!repUserId && (
                       <button
                         className="opacity-0 group-hover:opacity-100 hover:text-destructive"
-                        onClick={(e) => { e.stopPropagation(); disconnectAccount.mutate({ accountId: acc.id }); }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const label = acc.label ?? acc.email ?? acc.provider;
+                          if (confirm(`Disconnect ${label}? Past events stay in the local cache, but new sync will stop.`)) {
+                            disconnectAccount.mutate({ accountId: acc.id });
+                          }
+                        }}
                         title="Disconnect"
                       >
                         <Trash2 className="size-3" />
