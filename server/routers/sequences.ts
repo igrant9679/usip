@@ -390,7 +390,13 @@ export const sequencesRouter = router({
           label: e.label ?? null,
         })));
       }
-      await db.update(sequences).set({ updatedAt: new Date() }).where(eq(sequences.id, input.id));
+      // updatedAt write must be scoped to workspace too — the earlier
+      // ownership check filters the SELECT, but the final UPDATE was
+      // running unscoped, which is a latent cross-tenant write risk.
+      await db
+        .update(sequences)
+        .set({ updatedAt: new Date() })
+        .where(and(eq(sequences.id, input.id), eq(sequences.workspaceId, ctx.workspace.id)));
       return { ok: true };
     }),
 
