@@ -132,9 +132,12 @@ async function startServer() {
         // drafts the engine just created can dispatch without waiting for
         // a human if the workspace has aiAutoSendEnabled + threshold met.
         autoSendForAllWorkspaces().then((res) => {
-          if (res.dispatched > 0 || res.failed > 0) {
+          if (res.dispatched > 0 || res.failed > 0 || res.skippedNullScore > 0) {
+            // skippedNullScore is surfaced explicitly because "auto-send
+            // doesn't fire" is a common gotcha — usually the recipient
+            // contacts haven't had relStrengthScore computed yet.
             console.log(
-              `[autoSend] tick complete — dispatched=${res.dispatched} skipped=${res.skipped} failed=${res.failed} (${res.workspacesProcessed} workspace${res.workspacesProcessed === 1 ? "" : "s"})`,
+              `[autoSend] tick complete — dispatched=${res.dispatched} skipped=${res.skipped} (nullScore=${res.skippedNullScore}, lowScore=${res.skippedLowScore}) failed=${res.failed} (${res.workspacesProcessed} workspace${res.workspacesProcessed === 1 ? "" : "s"})`,
             );
           }
         }),

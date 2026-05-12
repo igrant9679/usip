@@ -1061,6 +1061,8 @@ export async function autoSendForAllWorkspaces(): Promise<{
   workspacesProcessed: number;
   dispatched: number;
   skipped: number;
+  skippedNullScore: number;
+  skippedLowScore: number;
   failed: number;
 }> {
   const db = await getDb();
@@ -1076,13 +1078,14 @@ export async function autoSendForAllWorkspaces(): Promise<{
     .where(eq(workspaceSettings.aiAutoSendEnabled, true));
 
   if (enabledWs.length === 0) {
-    return { workspacesProcessed: 0, dispatched: 0, skipped: 0, failed: 0 };
+    return { workspacesProcessed: 0, dispatched: 0, skipped: 0, skippedNullScore: 0, skippedLowScore: 0, failed: 0 };
   }
 
   let dispatched = 0;
   let skipped = 0;
+  let skippedNullScore = 0;
+  let skippedLowScore = 0;
   let failed = 0;
-  let confidenceWarned = false;
 
   for (const ws of enabledWs) {
     const scoreMin = ws.aiAutoSendScoreMin ?? 70;
@@ -1106,12 +1109,10 @@ export async function autoSendForAllWorkspaces(): Promise<{
       .limit(50); // bounded per workspace per tick
 
     if (candidateDrafts.length === 0) continue;
-    if (!confidenceWarned && (ws.aiAutoSendConfidenceMin ?? 0) > 0) {
-      console.warn(
-        `[autoSend] workspace ${ws.workspaceId} has aiAutoSendConfidenceMin=${ws.aiAutoSendConfidenceMin} but no aiConfidence column on emailDrafts — gating on score only.`,
-      );
-      confidenceWarned = true;
-    }
+    // aiAutoSendConfidenceMin is configurable in Settings but there's
+    // no aiConfidence column on emailDrafts yet, so the threshold is a
+    // no-op. We don't warn on every tick anymore — Settings shows the
+    // explicit "no signal source yet" hint instead. (Critical-8.)
 
     for (const draft of candidateDrafts) {
       // Score gate
@@ -1131,8 +1132,19 @@ export async function autoSendForAllWorkspaces(): Promise<{
           .limit(1);
         recipientScore = c?.score ?? null;
       }
-      if (recipientScore === null || recipientScore < scoreMin) {
+      // Two distinct skip reasons — track them separately so the cron
+      // summary can surface "you have 12 unscored contacts blocking
+      // auto-send". Previously these were silently bucketed together
+      // and contacts that hadn't been AI-scored just sat forever
+      // pending review with no visible cause. (Critical-7.)
+      if (recipientScore === null) {
         skipped++;
+        skippedNullScore++;
+        continue;
+      }
+      if (recipientScore < scoreMin) {
+        skipped++;
+        skippedLowScore++;
         continue;
       }
 
@@ -1175,7 +1187,14 @@ export async function autoSendForAllWorkspaces(): Promise<{
     }
   }
 
-  return { workspacesProcessed: enabledWs.length, dispatched, skipped, failed };
+  return {
+    workspacesProcessed: enabledWs.length,
+    dispatched,
+    skipped,
+    skippedNullScore,
+    skippedLowScore,
+    failed,
+  };
 }
 
 export const emailDraftsRouter = router({

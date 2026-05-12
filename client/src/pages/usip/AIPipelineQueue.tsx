@@ -688,7 +688,15 @@ export default function AIPipelineQueue() {
             </h2>
             <div className="flex items-center gap-2">
             {/* Auto-send toggle */}
-            <div className="flex items-center gap-2 border rounded-md px-3 py-1.5 bg-muted/40">
+            <div
+              className="flex items-center gap-2 border rounded-md px-3 py-1.5 bg-muted/40"
+              title={
+                `When ON, AI-generated sequence drafts dispatch automatically on the next 5-min tick — no human review.\n\n` +
+                `Gating: recipient must have a score ≥ ${autoSendSettings?.aiAutoSendScoreMin ?? 70} (lead.score or contact.relStrengthScore). ` +
+                `Unscored recipients are skipped silently and stay in pending review.\n\n` +
+                `Note: aiAutoSendConfidenceMin (set to ${autoSendSettings?.aiAutoSendConfidenceMin ?? 75}) is not yet enforced — there's no per-draft AI confidence signal stored on emailDrafts. Only the score threshold gates sends today.`
+              }
+            >
               <Switch
                 id="auto-send-toggle"
                 checked={autoSendSettings?.aiAutoSendEnabled ?? false}
