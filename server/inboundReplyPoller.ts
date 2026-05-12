@@ -25,7 +25,7 @@ import {
   enrollments,
   activities,
 } from "../drizzle/schema";
-import { eq, and, or, inArray, isNull } from "drizzle-orm";
+import { eq, and, or, desc, inArray, isNull } from "drizzle-orm";
 import { decryptField } from "./emailAdapter";
 
 let pollerInterval: ReturnType<typeof setInterval> | null = null;
@@ -152,22 +152,66 @@ export interface InboundReplyData {
 export async function processInboundReply(data: InboundReplyData) {
   const db = await getDb();
   if (!db) return;
-  // 1. Match to outbound draft via In-Reply-To or References
+  // 1. Match to outbound draft via In-Reply-To or References.
+  //
+  // Previously this gathered refIds and then *ignored* them — query
+  // matched on toEmail alone and picked drafts[0] (random old draft),
+  // which is what made reply analytics attribute to the wrong message.
+  //
+  // Strategy now:
+  //   a. If we have any In-Reply-To / References values, try matching
+  //      them against emailDrafts.trackingToken. trackingToken on the
+  //      Unipile path stores the provider tracking_id; matching on
+  //      that gives us exact draft identification when the recipient's
+  //      client preserved headers. We strip <> braces both ways.
+  //   b. Failing that, fall back to "most recent sent draft to this
+  //      sender" — at least temporally relevant, not the oldest.
   let matchedDraft: any = null;
   let matchedContactId: number | undefined;
   let matchedLeadId: number | undefined;
   let matchedAccountId: number | undefined;
 
-  if (data.inReplyTo || data.references) {
-    const refIds = [data.inReplyTo, ...(data.references?.split(/\s+/) ?? [])].filter(Boolean);
-    // Look for a draft whose trackingToken or messageId matches
-    const drafts = await db.select().from(emailDrafts)
+  const stripAngle = (s: string) => s.replace(/^<|>$/g, "").trim();
+  const refIds = [data.inReplyTo, ...(data.references?.split(/\s+/) ?? [])]
+    .map((s) => (s ? stripAngle(s) : ""))
+    .filter((s) => s.length > 0);
+
+  if (refIds.length > 0) {
+    // Exact-match on trackingToken — the Unipile path persists each
+    // outbound's tracking_id there. trackingToken is varchar(64) so
+    // refIds longer than 64 chars (full RFC Message-ID) won't match,
+    // but they don't share format anyway. We include both bare and
+    // angled forms to be tolerant.
+    const candidates = [...refIds, ...refIds.map((id) => `<${id}>`)];
+    const byToken = await db
+      .select()
+      .from(emailDrafts)
       .where(
         and(
           eq(emailDrafts.workspaceId, data.workspaceId),
-          inArray(emailDrafts.toEmail, [data.fromEmail]),
-        )
-      );
+          inArray(emailDrafts.trackingToken, candidates),
+        ),
+      )
+      .limit(1);
+    matchedDraft = byToken[0] ?? null;
+  }
+
+  if (!matchedDraft) {
+    // Fallback: most-recent sent draft to this sender (was previously
+    // the only path and used drafts[0] = oldest). Use desc(sentAt) so
+    // a reply to today's send attaches to today's draft, not 2024's.
+    const drafts = await db
+      .select()
+      .from(emailDrafts)
+      .where(
+        and(
+          eq(emailDrafts.workspaceId, data.workspaceId),
+          eq(emailDrafts.toEmail, data.fromEmail),
+          eq(emailDrafts.status, "sent"),
+        ),
+      )
+      .orderBy(desc(emailDrafts.sentAt))
+      .limit(1);
     matchedDraft = drafts[0] ?? null;
   }
 
