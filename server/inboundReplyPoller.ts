@@ -96,16 +96,37 @@ async function pollImapAccount(account: any) {
       const recentUids = uids.slice(-50); // Process up to 50 at a time
       for await (const msg of client.fetch(recentUids.join(","), { uid: true, flags: true, source: true }, { uid: true })) {
         try {
-          // Check if already processed by IMAP UID
+          // Dedup pass — two paths can record the same reply:
+          //   (a) IMAP poller for SMTP-served accounts (this loop)
+          //   (b) Unipile mail webhook for bridged M365 accounts
+          // (a) keys on imapUid + sendingAccountId, (b) keys on
+          // messageId + workspaceId. A single recipient mailbox served
+          // by BOTH would create duplicate rows. Parse the source so
+          // we can also check messageId before inserting.
           const db3 = await getDb();
           if (!db3) continue;
-          const existing = await db3.select({ id: emailReplies.id }).from(emailReplies)
+          const byImap = await db3.select({ id: emailReplies.id }).from(emailReplies)
             .where(and(eq(emailReplies.sendingAccountId, account.id), eq(emailReplies.imapUid, msg.uid)));
-          if (existing.length > 0) continue;
+          if (byImap.length > 0) continue;
 
           const parsed = await simpleParser(msg.source);
           const fromAddr = parsed.from?.value?.[0];
           const toVal = parsed.to;
+
+          // Cross-source dedup: same messageId already recorded for
+          // this workspace (e.g. via the Unipile webhook earlier).
+          const msgIdHeader = parsed.messageId ?? "";
+          if (msgIdHeader) {
+            const byMsg = await db3.select({ id: emailReplies.id }).from(emailReplies)
+              .where(
+                and(
+                  eq(emailReplies.workspaceId, account.workspaceId),
+                  eq(emailReplies.messageId, msgIdHeader),
+                ),
+              )
+              .limit(1);
+            if (byMsg.length > 0) continue;
+          }
 
           await processInboundReply({
             workspaceId: account.workspaceId,
