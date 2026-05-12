@@ -619,9 +619,30 @@ export const senderPoolsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // Verify the pool belongs to this workspace BEFORE wiping members.
+      // Without the ownership check + workspaceId on the member delete,
+      // any caller passing a numeric poolId from another workspace would
+      // wipe that workspace's sender_pool_members rows.
+      const [owns] = await db
+        .select({ id: senderPools.id })
+        .from(senderPools)
+        .where(
+          and(
+            eq(senderPools.id, input.id),
+            eq(senderPools.workspaceId, ctx.workspace.id),
+          ),
+        )
+        .limit(1);
+      if (!owns) throw new TRPCError({ code: "NOT_FOUND" });
+
       await db
         .delete(senderPoolMembers)
-        .where(eq(senderPoolMembers.poolId, input.id));
+        .where(
+          and(
+            eq(senderPoolMembers.poolId, input.id),
+            eq(senderPoolMembers.workspaceId, ctx.workspace.id),
+          ),
+        );
       await db
         .delete(senderPools)
         .where(
