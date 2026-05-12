@@ -988,6 +988,13 @@ interface BounceEvent {
   bounceType: "hard" | "soft" | "spam";
   message?: string;
   timestamp?: Date;
+  /**
+   * Workspace this bounce belongs to. The Unipile path knows it (looked up
+   * via the bridged account). Provider webhooks (Mailgun / SendGrid /
+   * Postmark) don't pass tenant info, so it's inferred below by finding
+   * the most-recent sent draft to this recipient.
+   */
+  workspaceId?: number;
 }
 
 export function detectBounceProvider(req: Request): BounceProvider {
@@ -1110,17 +1117,31 @@ export async function processBounceEvent(
   event: BounceEvent
 ): Promise<void> {
   const { emailDrafts: draftsTable, emailSuppressions } = await import("../drizzle/schema");
-  const { eq, and } = await import("drizzle-orm");
+  const { eq, and, desc } = await import("drizzle-orm");
 
-  // 1. Find the most recent sent draft for this email
+  // 1. Find the most recent sent draft for this email.
+  //
+  // Two paths:
+  //  - If the caller supplied workspaceId (Unipile bounce path), strictly
+  //    scope the lookup to that tenant — prevents a bounce for the same
+  //    address in workspace A from polluting workspace B.
+  //  - If not (provider webhooks at /api/track/bounce don't know tenancy),
+  //    pick the most-recent sent draft anywhere with that toEmail. This
+  //    is still a heuristic — a shared address that's been emailed by
+  //    two workspaces could land on the wrong one — but ordering by
+  //    sentAt DESC at least picks the temporally closest send, not the
+  //    oldest one ever.
+  const whereClause = event.workspaceId
+    ? and(eq(draftsTable.toEmail, event.email), eq(draftsTable.workspaceId, event.workspaceId))
+    : eq(draftsTable.toEmail, event.email);
   const [draft] = await db
     .select({ id: draftsTable.id, workspaceId: draftsTable.workspaceId })
     .from(draftsTable)
-    .where(eq(draftsTable.toEmail, event.email))
-    .orderBy(draftsTable.sentAt)
+    .where(whereClause)
+    .orderBy(desc(draftsTable.sentAt))
     .limit(1);
 
-  const workspaceId = draft?.workspaceId ?? 0;
+  const workspaceId = event.workspaceId ?? draft?.workspaceId ?? 0;
 
   // 2. Update the draft's bounce fields
   if (draft) {

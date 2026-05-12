@@ -602,6 +602,10 @@ export function registerUnipileWebhookRoutes(app: Express) {
                 bounceType: bounce.bounceType,
                 message: bounce.message,
                 timestamp: emailDate ?? new Date(),
+                // Scope to this workspace — the Unipile path knows tenancy
+                // from the account lookup so we shouldn't fall back to the
+                // cross-workspace draft heuristic.
+                workspaceId: acct.workspaceId,
               });
               console.log(
                 `[UnipileMailWebhook] bounce ${bounce.bounceType} for ${bounce.bouncedEmail} (from=${fromEmail ?? "?"} subj="${(payload.subject ?? "").slice(0, 60)}")`,
@@ -611,13 +615,21 @@ export function registerUnipileWebhookRoutes(app: Express) {
               // hard bounces, so future enrollments skip them.
               if (bounce.bounceType === "hard") {
                 const { contacts } = await import("../drizzle/schema");
+                // Scope to the workspace whose account received the bounce
+                // — a hard bounce in workspace A shouldn't flip the same
+                // address in workspace B as invalid.
                 await db
                   .update(contacts)
                   .set({
                     emailVerificationStatus: "invalid",
                     emailVerifiedAt: new Date(),
                   })
-                  .where(eq(contacts.email, bounce.bouncedEmail));
+                  .where(
+                    and(
+                      eq(contacts.email, bounce.bouncedEmail),
+                      eq(contacts.workspaceId, acct.workspaceId),
+                    ),
+                  );
               }
             } catch (bounceErr) {
               console.error(
