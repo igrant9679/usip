@@ -256,7 +256,9 @@ function SequenceEditDialog({ seq, open, onClose }: { seq: any; open: boolean; o
   // Steps state
   const [steps, setSteps] = useState<Step[]>([]);
 
-  const isLocked = seq?.status === "active" || seq?.status === "paused";
+  // Same lock rule as the canvas — paused sequences should be editable
+  // (that's why users pause). Only lock active (running) and archived.
+  const isLocked = seq?.status === "active" || seq?.status === "archived";
 
   // Pre-fill when dialog opens
   useEffect(() => {

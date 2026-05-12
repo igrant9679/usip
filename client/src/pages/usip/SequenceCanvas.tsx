@@ -231,7 +231,10 @@ function CanvasInner({
   seqExitConditions: ExitCondition[];
   seqSettings: SequenceSettings;
 }) {
-  const readOnly = seqStatus === "active" || seqStatus === "paused";
+  // Sequence is editable in `draft` and `paused` states — paused is when
+  // a user typically WANTS to make changes. Only lock while it's actively
+  // sending (`active`) or archived for historical reference (`archived`).
+  const readOnly = seqStatus === "active" || seqStatus === "archived";
   const { fitView } = useReactFlow();
 
   const [nodes, setNodes] = useState<Node[]>([]);

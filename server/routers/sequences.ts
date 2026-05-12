@@ -299,8 +299,12 @@ export const sequencesRouter = router({
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const [seq] = await db.select().from(sequences).where(and(eq(sequences.id, input.id), eq(sequences.workspaceId, ctx.workspace.id)));
     if (!seq) throw new TRPCError({ code: "NOT_FOUND" });
-    if (seq.status === "active" || seq.status === "paused") {
-      throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot edit steps of an active/paused sequence. Pause it first." });
+    // Steps are editable in draft + paused states. Pausing is precisely
+    // the lever a user pulls when they want to make changes safely
+    // without new sends going out. Only block while actively running
+    // (status=active) or after archival.
+    if (seq.status === "active" || seq.status === "archived") {
+      throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot edit steps while sequence is running. Pause it first." });
     }
     await db.update(sequences).set({ steps: input.steps, updatedAt: new Date() }).where(and(eq(sequences.id, input.id), eq(sequences.workspaceId, ctx.workspace.id)));
     return { ok: true };
@@ -355,7 +359,12 @@ export const sequencesRouter = router({
       // Verify sequence belongs to workspace
       const [seq] = await db.select().from(sequences).where(and(eq(sequences.id, input.id), eq(sequences.workspaceId, ctx.workspace.id)));
       if (!seq) throw new TRPCError({ code: "NOT_FOUND" });
-      if (seq.status === "active" || seq.status === "paused") throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot edit canvas of an active/paused sequence" });
+      // Canvas is editable in draft + paused states; paused means the
+      // user explicitly stopped sending to make changes. Only running or
+      // archived sequences are locked.
+      if (seq.status === "active" || seq.status === "archived") {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot edit canvas while sequence is running. Pause it first." });
+      }
       // Replace all nodes + edges atomically
       await db.delete(sequenceNodes).where(and(eq(sequenceNodes.sequenceId, input.id), eq(sequenceNodes.workspaceId, ctx.workspace.id)));
       await db.delete(sequenceEdges).where(and(eq(sequenceEdges.sequenceId, input.id), eq(sequenceEdges.workspaceId, ctx.workspace.id)));
