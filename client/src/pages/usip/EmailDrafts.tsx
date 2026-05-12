@@ -299,10 +299,20 @@ export default function EmailDrafts() {
   const { data: contacts } = trpc.contacts.list.useQuery();
   const compose = trpc.emailDrafts.compose.useMutation({
     onSuccess: () => { utils.emailDrafts.list.invalidate(); setComposeOpen(false); toast.success("Draft created — review it below"); },
+    onError: (e) => toast.error("Compose failed", { description: e.message }),
   });
-  const approve = trpc.emailDrafts.approve.useMutation({ onSuccess: () => utils.emailDrafts.list.invalidate() });
-  const reject = trpc.emailDrafts.reject.useMutation({ onSuccess: () => utils.emailDrafts.list.invalidate() });
-  const sendViaDb = trpc.emailDrafts.send.useMutation({ onSuccess: () => { utils.emailDrafts.list.invalidate(); toast.success("Draft marked sent"); } });
+  const approve = trpc.emailDrafts.approve.useMutation({
+    onSuccess: () => utils.emailDrafts.list.invalidate(),
+    onError: (e) => toast.error("Approve failed", { description: e.message }),
+  });
+  const reject = trpc.emailDrafts.reject.useMutation({
+    onSuccess: () => utils.emailDrafts.list.invalidate(),
+    onError: (e) => toast.error("Reject failed", { description: e.message }),
+  });
+  const sendViaDb = trpc.emailDrafts.send.useMutation({
+    onSuccess: () => { utils.emailDrafts.list.invalidate(); toast.success("Draft marked sent"); },
+    onError: (e) => toast.error("Send failed", { description: e.message }),
+  });
   const sendViaSmtp = trpc.smtpConfig.sendDraft.useMutation({
     onSuccess: () => { utils.emailDrafts.list.invalidate(); toast.success("Email sent via SMTP"); },
     onError: (e) => {

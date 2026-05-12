@@ -604,6 +604,7 @@ function AccountCard({ account, onEdit }: { account: any; onEdit: (id: number) =
 
   const toggleMutation = trpc.sendingAccounts.toggleEnabled.useMutation({
     onSuccess: () => utils.sendingAccounts.list.invalidate(),
+    onError: (e) => toast.error("Failed to toggle account", { description: e.message }),
   });
 
   const deleteMutation = trpc.sendingAccounts.delete.useMutation({
@@ -611,6 +612,7 @@ function AccountCard({ account, onEdit }: { account: any; onEdit: (id: number) =
       utils.sendingAccounts.list.invalidate();
       toast.success("Account removed");
     },
+    onError: (e) => toast.error("Failed to remove account", { description: e.message }),
   });
 
   return (

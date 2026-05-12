@@ -213,9 +213,11 @@ export default function Leads() {
   });
   const rescore = trpc.leadScoring.recompute.useMutation({
     onSuccess: () => { utils.leads.list.invalidate(); toast.success("Re-scored"); },
+    onError: (e: any) => toast.error("Re-score failed", { description: e.message }),
   });
   const convert = trpc.leads.convert.useMutation({
     onSuccess: () => { utils.leads.list.invalidate(); utils.workspace.summary.invalidate(); toast.success("Converted to account + contact + opportunity"); },
+    onError: (e: any) => toast.error("Convert failed", { description: e.message }),
   });
   const deleteMut = trpc.leads.delete.useMutation({
     onSuccess: () => { utils.leads.list.invalidate(); toast.success("Lead deleted"); },
@@ -410,6 +412,7 @@ function CreateLeadDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
   const utils = trpc.useUtils();
   const create = trpc.leads.create.useMutation({
     onSuccess: () => { utils.leads.list.invalidate(); onOpenChange(false); toast.success("Lead created"); },
+    onError: (e) => toast.error("Failed to create lead", { description: e.message }),
   });
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

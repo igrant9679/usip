@@ -542,7 +542,14 @@ function ThreadView({
     { enabled: !!accountId && !!threadId }
   );
   const markRead = trpc.mailbox.markRead.useMutation({
-    onSuccess: () => utils.mailbox.getThread.invalidate({ accountId, threadId, folder }),
+    onSuccess: () => {
+      // Also invalidate folder counts so sidebar unread badges refresh
+      // — previously only the thread refreshed, leaving stale counts.
+      utils.mailbox.getThread.invalidate({ accountId, threadId, folder });
+      utils.mailbox.listFolders.invalidate();
+      utils.mailbox.listThreads.invalidate();
+    },
+    onError: (e) => toast.error("Failed to update read state", { description: e.message }),
   });
   const moveToTrash = trpc.mailbox.moveToTrash.useMutation({
     onSuccess: () => { toast.success("Moved to trash"); onDeleted(); },

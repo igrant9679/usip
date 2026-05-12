@@ -344,6 +344,7 @@ function PoolCard({ pool }: { pool: any }) {
       utils.senderPools.list.invalidate();
       toast.success("Pool deleted");
     },
+    onError: (e) => toast.error("Failed to delete pool", { description: e.message }),
   });
 
   const { data: detail } = trpc.senderPools.getWithMembers.useQuery(

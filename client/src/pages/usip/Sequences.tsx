@@ -843,8 +843,12 @@ export default function Sequences() {
   const { data } = trpc.sequences.list.useQuery();
   const create = trpc.sequences.create.useMutation({
     onSuccess: () => { utils.sequences.list.invalidate(); setOpen(false); toast.success("Sequence created"); },
+    onError: (e) => toast.error("Failed to create sequence", { description: e.message }),
   });
-  const setStatus = trpc.sequences.setStatus.useMutation({ onSuccess: () => utils.sequences.list.invalidate() });
+  const setStatus = trpc.sequences.setStatus.useMutation({
+    onSuccess: () => utils.sequences.list.invalidate(),
+    onError: (e) => toast.error("Failed to change status", { description: e.message }),
+  });
   const detail = trpc.sequences.get.useQuery({ id: selected! }, { enabled: !!selected });
 
   return (

@@ -289,6 +289,7 @@ export default function Accounts() {
 
   const create = trpc.accounts.create.useMutation({
     onSuccess: () => { utils.accounts.list.invalidate(); utils.accounts.hierarchy.invalidate(); setOpen(false); toast.success("Account created"); },
+    onError: (e) => toast.error("Failed to create account", { description: e.message }),
   });
   const deleteMut = trpc.accounts.delete.useMutation({
     onSuccess: () => { utils.accounts.list.invalidate(); utils.accounts.hierarchy.invalidate(); toast.success("Account deleted"); },

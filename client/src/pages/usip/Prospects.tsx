@@ -194,6 +194,7 @@ function CloduraSearchPanel({ onClose }: { onClose: () => void }) {
   });
   const deleteSearch = trpc.clodura.deleteSavedSearch.useMutation({
     onSuccess: () => savedSearches.refetch(),
+    onError: (e) => toast.error("Failed to delete saved search", { description: e.message }),
   });
 
   const credits = trpc.clodura.credits.useQuery(undefined, { retry: false });
