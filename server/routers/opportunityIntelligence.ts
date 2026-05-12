@@ -360,7 +360,18 @@ export const opportunityIntelligenceRouter = router({
       const existing: Record<string, any> = (opp.customFields as any) ?? {};
       const coOwners: number[] = existing.coOwners ?? [];
       if (!coOwners.includes(input.userId)) coOwners.push(input.userId);
-      await db.update(opportunities).set({ customFields: { ...existing, coOwners } }).where(eq(opportunities.id, input.opportunityId));
+      // workspaceId on the UPDATE so a concurrent / crafted call can't
+      // mutate a different workspace's opportunity even if the prior
+      // SELECT was OK.
+      await db
+        .update(opportunities)
+        .set({ customFields: { ...existing, coOwners } })
+        .where(
+          and(
+            eq(opportunities.id, input.opportunityId),
+            eq(opportunities.workspaceId, ctx.workspace.id),
+          ),
+        );
       return { ok: true };
     }),
 
@@ -376,7 +387,18 @@ export const opportunityIntelligenceRouter = router({
       if (!opp) throw new TRPCError({ code: "NOT_FOUND" });
       const existing: Record<string, any> = (opp.customFields as any) ?? {};
       const coOwners: number[] = (existing.coOwners ?? []).filter((id: number) => id !== input.userId);
-      await db.update(opportunities).set({ customFields: { ...existing, coOwners } }).where(eq(opportunities.id, input.opportunityId));
+      // workspaceId on the UPDATE so a concurrent / crafted call can't
+      // mutate a different workspace's opportunity even if the prior
+      // SELECT was OK.
+      await db
+        .update(opportunities)
+        .set({ customFields: { ...existing, coOwners } })
+        .where(
+          and(
+            eq(opportunities.id, input.opportunityId),
+            eq(opportunities.workspaceId, ctx.workspace.id),
+          ),
+        );
       return { ok: true };
     }),
 
