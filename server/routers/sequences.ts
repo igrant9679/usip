@@ -263,12 +263,24 @@ export const sequencesRouter = router({
     return { id: Number((r as any)[0]?.insertId ?? 0) };
   }),
 
+  // Strict allow-list of editable columns. Previously this accepted
+  // z.record(z.string(), z.any()) and forwarded straight to SET, which
+  // let reps write `status`, `enrolledCount`, `workspaceId`,
+  // `ownerUserId`, bypassing setStatus validation and the canvas-edit
+  // lock. Now any unknown key is rejected at the input boundary.
+  // Use setStatus / updateSteps / updateMeta / saveCanvas for the
+  // domain-specific paths.
   update: repProcedure.input(z.object({
     id: z.number(),
-    patch: z.record(z.string(), z.any()),
+    patch: z.object({
+      name: z.string().min(1).max(200).optional(),
+      description: z.string().max(2000).nullable().optional(),
+      dailyCap: z.number().int().min(0).max(10000).nullable().optional(),
+    }).strict(),
   })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    if (Object.keys(input.patch).length === 0) return { ok: true };
     await db.update(sequences).set(input.patch).where(and(eq(sequences.id, input.id), eq(sequences.workspaceId, ctx.workspace.id)));
     return { ok: true };
   }),
@@ -314,7 +326,42 @@ export const sequencesRouter = router({
   delete: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    await db.delete(sequences).where(and(eq(sequences.id, input.id), eq(sequences.workspaceId, ctx.workspace.id)));
+    // Verify ownership first so we can fail fast (and so a NOT_FOUND
+    // produces a clean 404 instead of a no-op).
+    const [seq] = await db
+      .select({ id: sequences.id })
+      .from(sequences)
+      .where(and(eq(sequences.id, input.id), eq(sequences.workspaceId, ctx.workspace.id)))
+      .limit(1);
+    if (!seq) throw new TRPCError({ code: "NOT_FOUND" });
+
+    // Cascade — without these, child rows became orphans pointing at
+    // a tombstone. emailDrafts kept their sequenceId so analytics
+    // misattributed; processEnrollments tripped over `if (!seq)`
+    // every tick for each orphaned enrollment.
+    //
+    // Order matters: delete children BEFORE the parent so any FK that
+    // might exist on prod (Drizzle journal doesn't always emit them
+    // but other tooling can add them out-of-band) doesn't trip.
+    const wsCond = (col: any) => eq(col, ctx.workspace.id);
+    await db
+      .delete(enrollments)
+      .where(and(eq(enrollments.sequenceId, input.id), wsCond(enrollments.workspaceId)));
+    await db
+      .delete(emailDrafts)
+      .where(and(eq(emailDrafts.sequenceId, input.id), wsCond(emailDrafts.workspaceId)));
+    await db
+      .delete(sequenceAbVariants)
+      .where(and(eq(sequenceAbVariants.sequenceId, input.id), wsCond(sequenceAbVariants.workspaceId)));
+    await db
+      .delete(sequenceEdges)
+      .where(and(eq(sequenceEdges.sequenceId, input.id), wsCond(sequenceEdges.workspaceId)));
+    await db
+      .delete(sequenceNodes)
+      .where(and(eq(sequenceNodes.sequenceId, input.id), wsCond(sequenceNodes.workspaceId)));
+    await db
+      .delete(sequences)
+      .where(and(eq(sequences.id, input.id), eq(sequences.workspaceId, ctx.workspace.id)));
     return { ok: true };
   }),
 
@@ -1165,6 +1212,27 @@ export async function autoSendForAllWorkspaces(): Promise<{
         console.warn(
           `[autoSend] no actor user for draft ${draft.id} in workspace ${ws.workspaceId} — skipping`,
         );
+        continue;
+      }
+
+      // Compare-and-swap to claim this draft before dispatching. Two
+      // overlapping autoSend ticks (cron can run concurrently if a
+      // previous tick took >5min) could both SELECT the same
+      // pending_review row. Flipping status atomically with a WHERE
+      // status="pending_review" filter means whichever tick wins the
+      // race gets a row, the other gets affectedRows=0 and skips.
+      const [claimResult] = await db.execute(
+        sql`UPDATE \`email_drafts\`
+            SET \`status\` = 'approved',
+                \`reviewedByUserId\` = ${actorUserId}
+            WHERE \`id\` = ${draft.id}
+              AND \`workspaceId\` = ${ws.workspaceId}
+              AND \`status\` = 'pending_review'`,
+      );
+      const claimed = (claimResult as { affectedRows?: number })?.affectedRows ?? 0;
+      if (claimed === 0) {
+        // Another tick (or a manual reviewer) grabbed it. Don't count
+        // as skipped — it's just lost-race, not a policy decision.
         continue;
       }
 

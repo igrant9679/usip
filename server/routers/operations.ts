@@ -662,13 +662,29 @@ export const campaignsRouter = router({
     return { id: Number((r as any)[0]?.insertId ?? 0) };
   }),
 
-  update: workspaceProcedure.input(z.object({ id: z.number(), patch: z.record(z.string(), z.any()) })).mutation(async ({ ctx, input }) => {
+  // Strict allow-list — previously accepted any keys including
+  // `status` and the total* counter columns. updateOutreach handles
+  // the campaign-config fields; launch/pause/delete handle status
+  // transitions. This endpoint is now editorial-fields only.
+  update: repProcedure.input(z.object({
+    id: z.number(),
+    patch: z.object({
+      name: z.string().min(1).max(200).optional(),
+      objective: z.string().max(2000).nullable().optional(),
+      description: z.string().max(4000).nullable().optional(),
+      budget: z.union([z.number(), z.string()]).optional(),
+      startsAt: z.union([z.date(), z.string()]).nullable().optional(),
+      endsAt: z.union([z.date(), z.string()]).nullable().optional(),
+      ownerUserId: z.number().int().nullable().optional(),
+    }).strict(),
+  })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const patch: any = { ...input.patch };
     if (patch.budget !== undefined) patch.budget = String(patch.budget);
     if (patch.startsAt && typeof patch.startsAt === "string") patch.startsAt = new Date(patch.startsAt);
     if (patch.endsAt && typeof patch.endsAt === "string") patch.endsAt = new Date(patch.endsAt);
+    if (Object.keys(patch).length === 0) return { ok: true };
     await db.update(campaigns).set(patch).where(and(eq(campaigns.id, input.id), eq(campaigns.workspaceId, ctx.workspace.id)));
     return { ok: true };
   }),
