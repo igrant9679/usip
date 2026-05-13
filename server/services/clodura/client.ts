@@ -255,11 +255,22 @@ export async function searchPeople(
     return normalized;
   } catch (e) {
     if (e instanceof CloduraError && e.statusCode === 404) {
-      // Surface the 404 — previously this was silent and looked
-      // indistinguishable from "search broken". 404 means Clodura
-      // accepted the request and just found nothing matching.
+      // Surface the 404 + probe /credits with the SAME api key so we
+      // can tell two failure modes apart:
+      //  - credits 200 + search 404 → auth works, Clodura genuinely
+      //    has no matching rows (or our payload doesn't hit any).
+      //  - credits 4xx/5xx → auth or entitlement issue masquerading
+      //    as a search 404.
+      let creditDiag = "(probe skipped)";
+      try {
+        const c = await cloduraFetch<unknown>("/credits", { method: "GET", apiKey });
+        creditDiag = `OK ${JSON.stringify(c).slice(0, 150)}`;
+      } catch (probeErr) {
+        const pe = probeErr as CloduraError;
+        creditDiag = `${pe.statusCode ?? "?"} ${pe.message ?? String(probeErr)}`.slice(0, 200);
+      }
       console.log(
-        `[Clodura.search] 404 (no results) for body=${JSON.stringify(body).slice(0, 200)} — try broadening filters or using full names (e.g. "Virginia" not "VA", "United States" not "US")`,
+        `[Clodura.search] 404 (no results) for body=${JSON.stringify(body).slice(0, 200)} — /credits probe: ${creditDiag}`,
       );
       return {
         data: [],
