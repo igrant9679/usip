@@ -228,13 +228,28 @@ export async function searchPeople(
   // filters" — their semantic "empty result" code, NOT "endpoint
   // missing". Catch it and return an empty page instead of bubbling
   // the error up to the UI as a generic 404 toast.
+  // Diagnostic — surface exactly what we sent + what came back so we
+  // can verify field-name translation and response shape end-to-end.
+  // Strip the apiKey from logging by virtue of never including it in `body`.
+  console.log(
+    `[Clodura.search] request body=${JSON.stringify(body).slice(0, 400)}`,
+  );
   try {
     const raw = await cloduraFetch<unknown>("/search/people", {
       method: "POST",
       body: JSON.stringify(body),
       apiKey,
     });
-    return normalizeSearchResponse(raw, params.page ?? 1, params.perPage ?? 25);
+    // First 600 chars of the raw response — enough to see the envelope
+    // shape and the first row or two without flooding logs on big pages.
+    console.log(
+      `[Clodura.search] response keys=${Object.keys((raw ?? {}) as Record<string, unknown>).join(",")} sample=${JSON.stringify(raw).slice(0, 600)}`,
+    );
+    const normalized = normalizeSearchResponse(raw, params.page ?? 1, params.perPage ?? 25);
+    console.log(
+      `[Clodura.search] normalized total=${normalized.total} data.length=${normalized.data.length}`,
+    );
+    return normalized;
   } catch (e) {
     if (e instanceof CloduraError && e.statusCode === 404) {
       return {
