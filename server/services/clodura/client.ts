@@ -192,21 +192,49 @@ export async function searchPeople(
     throw new CloduraError(400, "You may specify at most 10 company domains per search.");
   }
 
-  // Per Clodura's API reference: 404 from /search/people means
-  // "No Results found, may be you can tweak the filters" — it's their
-  // semantic "empty result" code, NOT "endpoint not found". Catch it
-  // here and return an empty page instead of bubbling the error up to
-  // the UI as a generic 404 toast.
+  // Translate our friendly filter shape to Clodura's exact wire field
+  // names. Earlier the request was sent through as-is, which meant
+  // Clodura silently ignored every renamed filter (city, state, country,
+  // company, employeeSize, technology, etc.) and returned zero matches.
+  // Reference: Clodura API Reference Guide §2.1, Request Body Parameters.
+  const body: Record<string, unknown> = {
+    page: params.page ?? 1,
+    perPage: params.perPage ?? 25,
+  };
+  if (params.firstName) body.firstName = params.firstName;
+  if (params.lastName) body.lastName = params.lastName;
+  if (params.linkedinUrl) body.linkedinUrl = params.linkedinUrl;
+  if (params.personTitle?.length) {
+    // Clodura wants a single string + an includeSimilarTitles flag.
+    // Pass the first entry; downstream callers that want strict
+    // multi-title should fan out and merge.
+    body.personTitle = params.personTitle[0];
+  }
+  if (params.seniority?.length) body.seniority = params.seniority;
+  if (params.functional?.length) body.functional = params.functional;
+  if (params.industry?.length) body.industry = params.industry;
+  if (params.revenue?.length) body.revenue = params.revenue;
+  if (params.companyDomain?.length) body.companyDomain = params.companyDomain;
+  // Renamed fields →
+  if (params.company?.length) body.organizationName = params.company[0];
+  if (params.city?.length) body.personCity = params.city;
+  if (params.state?.length) body.personState = params.state;
+  if (params.country?.length) body.personCountry = params.country;
+  if (params.employeeSize?.length) body.companyEmployeeSize = params.employeeSize;
+  if (params.technology?.length) body.technologyParameters = params.technology;
+
+  // Per Clodura's API reference (HTTP Status Code table): 404 from
+  // /search/people means "No Results found, may be you can tweak the
+  // filters" — their semantic "empty result" code, NOT "endpoint
+  // missing". Catch it and return an empty page instead of bubbling
+  // the error up to the UI as a generic 404 toast.
   try {
-    return await cloduraFetch<CloduraSearchResponse>("/search/people", {
+    const raw = await cloduraFetch<unknown>("/search/people", {
       method: "POST",
-      body: JSON.stringify({
-        ...params,
-        page: params.page ?? 1,
-        perPage: params.perPage ?? 25,
-      }),
+      body: JSON.stringify(body),
       apiKey,
     });
+    return normalizeSearchResponse(raw, params.page ?? 1, params.perPage ?? 25);
   } catch (e) {
     if (e instanceof CloduraError && e.statusCode === 404) {
       return {
@@ -214,10 +242,33 @@ export async function searchPeople(
         page: params.page ?? 1,
         perPage: params.perPage ?? 25,
         total: 0,
-      } as CloduraSearchResponse;
+      };
     }
     throw e;
   }
+}
+
+/**
+ * Translate Clodura's wire response shape into our local CloduraSearchResponse.
+ * Their docs aren't explicit about the /search/people response envelope but
+ * peer endpoints (orgs search §3.1, webhook tracking §2.5) use
+ * `{ pagination: {...}, people: [...] }`. Be lenient and accept variants
+ * (people/data/results, pagination/total_entries/total) so we don't break
+ * silently if they reshape the response again.
+ */
+function normalizeSearchResponse(
+  raw: unknown,
+  fallbackPage: number,
+  fallbackPerPage: number,
+): CloduraSearchResponse {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  const data = (r.people ?? r.data ?? r.results ?? []) as CloduraPersonResult[];
+  const pag = (r.pagination ?? {}) as Record<string, unknown>;
+  const total = Number(pag.total_entries ?? pag.total ?? r.total ?? data.length ?? 0);
+  const page = Number(pag.page ?? r.page ?? fallbackPage);
+  const perPageRaw = pag.per_page ?? pag.perPage ?? r.perPage ?? fallbackPerPage;
+  const perPage = Number(perPageRaw);
+  return { data, total, page, perPage };
 }
 
 /* ─── Reveal email ────────────────────────────────────────────────────────── */
