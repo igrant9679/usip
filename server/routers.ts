@@ -36,7 +36,6 @@ import { calendarRouter } from "./routers/calendar";
 import { proposalsRouter } from "./routers/proposals";
 import { unipileRouter } from "./routers/unipile";
 import { areRouter } from "./routers/are";
-import { cloduraRouter } from "./routers/clodura";
 import { pageDescriptionsRouter } from "./routers/pageDescriptions";
 import { csAiRouter, leadsAiRouter, contactsAiRouter, quotesAiRouter, workflowsAiRouter, forecastAiRouter, mailboxAiRouter, emailAutoSendRouter } from "./routers/aiFeatures";
 import { helpCenterRouter } from "./routers/helpCenter";
@@ -44,6 +43,7 @@ import { toursRouter } from "./routers/tours";
 import { mindmapsRouter } from "./routers/mindmaps";
 import { aiCredentialsRouter } from "./routers/aiCredentials";
 import { profileRouter } from "./routers/profile";
+import { prospectsRouter } from "./routers/prospects";
 
 export const appRouter = router({
   system: systemRouter,
@@ -114,7 +114,6 @@ export const appRouter = router({
   unipile: unipileRouter,
   proposals: proposalsRouter,
   are: areRouter,
-  clodura: cloduraRouter,
   pageDescriptions: pageDescriptionsRouter,
   csAi: csAiRouter,
   leadsAi: leadsAiRouter,
@@ -129,6 +128,7 @@ export const appRouter = router({
   mindmaps: mindmapsRouter,
   aiCredentials: aiCredentialsRouter,
   profile: profileRouter,
+  prospects: prospectsRouter,
 });
 
 export type AppRouter = typeof appRouter;

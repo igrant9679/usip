@@ -238,57 +238,6 @@ const DEMO_TOURS: TourSeed[] = [
     ],
   },
 
-  // ── 5. Enriching Contacts with Clodura ─────────────────────────────────────
-  {
-    name: "Enriching Contacts with Clodura",
-    description: "Use the Clodura.ai integration to enrich contact data with verified emails, phone numbers, and firmographic details.",
-    type: "feature",
-    estimatedMinutes: 3,
-    pageKey: "/contacts",
-    steps: [
-      {
-        title: "Contact Enrichment",
-        bodyMarkdown: "**Enrichment** fills in missing data on your contacts — verified email, direct phone, LinkedIn URL, seniority, functional area, company revenue, and more — using the Clodura.ai database.",
-        targetDataTourId: "contacts-new-button",
-        routeTo: "/contacts",
-        visualTreatment: "coach",
-        advanceCondition: "next_button",
-      },
-      {
-        title: "The Enriched Column",
-        bodyMarkdown: "The **Enriched** column shows an amber **Enrich** button for contacts that haven't been enriched yet, and a green **Enriched** badge for those that have. Click **Enrich** on any row to start.",
-        targetDataTourId: "contacts-new-button",
-        routeTo: "/contacts",
-        visualTreatment: "spotlight",
-        advanceCondition: "next_button",
-      },
-      {
-        title: "Diff-and-Approve Modal",
-        bodyMarkdown: "Before any data is written, a **before/after comparison** modal appears. Each field shows the current value and the proposed enriched value. Tick the fields you want to apply and click **Apply Selected**.",
-        targetDataTourId: "contacts-new-button",
-        routeTo: "/contacts",
-        visualTreatment: "spotlight",
-        advanceCondition: "next_button",
-      },
-      {
-        title: "Bulk Enrich",
-        bodyMarkdown: "Select multiple contacts using the checkboxes, then click **Enrich (N)** in the bulk toolbar to queue them all for enrichment. The background worker processes them automatically.",
-        targetDataTourId: "contacts-new-button",
-        routeTo: "/contacts",
-        visualTreatment: "spotlight",
-        advanceCondition: "next_button",
-      },
-      {
-        title: "Setting Up Clodura",
-        bodyMarkdown: "To activate enrichment, go to **Settings → Integrations → Clodura.ai** and enter your API key. You can also enable **auto-enrich on contact create** so new contacts are enriched automatically.",
-        targetDataTourId: "contacts-new-button",
-        routeTo: "/contacts",
-        visualTreatment: "spotlight",
-        advanceCondition: "next_button",
-      },
-    ],
-  },
-
   // ── 6. The ARE Hub ──────────────────────────────────────────────────────────
   {
     name: "Automated Revenue Engine (ARE)",
