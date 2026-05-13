@@ -197,15 +197,32 @@ export async function searchPeople(
     throw new CloduraError(400, "You may specify at most 10 company domains per search.");
   }
 
-  return cloduraFetch<CloduraSearchResponse>(CLODURA_SEARCH_PATH, {
-    method: "POST",
-    body: JSON.stringify({
-      ...params,
-      page: params.page ?? 1,
-      perPage: params.perPage ?? 25,
-    }),
-    apiKey,
-  });
+  // Per Clodura's API reference: 404 from /search/people means
+  // "No Results found, may be you can tweak the filters" — it's their
+  // semantic "empty result" code, NOT "endpoint not found". Catch it
+  // here and return an empty page instead of bubbling the error up to
+  // the UI as a generic 404 toast.
+  try {
+    return await cloduraFetch<CloduraSearchResponse>(CLODURA_SEARCH_PATH, {
+      method: "POST",
+      body: JSON.stringify({
+        ...params,
+        page: params.page ?? 1,
+        perPage: params.perPage ?? 25,
+      }),
+      apiKey,
+    });
+  } catch (e) {
+    if (e instanceof CloduraError && e.statusCode === 404) {
+      return {
+        data: [],
+        page: params.page ?? 1,
+        perPage: params.perPage ?? 25,
+        total: 0,
+      } as CloduraSearchResponse;
+    }
+    throw e;
+  }
 }
 
 /* ─── Reveal email ────────────────────────────────────────────────────────── */
