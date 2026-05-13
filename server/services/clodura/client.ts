@@ -10,11 +10,6 @@ import { TRPCError } from "@trpc/server";
 // Strip any trailing slash so concatenation with `/path` always yields a
 // single-slash URL.
 const CLODURA_BASE = (process.env.CLODURA_BASE_URL || "https://app.clodura.ai/api/v1").replace(/\/+$/, "");
-// The "people search" endpoint path is overridable because Clodura has
-// renamed it before (we've seen /search/people, /people/search, and
-// /v2/people/search across SDK versions). Set CLODURA_SEARCH_PATH on
-// Railway to whatever the current docs say if you hit a 404 here.
-const CLODURA_SEARCH_PATH = process.env.CLODURA_SEARCH_PATH || "/search/people";
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 500;
 
@@ -203,7 +198,7 @@ export async function searchPeople(
   // here and return an empty page instead of bubbling the error up to
   // the UI as a generic 404 toast.
   try {
-    return await cloduraFetch<CloduraSearchResponse>(CLODURA_SEARCH_PATH, {
+    return await cloduraFetch<CloduraSearchResponse>("/search/people", {
       method: "POST",
       body: JSON.stringify({
         ...params,
