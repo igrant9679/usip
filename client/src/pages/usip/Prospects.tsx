@@ -1,13 +1,16 @@
 /**
- * Prospects page — outbound prospect list (manual CSV import + promote).
+ * Prospects page — outbound prospect list (manual CSV import + scraper).
  *
  * Layout:
- *   PageHeader + "Import CSV" button (wizard TBD)
+ *   PageHeader + Reoon balance + "Import CSV" button (wizard TBD)
  *   Filter toolbar (email status, promoted)
- *   Prospect table with row actions: Promote to contact, Delete
+ *   Prospect table with row actions: Find contact info, Promote, Delete
+ *   Enrichment detail dialog — shows scraper output for one prospect
  *
  * Sourcing: prospects are loaded via CSV upload (e.g. LeadRocks exports).
  * The previous Clodura.ai search/reveal/credits surface has been removed.
+ * Contact info (emails / phones / social URLs) is found via the company-site
+ * scraper + Reoon email pattern verification — see server/services/scraper.
  */
 import { useState } from "react";
 import { trpc } from "@/lib/trpc";
@@ -35,6 +38,13 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
 import {
@@ -52,20 +62,169 @@ import {
   CheckCircle2,
   Upload,
   Zap,
+  Sparkles,
+  Info,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useLocation } from "wouter";
+
+/* ─── Types ────────────────────────────────────────────────────────────────── */
+type EnrichmentData = {
+  scrapedDomain: string | null;
+  scrapedAt: string;
+  emailsFound: string[];
+  phonesFound: string[];
+  socialUrls: string[];
+  patternsVerified: Array<{
+    email: string;
+    pattern: "first.last" | "flast" | "firstlast";
+    status: "valid" | "accept_all" | "risky" | "invalid" | "unknown";
+    overallScore?: number;
+  }>;
+  skipReason?: string;
+};
 
 /* ─── Helpers ──────────────────────────────────────────────────────────────── */
 function emailStatusBadge(status?: string | null) {
   if (!status) return null;
   const map: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
-    verified: { label: "Verified", variant: "default" },
+    valid: { label: "Valid", variant: "default" },
+    verified: { label: "Valid", variant: "default" },
+    accept_all: { label: "Accept-All", variant: "secondary" },
+    risky: { label: "Risky", variant: "secondary" },
+    invalid: { label: "Invalid", variant: "destructive" },
     unverified: { label: "Unverified", variant: "secondary" },
     unavailable: { label: "Unavailable", variant: "outline" },
   };
   const s = map[status] ?? { label: status, variant: "outline" as const };
   return <Badge variant={s.variant} className="text-xs">{s.label}</Badge>;
+}
+
+/* ─── Enrichment detail dialog ─────────────────────────────────────────────── */
+function EnrichmentDialog({
+  open,
+  onClose,
+  data,
+  prospectName,
+}: {
+  open: boolean;
+  onClose: () => void;
+  data: EnrichmentData | null;
+  prospectName: string;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Contact info — {prospectName}</DialogTitle>
+          <DialogDescription>
+            {data?.scrapedDomain
+              ? `Scraped ${data.scrapedDomain} on ${data.scrapedAt.slice(0, 10)}`
+              : "No domain scraped"}
+          </DialogDescription>
+        </DialogHeader>
+        {!data ? (
+          <div className="text-sm text-muted-foreground">
+            No enrichment data yet. Click "Find contact info" on this prospect.
+          </div>
+        ) : (
+          <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-2">
+            {data.skipReason && (
+              <div className="rounded-md bg-yellow-50 border border-yellow-200 px-3 py-2 text-xs text-yellow-800">
+                Skip reason: <code>{data.skipReason}</code>
+              </div>
+            )}
+
+            <Section title="Email patterns tried">
+              {data.patternsVerified.length === 0 ? (
+                <div className="text-xs text-muted-foreground">None.</div>
+              ) : (
+                <div className="space-y-1">
+                  {data.patternsVerified.map((p) => (
+                    <div key={p.email} className="flex items-center gap-2 text-sm">
+                      <span className="font-mono">{p.email}</span>
+                      <span className="text-xs text-muted-foreground">({p.pattern})</span>
+                      {emailStatusBadge(p.status)}
+                      {p.overallScore !== undefined && (
+                        <span className="text-xs text-muted-foreground ml-auto">
+                          score {p.overallScore}
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Section>
+
+            <Section title={`Emails on company site (${data.emailsFound.length})`}>
+              {data.emailsFound.length === 0 ? (
+                <div className="text-xs text-muted-foreground">None.</div>
+              ) : (
+                <ul className="text-sm space-y-0.5">
+                  {data.emailsFound.map((e) => (
+                    <li key={e}>
+                      <a href={`mailto:${e}`} className="text-blue-600 hover:underline font-mono">
+                        {e}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </Section>
+
+            <Section title={`Phones on company site (${data.phonesFound.length})`}>
+              {data.phonesFound.length === 0 ? (
+                <div className="text-xs text-muted-foreground">None.</div>
+              ) : (
+                <ul className="text-sm space-y-0.5">
+                  {data.phonesFound.map((p) => (
+                    <li key={p}>
+                      <a href={`tel:${p}`} className="text-blue-600 hover:underline font-mono">
+                        {p}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </Section>
+
+            <Section title={`Social URLs (${data.socialUrls.length})`}>
+              {data.socialUrls.length === 0 ? (
+                <div className="text-xs text-muted-foreground">None.</div>
+              ) : (
+                <ul className="text-sm space-y-0.5">
+                  {data.socialUrls.map((u) => (
+                    <li key={u}>
+                      <a
+                        href={u}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-blue-600 hover:underline flex items-center gap-1"
+                      >
+                        <ExternalLink className="h-3 w-3" />
+                        <span className="truncate">{u}</span>
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </Section>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1.5">
+        {title}
+      </div>
+      {children}
+    </div>
+  );
 }
 
 /* ─── Main Prospects Page ───────────────────────────────────────────────────── */
@@ -76,6 +235,10 @@ export default function ProspectsPage() {
   const [emailStatusFilter, setEmailStatusFilter] = useState<string>("all");
   const [promotedFilter, setPromotedFilter] = useState<string>("all");
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [enrichOpenFor, setEnrichOpenFor] = useState<{
+    name: string;
+    data: EnrichmentData | null;
+  } | null>(null);
 
   const utils = trpc.useUtils();
 
@@ -84,6 +247,11 @@ export default function ProspectsPage() {
     perPage,
     emailStatus: emailStatusFilter !== "all" ? emailStatusFilter : undefined,
     promoted: promotedFilter === "promoted" ? true : promotedFilter === "not_promoted" ? false : undefined,
+  });
+
+  const reoonBalance = trpc.prospects.reoonBalance.useQuery(undefined, {
+    refetchInterval: 5 * 60 * 1000, // refresh every 5 min so users see credit drain
+    retry: false,
   });
 
   const promote = trpc.prospects.promoteToContact.useMutation({
@@ -115,6 +283,32 @@ export default function ProspectsPage() {
       );
       setSelectedIds(new Set());
       utils.prospects.list.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const findContact = trpc.prospects.findContactInfo.useMutation({
+    onSuccess: (res) => {
+      if (res.email) {
+        toast.success(`Found ${res.emailStatus} email: ${res.email}`);
+      } else {
+        toast(res.message, { description: res.enrichment.scrapedDomain ?? undefined });
+      }
+      utils.prospects.list.invalidate();
+      void reoonBalance.refetch();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const findContactBatch = trpc.prospects.findContactInfoBatch.useMutation({
+    onSuccess: (res) => {
+      toast.success(
+        `Scanned ${res.processed} prospects — ${res.withEmail} got emails, ${res.withoutEmail} did not`,
+        { description: `Used ${res.reoonCredits} Reoon credits` },
+      );
+      setSelectedIds(new Set());
+      utils.prospects.list.invalidate();
+      void reoonBalance.refetch();
     },
     onError: (e) => toast.error(e.message),
   });
@@ -151,6 +345,20 @@ export default function ProspectsPage() {
     setSelectedIds(new Set());
   };
 
+  const handleBulkFindContact = () => {
+    const ids = Array.from(selectedIds);
+    if (ids.length > 25) {
+      toast.error(`Pick 25 or fewer prospects per batch (you selected ${ids.length})`);
+      return;
+    }
+    if (!confirm(
+      `Find contact info for ${ids.length} prospect${ids.length !== 1 ? "s" : ""}?\n\n` +
+      `This will scrape each company site and verify up to 3 email patterns per prospect via Reoon. ` +
+      `Estimated Reoon credits: ${ids.length * 3} (may use fewer with early-stop).`
+    )) return;
+    findContactBatch.mutate({ prospectIds: ids, skipIfHasEmail: true });
+  };
+
   const handleImportClick = () => {
     // TODO: open CSV import wizard (LeadRocks-aware mapping, Reoon verification)
     toast.info("CSV import wizard coming soon.");
@@ -164,6 +372,14 @@ export default function ProspectsPage() {
         pageKey="prospects"
         icon={<Zap className="size-5" />}
       >
+        {reoonBalance.data && reoonBalance.data.api_status === "success" && (
+          <div className="text-right pr-2 hidden md:block">
+            <div className="text-xs text-muted-foreground">Reoon credits</div>
+            <div className="text-sm font-semibold tabular-nums">
+              {reoonBalance.data.remaining_daily_credits.toLocaleString()} daily
+            </div>
+          </div>
+        )}
         <Button variant="outline" size="sm" onClick={() => refetch()}>
           <RefreshCw className="h-4 w-4 mr-2" />
           Refresh
@@ -183,9 +399,10 @@ export default function ProspectsPage() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All email statuses</SelectItem>
-              <SelectItem value="verified">Verified</SelectItem>
-              <SelectItem value="unverified">Unverified</SelectItem>
-              <SelectItem value="unavailable">Unavailable</SelectItem>
+              <SelectItem value="valid">Valid</SelectItem>
+              <SelectItem value="accept_all">Accept-All</SelectItem>
+              <SelectItem value="risky">Risky</SelectItem>
+              <SelectItem value="invalid">Invalid</SelectItem>
             </SelectContent>
           </Select>
 
@@ -203,9 +420,22 @@ export default function ProspectsPage() {
           {selectedIds.size > 0 && (
             <>
               <Separator orientation="vertical" className="h-6" />
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleBulkFindContact}
+                disabled={findContactBatch.isPending || selectedIds.size > 25}
+              >
+                {findContactBatch.isPending ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <Sparkles className="h-4 w-4 mr-2" />
+                )}
+                Find contact info ({selectedIds.size})
+              </Button>
               <Button size="sm" variant="outline" onClick={handleBulkPromote} disabled={promote.isPending}>
                 <UserPlus className="h-4 w-4 mr-2" />
-                Promote {selectedIds.size} to contacts
+                Promote {selectedIds.size}
               </Button>
               <Button
                 size="sm"
@@ -273,100 +503,160 @@ export default function ProspectsPage() {
                   </TableCell>
                 </TableRow>
               )}
-              {data?.data?.map((p) => (
-                <TableRow key={p.id} className="hover:bg-muted/50">
-                  <TableCell onClick={(e) => e.stopPropagation()}>
-                    <Checkbox
-                      checked={selectedIds.has(p.id)}
-                      onCheckedChange={() => toggleSelect(p.id)}
-                    />
-                  </TableCell>
-                  <TableCell>
-                    <div className="font-medium text-sm">{p.firstName} {p.lastName}</div>
-                    {p.linkedinUrl && (
-                      <a
-                        href={p.linkedinUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-xs text-blue-600 hover:underline flex items-center gap-0.5"
-                      >
-                        <ExternalLink className="h-2.5 w-2.5" /> LinkedIn
-                      </a>
-                    )}
-                  </TableCell>
-                  <TableCell className="text-sm">{p.title}</TableCell>
-                  <TableCell className="text-sm">{p.company}</TableCell>
-                  <TableCell className="text-xs text-muted-foreground">
-                    {[p.city, p.state, p.country].filter(Boolean).join(", ")}
-                  </TableCell>
-                  <TableCell>
-                    {p.email ? (
-                      <div className="flex items-center gap-1">
-                        <Mail className="h-3 w-3 text-muted-foreground" />
-                        <span className="text-xs">{p.email}</span>
-                        {emailStatusBadge(p.emailStatus)}
-                      </div>
-                    ) : (
-                      <span className="text-xs text-muted-foreground">—</span>
-                    )}
-                  </TableCell>
-                  <TableCell>
-                    {p.phone ? (
-                      <div className="flex items-center gap-1">
-                        <Phone className="h-3 w-3 text-muted-foreground" />
-                        <span className="text-xs">{p.phone}</span>
-                      </div>
-                    ) : (
-                      <span className="text-xs text-muted-foreground">—</span>
-                    )}
-                  </TableCell>
-                  <TableCell>
-                    {p.linkedContactId ? (
-                      <Badge variant="default" className="text-xs gap-1">
-                        <CheckCircle2 className="h-3 w-3" /> Promoted
-                      </Badge>
-                    ) : (
-                      <Badge variant="outline" className="text-xs">Prospect</Badge>
-                    )}
-                  </TableCell>
-                  <TableCell>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="icon" className="h-7 w-7">
-                          <MoreHorizontal className="h-4 w-4" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        {!p.linkedContactId && (
-                          <DropdownMenuItem onClick={() => promote.mutate({ prospectId: p.id })}>
-                            <UserPlus className="h-4 w-4 mr-2" />
-                            Promote to contact
-                          </DropdownMenuItem>
-                        )}
-                        {p.linkedContactId && (
-                          <DropdownMenuItem onClick={() => setLocation(`/contacts/${p.linkedContactId}`)}>
-                            <ExternalLink className="h-4 w-4 mr-2" />
-                            View contact
-                          </DropdownMenuItem>
-                        )}
-                        <DropdownMenuItem
-                          className="text-destructive"
-                          onClick={() => {
-                            const label = `${p.firstName} ${p.lastName}`.trim() || "this prospect";
-                            const warn = p.linkedContactId
-                              ? `Delete ${label}? They've been promoted to a contact — the contact row will be kept.`
-                              : `Delete ${label}?`;
-                            if (confirm(warn)) deleteProspect.mutate({ prospectId: p.id });
-                          }}
+              {data?.data?.map((p) => {
+                const enrichment = (p.enrichmentData as EnrichmentData | null) ?? null;
+                const isWorkingOnThisRow =
+                  findContact.isPending && findContact.variables?.prospectId === p.id;
+                return (
+                  <TableRow key={p.id} className="hover:bg-muted/50">
+                    <TableCell onClick={(e) => e.stopPropagation()}>
+                      <Checkbox
+                        checked={selectedIds.has(p.id)}
+                        onCheckedChange={() => toggleSelect(p.id)}
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <div className="font-medium text-sm">{p.firstName} {p.lastName}</div>
+                      {p.linkedinUrl && (
+                        <a
+                          href={p.linkedinUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-xs text-blue-600 hover:underline flex items-center gap-0.5"
                         >
-                          <Trash2 className="h-4 w-4 mr-2" />
-                          Delete
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </TableCell>
-                </TableRow>
-              ))}
+                          <ExternalLink className="h-2.5 w-2.5" /> LinkedIn
+                        </a>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-sm">{p.title}</TableCell>
+                    <TableCell className="text-sm">{p.company}</TableCell>
+                    <TableCell className="text-xs text-muted-foreground">
+                      {[p.city, p.state, p.country].filter(Boolean).join(", ")}
+                    </TableCell>
+                    <TableCell>
+                      {p.email ? (
+                        <div className="flex items-center gap-1">
+                          <Mail className="h-3 w-3 text-muted-foreground" />
+                          <span className="text-xs">{p.email}</span>
+                          {emailStatusBadge(p.emailStatus)}
+                        </div>
+                      ) : (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 text-xs text-blue-600 hover:text-blue-700 px-1"
+                          onClick={() =>
+                            findContact.mutate({ prospectId: p.id, skipIfHasEmail: true })
+                          }
+                          disabled={isWorkingOnThisRow}
+                        >
+                          {isWorkingOnThisRow ? (
+                            <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                          ) : (
+                            <Sparkles className="h-3 w-3 mr-1" />
+                          )}
+                          Find
+                        </Button>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      {p.phone ? (
+                        <div className="flex items-center gap-1">
+                          <Phone className="h-3 w-3 text-muted-foreground" />
+                          <span className="text-xs">{p.phone}</span>
+                        </div>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">—</span>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-1">
+                        {p.linkedContactId ? (
+                          <Badge variant="default" className="text-xs gap-1">
+                            <CheckCircle2 className="h-3 w-3" /> Promoted
+                          </Badge>
+                        ) : (
+                          <Badge variant="outline" className="text-xs">Prospect</Badge>
+                        )}
+                        {enrichment && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-5 w-5"
+                            title="View enrichment details"
+                            onClick={() =>
+                              setEnrichOpenFor({
+                                name: `${p.firstName} ${p.lastName}`.trim(),
+                                data: enrichment,
+                              })
+                            }
+                          >
+                            <Info className="h-3 w-3 text-muted-foreground" />
+                          </Button>
+                        )}
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="ghost" size="icon" className="h-7 w-7">
+                            <MoreHorizontal className="h-4 w-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem
+                            onClick={() =>
+                              findContact.mutate({ prospectId: p.id, skipIfHasEmail: true })
+                            }
+                            disabled={isWorkingOnThisRow}
+                          >
+                            <Sparkles className="h-4 w-4 mr-2" />
+                            Find contact info
+                          </DropdownMenuItem>
+                          {enrichment && (
+                            <DropdownMenuItem
+                              onClick={() =>
+                                setEnrichOpenFor({
+                                  name: `${p.firstName} ${p.lastName}`.trim(),
+                                  data: enrichment,
+                                })
+                              }
+                            >
+                              <Info className="h-4 w-4 mr-2" />
+                              View enrichment details
+                            </DropdownMenuItem>
+                          )}
+                          {!p.linkedContactId && (
+                            <DropdownMenuItem onClick={() => promote.mutate({ prospectId: p.id })}>
+                              <UserPlus className="h-4 w-4 mr-2" />
+                              Promote to contact
+                            </DropdownMenuItem>
+                          )}
+                          {p.linkedContactId && (
+                            <DropdownMenuItem onClick={() => setLocation(`/contacts/${p.linkedContactId}`)}>
+                              <ExternalLink className="h-4 w-4 mr-2" />
+                              View contact
+                            </DropdownMenuItem>
+                          )}
+                          <DropdownMenuItem
+                            className="text-destructive"
+                            onClick={() => {
+                              const label = `${p.firstName} ${p.lastName}`.trim() || "this prospect";
+                              const warn = p.linkedContactId
+                                ? `Delete ${label}? They've been promoted to a contact — the contact row will be kept.`
+                                : `Delete ${label}?`;
+                              if (confirm(warn)) deleteProspect.mutate({ prospectId: p.id });
+                            }}
+                          >
+                            <Trash2 className="h-4 w-4 mr-2" />
+                            Delete
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
             </TableBody>
           </Table>
         </div>
@@ -393,6 +683,13 @@ export default function ProspectsPage() {
           </div>
         )}
       </div>
+
+      <EnrichmentDialog
+        open={!!enrichOpenFor}
+        onClose={() => setEnrichOpenFor(null)}
+        data={enrichOpenFor?.data ?? null}
+        prospectName={enrichOpenFor?.name ?? ""}
+      />
     </Shell>
   );
 }

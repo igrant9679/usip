@@ -2941,6 +2941,11 @@ export const prospects = mysqlTable(
     emailStatus: varchar("email_status", { length: 20 }), // verified|unverified|unavailable
     emailRevealedAt: timestamp("email_revealed_at"),
     phoneRevealedAt: timestamp("phone_revealed_at"),
+    // Set whenever the scraper service runs Reoon on this prospect.
+    emailVerifiedAt: timestamp("email_verified_at"),
+    // Full scraper output (emails/phones/socials found, patterns verified, etc.).
+    // Shape: see EnrichmentData in server/services/scraper/index.ts.
+    enrichmentData: json("enrichment_data"),
     linkedContactId: int("linked_contact_id"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
@@ -3005,6 +3010,24 @@ export const cloduraSearchCache = mysqlTable(
   }),
 );
 export type CloduraSearchCache = typeof cloduraSearchCache.$inferSelect;
+
+// ── Domain scrape cache (30-day TTL) ──────────────────────────────────────────
+// Memoizes the company-site scrape (emails/phones/social URLs) so that when
+// many prospects share a company domain we only touch the company website
+// once per month. Workspace-agnostic — domains are public resources and
+// rate-limiting/etiquette is a global concern.
+export const domainScrapeCache = mysqlTable(
+  "domain_scrape_cache",
+  {
+    domain: varchar("domain", { length: 253 }).primaryKey(),
+    result: json("result").notNull(), // ScrapedSite shape
+    scrapedAt: timestamp("scraped_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    byScrapedAt: index("ix_dsc_scraped_at").on(t.scrapedAt),
+  }),
+);
+export type DomainScrapeCache = typeof domainScrapeCache.$inferSelect;
 
 // ── Enrichment job tracking ────────────────────────────────────────────────────
 export const cloduraEnrichmentJobs = mysqlTable(

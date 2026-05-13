@@ -20,6 +20,8 @@ import { workspaceProcedure } from "../_core/workspace";
 import { getDb } from "../db";
 import { contacts, prospects } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
+import { lookupContactInfo, type LookupResult } from "../services/scraper";
+import { reoonCheckBalance, getReoonApiKey } from "../services/reoon";
 
 export const prospectsRouter = router({
   list: workspaceProcedure
@@ -209,4 +211,181 @@ export const prospectsRouter = router({
 
       return { contactId: contactId!, created: true };
     }),
+
+  /**
+   * Find contact info for a single prospect.
+   *
+   * Pipeline (see server/services/scraper):
+   *   1. Resolve company domain
+   *   2. Scrape company website (cached 30d per domain)
+   *   3. Generate up to 3 email patterns + Reoon-verify (early-stop on valid)
+   *   4. Pick winning email by status, write back to prospect row
+   *
+   * Synchronous — call site should expect ~5–10s of latency per call.
+   * Returns the full LookupResult so the UI can show what was found.
+   */
+  findContactInfo: workspaceProcedure
+    .input(
+      z.object({
+        prospectId: z.number().int(),
+        /** If true, won't overwrite existing prospect.email. Default true. */
+        skipIfHasEmail: z.boolean().default(true),
+      }),
+    )
+    .mutation(async ({ ctx, input }): Promise<LookupResult> => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [p] = await db
+        .select()
+        .from(prospects)
+        .where(
+          and(
+            eq(prospects.id, input.prospectId),
+            eq(prospects.workspaceId, ctx.workspace.id),
+          ),
+        )
+        .limit(1);
+      if (!p) throw new TRPCError({ code: "NOT_FOUND" });
+
+      const result = await lookupContactInfo({
+        workspaceId: ctx.workspace.id,
+        prospectId: p.id,
+        firstName: p.firstName,
+        lastName: p.lastName,
+        companyDomain: p.companyDomain ?? null,
+        existingPhone: p.phone ?? null,
+        skipIfHasEmail: input.skipIfHasEmail && Boolean(p.email),
+      });
+
+      await recordAudit({
+        workspaceId: ctx.workspace.id,
+        actorUserId: ctx.user.id,
+        action: "update",
+        entityType: "prospect",
+        entityId: p.id,
+        after: {
+          enrichment: "scraper.findContactInfo",
+          foundEmail: result.email,
+          reoonCredits: result.reoonCredits,
+        },
+      });
+
+      return result;
+    }),
+
+  /**
+   * Find contact info for up to 25 prospects in one shot.
+   *
+   * Runs lookups serially (NOT Promise.all — we want the per-domain rate
+   * limiter inside companySite.ts to work properly, and we don't want to
+   * flood Reoon with parallel requests that might hit per-second caps).
+   * For larger batches, the right answer is a background-job system — TODO.
+   */
+  findContactInfoBatch: workspaceProcedure
+    .input(
+      z.object({
+        prospectIds: z.array(z.number().int()).min(1).max(25),
+        skipIfHasEmail: z.boolean().default(true),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+
+      const rows = await db
+        .select()
+        .from(prospects)
+        .where(
+          and(
+            eq(prospects.workspaceId, ctx.workspace.id),
+            inArray(prospects.id, input.prospectIds),
+          ),
+        );
+
+      const results: Array<{ prospectId: number; result: LookupResult }> = [];
+      let totalCredits = 0;
+      let withEmail = 0;
+      let withoutEmail = 0;
+
+      for (const p of rows) {
+        try {
+          const result = await lookupContactInfo({
+            workspaceId: ctx.workspace.id,
+            prospectId: p.id,
+            firstName: p.firstName,
+            lastName: p.lastName,
+            companyDomain: p.companyDomain ?? null,
+            existingPhone: p.phone ?? null,
+            skipIfHasEmail: input.skipIfHasEmail && Boolean(p.email),
+          });
+          totalCredits += result.reoonCredits;
+          if (result.email) withEmail++;
+          else withoutEmail++;
+          results.push({ prospectId: p.id, result });
+        } catch (e) {
+          // One prospect's failure shouldn't kill the batch
+          withoutEmail++;
+          results.push({
+            prospectId: p.id,
+            result: {
+              ok: false,
+              email: null,
+              emailStatus: null,
+              phone: null,
+              enrichment: {
+                scrapedDomain: null,
+                scrapedAt: new Date().toISOString(),
+                emailsFound: [],
+                phonesFound: [],
+                socialUrls: [],
+                patternsVerified: [],
+                skipReason: "exception",
+              },
+              reoonCredits: 0,
+              message: (e as Error).message,
+            },
+          });
+        }
+      }
+
+      await recordAudit({
+        workspaceId: ctx.workspace.id,
+        actorUserId: ctx.user.id,
+        action: "update",
+        entityType: "prospect_bulk",
+        entityId: 0,
+        after: {
+          enrichment: "scraper.findContactInfoBatch",
+          processed: rows.length,
+          withEmail,
+          withoutEmail,
+          reoonCredits: totalCredits,
+        },
+      });
+
+      return {
+        processed: rows.length,
+        withEmail,
+        withoutEmail,
+        reoonCredits: totalCredits,
+        results,
+      };
+    }),
+
+  /** Check remaining Reoon daily/instant credits. Used by the UI header. */
+  reoonBalance: workspaceProcedure.query(async () => {
+    try {
+      const apiKey = getReoonApiKey();
+      return await reoonCheckBalance(apiKey);
+    } catch (e) {
+      // Don't fail the page render if Reoon is unconfigured / down
+      return {
+        api_status: "error",
+        status: "error",
+        remaining_daily_credits: 0,
+        remaining_instant_credits: 0,
+        error: (e as Error).message,
+      };
+    }
+  }),
 });

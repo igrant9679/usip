@@ -657,6 +657,31 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0065: prospects enrichment + domain scrape cache ─────────────────────
+  // Backs the new contact-info scraper (server/services/scraper). Adds:
+  //   - prospects.email_verified_at   — when we last ran Reoon on this row
+  //   - prospects.enrichment_data     — full scraper output (emails/phones/
+  //                                     socials found + Reoon verifications)
+  //   - domain_scrape_cache table     — 30-day memoization of company-site
+  //                                     scrapes so popular domains aren't
+  //                                     re-fetched per-prospect
+  // ALTER TABLE ... ADD COLUMN errors on dup (1060) are in TOLERATED_ERRNOS,
+  // so re-runs are safe without explicit IF NOT EXISTS dancing.
+  {
+    name: "0065_prospects_enrichment.sql",
+    statements: [
+      `ALTER TABLE \`prospects\` ADD COLUMN \`email_verified_at\` TIMESTAMP NULL`,
+      `ALTER TABLE \`prospects\` ADD COLUMN \`enrichment_data\` JSON NULL`,
+      `CREATE TABLE IF NOT EXISTS \`domain_scrape_cache\` (
+        \`domain\` varchar(253) NOT NULL,
+        \`result\` json NOT NULL,
+        \`scraped_at\` timestamp NOT NULL DEFAULT (now()),
+        CONSTRAINT \`domain_scrape_cache_pk\` PRIMARY KEY (\`domain\`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE INDEX \`ix_dsc_scraped_at\` ON \`domain_scrape_cache\` (\`scraped_at\`)`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------
