@@ -267,6 +267,8 @@ export const prospectsRouter = router({
           enrichment: "scraper.findContactInfo",
           foundEmail: result.email,
           reoonCredits: result.reoonCredits,
+          reoonCreditsQuick: result.reoonCreditsQuick,
+          reoonCreditsPower: result.reoonCreditsPower,
         },
       });
 
@@ -303,7 +305,8 @@ export const prospectsRouter = router({
         );
 
       const results: Array<{ prospectId: number; result: LookupResult }> = [];
-      let totalCredits = 0;
+      let creditsQuick = 0;
+      let creditsPower = 0;
       let withEmail = 0;
       let withoutEmail = 0;
 
@@ -318,7 +321,8 @@ export const prospectsRouter = router({
             existingPhone: p.phone ?? null,
             skipIfHasEmail: input.skipIfHasEmail && Boolean(p.email),
           });
-          totalCredits += result.reoonCredits;
+          creditsQuick += result.reoonCreditsQuick;
+          creditsPower += result.reoonCreditsPower;
           if (result.email) withEmail++;
           else withoutEmail++;
           results.push({ prospectId: p.id, result });
@@ -342,12 +346,15 @@ export const prospectsRouter = router({
                 skipReason: "exception",
               },
               reoonCredits: 0,
+              reoonCreditsQuick: 0,
+              reoonCreditsPower: 0,
               message: (e as Error).message,
             },
           });
         }
       }
 
+      const totalCredits = creditsQuick + creditsPower;
       await recordAudit({
         workspaceId: ctx.workspace.id,
         actorUserId: ctx.user.id,
@@ -360,6 +367,8 @@ export const prospectsRouter = router({
           withEmail,
           withoutEmail,
           reoonCredits: totalCredits,
+          reoonCreditsQuick: creditsQuick,
+          reoonCreditsPower: creditsPower,
         },
       });
 
@@ -368,6 +377,8 @@ export const prospectsRouter = router({
         withEmail,
         withoutEmail,
         reoonCredits: totalCredits,
+        reoonCreditsQuick: creditsQuick,
+        reoonCreditsPower: creditsPower,
         results,
       };
     }),

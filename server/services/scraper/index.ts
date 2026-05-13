@@ -34,6 +34,8 @@ export type PatternVerifyResult = {
   pattern: EmailPattern["pattern"];
   status: VerificationStatus;
   overallScore?: number;
+  /** Which Reoon mode produced this status. */
+  mode: "quick" | "power";
 };
 
 export type EnrichmentData = {
@@ -55,8 +57,12 @@ export type LookupResult = {
   /** First phone found on company site, if prospect had no phone before. */
   phone: string | null;
   enrichment: EnrichmentData;
-  /** How many Reoon credits we burned on this prospect. */
+  /** Total Reoon credits burned (sum of quick + power). */
   reoonCredits: number;
+  /** Reoon `instant_credits` consumed (mode=quick pre-filter). */
+  reoonCreditsQuick: number;
+  /** Reoon `daily_credits` consumed (mode=power confirmation). */
+  reoonCreditsPower: number;
   /** Short human-readable summary, useful for toast messages. */
   message: string;
 };
@@ -110,6 +116,8 @@ export async function lookupContactInfo(
       phone: null,
       enrichment: { ...empty, skipReason: "no_domain" },
       reoonCredits: 0,
+      reoonCreditsQuick: 0,
+      reoonCreditsPower: 0,
       message: "No company domain available — cannot search",
     };
   }
@@ -156,6 +164,8 @@ export async function lookupContactInfo(
       phone,
       enrichment,
       reoonCredits: 0,
+      reoonCreditsQuick: 0,
+      reoonCreditsPower: 0,
       message: "Already had an email — scraped site only (no verify)",
     };
   }
@@ -171,11 +181,23 @@ export async function lookupContactInfo(
       phone: pickPhone(scraped, input.existingPhone),
       enrichment,
       reoonCredits: 0,
+      reoonCreditsQuick: 0,
+      reoonCreditsPower: 0,
       message: "Missing first or last name — cannot build email patterns",
     };
   }
 
-  // 4. Verify patterns (early-stop on `valid`)
+  // 4. Two-stage verification: quick filter → power confirm.
+  //
+  // Stage A: run all 3 patterns through mode=quick (consumes the cheap
+  //   `instant_credits` pool). Drop anything quick rules as 'invalid'.
+  // Stage B: run survivors through mode=power (consumes the limited
+  //   `daily_credits` pool). Early-stop on first 'valid' match.
+  //
+  // Why this is cheaper on average: most fake patterns are caught by
+  // quick mode (syntax/MX/disposable/role-account). Without the pre-filter
+  // every pattern would burn 1 daily credit; with it, daily credits are
+  // only spent on plausible candidates.
   let apiKey: string;
   try {
     apiKey = getReoonApiKey();
@@ -188,35 +210,76 @@ export async function lookupContactInfo(
       phone: pickPhone(scraped, input.existingPhone),
       enrichment,
       reoonCredits: 0,
+      reoonCreditsQuick: 0,
+      reoonCreditsPower: 0,
       message: "REOON_API_KEY not configured",
     };
   }
 
-  let credits = 0;
+  let creditsQuick = 0;
+  let creditsPower = 0;
+
+  // Stage A — quick filter
+  type QuickResult = { pattern: EmailPattern; quickStatus: VerificationStatus };
+  const survivors: QuickResult[] = [];
   for (const p of patterns) {
     try {
-      const r = await reoonVerifySingle(p.email, apiKey);
-      credits++;
+      const r = await reoonVerifySingle(p.email, apiKey, "quick");
+      creditsQuick++;
       const status = reoonStatusToUsip(r.status);
+      // Record the quick result so the UI can show what was tried.
       enrichment.patternsVerified.push({
         email: p.email,
         pattern: p.pattern,
         status,
         overallScore: r.overall_score,
+        mode: "quick",
       });
-      if (status === "valid") break; // Early stop — save credits
+      // Drop only on confident invalid. 'unknown' (quick didn't have a
+      // cached answer) still escalates to power.
+      if (status !== "invalid") survivors.push({ pattern: p, quickStatus: status });
     } catch (e) {
+      // Quick mode unreachable — be conservative and still try power on
+      // this candidate (don't drop on transient errors).
       enrichment.patternsVerified.push({
         email: p.email,
         pattern: p.pattern,
         status: "unknown",
+        mode: "quick",
       });
-      // Continue trying other patterns; one transient Reoon error isn't fatal
+      survivors.push({ pattern: p, quickStatus: "unknown" });
       void e;
     }
   }
 
-  // 5. Pick winning email + write back
+  // Stage B — power confirmation on survivors. Order by prior (the
+  // generator already returns them in descending-prior order), so the
+  // most-likely pattern gets the first power probe and triggers early-stop.
+  for (const s of survivors) {
+    try {
+      const r = await reoonVerifySingle(s.pattern.email, apiKey, "power");
+      creditsPower++;
+      const status = reoonStatusToUsip(r.status);
+      enrichment.patternsVerified.push({
+        email: s.pattern.email,
+        pattern: s.pattern.pattern,
+        status,
+        overallScore: r.overall_score,
+        mode: "power",
+      });
+      if (status === "valid") break; // Early stop — saves remaining power credits
+    } catch (e) {
+      enrichment.patternsVerified.push({
+        email: s.pattern.email,
+        pattern: s.pattern.pattern,
+        status: "unknown",
+        mode: "power",
+      });
+      void e;
+    }
+  }
+
+  // 5. Pick winning email + write back. Power results win ties — see pickWinner.
   const winner = pickWinner(enrichment.patternsVerified);
   const phone = pickPhone(scraped, input.existingPhone);
 
@@ -253,22 +316,42 @@ export async function lookupContactInfo(
     emailStatus: winner?.status ?? null,
     phone,
     enrichment,
-    reoonCredits: credits,
+    reoonCredits: creditsQuick + creditsPower,
+    reoonCreditsQuick: creditsQuick,
+    reoonCreditsPower: creditsPower,
     message: winner
-      ? `Found ${winner.status} email (${winner.pattern})`
+      ? `Found ${winner.status} email (${winner.pattern}, ${winner.mode})`
       : scraped.fetchError
         ? `Could not reach ${domain}: ${scraped.fetchError}`
         : "No deliverable email found",
   };
 }
 
+/**
+ * Pick the winning email across all verification results.
+ *
+ * Priority:
+ *   1. Status rank (valid > accept_all > risky > unknown), invalid dropped
+ *   2. Mode (power > quick) — power is SMTP-confirmed, quick is heuristic
+ *   3. Pattern prior (caller already sorts by this; we just keep the first)
+ */
 function pickWinner(
   results: PatternVerifyResult[],
 ): PatternVerifyResult | null {
   let best: PatternVerifyResult | null = null;
   for (const r of results) {
     if (r.status === "invalid") continue;
-    if (!best || STATUS_RANK[r.status] > STATUS_RANK[best.status]) best = r;
+    if (!best) {
+      best = r;
+      continue;
+    }
+    const statusDelta = STATUS_RANK[r.status] - STATUS_RANK[best.status];
+    if (statusDelta > 0) {
+      best = r;
+    } else if (statusDelta === 0 && r.mode === "power" && best.mode === "quick") {
+      // Same status — prefer the power-confirmed one
+      best = r;
+    }
   }
   return best;
 }

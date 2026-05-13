@@ -80,6 +80,7 @@ type EnrichmentData = {
     pattern: "first.last" | "flast" | "firstlast";
     status: "valid" | "accept_all" | "risky" | "invalid" | "unknown";
     overallScore?: number;
+    mode: "quick" | "power";
   }>;
   skipReason?: string;
 };
@@ -140,10 +141,16 @@ function EnrichmentDialog({
                 <div className="text-xs text-muted-foreground">None.</div>
               ) : (
                 <div className="space-y-1">
-                  {data.patternsVerified.map((p) => (
-                    <div key={p.email} className="flex items-center gap-2 text-sm">
+                  {data.patternsVerified.map((p, i) => (
+                    <div key={`${p.email}-${p.mode}-${i}`} className="flex items-center gap-2 text-sm">
                       <span className="font-mono">{p.email}</span>
                       <span className="text-xs text-muted-foreground">({p.pattern})</span>
+                      <Badge
+                        variant="outline"
+                        className={`text-xs ${p.mode === "power" ? "border-purple-300 text-purple-700" : "border-slate-300 text-slate-600"}`}
+                      >
+                        {p.mode}
+                      </Badge>
                       {emailStatusBadge(p.status)}
                       {p.overallScore !== undefined && (
                         <span className="text-xs text-muted-foreground ml-auto">
@@ -289,10 +296,17 @@ export default function ProspectsPage() {
 
   const findContact = trpc.prospects.findContactInfo.useMutation({
     onSuccess: (res) => {
+      const creditMsg = `${res.reoonCreditsQuick} instant + ${res.reoonCreditsPower} daily`;
       if (res.email) {
-        toast.success(`Found ${res.emailStatus} email: ${res.email}`);
+        toast.success(`Found ${res.emailStatus} email: ${res.email}`, {
+          description: `Used ${creditMsg}`,
+        });
       } else {
-        toast(res.message, { description: res.enrichment.scrapedDomain ?? undefined });
+        toast(res.message, {
+          description: res.enrichment.scrapedDomain
+            ? `${res.enrichment.scrapedDomain} · ${creditMsg}`
+            : creditMsg,
+        });
       }
       utils.prospects.list.invalidate();
       void reoonBalance.refetch();
@@ -304,7 +318,9 @@ export default function ProspectsPage() {
     onSuccess: (res) => {
       toast.success(
         `Scanned ${res.processed} prospects — ${res.withEmail} got emails, ${res.withoutEmail} did not`,
-        { description: `Used ${res.reoonCredits} Reoon credits` },
+        {
+          description: `Used ${res.reoonCreditsQuick} instant + ${res.reoonCreditsPower} daily Reoon credits`,
+        },
       );
       setSelectedIds(new Set());
       utils.prospects.list.invalidate();
@@ -353,8 +369,10 @@ export default function ProspectsPage() {
     }
     if (!confirm(
       `Find contact info for ${ids.length} prospect${ids.length !== 1 ? "s" : ""}?\n\n` +
-      `This will scrape each company site and verify up to 3 email patterns per prospect via Reoon. ` +
-      `Estimated Reoon credits: ${ids.length * 3} (may use fewer with early-stop).`
+      `For each prospect: scrape the company site, then verify up to 3 email ` +
+      `patterns via Reoon (quick pre-filter → power confirmation on survivors).\n\n` +
+      `Worst-case spend: ~${ids.length * 3} instant + ~${ids.length * 3} daily ` +
+      `credits. Typical spend is much lower (early-stop on first valid hit).`
     )) return;
     findContactBatch.mutate({ prospectIds: ids, skipIfHasEmail: true });
   };
@@ -373,10 +391,17 @@ export default function ProspectsPage() {
         icon={<Zap className="size-5" />}
       >
         {reoonBalance.data && reoonBalance.data.api_status === "success" && (
-          <div className="text-right pr-2 hidden md:block">
+          <div
+            className="text-right pr-2 hidden md:block"
+            title="Daily = mode=power (full SMTP), Instant = mode=quick (cached). The scraper uses quick as a pre-filter, then power on survivors."
+          >
             <div className="text-xs text-muted-foreground">Reoon credits</div>
-            <div className="text-sm font-semibold tabular-nums">
-              {reoonBalance.data.remaining_daily_credits.toLocaleString()} daily
+            <div className="text-sm font-semibold tabular-nums leading-tight">
+              {reoonBalance.data.remaining_daily_credits.toLocaleString()}
+              <span className="text-xs font-normal text-muted-foreground"> daily</span>
+              {" · "}
+              {reoonBalance.data.remaining_instant_credits.toLocaleString()}
+              <span className="text-xs font-normal text-muted-foreground"> instant</span>
             </div>
           </div>
         )}

@@ -101,13 +101,26 @@ export function getReoonApiKey(): string {
   return key;
 }
 
-/** Single-email power-mode verification. ~3–8 seconds typical latency. */
+export type ReoonMode = "power" | "quick";
+
+/**
+ * Single-email verification.
+ *
+ *   mode=power — Full SMTP probe; ~3–8s; consumes `daily_credits` (limited).
+ *   mode=quick — Cached + syntax + MX + role-account/disposable checks;
+ *                <1s; consumes `instant_credits` (cheap & abundant).
+ *
+ * Use quick as a pre-filter to drop obviously-invalid candidates, then
+ * power on survivors. See server/services/scraper/index.ts for usage.
+ */
 export async function reoonVerifySingle(
   email: string,
   apiKey: string,
+  mode: ReoonMode = "power",
 ): Promise<ReoonVerifyResult> {
-  const url = `${REOON_BASE}/verify?email=${encodeURIComponent(email)}&key=${apiKey}&mode=power`;
-  const res = await fetch(url, { signal: AbortSignal.timeout(90_000) });
+  const timeoutMs = mode === "quick" ? 15_000 : 90_000;
+  const url = `${REOON_BASE}/verify?email=${encodeURIComponent(email)}&key=${apiKey}&mode=${mode}`;
+  const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
   if (!res.ok) throw new Error(`Reoon API error: ${res.status}`);
   return (await res.json()) as ReoonVerifyResult;
 }
