@@ -215,11 +215,14 @@ export async function searchPeople(
   if (params.industry?.length) body.industry = params.industry;
   if (params.revenue?.length) body.revenue = params.revenue;
   if (params.companyDomain?.length) body.companyDomain = params.companyDomain;
-  // Renamed fields →
+  // Renamed fields → also expand US state and country abbreviations to
+  // their full names because Clodura's reference data stores full names
+  // (per their API guide example: "personCountry": ["United States"]).
+  // Sending "VA" alone never matches; we send both "VA" and "Virginia".
   if (params.company?.length) body.organizationName = params.company[0];
   if (params.city?.length) body.personCity = params.city;
-  if (params.state?.length) body.personState = params.state;
-  if (params.country?.length) body.personCountry = params.country;
+  if (params.state?.length) body.personState = expandStates(params.state);
+  if (params.country?.length) body.personCountry = expandCountries(params.country);
   if (params.employeeSize?.length) body.companyEmployeeSize = params.employeeSize;
   if (params.technology?.length) body.technologyParameters = params.technology;
 
@@ -252,6 +255,12 @@ export async function searchPeople(
     return normalized;
   } catch (e) {
     if (e instanceof CloduraError && e.statusCode === 404) {
+      // Surface the 404 — previously this was silent and looked
+      // indistinguishable from "search broken". 404 means Clodura
+      // accepted the request and just found nothing matching.
+      console.log(
+        `[Clodura.search] 404 (no results) for body=${JSON.stringify(body).slice(0, 200)} — try broadening filters or using full names (e.g. "Virginia" not "VA", "United States" not "US")`,
+      );
       return {
         data: [],
         page: params.page ?? 1,
@@ -261,6 +270,60 @@ export async function searchPeople(
     }
     throw e;
   }
+}
+
+// Normalize common state / country shorthand to full names that Clodura's
+// reference data actually contains. We keep the caller's original values
+// AND add the expanded form so a search for ["VA"] becomes
+// ["VA", "Virginia"] — Clodura ORs across array values, so the chance of
+// matching their stored format goes up without dropping the caller's intent.
+const US_STATE_NAMES: Record<string, string> = {
+  AL: "Alabama", AK: "Alaska", AZ: "Arizona", AR: "Arkansas", CA: "California",
+  CO: "Colorado", CT: "Connecticut", DE: "Delaware", FL: "Florida", GA: "Georgia",
+  HI: "Hawaii", ID: "Idaho", IL: "Illinois", IN: "Indiana", IA: "Iowa",
+  KS: "Kansas", KY: "Kentucky", LA: "Louisiana", ME: "Maine", MD: "Maryland",
+  MA: "Massachusetts", MI: "Michigan", MN: "Minnesota", MS: "Mississippi", MO: "Missouri",
+  MT: "Montana", NE: "Nebraska", NV: "Nevada", NH: "New Hampshire", NJ: "New Jersey",
+  NM: "New Mexico", NY: "New York", NC: "North Carolina", ND: "North Dakota",
+  OH: "Ohio", OK: "Oklahoma", OR: "Oregon", PA: "Pennsylvania", RI: "Rhode Island",
+  SC: "South Carolina", SD: "South Dakota", TN: "Tennessee", TX: "Texas", UT: "Utah",
+  VT: "Vermont", VA: "Virginia", WA: "Washington", WV: "West Virginia",
+  WI: "Wisconsin", WY: "Wyoming", DC: "District of Columbia",
+};
+const COUNTRY_NAMES: Record<string, string> = {
+  US: "United States", USA: "United States",
+  UK: "United Kingdom", GB: "United Kingdom",
+  CA_COUNTRY: "Canada", // (CA collides with California; users normally type "Canada" in country)
+};
+
+function expandStates(values: string[] | undefined): string[] | undefined {
+  if (!values || values.length === 0) return values;
+  const out = new Set<string>();
+  for (const v of values) {
+    const trimmed = v.trim();
+    if (!trimmed) continue;
+    out.add(trimmed);
+    const upper = trimmed.toUpperCase();
+    if (US_STATE_NAMES[upper]) out.add(US_STATE_NAMES[upper]);
+    // Also normalize Title Case if the user typed all lowercase.
+    if (trimmed !== trimmed[0].toUpperCase() + trimmed.slice(1).toLowerCase()) {
+      out.add(trimmed[0].toUpperCase() + trimmed.slice(1).toLowerCase());
+    }
+  }
+  return Array.from(out);
+}
+
+function expandCountries(values: string[] | undefined): string[] | undefined {
+  if (!values || values.length === 0) return values;
+  const out = new Set<string>();
+  for (const v of values) {
+    const trimmed = v.trim();
+    if (!trimmed) continue;
+    out.add(trimmed);
+    const upper = trimmed.toUpperCase();
+    if (COUNTRY_NAMES[upper]) out.add(COUNTRY_NAMES[upper]);
+  }
+  return Array.from(out);
 }
 
 /**
