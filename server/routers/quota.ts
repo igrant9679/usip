@@ -8,9 +8,27 @@ import { z } from "zod";
 import { activities, opportunities, quotaTargets, workspaceMembers } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { router } from "../_core/trpc";
-import { managerProcedure, workspaceProcedure } from "../_core/workspace";
+import { managerProcedure, roleRank, workspaceProcedure } from "../_core/workspace";
 
 const periodRegex = /^\d{4}-(0[1-9]|1[0-2]|Q[1-4])$/;
+
+/**
+ * For procedures that expose per-user quota / attainment data, restrict
+ * non-managers to their OWN data only. Managers/admins see everyone.
+ *
+ * Returns the userId to filter to (or null = no filter, see all).
+ */
+function quotaScopeUserId(
+  ctx: { user: { id: number }; member: { role: string } },
+  requestedUserId?: number,
+): number | null {
+  const isManager = roleRank(ctx.member.role as any) >= roleRank("manager");
+  if (isManager) {
+    return requestedUserId ?? null; // manager: optional filter, default "everyone"
+  }
+  // Non-manager: ignore any requestedUserId override; you only see yourself.
+  return ctx.user.id;
+}
 
 export const quotaRouter = router({
   /** List all quota targets for the workspace (optionally filtered by userId or period) */
@@ -23,7 +41,10 @@ export const quotaRouter = router({
         .select()
         .from(quotaTargets)
         .where(eq(quotaTargets.workspaceId, ctx.workspace.id));
-      if (input?.userId) rows = rows.filter((r) => r.userId === input.userId);
+      // Non-managers see only their own quota — pinning the filter
+      // server-side so a crafted client can't pass another rep's id.
+      const scope = quotaScopeUserId(ctx, input?.userId);
+      if (scope !== null) rows = rows.filter((r) => r.userId === scope);
       if (input?.period) rows = rows.filter((r) => r.period === input.period);
       return rows;
     }),
@@ -89,6 +110,10 @@ export const quotaRouter = router({
     .query(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) return null;
+      // Reps may only inspect their own attainment numbers; managers+
+      // can see any teammate's.
+      const isManager = roleRank(ctx.member.role as any) >= roleRank("manager");
+      const targetUserId = isManager ? input.userId : ctx.user.id;
 
       const [target] = await db
         .select()
@@ -96,7 +121,7 @@ export const quotaRouter = router({
         .where(
           and(
             eq(quotaTargets.workspaceId, ctx.workspace.id),
-            eq(quotaTargets.userId, input.userId),
+            eq(quotaTargets.userId, targetUserId),
             eq(quotaTargets.period, input.period),
           ),
         );
@@ -128,7 +153,7 @@ export const quotaRouter = router({
         .where(
           and(
             eq(opportunities.workspaceId, ctx.workspace.id),
-            eq(opportunities.ownerUserId, input.userId),
+            eq(opportunities.ownerUserId, targetUserId),
             eq(opportunities.stage, "won"),
             gte(opportunities.updatedAt, startDate),
             lte(opportunities.updatedAt, endDate),
@@ -145,7 +170,7 @@ export const quotaRouter = router({
         .where(
           and(
             eq(activities.workspaceId, ctx.workspace.id),
-            eq(activities.actorUserId, input.userId),
+            eq(activities.actorUserId, targetUserId),
             gte(activities.createdAt, startDate),
             lte(activities.createdAt, endDate),
           ),
@@ -164,7 +189,9 @@ export const quotaRouter = router({
     }),
 
   /** Team-wide quota summary for current period */
-  teamSummary: workspaceProcedure
+  // teamSummary returns everyone's targets/attainment — strictly a
+  // manager+ view. Reps shouldn't see peer compensation numbers.
+  teamSummary: managerProcedure
     .input(z.object({ period: z.string() }))
     .query(async ({ ctx, input }) => {
       const db = await getDb();

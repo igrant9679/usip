@@ -772,6 +772,34 @@ export const campaignsRouter = router({
     return { ok: true };
   }),
 
+  /**
+   * Resume a paused campaign back to live. Previously there was no
+   * inverse to `pause` — a paused campaign could only be deleted or
+   * flipped via the generic `update` (which then bypassed launch's
+   * checklist guard). This restores the symmetric pause/resume control.
+   */
+  resume: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    const [c] = await db
+      .select({ status: campaigns.status })
+      .from(campaigns)
+      .where(and(eq(campaigns.id, input.id), eq(campaigns.workspaceId, ctx.workspace.id)))
+      .limit(1);
+    if (!c) throw new TRPCError({ code: "NOT_FOUND" });
+    if (c.status !== "paused") {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: `Only paused campaigns can be resumed (current status: ${c.status}).`,
+      });
+    }
+    await db
+      .update(campaigns)
+      .set({ status: "live" })
+      .where(and(eq(campaigns.id, input.id), eq(campaigns.workspaceId, ctx.workspace.id)));
+    return { ok: true };
+  }),
+
   /** Get per-step analytics for a campaign */
   getStepStats: workspaceProcedure.input(z.object({ campaignId: z.number() })).query(async ({ ctx, input }) => {
     const db = await getDb();

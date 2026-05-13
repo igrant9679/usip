@@ -185,6 +185,13 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
                 eq(sequenceAbVariants.stepIndex, stepIndex),
               ),
             );
+          // Pick a variant if any are configured. Increment of sentCount
+          // is deferred until AFTER the draft insert succeeds — previously
+          // the bump ran first, which left the variant counter wrong when
+          // the insert threw (counter says "we sent 5 with variant A"
+          // when only 4 drafts actually exist).
+          let chosenVariantId: number | null = null;
+          let chosenVariantCount: number | null = null;
           if (variants.length > 0) {
             // Weighted random selection based on splitPct. Guard against
             // all-zero weights (Math.random() * 0 = 0, loop never
@@ -204,11 +211,8 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
             }
             draftSubject = chosen.subject;
             draftBody = chosen.body;
-            // Increment sentCount on the chosen variant
-            await db
-              .update(sequenceAbVariants)
-              .set({ sentCount: chosen.sentCount + 1 })
-              .where(eq(sequenceAbVariants.id, chosen.id));
+            chosenVariantId = chosen.id;
+            chosenVariantCount = chosen.sentCount;
           }
           // Create email draft for review.
           // stepIndex captures which sequence step this draft was generated
@@ -227,6 +231,16 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
             status: "pending_review",
             aiGenerated: false,
           });
+          // Insert succeeded — NOW bump the chosen variant's sent count.
+          // If we'd done this before the insert and the insert threw, the
+          // variant counter would have over-counted relative to actual
+          // drafts created.
+          if (chosenVariantId !== null && chosenVariantCount !== null) {
+            await db
+              .update(sequenceAbVariants)
+              .set({ sentCount: chosenVariantCount + 1 })
+              .where(eq(sequenceAbVariants.id, chosenVariantId));
+          }
         }
 
         // Advance to next step

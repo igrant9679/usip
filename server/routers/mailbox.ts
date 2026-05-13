@@ -100,6 +100,47 @@ async function getAccount(accountId: number, workspaceId: number) {
   return acc;
 }
 
+/**
+ * Verify the caller is allowed to write to this mailbox account.
+ *
+ * For Unipile-bridged personal mailboxes (Microsoft 365 etc.), the
+ * account's underlying unipile_accounts.userId is the rep's id. Only
+ * that rep — or a manager+ — may send / mark-read / move messages
+ * from it. Without this, a rep with a stale accountId from a
+ * previous session could send from a teammate's mailbox.
+ *
+ * Non-Unipile (shared workspace SMTP) accounts skip the check — those
+ * are shared outreach infrastructure by design.
+ */
+async function assertMailboxWriteOwnership(
+  ctx: { user: { id: number }; member: { role: string } },
+  account: { id: number; unipileAccountId: string | null },
+): Promise<void> {
+  if (!account.unipileAccountId) return; // shared SMTP — anyone in workspace
+  // Managers / admins can act on any rep's mailbox (matches the
+  // resolveTargetUser pattern used by read paths).
+  if (roleRank(ctx.member.role as any) >= roleRank("manager")) return;
+  const db = await getDb();
+  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+  const [row] = await db
+    .select({ userId: unipileAccounts.userId })
+    .from(unipileAccounts)
+    .where(eq(unipileAccounts.unipileAccountId, account.unipileAccountId))
+    .limit(1);
+  if (!row) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: "Bridged account row not found — was it disconnected?",
+    });
+  }
+  if (row.userId !== ctx.user.id) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "You can only send from your own connected mailbox.",
+    });
+  }
+}
+
 export const mailboxRouter = router({
   /**
    * List inbox-enabled sending accounts for the current user.
@@ -210,6 +251,7 @@ export const mailboxRouter = router({
     }))
     .mutation(async ({ ctx, input }) => {
       const acc = await getAccount(input.accountId, ctx.workspace.id);
+      await assertMailboxWriteOwnership(ctx, acc);
       const adapter = createEmailAdapter(acc);
       // Cap gate before signature so a blocked send produces a clear
       // error instead of doing the (slow) signature build for nothing.
@@ -248,6 +290,7 @@ export const mailboxRouter = router({
     }))
     .mutation(async ({ ctx, input }) => {
       const acc = await getAccount(input.accountId, ctx.workspace.id);
+      await assertMailboxWriteOwnership(ctx, acc);
       const adapter = createEmailAdapter(acc);
       // Cap gate before signature so a blocked send produces a clear
       // error instead of doing the (slow) signature build for nothing.
@@ -273,6 +316,7 @@ export const mailboxRouter = router({
     .input(z.object({ accountId: z.number(), messageId: z.string(), read: z.boolean() }))
     .mutation(async ({ ctx, input }) => {
       const acc = await getAccount(input.accountId, ctx.workspace.id);
+      await assertMailboxWriteOwnership(ctx, acc);
       const adapter = createEmailAdapter(acc);
       await adapter.markRead(input.messageId, input.read);
       return { ok: true };
@@ -283,6 +327,7 @@ export const mailboxRouter = router({
     .input(z.object({ accountId: z.number(), messageId: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const acc = await getAccount(input.accountId, ctx.workspace.id);
+      await assertMailboxWriteOwnership(ctx, acc);
       const adapter = createEmailAdapter(acc);
       await adapter.moveToTrash(input.messageId);
       return { ok: true };
@@ -298,6 +343,7 @@ export const mailboxRouter = router({
     }))
     .mutation(async ({ ctx, input }) => {
       const acc = await getAccount(input.accountId, ctx.workspace.id);
+      await assertMailboxWriteOwnership(ctx, acc);
       const adapter = createEmailAdapter(acc);
       await adapter.moveToFolder(input.messageId, input.destFolder, input.currentFolder);
       return { ok: true };
