@@ -637,6 +637,26 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0064: clodura_search_cache table ─────────────────────────────────────
+  // Another 0048-era table that wasn't ported into rawMigrations — the
+  // Clodura "Search Clodura" panel writes here to memoize query results,
+  // and threw "Failed query ... clodura_search_cache" on every search.
+  // Composite PK on (cache_key, workspaceId) so the same hashed query
+  // in different tenants doesn't collide.
+  {
+    name: "0064_clodura_search_cache.sql",
+    statements: [
+      `CREATE TABLE IF NOT EXISTS \`clodura_search_cache\` (
+        \`cache_key\` varchar(128) NOT NULL,
+        \`workspaceId\` int NOT NULL,
+        \`response\` json NOT NULL,
+        \`cached_at\` timestamp NOT NULL DEFAULT (now()),
+        CONSTRAINT \`clodura_search_cache_pk\` PRIMARY KEY (\`cache_key\`, \`workspaceId\`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE INDEX \`ix_csc_ws_cached\` ON \`clodura_search_cache\` (\`workspaceId\`, \`cached_at\`)`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------
