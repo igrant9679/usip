@@ -9,6 +9,7 @@ import {
   contactImportRows,
   contacts,
 } from "../../drizzle/schema";
+import { parseCSVText } from "../services/csv";
 
 /* ─── Field definitions ─────────────────────────────────────────────────── */
 
@@ -32,48 +33,6 @@ export const SYSTEM_FIELDS = [
 export type SystemFieldKey = (typeof SYSTEM_FIELDS)[number]["key"];
 
 /* ─── Helpers ───────────────────────────────────────────────────────────── */
-
-function parseCSVText(csvText: string): { headers: string[]; rows: Record<string, string>[] } {
-  const lines = csvText.split(/\r?\n/).filter((l) => l.trim().length > 0);
-  if (lines.length === 0) return { headers: [], rows: [] };
-
-  // Simple CSV parser (handles quoted fields)
-  function parseLine(line: string): string[] {
-    const result: string[] = [];
-    let current = "";
-    let inQuotes = false;
-    for (let i = 0; i < line.length; i++) {
-      const ch = line[i];
-      if (ch === '"') {
-        if (inQuotes && line[i + 1] === '"') {
-          current += '"';
-          i++;
-        } else {
-          inQuotes = !inQuotes;
-        }
-      } else if (ch === "," && !inQuotes) {
-        result.push(current.trim());
-        current = "";
-      } else {
-        current += ch;
-      }
-    }
-    result.push(current.trim());
-    return result;
-  }
-
-  const headers = parseLine(lines[0]);
-  const rows = lines.slice(1).map((line) => {
-    const values = parseLine(line);
-    const row: Record<string, string> = {};
-    headers.forEach((h, i) => {
-      row[h] = values[i] ?? "";
-    });
-    return row;
-  });
-
-  return { headers, rows };
-}
 
 function isValidEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);

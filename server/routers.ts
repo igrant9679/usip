@@ -44,6 +44,7 @@ import { mindmapsRouter } from "./routers/mindmaps";
 import { aiCredentialsRouter } from "./routers/aiCredentials";
 import { profileRouter } from "./routers/profile";
 import { prospectsRouter } from "./routers/prospects";
+import { prospectImportsRouter } from "./routers/prospectImports";
 
 export const appRouter = router({
   system: systemRouter,
@@ -129,6 +130,7 @@ export const appRouter = router({
   aiCredentials: aiCredentialsRouter,
   profile: profileRouter,
   prospects: prospectsRouter,
+  prospectImports: prospectImportsRouter,
 });
 
 export type AppRouter = typeof appRouter;

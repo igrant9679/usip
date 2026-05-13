@@ -67,6 +67,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { useLocation } from "wouter";
+import { ProspectImportDialog } from "./ProspectImportDialog";
 
 /* ─── Types ────────────────────────────────────────────────────────────────── */
 type EnrichmentData = {
@@ -246,6 +247,7 @@ export default function ProspectsPage() {
     name: string;
     data: EnrichmentData | null;
   } | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
 
   const utils = trpc.useUtils();
 
@@ -378,8 +380,7 @@ export default function ProspectsPage() {
   };
 
   const handleImportClick = () => {
-    // TODO: open CSV import wizard (LeadRocks-aware mapping, Reoon verification)
-    toast.info("CSV import wizard coming soon.");
+    setImportOpen(true);
   };
 
   return (
@@ -714,6 +715,14 @@ export default function ProspectsPage() {
         onClose={() => setEnrichOpenFor(null)}
         data={enrichOpenFor?.data ?? null}
         prospectName={enrichOpenFor?.name ?? ""}
+      />
+
+      <ProspectImportDialog
+        open={importOpen}
+        onOpenChange={setImportOpen}
+        onImported={() => {
+          void refetch();
+        }}
       />
     </Shell>
   );
