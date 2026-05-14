@@ -835,6 +835,12 @@ function ShareTab({ proposal, onRefetch }: { proposal: any; onRefetch: () => voi
   const [copied, setCopied] = useState(false);
   const [sendDialogOpen, setSendDialogOpen] = useState(false);
   const [personalMessage, setPersonalMessage] = useState("");
+  // Send-from picker: "auto" lets the server pick the workspace default,
+  // otherwise it's the sendingAccount.id we want to send through.
+  const [selectedAccountId, setSelectedAccountId] = useState<"auto" | number>("auto");
+  const [showPreview, setShowPreview] = useState(false);
+
+  const { data: sendingAccounts } = trpc.sendingAccounts.list.useQuery();
 
   const generateLink = trpc.proposals.generateShareLink.useMutation({
     onSuccess: () => { toast.success("Share link generated"); onRefetch(); },
