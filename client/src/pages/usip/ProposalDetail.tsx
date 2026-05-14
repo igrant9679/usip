@@ -71,6 +71,10 @@ import {
   Tooltip as RechartsTooltip,
 } from "recharts";
 import { Shell } from "@/components/usip/Shell";
+import { buildPrintHTML, openPrintWindow } from "./proposalExports/buildPrintHTML";
+import { downloadProposalDocx } from "./proposalExports/buildDocx";
+import { ProposalTimeline } from "./proposalExports/ProposalTimeline";
+import { FileDown, FileType2 } from "lucide-react";
 
 // ── Status config ─────────────────────────────────────────────────────────────
 const STATUS_CONFIG = {
@@ -705,6 +709,15 @@ function TimelineTab({ proposal, milestones, onRefetch }: { proposal: any; miles
           <p>No milestones yet. Add your first milestone to build the project timeline.</p>
         </div>
       ) : (
+        <>
+          {/* Visual timeline (read-only) — provides the at-a-glance view. */}
+          <div className="rounded-lg border border-border bg-card/40 p-5 mb-2">
+            <ProposalTimeline milestones={milestones as never} />
+          </div>
+          {/* Editable milestone list below */}
+          <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1 mb-1">
+            Edit milestones
+          </div>
         <div className="space-y-2">
           {milestones.map((m, idx) => (
             <div key={m.id} className="flex items-start gap-3 bg-card border border-border rounded-lg px-4 py-3">
@@ -745,6 +758,7 @@ function TimelineTab({ proposal, milestones, onRefetch }: { proposal: any; miles
             </div>
           ))}
         </div>
+        </>
       )}
 
       <Dialog open={addOpen} onOpenChange={(o) => { if (!o) { setAddOpen(false); setEditMilestone(null); resetForm(); } }}>
@@ -1219,6 +1233,59 @@ export default function ProposalDetail() {
 
   const { proposal, sections, milestones, feedback } = data;
 
+  // ── Export handlers ────────────────────────────────────────────────────
+  // Convert the server's sections array → keyed map (executive_summary, etc.)
+  // so the PDF/DOCX builders can index by section name.
+  const sectionMap: Record<string, string> = Object.fromEntries(
+    (sections ?? []).map((s) => [s.sectionKey, s.content ?? ""]),
+  );
+
+  // Shared printable-proposal shape consumed by both exporters.
+  const printable = {
+    title: proposal.title,
+    clientName: proposal.clientName,
+    clientEmail: proposal.clientEmail,
+    clientWebsite: proposal.clientWebsite,
+    projectType: proposal.projectType,
+    rfpDeadline: proposal.rfpDeadline,
+    completionDate: proposal.completionDate,
+  };
+
+  // Map ProposalMilestone (server) → shape both exporters expect.
+  const exportMilestones = (milestones ?? []).map((m) => ({
+    id: m.id,
+    name: m.name,
+    milestoneDate: m.milestoneDate,
+    description: m.description,
+    owner: m.owner,
+    sortOrder: m.sortOrder,
+  }));
+
+  function handleExportPdf() {
+    const html = buildPrintHTML({
+      proposal: printable,
+      sections: sectionMap,
+      milestones: exportMilestones,
+    });
+    openPrintWindow(html);
+    toast.success("Opening print preview… use Save as PDF to download.");
+  }
+
+  async function handleExportDocx() {
+    try {
+      toast.loading("Building Word document…", { id: "docx-export" });
+      const filename = await downloadProposalDocx({
+        proposal: printable,
+        sections: sectionMap,
+        milestones: exportMilestones,
+      });
+      toast.success(`Downloaded ${filename}`, { id: "docx-export" });
+    } catch (e) {
+      console.error("DOCX export failed:", e);
+      toast.error(`Word export failed: ${(e as Error).message}`, { id: "docx-export" });
+    }
+  }
+
   return (
     <Shell title="Proposal">
     <div className="flex flex-col h-full">
@@ -1257,6 +1324,26 @@ export default function ProposalDetail() {
           </p>
         </div>
         {/* Header actions */}
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={handleExportPdf}
+          className="gap-1.5 shrink-0"
+          title="Open print preview — save as PDF from the browser dialog"
+        >
+          <FileDown className="size-3.5" />
+          PDF
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={handleExportDocx}
+          className="gap-1.5 shrink-0"
+          title="Download as a Microsoft Word document"
+        >
+          <FileType2 className="size-3.5" />
+          Word
+        </Button>
         <Button
           variant="outline"
           size="sm"
