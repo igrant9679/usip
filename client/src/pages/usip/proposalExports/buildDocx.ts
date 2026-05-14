@@ -2,11 +2,19 @@
  * Proposal Word (.docx) export.
  *
  * Ported from the LSI proposal-system v5 prototype (exportWord). Uses the
- * `docx` package (added to dependencies) to build a fully-formatted
- * Word document client-side, then triggers download as a Blob.
+ * `docx` library to build a fully-formatted Word document client-side, then
+ * triggers download as a Blob.
  *
- * Lazy-imports the `docx` package so the ~250 KB library isn't shipped in
- * the main bundle — only when the user actually clicks Export.
+ * The library is loaded from a CDN at runtime (not bundled) — matches the
+ * source prototype's `<script src="https://unpkg.com/docx@8.5.0/build/index.js">`
+ * approach. Trade-offs:
+ *   - PRO: no `docx` package in package.json, no pnpm-lock churn, no bundler
+ *     hit; ships only when user clicks Word
+ *   - CON: requires internet access at export time (fine for a SaaS app);
+ *     the library isn't type-checked at compile time (we use a hand-typed
+ *     shim for the few APIs we touch)
+ *
+ * Loaded once per page-load and cached on `window.docx`.
  */
 
 import type {
@@ -16,6 +24,77 @@ import type {
   CaseStudy,
   PrintableProposal,
 } from "./buildPrintHTML";
+
+const DOCX_CDN_URL = "https://unpkg.com/docx@8.5.0/build/index.js";
+
+// Minimal type for the parts of `docx` we use. Not exhaustive — just enough
+// to keep TypeScript happy inside this module.
+type DocxLib = {
+  Document: new (opts: unknown) => unknown;
+  Packer: { toBlob: (doc: unknown) => Promise<Blob> };
+  Paragraph: new (opts: unknown) => unknown;
+  TextRun: new (opts: unknown) => unknown;
+  Table: new (opts: unknown) => unknown;
+  TableRow: new (opts: unknown) => unknown;
+  TableCell: new (opts: unknown) => unknown;
+  Header: new (opts: unknown) => unknown;
+  Footer: new (opts: unknown) => unknown;
+  AlignmentType: Record<string, unknown>;
+  BorderStyle: Record<string, unknown>;
+  WidthType: Record<string, unknown>;
+  ShadingType: Record<string, unknown>;
+  LevelFormat: Record<string, unknown>;
+};
+
+declare global {
+  interface Window {
+    docx?: DocxLib;
+  }
+}
+
+/**
+ * Inject the docx UMD bundle as a <script> tag and resolve once it has
+ * registered itself on `window.docx`. Subsequent calls return immediately.
+ */
+function loadDocxFromCdn(): Promise<DocxLib> {
+  if (typeof window === "undefined") {
+    return Promise.reject(new Error("docx export requires a browser"));
+  }
+  if (window.docx) return Promise.resolve(window.docx);
+
+  // If a script tag is already in flight from a prior click, reuse it
+  const existing = document.querySelector<HTMLScriptElement>(
+    `script[data-docx-cdn="true"]`,
+  );
+  if (existing) {
+    return new Promise((resolve, reject) => {
+      existing.addEventListener("load", () => {
+        if (window.docx) resolve(window.docx);
+        else reject(new Error("docx loaded but window.docx is undefined"));
+      });
+      existing.addEventListener("error", () =>
+        reject(new Error("Failed to load docx from CDN")),
+      );
+    });
+  }
+
+  return new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = DOCX_CDN_URL;
+    script.async = true;
+    script.crossOrigin = "anonymous";
+    script.dataset.docxCdn = "true";
+    script.addEventListener("load", () => {
+      if (window.docx) resolve(window.docx);
+      else reject(new Error("docx loaded but window.docx is undefined"));
+    });
+    script.addEventListener("error", () => {
+      script.remove();
+      reject(new Error("Failed to load docx from CDN — check internet connection"));
+    });
+    document.head.appendChild(script);
+  });
+}
 
 function fmtDate(d: string | Date | null | undefined): string {
   if (!d) return "";
@@ -65,7 +144,22 @@ export async function downloadProposalDocx(opts: {
   pricingTable?: PricingTable;
   caseStudies?: CaseStudy[];
 }): Promise<string> {
-  const D = await import("docx");
+  // CDN-loaded library — typed as `any` here because we don't bundle the
+  // real `docx` package, so its types aren't available. The shim in
+  // loadDocxFromCdn() validates the runtime shape on the first call.
+  //
+  // The local type aliases below let `Paragraph`, `Table`, etc. work in
+  // type-positions (e.g. `Paragraph[]`) alongside the destructured value
+  // bindings — TS keeps types and values in separate namespaces.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  type Paragraph = any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  type Table = any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  type TextRun = any;
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const D = (await loadDocxFromCdn()) as any;
   const {
     Document,
     Packer,
