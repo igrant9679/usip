@@ -697,10 +697,10 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
         \`enabled\` tinyint(1) NOT NULL DEFAULT 1,
         \`usage_cents\` int NOT NULL DEFAULT 0,
         \`calls_count\` int NOT NULL DEFAULT 0,
-        \`period_start\` timestamp NOT NULL DEFAULT (now()),
+        \`period_start\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
         \`threshold_alert_sent_at\` timestamp NULL,
         \`cap_reached_at\` timestamp NULL,
-        \`updatedAt\` timestamp NOT NULL DEFAULT (now()) ON UPDATE (now()),
+        \`updatedAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         CONSTRAINT \`places_budget_pk\` PRIMARY KEY (\`workspaceId\`)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
       `CREATE TABLE IF NOT EXISTS \`places_search_log\` (
