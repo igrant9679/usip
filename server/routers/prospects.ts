@@ -21,6 +21,21 @@ import { getDb } from "../db";
 import { contacts, prospects } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
 import { lookupContactInfo, type LookupResult } from "../services/scraper";
+
+/**
+ * A prospect has a synthetic (non-person) name when it was created from a
+ * company-level source like Google Places — firstName holds the business
+ * name and lastName is a "(business)" placeholder. The importer/finder
+ * stamps `enrichmentData.syntheticName = true` on those rows. Email-pattern
+ * generation + Reoon must be skipped for them (see scraper/index.ts).
+ */
+function isSyntheticNameProspect(enrichmentData: unknown): boolean {
+  return (
+    !!enrichmentData &&
+    typeof enrichmentData === "object" &&
+    (enrichmentData as { syntheticName?: unknown }).syntheticName === true
+  );
+}
 import { reoonCheckBalance, getReoonApiKey } from "../services/reoon";
 
 export const prospectsRouter = router({
@@ -255,6 +270,7 @@ export const prospectsRouter = router({
         companyDomain: p.companyDomain ?? null,
         existingPhone: p.phone ?? null,
         skipIfHasEmail: input.skipIfHasEmail && Boolean(p.email),
+        syntheticName: isSyntheticNameProspect(p.enrichmentData),
       });
 
       await recordAudit({
@@ -320,6 +336,7 @@ export const prospectsRouter = router({
             companyDomain: p.companyDomain ?? null,
             existingPhone: p.phone ?? null,
             skipIfHasEmail: input.skipIfHasEmail && Boolean(p.email),
+            syntheticName: isSyntheticNameProspect(p.enrichmentData),
           });
           creditsQuick += result.reoonCreditsQuick;
           creditsPower += result.reoonCreditsPower;

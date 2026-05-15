@@ -118,10 +118,38 @@ export const placesSearchRouter = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
 
+      // Dedup against existing Places-sourced prospects. The prospects
+      // table has no unique constraint, so a bare insert+catch never
+      // actually dedupes — re-running the same selection would silently
+      // create N duplicate rows. Match on (workspaceId, company) +
+      // companyDomain, the stable keys for a business-derived prospect.
+      const candidateCompanies = input.hits.map((h) => h.name);
+      const existingKeys = new Set<string>();
+      if (candidateCompanies.length > 0) {
+        const rows = await db
+          .select({ company: prospects.company, companyDomain: prospects.companyDomain })
+          .from(prospects)
+          .where(
+            and(
+              eq(prospects.workspaceId, ctx.workspace.id),
+              inArray(prospects.company, candidateCompanies),
+            ),
+          );
+        for (const r of rows) {
+          existingKeys.add(`${(r.company ?? "").toLowerCase()}|${(r.companyDomain ?? "").toLowerCase()}`);
+        }
+      }
+
       let created = 0;
+      let skipped = 0;
       for (const hit of input.hits) {
         const { firstName, lastName } = splitName(hit.name);
         const companyDomain = normalizeDomain(hit.websiteUri ?? null);
+        const dedupKey = `${hit.name.toLowerCase()}|${(companyDomain ?? "").toLowerCase()}`;
+        if (existingKeys.has(dedupKey)) {
+          skipped++;
+          continue;
+        }
         try {
           await db.insert(prospects).values({
             workspaceId: ctx.workspace.id,
@@ -131,11 +159,17 @@ export const placesSearchRouter = router({
             companyDomain: companyDomain ?? undefined,
             phone: hit.nationalPhoneNumber ?? hit.internationalPhoneNumber ?? undefined,
             city: undefined, // could parse from formattedAddress in a follow-up
-            // No email — the scraper's "Find contact info" will fill that
+            // Mark as a company-level (synthetic-name) prospect so the
+            // scraper skips email-pattern generation + Reoon on it —
+            // see isSyntheticNameProspect() in routers/prospects.ts.
+            enrichmentData: { source: "google_places", syntheticName: true },
+            // No email — "Find contact info" will scrape phone/socials only
           } as never);
           created++;
+          existingKeys.add(dedupKey);
         } catch {
-          // continue — likely a duplicate
+          // continue — defensive; dedup above already handles the common case
+          skipped++;
         }
       }
       await recordAudit({
@@ -144,9 +178,9 @@ export const placesSearchRouter = router({
         action: "create",
         entityType: "prospect_bulk_places",
         entityId: 0,
-        after: { source: "google_places", attempted: input.hits.length, created },
+        after: { source: "google_places", attempted: input.hits.length, created, skipped },
       });
-      return { attempted: input.hits.length, created };
+      return { attempted: input.hits.length, created, skipped };
     }),
 
   /** Same as saveAsProspects but lands in the accounts table — for companies. */

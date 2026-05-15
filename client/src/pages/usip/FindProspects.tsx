@@ -188,7 +188,10 @@ function PlacesTab() {
 
   const saveAsProspects = trpc.placesSearch.saveAsProspects.useMutation({
     onSuccess: (data) => {
-      toast.success(`Saved ${data.created} prospect${data.created === 1 ? "" : "s"}`);
+      toast.success(
+        `Saved ${data.created} prospect${data.created === 1 ? "" : "s"}` +
+          (data.skipped ? ` (${data.skipped} already existed)` : ""),
+      );
       setSelected(new Set());
     },
     onError: (e) => toast.error(e.message),

@@ -24,6 +24,8 @@
  * inferred from a company.
  */
 
+import { safeFetch } from "./ssrfGuard";
+
 const FETCH_TIMEOUT_MS = 5_000;
 const USER_AGENT =
   "Mozilla/5.0 (compatible; Velocity-CRM/1.0; +https://velocity.app)";
@@ -81,10 +83,11 @@ export async function scrapeUrl(rawUrl: string): Promise<ExtractedData> {
 
   let html: string;
   try {
-    const res = await fetch(url, {
+    // safeFetch validates the URL + every redirect hop against the SSRF
+    // blocklist (private IPs, cloud metadata, localhost, *.internal).
+    const res = await safeFetch(url, {
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       headers: { "User-Agent": USER_AGENT, Accept: "text/html,application/xhtml+xml,*/*" },
-      redirect: "follow",
     });
     if (!res.ok) {
       return { ...empty, error: `HTTP ${res.status}` };

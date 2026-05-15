@@ -26,6 +26,7 @@
  */
 
 import { buildUrl } from "./domain";
+import { safeFetch } from "./ssrfGuard";
 
 const FETCH_TIMEOUT_MS = 5_000;
 const USER_AGENT =
@@ -76,7 +77,7 @@ const robotsCache = new Map<string, RobotsRules | null>();
 async function getRobots(domain: string): Promise<RobotsRules | null> {
   if (robotsCache.has(domain)) return robotsCache.get(domain) ?? null;
   try {
-    const res = await fetch(buildUrl(domain, "/robots.txt"), {
+    const res = await safeFetch(buildUrl(domain, "/robots.txt"), {
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       headers: { "User-Agent": USER_AGENT },
     });
@@ -239,10 +240,9 @@ export async function scrapeCompanySite(domain: string): Promise<ScrapedSite> {
 
     try {
       const html = await serializePerDomain(domain, async () => {
-        const res = await fetch(buildUrl(domain, path), {
+        const res = await safeFetch(buildUrl(domain, path), {
           signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
           headers: { "User-Agent": USER_AGENT, Accept: "text/html,*/*" },
-          redirect: "follow",
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const ct = res.headers.get("content-type") ?? "";

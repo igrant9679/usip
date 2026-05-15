@@ -91,6 +91,15 @@ export type ProspectLookupInput = {
   skipIfHasEmail: boolean;
   /** Existing prospect.phone — only fill if null. */
   existingPhone: string | null;
+  /**
+   * True when firstName/lastName are synthetic placeholders (e.g. a
+   * Google-Places business saved as a prospect: firstName="Acme Dental",
+   * lastName="(business)"). The company-site scrape (phones/socials) still
+   * runs and is persisted, but email-pattern generation + Reoon are
+   * skipped — generating "acmedental.business@domain" and burning Reoon
+   * credits on it is pure waste.
+   */
+  syntheticName?: boolean;
 };
 
 export async function lookupContactInfo(
@@ -137,6 +146,40 @@ export async function lookupContactInfo(
     socialUrls: scraped.socialUrls,
     patternsVerified: [],
   };
+
+  // Synthetic-name prospect (e.g. a Google-Places business): the scrape
+  // (phones/socials) is still valuable and gets persisted, but generating
+  // email patterns from "Acme Dental / (business)" and Reoon-verifying
+  // them is pure waste. Skip pattern-gen + Reoon entirely.
+  if (input.syntheticName) {
+    enrichment.skipReason = "synthetic_name";
+    const phone = pickPhone(scraped, input.existingPhone);
+    const db = await getDb();
+    if (db) {
+      const update: Record<string, unknown> = { enrichmentData: enrichment };
+      if (phone && !input.existingPhone) update.phone = phone;
+      await db
+        .update(prospects)
+        .set(update)
+        .where(
+          and(
+            eq(prospects.id, input.prospectId),
+            eq(prospects.workspaceId, input.workspaceId),
+          ),
+        );
+    }
+    return {
+      ok: true,
+      email: null,
+      emailStatus: null,
+      phone,
+      enrichment,
+      reoonCredits: 0,
+      reoonCreditsQuick: 0,
+      reoonCreditsPower: 0,
+      message: "Business prospect — scraped site for phone/socials (no email patterns)",
+    };
+  }
 
   // If the caller already has an email and asked us not to overwrite, skip
   // the pattern + Reoon step entirely — we'd burn credits with no benefit.

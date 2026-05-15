@@ -123,7 +123,13 @@ async function loadBudget(workspaceId: number): Promise<BudgetState> {
     .limit(1);
 
   if (!row) {
-    await db.insert(placesBudget).values({ workspaceId } as never);
+    // onDuplicateKeyUpdate makes this safe under concurrent first-requests
+    // for the same workspace (workspaceId is the PK) — a plain insert would
+    // throw an uncaught dup-key error on the loser of the race.
+    await db
+      .insert(placesBudget)
+      .values({ workspaceId } as never)
+      .onDuplicateKeyUpdate({ set: { workspaceId } });
     [row] = await db
       .select()
       .from(placesBudget)
@@ -202,61 +208,108 @@ export async function setBudget(
  *   - Fires the in-app notification once per period when the threshold is
  *     crossed (idempotent via thresholdAlertSentAt)
  */
-async function chargeAndLog(opts: {
+/**
+ * Atomically reserve `cost` cents against the budget. The conditional
+ * UPDATE only succeeds when the integration is enabled AND the post-charge
+ * total stays within the cap — so concurrent searches at 99% can't all
+ * slip past a read-only pre-check (the old TOCTOU bug). affectedRows===0
+ * means refused; we then read the row once to tell disabled vs cap apart
+ * for the error message.
+ */
+async function reserveBudget(
+  workspaceId: number,
+  cost: number,
+): Promise<{ ok: boolean; reason?: "disabled" | "cap" }> {
+  const db = await getDb();
+  if (!db) return { ok: false, reason: "disabled" };
+  const [res] = await db.execute(
+    sql`UPDATE \`places_budget\`
+        SET \`usage_cents\` = \`usage_cents\` + ${cost},
+            \`calls_count\` = \`calls_count\` + 1
+        WHERE \`workspaceId\` = ${workspaceId}
+          AND \`enabled\` = 1
+          AND \`usage_cents\` + ${cost} <= \`monthly_budget_cents\``,
+  );
+  const affected = (res as { affectedRows?: number })?.affectedRows ?? 0;
+  if (affected > 0) return { ok: true };
+  const [row] = await db
+    .select({ enabled: placesBudget.enabled })
+    .from(placesBudget)
+    .where(eq(placesBudget.workspaceId, workspaceId))
+    .limit(1);
+  return { ok: false, reason: row && !row.enabled ? "disabled" : "cap" };
+}
+
+/** Reverse a reservation when the downstream Google call fails. */
+async function refundBudget(workspaceId: number, cost: number): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.execute(
+    sql`UPDATE \`places_budget\`
+        SET \`usage_cents\` = GREATEST(0, \`usage_cents\` - ${cost}),
+            \`calls_count\` = GREATEST(0, \`calls_count\` - 1)
+        WHERE \`workspaceId\` = ${workspaceId}`,
+  );
+}
+
+/** Write one audit-log row. Never throws (logging must not break the call). */
+async function logCall(opts: {
   workspaceId: number;
   userId?: number;
   endpoint: keyof typeof COST_CENTS;
   query: string | null;
   resultsCount?: number;
   status: "ok" | "blocked" | "error";
+  costCents: number;
   error?: string;
 }): Promise<void> {
   const db = await getDb();
   if (!db) return;
-  const cost = opts.status === "ok" ? (COST_CENTS[opts.endpoint] ?? 0) : 0;
+  try {
+    await db.insert(placesSearchLog).values({
+      workspaceId: opts.workspaceId,
+      userId: opts.userId,
+      endpoint: opts.endpoint,
+      query: opts.query,
+      costCents: opts.costCents,
+      resultsCount: opts.resultsCount,
+      status: opts.status,
+      error: opts.error,
+    } as never);
+  } catch (e) {
+    console.error("[Places] audit log insert failed:", e);
+  }
+}
 
-  await db.insert(placesSearchLog).values({
-    workspaceId: opts.workspaceId,
-    userId: opts.userId,
-    endpoint: opts.endpoint,
-    query: opts.query,
-    costCents: cost,
-    resultsCount: opts.resultsCount,
-    status: opts.status,
-    error: opts.error,
-  } as never);
+/**
+ * After a successful (reserved + charged) call, fire the threshold / cap
+ * side-effects. Each is gated by a conditional UPDATE whose affectedRows
+ * decides the single winner — so concurrent crossers don't double-notify.
+ */
+async function fireBudgetSideEffects(workspaceId: number): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  const state = await loadBudget(workspaceId);
 
-  if (cost === 0) return;
-
-  // Atomic increment so two concurrent calls can't both think they were
-  // the one to cross the threshold (the row's CAS-ed via WHERE + the
-  // returned state is then used for alerting).
-  await db
-    .update(placesBudget)
-    .set({
-      usageCents: sql`${placesBudget.usageCents} + ${cost}`,
-      callsCount: sql`${placesBudget.callsCount} + 1`,
-    })
-    .where(eq(placesBudget.workspaceId, opts.workspaceId));
-
-  // Re-read to determine if we just crossed any boundaries
-  const state = await loadBudget(opts.workspaceId);
-
-  // Threshold alert — only fire once per period
   if (state.thresholdCrossed && !state.thresholdAlertSentAt) {
-    await db
-      .update(placesBudget)
-      .set({ thresholdAlertSentAt: new Date() })
-      .where(eq(placesBudget.workspaceId, opts.workspaceId));
-    await emitThresholdNotification(opts.workspaceId, state);
+    const [r] = await db.execute(
+      sql`UPDATE \`places_budget\`
+          SET \`threshold_alert_sent_at\` = NOW()
+          WHERE \`workspaceId\` = ${workspaceId}
+            AND \`threshold_alert_sent_at\` IS NULL`,
+    );
+    if (((r as { affectedRows?: number })?.affectedRows ?? 0) > 0) {
+      await emitThresholdNotification(workspaceId, state);
+    }
   }
 
-  // Cap reached — record the moment
   if (state.capReached && !state.capReachedAt) {
-    await db
-      .update(placesBudget)
-      .set({ capReachedAt: new Date() })
-      .where(eq(placesBudget.workspaceId, opts.workspaceId));
+    await db.execute(
+      sql`UPDATE \`places_budget\`
+          SET \`cap_reached_at\` = NOW()
+          WHERE \`workspaceId\` = ${workspaceId}
+            AND \`cap_reached_at\` IS NULL`,
+    );
   }
 }
 
@@ -386,32 +439,31 @@ export async function textSearch(opts: {
   userId: number;
   input: PlacesTextSearchInput;
 }): Promise<{ results: PlacesResult[]; budget: BudgetState }> {
-  // Pre-flight budget check — refuse without calling Google if we already
-  // know we're over the cap or disabled.
+  // loadBudget rolls the period if the month changed; we then reserve the
+  // cost ATOMICALLY before calling Google. The conditional UPDATE is the
+  // real gate — no read-then-act TOCTOU window.
   const preBudget = await loadBudget(opts.workspaceId);
-  if (!preBudget.enabled) {
-    await chargeAndLog({
+  const cost = COST_CENTS["textsearch"] ?? 0;
+  const reservation = await reserveBudget(opts.workspaceId, cost);
+  if (!reservation.ok) {
+    await logCall({
       workspaceId: opts.workspaceId,
       userId: opts.userId,
       endpoint: "textsearch",
       query: opts.input.query,
       status: "blocked",
-      error: "Google Places integration is disabled for this workspace.",
+      costCents: 0,
+      error:
+        reservation.reason === "disabled"
+          ? "Google Places integration is disabled for this workspace."
+          : "Monthly Google Places budget cap reached.",
     });
-    throw new TRPCError({
-      code: "PRECONDITION_FAILED",
-      message: "Google Places integration is disabled for this workspace. Re-enable in Settings.",
-    });
-  }
-  if (preBudget.capReached) {
-    await chargeAndLog({
-      workspaceId: opts.workspaceId,
-      userId: opts.userId,
-      endpoint: "textsearch",
-      query: opts.input.query,
-      status: "blocked",
-      error: "Monthly Google Places budget cap reached.",
-    });
+    if (reservation.reason === "disabled") {
+      throw new TRPCError({
+        code: "PRECONDITION_FAILED",
+        message: "Google Places integration is disabled for this workspace. Re-enable in Settings.",
+      });
+    }
     throw new TRPCError({
       code: "PRECONDITION_FAILED",
       message: `Monthly Google Places budget cap reached ($${(preBudget.monthlyBudgetCents / 100).toFixed(2)}). Resets on the 1st of next month, or raise the cap in Settings.`,
@@ -467,12 +519,16 @@ export async function textSearch(opts: {
     });
     if (!res.ok) {
       const text = await res.text().catch(() => `HTTP ${res.status}`);
-      await chargeAndLog({
+      // Google rejected the call — refund the reservation so a failed
+      // request doesn't eat budget.
+      await refundBudget(opts.workspaceId, cost);
+      await logCall({
         workspaceId: opts.workspaceId,
         userId: opts.userId,
         endpoint: "textsearch",
         query: opts.input.query,
         status: "error",
+        costCents: 0,
         error: `${res.status}: ${text.slice(0, 500)}`,
       });
       throw new TRPCError({ code: "BAD_GATEWAY", message: `Google Places error: ${text.slice(0, 200)}` });
@@ -480,12 +536,14 @@ export async function textSearch(opts: {
     raw = (await res.json()) as { places?: GoogleRawPlace[] };
   } catch (e) {
     if (e instanceof TRPCError) throw e;
-    await chargeAndLog({
+    await refundBudget(opts.workspaceId, cost);
+    await logCall({
       workspaceId: opts.workspaceId,
       userId: opts.userId,
       endpoint: "textsearch",
       query: opts.input.query,
       status: "error",
+      costCents: 0,
       error: (e as Error).message,
     });
     throw new TRPCError({ code: "BAD_GATEWAY", message: (e as Error).message });
@@ -506,14 +564,18 @@ export async function textSearch(opts: {
     googleMapsUri: p.googleMapsUri,
   }));
 
-  await chargeAndLog({
+  // Budget was already reserved before the call. Just record the audit
+  // row + fire threshold/cap side-effects.
+  await logCall({
     workspaceId: opts.workspaceId,
     userId: opts.userId,
     endpoint: "textsearch",
     query: opts.input.query,
     resultsCount: results.length,
     status: "ok",
+    costCents: cost,
   });
+  await fireBudgetSideEffects(opts.workspaceId);
 
   const budget = await loadBudget(opts.workspaceId);
   return { results, budget };
