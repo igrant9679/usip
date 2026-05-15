@@ -21,7 +21,7 @@ import {
   ChevronRight,
   X,
 } from "lucide-react";
-import { useParams, useLocation } from "wouter";
+import { useParams, useLocation, Link } from "wouter";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type RuleField =
@@ -411,6 +411,13 @@ export default function Segments() {
       
         icon={<Filter className="size-5" />}
       >
+        <Link
+          href="/segment-rules"
+          className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
+          title="Configure segment → sequence auto-enrollment rules"
+        >
+          Auto-Enroll Rules →
+        </Link>
         <Button size="sm" onClick={() => { setEditing(null); setBuilderOpen(true); }}>
           <Plus className="size-3.5 mr-1.5" />
           New Segment

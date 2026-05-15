@@ -4,6 +4,7 @@
  * and provides a per-account connection test action.
  */
 import { useState, useEffect } from "react";
+import { Link } from "wouter";
 import { PageHeader, Shell } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
@@ -752,6 +753,20 @@ export default function SendingAccounts() {
         
         icon={<AtSign className="size-5" />}
       >
+          <Link
+            href="/sender-pools"
+            className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
+            title="Group sending accounts into pools for sequence load-balancing"
+          >
+            Sender Pools →
+          </Link>
+          <Link
+            href="/my-linkedin"
+            className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
+            title="Manage your personal LinkedIn bridge"
+          >
+            My LinkedIn →
+          </Link>
           <Button onClick={openAdd} className="gap-2">
             <Plus className="w-4 h-4" /> Connect account
           </Button>

@@ -6,7 +6,6 @@ import { cn } from "@/lib/utils";
 import {
   Activity,
   Bell,
-  BookOpen,
   Building2,
   CalendarClock,
   Check,
@@ -40,13 +39,11 @@ import {
   X,
   Zap,
   Upload,
-  Linkedin,
   BarChart3,
   Filter,
   AlertTriangle,
   Ban,
   Mail,
-  Layers,
   MailOpen,
   CalendarDays,
   Plug,
@@ -55,7 +52,6 @@ import {
   Cpu,
   Radar,
   HelpCircle,
-  GraduationCap,
   GitFork,
 } from "lucide-react";
 import { ReactNode, useEffect, useState, useRef, createContext, useContext } from "react";
@@ -67,7 +63,17 @@ import { Moon, Sun, Pencil, Check as CheckIcon, X as XIcon } from "lucide-react"
 const AccentContext = createContext<string>("#1D4ED8");
 export function useAccentColor() { return useContext(AccentContext); }
 
-type NavItem = { href: string; label: string; icon: any };
+// Three kinds of entries can appear in a NavGroup's `items` array:
+//   - default link (no `kind` field): renders as a clickable nav row
+//   - subhead: small uppercase label inside the group (e.g. Acquire's
+//     "Funnel" / "Tools" sub-headers)
+//   - connector: a faint down-arrow rendered between consecutive funnel
+//     items in the Acquire group, signaling the Prospects → Leads → Contacts
+//     → Accounts → Pipeline progression
+type NavLinkItem = { href: string; label: string; icon: any };
+type NavSubhead = { kind: "subhead"; label: string };
+type NavConnector = { kind: "connector" };
+type NavItem = NavLinkItem | NavSubhead | NavConnector;
 type NavGroup = { label: string; items: NavItem[]; color: string; darkColor: string; activeColor: string; activeBg: string; darkActiveBg: string };
 
 const NAV: NavGroup[] = [
@@ -106,14 +112,26 @@ const NAV: NavGroup[] = [
     activeColor: "#B45309",
     activeBg: "rgba(180,83,9,0.10)",
     darkActiveBg: "rgba(252,211,77,0.12)",
+    // FUNNEL (Prospects → Leads → Contacts → Accounts → Pipeline) +
+    // TOOLS (utility pages that support the funnel). Connectors render as
+    // a faint down-arrow between funnel items so the flow is visible.
     items: [
-      { href: "/leads", label: "Leads", icon: Target },
+      { kind: "subhead", label: "Funnel" },
       { href: "/prospects", label: "Prospects", icon: Radar },
+      { kind: "connector" },
+      { href: "/leads", label: "Leads", icon: Target },
+      { kind: "connector" },
       { href: "/contacts", label: "Contacts", icon: Users },
+      { kind: "connector" },
+      { href: "/accounts", label: "Accounts", icon: Building2 },
+      { kind: "connector" },
+      { href: "/pipeline", label: "Pipeline", icon: KanbanSquare },
+      { kind: "subhead", label: "Tools" },
       { href: "/import", label: "Import Contacts", icon: Upload },
       { href: "/data-health", label: "Data Health", icon: BarChart3 },
-      { href: "/accounts", label: "Accounts", icon: Building2 },
-      { href: "/pipeline", label: "Pipeline", icon: KanbanSquare },
+      // Moved from Operate — Lead Routing manages how new leads are
+      // assigned to reps, which is conceptually a funnel-stage tool.
+      { href: "/lead-routing", label: "Lead Routing", icon: Sparkles },
       { href: "/pipeline-alerts", label: "Pipeline Alerts", icon: AlertTriangle },
     ],
   },
@@ -124,17 +142,19 @@ const NAV: NavGroup[] = [
     activeColor: "#7C3AED",
     activeBg: "rgba(124,58,237,0.10)",
     darkActiveBg: "rgba(196,181,253,0.12)",
+    // Trimmed from 16 → 13 items. Removed (still routable, with
+    // "Open" links added on adjacent pages so they remain discoverable):
+    //   - /sender-pools     → opens from /sending-accounts
+    //   - /snippets         → opens from /email-builder
+    //   - /segment-rules    → opens from /segments
     items: [
       { href: "/segments", label: "Segments", icon: Filter },
-      { href: "/segment-rules", label: "Segment Auto-Enroll", icon: Zap },
       { href: "/sequences", label: "Sequences", icon: Activity },
       { href: "/email-drafts", label: "Email Drafts", icon: FileText },
       { href: "/email-analytics", label: "Email Analytics", icon: BarChart3 },
       { href: "/email-suppressions", label: "Opt-Out Management", icon: Ban },
       { href: "/sending-accounts", label: "Sending Accounts", icon: Mail },
-      { href: "/sender-pools", label: "Sender Pools", icon: Layers },
       { href: "/email-builder", label: "Email Builder", icon: LayoutTemplate },
-      { href: "/snippets", label: "Snippet Library", icon: BookOpen },
       { href: "/research-pipeline", label: "AI Research Pipeline", icon: Sparkles },
       { href: "/ai-pipeline", label: "AI Draft Queue", icon: Sparkles },
       { href: "/unified-inbox", label: "Unified Inbox", icon: MessageSquare },
@@ -163,6 +183,8 @@ const NAV: NavGroup[] = [
     activeColor: "#0F766E",
     activeBg: "rgba(15,118,110,0.10)",
     darkActiveBg: "rgba(94,234,212,0.12)",
+    // Removed: /lead-routing (moved to Acquire → Tools, near Leads where
+    // it belongs conceptually).
     items: [
       { href: "/tasks", label: "Tasks", icon: ListChecks },
       { href: "/mindmaps", label: "Mindmaps", icon: GitFork },
@@ -172,7 +194,6 @@ const NAV: NavGroup[] = [
       { href: "/proposals", label: "Proposals", icon: ClipboardList },
       { href: "/quotes", label: "Quotes", icon: FileText },
       { href: "/territories", label: "Territories", icon: Network },
-      { href: "/lead-routing", label: "Lead Routing", icon: Sparkles },
       { href: "/quota", label: "Quota Management", icon: Target },
     ],
   },
@@ -183,6 +204,11 @@ const NAV: NavGroup[] = [
     activeColor: "#475569",
     activeBg: "rgba(71,85,105,0.10)",
     darkActiveBg: "rgba(203,213,225,0.12)",
+    // Trimmed from 10 → 8. Removed (still routable, discoverable via
+    // Settings or direct URL):
+    //   - /my-linkedin   → per-user, link from /sending-accounts
+    //   - /tour-builder  → super-admin tool, rarely used; bookmark or
+    //                       link from /settings
     items: [
       { href: "/team", label: "Team", icon: Users },
       { href: "/lead-scoring", label: "Lead Scoring", icon: Target },
@@ -191,9 +217,7 @@ const NAV: NavGroup[] = [
       { href: "/brand-voice", label: "Brand Voice", icon: Mic2 },
       { href: "/audit", label: "Audit Log", icon: Database },
       { href: "/scim", label: "SCIM", icon: Zap },
-      { href: "/my-linkedin", label: "My LinkedIn", icon: Linkedin },
       { href: "/settings", label: "Settings", icon: Settings },
-      { href: "/tour-builder", label: "Tour Builder", icon: GraduationCap },
     ],
   },
   {
@@ -234,14 +258,25 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
   // Respect the user's "Set as Home" preference for the Dashboard nav link
   const homeDashboardHref = (typeof window !== "undefined" ? localStorage.getItem(HOME_DASHBOARD_KEY) : null) ?? "/";
 
-  // Build effective nav with the resolved home href
+  // Build effective nav with the resolved home href. Non-link items (subheads,
+  // connectors — see Acquire section) pass through unchanged.
   const effectiveNav = NAV.map((g) => ({
     ...g,
-    items: g.items.map((i) => i.href === "/" ? { ...i, href: homeDashboardHref } : i),
+    items: g.items.map((i) =>
+      "href" in i && i.href === "/" ? { ...i, href: homeDashboardHref } : i,
+    ),
   }));
 
-  // Derive current category accent from active route
-  const activeGroup = effectiveNav.find(g => g.items.some(i => i.href === location || (i.href !== "/" && i.href !== homeDashboardHref && location.startsWith(i.href)) || i.href === location));
+  // Derive current category accent from active route. Only `link` items
+  // contribute hrefs to the active-group match.
+  const activeGroup = effectiveNav.find((g) =>
+    g.items.some(
+      (i) =>
+        "href" in i &&
+        (i.href === location ||
+          (i.href !== "/" && i.href !== homeDashboardHref && location.startsWith(i.href))),
+    ),
+  );
   const isDark = theme === "dark";
   const accentColor = isDark
     ? (activeGroup?.darkColor ?? "#93C5FD")
@@ -288,7 +323,10 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
             // Collect all hrefs in this group so we can detect prefix collisions.
             // An item is only active via startsWith when no sibling has a longer
             // href that also matches — this prevents /are matching /are/icp etc.
-            const groupHrefs = group.items.map((i) => i.href);
+            // Only `link` items contribute hrefs to the prefix-collision check.
+            const groupHrefs = group.items
+              .filter((i): i is typeof i & { href: string } => "href" in i)
+              .map((i) => i.href);
             return (
             <div key={group.label}>
               {/* Section header with left stripe */}
@@ -304,7 +342,40 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
                 </span>
               </div>
               <div className="space-y-0.5 pl-0">
-                {group.items.map((item) => {
+                {group.items.map((item, idx) => {
+                  // Sub-section header (e.g. Acquire "Funnel" / "Tools")
+                  if ("kind" in item && item.kind === "subhead") {
+                    return (
+                      <div
+                        key={`subhead-${item.label}-${idx}`}
+                        className="pt-2 pb-0.5 pl-3 pr-2"
+                      >
+                        <span
+                          className="text-[9px] font-semibold uppercase tracking-wider text-white/40"
+                        >
+                          {item.label}
+                        </span>
+                      </div>
+                    );
+                  }
+                  // Flow connector — faint down-arrow between funnel items
+                  if ("kind" in item && item.kind === "connector") {
+                    return (
+                      <div
+                        key={`connector-${idx}`}
+                        className="flex justify-center pointer-events-none select-none"
+                        aria-hidden="true"
+                      >
+                        <span
+                          className="text-[11px] leading-none"
+                          style={{ color: gc + "66" /* 40% opacity */ }}
+                        >
+                          ↓
+                        </span>
+                      </div>
+                    );
+                  }
+                  // Normal link item.
                   // An item is active if:
                   //   1. Exact match, OR
                   //   2. location starts with item.href AND no sibling href is a

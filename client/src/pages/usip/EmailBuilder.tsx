@@ -5,7 +5,7 @@
  * Right: block property editor + merge-tag picker
  */
 import { useState, useRef, useCallback, useEffect } from "react";
-import { useRoute, useLocation } from "wouter";
+import { useRoute, useLocation, Link } from "wouter";
 import { Shell, PageHeader } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
@@ -1771,9 +1771,17 @@ export default function EmailBuilderPage() {
       <PageHeader
         title="Email Builder" pageKey="email-builder"
         description="Design and preview HTML email templates using drag-and-drop content blocks. Build reusable layouts for campaigns, sequences, and one-off sends with live mobile preview."
-      
+
         icon={<PenLine className="size-5" />}
-      />
+      >
+        <Link
+          href="/snippets"
+          className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
+          title="Reusable text fragments inserted into templates"
+        >
+          Snippet Library →
+        </Link>
+      </PageHeader>
       <div className="flex flex-1 min-h-0 border rounded-xl overflow-hidden bg-card" style={{height: 'calc(100vh - 180px)'}}>
         <TemplateList onOpen={(id) => navigate(`/email-builder/${id}`)} />
       </div>
