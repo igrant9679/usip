@@ -48,7 +48,6 @@ import {
   Plug,
   MessageSquare,
   Bot,
-  Cpu,
   Radar,
   HelpCircle,
   GitFork,
@@ -72,7 +71,14 @@ export function useAccentColor() { return useContext(AccentContext); }
 type NavLinkItem = { href: string; label: string; icon: any };
 type NavSubhead = { kind: "subhead"; label: string };
 type NavConnector = { kind: "connector" };
-type NavItem = NavLinkItem | NavSubhead | NavConnector;
+// Compact horizontal pipeline visualization shown at the TOP of a group
+// (currently only used by Acquire) — letter-pill per stage with arrow glyphs
+// between them. Each pill is clickable and highlights when its route is active.
+type NavMiniPipeline = {
+  kind: "miniPipeline";
+  stages: { href: string; label: string; short: string }[];
+};
+type NavItem = NavLinkItem | NavSubhead | NavConnector | NavMiniPipeline;
 type NavGroup = { label: string; items: NavItem[]; color: string; darkColor: string; activeColor: string; activeBg: string; darkActiveBg: string };
 
 const NAV: NavGroup[] = [
@@ -97,11 +103,11 @@ const NAV: NavGroup[] = [
     activeColor: "#059669",
     activeBg: "rgba(5,150,105,0.10)",
     darkActiveBg: "rgba(110,231,183,0.12)",
+    // Trimmed 4 → 1. ARE sub-pages (/are/icp, /are/campaigns, /are/settings)
+    // are tabs of the same product — discovery links added in the ARE Hub
+    // page header so they remain reachable without sidebar clutter.
     items: [
       { href: "/are", label: "ARE Hub", icon: Bot },
-      { href: "/are/icp", label: "ICP Agent", icon: Cpu },
-      { href: "/are/campaigns", label: "Campaigns", icon: Radar },
-      { href: "/are/settings", label: "ARE Settings", icon: Settings },
     ],
   },
   {
@@ -111,10 +117,20 @@ const NAV: NavGroup[] = [
     activeColor: "#B45309",
     activeBg: "rgba(180,83,9,0.10)",
     darkActiveBg: "rgba(252,211,77,0.12)",
-    // FUNNEL (Prospects → Leads → Contacts → Accounts → Pipeline) +
-    // TOOLS (utility pages that support the funnel). Connectors render as
-    // a faint down-arrow between funnel items so the flow is visible.
+    // Mini horizontal pipeline at the top reads as the "story" of this
+    // section at a glance. Below it, the same stages plus support tools
+    // are listed vertically with arrow connectors.
     items: [
+      {
+        kind: "miniPipeline",
+        stages: [
+          { href: "/prospects", label: "Prospects", short: "P" },
+          { href: "/leads", label: "Leads", short: "L" },
+          { href: "/contacts", label: "Contacts", short: "C" },
+          { href: "/accounts", label: "Accounts", short: "A" },
+          { href: "/pipeline", label: "Pipeline", short: "Π" },
+        ],
+      },
       { kind: "subhead", label: "Funnel" },
       { href: "/prospects", label: "Prospects", icon: Radar },
       { kind: "connector" },
@@ -217,17 +233,9 @@ const NAV: NavGroup[] = [
       { href: "/settings", label: "Settings", icon: Settings },
     ],
   },
-  {
-    label: "Help",
-    color: "#0891b2",
-    darkColor: "#67e8f9",
-    activeColor: "#0891b2",
-    activeBg: "rgba(8,145,178,0.10)",
-    darkActiveBg: "rgba(103,232,249,0.12)",
-    items: [
-      { href: "/help", label: "Help Center", icon: HelpCircle },
-    ],
-  },
+  // Removed Help group — now reached via the (?) button in the user
+  // footer at the bottom of the sidebar. Saves an entire group header
+  // for a one-item section.
 ];
 
 /** Key used by Dashboards.tsx to persist the user's chosen home dashboard. */
@@ -340,6 +348,59 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
               </div>
               <div className="space-y-0.5 pl-0">
                 {group.items.map((item, idx) => {
+                  // Mini horizontal pipeline (P→L→C→A→Π at top of Acquire).
+                  if ("kind" in item && item.kind === "miniPipeline") {
+                    return (
+                      <div
+                        key={`pipeline-${idx}`}
+                        className="px-3 pt-2 pb-3"
+                      >
+                        <div className="flex items-center justify-between gap-0.5">
+                          {item.stages.map((stage, sIdx) => {
+                            const stageActive =
+                              location === stage.href ||
+                              (stage.href !== "/" && location.startsWith(stage.href + "/"));
+                            return (
+                              <div
+                                key={stage.href}
+                                className="flex items-center gap-0.5 flex-1 last:flex-initial"
+                              >
+                                <Link
+                                  href={stage.href}
+                                  title={stage.label}
+                                  className={cn(
+                                    "flex items-center justify-center size-6 rounded text-[10px] font-bold transition-all",
+                                    stageActive
+                                      ? "text-white shadow-sm"
+                                      : "text-white/60 hover:text-white/90",
+                                  )}
+                                  style={
+                                    stageActive
+                                      ? { backgroundColor: gc }
+                                      : {
+                                          backgroundColor: gc + "22" /* 13% */,
+                                          border: `1px solid ${gc}55` /* 33% */,
+                                        }
+                                  }
+                                >
+                                  {stage.short}
+                                </Link>
+                                {sIdx < item.stages.length - 1 && (
+                                  <span
+                                    className="text-[9px] flex-1 text-center select-none pointer-events-none"
+                                    style={{ color: gc + "88" /* 53% */ }}
+                                    aria-hidden="true"
+                                  >
+                                    →
+                                  </span>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  }
                   // Sub-section header (e.g. Acquire "Funnel" / "Tools")
                   if ("kind" in item && item.kind === "subhead") {
                     return (
@@ -425,7 +486,14 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
             <div className="text-white truncate text-[13px]">{user?.name ?? "Anonymous"}</div>
             <div className="truncate">{current?.role ?? ""}</div>
           </div>
-          <button onClick={() => logout()} className="text-white/60 hover:text-white" title="Sign out">
+          <Link
+            href="/help"
+            className="text-white/60 hover:text-white shrink-0"
+            title="Help Center"
+          >
+            <HelpCircle className="size-4" />
+          </Link>
+          <button onClick={() => logout()} className="text-white/60 hover:text-white shrink-0" title="Sign out">
             <LogOut className="size-4" />
           </button>
         </div>

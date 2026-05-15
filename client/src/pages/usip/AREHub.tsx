@@ -300,9 +300,30 @@ export default function AREHub() {
       <PageHeader
         title="Autonomous Revenue Engine" pageKey="are-hub"
         description="Command centre for your Autonomous Revenue Engine — monitor campaigns, ICP health, and pipeline flow. Track every prospect from discovery through to booked meeting."
-      
+
         icon={<Rocket className="size-5" />}
       >
+        <Link
+          href="/are/icp"
+          className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline self-center"
+          title="Manage the Ideal Customer Profile agent"
+        >
+          ICP Agent →
+        </Link>
+        <Link
+          href="/are/campaigns"
+          className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline self-center"
+          title="All ARE-managed outbound campaigns"
+        >
+          Campaigns →
+        </Link>
+        <Link
+          href="/are/settings"
+          className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline self-center"
+          title="ARE configuration, throttles, and limits"
+        >
+          ARE Settings →
+        </Link>
         <Button variant="outline" size="sm" onClick={() => refetch()} className="gap-1.5 text-xs">
           <RefreshCw className="size-3.5" />
           Refresh
