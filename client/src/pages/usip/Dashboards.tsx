@@ -395,6 +395,20 @@ export default function Dashboards() {
       <PageHeader title="Dashboards" description="Build custom dashboards with KPI widgets, charts, and live CRM data pulled in real time. Share dashboards with your team or embed them in QBRs and executive reports." pageKey="dashboards"
         icon={<LayoutGrid className="size-5" />}
       >
+        <Link
+          href="/email-analytics"
+          className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
+          title="Open / click / reply rates per sequence and per step"
+        >
+          Email Analytics →
+        </Link>
+        <Link
+          href="/quota"
+          className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
+          title="Set and track per-rep quotas"
+        >
+          Quota Management →
+        </Link>
         <Button size="sm" variant="outline" onClick={() => setOpenSched(true)}>
           <Send className="h-3.5 w-3.5 mr-1" /> Schedule
         </Button>

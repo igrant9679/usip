@@ -278,6 +278,13 @@ export default function UnifiedInbox() {
                 Manage Accounts
               </Button>
             </Link>
+            <Link
+              href="/email-drafts"
+              className="text-xs text-muted-foreground hover:text-foreground self-center underline-offset-2 hover:underline"
+              title="Drafts created by sequences awaiting review"
+            >
+              Email Drafts →
+            </Link>
           </div>
         }
       />

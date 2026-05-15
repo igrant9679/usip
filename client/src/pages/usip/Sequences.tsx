@@ -856,6 +856,20 @@ export default function Sequences() {
       <PageHeader title="Sequences" description="Build multi-step email and task cadences to engage prospects at scale with personalised touchpoints. Set delays, branching conditions, and auto-stop rules to keep every sequence relevant." pageKey="sequences"
         icon={<ListOrdered className="size-5" />}
       >
+        <Link
+          href="/email-drafts"
+          className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
+          title="Review and edit drafts created by sequence steps"
+        >
+          Email Drafts →
+        </Link>
+        <Link
+          href="/email-analytics"
+          className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
+          title="Open / click / reply rates per sequence and per step"
+        >
+          Email Analytics →
+        </Link>
         <Button onClick={() => setOpen(true)} data-tour-id="sequences-new-button"><Plus className="size-4" /> New sequence</Button>
       </PageHeader>
       <div className="p-6 grid grid-cols-1 lg:grid-cols-3 gap-4">

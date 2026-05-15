@@ -761,6 +761,20 @@ export default function SendingAccounts() {
             Sender Pools →
           </Link>
           <Link
+            href="/connected-accounts"
+            className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
+            title="Connected mailboxes and calendars used for sync (read-side)"
+          >
+            Connected Accounts →
+          </Link>
+          <Link
+            href="/email-suppressions"
+            className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
+            title="Opt-outs and global suppression list — required for compliance"
+          >
+            Opt-Outs →
+          </Link>
+          <Link
             href="/my-linkedin"
             className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
             title="Manage your personal LinkedIn bridge"

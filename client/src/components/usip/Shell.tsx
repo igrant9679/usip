@@ -142,23 +142,23 @@ const NAV: NavGroup[] = [
     activeColor: "#7C3AED",
     activeBg: "rgba(124,58,237,0.10)",
     darkActiveBg: "rgba(196,181,253,0.12)",
-    // Trimmed from 16 → 13 items. Removed (still routable, with
+    // Trimmed from 16 → 9 items. Removed (still routable, with
     // "Open" links added on adjacent pages so they remain discoverable):
-    //   - /sender-pools     → opens from /sending-accounts
-    //   - /snippets         → opens from /email-builder
-    //   - /segment-rules    → opens from /segments
+    //   - /sender-pools         → opens from /sending-accounts
+    //   - /snippets             → opens from /email-builder
+    //   - /segment-rules        → opens from /segments
+    //   - /email-drafts         → opens from /sequences and /unified-inbox
+    //   - /email-analytics      → opens from /sequences and /dashboards
+    //   - /connected-accounts   → opens from /sending-accounts
+    //   - /email-suppressions   → opens from /sending-accounts
     items: [
       { href: "/segments", label: "Segments", icon: Filter },
       { href: "/sequences", label: "Sequences", icon: Activity },
-      { href: "/email-drafts", label: "Email Drafts", icon: FileText },
-      { href: "/email-analytics", label: "Email Analytics", icon: BarChart3 },
-      { href: "/email-suppressions", label: "Opt-Out Management", icon: Ban },
       { href: "/sending-accounts", label: "Sending Accounts", icon: Mail },
       { href: "/email-builder", label: "Email Builder", icon: LayoutTemplate },
       { href: "/research-pipeline", label: "AI Research Pipeline", icon: Sparkles },
       { href: "/ai-pipeline", label: "AI Draft Queue", icon: Sparkles },
       { href: "/unified-inbox", label: "Unified Inbox", icon: MessageSquare },
-      { href: "/connected-accounts", label: "Connected Accounts", icon: Plug },
       { href: "/social", label: "Social", icon: Share2 },
       { href: "/campaigns", label: "Campaigns", icon: Megaphone },
     ],
@@ -183,8 +183,9 @@ const NAV: NavGroup[] = [
     activeColor: "#0F766E",
     activeBg: "rgba(15,118,110,0.10)",
     darkActiveBg: "rgba(94,234,212,0.12)",
-    // Removed: /lead-routing (moved to Acquire → Tools, near Leads where
-    // it belongs conceptually).
+    // Removed:
+    //   - /lead-routing (moved to Acquire → Tools)
+    //   - /quota (opens from /dashboards — quotas are a reporting concern)
     items: [
       { href: "/tasks", label: "Tasks", icon: ListChecks },
       { href: "/mindmaps", label: "Mindmaps", icon: GitFork },
@@ -194,7 +195,6 @@ const NAV: NavGroup[] = [
       { href: "/proposals", label: "Proposals", icon: ClipboardList },
       { href: "/quotes", label: "Quotes", icon: FileText },
       { href: "/territories", label: "Territories", icon: Network },
-      { href: "/quota", label: "Quota Management", icon: Target },
     ],
   },
   {
@@ -204,19 +204,18 @@ const NAV: NavGroup[] = [
     activeColor: "#475569",
     activeBg: "rgba(71,85,105,0.10)",
     darkActiveBg: "rgba(203,213,225,0.12)",
-    // Trimmed from 10 → 8. Removed (still routable, discoverable via
-    // Settings or direct URL):
-    //   - /my-linkedin   → per-user, link from /sending-accounts
-    //   - /tour-builder  → super-admin tool, rarely used; bookmark or
-    //                       link from /settings
+    // Trimmed from 10 → 6. Removed (still routable, discoverable via
+    // links added to adjacent admin pages):
+    //   - /my-linkedin   → per-user, opens from /sending-accounts
+    //   - /tour-builder  → super-admin; direct URL only
+    //   - /audit         → opens from /settings header
+    //   - /scim          → opens from /team header (it's identity provisioning)
     items: [
       { href: "/team", label: "Team", icon: Users },
       { href: "/lead-scoring", label: "Lead Scoring", icon: Target },
       { href: "/custom-fields", label: "Custom Fields", icon: Database },
       { href: "/prompt-templates", label: "Prompt Templates", icon: FlaskConical },
       { href: "/brand-voice", label: "Brand Voice", icon: Mic2 },
-      { href: "/audit", label: "Audit Log", icon: Database },
-      { href: "/scim", label: "SCIM", icon: Zap },
       { href: "/settings", label: "Settings", icon: Settings },
     ],
   },
