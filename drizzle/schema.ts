@@ -3408,3 +3408,53 @@ export const mindmapEdges = mysqlTable(
   (t) => ({ byMap: index("ix_mmedge_map").on(t.mindmapId) }),
 );
 export type MindmapEdge = typeof mindmapEdges.$inferSelect;
+
+// ─── Google Places budget tracking ─────────────────────────────────────────
+// One row per workspace. The auto-cap fires when usageCents reaches
+// monthlyBudgetCents; the threshold alert fires when usageCents crosses
+// (monthlyBudgetCents * thresholdPct / 100). Both reset at month boundary
+// via lazy check on each insert (no cron required — see places service).
+export const placesBudget = mysqlTable(
+  "places_budget",
+  {
+    workspaceId: int("workspaceId").primaryKey(),
+    // Limit in USD cents (e.g. 20000 = $200 = the free Google credit)
+    monthlyBudgetCents: int("monthly_budget_cents").default(20000).notNull(),
+    // Send the threshold alert when usage hits this percentage of budget
+    thresholdPct: int("threshold_pct").default(80).notNull(),
+    // Master kill switch — when false, no Places API calls are allowed
+    enabled: boolean("enabled").default(true).notNull(),
+    // Running totals for the current period
+    usageCents: int("usage_cents").default(0).notNull(),
+    callsCount: int("calls_count").default(0).notNull(),
+    // Period bookkeeping
+    periodStart: timestamp("period_start").defaultNow().notNull(),
+    thresholdAlertSentAt: timestamp("threshold_alert_sent_at"),
+    capReachedAt: timestamp("cap_reached_at"),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+);
+export type PlacesBudget = typeof placesBudget.$inferSelect;
+
+// Per-call audit log so admins can see what was spent on what.
+export const placesSearchLog = mysqlTable(
+  "places_search_log",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    userId: int("userId"),
+    endpoint: varchar("endpoint", { length: 64 }).notNull(), // "textsearch" | "details" | etc.
+    query: text("query"),
+    // Cost in cents (e.g. 1.7 cents per Text Search → store as 2 with rounding,
+    // or just track call counts and bill per-endpoint cost in usageCents)
+    costCents: int("cost_cents").notNull(),
+    resultsCount: int("results_count"),
+    status: varchar("status", { length: 16 }).notNull(), // "ok" | "blocked" | "error"
+    error: text("error"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    byWs: index("ix_psl_ws").on(t.workspaceId, t.createdAt),
+  }),
+);
+export type PlacesSearchLog = typeof placesSearchLog.$inferSelect;

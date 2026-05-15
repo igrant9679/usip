@@ -682,6 +682,44 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0066: Google Places budget tracking ─────────────────────────────────
+  // Backs the new /find-prospects Google Places search. One budget row per
+  // workspace + a per-call audit log. The hard-cap and 80% threshold logic
+  // both live in app code (server/services/googlePlaces.ts) — schema just
+  // stores the state.
+  {
+    name: "0066_places_budget.sql",
+    statements: [
+      `CREATE TABLE IF NOT EXISTS \`places_budget\` (
+        \`workspaceId\` int NOT NULL,
+        \`monthly_budget_cents\` int NOT NULL DEFAULT 20000,
+        \`threshold_pct\` int NOT NULL DEFAULT 80,
+        \`enabled\` tinyint(1) NOT NULL DEFAULT 1,
+        \`usage_cents\` int NOT NULL DEFAULT 0,
+        \`calls_count\` int NOT NULL DEFAULT 0,
+        \`period_start\` timestamp NOT NULL DEFAULT (now()),
+        \`threshold_alert_sent_at\` timestamp NULL,
+        \`cap_reached_at\` timestamp NULL,
+        \`updatedAt\` timestamp NOT NULL DEFAULT (now()) ON UPDATE (now()),
+        CONSTRAINT \`places_budget_pk\` PRIMARY KEY (\`workspaceId\`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS \`places_search_log\` (
+        \`id\` int AUTO_INCREMENT NOT NULL,
+        \`workspaceId\` int NOT NULL,
+        \`userId\` int NULL,
+        \`endpoint\` varchar(64) NOT NULL,
+        \`query\` text NULL,
+        \`cost_cents\` int NOT NULL,
+        \`results_count\` int NULL,
+        \`status\` varchar(16) NOT NULL,
+        \`error\` text NULL,
+        \`createdAt\` timestamp NOT NULL DEFAULT (now()),
+        CONSTRAINT \`places_search_log_pk\` PRIMARY KEY (\`id\`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE INDEX \`ix_psl_ws\` ON \`places_search_log\` (\`workspaceId\`, \`createdAt\`)`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

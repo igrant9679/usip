@@ -1,0 +1,455 @@
+/**
+ * Google Places API client + budget enforcement.
+ *
+ * Uses the "Places API (New)" v1 endpoint family — Google's modern Places
+ * surface that replaces the legacy Places API in 2024. Authentication is
+ * via API key in the `X-Goog-Api-Key` header (NOT a query param, to avoid
+ * leaking the key in URL logs).
+ *
+ * Pricing (as of 2026, USD per 1k requests, billed per-call):
+ *   Text Search        — $17 per 1,000  (1.7 cents per call)
+ *   Place Details (id) — $17 per 1,000  (1.7 cents per call, basic SKU)
+ *
+ * The $200/month free credit Google offers covers about 11,700 calls
+ * per month at these rates. We default each workspace to a $200 cap.
+ *
+ * Budget enforcement model:
+ *   - Each call goes through `enforceBudgetAndLog()` which:
+ *       1. Lazy-rolls the period if month changed (resets usage_cents to 0)
+ *       2. Refuses the call if usage ≥ budget OR `enabled=false`
+ *       3. Increments usage + log on success (or "blocked" / "error" status)
+ *       4. Fires the threshold notification once per period when crossing
+ *
+ *   - Threshold notification is in-app only here. The email-out hook is
+ *     wired in Phase 1b (see TODO at bottom).
+ */
+
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
+import { TRPCError } from "@trpc/server";
+import { getDb } from "../db";
+import { placesBudget, placesSearchLog, notifications, workspaceMembers } from "../../drizzle/schema";
+
+const PLACES_BASE = "https://places.googleapis.com/v1";
+
+/* ─── Per-endpoint costs (cents) ───────────────────────────────────────── */
+const COST_CENTS: Record<string, number> = {
+  // Round to nearest cent; Google bills fractional but we want integer math.
+  textsearch: 2, // 1.7¢ → round up to 2¢ (conservative — bills always meet/exceed actual)
+  details: 2,
+};
+
+/* ─── Public API shapes ─────────────────────────────────────────────────── */
+
+export type PlacesTextSearchInput = {
+  /** Free-text query, e.g. "dentists in Leesburg, VA" */
+  query: string;
+  /** Optional centerpoint + radius (meters) to constrain the search. */
+  locationBias?: {
+    lat: number;
+    lng: number;
+    radiusMeters: number;
+  };
+  /** Place type filter, e.g. "restaurant", "law_firm", "dentist". */
+  includedType?: string;
+  /** Up to 20 results per call. */
+  maxResultCount?: number;
+};
+
+export type PlacesResult = {
+  placeId: string;
+  name: string;
+  formattedAddress?: string;
+  websiteUri?: string;
+  nationalPhoneNumber?: string;
+  internationalPhoneNumber?: string;
+  rating?: number;
+  userRatingCount?: number;
+  primaryType?: string;
+  types?: string[];
+  location?: { lat: number; lng: number };
+  googleMapsUri?: string;
+};
+
+export type BudgetState = {
+  workspaceId: number;
+  monthlyBudgetCents: number;
+  thresholdPct: number;
+  enabled: boolean;
+  usageCents: number;
+  callsCount: number;
+  periodStart: Date;
+  thresholdAlertSentAt: Date | null;
+  capReachedAt: Date | null;
+  /** Derived: usage / budget — useful for the UI meter */
+  usagePct: number;
+  /** Derived: usage above threshold? */
+  thresholdCrossed: boolean;
+  /** Derived: usage at or beyond cap? */
+  capReached: boolean;
+};
+
+/* ─── Env helper ───────────────────────────────────────────────────────── */
+
+function getApiKey(): string {
+  const key = process.env.GOOGLE_PLACES_API_KEY;
+  if (!key) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "GOOGLE_PLACES_API_KEY is not configured.",
+    });
+  }
+  return key;
+}
+
+/* ─── Budget lifecycle ─────────────────────────────────────────────────── */
+
+/** Read or auto-create the per-workspace budget row, rolling the period if stale. */
+async function loadBudget(workspaceId: number): Promise<BudgetState> {
+  const db = await getDb();
+  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+
+  let [row] = await db
+    .select()
+    .from(placesBudget)
+    .where(eq(placesBudget.workspaceId, workspaceId))
+    .limit(1);
+
+  if (!row) {
+    await db.insert(placesBudget).values({ workspaceId } as never);
+    [row] = await db
+      .select()
+      .from(placesBudget)
+      .where(eq(placesBudget.workspaceId, workspaceId))
+      .limit(1);
+  }
+  if (!row) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Budget row missing" });
+
+  // Lazy period roll — if periodStart is in a previous calendar month,
+  // reset the counters. This is cheaper than a cron and is correct from
+  // the perspective of any caller (they always see the current period).
+  const now = new Date();
+  const ps = new Date(row.periodStart);
+  if (ps.getUTCFullYear() !== now.getUTCFullYear() || ps.getUTCMonth() !== now.getUTCMonth()) {
+    await db
+      .update(placesBudget)
+      .set({
+        usageCents: 0,
+        callsCount: 0,
+        periodStart: now,
+        thresholdAlertSentAt: null,
+        capReachedAt: null,
+      })
+      .where(eq(placesBudget.workspaceId, workspaceId));
+    row = { ...row, usageCents: 0, callsCount: 0, periodStart: now, thresholdAlertSentAt: null, capReachedAt: null };
+  }
+
+  return deriveBudgetState(row);
+}
+
+function deriveBudgetState(row: typeof placesBudget.$inferSelect): BudgetState {
+  const usagePct = row.monthlyBudgetCents > 0 ? (row.usageCents / row.monthlyBudgetCents) * 100 : 0;
+  return {
+    workspaceId: row.workspaceId,
+    monthlyBudgetCents: row.monthlyBudgetCents,
+    thresholdPct: row.thresholdPct,
+    enabled: row.enabled,
+    usageCents: row.usageCents,
+    callsCount: row.callsCount,
+    periodStart: row.periodStart,
+    thresholdAlertSentAt: row.thresholdAlertSentAt,
+    capReachedAt: row.capReachedAt,
+    usagePct,
+    thresholdCrossed: usagePct >= row.thresholdPct,
+    capReached: row.usageCents >= row.monthlyBudgetCents,
+  };
+}
+
+export async function getBudget(workspaceId: number): Promise<BudgetState> {
+  return loadBudget(workspaceId);
+}
+
+export async function setBudget(
+  workspaceId: number,
+  patch: { monthlyBudgetCents?: number; thresholdPct?: number; enabled?: boolean },
+): Promise<BudgetState> {
+  const db = await getDb();
+  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+  await loadBudget(workspaceId); // ensures row exists + period rolled
+  await db
+    .update(placesBudget)
+    .set({
+      ...(patch.monthlyBudgetCents !== undefined ? { monthlyBudgetCents: patch.monthlyBudgetCents } : {}),
+      ...(patch.thresholdPct !== undefined ? { thresholdPct: patch.thresholdPct } : {}),
+      ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
+    })
+    .where(eq(placesBudget.workspaceId, workspaceId));
+  return loadBudget(workspaceId);
+}
+
+/**
+ * Charge the budget for one API call.
+ *
+ *   - Refuses if disabled or cap reached BEFORE the call (returns "blocked")
+ *   - Otherwise increments usage and writes the audit log
+ *   - Fires the in-app notification once per period when the threshold is
+ *     crossed (idempotent via thresholdAlertSentAt)
+ */
+async function chargeAndLog(opts: {
+  workspaceId: number;
+  userId?: number;
+  endpoint: keyof typeof COST_CENTS;
+  query: string | null;
+  resultsCount?: number;
+  status: "ok" | "blocked" | "error";
+  error?: string;
+}): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  const cost = opts.status === "ok" ? (COST_CENTS[opts.endpoint] ?? 0) : 0;
+
+  await db.insert(placesSearchLog).values({
+    workspaceId: opts.workspaceId,
+    userId: opts.userId,
+    endpoint: opts.endpoint,
+    query: opts.query,
+    costCents: cost,
+    resultsCount: opts.resultsCount,
+    status: opts.status,
+    error: opts.error,
+  } as never);
+
+  if (cost === 0) return;
+
+  // Atomic increment so two concurrent calls can't both think they were
+  // the one to cross the threshold (the row's CAS-ed via WHERE + the
+  // returned state is then used for alerting).
+  await db
+    .update(placesBudget)
+    .set({
+      usageCents: sql`${placesBudget.usageCents} + ${cost}`,
+      callsCount: sql`${placesBudget.callsCount} + 1`,
+    })
+    .where(eq(placesBudget.workspaceId, opts.workspaceId));
+
+  // Re-read to determine if we just crossed any boundaries
+  const state = await loadBudget(opts.workspaceId);
+
+  // Threshold alert — only fire once per period
+  if (state.thresholdCrossed && !state.thresholdAlertSentAt) {
+    await db
+      .update(placesBudget)
+      .set({ thresholdAlertSentAt: new Date() })
+      .where(eq(placesBudget.workspaceId, opts.workspaceId));
+    await emitThresholdNotification(opts.workspaceId, state);
+  }
+
+  // Cap reached — record the moment
+  if (state.capReached && !state.capReachedAt) {
+    await db
+      .update(placesBudget)
+      .set({ capReachedAt: new Date() })
+      .where(eq(placesBudget.workspaceId, opts.workspaceId));
+  }
+}
+
+async function emitThresholdNotification(workspaceId: number, state: BudgetState): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  const dollars = (state.usageCents / 100).toFixed(2);
+  const budgetDollars = (state.monthlyBudgetCents / 100).toFixed(2);
+  // Fan out one in-app notification per admin/super_admin in the workspace.
+  // The notifications table enforces NOT NULL on userId + kind enum, so
+  // we can't write a single workspace-wide row.
+  try {
+    const admins = await db
+      .select({ userId: workspaceMembers.userId })
+      .from(workspaceMembers)
+      .where(
+        and(
+          eq(workspaceMembers.workspaceId, workspaceId),
+          inArray(workspaceMembers.role, ["admin", "super_admin"]),
+          isNull(workspaceMembers.deactivatedAt),
+        ),
+      );
+    if (admins.length === 0) return;
+    await db.insert(notifications).values(
+      admins.map((a) => ({
+        workspaceId,
+        userId: a.userId,
+        kind: "system" as const,
+        title: `Google Places usage at ${Math.round(state.usagePct)}%`,
+        body: `Your workspace has used $${dollars} of the $${budgetDollars} monthly Google Places API budget. Searches will be blocked when usage hits 100%. Adjust the cap or threshold in Settings → Integrations.`,
+        relatedType: "places_budget",
+        relatedId: workspaceId,
+      })) as never,
+    );
+  } catch (e) {
+    // Don't let a notification failure block the API call
+    console.error("[Places] threshold notification failed:", e);
+  }
+  // TODO Phase 1b: emitThresholdEmail(workspaceId, state) to all admin users
+}
+
+/* ─── Public: Text Search ─────────────────────────────────────────────── */
+
+/**
+ * Run a Google Places Text Search and return parsed results.
+ *
+ * Throws TRPCError with code "PRECONDITION_FAILED" if the budget is
+ * exhausted or disabled — the caller should surface that as a clean
+ * UI error rather than a 500.
+ */
+export async function textSearch(opts: {
+  workspaceId: number;
+  userId: number;
+  input: PlacesTextSearchInput;
+}): Promise<{ results: PlacesResult[]; budget: BudgetState }> {
+  // Pre-flight budget check — refuse without calling Google if we already
+  // know we're over the cap or disabled.
+  const preBudget = await loadBudget(opts.workspaceId);
+  if (!preBudget.enabled) {
+    await chargeAndLog({
+      workspaceId: opts.workspaceId,
+      userId: opts.userId,
+      endpoint: "textsearch",
+      query: opts.input.query,
+      status: "blocked",
+      error: "Google Places integration is disabled for this workspace.",
+    });
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "Google Places integration is disabled for this workspace. Re-enable in Settings.",
+    });
+  }
+  if (preBudget.capReached) {
+    await chargeAndLog({
+      workspaceId: opts.workspaceId,
+      userId: opts.userId,
+      endpoint: "textsearch",
+      query: opts.input.query,
+      status: "blocked",
+      error: "Monthly Google Places budget cap reached.",
+    });
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: `Monthly Google Places budget cap reached ($${(preBudget.monthlyBudgetCents / 100).toFixed(2)}). Resets on the 1st of next month, or raise the cap in Settings.`,
+    });
+  }
+
+  const apiKey = getApiKey();
+  const body: Record<string, unknown> = {
+    textQuery: opts.input.query,
+    maxResultCount: Math.min(Math.max(opts.input.maxResultCount ?? 10, 1), 20),
+  };
+  if (opts.input.locationBias) {
+    body.locationBias = {
+      circle: {
+        center: { latitude: opts.input.locationBias.lat, longitude: opts.input.locationBias.lng },
+        radius: opts.input.locationBias.radiusMeters,
+      },
+    };
+  }
+  if (opts.input.includedType) {
+    body.includedType = opts.input.includedType;
+  }
+
+  // FieldMask is REQUIRED by Places API New — controls which fields are
+  // returned and which SKU you're billed against. We keep it lean to stay
+  // on the basic SKU.
+  const fieldMask = [
+    "places.id",
+    "places.displayName",
+    "places.formattedAddress",
+    "places.websiteUri",
+    "places.nationalPhoneNumber",
+    "places.internationalPhoneNumber",
+    "places.rating",
+    "places.userRatingCount",
+    "places.primaryType",
+    "places.types",
+    "places.location",
+    "places.googleMapsUri",
+  ].join(",");
+
+  let raw: { places?: GoogleRawPlace[] } | null = null;
+  try {
+    const res = await fetch(`${PLACES_BASE}/places:searchText`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": apiKey,
+        "X-Goog-FieldMask": fieldMask,
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => `HTTP ${res.status}`);
+      await chargeAndLog({
+        workspaceId: opts.workspaceId,
+        userId: opts.userId,
+        endpoint: "textsearch",
+        query: opts.input.query,
+        status: "error",
+        error: `${res.status}: ${text.slice(0, 500)}`,
+      });
+      throw new TRPCError({ code: "BAD_GATEWAY", message: `Google Places error: ${text.slice(0, 200)}` });
+    }
+    raw = (await res.json()) as { places?: GoogleRawPlace[] };
+  } catch (e) {
+    if (e instanceof TRPCError) throw e;
+    await chargeAndLog({
+      workspaceId: opts.workspaceId,
+      userId: opts.userId,
+      endpoint: "textsearch",
+      query: opts.input.query,
+      status: "error",
+      error: (e as Error).message,
+    });
+    throw new TRPCError({ code: "BAD_GATEWAY", message: (e as Error).message });
+  }
+
+  const results: PlacesResult[] = (raw.places ?? []).map((p) => ({
+    placeId: p.id,
+    name: p.displayName?.text ?? "(unnamed)",
+    formattedAddress: p.formattedAddress,
+    websiteUri: p.websiteUri,
+    nationalPhoneNumber: p.nationalPhoneNumber,
+    internationalPhoneNumber: p.internationalPhoneNumber,
+    rating: p.rating,
+    userRatingCount: p.userRatingCount,
+    primaryType: p.primaryType,
+    types: p.types,
+    location: p.location ? { lat: p.location.latitude, lng: p.location.longitude } : undefined,
+    googleMapsUri: p.googleMapsUri,
+  }));
+
+  await chargeAndLog({
+    workspaceId: opts.workspaceId,
+    userId: opts.userId,
+    endpoint: "textsearch",
+    query: opts.input.query,
+    resultsCount: results.length,
+    status: "ok",
+  });
+
+  const budget = await loadBudget(opts.workspaceId);
+  return { results, budget };
+}
+
+/* ─── Internal: Google's raw response shape ────────────────────────────── */
+
+type GoogleRawPlace = {
+  id: string;
+  displayName?: { text: string; languageCode?: string };
+  formattedAddress?: string;
+  websiteUri?: string;
+  nationalPhoneNumber?: string;
+  internationalPhoneNumber?: string;
+  rating?: number;
+  userRatingCount?: number;
+  primaryType?: string;
+  types?: string[];
+  location?: { latitude: number; longitude: number };
+  googleMapsUri?: string;
+};

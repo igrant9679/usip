@@ -142,6 +142,9 @@ const NAV: NavGroup[] = [
       { kind: "connector" },
       { href: "/pipeline", label: "Pipeline", icon: KanbanSquare },
       { kind: "subhead", label: "Tools" },
+      // Phase 1 of the multi-source prospect finder (Google Places now,
+      // arbitrary-URL scrape + LinkedIn coming in phases 2-3).
+      { href: "/find-prospects", label: "Find Prospects", icon: Search },
       { href: "/import", label: "Import Contacts", icon: Upload },
       { href: "/data-health", label: "Data Health", icon: BarChart3 },
       // Moved from Operate — Lead Routing manages how new leads are

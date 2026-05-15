@@ -45,6 +45,7 @@ import { aiCredentialsRouter } from "./routers/aiCredentials";
 import { profileRouter } from "./routers/profile";
 import { prospectsRouter } from "./routers/prospects";
 import { prospectImportsRouter } from "./routers/prospectImports";
+import { placesSearchRouter } from "./routers/placesSearch";
 
 export const appRouter = router({
   system: systemRouter,
@@ -131,6 +132,7 @@ export const appRouter = router({
   profile: profileRouter,
   prospects: prospectsRouter,
   prospectImports: prospectImportsRouter,
+  placesSearch: placesSearchRouter,
 });
 
 export type AppRouter = typeof appRouter;
