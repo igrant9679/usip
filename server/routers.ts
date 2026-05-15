@@ -46,6 +46,7 @@ import { profileRouter } from "./routers/profile";
 import { prospectsRouter } from "./routers/prospects";
 import { prospectImportsRouter } from "./routers/prospectImports";
 import { placesSearchRouter } from "./routers/placesSearch";
+import { urlScraperRouter } from "./routers/urlScraper";
 
 export const appRouter = router({
   system: systemRouter,
@@ -133,6 +134,7 @@ export const appRouter = router({
   prospects: prospectsRouter,
   prospectImports: prospectImportsRouter,
   placesSearch: placesSearchRouter,
+  urlScraper: urlScraperRouter,
 });
 
 export type AppRouter = typeof appRouter;

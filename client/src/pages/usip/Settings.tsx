@@ -830,9 +830,153 @@ function IntegrationsTab() {
       <AIProvidersSection isAdmin={isAdmin} />
       {/* Email Verification Settings */}
       <EmailVerificationSettingsSection isAdmin={isAdmin} />
+      {/* Places API budget */}
+      <PlacesBudgetSection isAdmin={isAdmin} />
       {/* Slack / Teams / System Sender */}
       <WorkspaceMessagingSection isAdmin={isAdmin} />
     </>
+  );
+}
+
+/* ─── Google Places Budget ────────────────────────────────────────────── */
+function PlacesBudgetSection({ isAdmin }: { isAdmin: boolean }) {
+  const utils = trpc.useUtils();
+  const { data } = trpc.placesSearch.getBudget.useQuery();
+  const save = trpc.placesSearch.saveBudget.useMutation({
+    onSuccess: () => {
+      utils.placesSearch.getBudget.invalidate();
+      toast.success("Places budget updated");
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  // Local form state seeded from server, expressed in dollars for display
+  const [budgetDollars, setBudgetDollars] = useState<string>("");
+  const [thresholdPct, setThresholdPct] = useState<string>("");
+  const [enabled, setEnabled] = useState<boolean>(true);
+
+  // Sync local state with server state whenever the query resolves
+  useEffect(() => {
+    if (!data) return;
+    setBudgetDollars((data.monthlyBudgetCents / 100).toFixed(2));
+    setThresholdPct(String(data.thresholdPct));
+    setEnabled(data.enabled);
+  }, [data?.monthlyBudgetCents, data?.thresholdPct, data?.enabled]);
+
+  if (!data) {
+    return (
+      <Section title="Google Places Budget" description="Loading…">
+        <div className="h-12" />
+      </Section>
+    );
+  }
+
+  const usedDollars = (data.usageCents / 100).toFixed(2);
+  const pct = Math.min(100, Math.round(data.usagePct));
+  const barColor = pct >= 100 ? "bg-red-500" : pct >= data.thresholdPct ? "bg-amber-500" : "bg-emerald-500";
+
+  const handleSave = () => {
+    const cents = Math.round((Number(budgetDollars) || 0) * 100);
+    const threshold = Math.max(0, Math.min(100, Number(thresholdPct) || 80));
+    save.mutate({
+      monthlyBudgetCents: cents,
+      thresholdPct: threshold,
+      enabled,
+    });
+  };
+
+  return (
+    <Section
+      title="Google Places Budget"
+      description="Caps monthly Google Places API spend for the Find Prospects search. New searches are blocked when usage reaches 100%; admins are alerted in-app and by email at the threshold."
+    >
+      <div className="space-y-4">
+        {/* Live meter */}
+        <div className="rounded-md border bg-card p-3">
+          <div className="flex items-center justify-between text-sm mb-2">
+            <span className="text-muted-foreground">This month</span>
+            <span className="font-medium tabular-nums">
+              ${usedDollars} of ${(data.monthlyBudgetCents / 100).toFixed(2)}{" "}
+              <span className="text-xs text-muted-foreground">({pct}%)</span>
+            </span>
+          </div>
+          <div className="w-full h-2 bg-muted rounded-full overflow-hidden">
+            <div className={`h-full ${barColor} transition-all`} style={{ width: `${pct}%` }} />
+          </div>
+          <div className="flex items-center justify-between text-xs text-muted-foreground mt-2">
+            <span>{data.callsCount} calls this period</span>
+            <span>
+              Period started {new Date(data.periodStart).toLocaleDateString()} · resets monthly (UTC)
+            </span>
+          </div>
+          {data.capReached && (
+            <div className="mt-2 text-xs text-red-600">
+              Cap reached on {data.capReachedAt ? new Date(data.capReachedAt).toLocaleString() : "—"} —
+              new searches are blocked.
+            </div>
+          )}
+          {data.thresholdAlertSentAt && !data.capReached && (
+            <div className="mt-2 text-xs text-amber-600">
+              Threshold alert sent {new Date(data.thresholdAlertSentAt).toLocaleString()}.
+            </div>
+          )}
+        </div>
+
+        {/* Controls (admin only) */}
+        <div className="grid grid-cols-1 md:grid-cols-[1fr_180px_140px_auto] gap-3 items-end">
+          <div className="space-y-1">
+            <Label htmlFor="places-cap" className="text-xs">Monthly cap (USD)</Label>
+            <Input
+              id="places-cap"
+              type="number"
+              min={0}
+              step="1"
+              value={budgetDollars}
+              onChange={(e) => setBudgetDollars(e.target.value)}
+              disabled={!isAdmin}
+              placeholder="200"
+            />
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor="places-thresh" className="text-xs">Alert at %</Label>
+            <Input
+              id="places-thresh"
+              type="number"
+              min={0}
+              max={100}
+              step="1"
+              value={thresholdPct}
+              onChange={(e) => setThresholdPct(e.target.value)}
+              disabled={!isAdmin}
+              placeholder="80"
+            />
+          </div>
+          <div className="flex items-center gap-2 self-center pt-5">
+            <Switch
+              id="places-enabled"
+              checked={enabled}
+              onCheckedChange={setEnabled}
+              disabled={!isAdmin}
+            />
+            <Label htmlFor="places-enabled" className="text-xs">
+              {enabled ? "Enabled" : "Disabled"}
+            </Label>
+          </div>
+          <Button onClick={handleSave} disabled={!isAdmin || save.isPending}>
+            {save.isPending ? "Saving…" : "Save"}
+          </Button>
+        </div>
+        {!isAdmin && (
+          <p className="text-xs text-muted-foreground">
+            Only workspace admins can change the budget settings.
+          </p>
+        )}
+        <p className="text-xs text-muted-foreground">
+          Google charges ~1.7¢ per Text Search. Default $200 cap matches Google&apos;s monthly
+          free credit (~11,700 searches). Disabling blocks all Places API calls in this workspace.
+        </p>
+      </div>
+    </Section>
   );
 }
 

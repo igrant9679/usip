@@ -43,8 +43,29 @@ import {
   Save,
   Star,
   AlertCircle,
+  Eye,
 } from "lucide-react";
 import { toast } from "sonner";
+
+type Confidence = "high" | "medium" | "low" | "none";
+type ExtractedField<T> = { value: T | null; confidence: Confidence; source: string };
+type ExtractedData = {
+  url: string;
+  pageTitle: string | null;
+  error?: string;
+  firstName: ExtractedField<string>;
+  lastName: ExtractedField<string>;
+  fullName: ExtractedField<string>;
+  jobTitle: ExtractedField<string>;
+  email: ExtractedField<string>;
+  phone: ExtractedField<string>;
+  bio: ExtractedField<string>;
+  companyName: ExtractedField<string>;
+  companyDomain: ExtractedField<string>;
+  allEmails: string[];
+  allPhones: string[];
+  socialUrls: string[];
+};
 
 type PlacesHit = {
   placeId: string;
@@ -80,10 +101,9 @@ export default function FindProspectsPage() {
               <MapPin className="size-3.5" />
               Google Places
             </TabsTrigger>
-            <TabsTrigger value="url" disabled className="gap-1.5">
+            <TabsTrigger value="url" className="gap-1.5">
               <Globe className="size-3.5" />
               URL Scraper
-              <Badge variant="outline" className="ml-1 text-[9px] py-0">soon</Badge>
             </TabsTrigger>
             <TabsTrigger value="linkedin" disabled className="gap-1.5">
               <Linkedin className="size-3.5" />
@@ -93,6 +113,9 @@ export default function FindProspectsPage() {
           </TabsList>
           <TabsContent value="places" className="mt-4">
             <PlacesTab />
+          </TabsContent>
+          <TabsContent value="url" className="mt-4">
+            <UrlScraperTab />
           </TabsContent>
         </Tabs>
       </div>
@@ -389,6 +412,358 @@ function PlacesTab() {
             Each search uses ~1.7¢ of your monthly Places budget.
           </p>
         </div>
+      )}
+    </div>
+  );
+}
+
+/* ─── URL scraper tab content ─────────────────────────────────────────── */
+function UrlScraperTab() {
+  const [url, setUrl] = useState("");
+  const [result, setResult] = useState<ExtractedData | null>(null);
+  // Editable form state — seeded from extraction, user can fix before saving
+  const [edit, setEdit] = useState<{
+    firstName: string;
+    lastName: string;
+    jobTitle: string;
+    email: string;
+    phone: string;
+    companyName: string;
+    companyDomain: string;
+    bio: string;
+    linkedinUrl: string;
+  }>({
+    firstName: "",
+    lastName: "",
+    jobTitle: "",
+    email: "",
+    phone: "",
+    companyName: "",
+    companyDomain: "",
+    bio: "",
+    linkedinUrl: "",
+  });
+
+  const scrape = trpc.urlScraper.scrapeOne.useMutation({
+    onSuccess: (data) => {
+      setResult(data);
+      // Seed the editable form from extraction
+      const li = data.socialUrls.find((u) => /linkedin\.com\/in\//i.test(u)) ?? "";
+      setEdit({
+        firstName: data.firstName.value ?? "",
+        lastName: data.lastName.value ?? "",
+        jobTitle: data.jobTitle.value ?? "",
+        email: data.email.value ?? "",
+        phone: data.phone.value ?? "",
+        companyName: data.companyName.value ?? "",
+        companyDomain: data.companyDomain.value ?? "",
+        bio: data.bio.value ?? "",
+        linkedinUrl: li,
+      });
+      if (data.error) {
+        toast.error(`Could not scrape: ${data.error}`);
+      } else {
+        toast.success("URL scraped — review the extracted data below");
+      }
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const save = trpc.urlScraper.saveAsProspect.useMutation({
+    onSuccess: (res) => {
+      if (res.ok) {
+        toast.success("Saved as Prospect");
+        setResult(null);
+        setUrl("");
+      } else {
+        toast.error(res.error ?? "Save failed");
+      }
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const submit = () => {
+    if (url.trim().length < 3) {
+      toast.error("Paste a URL to scrape (e.g. https://example.com/about)");
+      return;
+    }
+    scrape.mutate({ url: url.trim() });
+  };
+
+  const handleSave = () => {
+    if (!result) return;
+    save.mutate({
+      url: result.url,
+      firstName: edit.firstName || undefined,
+      lastName: edit.lastName || undefined,
+      jobTitle: edit.jobTitle || undefined,
+      email: edit.email || undefined,
+      phone: edit.phone || undefined,
+      companyName: edit.companyName || undefined,
+      companyDomain: edit.companyDomain || undefined,
+      bio: edit.bio || undefined,
+      linkedinUrl: edit.linkedinUrl || undefined,
+    });
+  };
+
+  return (
+    <div className="space-y-5">
+      {/* URL input */}
+      <div className="rounded-lg border bg-card p-4 space-y-3">
+        <div className="grid grid-cols-1 md:grid-cols-[1fr_auto] gap-3 items-end">
+          <div className="space-y-1">
+            <Label htmlFor="url-input" className="text-xs">URL</Label>
+            <Input
+              id="url-input"
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder="https://example.com/team/jane-smith"
+              onKeyDown={(e) => {
+                if (e.key === "Enter") submit();
+              }}
+            />
+          </div>
+          <Button onClick={submit} disabled={scrape.isPending}>
+            {scrape.isPending ? (
+              <Loader2 className="size-4 mr-2 animate-spin" />
+            ) : (
+              <Eye className="size-4 mr-2" />
+            )}
+            Scrape
+          </Button>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Paste any URL — a blog post, company About page, LinkedIn-style profile, or
+          conference speaker page. Velocity will extract names, contact info, and social
+          URLs using structured data (JSON-LD, OpenGraph) plus heuristic fallbacks.
+        </p>
+      </div>
+
+      {/* Result */}
+      {result && (
+        <div className="rounded-lg border bg-card">
+          <div className="border-b px-4 py-3 flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-sm font-semibold truncate">{result.pageTitle ?? "(no title)"}</div>
+              <a
+                href={result.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs text-blue-600 hover:underline truncate inline-flex items-center gap-1"
+              >
+                <ExternalLink className="size-3" />
+                {result.url}
+              </a>
+              {result.error && (
+                <div className="text-xs text-red-600 mt-1 flex items-center gap-1">
+                  <AlertCircle className="size-3" /> {result.error}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {!result.error && (
+            <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-x-4 gap-y-3">
+              <EditableField
+                label="First name"
+                value={edit.firstName}
+                onChange={(v) => setEdit((e) => ({ ...e, firstName: v }))}
+                conf={result.firstName.confidence}
+                source={result.firstName.source}
+              />
+              <EditableField
+                label="Last name"
+                value={edit.lastName}
+                onChange={(v) => setEdit((e) => ({ ...e, lastName: v }))}
+                conf={result.lastName.confidence}
+                source={result.lastName.source}
+              />
+              <EditableField
+                label="Job title"
+                value={edit.jobTitle}
+                onChange={(v) => setEdit((e) => ({ ...e, jobTitle: v }))}
+                conf={result.jobTitle.confidence}
+                source={result.jobTitle.source}
+              />
+              <EditableField
+                label="Email"
+                value={edit.email}
+                onChange={(v) => setEdit((e) => ({ ...e, email: v }))}
+                conf={result.email.confidence}
+                source={result.email.source}
+              />
+              <EditableField
+                label="Phone"
+                value={edit.phone}
+                onChange={(v) => setEdit((e) => ({ ...e, phone: v }))}
+                conf={result.phone.confidence}
+                source={result.phone.source}
+              />
+              <EditableField
+                label="LinkedIn URL"
+                value={edit.linkedinUrl}
+                onChange={(v) => setEdit((e) => ({ ...e, linkedinUrl: v }))}
+                conf={edit.linkedinUrl ? "medium" : "none"}
+                source="extracted from page links"
+              />
+              <EditableField
+                label="Company name"
+                value={edit.companyName}
+                onChange={(v) => setEdit((e) => ({ ...e, companyName: v }))}
+                conf={result.companyName.confidence}
+                source={result.companyName.source}
+              />
+              <EditableField
+                label="Company domain"
+                value={edit.companyDomain}
+                onChange={(v) => setEdit((e) => ({ ...e, companyDomain: v }))}
+                conf={result.companyDomain.confidence}
+                source={result.companyDomain.source}
+              />
+              <div className="md:col-span-2">
+                <EditableField
+                  label="Bio"
+                  value={edit.bio}
+                  onChange={(v) => setEdit((e) => ({ ...e, bio: v }))}
+                  conf={result.bio.confidence}
+                  source={result.bio.source}
+                  textarea
+                />
+              </div>
+
+              {/* Aggregate sets (info-only, not editable) */}
+              {(result.allEmails.length > 1 ||
+                result.allPhones.length > 1 ||
+                result.socialUrls.length > 0) && (
+                <div className="md:col-span-2 border-t pt-3 mt-1 space-y-1.5">
+                  <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                    Other things found on the page
+                  </div>
+                  {result.allEmails.length > 1 && (
+                    <div className="text-xs flex flex-wrap gap-1 items-center">
+                      <span className="text-muted-foreground">Other emails:</span>
+                      {result.allEmails.slice(0, 8).map((e) => (
+                        <code
+                          key={e}
+                          className="px-1.5 py-0.5 rounded bg-muted text-[10px] cursor-pointer hover:bg-muted-foreground/10"
+                          onClick={() => setEdit((s) => ({ ...s, email: e }))}
+                          title="Click to use this address"
+                        >
+                          {e}
+                        </code>
+                      ))}
+                    </div>
+                  )}
+                  {result.socialUrls.length > 0 && (
+                    <div className="text-xs flex flex-wrap gap-1 items-center">
+                      <span className="text-muted-foreground">Socials:</span>
+                      {result.socialUrls.slice(0, 8).map((u) => (
+                        <a
+                          key={u}
+                          href={u}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-blue-600 hover:underline text-[10px] truncate max-w-[200px]"
+                        >
+                          {u.replace(/^https?:\/\//, "")}
+                        </a>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="border-t bg-muted/30 px-4 py-3 flex justify-end gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setResult(null);
+                setUrl("");
+              }}
+              disabled={save.isPending}
+            >
+              Discard
+            </Button>
+            <Button
+              size="sm"
+              onClick={handleSave}
+              disabled={save.isPending || !!result.error}
+            >
+              {save.isPending ? (
+                <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+              ) : (
+                <UserPlus className="size-3.5 mr-1.5" />
+              )}
+              Save as Prospect
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {!result && !scrape.isPending && (
+        <div className="rounded-lg border border-dashed bg-card/40 p-8 text-center text-muted-foreground">
+          <Globe className="size-10 mx-auto mb-3 opacity-30" />
+          <p className="text-sm">Paste any URL above to extract person + company data.</p>
+          <p className="text-xs mt-1">
+            Works best on pages with structured data (Schema.org JSON-LD, OpenGraph).
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ─── Editable field with confidence pill ─────────────────────────────── */
+function EditableField({
+  label,
+  value,
+  onChange,
+  conf,
+  source,
+  textarea = false,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  conf: Confidence;
+  source: string;
+  textarea?: boolean;
+}) {
+  const dotColor =
+    conf === "high"
+      ? "bg-emerald-500"
+      : conf === "medium"
+        ? "bg-amber-500"
+        : conf === "low"
+          ? "bg-slate-400"
+          : "bg-transparent border border-muted-foreground/30";
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center gap-2">
+        <Label className="text-xs">{label}</Label>
+        {conf !== "none" && (
+          <span
+            className={`size-1.5 rounded-full ${dotColor}`}
+            title={`${conf} confidence — ${source}`}
+          />
+        )}
+      </div>
+      {textarea ? (
+        <textarea
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          rows={2}
+          className="w-full text-sm rounded-md border bg-background px-2 py-1.5 resize-y"
+        />
+      ) : (
+        <Input
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className="text-sm h-8"
+        />
       )}
     </div>
   );

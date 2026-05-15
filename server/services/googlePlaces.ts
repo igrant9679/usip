@@ -27,7 +27,15 @@
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { getDb } from "../db";
-import { placesBudget, placesSearchLog, notifications, workspaceMembers } from "../../drizzle/schema";
+import {
+  placesBudget,
+  placesSearchLog,
+  notifications,
+  workspaceMembers,
+  users,
+  workspaces,
+} from "../../drizzle/schema";
+import { sendWorkspaceEmail } from "../emailDelivery";
 
 const PLACES_BASE = "https://places.googleapis.com/v1";
 
@@ -287,7 +295,81 @@ async function emitThresholdNotification(workspaceId: number, state: BudgetState
     // Don't let a notification failure block the API call
     console.error("[Places] threshold notification failed:", e);
   }
-  // TODO Phase 1b: emitThresholdEmail(workspaceId, state) to all admin users
+  // Phase 1b — also email all admins.
+  await emitThresholdEmail(workspaceId, state).catch((e) =>
+    console.error("[Places] threshold email failed:", e),
+  );
+}
+
+/**
+ * Send a single email to all admin/super_admin users in the workspace
+ * announcing that the Places budget threshold has been crossed. Uses the
+ * workspace's SMTP config (Settings → Email Delivery). Failure is logged
+ * but not fatal — the in-app notification path is the primary alert.
+ */
+async function emitThresholdEmail(workspaceId: number, state: BudgetState): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  const dollars = (state.usageCents / 100).toFixed(2);
+  const budgetDollars = (state.monthlyBudgetCents / 100).toFixed(2);
+  const pct = Math.round(state.usagePct);
+
+  // Pull admin emails + workspace name for the message
+  const admins = await db
+    .select({ email: users.email, name: users.name })
+    .from(workspaceMembers)
+    .innerJoin(users, eq(workspaceMembers.userId, users.id))
+    .where(
+      and(
+        eq(workspaceMembers.workspaceId, workspaceId),
+        inArray(workspaceMembers.role, ["admin", "super_admin"]),
+        isNull(workspaceMembers.deactivatedAt),
+      ),
+    );
+  const recipients = admins.map((a) => a.email).filter((e): e is string => !!e);
+  if (recipients.length === 0) return;
+
+  const [ws] = await db
+    .select({ name: workspaces.name })
+    .from(workspaces)
+    .where(eq(workspaces.id, workspaceId))
+    .limit(1);
+  const wsName = ws?.name ?? "your workspace";
+
+  const settingsUrl = `${(process.env.MANUS_APP_URL ?? "").replace(/\/+$/, "")}/settings`;
+
+  const html = `
+<div style="font-family:sans-serif;max-width:560px;margin:0 auto;padding:24px;color:#111827">
+  <div style="margin-bottom:16px;color:#B45309;font-weight:600">Velocity — Budget Alert</div>
+  <h2 style="margin:0 0 8px;font-size:18px">Google Places API usage at ${pct}%</h2>
+  <p style="margin:0 0 12px;color:#374151">
+    The <strong>${wsName}</strong> workspace has used <strong>$${dollars}</strong> of the
+    <strong>$${budgetDollars}</strong> monthly Google Places budget so far this period.
+  </p>
+  <p style="margin:0 0 12px;color:#374151">
+    Once usage reaches 100%, new Places searches will be blocked until the budget resets
+    on the 1st of next month (UTC) or you raise the cap.
+  </p>
+  ${settingsUrl ? `<p style="margin:24px 0"><a href="${settingsUrl}" style="display:inline-block;background:#1E55D0;color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none;font-weight:600">Adjust budget in Settings</a></p>` : ""}
+  <hr style="border:none;border-top:1px solid #e5e7eb;margin:16px 0">
+  <p style="color:#9ca3af;font-size:11px">
+    You're receiving this because you have admin or super-admin role on the workspace.
+    To stop these alerts, lower the threshold % (or disable Places integration) in
+    Settings → Integrations.
+  </p>
+</div>`.trim();
+
+  const text =
+    `Google Places API usage at ${pct}% — ` +
+    `$${dollars} of $${budgetDollars} monthly budget used. ` +
+    `New searches will be blocked at 100%. Adjust in Settings → Integrations.`;
+
+  await sendWorkspaceEmail(workspaceId, {
+    to: recipients,
+    subject: `[Velocity] Places API usage at ${pct}% in ${wsName}`,
+    html,
+    text,
+  });
 }
 
 /* ─── Public: Text Search ─────────────────────────────────────────────── */
