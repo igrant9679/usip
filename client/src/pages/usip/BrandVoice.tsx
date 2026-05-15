@@ -2,6 +2,7 @@
  * Brand Voice — configure tone, style, and persona for AI-generated emails
  */
 import { useState, useEffect } from "react";
+import { Link } from "wouter";
 import { Shell, PageHeader } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
@@ -162,9 +163,16 @@ export default function BrandVoicePage() {
       <PageHeader
         title="Brand Voice" pageKey="brand-voice"
         description="Define your brand voice guidelines so every piece of AI-generated content stays on-message. Set tone, vocabulary preferences, and words to avoid across all outreach and campaigns."
-      
+
         icon={<Mic2 className="size-5" />}
       >
+        <Link
+          href="/prompt-templates"
+          className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline self-center"
+          title="Edit the underlying AI prompt templates used by each feature"
+        >
+          Prompt Templates →
+        </Link>
         <Button size="sm" onClick={handleSave} disabled={!isDirty || saveMutation.isPending}>
           <Save size={14} className="mr-1.5" /> {saveMutation.isPending ? "Saving…" : "Save Changes"}
         </Button>

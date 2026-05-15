@@ -15,7 +15,6 @@ import {
   ClipboardList,
   Database,
   FileText,
-  FlaskConical,
   Heart,
   Inbox,
   KanbanSquare,
@@ -142,13 +141,14 @@ const NAV: NavGroup[] = [
     activeColor: "#7C3AED",
     activeBg: "rgba(124,58,237,0.10)",
     darkActiveBg: "rgba(196,181,253,0.12)",
-    // Trimmed from 16 → 9 items. Removed (still routable, with
-    // "Open" links added on adjacent pages so they remain discoverable):
+    // Trimmed 16 → 8. Round 3 removed /research-pipeline (now opens
+    // from /ai-pipeline) and renamed "AI Draft Queue" → "AI Pipeline"
+    // since the two stages are now under one entry. Other removals:
     //   - /sender-pools         → opens from /sending-accounts
     //   - /snippets             → opens from /email-builder
     //   - /segment-rules        → opens from /segments
-    //   - /email-drafts         → opens from /sequences and /unified-inbox
-    //   - /email-analytics      → opens from /sequences and /dashboards
+    //   - /email-drafts         → opens from /sequences + /unified-inbox
+    //   - /email-analytics      → opens from /sequences + /dashboards
     //   - /connected-accounts   → opens from /sending-accounts
     //   - /email-suppressions   → opens from /sending-accounts
     items: [
@@ -156,8 +156,7 @@ const NAV: NavGroup[] = [
       { href: "/sequences", label: "Sequences", icon: Activity },
       { href: "/sending-accounts", label: "Sending Accounts", icon: Mail },
       { href: "/email-builder", label: "Email Builder", icon: LayoutTemplate },
-      { href: "/research-pipeline", label: "AI Research Pipeline", icon: Sparkles },
-      { href: "/ai-pipeline", label: "AI Draft Queue", icon: Sparkles },
+      { href: "/ai-pipeline", label: "AI Pipeline", icon: Sparkles },
       { href: "/unified-inbox", label: "Unified Inbox", icon: MessageSquare },
       { href: "/social", label: "Social", icon: Share2 },
       { href: "/campaigns", label: "Campaigns", icon: Megaphone },
@@ -183,9 +182,11 @@ const NAV: NavGroup[] = [
     activeColor: "#0F766E",
     activeBg: "rgba(15,118,110,0.10)",
     darkActiveBg: "rgba(94,234,212,0.12)",
-    // Removed:
-    //   - /lead-routing (moved to Acquire → Tools)
-    //   - /quota (opens from /dashboards — quotas are a reporting concern)
+    // Trimmed 10 → 6. Removed:
+    //   - /lead-routing  → moved to Acquire → Tools
+    //   - /quota         → opens from /dashboards
+    //   - /quotes        → opens from /proposals (similar customer-facing doc)
+    //   - /territories   → opens from /lead-routing (routing config lives there)
     items: [
       { href: "/tasks", label: "Tasks", icon: ListChecks },
       { href: "/mindmaps", label: "Mindmaps", icon: GitFork },
@@ -193,8 +194,6 @@ const NAV: NavGroup[] = [
       { href: "/dashboards", label: "Dashboards", icon: PieChart },
       { href: "/products", label: "Products", icon: Package },
       { href: "/proposals", label: "Proposals", icon: ClipboardList },
-      { href: "/quotes", label: "Quotes", icon: FileText },
-      { href: "/territories", label: "Territories", icon: Network },
     ],
   },
   {
@@ -204,17 +203,16 @@ const NAV: NavGroup[] = [
     activeColor: "#475569",
     activeBg: "rgba(71,85,105,0.10)",
     darkActiveBg: "rgba(203,213,225,0.12)",
-    // Trimmed from 10 → 6. Removed (still routable, discoverable via
-    // links added to adjacent admin pages):
-    //   - /my-linkedin   → per-user, opens from /sending-accounts
-    //   - /tour-builder  → super-admin; direct URL only
-    //   - /audit         → opens from /settings header
-    //   - /scim          → opens from /team header (it's identity provisioning)
+    // Trimmed 10 → 5. Removed (links added on adjacent pages):
+    //   - /my-linkedin      → opens from /sending-accounts
+    //   - /tour-builder     → opens from /settings (super-admin tool)
+    //   - /audit            → opens from /settings
+    //   - /scim             → opens from /team (identity provisioning)
+    //   - /prompt-templates → opens from /brand-voice (both customize AI)
     items: [
       { href: "/team", label: "Team", icon: Users },
       { href: "/lead-scoring", label: "Lead Scoring", icon: Target },
       { href: "/custom-fields", label: "Custom Fields", icon: Database },
-      { href: "/prompt-templates", label: "Prompt Templates", icon: FlaskConical },
       { href: "/brand-voice", label: "Brand Voice", icon: Mic2 },
       { href: "/settings", label: "Settings", icon: Settings },
     ],

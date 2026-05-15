@@ -1,6 +1,6 @@
 import { Shell, PageHeader } from "@/components/usip/Shell";
 import { useState, useMemo, useEffect } from "react";
-import { useLocation, useSearch } from "wouter";
+import { useLocation, useSearch, Link } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { Button } from "@/components/ui/button";
@@ -570,6 +570,13 @@ export default function Proposals() {
       <PageHeader title="Proposals" description="Create, send, and track client proposals with full version history, e-signature support, and engagement analytics. Know exactly when a prospect opens, reads, and forwards your proposal." pageKey="proposals"
         icon={<ClipboardList className="size-5" />}
       >
+        <Link
+          href="/quotes"
+          className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline self-center"
+          title="Pricing-only quotes — shorter, signature-ready documents"
+        >
+          Quotes →
+        </Link>
         <div className="flex items-center gap-2">
           <Button
             variant="outline"
