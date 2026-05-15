@@ -14,11 +14,64 @@
  *      lookup so the UI can show usage)
  */
 
-import { and, eq, gte, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { getDb } from "../db";
-import { unipileAccounts, linkedinLookupLog, workspaceMembers, users } from "../../drizzle/schema";
+import {
+  unipileAccounts,
+  linkedinLookupLog,
+  linkedinDailyUsage,
+  workspaceMembers,
+  users,
+} from "../../drizzle/schema";
 import { getLinkedInProfile, type UnipileUserProfile } from "../lib/unipile";
+
+/** UTC calendar date as "YYYY-MM-DD" — the daily-usage partition key. */
+function utcDateKey(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+/**
+ * Atomically reserve one lookup slot for an account against today's cap.
+ * Concurrency-safe: the conditional UPDATE's affectedRows is the gate, so
+ * N parallel lookups can't all pass a COUNT-then-check the way the old
+ * code could (which risked blowing LinkedIn's per-account throttle and
+ * getting the account flagged/banned).
+ *
+ * Returns true if a slot was reserved, false if the account is at cap.
+ */
+async function reserveSlot(unipileAccountId: string, cap: number): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const day = utcDateKey();
+  // Ensure the (account, day) counter row exists. No-op self-update on
+  // conflict so concurrent first-requests don't throw a dup-key error.
+  await db
+    .insert(linkedinDailyUsage)
+    .values({ unipileAccountId, usageDate: day, count: 0 } as never)
+    .onDuplicateKeyUpdate({ set: { unipileAccountId } });
+  // Atomic conditional increment — only succeeds while under cap.
+  const [res] = await db.execute(
+    sql`UPDATE \`linkedin_daily_usage\`
+        SET \`count\` = \`count\` + 1
+        WHERE \`unipile_account_id\` = ${unipileAccountId}
+          AND \`usage_date\` = ${day}
+          AND \`count\` < ${cap}`,
+  );
+  return ((res as { affectedRows?: number })?.affectedRows ?? 0) > 0;
+}
+
+/** Reverse a reservation when the downstream Unipile call fails. */
+async function refundSlot(unipileAccountId: string): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.execute(
+    sql`UPDATE \`linkedin_daily_usage\`
+        SET \`count\` = GREATEST(0, \`count\` - 1)
+        WHERE \`unipile_account_id\` = ${unipileAccountId}
+          AND \`usage_date\` = ${utcDateKey()}`,
+  );
+}
 
 /**
  * Conservative daily cap per bridged LinkedIn account. LinkedIn's actual
@@ -75,25 +128,34 @@ export function extractLinkedInIdentifier(input: string): string | null {
 
 /* ─── Daily usage ──────────────────────────────────────────────────────── */
 
-function utcMidnight(): Date {
-  const d = new Date();
-  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
-}
-
-async function usedTodayFor(unipileAccountId: string): Promise<number> {
+/**
+ * Today's usage for a SET of accounts in ONE query (fixes the prior N+1
+ * where listUsableAccounts ran a COUNT per account). Reads the
+ * linkedin_daily_usage counter — authoritative for the cap — not the
+ * append-only audit log. Missing rows = 0 used.
+ */
+async function usageForAccounts(
+  unipileAccountIds: string[],
+): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  if (unipileAccountIds.length === 0) return out;
   const db = await getDb();
-  if (!db) return 0;
-  const [row] = await db
-    .select({ n: sql<number>`count(*)` })
-    .from(linkedinLookupLog)
+  if (!db) return out;
+  const day = utcDateKey();
+  const rows = await db
+    .select({
+      id: linkedinDailyUsage.unipileAccountId,
+      count: linkedinDailyUsage.count,
+    })
+    .from(linkedinDailyUsage)
     .where(
       and(
-        eq(linkedinLookupLog.unipileAccountId, unipileAccountId),
-        eq(linkedinLookupLog.status, "ok"),
-        gte(linkedinLookupLog.createdAt, utcMidnight()),
+        inArray(linkedinDailyUsage.unipileAccountId, unipileAccountIds),
+        eq(linkedinDailyUsage.usageDate, day),
       ),
     );
-  return Number(row?.n ?? 0);
+  for (const r of rows) out.set(r.id, r.count);
+  return out;
 }
 
 /* ─── Account pool ─────────────────────────────────────────────────────── */
@@ -132,10 +194,11 @@ export async function listUsableAccounts(opts: {
       ),
     );
 
-  const out: BridgedAccount[] = [];
-  for (const r of rows) {
-    const used = await usedTodayFor(r.unipileAccountId);
-    out.push({
+  // Single batched usage read instead of one COUNT per account.
+  const usage = await usageForAccounts(rows.map((r) => r.unipileAccountId));
+  const out: BridgedAccount[] = rows.map((r) => {
+    const used = usage.get(r.unipileAccountId) ?? 0;
+    return {
       unipileAccountId: r.unipileAccountId,
       ownerUserId: r.ownerUserId,
       ownerName: r.ownerName ?? null,
@@ -144,8 +207,8 @@ export async function listUsableAccounts(opts: {
       status: r.status,
       usedToday: used,
       remainingToday: Math.max(0, LINKEDIN_DAILY_CAP - used),
-    });
-  }
+    };
+  });
   // Most headroom first — both for the UI list and the auto-picker.
   out.sort((a, b) => b.remainingToday - a.remainingToday);
   return out;
@@ -221,8 +284,12 @@ export async function lookupProfile(opts: {
     chosen = pool.find((a) => a.remainingToday > 0) ?? pool[0];
   }
 
-  // Rate-limit gate
-  if (chosen.remainingToday <= 0) {
+  // Rate-limit gate — ATOMIC reserve. Concurrent lookups on the same
+  // account can't all slip past (the old `remainingToday <= 0` read-check
+  // had a TOCTOU window that risked blowing LinkedIn's per-account
+  // throttle and getting the account flagged).
+  const reserved = await reserveSlot(chosen.unipileAccountId, LINKEDIN_DAILY_CAP);
+  if (!reserved) {
     await db.insert(linkedinLookupLog).values({
       workspaceId: opts.workspaceId,
       requestedByUserId: opts.userId,
@@ -244,7 +311,8 @@ export async function lookupProfile(opts: {
     };
   }
 
-  // Do the lookup
+  // Slot reserved. Do the lookup; refund the slot if the Unipile call
+  // fails so a failed request doesn't permanently consume daily capacity.
   try {
     const profile = await getLinkedInProfile(chosen.unipileAccountId, identifier);
     await db.insert(linkedinLookupLog).values({
@@ -265,6 +333,9 @@ export async function lookupProfile(opts: {
     };
   } catch (e) {
     const msg = (e as Error).message;
+    // The Unipile call failed — give the reserved slot back so a transient
+    // error doesn't permanently burn daily capacity for this account.
+    await refundSlot(chosen.unipileAccountId);
     await db.insert(linkedinLookupLog).values({
       workspaceId: opts.workspaceId,
       requestedByUserId: opts.userId,

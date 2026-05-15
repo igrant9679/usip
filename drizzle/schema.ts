@@ -3489,3 +3489,27 @@ export const linkedinLookupLog = mysqlTable(
   }),
 );
 export type LinkedinLookupLog = typeof linkedinLookupLog.$inferSelect;
+
+// ─── LinkedIn per-account daily usage counter ─────────────────────────────────
+// Load-bearing for the rate limit (linkedin_lookup_log is audit-only). The
+// cap is enforced by an atomic conditional UPDATE on `count` — concurrent
+// lookups can't blow past the cap the way a COUNT(*)-then-check could.
+// Daily reset is implicit: usageDate is part of the PK, so a new UTC day is
+// a fresh row starting at 0 (no cron needed).
+export const linkedinDailyUsage = mysqlTable(
+  "linkedin_daily_usage",
+  {
+    unipileAccountId: varchar("unipile_account_id", { length: 200 }).notNull(),
+    /** UTC calendar date, "YYYY-MM-DD". */
+    usageDate: varchar("usage_date", { length: 10 }).notNull(),
+    count: int("count").default(0).notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    // Composite uniqueness (account + day). The actual PRIMARY KEY is
+    // declared in migration 0068; this uniqueIndex gives Drizzle the key
+    // it needs for typed onDuplicateKeyUpdate.
+    byAcctDate: uniqueIndex("ix_ldu_acct_date").on(t.unipileAccountId, t.usageDate),
+  }),
+);
+export type LinkedinDailyUsage = typeof linkedinDailyUsage.$inferSelect;

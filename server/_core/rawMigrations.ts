@@ -745,6 +745,25 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0068: LinkedIn per-account daily usage counter ──────────────────────
+  // Makes the LinkedIn daily cap concurrency-safe. The cap is enforced by
+  // `UPDATE ... SET count = count + 1 WHERE count < cap` (affectedRows
+  // decides) instead of COUNT(*)-then-check, which had a TOCTOU window
+  // under concurrent batch lookups (real LinkedIn-ban risk). Daily reset
+  // is implicit — usage_date is part of the PK.
+  {
+    name: "0068_linkedin_daily_usage.sql",
+    statements: [
+      `CREATE TABLE IF NOT EXISTS \`linkedin_daily_usage\` (
+        \`unipile_account_id\` varchar(200) NOT NULL,
+        \`usage_date\` varchar(10) NOT NULL,
+        \`count\` int NOT NULL DEFAULT 0,
+        \`updatedAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        CONSTRAINT \`linkedin_daily_usage_pk\` PRIMARY KEY (\`unipile_account_id\`, \`usage_date\`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------
