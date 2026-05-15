@@ -105,10 +105,9 @@ export default function FindProspectsPage() {
               <Globe className="size-3.5" />
               URL Scraper
             </TabsTrigger>
-            <TabsTrigger value="linkedin" disabled className="gap-1.5">
+            <TabsTrigger value="linkedin" className="gap-1.5">
               <Linkedin className="size-3.5" />
               LinkedIn
-              <Badge variant="outline" className="ml-1 text-[9px] py-0">soon</Badge>
             </TabsTrigger>
           </TabsList>
           <TabsContent value="places" className="mt-4">
@@ -116,6 +115,9 @@ export default function FindProspectsPage() {
           </TabsContent>
           <TabsContent value="url" className="mt-4">
             <UrlScraperTab />
+          </TabsContent>
+          <TabsContent value="linkedin" className="mt-4">
+            <LinkedInTab />
           </TabsContent>
         </Tabs>
       </div>
@@ -764,6 +766,301 @@ function EditableField({
           onChange={(e) => onChange(e.target.value)}
           className="text-sm h-8"
         />
+      )}
+    </div>
+  );
+}
+
+/* ─── LinkedIn tab content ────────────────────────────────────────────── */
+function LinkedInTab() {
+  const accountsQ = trpc.linkedinFinder.listAccounts.useQuery();
+  const utils = trpc.useUtils();
+
+  const [url, setUrl] = useState("");
+  const [accountId, setAccountId] = useState<string>("auto");
+  const [result, setResult] = useState<{
+    ok: boolean;
+    identifier: string | null;
+    viaAccountId: string | null;
+    profile: {
+      id: string;
+      provider_id: string;
+      name?: string;
+      headline?: string;
+      profile_picture_url?: string;
+      public_profile_url?: string;
+    } | null;
+    message: string;
+  } | null>(null);
+  const [edit, setEdit] = useState({
+    firstName: "",
+    lastName: "",
+    title: "",
+    company: "",
+    companyDomain: "",
+  });
+
+  const lookup = trpc.linkedinFinder.lookup.useMutation({
+    onSuccess: (data) => {
+      setResult(data);
+      void utils.linkedinFinder.listAccounts.invalidate();
+      if (data.ok && data.profile) {
+        const name = data.profile.name ?? "";
+        const sp = name.lastIndexOf(" ");
+        setEdit({
+          firstName: sp === -1 ? name : name.slice(0, sp),
+          lastName: sp === -1 ? "" : name.slice(sp + 1),
+          title: data.profile.headline ?? "",
+          company: "",
+          companyDomain: "",
+        });
+        toast.success(data.message);
+      } else {
+        toast.error(data.message);
+      }
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const save = trpc.linkedinFinder.saveAsProspect.useMutation({
+    onSuccess: (res) => {
+      if (res.ok) {
+        toast.success("Saved as Prospect");
+        setResult(null);
+        setUrl("");
+      } else {
+        toast.error(res.error ?? "Save failed");
+      }
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  if (accountsQ.isLoading) {
+    return (
+      <div className="flex items-center justify-center py-12 text-muted-foreground">
+        <Loader2 className="size-5 animate-spin" />
+      </div>
+    );
+  }
+
+  const data = accountsQ.data;
+  const accounts = data?.accounts ?? [];
+  const cap = data?.dailyCap ?? 100;
+  const isAdmin = data?.isAdmin ?? false;
+
+  // No bridged LinkedIn account → onboarding CTA
+  if (accounts.length === 0) {
+    return (
+      <div className="rounded-lg border border-dashed bg-card/40 p-10 text-center">
+        <Linkedin className="size-10 mx-auto mb-3 text-[#0A66C2] opacity-60" />
+        <p className="text-sm font-medium">No LinkedIn account bridged yet</p>
+        <p className="text-xs text-muted-foreground mt-1 max-w-md mx-auto">
+          {isAdmin
+            ? "Nobody in this workspace has connected a LinkedIn account. LinkedIn lookups run through a team member's authenticated session via Unipile."
+            : "Connect your LinkedIn account so lookups run through your own authenticated session. LinkedIn caps each account at ~" +
+              cap +
+              " profile views/day."}
+        </p>
+        <a
+          href="/connected-accounts"
+          className="inline-flex items-center gap-1.5 mt-4 text-sm text-blue-600 hover:underline"
+        >
+          <ExternalLink className="size-3.5" />
+          Connect a LinkedIn account
+        </a>
+      </div>
+    );
+  }
+
+  const submit = () => {
+    if (url.trim().length < 3) {
+      toast.error("Paste a LinkedIn profile URL (https://linkedin.com/in/…)");
+      return;
+    }
+    lookup.mutate({
+      linkedinUrl: url.trim(),
+      accountId: isAdmin && accountId !== "auto" ? accountId : undefined,
+    });
+  };
+
+  const handleSave = () => {
+    if (!result?.profile) return;
+    save.mutate({
+      firstName: edit.firstName || undefined,
+      lastName: edit.lastName || undefined,
+      title: edit.title || undefined,
+      company: edit.company || undefined,
+      companyDomain: edit.companyDomain || undefined,
+      linkedinUrl: result.profile.public_profile_url || url.trim(),
+    });
+  };
+
+  return (
+    <div className="space-y-5">
+      {/* Account pool meter */}
+      <div className="rounded-lg border bg-card p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+            {isAdmin ? "Workspace LinkedIn pool" : "Your LinkedIn account"}
+          </div>
+          <a
+            href="/connected-accounts"
+            className="text-xs text-blue-600 hover:underline inline-flex items-center gap-1"
+          >
+            <ExternalLink className="size-3" />
+            Manage
+          </a>
+        </div>
+        <div className="space-y-1.5">
+          {accounts.map((a) => {
+            const pct = Math.min(100, Math.round((a.usedToday / cap) * 100));
+            const bar =
+              pct >= 100 ? "bg-red-500" : pct >= 80 ? "bg-amber-500" : "bg-emerald-500";
+            return (
+              <div key={a.unipileAccountId} className="flex items-center gap-3 text-xs">
+                <div className="w-40 truncate">
+                  {a.displayName ?? a.ownerName ?? a.ownerEmail ?? a.unipileAccountId}
+                  {isAdmin && a.ownerName && (
+                    <span className="text-muted-foreground"> · {a.ownerName}</span>
+                  )}
+                </div>
+                <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
+                  <div className={`h-full ${bar}`} style={{ width: `${pct}%` }} />
+                </div>
+                <div className="tabular-nums text-muted-foreground w-16 text-right">
+                  {a.usedToday}/{cap}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        <p className="text-[11px] text-muted-foreground">
+          LinkedIn throttles each account at roughly {cap} profile views/day. Usage resets at
+          midnight UTC. {isAdmin ? "Lookups auto-route to the account with the most headroom unless you pick one below." : ""}
+        </p>
+      </div>
+
+      {/* Lookup form */}
+      <div className="rounded-lg border bg-card p-4 space-y-3">
+        <div
+          className={`grid grid-cols-1 gap-3 items-end ${
+            isAdmin ? "md:grid-cols-[1fr_220px_auto]" : "md:grid-cols-[1fr_auto]"
+          }`}
+        >
+          <div className="space-y-1">
+            <Label htmlFor="li-url" className="text-xs">LinkedIn profile URL</Label>
+            <Input
+              id="li-url"
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder="https://linkedin.com/in/jane-smith"
+              onKeyDown={(e) => {
+                if (e.key === "Enter") submit();
+              }}
+            />
+          </div>
+          {isAdmin && (
+            <div className="space-y-1">
+              <Label className="text-xs">Route through</Label>
+              <select
+                value={accountId}
+                onChange={(e) => setAccountId(e.target.value)}
+                className="w-full text-sm h-9 rounded-md border bg-background px-2"
+              >
+                <option value="auto">Auto (most headroom)</option>
+                {accounts.map((a) => (
+                  <option key={a.unipileAccountId} value={a.unipileAccountId}>
+                    {(a.displayName ?? a.ownerName ?? a.unipileAccountId) +
+                      ` (${a.remainingToday} left)`}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+          <Button onClick={submit} disabled={lookup.isPending}>
+            {lookup.isPending ? (
+              <Loader2 className="size-4 mr-2 animate-spin" />
+            ) : (
+              <Search className="size-4 mr-2" />
+            )}
+            Look up
+          </Button>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Uses one of your bridged LinkedIn sessions via Unipile. Public profile URLs only —
+          Sales Navigator links aren&apos;t supported. Counts against the daily cap above.
+        </p>
+      </div>
+
+      {/* Result */}
+      {result?.ok && result.profile && (
+        <div className="rounded-lg border bg-card">
+          <div className="border-b px-4 py-3 flex items-center gap-3">
+            {result.profile.profile_picture_url && (
+              <img
+                src={result.profile.profile_picture_url}
+                alt=""
+                className="size-10 rounded-full object-cover"
+              />
+            )}
+            <div className="min-w-0">
+              <div className="text-sm font-semibold truncate">
+                {result.profile.name ?? "(no name)"}
+              </div>
+              <div className="text-xs text-muted-foreground truncate">
+                {result.profile.headline ?? ""}
+              </div>
+            </div>
+            {result.profile.public_profile_url && (
+              <a
+                href={result.profile.public_profile_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="ml-auto text-xs text-blue-600 hover:underline inline-flex items-center gap-1"
+              >
+                <ExternalLink className="size-3" /> Profile
+              </a>
+            )}
+          </div>
+          <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-x-4 gap-y-3">
+            <EditableField label="First name" value={edit.firstName} onChange={(v) => setEdit((e) => ({ ...e, firstName: v }))} conf="high" source="LinkedIn name" />
+            <EditableField label="Last name" value={edit.lastName} onChange={(v) => setEdit((e) => ({ ...e, lastName: v }))} conf="high" source="LinkedIn name" />
+            <EditableField label="Title / headline" value={edit.title} onChange={(v) => setEdit((e) => ({ ...e, title: v }))} conf="high" source="LinkedIn headline" />
+            <EditableField label="Company" value={edit.company} onChange={(v) => setEdit((e) => ({ ...e, company: v }))} conf="none" source="" />
+            <EditableField label="Company domain" value={edit.companyDomain} onChange={(v) => setEdit((e) => ({ ...e, companyDomain: v }))} conf="none" source="" />
+          </div>
+          <div className="border-t bg-muted/30 px-4 py-3 flex items-center justify-between">
+            <span className="text-xs text-muted-foreground">{result.message}</span>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setResult(null);
+                  setUrl("");
+                }}
+                disabled={save.isPending}
+              >
+                Discard
+              </Button>
+              <Button size="sm" onClick={handleSave} disabled={save.isPending}>
+                {save.isPending ? (
+                  <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                ) : (
+                  <UserPlus className="size-3.5 mr-1.5" />
+                )}
+                Save as Prospect
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {result && !result.ok && (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 flex items-start gap-2">
+          <AlertCircle className="size-4 mt-0.5 shrink-0" />
+          <div>{result.message}</div>
+        </div>
       )}
     </div>
   );

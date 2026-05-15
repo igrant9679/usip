@@ -720,6 +720,31 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0067: LinkedIn lookup audit + rate-limit log ────────────────────────
+  // Backs Phase 3 of the prospect scraper (LinkedIn via Unipile). The
+  // per-account daily cap is enforced by counting rows for a given
+  // unipile_account_id created since UTC midnight — no separate counter.
+  {
+    name: "0067_linkedin_lookup_log.sql",
+    statements: [
+      `CREATE TABLE IF NOT EXISTS \`linkedin_lookup_log\` (
+        \`id\` int AUTO_INCREMENT NOT NULL,
+        \`workspaceId\` int NOT NULL,
+        \`requested_by_user_id\` int NOT NULL,
+        \`unipile_account_id\` varchar(200) NOT NULL,
+        \`account_owner_user_id\` int NULL,
+        \`target_url\` text NULL,
+        \`target_identifier\` varchar(200) NULL,
+        \`status\` varchar(16) NOT NULL,
+        \`error\` text NULL,
+        \`createdAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT \`linkedin_lookup_log_pk\` PRIMARY KEY (\`id\`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE INDEX \`ix_lll_acct_day\` ON \`linkedin_lookup_log\` (\`unipile_account_id\`, \`createdAt\`)`,
+      `CREATE INDEX \`ix_lll_ws\` ON \`linkedin_lookup_log\` (\`workspaceId\`, \`createdAt\`)`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

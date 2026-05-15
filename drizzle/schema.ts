@@ -3458,3 +3458,34 @@ export const placesSearchLog = mysqlTable(
   }),
 );
 export type PlacesSearchLog = typeof placesSearchLog.$inferSelect;
+
+// ─── LinkedIn profile-lookup audit + rate-limit ───────────────────────────────
+// One row per Unipile LinkedIn profile fetch. Used to enforce the per-account
+// daily cap (LinkedIn throttles individual accounts at ~80-150 profile views
+// /day; we default conservatively). Counting "today's rows for this
+// unipileAccountId" gives the current usage without a separate counter table.
+export const linkedinLookupLog = mysqlTable(
+  "linkedin_lookup_log",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    // The Velocity user who initiated the lookup (may differ from the
+    // account owner when an admin routes through the pool).
+    requestedByUserId: int("requested_by_user_id").notNull(),
+    // The Unipile account the lookup was performed THROUGH.
+    unipileAccountId: varchar("unipile_account_id", { length: 200 }).notNull(),
+    // The Velocity user who owns that bridged account.
+    accountOwnerUserId: int("account_owner_user_id"),
+    // LinkedIn URL / identifier that was looked up.
+    targetUrl: text("target_url"),
+    targetIdentifier: varchar("target_identifier", { length: 200 }),
+    status: varchar("status", { length: 16 }).notNull(), // "ok" | "blocked" | "error"
+    error: text("error"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    byAccountDay: index("ix_lll_acct_day").on(t.unipileAccountId, t.createdAt),
+    byWs: index("ix_lll_ws").on(t.workspaceId, t.createdAt),
+  }),
+);
+export type LinkedinLookupLog = typeof linkedinLookupLog.$inferSelect;
