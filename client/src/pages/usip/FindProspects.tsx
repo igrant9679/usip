@@ -14,7 +14,7 @@
  */
 
 import { useState } from "react";
-import { trpc } from "@/lib/trpc";
+import { trpc, type RouterOutputs } from "@/lib/trpc";
 import { PageHeader, Shell } from "@/components/usip/Shell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -47,40 +47,13 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+// Server-derived — these stay in lockstep with the routers (see trpc.ts).
+// A shape change on the server is now a compile error here, not a silent
+// runtime mismatch.
 type Confidence = "high" | "medium" | "low" | "none";
-type ExtractedField<T> = { value: T | null; confidence: Confidence; source: string };
-type ExtractedData = {
-  url: string;
-  pageTitle: string | null;
-  error?: string;
-  firstName: ExtractedField<string>;
-  lastName: ExtractedField<string>;
-  fullName: ExtractedField<string>;
-  jobTitle: ExtractedField<string>;
-  email: ExtractedField<string>;
-  phone: ExtractedField<string>;
-  bio: ExtractedField<string>;
-  companyName: ExtractedField<string>;
-  companyDomain: ExtractedField<string>;
-  allEmails: string[];
-  allPhones: string[];
-  socialUrls: string[];
-};
-
-type PlacesHit = {
-  placeId: string;
-  name: string;
-  formattedAddress?: string;
-  websiteUri?: string;
-  nationalPhoneNumber?: string;
-  internationalPhoneNumber?: string;
-  rating?: number;
-  userRatingCount?: number;
-  primaryType?: string;
-  types?: string[];
-  location?: { lat: number; lng: number };
-  googleMapsUri?: string;
-};
+type ExtractedData = RouterOutputs["urlScraper"]["scrapeOne"];
+type PlacesHit = RouterOutputs["placesSearch"]["textSearch"]["results"][number];
+type LinkedInLookupResult = RouterOutputs["linkedinFinder"]["lookup"];
 
 export default function FindProspectsPage() {
   return (
@@ -475,14 +448,10 @@ function UrlScraperTab() {
   });
 
   const save = trpc.urlScraper.saveAsProspect.useMutation({
-    onSuccess: (res) => {
-      if (res.ok) {
-        toast.success("Saved as Prospect");
-        setResult(null);
-        setUrl("");
-      } else {
-        toast.error(res.error ?? "Save failed");
-      }
+    onSuccess: () => {
+      toast.success("Saved as Prospect");
+      setResult(null);
+      setUrl("");
     },
     onError: (e) => toast.error(e.message),
   });
@@ -781,20 +750,7 @@ function LinkedInTab() {
 
   const [url, setUrl] = useState("");
   const [accountId, setAccountId] = useState<string>("auto");
-  const [result, setResult] = useState<{
-    ok: boolean;
-    identifier: string | null;
-    viaAccountId: string | null;
-    profile: {
-      id: string;
-      provider_id: string;
-      name?: string;
-      headline?: string;
-      profile_picture_url?: string;
-      public_profile_url?: string;
-    } | null;
-    message: string;
-  } | null>(null);
+  const [result, setResult] = useState<LinkedInLookupResult | null>(null);
   const [edit, setEdit] = useState({
     firstName: "",
     lastName: "",
@@ -826,14 +782,10 @@ function LinkedInTab() {
   });
 
   const save = trpc.linkedinFinder.saveAsProspect.useMutation({
-    onSuccess: (res) => {
-      if (res.ok) {
-        toast.success("Saved as Prospect");
-        setResult(null);
-        setUrl("");
-      } else {
-        toast.error(res.error ?? "Save failed");
-      }
+    onSuccess: () => {
+      toast.success("Saved as Prospect");
+      setResult(null);
+      setUrl("");
     },
     onError: (e) => toast.error(e.message),
   });

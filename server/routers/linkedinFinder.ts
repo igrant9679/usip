@@ -26,6 +26,7 @@ import {
   lookupProfile,
   LINKEDIN_DAILY_CAP,
 } from "../services/linkedinLookup";
+import { buildScrapedProspectValues } from "../services/prospectFromSource";
 
 function isAdminRole(role: string): boolean {
   return role === "admin" || role === "super_admin";
@@ -83,21 +84,20 @@ export const linkedinFinderRouter = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
 
-      const firstName = (input.firstName ?? "").trim() || "(unknown)";
-      const lastName = (input.lastName ?? "").trim() || "(LinkedIn)";
+      const built = buildScrapedProspectValues({
+        workspaceId: ctx.workspace.id,
+        source: "linkedin_finder",
+        firstName: input.firstName,
+        lastName: input.lastName,
+        title: input.title,
+        company: input.company,
+        companyDomain: input.companyDomain,
+        linkedinUrl: input.linkedinUrl,
+        sourceUrl: input.linkedinUrl,
+      });
 
       try {
-        const inserted = await db
-          .insert(prospects)
-          .values({
-            workspaceId: ctx.workspace.id,
-            firstName,
-            lastName,
-            title: input.title ?? undefined,
-            linkedinUrl: input.linkedinUrl,
-            company: input.company ?? undefined,
-            companyDomain: input.companyDomain ?? undefined,
-          } as never);
+        const inserted = await db.insert(prospects).values(built.values as never);
         const id = Number(
           (inserted as unknown as { insertId?: number }[])[0]?.insertId ?? 0,
         );
@@ -105,13 +105,17 @@ export const linkedinFinderRouter = router({
           workspaceId: ctx.workspace.id,
           actorUserId: ctx.user.id,
           action: "create",
-          entityType: "prospect_from_linkedin",
+          entityType: built.entityType,
           entityId: id,
-          after: { source: "linkedin_finder", linkedinUrl: input.linkedinUrl },
+          after: built.audit,
         });
-        return { ok: true, prospectId: id };
+        return { ok: true as const, prospectId: id };
       } catch (e) {
-        return { ok: false, error: (e as Error).message };
+        console.error("[linkedinFinder.saveAsProspect] insert failed:", e);
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Could not save the prospect. Please try again.",
+        });
       }
     }),
 });

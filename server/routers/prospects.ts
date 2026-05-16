@@ -21,21 +21,10 @@ import { getDb } from "../db";
 import { contacts, prospects } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
 import { lookupContactInfo, type LookupResult } from "../services/scraper";
-
-/**
- * A prospect has a synthetic (non-person) name when it was created from a
- * company-level source like Google Places — firstName holds the business
- * name and lastName is a "(business)" placeholder. The importer/finder
- * stamps `enrichmentData.syntheticName = true` on those rows. Email-pattern
- * generation + Reoon must be skipped for them (see scraper/index.ts).
- */
-function isSyntheticNameProspect(enrichmentData: unknown): boolean {
-  return (
-    !!enrichmentData &&
-    typeof enrichmentData === "object" &&
-    (enrichmentData as { syntheticName?: unknown }).syntheticName === true
-  );
-}
+// Shared synthetic-name detector — anchored to the lastName sentinel so it
+// keeps working after the scraper overwrites enrichmentData. See
+// services/prospectFromSource.ts.
+import { isSyntheticNameProspect } from "../services/prospectFromSource";
 import { reoonCheckBalance, getReoonApiKey } from "../services/reoon";
 
 export const prospectsRouter = router({
@@ -270,7 +259,7 @@ export const prospectsRouter = router({
         companyDomain: p.companyDomain ?? null,
         existingPhone: p.phone ?? null,
         skipIfHasEmail: input.skipIfHasEmail && Boolean(p.email),
-        syntheticName: isSyntheticNameProspect(p.enrichmentData),
+        syntheticName: isSyntheticNameProspect(p),
       });
 
       await recordAudit({
@@ -336,7 +325,7 @@ export const prospectsRouter = router({
             companyDomain: p.companyDomain ?? null,
             existingPhone: p.phone ?? null,
             skipIfHasEmail: input.skipIfHasEmail && Boolean(p.email),
-            syntheticName: isSyntheticNameProspect(p.enrichmentData),
+            syntheticName: isSyntheticNameProspect(p),
           });
           creditsQuick += result.reoonCreditsQuick;
           creditsPower += result.reoonCreditsPower;

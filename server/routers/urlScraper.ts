@@ -19,6 +19,7 @@ import { getDb } from "../db";
 import { prospects } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
 import { scrapeUrl, type ExtractedData } from "../services/scraper/urlScraper";
+import { buildScrapedProspectValues } from "../services/prospectFromSource";
 
 const ExtractedFieldZ = z.object({
   value: z.string().nullable(),
@@ -87,37 +88,42 @@ export const urlScraperRouter = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
 
-      const firstName = (input.firstName ?? "").trim() || "(unknown)";
-      const lastName = (input.lastName ?? "").trim() || "(via URL)";
+      const built = buildScrapedProspectValues({
+        workspaceId: ctx.workspace.id,
+        source: "url_scraper",
+        firstName: input.firstName,
+        lastName: input.lastName,
+        title: input.jobTitle,
+        email: input.email,
+        phone: input.phone,
+        company: input.companyName,
+        companyDomain: input.companyDomain,
+        // helper keeps this only if it's a real linkedin.com URL —
+        // arbitrary page URLs no longer pollute the linkedinUrl column
+        linkedinUrl: input.linkedinUrl,
+        sourceUrl: input.url,
+      });
 
       try {
-        const inserted = await db
-          .insert(prospects)
-          .values({
-            workspaceId: ctx.workspace.id,
-            firstName,
-            lastName,
-            title: input.jobTitle ?? undefined,
-            email: input.email ?? undefined,
-            phone: input.phone ?? undefined,
-            company: input.companyName ?? undefined,
-            companyDomain: input.companyDomain ?? undefined,
-            // Prefer a real LinkedIn URL discovered on the page; fall back
-            // to the source page URL so we always have a reference link.
-            linkedinUrl: input.linkedinUrl ?? input.url,
-          } as never);
+        const inserted = await db.insert(prospects).values(built.values as never);
         const id = Number((inserted as unknown as { insertId?: number }[])[0]?.insertId ?? 0);
         await recordAudit({
           workspaceId: ctx.workspace.id,
           actorUserId: ctx.user.id,
           action: "create",
-          entityType: "prospect_from_url",
+          entityType: built.entityType,
           entityId: id,
-          after: { source: "url_scraper", sourceUrl: input.url },
+          after: built.audit,
         });
-        return { ok: true, prospectId: id };
+        return { ok: true as const, prospectId: id };
       } catch (e) {
-        return { ok: false, error: (e as Error).message };
+        // Standardized: log the raw error server-side, surface a sanitized
+        // TRPCError (don't leak DB internals to the client).
+        console.error("[urlScraper.saveAsProspect] insert failed:", e);
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Could not save the prospect. Please try again.",
+        });
       }
     }),
 });

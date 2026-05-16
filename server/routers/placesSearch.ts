@@ -27,6 +27,7 @@ import {
   type PlacesResult,
 } from "../services/googlePlaces";
 import { normalizeDomain } from "../services/scraper/domain";
+import { buildScrapedProspectValues } from "../services/prospectFromSource";
 
 /* ─── Reusable validator for a single Places hit coming back from the UI ─ */
 const PlacesResultZ = z.object({
@@ -44,13 +45,6 @@ const PlacesResultZ = z.object({
   googleMapsUri: z.string().optional(),
 });
 
-/** Split "First Last" into firstName/lastName. Returns ("Acme Inc", "") if no space. */
-function splitName(full: string): { firstName: string; lastName: string } {
-  const trimmed = full.trim();
-  const i = trimmed.lastIndexOf(" ");
-  if (i === -1) return { firstName: trimmed, lastName: "" };
-  return { firstName: trimmed.slice(0, i), lastName: trimmed.slice(i + 1) };
-}
 
 export const placesSearchRouter = router({
   /** Read the current budget state for the page meter. */
@@ -143,28 +137,27 @@ export const placesSearchRouter = router({
       let created = 0;
       let skipped = 0;
       for (const hit of input.hits) {
-        const { firstName, lastName } = splitName(hit.name);
         const companyDomain = normalizeDomain(hit.websiteUri ?? null);
         const dedupKey = `${hit.name.toLowerCase()}|${(companyDomain ?? "").toLowerCase()}`;
         if (existingKeys.has(dedupKey)) {
           skipped++;
           continue;
         }
+        // Shared builder: company name → firstName, "(company)" sentinel
+        // lastName, syntheticName flag so the scraper skips email-pattern
+        // generation + Reoon. No email here — "Find contact info" scrapes
+        // phone/socials only for these.
+        const built = buildScrapedProspectValues({
+          workspaceId: ctx.workspace.id,
+          source: "google_places",
+          firstName: hit.name,
+          company: hit.name,
+          companyDomain: companyDomain ?? undefined,
+          phone: hit.nationalPhoneNumber ?? hit.internationalPhoneNumber ?? undefined,
+          syntheticName: true,
+        });
         try {
-          await db.insert(prospects).values({
-            workspaceId: ctx.workspace.id,
-            firstName: firstName || "(unknown)",
-            lastName: lastName || "(business)",
-            company: hit.name,
-            companyDomain: companyDomain ?? undefined,
-            phone: hit.nationalPhoneNumber ?? hit.internationalPhoneNumber ?? undefined,
-            city: undefined, // could parse from formattedAddress in a follow-up
-            // Mark as a company-level (synthetic-name) prospect so the
-            // scraper skips email-pattern generation + Reoon on it —
-            // see isSyntheticNameProspect() in routers/prospects.ts.
-            enrichmentData: { source: "google_places", syntheticName: true },
-            // No email — "Find contact info" will scrape phone/socials only
-          } as never);
+          await db.insert(prospects).values(built.values as never);
           created++;
           existingKeys.add(dedupKey);
         } catch {
