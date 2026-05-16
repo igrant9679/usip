@@ -653,7 +653,12 @@ export default function Dashboard() {
           <div className="p-5">
             {/* Stat row */}
             <div className="grid grid-cols-3 gap-4 mb-5">
-              <div className="rounded-lg border bg-secondary/30 p-3 text-center" style={{ borderLeftWidth: 3, borderLeftColor: "#0A66C2" }}>
+              <Link
+                href="/unified-inbox"
+                className="rounded-lg border bg-secondary/30 p-3 text-center block hover:bg-secondary/60 transition-colors cursor-pointer"
+                style={{ borderLeftWidth: 3, borderLeftColor: "#0A66C2" }}
+                title="View multichannel messages in the Unified Inbox"
+              >
                 <div className="flex items-center justify-center gap-1 mb-1">
                   <MessageSquare className="size-3.5" style={{ color: "#0A66C2" }} />
                   <span className="text-[11px] text-muted-foreground uppercase tracking-wide">Messages Sent</span>
@@ -661,8 +666,13 @@ export default function Dashboard() {
                 <div className="text-2xl font-bold font-mono tabular-nums" style={{ color: "#0A66C2" }}>
                   {unipileMetrics?.messagesSent ?? 0}
                 </div>
-              </div>
-              <div className="rounded-lg border bg-secondary/30 p-3 text-center" style={{ borderLeftWidth: 3, borderLeftColor: "#34D399" }}>
+              </Link>
+              <Link
+                href="/unified-inbox"
+                className="rounded-lg border bg-secondary/30 p-3 text-center block hover:bg-secondary/60 transition-colors cursor-pointer"
+                style={{ borderLeftWidth: 3, borderLeftColor: "#34D399" }}
+                title="View accepted connections in the Unified Inbox"
+              >
                 <div className="flex items-center justify-center gap-1 mb-1">
                   <UserPlus className="size-3.5 text-emerald-500" />
                   <span className="text-[11px] text-muted-foreground uppercase tracking-wide">Connections</span>
@@ -670,8 +680,13 @@ export default function Dashboard() {
                 <div className="text-2xl font-bold font-mono tabular-nums text-emerald-500">
                   {unipileMetrics?.connectionsAccepted ?? 0}
                 </div>
-              </div>
-              <div className="rounded-lg border bg-secondary/30 p-3 text-center" style={{ borderLeftWidth: 3, borderLeftColor: "#FCD34D" }}>
+              </Link>
+              <Link
+                href="/unified-inbox"
+                className="rounded-lg border bg-secondary/30 p-3 text-center block hover:bg-secondary/60 transition-colors cursor-pointer"
+                style={{ borderLeftWidth: 3, borderLeftColor: "#FCD34D" }}
+                title="View outreach activity in the Unified Inbox"
+              >
                 <div className="flex items-center justify-center gap-1 mb-1">
                   <Target className="size-3.5 text-amber-500" />
                   <span className="text-[11px] text-muted-foreground uppercase tracking-wide">Acceptance</span>
@@ -679,7 +694,7 @@ export default function Dashboard() {
                 <div className="text-2xl font-bold font-mono tabular-nums text-amber-600">
                   {unipileMetrics?.acceptanceRate ?? 0}%
                 </div>
-              </div>
+              </Link>
             </div>
             {/* Provider breakdown bar chart */}
             {(unipileMetrics?.byProvider ?? []).length === 0 ? (
