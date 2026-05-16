@@ -745,13 +745,26 @@ function ThreadRow({ thread, selected, showAccountBadge, onSelect }: {
 
 // ─── Single-account thread list ────────────────────────────────────────────────
 
-function SingleAccountThreadList({ accountId, folder, selectedId, onSelect }: {
+function SingleAccountThreadList({ accountId, folder, selectedId, onSelect, initialSearch }: {
   accountId: number; folder: string; selectedId?: string; onSelect: (id: string) => void;
+  initialSearch?: string;
 }) {
   const [pageToken, setPageToken] = useState<string | undefined>();
-  const [searchQuery, setSearchQuery] = useState("");
-  const [debouncedQuery, setDebouncedQuery] = useState("");
+  const [searchQuery, setSearchQuery] = useState(initialSearch ?? "");
+  const [debouncedQuery, setDebouncedQuery] = useState(initialSearch ?? "");
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Apply a late-arriving initialSearch (the ?reply= lookup resolves after
+  // first render). Only seeds once, and never clobbers what the user types.
+  const seededRef = useRef(false);
+  useEffect(() => {
+    if (seededRef.current) return;
+    if (initialSearch) {
+      seededRef.current = true;
+      setSearchQuery(initialSearch);
+      setDebouncedQuery(initialSearch);
+    }
+  }, [initialSearch]);
 
   function handleSearch(q: string) {
     setSearchQuery(q);
@@ -888,7 +901,37 @@ export default function MailboxPage() {
   const [composeState, setComposeState] = useState<ComposeState | null>(null);
   const [repUserId, setRepUserId] = useState<number | undefined>();
 
+  // Deep-link from the Inbox "Open in Mailbox" link: /mailbox?reply=<id>.
+  // Resolve the reply → its sending account + sender email, switch to that
+  // account view, and seed the thread-list search so the exact
+  // conversation surfaces instead of dumping the user on a generic inbox.
+  const [replyId] = useState<number | null>(() => {
+    if (typeof window === "undefined") return null;
+    const v = new URLSearchParams(window.location.search).get("reply");
+    return v && /^\d+$/.test(v) ? Number(v) : null;
+  });
+  const [initialThreadSearch, setInitialThreadSearch] = useState<string | undefined>();
+  const locatedReply = trpc.mailbox.locateReply.useQuery(
+    { replyId: replyId! },
+    { enabled: !!replyId, retry: false },
+  );
+
   const { data: accounts = [], isLoading: accountsLoading } = trpc.mailbox.listAccounts.useQuery({ repUserId }, { enabled: true });
+
+  // When the ?reply= deep-link resolves, jump to that account's inbox and
+  // pre-seed the thread search with the sender's email. Runs once.
+  const appliedReplyRef = useRef(false);
+  useEffect(() => {
+    if (appliedReplyRef.current) return;
+    const r = locatedReply.data;
+    if (!r) return;
+    appliedReplyRef.current = true;
+    if (r.sendingAccountId) {
+      setSelectedView({ type: "account", accountId: r.sendingAccountId });
+    }
+    if (r.fromEmail) setInitialThreadSearch(r.fromEmail);
+  }, [locatedReply.data]);
+
   const currentAccountId = selectedView.type === "account" ? selectedView.accountId : undefined;
   const { data: folders = [] } = trpc.mailbox.listFolders.useQuery({ accountId: currentAccountId!, repUserId }, { enabled: !!currentAccountId });
   const { data: teamData } = trpc.team.list.useQuery(undefined, { enabled: true });
@@ -1032,7 +1075,8 @@ export default function MailboxPage() {
           ) : (
             <SingleAccountThreadList
               accountId={(selectedView as { type: "account"; accountId: number }).accountId}
-              folder={selectedFolder} selectedId={selectedThreadId} onSelect={(id) => selectThread(id)} />
+              folder={selectedFolder} selectedId={selectedThreadId} onSelect={(id) => selectThread(id)}
+              initialSearch={initialThreadSearch} />
           )}
         </div>
 

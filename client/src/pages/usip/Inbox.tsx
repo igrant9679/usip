@@ -134,7 +134,14 @@ export default function Inbox() {
                     <div className="flex items-center gap-3 mt-1">
                       <span className="text-[11px] text-muted-foreground">{fmtDate(n.createdAt)}</span>
                       {isEmailReply && (
-                        <Link href="/mailbox" className="text-[11px] text-primary hover:underline flex items-center gap-1">
+                        <Link
+                          href={
+                            n.relatedType === "email_reply" && n.relatedId
+                              ? `/mailbox?reply=${n.relatedId}`
+                              : "/mailbox"
+                          }
+                          className="text-[11px] text-primary hover:underline flex items-center gap-1"
+                        >
                           <Mail className="size-3" /> Open in Mailbox
                         </Link>
                       )}

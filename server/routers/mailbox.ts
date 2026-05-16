@@ -19,7 +19,7 @@ import { router } from "../_core/trpc";
 import { workspaceProcedure, managerProcedure, roleRank } from "../_core/workspace";
 import { TRPCError } from "@trpc/server";
 import { getDb } from "../db";
-import { sendingAccounts, unipileAccounts, users, workspaceSettings } from "../../drizzle/schema";
+import { sendingAccounts, unipileAccounts, users, workspaceSettings, emailReplies } from "../../drizzle/schema";
 import { eq, and, isNotNull } from "drizzle-orm";
 import { createEmailAdapter } from "../emailAdapter";
 import { invokeLLM } from "../_core/llm";
@@ -190,6 +190,36 @@ export const mailboxRouter = router({
         inboxEnabled: true,
         unipileBridged: true,
       }));
+    }),
+
+  /**
+   * Resolve an email_reply notification → enough to open the right
+   * conversation in the mailbox. Backs the Inbox "Open in Mailbox"
+   * deep-link (/mailbox?reply=<id>). Returns the sending account the
+   * reply came in on + the sender email/subject so the UI can switch
+   * to that account view and pre-search the thread.
+   */
+  locateReply: workspaceProcedure
+    .input(z.object({ replyId: z.number().int() }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [r] = await db
+        .select({
+          sendingAccountId: emailReplies.sendingAccountId,
+          fromEmail: emailReplies.fromEmail,
+          subject: emailReplies.subject,
+        })
+        .from(emailReplies)
+        .where(
+          and(
+            eq(emailReplies.id, input.replyId),
+            eq(emailReplies.workspaceId, ctx.workspace.id),
+          ),
+        )
+        .limit(1);
+      if (!r) throw new TRPCError({ code: "NOT_FOUND", message: "Reply not found" });
+      return r;
     }),
 
   /** List folders/labels for an account */

@@ -251,8 +251,9 @@ export async function processInboundReply(data: InboundReplyData) {
     if (matchedLead) matchedLeadId = matchedLead.id;
   }
 
-  // 3. Insert email_reply row
-  await db.insert(emailReplies).values({
+  // 3. Insert email_reply row (capture the id so the notification can
+  //    deep-link "Open in Mailbox" straight to this conversation)
+  const [insertedReply] = await db.insert(emailReplies).values({
     workspaceId: data.workspaceId,
     draftId: matchedDraft?.id ?? null,
     sendingAccountId: data.sendingAccountId,
@@ -270,6 +271,9 @@ export async function processInboundReply(data: InboundReplyData) {
     imapUid: data.imapUid,
     receivedAt: data.receivedAt,
   });
+  const emailReplyId = Number(
+    (insertedReply as unknown as { insertId?: number })?.insertId ?? 0,
+  );
 
   // 4. Create notification for the account owner
   if (data.userId) {
@@ -279,8 +283,12 @@ export async function processInboundReply(data: InboundReplyData) {
       kind: "email_reply",
       title: `Reply from ${data.fromName || data.fromEmail}`,
       body: data.subject ? `Re: ${data.subject}` : data.bodyText?.slice(0, 200),
-      relatedType: matchedContactId ? "contact" : matchedLeadId ? "lead" : null,
-      relatedId: matchedContactId ?? matchedLeadId ?? null,
+      // Point at the email_reply row itself so the Inbox "Open in Mailbox"
+      // link can deep-link straight to this conversation. (The contact/
+      // lead linkage lives on the emailReplies + activities rows; nothing
+      // consumed it off the notification.)
+      relatedType: emailReplyId ? "email_reply" : null,
+      relatedId: emailReplyId || null,
     });
   }
 
