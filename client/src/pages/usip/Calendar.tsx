@@ -418,6 +418,16 @@ export default function CalendarPage() {
     { accountId: selectedAccountId ?? 0, repUserId },
     { enabled: !!selectedAccountId },
   );
+  // Auto-select the first connected account once accounts load. Without
+  // this, selectedAccountId stays null until the user manually clicks an
+  // account row in the sidebar — which left "New Event" (disabled when
+  // !selectedAccountId) looking permanently broken for anyone who already
+  // has a calendar connected.
+  useEffect(() => {
+    if (selectedAccountId == null && accounts && accounts.length > 0) {
+      setSelectedAccountId(accounts[0].id);
+    }
+  }, [accounts, selectedAccountId]);
   // Auto-pick the primary calendar (is_primary → is_default → first) when the
   // user selects an account. Only runs once per account change.
   useEffect(() => {
@@ -489,6 +499,11 @@ export default function CalendarPage() {
               className="w-full"
               onClick={() => { setEditingEvent(null); setNewEventStart(new Date()); setNewEventEnd(new Date(Date.now() + 3600_000)); setEventDialogOpen(true); }}
               disabled={!selectedAccountId}
+              title={
+                selectedAccountId
+                  ? "Create a new calendar event"
+                  : "Connect a calendar account first to create events"
+              }
             >
               <Plus className="size-3.5 mr-2" /> New Event
             </Button>
