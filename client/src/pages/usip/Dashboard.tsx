@@ -537,16 +537,24 @@ export default function Dashboard() {
                     </PieChart>
                   </ResponsiveContainer>
                   <div className="grid grid-cols-2 gap-3 w-full text-center">
-                    <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/20 py-2">
+                    <Link
+                      href="/pipeline"
+                      className="rounded-lg bg-emerald-500/10 border border-emerald-500/20 py-2 hover:bg-emerald-500/20 transition-colors cursor-pointer"
+                      title="View the Won column on the pipeline board"
+                    >
                       <div className="text-xl font-bold text-emerald-500">{winLoss?.won ?? 0}</div>
                       <div className="text-xs text-muted-foreground">Won</div>
                       <div className="text-xs font-mono text-emerald-600">{fmt$(winLoss?.wonValue ?? 0)}</div>
-                    </div>
-                    <div className="rounded-lg bg-red-500/10 border border-red-500/20 py-2">
+                    </Link>
+                    <Link
+                      href="/pipeline"
+                      className="rounded-lg bg-red-500/10 border border-red-500/20 py-2 hover:bg-red-500/20 transition-colors cursor-pointer"
+                      title="View the Lost column on the pipeline board"
+                    >
                       <div className="text-xl font-bold text-red-500">{winLoss?.lost ?? 0}</div>
                       <div className="text-xs text-muted-foreground">Lost</div>
                       <div className="text-xs font-mono text-red-600">{fmt$(winLoss?.lostValue ?? 0)}</div>
-                    </div>
+                    </Link>
                   </div>
                 </>
               )}
