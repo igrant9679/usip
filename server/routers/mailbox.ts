@@ -19,7 +19,7 @@ import { router } from "../_core/trpc";
 import { workspaceProcedure, managerProcedure, roleRank } from "../_core/workspace";
 import { TRPCError } from "@trpc/server";
 import { getDb } from "../db";
-import { sendingAccounts, unipileAccounts, users, workspaceSettings, emailReplies } from "../../drizzle/schema";
+import { sendingAccounts, unipileAccounts, users, workspaceSettings, emailReplies, unipileEmailsCache } from "../../drizzle/schema";
 import { eq, and, isNotNull } from "drizzle-orm";
 import { createEmailAdapter } from "../emailAdapter";
 import { invokeLLM } from "../_core/llm";
@@ -341,15 +341,62 @@ export const mailboxRouter = router({
       });
     }),
 
-  /** Mark a message read or unread */
+  /**
+   * Mark a message read or unread.
+   *
+   * Threads served from the local unipile_emails_cache (Unipile's live
+   * thread endpoint returns nothing for webhook-delivered mail) carry a
+   * cache emailId that Unipile's PUT /emails/{id} doesn't recognize → it
+   * 404s with "Email not found". That used to bubble as a hard error and
+   * a scary "Failed to update read state" toast on every such email,
+   * even though the email itself displayed fine.
+   *
+   * Read-state is a best-effort nicety. When Unipile 404s we persist the
+   * read state to the cache (readDate) instead so the UI stays consistent
+   * and no error surfaces. Genuine non-404 failures still throw.
+   */
   markRead: workspaceProcedure
     .input(z.object({ accountId: z.number(), messageId: z.string(), read: z.boolean() }))
     .mutation(async ({ ctx, input }) => {
       const acc = await getAccount(input.accountId, ctx.workspace.id);
       await assertMailboxWriteOwnership(ctx, acc);
       const adapter = createEmailAdapter(acc);
-      await adapter.markRead(input.messageId, input.read);
-      return { ok: true };
+
+      const syncCache = async () => {
+        const db = await getDb();
+        if (!db || !acc.unipileAccountId) return;
+        await db
+          .update(unipileEmailsCache)
+          .set({ readDate: input.read ? new Date() : null })
+          .where(
+            and(
+              eq(unipileEmailsCache.unipileAccountId, acc.unipileAccountId),
+              eq(unipileEmailsCache.emailId, input.messageId),
+            ),
+          );
+      };
+
+      try {
+        await adapter.markRead(input.messageId, input.read);
+        // Keep the cache in sync so a later cache-served render of this
+        // thread reflects the same read state.
+        await syncCache().catch(() => {});
+        return { ok: true as const };
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        const is404 = /→\s*404\b/.test(msg) || /not\s*found/i.test(msg);
+        if (is404) {
+          // Cache-only / webhook email — nothing to update remotely.
+          // Persist read state locally and report success.
+          await syncCache().catch(() => {});
+          return { ok: true as const, local: true as const };
+        }
+        // Real failure (auth, 5xx, network) — surface it.
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Could not update read state.",
+        });
+      }
     }),
 
   /** Move a message to trash */
