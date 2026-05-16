@@ -151,16 +151,20 @@ function GoalBar({
               ref={inputRef}
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
+              onClick={(e) => { e.preventDefault(); e.stopPropagation(); }}
               onKeyDown={(e) => { if (e.key === "Enter") commitEdit(); if (e.key === "Escape") setEditing(false); }}
               className="w-20 border rounded px-1 py-0 text-[10px] bg-background text-foreground"
             />
-            <button onClick={commitEdit} className="text-emerald-500 hover:text-emerald-600">
+            <button
+              onClick={(e) => { e.preventDefault(); e.stopPropagation(); commitEdit(); }}
+              className="text-emerald-500 hover:text-emerald-600"
+            >
               <Check className="size-3" />
             </button>
           </div>
         ) : (
           <button
-            onClick={startEdit}
+            onClick={(e) => { e.preventDefault(); e.stopPropagation(); startEdit(); }}
             className="flex items-center gap-0.5 hover:text-foreground transition-colors"
           >
             Goal: {isMoney ? fmt$(goal) : goal.toLocaleString()}
@@ -369,57 +373,65 @@ export default function Dashboard() {
 
         {/* ── Row 1: Live stat cards with goal progress ── */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4" data-tour-id="dashboard-kpi-grid">
-          <MBStatCard
-            label="Pipeline Value"
-            value={fmt$(stats?.pipelineValue ?? 0)}
-            rawValue={stats?.pipelineValue ?? 0}
-            hint={`${stats?.openOppsCount ?? 0} open opps`}
-            delta={stats?.pipelineDelta}
-            icon={BarChart2}
-            iconColor="#60A5FA"
-            loading={statsLoading}
-            goalKey="pipelineValue"
-            goals={goals}
-            onGoalChange={handleGoalChange}
-            isMoney
-          />
-          <MBStatCard
-            label="Closed-Won"
-            value={`${stats?.closedWonCount ?? 0} deals`}
-            rawValue={stats?.closedWonCount ?? 0}
-            hint={fmt$(stats?.totalWonValue ?? 0)}
-            delta={stats?.closedWonDelta}
-            icon={Briefcase}
-            iconColor="#34D399"
-            loading={statsLoading}
-            goalKey="closedWon"
-            goals={goals}
-            onGoalChange={handleGoalChange}
-          />
-          <MBStatCard
-            label="Active Leads"
-            value={(stats?.activeLeads ?? 0).toLocaleString()}
-            rawValue={stats?.activeLeads ?? 0}
-            delta={stats?.leadsDelta}
-            icon={Users}
-            iconColor="#C084FC"
-            loading={statsLoading}
-            goalKey="activeLeads"
-            goals={goals}
-            onGoalChange={handleGoalChange}
-          />
-          <MBStatCard
-            label="Customers"
-            value={stats?.customerCount ?? 0}
-            rawValue={stats?.customerCount ?? 0}
-            delta={stats?.customerDelta}
-            icon={UserCheck}
-            iconColor="#F87171"
-            loading={statsLoading}
-            goalKey="customers"
-            goals={goals}
-            onGoalChange={handleGoalChange}
-          />
+          <Link href="/pipeline">
+            <MBStatCard
+              label="Pipeline Value"
+              value={fmt$(stats?.pipelineValue ?? 0)}
+              rawValue={stats?.pipelineValue ?? 0}
+              hint={`${stats?.openOppsCount ?? 0} open opps`}
+              delta={stats?.pipelineDelta}
+              icon={BarChart2}
+              iconColor="#60A5FA"
+              loading={statsLoading}
+              goalKey="pipelineValue"
+              goals={goals}
+              onGoalChange={handleGoalChange}
+              isMoney
+            />
+          </Link>
+          <Link href="/pipeline">
+            <MBStatCard
+              label="Closed-Won"
+              value={`${stats?.closedWonCount ?? 0} deals`}
+              rawValue={stats?.closedWonCount ?? 0}
+              hint={fmt$(stats?.totalWonValue ?? 0)}
+              delta={stats?.closedWonDelta}
+              icon={Briefcase}
+              iconColor="#34D399"
+              loading={statsLoading}
+              goalKey="closedWon"
+              goals={goals}
+              onGoalChange={handleGoalChange}
+            />
+          </Link>
+          <Link href="/leads">
+            <MBStatCard
+              label="Active Leads"
+              value={(stats?.activeLeads ?? 0).toLocaleString()}
+              rawValue={stats?.activeLeads ?? 0}
+              delta={stats?.leadsDelta}
+              icon={Users}
+              iconColor="#C084FC"
+              loading={statsLoading}
+              goalKey="activeLeads"
+              goals={goals}
+              onGoalChange={handleGoalChange}
+            />
+          </Link>
+          <Link href="/customers">
+            <MBStatCard
+              label="Customers"
+              value={stats?.customerCount ?? 0}
+              rawValue={stats?.customerCount ?? 0}
+              delta={stats?.customerDelta}
+              icon={UserCheck}
+              iconColor="#F87171"
+              loading={statsLoading}
+              goalKey="customers"
+              goals={goals}
+              onGoalChange={handleGoalChange}
+            />
+          </Link>
           <Link href="/proposals">
             <MBStatCard
               label="Stale Proposals"
