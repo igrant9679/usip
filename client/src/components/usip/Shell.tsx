@@ -61,24 +61,19 @@ import { Moon, Sun, Pencil, Check as CheckIcon, X as XIcon } from "lucide-react"
 const AccentContext = createContext<string>("#1D4ED8");
 export function useAccentColor() { return useContext(AccentContext); }
 
-// Three kinds of entries can appear in a NavGroup's `items` array:
+// Entry kinds that can appear in a NavGroup's `items` array:
 //   - default link (no `kind` field): renders as a clickable nav row
 //   - subhead: small uppercase label inside the group (e.g. Acquire's
 //     "Funnel" / "Tools" sub-headers)
-//   - connector: a faint down-arrow rendered between consecutive funnel
-//     items in the Acquire group, signaling the Prospects → Leads → Contacts
-//     → Accounts → Pipeline progression
+//   - miniPipeline: compact horizontal pipeline at the TOP of a group
+//     (Acquire) — letter-pill per stage, clickable, active-highlighting
 type NavLinkItem = { href: string; label: string; icon: any };
 type NavSubhead = { kind: "subhead"; label: string };
-type NavConnector = { kind: "connector" };
-// Compact horizontal pipeline visualization shown at the TOP of a group
-// (currently only used by Acquire) — letter-pill per stage with arrow glyphs
-// between them. Each pill is clickable and highlights when its route is active.
 type NavMiniPipeline = {
   kind: "miniPipeline";
   stages: { href: string; label: string; short: string }[];
 };
-type NavItem = NavLinkItem | NavSubhead | NavConnector | NavMiniPipeline;
+type NavItem = NavLinkItem | NavSubhead | NavMiniPipeline;
 type NavGroup = { label: string; items: NavItem[]; color: string; darkColor: string; activeColor: string; activeBg: string; darkActiveBg: string };
 
 const NAV: NavGroup[] = [
@@ -119,7 +114,7 @@ const NAV: NavGroup[] = [
     darkActiveBg: "rgba(252,211,77,0.12)",
     // Mini horizontal pipeline at the top reads as the "story" of this
     // section at a glance. Below it, the same stages plus support tools
-    // are listed vertically with arrow connectors.
+    // are listed vertically under "Funnel" / "Tools" sub-headers.
     items: [
       {
         kind: "miniPipeline",
@@ -133,13 +128,9 @@ const NAV: NavGroup[] = [
       },
       { kind: "subhead", label: "Funnel" },
       { href: "/prospects", label: "Prospects", icon: Radar },
-      { kind: "connector" },
       { href: "/leads", label: "Leads", icon: Target },
-      { kind: "connector" },
       { href: "/contacts", label: "Contacts", icon: Users },
-      { kind: "connector" },
       { href: "/accounts", label: "Accounts", icon: Building2 },
-      { kind: "connector" },
       { href: "/pipeline", label: "Pipeline", icon: KanbanSquare },
       { kind: "subhead", label: "Tools" },
       // Phase 1 of the multi-source prospect finder (Google Places now,
@@ -266,8 +257,8 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
   // Respect the user's "Set as Home" preference for the Dashboard nav link
   const homeDashboardHref = (typeof window !== "undefined" ? localStorage.getItem(HOME_DASHBOARD_KEY) : null) ?? "/";
 
-  // Build effective nav with the resolved home href. Non-link items (subheads,
-  // connectors — see Acquire section) pass through unchanged.
+  // Build effective nav with the resolved home href. Non-link items
+  // (subheads, miniPipeline — see Acquire section) pass through unchanged.
   const effectiveNav = NAV.map((g) => ({
     ...g,
     items: g.items.map((i) =>
@@ -415,23 +406,6 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
                           className="text-[9px] font-semibold uppercase tracking-wider text-white/40"
                         >
                           {item.label}
-                        </span>
-                      </div>
-                    );
-                  }
-                  // Flow connector — faint down-arrow between funnel items
-                  if ("kind" in item && item.kind === "connector") {
-                    return (
-                      <div
-                        key={`connector-${idx}`}
-                        className="flex justify-center pointer-events-none select-none"
-                        aria-hidden="true"
-                      >
-                        <span
-                          className="text-[11px] leading-none"
-                          style={{ color: gc + "66" /* 40% opacity */ }}
-                        >
-                          ↓
                         </span>
                       </div>
                     );
