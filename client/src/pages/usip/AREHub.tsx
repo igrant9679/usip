@@ -345,13 +345,34 @@ export default function AREHub() {
             {loadingCampaigns && <Loader2 className="size-3.5 animate-spin text-muted-foreground" />}
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
-            <StatCard label="Discovered" value={totals.discovered} hint="prospects found" />
-            <StatCard label="Enriched" value={totals.enriched} hint={pct(totals.enriched, totals.discovered) + " of found"} />
-            <StatCard label="Approved" value={totals.approved} hint={pct(totals.approved, totals.enriched) + " of enriched"} />
-            <StatCard label="Contacted" value={totals.contacted} hint={pct(totals.contacted, totals.approved) + " of approved"} />
-            <StatCard label="Replied" value={totals.replied} hint={pct(totals.replied, totals.contacted) + " reply rate"} tone={totals.replied > 0 ? "success" : undefined} />
-            <StatCard label="Meetings" value={totals.meetings} hint={pct(totals.meetings, totals.replied) + " of replies"} tone={totals.meetings > 0 ? "success" : undefined} />
-            <StatCard label="Opps Created" value={totals.opps} hint="pipeline generated" tone={totals.opps > 0 ? "success" : undefined} />
+            {/* Each stage links to the existing page that shows that
+                stage's content. The funnel is aggregated across all
+                campaigns, so the early stages point at the ARE Campaigns
+                list (the entry point to per-campaign prospect pipelines);
+                later stages point at the dedicated pages that surface
+                them (replies → Unified Inbox, meetings → Calendar,
+                opps → Pipeline). */}
+            <Link href="/are/campaigns" className="block rounded-xl hover:ring-2 hover:ring-primary/30 transition" title="View campaigns and their discovered prospects">
+              <StatCard label="Discovered" value={totals.discovered} hint="prospects found" />
+            </Link>
+            <Link href="/are/campaigns" className="block rounded-xl hover:ring-2 hover:ring-primary/30 transition" title="View enriched prospects in campaigns">
+              <StatCard label="Enriched" value={totals.enriched} hint={pct(totals.enriched, totals.discovered) + " of found"} />
+            </Link>
+            <Link href="/are/campaigns" className="block rounded-xl hover:ring-2 hover:ring-primary/30 transition" title="View approved prospects in campaigns">
+              <StatCard label="Approved" value={totals.approved} hint={pct(totals.approved, totals.enriched) + " of enriched"} />
+            </Link>
+            <Link href="/are/campaigns" className="block rounded-xl hover:ring-2 hover:ring-primary/30 transition" title="View contacted prospects in campaigns">
+              <StatCard label="Contacted" value={totals.contacted} hint={pct(totals.contacted, totals.approved) + " of approved"} />
+            </Link>
+            <Link href="/unified-inbox" className="block rounded-xl hover:ring-2 hover:ring-primary/30 transition" title="View replies in the Unified Inbox">
+              <StatCard label="Replied" value={totals.replied} hint={pct(totals.replied, totals.contacted) + " reply rate"} tone={totals.replied > 0 ? "success" : undefined} />
+            </Link>
+            <Link href="/calendar" className="block rounded-xl hover:ring-2 hover:ring-primary/30 transition" title="View booked meetings on the Calendar">
+              <StatCard label="Meetings" value={totals.meetings} hint={pct(totals.meetings, totals.replied) + " of replies"} tone={totals.meetings > 0 ? "success" : undefined} />
+            </Link>
+            <Link href="/pipeline" className="block rounded-xl hover:ring-2 hover:ring-primary/30 transition" title="View generated opportunities on the Pipeline">
+              <StatCard label="Opps Created" value={totals.opps} hint="pipeline generated" tone={totals.opps > 0 ? "success" : undefined} />
+            </Link>
           </div>
 
           {/* Funnel visualisation */}
