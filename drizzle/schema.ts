@@ -1097,6 +1097,11 @@ export const workspaceSettings = mysqlTable("workspace_settings", {
   aiAutoSendEnabled: boolean("aiAutoSendEnabled").default(false).notNull(),
   aiAutoSendScoreMin: int("aiAutoSendScoreMin").default(70).notNull(),
   aiAutoSendConfidenceMin: int("aiAutoSendConfidenceMin").default(75).notNull(),
+  // When true, auto-send dispatches sequence drafts to recipients with a
+  // NULL relationship-strength / lead score (cold mass-outreach). Default
+  // false preserves the warm-only protection for workspaces that don't
+  // explicitly opt in. See autoSendForAllWorkspaces in routers/sequences.
+  aiAutoSendAllowUnscored: boolean("aiAutoSendAllowUnscored").default(false).notNull(),
   // BYOK AI provider credentials (Migration 0056). API keys are stored as
   // AES-256-GCM ciphertext in `iv:ciphertext:authTag` hex form — see server/_core/crypto.ts.
   anthropicApiKeyEnc: text("anthropicApiKeyEnc"),

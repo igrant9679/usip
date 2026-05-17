@@ -699,10 +699,10 @@ export default function AIPipelineQueue() {
             <div
               className="flex items-center gap-2 border rounded-md px-3 py-1.5 bg-muted/40"
               title={
-                `When ON, AI-generated sequence drafts dispatch automatically on the next 5-min tick — no human review.\n\n` +
-                `Gating: recipient must have a score ≥ ${autoSendSettings?.aiAutoSendScoreMin ?? 70} (lead.score or contact.relStrengthScore). ` +
-                `Unscored recipients are skipped silently and stay in pending review.\n\n` +
-                `Note: aiAutoSendConfidenceMin (set to ${autoSendSettings?.aiAutoSendConfidenceMin ?? 75}) is not yet enforced — there's no per-draft AI confidence signal stored on emailDrafts. Only the score threshold gates sends today.`
+                `When ON, sequence drafts dispatch automatically on the next 5-min tick — no human review.\n\n` +
+                `Gating: recipient must have a score ≥ ${autoSendSettings?.aiAutoSendScoreMin ?? 70} (lead.score or contact.relStrengthScore), ` +
+                `UNLESS "Incl. cold/unscored" is on (needed for mass cold outreach to freshly imported contacts, which have no score).\n\n` +
+                `Note: aiAutoSendConfidenceMin (${autoSendSettings?.aiAutoSendConfidenceMin ?? 75}) is not yet enforced — no per-draft AI confidence signal exists. Only the score threshold gates sends today.`
               }
             >
               <Switch
@@ -713,11 +713,40 @@ export default function AIPipelineQueue() {
                     aiAutoSendEnabled: checked,
                     aiAutoSendScoreMin: autoSendSettings?.aiAutoSendScoreMin ?? 70,
                     aiAutoSendConfidenceMin: autoSendSettings?.aiAutoSendConfidenceMin ?? 75,
+                    aiAutoSendAllowUnscored: autoSendSettings?.aiAutoSendAllowUnscored ?? false,
                   })
                 }
               />
               <label htmlFor="auto-send-toggle" className="text-xs text-muted-foreground cursor-pointer select-none whitespace-nowrap">
                 Auto-send approved
+              </label>
+            </div>
+            {/* Allow auto-send to cold/unscored recipients — required for
+                mass cold outreach (imported contacts have no rel-strength
+                score). Disabled unless the main toggle is on. */}
+            <div
+              className="flex items-center gap-2 border rounded-md px-3 py-1.5 bg-muted/40"
+              title={
+                `When ON, auto-send also dispatches to recipients with NO relationship-strength / lead score ` +
+                `(freshly imported cold contacts). Required for mass automated cold outreach. ` +
+                `When OFF, unscored recipients stay parked in pending review.`
+              }
+            >
+              <Switch
+                id="auto-send-unscored-toggle"
+                checked={autoSendSettings?.aiAutoSendAllowUnscored ?? false}
+                disabled={!(autoSendSettings?.aiAutoSendEnabled ?? false)}
+                onCheckedChange={(checked) =>
+                  updateAutoSend.mutate({
+                    aiAutoSendEnabled: autoSendSettings?.aiAutoSendEnabled ?? false,
+                    aiAutoSendScoreMin: autoSendSettings?.aiAutoSendScoreMin ?? 70,
+                    aiAutoSendConfidenceMin: autoSendSettings?.aiAutoSendConfidenceMin ?? 75,
+                    aiAutoSendAllowUnscored: checked,
+                  })
+                }
+              />
+              <label htmlFor="auto-send-unscored-toggle" className="text-xs text-muted-foreground cursor-pointer select-none whitespace-nowrap">
+                Incl. cold/unscored
               </label>
             </div>
             {pendingDraftIds.length > 0 && (

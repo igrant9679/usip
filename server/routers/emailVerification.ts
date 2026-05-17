@@ -162,6 +162,74 @@ export async function runDailyVerificationMaintenance(): Promise<void> {
   }
 }
 
+/**
+ * Server-driven advance of in-flight Reoon bulk verification jobs.
+ *
+ * getBulkJobStatus only progresses a job when the CLIENT polls it — so if
+ * the SDR closes the tab after kicking off a 10k bulk verify, the Reoon
+ * task completes server-side but the results are never written back to
+ * `contacts`. This cron does the same write-back without the client:
+ * find every `status='running'` job, ask Reoon for results, apply to the
+ * job's workspace contacts, mark completed. Bounded per tick; per-job
+ * try/catch so one stuck job can't block the rest.
+ */
+export async function advanceRunningVerificationJobs(): Promise<void> {
+  const apiKey = process.env.REOON_API_KEY;
+  if (!apiKey) return; // nothing to do without a key
+  const db = await getDb();
+  if (!db) return;
+
+  const running = await db
+    .select()
+    .from(emailVerificationJobs)
+    .where(eq(emailVerificationJobs.status, "running"))
+    .limit(25);
+
+  for (const job of running) {
+    if (!job.reoonTaskId) continue;
+    try {
+      const result = await reoonGetBulkResult(job.reoonTaskId, apiKey);
+      const progressPct = result.progress_percentage ?? 0;
+      const isCompleted = result.status === "completed";
+
+      if (isCompleted && result.results) {
+        for (const [email, data] of Object.entries(result.results)) {
+          const usipStatus = reoonStatusToUsip(data.status);
+          await db
+            .update(contacts)
+            .set({
+              emailVerificationStatus: usipStatus,
+              emailVerifiedAt: new Date(),
+              emailVerificationData: data,
+            })
+            .where(
+              and(
+                eq(contacts.workspaceId, job.workspaceId),
+                eq(contacts.email, email),
+              ),
+            );
+        }
+        await db
+          .update(emailVerificationJobs)
+          .set({
+            status: "completed",
+            checkedEmails: result.count_checked,
+            progressPct: String(progressPct),
+            completedAt: new Date(),
+          })
+          .where(eq(emailVerificationJobs.id, job.id));
+      } else {
+        await db
+          .update(emailVerificationJobs)
+          .set({ checkedEmails: result.count_checked, progressPct: String(progressPct) })
+          .where(eq(emailVerificationJobs.id, job.id));
+      }
+    } catch (e) {
+      console.error(`[VerifyJobs] job ${job.id} advance failed:`, e);
+    }
+  }
+}
+
 /* ─── Router ────────────────────────────────────────────────────────────── */
 
 export const emailVerificationRouter = router({

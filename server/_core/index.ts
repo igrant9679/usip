@@ -13,7 +13,7 @@ import { registerScimRoutes } from "../scimHttp";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
-import { runDailyVerificationMaintenance } from "../routers/emailVerification";
+import { runDailyVerificationMaintenance, advanceRunningVerificationJobs } from "../routers/emailVerification";
 import { processEnrollments } from "../sequenceEngine";
 import { autoSendForAllWorkspaces } from "../routers/sequences";
 import { runNightlyBatch } from "../nightlyBatch";
@@ -119,6 +119,17 @@ async function startServer() {
   };
   setTimeout(runMaintenance, 30_000); // delay 30s to let DB settle
   setInterval(runMaintenance, 24 * 60 * 60 * 1000);
+
+  // Advance in-flight Reoon bulk verification jobs server-side every 2 min
+  // so results land even if the SDR closed the tab after kicking off a
+  // big (e.g. 10k) bulk verify.
+  const runVerifyJobs = () => {
+    advanceRunningVerificationJobs().catch((e) =>
+      console.error("[VerifyJobs] advance run failed:", e),
+    );
+  };
+  setTimeout(runVerifyJobs, 45_000);
+  setInterval(runVerifyJobs, 2 * 60 * 1000);
 
   // Sequence execution engine: process active enrollments every 5 minutes
   const runSequenceEngine = () => {

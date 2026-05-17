@@ -235,99 +235,116 @@ export const importsRouter = router({
       let errorRows = 0;
       const seenEmails = new Set<string>();
 
+      // ── Phase 1: validate + dedup entirely in memory (no DB I/O) ──
+      // Previously this loop did ~2 sequential awaited inserts PER ROW
+      // (contact + import-row) → ~20k round-trips for a 10k file, minutes
+      // long inside one tRPC request → timeout / partial import. Now we
+      // classify in memory then bulk-insert in chunks.
+      type Pending = {
+        rowIndex: number;
+        row: Record<string, string>;
+        mapped: ReturnType<typeof mapRowToContact>;
+      };
+      const toInsert: Pending[] = [];
+      const importRowValues: Array<Record<string, unknown>> = [];
+
       for (let idx = 0; idx < rows.length; idx++) {
         const row = rows[idx];
         const rowIndex = idx + 1;
         const mapped = mapRowToContact(row, input.fieldMapping as Record<string, string | null>);
 
-        // Validation
         const errors: string[] = [];
         if (!mapped.firstName?.trim()) errors.push("Missing First Name");
         if (!mapped.lastName?.trim()) errors.push("Missing Last Name");
         if (mapped.email && !isValidEmail(mapped.email)) errors.push("Invalid email");
 
         if (errors.length > 0) {
-          await db.insert(contactImportRows).values({
-            importId,
-            rowIndex,
-            rowData: row,
-            mappedData: mapped,
-            status: "error",
-            errorReason: errors.join("; "),
-          });
+          importRowValues.push({ importId, rowIndex, rowData: row, mappedData: mapped, status: "error", errorReason: errors.join("; ") });
           errorRows++;
           continue;
         }
 
-        // Duplicate check
         if (mapped.email) {
           const emailLower = mapped.email.toLowerCase();
-          if (existingEmails.has(emailLower) || seenEmails.has(emailLower)) {
-            if (input.skipDuplicates) {
-              await db.insert(contactImportRows).values({
-                importId,
-                rowIndex,
-                rowData: row,
-                mappedData: mapped,
-                status: "duplicate",
-                errorReason: "Duplicate email",
-              });
-              skippedRows++;
-              continue;
-            }
+          if ((existingEmails.has(emailLower) || seenEmails.has(emailLower)) && input.skipDuplicates) {
+            importRowValues.push({ importId, rowIndex, rowData: row, mappedData: mapped, status: "duplicate", errorReason: "Duplicate email" });
+            skippedRows++;
+            continue;
           }
           seenEmails.add(emailLower);
+          existingEmails.add(emailLower);
         }
+        toInsert.push({ rowIndex, row, mapped });
+      }
 
-        // Insert contact
+      // ── Phase 2: chunked batch insert of contacts, then import-rows ──
+      const CHUNK = 500;
+      const buildContactValues = (p: Pending) => ({
+        workspaceId: wsId,
+        firstName: p.mapped.firstName?.trim() ?? "",
+        lastName: p.mapped.lastName?.trim() ?? "",
+        email: p.mapped.email?.trim() || null,
+        phone: p.mapped.phone?.trim() || null,
+        title: p.mapped.title?.trim() || null,
+        linkedinUrl: p.mapped.linkedinUrl?.trim() || null,
+        city: p.mapped.city?.trim() || null,
+        seniority: p.mapped.seniority?.trim() || null,
+        ownerUserId: input.postImportActions?.ownerUserId ?? userId,
+        customFields: {
+          importTag: input.postImportActions?.tag ?? null,
+          importSource: "csv_import",
+          importId,
+          ...(p.mapped.company ? { company: p.mapped.company } : {}),
+          ...(p.mapped.industry ? { industry: p.mapped.industry } : {}),
+          ...(p.mapped.country ? { country: p.mapped.country } : {}),
+          ...(p.mapped.state ? { state: p.mapped.state } : {}),
+          ...(p.mapped.website ? { website: p.mapped.website } : {}),
+        },
+      });
+
+      for (let i = 0; i < toInsert.length; i += CHUNK) {
+        const chunk = toInsert.slice(i, i + CHUNK);
         try {
-          const [newContact] = await db
+          const ids = await db
             .insert(contacts)
-            .values({
-              workspaceId: wsId,
-              firstName: mapped.firstName?.trim() ?? "",
-              lastName: mapped.lastName?.trim() ?? "",
-              email: mapped.email?.trim() || null,
-              phone: mapped.phone?.trim() || null,
-              title: mapped.title?.trim() || null,
-              linkedinUrl: mapped.linkedinUrl?.trim() || null,
-              city: mapped.city?.trim() || null,
-              seniority: mapped.seniority?.trim() || null,
-              ownerUserId: input.postImportActions?.ownerUserId ?? userId,
-              customFields: {
-                importTag: input.postImportActions?.tag ?? null,
-                importSource: "csv_import",
-                importId,
-                ...(mapped.company ? { company: mapped.company } : {}),
-                ...(mapped.industry ? { industry: mapped.industry } : {}),
-                ...(mapped.country ? { country: mapped.country } : {}),
-                ...(mapped.state ? { state: mapped.state } : {}),
-                ...(mapped.website ? { website: mapped.website } : {}),
-              },
-            })
-            .$returningId();
+            .values(chunk.map(buildContactValues) as never)
+            .$returningId(); // ordered ids for the batch
+          for (let j = 0; j < chunk.length; j++) {
+            importRowValues.push({
+              importId,
+              rowIndex: chunk[j].rowIndex,
+              rowData: chunk[j].row,
+              mappedData: chunk[j].mapped,
+              status: "imported",
+              contactId: (ids as Array<{ id: number }>)[j]?.id,
+            });
+            importedRows++;
+          }
+        } catch {
+          // Chunk failed — fall back to per-row so one bad row doesn't
+          // lose the other 499. Preserves prior error-capture behavior.
+          for (const p of chunk) {
+            try {
+              const [c] = await db.insert(contacts).values(buildContactValues(p) as never).$returningId();
+              importRowValues.push({ importId, rowIndex: p.rowIndex, rowData: p.row, mappedData: p.mapped, status: "imported", contactId: c.id });
+              importedRows++;
+            } catch {
+              importRowValues.push({ importId, rowIndex: p.rowIndex, rowData: p.row, mappedData: p.mapped, status: "error", errorReason: "Database insert failed" });
+              errorRows++;
+            }
+          }
+        }
+      }
 
-          await db.insert(contactImportRows).values({
-            importId,
-            rowIndex,
-            rowData: row,
-            mappedData: mapped,
-            status: "imported",
-            contactId: newContact.id,
-          });
-
-          if (mapped.email) existingEmails.add(mapped.email.toLowerCase());
-          importedRows++;
-        } catch (err) {
-          await db.insert(contactImportRows).values({
-            importId,
-            rowIndex,
-            rowData: row,
-            mappedData: mapped,
-            status: "error",
-            errorReason: "Database insert failed",
-          });
-          errorRows++;
+      // Bulk-insert all import-row audit records (chunked).
+      for (let i = 0; i < importRowValues.length; i += CHUNK) {
+        const slice = importRowValues.slice(i, i + CHUNK);
+        try {
+          await db.insert(contactImportRows).values(slice as never);
+        } catch {
+          for (const v of slice) {
+            try { await db.insert(contactImportRows).values(v as never); } catch { /* audit row best-effort */ }
+          }
         }
       }
 

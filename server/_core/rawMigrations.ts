@@ -764,6 +764,20 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0069: auto-send to unscored (cold) recipients ───────────────────────
+  // Lets a workspace opt into auto-sending sequence drafts to recipients
+  // with a NULL relationship-strength / lead score (the cold mass-outreach
+  // case — freshly imported contacts are always NULL-scored and nothing
+  // computes it server-side). Default FALSE = no behavior change for
+  // workspaces that don't opt in. errno 1060 (dup column) is tolerated so
+  // re-runs are safe.
+  {
+    name: "0069_autosend_allow_unscored.sql",
+    statements: [
+      `ALTER TABLE \`workspace_settings\` ADD COLUMN \`aiAutoSendAllowUnscored\` boolean NOT NULL DEFAULT FALSE`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

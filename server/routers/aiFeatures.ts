@@ -753,10 +753,11 @@ export const emailAutoSendRouter = router({
         aiAutoSendEnabled: workspaceSettings.aiAutoSendEnabled,
         aiAutoSendScoreMin: workspaceSettings.aiAutoSendScoreMin,
         aiAutoSendConfidenceMin: workspaceSettings.aiAutoSendConfidenceMin,
+        aiAutoSendAllowUnscored: workspaceSettings.aiAutoSendAllowUnscored,
       })
       .from(workspaceSettings)
       .where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
-    return settings ?? { aiAutoSendEnabled: false, aiAutoSendScoreMin: 70, aiAutoSendConfidenceMin: 75 };
+    return settings ?? { aiAutoSendEnabled: false, aiAutoSendScoreMin: 70, aiAutoSendConfidenceMin: 75, aiAutoSendAllowUnscored: false };
   }),
 
   /** Update auto-send settings */
@@ -765,6 +766,7 @@ export const emailAutoSendRouter = router({
       aiAutoSendEnabled: z.boolean(),
       aiAutoSendScoreMin: z.number().int().min(0).max(100),
       aiAutoSendConfidenceMin: z.number().int().min(0).max(100),
+      aiAutoSendAllowUnscored: z.boolean().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();

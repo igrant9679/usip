@@ -1105,10 +1105,15 @@ export async function deliverEmailDraft(params: {
  *
  * Eligibility per draft:
  *   - status = "pending_review"
- *   - aiGenerated = true (only auto-send AI work, not human drafts)
- *   - sequenceId IS NOT NULL (only outreach paths, not ad-hoc compose)
- *   - linked lead.score >= aiAutoSendScoreMin, OR
- *   - linked contact.relStrengthScore >= aiAutoSendScoreMin
+ *   - sequenceId IS NOT NULL — scopes to sequence-engine automated
+ *     outreach; ad-hoc human mailbox drafts have no sequenceId. (The old
+ *     extra `aiGenerated = true` filter was a bug: the sequence engine
+ *     creates drafts with aiGenerated:false, so it excluded ALL automated
+ *     sequence outreach — nothing ever auto-sent. Removed.)
+ *   - recipient score gate: linked lead.score / contact.relStrengthScore
+ *     >= aiAutoSendScoreMin. If the score is NULL (e.g. freshly imported
+ *     cold contacts), the draft is skipped UNLESS the workspace enabled
+ *     aiAutoSendAllowUnscored (cold mass-outreach opt-in).
  *
  * aiAutoSendConfidenceMin is currently unenforceable — no aiConfidence
  * column on emailDrafts yet. Falls through as "pass" with a one-time
@@ -1130,6 +1135,7 @@ export async function autoSendForAllWorkspaces(): Promise<{
       workspaceId: workspaceSettings.workspaceId,
       aiAutoSendScoreMin: workspaceSettings.aiAutoSendScoreMin,
       aiAutoSendConfidenceMin: workspaceSettings.aiAutoSendConfidenceMin,
+      aiAutoSendAllowUnscored: workspaceSettings.aiAutoSendAllowUnscored,
     })
     .from(workspaceSettings)
     .where(eq(workspaceSettings.aiAutoSendEnabled, true));
@@ -1159,7 +1165,12 @@ export async function autoSendForAllWorkspaces(): Promise<{
         and(
           eq(emailDrafts.workspaceId, ws.workspaceId),
           eq(emailDrafts.status, "pending_review"),
-          eq(emailDrafts.aiGenerated, true),
+          // sequenceId NOT NULL already scopes this to sequence-engine
+          // automated drafts — ad-hoc human mailbox drafts have no
+          // sequenceId. The old `aiGenerated = true` filter ALSO excluded
+          // every sequence-engine draft (sequenceEngine.ts creates them
+          // with aiGenerated:false), so automated sequence outreach never
+          // auto-sent at all. Dropped it; sequenceId-scoping is correct.
           isNotNull(emailDrafts.sequenceId),
         ),
       )
@@ -1195,11 +1206,21 @@ export async function autoSendForAllWorkspaces(): Promise<{
       // and contacts that hadn't been AI-scored just sat forever
       // pending review with no visible cause. (Critical-7.)
       if (recipientScore === null) {
-        skipped++;
-        skippedNullScore++;
-        continue;
-      }
-      if (recipientScore < scoreMin) {
+        // Cold mass-outreach use case: freshly imported contacts have a
+        // NULL relStrengthScore and nothing scores them server-side. The
+        // relationship-strength gate is meant to protect WARM contacts
+        // from auto-spam — it's backwards for a deliberate SDR cold
+        // sequence. When the workspace opts into aiAutoSendAllowUnscored,
+        // treat a null score as eligible (fall through to send) instead
+        // of parking it forever as skippedNullScore. Default-off, so no
+        // behavior change for workspaces that didn't opt in.
+        if (!ws.aiAutoSendAllowUnscored) {
+          skipped++;
+          skippedNullScore++;
+          continue;
+        }
+        // allowed → skip the < scoreMin check below (null isn't comparable)
+      } else if (recipientScore < scoreMin) {
         skipped++;
         skippedLowScore++;
         continue;
