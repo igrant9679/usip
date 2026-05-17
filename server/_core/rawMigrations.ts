@@ -778,6 +778,46 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0070: sequence canvas tables (nodes + edges) ────────────────────────
+  // sequence_nodes / sequence_edges were defined in drizzle/schema.ts and
+  // old drizzle-kit SQL (0004/0029) but NEVER ported into rawMigrations,
+  // which is what actually migrates prod on boot. So the Sequence Canvas
+  // auto-seed insert ("Sequence start" + first email node) failed with
+  // "Failed query: insert into `sequence_nodes` ..." on any workspace
+  // whose DB was built from rawMigrations only. CREATE IF NOT EXISTS +
+  // tolerated dup-errnos make this safe where the tables already exist.
+  {
+    name: "0070_sequence_canvas.sql",
+    statements: [
+      `CREATE TABLE IF NOT EXISTS \`sequence_nodes\` (
+        \`id\` varchar(64) NOT NULL,
+        \`sequenceId\` int NOT NULL,
+        \`workspaceId\` int NOT NULL,
+        \`type\` enum('start','email','wait','condition','action','goal','linkedin_dm','linkedin_invite') NOT NULL,
+        \`positionX\` int NOT NULL DEFAULT 0,
+        \`positionY\` int NOT NULL DEFAULT 0,
+        \`data\` json NOT NULL,
+        \`createdAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        \`updatedAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        CONSTRAINT \`sequence_nodes_pk\` PRIMARY KEY (\`id\`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE INDEX \`ix_sn_seq\` ON \`sequence_nodes\` (\`sequenceId\`)`,
+      `CREATE INDEX \`ix_sn_ws\` ON \`sequence_nodes\` (\`workspaceId\`)`,
+      `CREATE TABLE IF NOT EXISTS \`sequence_edges\` (
+        \`id\` varchar(64) NOT NULL,
+        \`sequenceId\` int NOT NULL,
+        \`workspaceId\` int NOT NULL,
+        \`source\` varchar(64) NOT NULL,
+        \`target\` varchar(64) NOT NULL,
+        \`sourceHandle\` varchar(32) NULL,
+        \`label\` varchar(64) NULL,
+        \`createdAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT \`sequence_edges_pk\` PRIMARY KEY (\`id\`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE INDEX \`ix_se_seq\` ON \`sequence_edges\` (\`sequenceId\`)`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------
