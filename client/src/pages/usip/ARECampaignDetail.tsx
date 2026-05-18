@@ -726,6 +726,7 @@ export default function ARECampaignDetail() {
   const { data: prospects, isLoading: loadingProspects } = trpc.are.prospects.list.useQuery({ campaignId, limit: 100 });
   const { data: signals } = trpc.are.execution.getSignalLog.useQuery({ campaignId, limit: 50 });
   const { data: abVariants } = trpc.are.prospects.getAbVariants.useQuery({ campaignId });
+  const { data: scrapeJobs } = trpc.are.scraper.listJobs.useQuery({ campaignId, limit: 25 });
   const { data: rejectionStats } = trpc.are.prospects.getRejectionStats.useQuery({ campaignId });
   const { data: reevalHistory } = trpc.are.prospects.getReevalHistory.useQuery({ campaignId });
   const { data: csvData, refetch: fetchCsv } = trpc.are.prospects.exportRejections.useQuery(
@@ -1211,6 +1212,66 @@ export default function ARECampaignDetail() {
                   </div>
                 </CardContent>
               </Card>
+            </div>
+
+            {/* Recent scrape jobs */}
+            <div className="mt-6">
+              <div className="flex items-center gap-2 mb-3">
+                <Clock className="size-4 text-muted-foreground" />
+                <h3 className="text-sm font-semibold">Recent scrape jobs</h3>
+                {scrapeJobs && scrapeJobs.length > 0 && (
+                  <span className="text-xs text-muted-foreground">({scrapeJobs.length})</span>
+                )}
+              </div>
+              {!scrapeJobs || scrapeJobs.length === 0 ? (
+                <EmptyState
+                  icon={Search}
+                  title="No scrape jobs yet"
+                  description="Run a scrape above to discover prospects. Completed jobs and their result counts will appear here."
+                />
+              ) : (
+                <div className="rounded-xl border divide-y">
+                  {scrapeJobs.map((job) => {
+                    const statusColor =
+                      job.status === "complete" ? "text-emerald-500"
+                      : job.status === "failed" ? "text-destructive"
+                      : job.status === "running" ? "text-blue-500"
+                      : "text-muted-foreground";
+                    const StatusIcon =
+                      job.status === "complete" ? CheckCircle2
+                      : job.status === "failed" ? XCircle
+                      : job.status === "running" ? Loader2
+                      : Clock;
+                    return (
+                      <div key={job.id} className="flex items-center gap-3 px-4 py-3">
+                        <StatusIcon
+                          className={`size-4 shrink-0 ${statusColor} ${job.status === "running" ? "animate-spin" : ""}`}
+                        />
+                        <div className="min-w-0 flex-1">
+                          <div className="text-sm font-medium truncate">{job.query}</div>
+                          <div className="text-xs text-muted-foreground flex items-center gap-2 mt-0.5">
+                            <span className="capitalize">{job.sourceType.replace(/_/g, " ")}</span>
+                            <span>·</span>
+                            <span className={statusColor}>{job.status}</span>
+                            {job.errorMessage && (
+                              <>
+                                <span>·</span>
+                                <span className="text-destructive truncate">{job.errorMessage}</span>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <div className="text-sm font-semibold tabular-nums">{job.resultCount}</div>
+                          <div className="text-[11px] text-muted-foreground">
+                            {new Date(job.scrapedAt ?? job.createdAt).toLocaleDateString([], { month: "short", day: "numeric" })}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </TabsContent>
 

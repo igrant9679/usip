@@ -30,6 +30,7 @@ import { registerEmailBuilderStreamRoutes } from "../emailBuilderStreamRoute";
 import { registerAccountBriefsStreamRoutes } from "../accountBriefsStreamRoute";
 import { registerMailboxStreamRoutes } from "../mailboxStreamRoute";
 import { seedToursForAllWorkspaces } from "../seedTours";
+import { seedAreDemoForAllWorkspaces } from "../seedAreDemo";
 import { runRawMigrations } from "./rawMigrations";
 
 function isPortAvailable(port: number): Promise<boolean> {
@@ -109,6 +110,13 @@ async function startServer() {
       console.error("[SeedTours] startup seed failed:", e)
     );
   }, 15_000); // 15s delay to let DB settle
+  // Seed a populated demo ARE campaign for all workspaces (idempotent).
+  // 25s delay so the 0071 are_*/prospect_* migration has applied first.
+  setTimeout(() => {
+    seedAreDemoForAllWorkspaces().catch((e) =>
+      console.error("[SeedAreDemo] startup seed failed:", e)
+    );
+  }, 25_000);
 
   // Daily email verification maintenance: snapshot + auto re-verify
   // Run once on startup (catches up if server was down), then every 24h

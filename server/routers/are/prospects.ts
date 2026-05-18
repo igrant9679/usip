@@ -921,11 +921,16 @@ export const prospectsRouter = router({
     .query(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) return { total: 0, byReason: [] };
+      // prospectQueue has firstName/lastName/title — NOT contactName/
+      // contactTitle. Selecting the nonexistent columns threw on every
+      // load, crashing the whole Rejections tab. The UI already falls
+      // back to firstName+lastName / title.
       const rejected = await db.select({
         id: prospectQueue.id,
         companyName: prospectQueue.companyName,
-        contactName: prospectQueue.contactName,
-        contactTitle: prospectQueue.contactTitle,
+        firstName: prospectQueue.firstName,
+        lastName: prospectQueue.lastName,
+        title: prospectQueue.title,
         rejectionReason: prospectQueue.rejectionReason,
         rejectedAt: prospectQueue.rejectedAt,
       })
@@ -958,7 +963,7 @@ export const prospectsRouter = router({
         id: prospectQueue.id,
         firstName: prospectQueue.firstName,
         lastName: prospectQueue.lastName,
-        contactTitle: prospectQueue.contactTitle,
+        title: prospectQueue.title,
         companyName: prospectQueue.companyName,
         industry: prospectQueue.industry,
         geography: prospectQueue.geography,
@@ -988,7 +993,7 @@ export const prospectsRouter = router({
         "Company Size","Email","LinkedIn URL","ICP Match Score","Rejection Reason","Rejected At","Source",
       ];
       const rows = rejected.map((r) => [
-        r.id, r.firstName, r.lastName, r.contactTitle, r.companyName, r.industry,
+        r.id, r.firstName, r.lastName, r.title, r.companyName, r.industry,
         r.geography, r.companySize, r.email, r.linkedinUrl, r.icpMatchScore,
         r.rejectionReason, r.rejectedAt ? new Date(r.rejectedAt).toISOString() : "", r.sourceType,
       ].map(escape).join(","));

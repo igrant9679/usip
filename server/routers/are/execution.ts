@@ -182,10 +182,12 @@ export async function processSignal(
           ownerUserId: campaign.ownerUserId ?? undefined,
         }).$returningId();
 
-        // Build AI note from intelligence dossier
-        const intelData = intel?.data as Record<string, unknown> | null;
-        const hooks = (intelData?.personalisationHooks as Array<{hook: string}> | null) ?? [];
-        const pains = (intelData?.painSignals as Array<{signal: string}> | null) ?? [];
+        // Build AI note from intelligence dossier. prospectIntelligence
+        // stores these as TOP-LEVEL json columns — there is no `data`
+        // wrapper column, so the old `intel?.data?.x` always resolved
+        // undefined and the note was permanently blank.
+        const hooks = ((intel?.personalisationHooks as Array<{ hook: string }> | null) ?? []);
+        const pains = ((intel?.painSignals as Array<{ signal: string }> | null) ?? []);
         const aiNote = [
           `ARE Campaign: ${campaign.name}`,
           hooks.length > 0 ? `Hooks: ${hooks.slice(0, 2).map(h => h.hook).join(" | ")}` : null,
