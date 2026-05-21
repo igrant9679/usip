@@ -11,7 +11,7 @@ type LineItem = { productId?: number; name: string; description?: string; quanti
 function AiPricingPanel({ quote }: { quote: any }) {
   const utils = trpc.useUtils();
   const [open, setOpen] = useState(false);
-  const score = trpc.quotesAi.recommendPricing.useMutation({
+  const score = trpc.quotesAi.suggestPricing.useMutation({
     onSuccess: () => utils.quotes.list.invalidate(),
     onError: (e: any) => toast.error(e.message),
   });
