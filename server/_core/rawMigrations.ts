@@ -1055,6 +1055,38 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0072: Help Center column drift ──────────────────────────────────────
+  // schema.ts (the Drizzle source of truth) renamed/added help_articles
+  // columns — body→bodyMarkdown, helpfulYes→helpfulCount,
+  // helpfulNo→notHelpfulCount, createdBy→authorId, plus new summary +
+  // associatedTourId — but the prod table was created by 0051 with the OLD
+  // names. Drizzle emits explicit column lists, so every helpCenter.* query
+  // and insert threw "Unknown column" and the entire Help Center 500'd.
+  // Also: help_categories.slug is NOT NULL in prod but absent from schema.ts,
+  // so upsertCategory's insert (which omits slug) failed too. Add the new
+  // columns, backfill from the legacy ones, and relax the now-unwritten
+  // columns to nullable. errno 1060 (dup column) is tolerated on re-run.
+  {
+    name: "0072_help_center_column_drift.sql",
+    statements: [
+      `ALTER TABLE \`help_articles\` ADD COLUMN \`summary\` text NULL`,
+      `ALTER TABLE \`help_articles\` ADD COLUMN \`bodyMarkdown\` text NULL`,
+      `ALTER TABLE \`help_articles\` ADD COLUMN \`associatedTourId\` int NULL`,
+      `ALTER TABLE \`help_articles\` ADD COLUMN \`authorId\` int NULL`,
+      `ALTER TABLE \`help_articles\` ADD COLUMN \`helpfulCount\` int NOT NULL DEFAULT 0`,
+      `ALTER TABLE \`help_articles\` ADD COLUMN \`notHelpfulCount\` int NOT NULL DEFAULT 0`,
+      // Backfill from the legacy columns 0051 created.
+      `UPDATE \`help_articles\` SET \`bodyMarkdown\` = \`body\` WHERE \`bodyMarkdown\` IS NULL`,
+      `UPDATE \`help_articles\` SET \`authorId\` = \`createdBy\` WHERE \`authorId\` IS NULL`,
+      `UPDATE \`help_articles\` SET \`helpfulCount\` = \`helpfulYes\`, \`notHelpfulCount\` = \`helpfulNo\``,
+      // `body` is NOT NULL with no default; Drizzle inserts omit it → relax it.
+      `ALTER TABLE \`help_articles\` MODIFY COLUMN \`body\` longtext NULL`,
+      // help_categories.slug is NOT NULL in prod but not in schema.ts → relax
+      // it so Drizzle inserts (which omit slug) succeed.
+      `ALTER TABLE \`help_categories\` MODIFY COLUMN \`slug\` varchar(120) NULL`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------
