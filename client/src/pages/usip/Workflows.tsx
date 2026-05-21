@@ -48,7 +48,9 @@ export default function Workflows() {
   const [selected, setSelected] = useState<number | null>(null);
   const [openNew, setOpenNew] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState(false);
-  const suggestMut = trpc.workflowsAi.suggestWorkflows.useMutation({
+  const suggestionsQ = trpc.workflowsAi.listSuggestions.useQuery(undefined, { enabled: showSuggestions });
+  const suggestMut = trpc.workflowsAi.generateSuggestions.useMutation({
+    onSuccess: () => suggestionsQ.refetch(),
     onError: (e: any) => toast.error(e.message),
   });
   const runs = trpc.workflows.runs.useQuery({ ruleId: selected ?? undefined });
@@ -64,13 +66,13 @@ export default function Workflows() {
       <PageHeader title="Workflow Automation" description="Automate repetitive actions with trigger-based workflow rules across the entire CRM. Workflows fire on record changes, time delays, or score thresholds and can update fields, send emails, or create tasks." pageKey="workflows"
         icon={<GitBranch className="size-5" />}
       >
-        <Button variant="outline" onClick={() => { suggestMut.mutate({}); setShowSuggestions(true); }} disabled={suggestMut.isPending}>
+        <Button variant="outline" onClick={() => { suggestMut.mutate(); setShowSuggestions(true); }} disabled={suggestMut.isPending}>
           <Sparkles className="size-4" /> {suggestMut.isPending ? "Analysing…" : "AI suggestions"}
         </Button>
         <Button onClick={() => setOpenNew(true)}><Plus className="size-4" /> New rule</Button>
       </PageHeader>
       {/* AI Workflow Suggestions Panel */}
-      {showSuggestions && (suggestMut.data?.suggestions ?? []).length > 0 && (
+      {showSuggestions && (suggestionsQ.data ?? []).length > 0 && (
         <div className="mx-6 mt-4 rounded-lg border border-violet-200 bg-violet-50/60 p-4">
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2 text-sm font-medium text-violet-800">
@@ -80,13 +82,13 @@ export default function Workflows() {
             <button className="text-xs text-muted-foreground hover:text-foreground" onClick={() => setShowSuggestions(false)}>Dismiss</button>
           </div>
           <ul className="space-y-2">
-            {(suggestMut.data!.suggestions as any[]).map((s, i) => (
-              <li key={i} className="rounded border bg-white p-3 text-sm">
-                <div className="font-medium">{s.name}</div>
-                <div className="text-xs text-muted-foreground mt-0.5">{s.rationale}</div>
+            {(suggestionsQ.data ?? []).map((s: any, i: number) => (
+              <li key={s.id ?? i} className="rounded border bg-white p-3 text-sm">
+                <div className="font-medium">{s.title}</div>
+                <div className="text-xs text-muted-foreground mt-0.5">{s.description}</div>
                 <div className="mt-1.5 flex gap-3 text-xs">
-                  <span className="text-muted-foreground">Trigger: <span className="font-medium text-foreground">{s.trigger}</span></span>
-                  <span className="text-muted-foreground">Action: <span className="font-medium text-foreground">{s.action}</span></span>
+                  <span className="text-muted-foreground">Trigger: <span className="font-medium text-foreground">{s.triggerType}</span></span>
+                  <span className="text-muted-foreground">Action: <span className="font-medium text-foreground">{(s.actions as any[])?.[0]?.type ?? "—"}</span></span>
                 </div>
               </li>
             ))}
