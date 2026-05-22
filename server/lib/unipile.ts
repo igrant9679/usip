@@ -250,6 +250,59 @@ export async function getLinkedInProfile(
   );
 }
 
+/**
+ * Raw LinkedIn people-search hit. Unipile's search response field names vary
+ * across API versions, so every field here is optional and callers read it
+ * defensively.
+ */
+export interface UnipileLinkedInSearchHit {
+  id?: string;
+  provider_id?: string;
+  public_identifier?: string;
+  name?: string;
+  first_name?: string;
+  last_name?: string;
+  headline?: string;
+  title?: string;
+  occupation?: string;
+  location?: string;
+  industry?: string;
+  current_company?: string | { name?: string };
+  company?: string | { name?: string };
+  public_profile_url?: string;
+  profile_url?: string;
+  profile_picture_url?: string;
+  network_distance?: string | number;
+}
+
+/**
+ * LinkedIn people search via Unipile's classic (non–Sales-Navigator) search
+ * API. Filters are folded into the `keywords` string by the caller — classic
+ * LinkedIn search is keyword-based; structured location/industry filters with
+ * entity-ID resolution would be a Sales-Navigator follow-up.
+ *
+ * POST /api/v1/linkedin/search?account_id=…&limit=…
+ */
+export async function searchLinkedInPeople(
+  accountId: string,
+  params: { keywords: string; limit?: number },
+): Promise<{ items: UnipileLinkedInSearchHit[] }> {
+  const limit = Math.min(Math.max(params.limit ?? 10, 1), 25);
+  const res = await unipileFetch<{ items?: UnipileLinkedInSearchHit[] }>(
+    `/linkedin/search?account_id=${encodeURIComponent(accountId)}&limit=${limit}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        api: "classic",
+        category: "people",
+        keywords: params.keywords,
+      }),
+    },
+  );
+  return { items: Array.isArray(res?.items) ? res.items : [] };
+}
+
 // ─── Webhooks ─────────────────────────────────────────────────────────────────
 
 /**

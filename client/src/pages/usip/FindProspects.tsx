@@ -743,6 +743,319 @@ function EditableField({
   );
 }
 
+/* ─── LinkedIn people search ──────────────────────────────────────────── */
+type LinkedInAccount =
+  RouterOutputs["linkedinFinder"]["listAccounts"]["accounts"][number];
+type LinkedInSearchHit = RouterOutputs["linkedinFinder"]["search"]["hits"][number];
+
+const COMPANY_SIZES = [
+  "any",
+  "1-10",
+  "11-50",
+  "51-200",
+  "201-500",
+  "501-1000",
+  "1001-5000",
+  "5001-10000",
+  "10001+",
+];
+
+function LinkedInSearch({
+  accounts,
+  isAdmin,
+}: {
+  accounts: LinkedInAccount[];
+  isAdmin: boolean;
+}) {
+  const [name, setName] = useState("");
+  const [title, setTitle] = useState("");
+  const [location, setLocation] = useState("");
+  const [industry, setIndustry] = useState("");
+  const [companySize, setCompanySize] = useState("any");
+  const [keywords, setKeywords] = useState("");
+  const [maxResults, setMaxResults] = useState(10);
+  const [accountId, setAccountId] = useState("auto");
+  const [hits, setHits] = useState<LinkedInSearchHit[]>([]);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+
+  const search = trpc.linkedinFinder.search.useMutation({
+    onSuccess: (data) => {
+      setSelected(new Set());
+      if (data.ok) {
+        setHits(data.hits);
+        if (data.hits.length === 0) toast(data.message);
+        else toast.success(data.message);
+      } else {
+        setHits([]);
+        toast.error(data.message);
+      }
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const save = trpc.linkedinFinder.saveSearchHits.useMutation({
+    onSuccess: (data) => {
+      toast.success(
+        `Saved ${data.created} prospect${data.created === 1 ? "" : "s"}`,
+      );
+      setSelected(new Set());
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const submit = () => {
+    const hasCriterion = [name, title, location, industry, keywords].some(
+      (s) => s.trim().length > 0,
+    );
+    if (!hasCriterion) {
+      toast.error(
+        "Enter at least one criterion (name, title, location, industry, or keywords)",
+      );
+      return;
+    }
+    search.mutate({
+      name: name.trim() || undefined,
+      title: title.trim() || undefined,
+      location: location.trim() || undefined,
+      industry: industry.trim() || undefined,
+      companySize: companySize !== "any" ? companySize : undefined,
+      keywords: keywords.trim() || undefined,
+      limit: maxResults,
+      accountId: isAdmin && accountId !== "auto" ? accountId : undefined,
+    });
+  };
+
+  const toggle = (i: number) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(i)) next.delete(i);
+      else next.add(i);
+      return next;
+    });
+  };
+  const toggleAll = () => {
+    if (selected.size === hits.length) setSelected(new Set());
+    else setSelected(new Set(hits.map((_, i) => i)));
+  };
+
+  const selectedHits = hits
+    .filter((_, i) => selected.has(i))
+    .filter((h) => h.linkedinUrl);
+
+  return (
+    <div className="space-y-4">
+      {/* Search form */}
+      <div className="rounded-lg border bg-card p-4 space-y-3">
+        <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+          Search LinkedIn people
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div className="space-y-1">
+            <Label className="text-xs">Name</Label>
+            <Input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="e.g. Jane Smith"
+              onKeyDown={(e) => e.key === "Enter" && submit()}
+            />
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">Job title</Label>
+            <Input
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="e.g. VP of Sales"
+              onKeyDown={(e) => e.key === "Enter" && submit()}
+            />
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">Location</Label>
+            <Input
+              value={location}
+              onChange={(e) => setLocation(e.target.value)}
+              placeholder="e.g. Boston, MA"
+              onKeyDown={(e) => e.key === "Enter" && submit()}
+            />
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">Industry</Label>
+            <Input
+              value={industry}
+              onChange={(e) => setIndustry(e.target.value)}
+              placeholder="e.g. SaaS, Fintech"
+              onKeyDown={(e) => e.key === "Enter" && submit()}
+            />
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">Company size</Label>
+            <select
+              value={companySize}
+              onChange={(e) => setCompanySize(e.target.value)}
+              className="w-full text-sm h-9 rounded-md border bg-background px-2"
+            >
+              {COMPANY_SIZES.map((s) => (
+                <option key={s} value={s}>
+                  {s === "any" ? "Any size" : `${s} employees`}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">
+              Keywords <span className="text-muted-foreground">(optional)</span>
+            </Label>
+            <Input
+              value={keywords}
+              onChange={(e) => setKeywords(e.target.value)}
+              placeholder="e.g. revenue operations"
+              onKeyDown={(e) => e.key === "Enter" && submit()}
+            />
+          </div>
+        </div>
+        <div
+          className={`grid grid-cols-1 gap-3 items-end ${
+            isAdmin ? "md:grid-cols-[120px_220px_auto]" : "md:grid-cols-[120px_auto]"
+          }`}
+        >
+          <div className="space-y-1">
+            <Label className="text-xs">Max results</Label>
+            <Input
+              type="number"
+              min={1}
+              max={25}
+              value={maxResults}
+              onChange={(e) => setMaxResults(Number(e.target.value) || 10)}
+            />
+          </div>
+          {isAdmin && (
+            <div className="space-y-1">
+              <Label className="text-xs">Route through</Label>
+              <select
+                value={accountId}
+                onChange={(e) => setAccountId(e.target.value)}
+                className="w-full text-sm h-9 rounded-md border bg-background px-2"
+              >
+                <option value="auto">Auto (most headroom)</option>
+                {accounts.map((a) => (
+                  <option key={a.unipileAccountId} value={a.unipileAccountId}>
+                    {(a.displayName ?? a.ownerName ?? a.unipileAccountId) +
+                      ` (${a.remainingToday} left)`}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+          <Button onClick={submit} disabled={search.isPending}>
+            {search.isPending ? (
+              <Loader2 className="size-4 mr-2 animate-spin" />
+            ) : (
+              <Search className="size-4 mr-2" />
+            )}
+            Search LinkedIn
+          </Button>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Runs a real LinkedIn people search through your bridged account via
+          Unipile. Filters are matched as keywords — exact company-size
+          filtering needs a Sales Navigator seat and isn&apos;t applied here.
+        </p>
+      </div>
+
+      {/* Results */}
+      {hits.length > 0 && (
+        <div className="rounded-lg border overflow-hidden">
+          <div className="flex items-center justify-between px-3 py-2 border-b bg-muted/30">
+            <div className="text-sm text-muted-foreground">
+              {hits.length} result{hits.length === 1 ? "" : "s"} ·{" "}
+              {selected.size} selected
+            </div>
+            <Button
+              size="sm"
+              onClick={() =>
+                save.mutate({
+                  hits: selectedHits.map((h) => ({
+                    firstName: h.firstName || undefined,
+                    lastName: h.lastName || undefined,
+                    title: h.headline || undefined,
+                    company: h.company || undefined,
+                    linkedinUrl: h.linkedinUrl,
+                  })),
+                })
+              }
+              disabled={selectedHits.length === 0 || save.isPending}
+            >
+              {save.isPending ? (
+                <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+              ) : (
+                <UserPlus className="size-3.5 mr-1.5" />
+              )}
+              Save as Prospects ({selectedHits.length})
+            </Button>
+          </div>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-8">
+                  <Checkbox
+                    checked={hits.length > 0 && selected.size === hits.length}
+                    onCheckedChange={toggleAll}
+                  />
+                </TableHead>
+                <TableHead>Name</TableHead>
+                <TableHead>Location</TableHead>
+                <TableHead>Company</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {hits.map((h, i) => (
+                <TableRow
+                  key={h.linkedinUrl || `hit-${i}`}
+                  className="cursor-pointer hover:bg-muted/40"
+                  onClick={() => toggle(i)}
+                >
+                  <TableCell onClick={(e) => e.stopPropagation()}>
+                    <Checkbox
+                      checked={selected.has(i)}
+                      onCheckedChange={() => toggle(i)}
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <div className="font-medium">{h.name}</div>
+                    {h.headline && (
+                      <div className="text-[11px] text-muted-foreground">
+                        {h.headline}
+                      </div>
+                    )}
+                    {h.linkedinUrl && (
+                      <a
+                        href={h.linkedinUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-[10px] text-blue-600 hover:underline inline-flex items-center gap-0.5"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <ExternalLink className="size-2.5" /> Profile
+                      </a>
+                    )}
+                  </TableCell>
+                  <TableCell className="text-xs text-muted-foreground">
+                    {h.location || "—"}
+                  </TableCell>
+                  <TableCell className="text-xs">
+                    {h.company || (
+                      <span className="text-muted-foreground">—</span>
+                    )}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ─── LinkedIn tab content ────────────────────────────────────────────── */
 function LinkedInTab() {
   const accountsQ = trpc.linkedinFinder.listAccounts.useQuery();
@@ -895,8 +1208,14 @@ function LinkedInTab() {
         </p>
       </div>
 
+      {/* People search */}
+      <LinkedInSearch accounts={accounts} isAdmin={isAdmin} />
+
       {/* Lookup form */}
       <div className="rounded-lg border bg-card p-4 space-y-3">
+        <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+          Or look up one profile by URL
+        </div>
         <div
           className={`grid grid-cols-1 gap-3 items-end ${
             isAdmin ? "md:grid-cols-[1fr_220px_auto]" : "md:grid-cols-[1fr_auto]"

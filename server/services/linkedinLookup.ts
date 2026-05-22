@@ -24,7 +24,12 @@ import {
   workspaceMembers,
   users,
 } from "../../drizzle/schema";
-import { getLinkedInProfile, type UnipileUserProfile } from "../lib/unipile";
+import {
+  getLinkedInProfile,
+  searchLinkedInPeople,
+  type UnipileLinkedInSearchHit,
+  type UnipileUserProfile,
+} from "../lib/unipile";
 
 /** UTC calendar date as "YYYY-MM-DD" — the daily-usage partition key. */
 function utcDateKey(): string {
@@ -352,6 +357,139 @@ export async function lookupProfile(opts: {
       viaAccountId: chosen.unipileAccountId,
       profile: null,
       message: `LinkedIn lookup failed: ${msg.slice(0, 200)}`,
+    };
+  }
+}
+
+/* ─── People search ────────────────────────────────────────────────────── */
+
+export type SearchHit = {
+  name: string;
+  firstName: string;
+  lastName: string;
+  headline: string;
+  location: string;
+  company: string;
+  linkedinUrl: string;
+  profilePictureUrl: string | null;
+  networkDistance: string;
+};
+
+export type SearchResult = {
+  ok: boolean;
+  viaAccountId: string | null;
+  hits: SearchHit[];
+  message: string;
+};
+
+/** Pull a company name off a hit whose company field may be a string or object. */
+function companyOf(h: UnipileLinkedInSearchHit): string {
+  const c = h.current_company ?? h.company;
+  if (!c) return "";
+  return typeof c === "string" ? c : (c.name ?? "");
+}
+
+function mapSearchHit(h: UnipileLinkedInSearchHit): SearchHit {
+  let firstName = h.first_name ?? "";
+  let lastName = h.last_name ?? "";
+  const fullName = (h.name ?? `${firstName} ${lastName}`).trim();
+  if (!firstName && !lastName && fullName) {
+    const sp = fullName.lastIndexOf(" ");
+    firstName = sp === -1 ? fullName : fullName.slice(0, sp);
+    lastName = sp === -1 ? "" : fullName.slice(sp + 1);
+  }
+  const linkedinUrl =
+    h.public_profile_url ??
+    h.profile_url ??
+    (h.public_identifier
+      ? `https://www.linkedin.com/in/${h.public_identifier}`
+      : "");
+  return {
+    name: fullName,
+    firstName,
+    lastName,
+    headline: h.headline ?? h.title ?? h.occupation ?? "",
+    location: h.location ?? "",
+    company: companyOf(h),
+    linkedinUrl,
+    profilePictureUrl: h.profile_picture_url ?? null,
+    networkDistance: String(h.network_distance ?? ""),
+  };
+}
+
+/**
+ * Search LinkedIn people through a bridged account. `keywords` is built by the
+ * caller from the structured search form (name / title / location / industry /
+ * company size). Routes through the chosen / least-used account.
+ */
+export async function searchLinkedInProfiles(opts: {
+  workspaceId: number;
+  userId: number;
+  isAdmin: boolean;
+  keywords: string;
+  limit: number;
+  /** Explicit account to route through. Admins only. */
+  requestedAccountId?: string;
+}): Promise<SearchResult> {
+  const keywords = opts.keywords.trim();
+  if (keywords.length < 2) {
+    return {
+      ok: false,
+      viaAccountId: null,
+      hits: [],
+      message: "Enter at least one search criterion (name, title, location, …).",
+    };
+  }
+
+  const pool = await listUsableAccounts(opts);
+  if (pool.length === 0) {
+    return {
+      ok: false,
+      viaAccountId: null,
+      hits: [],
+      message: opts.isAdmin
+        ? "No LinkedIn accounts are bridged in this workspace. Connect one from Connected Accounts."
+        : "You haven't bridged a LinkedIn account yet. Connect yours from Connected Accounts.",
+    };
+  }
+
+  let chosen: BridgedAccount | undefined;
+  if (opts.isAdmin && opts.requestedAccountId) {
+    chosen = pool.find((a) => a.unipileAccountId === opts.requestedAccountId);
+    if (!chosen) {
+      return {
+        ok: false,
+        viaAccountId: null,
+        hits: [],
+        message: "Requested LinkedIn account isn't available in this workspace pool.",
+      };
+    }
+  } else {
+    chosen = pool[0]; // listUsableAccounts is sorted most-headroom first
+  }
+
+  try {
+    const { items } = await searchLinkedInPeople(chosen.unipileAccountId, {
+      keywords,
+      limit: opts.limit,
+    });
+    const hits = items.map(mapSearchHit).filter((h) => h.name.length > 0);
+    return {
+      ok: true,
+      viaAccountId: chosen.unipileAccountId,
+      hits,
+      message:
+        hits.length > 0
+          ? `Found ${hits.length} profile${hits.length === 1 ? "" : "s"} via ${chosen.displayName ?? chosen.ownerName ?? "bridged account"}`
+          : "No LinkedIn profiles matched those criteria. Try broadening the search.",
+    };
+  } catch (e) {
+    const msg = (e as Error).message;
+    return {
+      ok: false,
+      viaAccountId: chosen.unipileAccountId,
+      hits: [],
+      message: `LinkedIn search failed: ${msg.slice(0, 200)}`,
     };
   }
 }
