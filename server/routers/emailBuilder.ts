@@ -65,7 +65,9 @@ interface Block {
 }
 
 function blockToHtml(block: Block): string {
-  const p = block.props;
+  // Canonical blocks carry a `props` object; legacy seeded blocks store fields
+  // flat on the block itself. Fall back to the block so `p.x ?? default` works.
+  const p = (block.props ?? block) as Record<string, unknown>;
   switch (block.type) {
     case "header":
       return `<div style="background:${p.bgColor ?? "#14B89A"};padding:24px;text-align:center;">

@@ -110,6 +110,30 @@ function uid() {
   return Math.random().toString(36).slice(2, 10);
 }
 
+/**
+ * Coerce a stored block into a full Block. Canonical blocks carry a `props`
+ * object; legacy seeded / AI-generated blocks store fields flat (e.g.
+ * { type: "text", content: "..." }) with no id/props/sortOrder. Without this,
+ * the property editor and canvas crash reading block.props.fontSize etc.
+ */
+function normalizeBlock(raw: any, index: number): Block {
+  const type = (raw?.type ?? "text") as BlockType;
+  const def = BLOCK_DEFS.find((d) => d.type === type);
+  const source = raw?.props && typeof raw.props === "object" ? raw.props : (raw ?? {});
+  const props: Record<string, any> = { ...(def?.defaultProps ?? {}) };
+  for (const [k, v] of Object.entries(source)) {
+    if (k !== "id" && k !== "type" && k !== "sortOrder" && k !== "props" && v !== undefined) {
+      props[k] = v;
+    }
+  }
+  return {
+    id: typeof raw?.id === "string" ? raw.id : uid(),
+    type,
+    props,
+    sortOrder: typeof raw?.sortOrder === "number" ? raw.sortOrder : index,
+  };
+}
+
 /* ─── Block property editors ─────────────────────────────────────────────── */
 function PropField({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -1057,9 +1081,10 @@ function Builder({ templateId }: { templateId: number }) {
       // designData may be stored either as a bare Block[] (saved by this editor)
       // or wrapped as { blocks: Block[] } (seeded / AI-generated templates).
       const raw = template.designData as unknown;
-      const loadedBlocks: Block[] = Array.isArray(raw)
-        ? (raw as Block[])
-        : ((raw as { blocks?: Block[] } | null)?.blocks ?? []);
+      const rawBlocks: any[] = Array.isArray(raw)
+        ? raw
+        : ((raw as { blocks?: any[] } | null)?.blocks ?? []);
+      const loadedBlocks: Block[] = rawBlocks.map((b, i) => normalizeBlock(b, i));
       setBlocks(loadedBlocks);
       setSubject(template.subject ?? "");
       setTemplateName(template.name);
