@@ -94,7 +94,9 @@ export function buildScrapedProspectValues(input: ScrapedProspectInput): {
       workspaceId: input.workspaceId,
       firstName,
       lastName,
-      title: input.title?.trim() || undefined,
+      // prospects.title is varchar(120); LinkedIn headlines routinely run
+      // longer, so truncate rather than let the insert fail "Data too long".
+      title: input.title?.trim().slice(0, 120) || undefined,
       email: input.email?.trim() || undefined,
       phone: input.phone?.trim() || undefined,
       company: input.company?.trim() || undefined,

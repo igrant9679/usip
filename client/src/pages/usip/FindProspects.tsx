@@ -795,8 +795,10 @@ function LinkedInSearch({
 
   const save = trpc.linkedinFinder.saveSearchHits.useMutation({
     onSuccess: (data) => {
+      const skipped = data.total - data.created;
       toast.success(
-        `Saved ${data.created} prospect${data.created === 1 ? "" : "s"}`,
+        `Saved ${data.created} prospect${data.created === 1 ? "" : "s"}` +
+          (skipped > 0 ? ` (${skipped} skipped)` : ""),
       );
       setSelected(new Set());
     },
