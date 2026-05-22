@@ -34,7 +34,7 @@ export const dataHealthRouter = router({
     const [dupEmailResult] = await db.execute(
       sql`SELECT COUNT(*) as cnt FROM (
         SELECT email FROM ${contacts}
-        WHERE workspace_id = ${wsId} AND email IS NOT NULL AND email != ''
+        WHERE workspaceId = ${wsId} AND email IS NOT NULL AND email != ''
         GROUP BY email HAVING COUNT(*) > 1
       ) t`
     ) as any;
@@ -43,9 +43,9 @@ export const dataHealthRouter = router({
     // Contacts sharing same firstName+lastName+company
     const [dupNameResult] = await db.execute(
       sql`SELECT COUNT(*) as cnt FROM (
-        SELECT first_name, last_name, company FROM ${contacts}
-        WHERE workspace_id = ${wsId} AND first_name IS NOT NULL AND last_name IS NOT NULL AND company IS NOT NULL
-        GROUP BY first_name, last_name, company HAVING COUNT(*) > 1
+        SELECT firstName, lastName, accountId FROM ${contacts}
+        WHERE workspaceId = ${wsId} AND firstName IS NOT NULL AND lastName IS NOT NULL AND accountId IS NOT NULL
+        GROUP BY firstName, lastName, accountId HAVING COUNT(*) > 1
       ) t`
     ) as any;
     const dupNameGroups = Number((dupNameResult as any[])?.[0]?.cnt ?? 0);
@@ -134,24 +134,24 @@ export const dataHealthRouter = router({
 
     // Email duplicates
     const emailDups = await db.execute(
-      sql`SELECT email, GROUP_CONCAT(id ORDER BY created_at SEPARATOR ',') as ids,
-          GROUP_CONCAT(CONCAT(first_name, ' ', last_name) ORDER BY created_at SEPARATOR '||') as names,
+      sql`SELECT email, GROUP_CONCAT(id ORDER BY createdAt SEPARATOR ',') as ids,
+          GROUP_CONCAT(CONCAT(firstName, ' ', lastName) ORDER BY createdAt SEPARATOR '||') as names,
           COUNT(*) as cnt
           FROM ${contacts}
-          WHERE workspace_id = ${wsId} AND email IS NOT NULL AND email != ''
+          WHERE workspaceId = ${wsId} AND email IS NOT NULL AND email != ''
           GROUP BY email HAVING COUNT(*) > 1
           ORDER BY cnt DESC LIMIT 10`
     ) as any;
 
     // Name+account duplicates
     const nameDups = await db.execute(
-      sql`SELECT CONCAT(first_name, ' ', last_name, ' (acct:', COALESCE(accountId, 0), ')') as key_val,
-          GROUP_CONCAT(id ORDER BY created_at SEPARATOR ',') as ids,
-          GROUP_CONCAT(CONCAT(first_name, ' ', last_name) ORDER BY created_at SEPARATOR '||') as names,
+      sql`SELECT CONCAT(firstName, ' ', lastName, ' (acct:', COALESCE(accountId, 0), ')') as key_val,
+          GROUP_CONCAT(id ORDER BY createdAt SEPARATOR ',') as ids,
+          GROUP_CONCAT(CONCAT(firstName, ' ', lastName) ORDER BY createdAt SEPARATOR '||') as names,
           COUNT(*) as cnt
           FROM ${contacts}
-          WHERE workspace_id = ${wsId} AND first_name IS NOT NULL AND last_name IS NOT NULL AND accountId IS NOT NULL
-          GROUP BY first_name, last_name, accountId HAVING COUNT(*) > 1
+          WHERE workspaceId = ${wsId} AND firstName IS NOT NULL AND lastName IS NOT NULL AND accountId IS NOT NULL
+          GROUP BY firstName, lastName, accountId HAVING COUNT(*) > 1
           ORDER BY cnt DESC LIMIT 10`
     ) as any;
 
