@@ -1174,7 +1174,7 @@ Write 2-4 paragraphs of professional proposal content for this section. Be speci
   snapshotScore: workspaceProcedure
     .input(z.object({ proposalId: z.number().int().positive() }))
     .mutation(async ({ ctx, input }) => {
-      const db = getDb();
+      const db = await getDb();
       const proposal = await getProposalOrThrow(db, input.proposalId, ctx.workspace.id);
       const feedbackRows = await db
         .select({ id: proposalFeedback.id })
@@ -1297,7 +1297,7 @@ Reason: ${input.reason}`,
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const db = getDb();
+      const db = await getDb();
       const { inArray } = await import("drizzle-orm");
       // Verify all proposals belong to this workspace
       const rows = await db
@@ -1612,7 +1612,7 @@ ${input.reason ? `<p>${input.reason}</p>` : ""}
   listExtensionDetails: workspaceProcedure
     .input(z.object({ proposalId: z.number().int().positive() }))
     .query(async ({ ctx, input }) => {
-      const db = getDb();
+      const db = await getDb();
       await getProposalOrThrow(db, input.proposalId, ctx.workspace.id);
       const rows = await db
         .select({
@@ -1637,8 +1637,9 @@ ${input.reason ? `<p>${input.reason}</p>` : ""}
   getScoreHistory: workspaceProcedure
     .input(z.object({ proposalId: z.number().int().positive() }))
     .query(async ({ ctx, input }) => {
-      await getProposalOrThrow(getDb(), input.proposalId, ctx.workspace.id);
-      const rows = await getDb()
+      const db = await getDb();
+      await getProposalOrThrow(db, input.proposalId, ctx.workspace.id);
+      const rows = await db
         .select({
           id: proposalScoreHistory.id,
           score: proposalScoreHistory.score,
