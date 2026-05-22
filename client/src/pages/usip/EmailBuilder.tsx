@@ -1054,7 +1054,12 @@ function Builder({ templateId }: { templateId: number }) {
   // Load template data — show starter picker for new empty templates
   useEffect(() => {
     if (template) {
-      const loadedBlocks = (template.designData as Block[]) ?? [];
+      // designData may be stored either as a bare Block[] (saved by this editor)
+      // or wrapped as { blocks: Block[] } (seeded / AI-generated templates).
+      const raw = template.designData as unknown;
+      const loadedBlocks: Block[] = Array.isArray(raw)
+        ? (raw as Block[])
+        : ((raw as { blocks?: Block[] } | null)?.blocks ?? []);
       setBlocks(loadedBlocks);
       setSubject(template.subject ?? "");
       setTemplateName(template.name);

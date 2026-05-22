@@ -122,7 +122,12 @@ export function renderDesignToHtml(
   subject: string,
   mergeOverrides: Record<string, string> = {},
 ): string {
-  const sorted = [...designData].sort((a, b) => a.sortOrder - b.sortOrder);
+  // designData may be a bare Block[] (saved by the editor) or a legacy
+  // { blocks: Block[] } wrapper (seeded / AI-generated templates).
+  const blockArr: Block[] = Array.isArray(designData)
+    ? designData
+    : ((designData as { blocks?: Block[] } | null)?.blocks ?? []);
+  const sorted = [...blockArr].sort((a, b) => a.sortOrder - b.sortOrder);
   const body = sorted.map(blockToHtml).join("\n");
   const html = `<!DOCTYPE html>
 <html>
