@@ -56,6 +56,7 @@ function BrowseTab() {
   const { data: categories } = trpc.helpCenter.listCategories.useQuery();
   const { data: articles, isFetching } = trpc.helpCenter.searchArticles.useQuery(
     { query: debouncedQuery, categoryId: selectedCategory ?? undefined, limit: 20 },
+    { enabled: debouncedQuery.length >= 2 },
   );
   const { data: allArticles } = trpc.helpCenter.listArticles.useQuery(
     { status: "published", categoryId: selectedCategory ?? undefined, limit: 20 },

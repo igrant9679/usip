@@ -792,7 +792,7 @@ export function RecordDrawer({
             { k: "note", label: "Add note" },
             { k: "files", label: `Files (${files.data?.length ?? 0})` },
             ...(relatedType === "lead" ? [{ k: "score", label: "Score" }] : []),
-            ...(relatedType === "opportunity" ? [{ k: "opp-timeline", label: "Timeline" }] : []),
+            ...(relatedType === "opportunity" ? [{ k: "opp-timeline", label: "Deal Timeline" }] : []),
             ...(relatedType === "opportunity" ? [{ k: "intelligence", label: "AI Intel" }] : []),
             ...((relatedType === "contact" || relatedType === "lead") ? [{ k: "email", label: "Send Email" }] : []),
             ...((relatedType === "contact" || relatedType === "lead") ? [{ k: "linkedin", label: "LinkedIn" }] : []),
