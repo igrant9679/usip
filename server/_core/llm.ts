@@ -336,6 +336,10 @@ async function invokeViaAnthropic(
     max_tokens,
     model,
     temperature,
+    responseFormat,
+    response_format,
+    outputSchema,
+    output_schema,
   } = params;
 
   const systemParts: string[] = [];
@@ -392,7 +396,39 @@ async function invokeViaAnthropic(
     }
   }
 
-  const requestedMaxTokens = maxTokens ?? max_tokens ?? 4096;
+  // Anthropic has no OpenAI-style `response_format`. When the caller asked
+  // for json_schema output and supplied no tools of its own, synthesise a
+  // single forced tool from the schema — the model's tool_use input then IS
+  // the structured JSON. Without this every json_schema call (the whole ARE
+  // agent suite, etc.) got prose back and the caller's JSON.parse threw.
+  const structuredFormat = normalizeResponseFormat({
+    responseFormat,
+    response_format,
+    outputSchema,
+    output_schema,
+  });
+  const STRUCTURED_TOOL_NAME = "respond_with_structured_output";
+  const useStructuredTool =
+    structuredFormat?.type === "json_schema" &&
+    (!anthropicTools || anthropicTools.length === 0);
+
+  const effectiveTools: Anthropic.Tool[] | undefined = useStructuredTool
+    ? [
+        {
+          name: STRUCTURED_TOOL_NAME,
+          description:
+            "Return the response strictly as JSON matching the provided schema.",
+          input_schema: (structuredFormat as { json_schema: JsonSchema })
+            .json_schema.schema as Anthropic.Tool["input_schema"],
+        },
+      ]
+    : anthropicTools;
+  const effectiveToolChoice = useStructuredTool
+    ? ({ type: "tool", name: STRUCTURED_TOOL_NAME } as Anthropic.ToolChoiceTool)
+    : anthropicToolChoice;
+
+  const requestedMaxTokens =
+    maxTokens ?? max_tokens ?? (useStructuredTool ? 8192 : 4096);
 
   const response = await client.messages.create({
     model: model ?? creds.anthropicModel,
@@ -400,17 +436,31 @@ async function invokeViaAnthropic(
     ...(typeof temperature === "number" ? { temperature } : {}),
     ...(systemPrompt ? { system: systemPrompt } : {}),
     messages: conversationMessages,
-    ...(anthropicTools ? { tools: anthropicTools } : {}),
-    ...(anthropicToolChoice ? { tool_choice: anthropicToolChoice } : {}),
+    ...(effectiveTools ? { tools: effectiveTools } : {}),
+    ...(effectiveToolChoice ? { tool_choice: effectiveToolChoice } : {}),
   });
 
-  const textContent = response.content
+  const textBlocks = response.content
     .filter((b): b is Anthropic.TextBlock => b.type === "text")
     .map(b => b.text)
     .join("");
 
+  // When we forced the structured-output tool, the tool_use input IS the
+  // result — surface it as the message content so callers can JSON.parse it.
+  const structuredBlock = response.content.find(
+    (b): b is Anthropic.ToolUseBlock =>
+      b.type === "tool_use" && b.name === STRUCTURED_TOOL_NAME,
+  );
+  const textContent =
+    useStructuredTool && structuredBlock
+      ? JSON.stringify(structuredBlock.input)
+      : textBlocks;
+
   const toolCalls: ToolCall[] = response.content
-    .filter((b): b is Anthropic.ToolUseBlock => b.type === "tool_use")
+    .filter(
+      (b): b is Anthropic.ToolUseBlock =>
+        b.type === "tool_use" && b.name !== STRUCTURED_TOOL_NAME,
+    )
     .map(b => ({
       id: b.id,
       type: "function" as const,
