@@ -64,11 +64,13 @@ export async function runSignalEnhancement(
       if (ageMs < 24 * 60 * 60 * 1000) return;
     }
 
-    const intelData = intel.data as Record<string, unknown> | null ?? {};
-    const existingHooks = (intelData.personalisationHooks as Array<{ hook: string; source?: string }> | null) ?? [];
+    // prospectIntelligence stores these as top-level json columns — there is
+    // no `data` wrapper column, so `intel.data.*` always resolved undefined
+    // and the Signal Enhancement Agent ran with empty hooks/triggers.
+    const existingHooks = (intel.personalisationHooks as Array<{ hook: string; source?: string }> | null) ?? [];
     const recentNews = (intel.recentNews as Array<{ headline: string; date?: string; sentiment?: string }> | null) ?? [];
     const industryEvents = (intel.industryEvents as Array<{ eventName: string; date?: string; role?: string }> | null) ?? [];
-    const triggerEvents = (intelData.triggerEvents as Array<{ type: string; description: string }> | null) ?? [];
+    const triggerEvents = (intel.triggerEvents as Array<{ type: string; description: string }> | null) ?? [];
 
     const companyName = prospect.companyName ?? "the company";
     const firstName = prospect.firstName ?? "there";

@@ -188,11 +188,15 @@ export async function processSignal(
         // undefined and the note was permanently blank.
         const hooks = ((intel?.personalisationHooks as Array<{ hook: string }> | null) ?? []);
         const pains = ((intel?.painSignals as Array<{ signal: string }> | null) ?? []);
+        const timing = intel?.recommendedTiming as { dayOfWeek?: string; hourOfDay?: number; timezone?: string } | null;
+        const timingStr = timing
+          ? [timing.dayOfWeek, timing.hourOfDay != null ? `${timing.hourOfDay}:00` : null, timing.timezone].filter(Boolean).join(" ")
+          : "";
         const aiNote = [
           `ARE Campaign: ${campaign.name}`,
           hooks.length > 0 ? `Hooks: ${hooks.slice(0, 2).map(h => h.hook).join(" | ")}` : null,
           pains.length > 0 ? `Pain signals: ${pains.slice(0, 2).map(p => p.signal).join(", ")}` : null,
-          intelData?.recommendedTiming ? `Best timing: ${intelData.recommendedTiming}` : null,
+          timingStr ? `Best timing: ${timingStr}` : null,
         ].filter(Boolean).join("\n");
 
         // Create opportunity
