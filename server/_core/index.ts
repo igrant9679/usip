@@ -17,6 +17,7 @@ import { runDailyVerificationMaintenance, advanceRunningVerificationJobs } from 
 import { processEnrollments } from "../sequenceEngine";
 import { autoSendForAllWorkspaces } from "../routers/sequences";
 import { runNightlyBatch } from "../nightlyBatch";
+import { runAreEngine } from "../areEngine";
 import { runSegmentEnrollmentForAllWorkspaces } from "../routers/segmentRules"; // eslint-disable-line
 import { registerEmailTrackingRoutes } from "../emailTracking";
 import { startInboundReplyPoller } from "../inboundReplyPoller";
@@ -172,6 +173,16 @@ async function startServer() {
   setTimeout(runSegmentEnrollment, 90_000); // first run after 90s
   setInterval(runSegmentEnrollment, 60 * 60 * 1000); // every hour
 
+
+  // ARE engine: drive every active Autonomous Revenue Engine campaign through
+  // enrich → screen → sequence → enroll → dispatch → counters, every 10 min.
+  const runAre = () => {
+    runAreEngine().catch((e) =>
+      console.error("[AreEngine] cron run failed:", e)
+    );
+  };
+  setTimeout(runAre, 120_000); // first run after 2 min (let DB + migrations settle)
+  setInterval(runAre, 10 * 60 * 1000); // every 10 minutes
 
   // Nightly AI pipeline batch: midnight cron for leads above score threshold
   const scheduleNightlyBatch = () => {

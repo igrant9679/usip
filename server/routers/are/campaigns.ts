@@ -11,6 +11,7 @@ import { areCampaigns, prospectQueue } from "../../../drizzle/schema";
 import { getDb } from "../../db";
 import { router } from "../../_core/trpc";
 import { workspaceProcedure } from "../../_core/workspace";
+import { runAreEngine } from "../../areEngine";
 
 export const campaignsRouter = router({
   list: workspaceProcedure
@@ -196,4 +197,13 @@ export const campaignsRouter = router({
         .where(and(eq(areCampaigns.id, input.id), eq(areCampaigns.workspaceId, ctx.workspace.id)));
       return { success: true };
     }),
+
+  /**
+   * Manually run one ARE engine tick now. The engine also runs on a 10-minute
+   * cron; this lets an operator drive it on demand and see the per-phase
+   * counts (enriched / approved / enrolled / sent / …) come back immediately.
+   */
+  runEngine: workspaceProcedure.mutation(async () => {
+    return runAreEngine();
+  }),
 });

@@ -260,7 +260,7 @@ export async function scrapeIndustryEvents(
 
 /* ─── Shared: save scrape job + queue prospects ─────────────────────────── */
 
-async function saveScrapeJobAndQueue(
+export async function saveScrapeJobAndQueue(
   workspaceId: number,
   campaignId: number | null,
   sourceType: "google_business" | "linkedin_company" | "linkedin_people" | "web_scrape" | "news" | "industry_events",
