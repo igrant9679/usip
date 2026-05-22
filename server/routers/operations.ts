@@ -70,11 +70,11 @@ export async function checkDealAging(): Promise<{ rulesChecked: number; dealsMat
       name: opportunities.name,
       stage: opportunities.stage,
       daysInStage: opportunities.daysInStage,
-      ownerId: opportunities.ownerId,
+      ownerId: opportunities.ownerUserId,
     }).from(opportunities)
       .where(and(
         eq(opportunities.workspaceId, rule.workspaceId),
-        sql`${opportunities.stage} NOT IN ('closed_won', 'closed_lost')`,
+        sql`${opportunities.stage} NOT IN ('won', 'lost')`,
         sql`${opportunities.daysInStage} >= ${minDays}`,
         ...(targetStage ? [eq(opportunities.stage, targetStage)] : []),
       ));
@@ -347,11 +347,11 @@ export const workflowsRouter = router({
           name: opportunities.name,
           stage: opportunities.stage,
           daysInStage: opportunities.daysInStage,
-          ownerId: opportunities.ownerId,
+          ownerId: opportunities.ownerUserId,
         }).from(opportunities)
           .where(and(
             eq(opportunities.workspaceId, ctx.workspace.id),
-            sql`${opportunities.stage} NOT IN ('closed_won', 'closed_lost')`,
+            sql`${opportunities.stage} NOT IN ('won', 'lost')`,
             sql`${opportunities.daysInStage} >= ${minDays}`,
             ...(targetStage ? [eq(opportunities.stage, targetStage)] : []),
           ));

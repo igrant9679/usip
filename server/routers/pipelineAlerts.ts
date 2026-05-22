@@ -303,13 +303,13 @@ export const pipelineAlertsRouter = router({
           winProb: opportunities.winProb,
           closeDate: opportunities.closeDate,
           daysInStage: opportunities.daysInStage,
-          ownerId: opportunities.ownerId,
+          ownerId: opportunities.ownerUserId,
         })
         .from(opportunities)
         .where(
           and(
             eq(opportunities.workspaceId, ctx.workspace.id),
-            sql`${opportunities.stage} NOT IN ('closed_won', 'closed_lost')`,
+            sql`${opportunities.stage} NOT IN ('won', 'lost')`,
           )
         );
 
@@ -406,9 +406,9 @@ export const pipelineAlertsRouter = router({
       : defaultMinDays;
 
     const openOpps = await db
-      .select({ id: opportunities.id, name: opportunities.name, stage: opportunities.stage, value: opportunities.value, daysInStage: opportunities.daysInStage, ownerId: opportunities.ownerId })
+      .select({ id: opportunities.id, name: opportunities.name, stage: opportunities.stage, value: opportunities.value, daysInStage: opportunities.daysInStage, ownerId: opportunities.ownerUserId })
       .from(opportunities)
-      .where(and(eq(opportunities.workspaceId, wsId), sql`${opportunities.stage} NOT IN ('closed_won', 'closed_lost')`));
+      .where(and(eq(opportunities.workspaceId, wsId), sql`${opportunities.stage} NOT IN ('won', 'lost')`));
 
     const stuckDeals = openOpps.filter((opp) => {
       const days = opp.daysInStage ?? 0;
