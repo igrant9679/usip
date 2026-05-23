@@ -1201,6 +1201,13 @@ export default function ProposalDetail() {
     { enabled: !!current && proposalId > 0 },
   );
 
+  const deleteProposal = trpc.proposals.delete.useMutation({
+    onSuccess: () => {
+      toast.success("Proposal deleted");
+      navigate("/proposals");
+    },
+    onError: (e) => toast.error("Failed to delete proposal", { description: e.message }),
+  });
   const duplicateMutation = trpc.proposals.duplicate.useMutation({
     onSuccess: (result) => {
       toast.success("Proposal duplicated");
@@ -1354,6 +1361,21 @@ export default function ProposalDetail() {
         >
           <Files className="size-3.5" />
           {duplicateMutation.isPending ? "Duplicating..." : "Duplicate"}
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            if (window.confirm(`Delete proposal "${proposal.title}"? This cannot be undone.`)) {
+              deleteProposal.mutate({ id: proposal.id });
+            }
+          }}
+          disabled={deleteProposal.isPending}
+          className="gap-1.5 shrink-0 text-muted-foreground hover:text-destructive"
+          title="Permanently delete this proposal"
+        >
+          <Trash2 className="size-3.5" />
+          {deleteProposal.isPending ? "Deleting..." : "Delete"}
         </Button>
       </div>
 

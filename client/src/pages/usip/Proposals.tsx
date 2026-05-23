@@ -48,6 +48,7 @@ import {
   ThumbsUp,
   ThumbsDown,
   AlertCircle,
+  Trash2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -447,6 +448,14 @@ export default function Proposals() {
   const [bulkExpiryDate, setBulkExpiryDate] = useState("");
   const [sortBy, setSortBy] = useState<"none" | "expires_asc" | "expires_desc">("none");
 
+  const utils = trpc.useUtils();
+  const removeProposal = trpc.proposals.delete.useMutation({
+    onSuccess: () => {
+      utils.proposals.list.invalidate();
+      toast.success("Proposal deleted");
+    },
+    onError: (e) => toast.error("Failed to delete proposal", { description: e.message }),
+  });
   const { data: list, isLoading, refetch } = trpc.proposals.list.useQuery(undefined, {
     enabled: !!current,
   });
@@ -870,6 +879,18 @@ export default function Proposals() {
                     <ChevronRight className="size-4 text-muted-foreground group-hover:text-teal-400 transition-colors" />
                   </div>
                 </div>
+                </button>
+                <button
+                  className="ml-1 text-muted-foreground hover:text-destructive p-1.5 rounded opacity-0 group-hover:opacity-100 transition-opacity self-center"
+                  title="Delete proposal"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (window.confirm(`Delete proposal "${p.title}"? This cannot be undone.`)) {
+                      removeProposal.mutate({ id: p.id });
+                    }
+                  }}
+                >
+                  <Trash2 className="size-4" />
                 </button>
               </div>
             ))}

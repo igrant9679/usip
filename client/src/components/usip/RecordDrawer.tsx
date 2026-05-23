@@ -756,6 +756,38 @@ export function RecordDrawer({
   const addNote = trpc.activities.addNote.useMutation({ onSuccess: () => { refresh(); toast.success("Note added"); setTab("timeline"); } });
   const upload = trpc.attachments.upload.useMutation({ onSuccess: () => { refresh(); toast.success("File attached"); } });
   const delAtt = trpc.attachments.delete.useMutation({ onSuccess: () => refresh() });
+  const delActivity = trpc.activities.delete.useMutation({
+    onSuccess: () => { refresh(); toast.success("Activity deleted"); },
+    onError: (e) => toast.error(e.message),
+  });
+  // Entity-level delete — routes to the right router based on relatedType.
+  const delContact = trpc.contacts.delete.useMutation();
+  const delAccount = trpc.accounts.delete.useMutation();
+  const delLead = trpc.leads.delete.useMutation();
+  const delOpp = trpc.opportunities.delete.useMutation();
+  const deleteRecord = () => {
+    if (!relatedId) return;
+    const label = title || relatedType;
+    if (!window.confirm(`Delete this ${relatedType} "${label}"? This cannot be undone.`)) return;
+    const opts = {
+      onSuccess: () => {
+        toast.success(`${relatedType.charAt(0).toUpperCase() + relatedType.slice(1)} deleted`);
+        if (relatedType === "contact") utils.contacts.list.invalidate();
+        if (relatedType === "account") {
+          utils.accounts.list.invalidate();
+          utils.accounts.hierarchy.invalidate();
+        }
+        if (relatedType === "lead") utils.leads.list.invalidate();
+        if (relatedType === "opportunity") utils.opportunities.board.invalidate();
+        onOpenChange(false);
+      },
+      onError: (e: { message: string }) => toast.error(`Failed to delete: ${e.message}`),
+    };
+    if (relatedType === "contact") delContact.mutate({ id: relatedId }, opts);
+    else if (relatedType === "account") delAccount.mutate({ id: relatedId }, opts);
+    else if (relatedType === "lead") delLead.mutate({ id: relatedId }, opts);
+    else if (relatedType === "opportunity") delOpp.mutate({ id: relatedId }, opts);
+  };
 
   const fileInput = useRef<HTMLInputElement>(null);
 
@@ -778,7 +810,19 @@ export function RecordDrawer({
         <SheetHeader>
           <SheetTitle className="flex items-center justify-between">
             <span>{title}</span>
-            {headerExtras}
+            <div className="flex items-center gap-2">
+              {headerExtras}
+              {relatedId && (relatedType === "contact" || relatedType === "account" || relatedType === "lead" || relatedType === "opportunity") && (
+                <button
+                  className="text-muted-foreground hover:text-destructive p-1 rounded"
+                  title={`Delete this ${relatedType}`}
+                  onClick={deleteRecord}
+                  disabled={delContact.isPending || delAccount.isPending || delLead.isPending || delOpp.isPending}
+                >
+                  <Trash2 className="size-4" />
+                </button>
+              )}
+            </div>
           </SheetTitle>
           {subtitle && <div className="text-xs text-muted-foreground">{subtitle}</div>}
         </SheetHeader>
@@ -814,7 +858,7 @@ export function RecordDrawer({
               {acts.isLoading && <div className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="size-3 animate-spin" /> Loading…</div>}
               {acts.data?.length === 0 && <div className="text-sm text-muted-foreground py-8 text-center">No activity logged yet. Use the tabs above to log a call, meeting, or note.</div>}
               {acts.data?.map((a: any) => (
-                <div key={a.id} className="border rounded-md p-3 bg-card">
+                <div key={a.id} className="border rounded-md p-3 bg-card group">
                   <div className="flex items-center gap-2 text-xs">
                     {a.kind === "call" && <Phone className="size-3 text-[#14B89A]" />}
                     {a.kind === "meeting" && <Calendar className="size-3 text-blue-600" />}
@@ -822,6 +866,17 @@ export function RecordDrawer({
                     <span className="font-semibold uppercase tracking-wide">{a.kind}</span>
                     {a.disposition && <StatusPill tone={a.disposition === "connected" ? "success" : a.disposition === "not_interested" ? "danger" : "warning"}>{a.disposition.replace(/_/g, " ")}</StatusPill>}
                     <span className="ml-auto text-muted-foreground">{fmtDate(a.createdAt)}</span>
+                    <button
+                      className="text-muted-foreground hover:text-destructive p-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity"
+                      title="Delete activity"
+                      onClick={() => {
+                        if (window.confirm("Delete this activity? This cannot be undone.")) {
+                          delActivity.mutate({ id: a.id });
+                        }
+                      }}
+                    >
+                      <Trash2 className="size-3" />
+                    </button>
                   </div>
                   {a.subject && <div className="text-sm font-semibold mt-1">{a.subject}</div>}
                   {a.notes && <div className="text-sm whitespace-pre-wrap mt-1 text-foreground/90">{a.notes}</div>}

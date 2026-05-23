@@ -58,6 +58,14 @@ export default function Workflows() {
   const update = trpc.workflows.update.useMutation({ onSuccess: () => { utils.workflows.list.invalidate(); toast.success("Rule saved"); } });
   const toggle = trpc.workflows.toggle.useMutation({ onSuccess: () => utils.workflows.list.invalidate() });
   const test = trpc.workflows.testFire.useMutation({ onSuccess: () => { utils.workflows.runs.invalidate(); utils.workflows.list.invalidate(); toast.success("Rule fired (1 simulated run)"); } });
+  const removeRule = trpc.workflows.delete.useMutation({
+    onSuccess: (_d, vars) => {
+      utils.workflows.list.invalidate();
+      if (selected === vars.id) setSelected(null);
+      toast.success("Rule deleted");
+    },
+    onError: (e) => toast.error("Failed to delete rule", { description: e.message }),
+  });
 
   const rule = useMemo(() => data?.find((x) => x.id === selected) ?? null, [data, selected]);
 
@@ -106,6 +114,18 @@ export default function Workflows() {
                       <Switch checked={r.enabled} onCheckedChange={(v) => toggle.mutate({ id: r.id, enabled: v })} onClick={(e) => e.stopPropagation()} />
                       <div className="text-sm font-medium flex-1 truncate">{r.name}</div>
                       <span className="text-xs text-muted-foreground font-mono tabular-nums">{r.fireCount}x</span>
+                      <button
+                        className="text-muted-foreground hover:text-destructive p-1 rounded"
+                        title="Delete rule"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (window.confirm(`Delete workflow rule "${r.name}"? This cannot be undone.`)) {
+                            removeRule.mutate({ id: r.id });
+                          }
+                        }}
+                      >
+                        <Trash2 className="size-3.5" />
+                      </button>
                     </div>
                     <div className="text-xs text-muted-foreground mt-0.5"><StatusPill tone="info">{r.triggerType}</StatusPill></div>
                   </li>
