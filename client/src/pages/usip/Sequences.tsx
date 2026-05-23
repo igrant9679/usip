@@ -849,6 +849,15 @@ export default function Sequences() {
     onSuccess: () => utils.sequences.list.invalidate(),
     onError: (e) => toast.error("Failed to change status", { description: e.message }),
   });
+  const remove = trpc.sequences.delete.useMutation({
+    onSuccess: (_d, vars) => {
+      utils.sequences.list.invalidate();
+      // Clear the right-pane selection if we just deleted what was open.
+      if (selected === vars.id) setSelected(null);
+      toast.success("Sequence deleted");
+    },
+    onError: (e) => toast.error("Failed to delete sequence", { description: e.message }),
+  });
   const detail = trpc.sequences.get.useQuery({ id: selected! }, { enabled: !!selected });
 
   return (
@@ -884,6 +893,18 @@ export default function Sequences() {
                     <div className="flex items-center gap-2">
                       <div className="flex-1 text-sm font-medium truncate">{s.name}</div>
                       <StatusPill tone={s.status === "active" ? "success" : s.status === "paused" ? "warning" : "muted"}>{s.status}</StatusPill>
+                      <button
+                        className="text-muted-foreground hover:text-destructive p-1 rounded"
+                        title="Delete sequence"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (window.confirm(`Delete sequence "${s.name}"? This removes the sequence and its steps; enrollments stop. This cannot be undone.`)) {
+                            remove.mutate({ id: s.id });
+                          }
+                        }}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
                     </div>
                     <div className="text-xs text-muted-foreground line-clamp-1">{s.description}</div>
                     <div className="text-xs text-muted-foreground mt-0.5">

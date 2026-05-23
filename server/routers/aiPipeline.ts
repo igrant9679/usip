@@ -625,4 +625,61 @@ Return JSON with:
         return { score: 5, strengths: [], improvements: [], alt_subjects: [] };
       }
     }),
+
+  /** Delete one email draft from the AI Pipeline queue. */
+  deleteDraft: workspaceProcedure
+    .input(z.object({ id: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      await db
+        .delete(emailDrafts)
+        .where(and(eq(emailDrafts.id, input.id), eq(emailDrafts.workspaceId, ctx.workspace.id)));
+      return { ok: true };
+    }),
+
+  /**
+   * Bulk-delete drafts, optionally filtered by status. Pass status=undefined
+   * to clear the entire queue. Returns the number of rows deleted.
+   */
+  clearDrafts: workspaceProcedure
+    .input(
+      z.object({
+        status: z
+          .enum(["pending_review", "approved", "sent", "rejected", "bounced"])
+          .optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const conditions = [eq(emailDrafts.workspaceId, ctx.workspace.id)];
+      if (input.status) conditions.push(eq(emailDrafts.status, input.status));
+      const res = await db.delete(emailDrafts).where(and(...conditions));
+      const deleted = Number((res as unknown as { affectedRows?: number }[])[0]?.affectedRows ?? 0);
+      return { ok: true, deleted };
+    }),
+
+  /** Delete a single AI Pipeline job record. */
+  deleteJob: workspaceProcedure
+    .input(z.object({ id: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      await db
+        .delete(aiPipelineJobs)
+        .where(and(eq(aiPipelineJobs.id, input.id), eq(aiPipelineJobs.workspaceId, ctx.workspace.id)));
+      return { ok: true };
+    }),
+
+  /** Purge every AI Pipeline job for the workspace. */
+  clearJobs: workspaceProcedure.mutation(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    const res = await db
+      .delete(aiPipelineJobs)
+      .where(eq(aiPipelineJobs.workspaceId, ctx.workspace.id));
+    const deleted = Number((res as unknown as { affectedRows?: number }[])[0]?.affectedRows ?? 0);
+    return { ok: true, deleted };
+  }),
 });

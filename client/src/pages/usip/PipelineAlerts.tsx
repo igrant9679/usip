@@ -34,6 +34,7 @@ import {
   MessageSquarePlus,
   ArrowRightCircle,
   Mail,
+  Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Link } from "wouter";
@@ -302,6 +303,15 @@ export default function PipelineAlerts() {
     onError: (e) => toast.error(e.message),
   });
 
+  const clearAll = trpc.pipelineAlerts.clearAll.useMutation({
+    onSuccess: (data) => {
+      toast.success(`Deleted ${data.deleted} alert${data.deleted === 1 ? "" : "s"}`);
+      refetch();
+      refetchSummary();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
   const handleRefresh = () => {
     refetch();
     refetchSummary();
@@ -326,6 +336,27 @@ export default function PipelineAlerts() {
           <RefreshCw className="h-4 w-4 mr-1" />
           Refresh
         </Button>
+        {totalAlerts > 0 && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="text-muted-foreground hover:text-destructive"
+            onClick={() => {
+              if (window.confirm(`Delete all ${totalAlerts} alert${totalAlerts === 1 ? "" : "s"}? This hard-deletes every alert row for the workspace; new ones will appear on the next health scan. Cannot be undone.`)) {
+                clearAll.mutate();
+              }
+            }}
+            disabled={clearAll.isPending}
+            title="Delete every alert for this workspace"
+          >
+            {clearAll.isPending ? (
+              <Loader2 className="h-4 w-4 animate-spin mr-1" />
+            ) : (
+              <Trash2 className="h-4 w-4 mr-1" />
+            )}
+            Clear all
+          </Button>
+        )}
         <Button
           size="sm"
           variant="outline"

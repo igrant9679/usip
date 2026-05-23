@@ -191,4 +191,47 @@ export const csRouter = router({
     if (!db) return [];
     return db.select().from(supportTickets).where(and(eq(supportTickets.customerId, input.customerId), eq(supportTickets.workspaceId, ctx.workspace.id)));
   }),
+
+  /**
+   * Delete a single customer record (the CS overlay) along with its QBRs,
+   * support tickets, and contract amendments. The underlying accounts row
+   * stays intact — only the customer-success overlay is removed.
+   */
+  delete: repProcedure
+    .input(z.object({ id: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // Cascade delete child rows first so FK constraints don't trip.
+      await db
+        .delete(qbrs)
+        .where(and(eq(qbrs.customerId, input.id), eq(qbrs.workspaceId, ctx.workspace.id)));
+      await db
+        .delete(supportTickets)
+        .where(and(eq(supportTickets.customerId, input.id), eq(supportTickets.workspaceId, ctx.workspace.id)));
+      await db
+        .delete(contractAmendments)
+        .where(and(eq(contractAmendments.customerId, input.id), eq(contractAmendments.workspaceId, ctx.workspace.id)));
+      await db
+        .delete(customers)
+        .where(and(eq(customers.id, input.id), eq(customers.workspaceId, ctx.workspace.id)));
+      return { ok: true };
+    }),
+
+  /**
+   * Reset all customer-success data for the workspace — purges every
+   * customer, QBR, support ticket, and contract amendment. The underlying
+   * accounts (and contacts / opportunities) are untouched.
+   */
+  clearAll: repProcedure.mutation(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    const wsId = ctx.workspace.id;
+    await db.delete(qbrs).where(eq(qbrs.workspaceId, wsId));
+    await db.delete(supportTickets).where(eq(supportTickets.workspaceId, wsId));
+    await db.delete(contractAmendments).where(eq(contractAmendments.workspaceId, wsId));
+    const res = await db.delete(customers).where(eq(customers.workspaceId, wsId));
+    const deleted = Number((res as unknown as { affectedRows?: number }[])[0]?.affectedRows ?? 0);
+    return { ok: true, deletedCustomers: deleted };
+  }),
 });

@@ -46,6 +46,7 @@ import {
   GitBranch,
   Layers,
   Link2,
+  Trash2,
 } from "lucide-react";
 import { EntityPicker } from "@/components/usip/EntityPicker";
 import { Label } from "@/components/ui/label";
@@ -167,6 +168,10 @@ function DraftCard({ draft, onAction }: { draft: any; onAction: () => void }) {
   });
   const score = trpc.aiPipeline.scoreDraft.useMutation({
     onSuccess: (data) => { setScoreData(data); setScoreOpen(true); },
+    onError: (e) => toast.error(e.message),
+  });
+  const remove = trpc.aiPipeline.deleteDraft.useMutation({
+    onSuccess: () => { toast.success("Draft deleted"); onAction(); },
     onError: (e) => toast.error(e.message),
   });
 
@@ -293,6 +298,20 @@ function DraftCard({ draft, onAction }: { draft: any; onAction: () => void }) {
                 {reject.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <XCircle className="h-3.5 w-3.5" />}
                 Reject
               </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  if (window.confirm("Delete this draft permanently? This cannot be undone.")) {
+                    remove.mutate({ id: draft.id });
+                  }
+                }}
+                disabled={remove.isPending}
+                className="text-muted-foreground hover:text-destructive"
+                title="Delete draft"
+              >
+                {remove.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+              </Button>
               <div className="flex items-center gap-1 ml-auto">
                 <Select value={regenPreset} onValueChange={(v) => setRegenPreset(v as Preset)}>
                   <SelectTrigger className="h-7 text-xs w-36">
@@ -380,6 +399,14 @@ export default function AIPipelineQueue() {
   const bulkApprove = trpc.aiPipeline.bulkApproveDrafts.useMutation({
     onSuccess: (data) => {
       toast.success(`${data.count} drafts approved`);
+      refetchDrafts();
+      refetchStats();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const clearDrafts = trpc.aiPipeline.clearDrafts.useMutation({
+    onSuccess: (data) => {
+      toast.success(`Cleared ${data.deleted} draft${data.deleted === 1 ? "" : "s"}`);
       refetchDrafts();
       refetchStats();
     },
@@ -778,6 +805,27 @@ export default function AIPipelineQueue() {
                   <Mail className="h-4 w-4 mr-1" />
                 )}
                 Send Approved ({stats?.approved})
+              </Button>
+            )}
+            {(drafts?.length ?? 0) > 0 && (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="text-muted-foreground hover:text-destructive"
+                onClick={() => {
+                  if (window.confirm(`Delete all ${drafts.length} draft${drafts.length === 1 ? "" : "s"} on this page? This cannot be undone.`)) {
+                    clearDrafts.mutate({});
+                  }
+                }}
+                disabled={clearDrafts.isPending}
+                title="Permanently delete all drafts in the queue"
+              >
+                {clearDrafts.isPending ? (
+                  <Loader2 className="h-4 w-4 animate-spin mr-1" />
+                ) : (
+                  <Trash2 className="h-4 w-4 mr-1" />
+                )}
+                Clear queue
               </Button>
             )}
             </div>

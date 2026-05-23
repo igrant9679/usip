@@ -458,4 +458,36 @@ export const pipelineAlertsRouter = router({
     }
     return { ok: true, sent: true, count: stuckDeals.length, recipient: recipientEmail };
   }),
+
+  /** Dismiss every undismissed alert for the whole workspace. */
+  dismissAll: workspaceProcedure.mutation(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    const res = await db
+      .update(pipelineAlerts)
+      .set({ dismissedAt: new Date(), dismissedByUserId: ctx.user.id })
+      .where(
+        and(
+          eq(pipelineAlerts.workspaceId, ctx.workspace.id),
+          isNull(pipelineAlerts.dismissedAt),
+        ),
+      );
+    const dismissed = Number(
+      (res as unknown as { affectedRows?: number }[])[0]?.affectedRows ?? 0,
+    );
+    return { ok: true, dismissed };
+  }),
+
+  /** Hard-delete every alert row for the workspace (dismissed or not). */
+  clearAll: workspaceProcedure.mutation(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    const res = await db
+      .delete(pipelineAlerts)
+      .where(eq(pipelineAlerts.workspaceId, ctx.workspace.id));
+    const deleted = Number(
+      (res as unknown as { affectedRows?: number }[])[0]?.affectedRows ?? 0,
+    );
+    return { ok: true, deleted };
+  }),
 });

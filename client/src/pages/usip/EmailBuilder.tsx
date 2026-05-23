@@ -620,10 +620,17 @@ function AIGenerateDialog({
 function TemplateList({ onOpen }: { onOpen: (id: number) => void }) {
   const { data: templates } = trpc.emailTemplates.list.useQuery({ status: "all" });
   const [showAIGenerate, setShowAIGenerate] = useState(false);
+  const utils = trpc.useUtils();
   const createMutation = trpc.emailTemplates.create.useMutation({
     onSuccess: (data) => onOpen(data.id),
   });
-  const utils = trpc.useUtils();
+  const deleteMutation = trpc.emailTemplates.delete.useMutation({
+    onSuccess: () => {
+      utils.emailTemplates.list.invalidate();
+      toast.success("Template deleted");
+    },
+    onError: (e) => toast.error("Failed to delete template", { description: e.message }),
+  });
 
   return (
     <div className="flex flex-col h-full">
@@ -664,19 +671,35 @@ function TemplateList({ onOpen }: { onOpen: (id: number) => void }) {
             <p className="text-xs text-muted-foreground text-center py-6">No templates yet. Create one to get started.</p>
           )}
           {templates?.map((t) => (
-            <button
+            <div
               key={t.id}
-              onClick={() => onOpen(t.id)}
-              className="w-full text-left rounded-md px-2.5 py-2 hover:bg-muted transition-colors"
+              className="group flex items-start gap-1 rounded-md hover:bg-muted transition-colors"
             >
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-sm truncate font-medium">{t.name}</span>
-                <Badge variant={t.status === "active" ? "default" : "secondary"} className="text-[10px] shrink-0">
-                  {t.status}
-                </Badge>
-              </div>
-              <p className="text-[10px] text-muted-foreground mt-0.5 truncate">{t.category}</p>
-            </button>
+              <button
+                onClick={() => onOpen(t.id)}
+                className="flex-1 min-w-0 text-left px-2.5 py-2"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-sm truncate font-medium">{t.name}</span>
+                  <Badge variant={t.status === "active" ? "default" : "secondary"} className="text-[10px] shrink-0">
+                    {t.status}
+                  </Badge>
+                </div>
+                <p className="text-[10px] text-muted-foreground mt-0.5 truncate">{t.category}</p>
+              </button>
+              <button
+                className="px-2 py-2 text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-destructive transition-opacity"
+                title="Delete template"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (window.confirm(`Delete template "${t.name}"? This cannot be undone.`)) {
+                    deleteMutation.mutate({ id: t.id });
+                  }
+                }}
+              >
+                <Trash2 size={12} />
+              </button>
+            </div>
           ))}
         </div>
       </ScrollArea>

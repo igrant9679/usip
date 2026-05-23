@@ -3,7 +3,7 @@ import { fmt$, fmtDate, Field, FormDialog, Section, SelectField, StatusPill, Tex
 import { EmptyState, PageHeader, Shell, StatCard } from "@/components/usip/Shell";
 import { RecordDrawer } from "@/components/usip/RecordDrawer";
 import { trpc } from "@/lib/trpc";
-import { AlertTriangle, FolderOpen, Heart, TrendingUp, HeartHandshake } from "lucide-react";
+import { AlertTriangle, FolderOpen, Heart, TrendingUp, HeartHandshake, Trash2, RotateCcw } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -29,12 +29,48 @@ export default function Customers() {
     return { tier: "low", tone: "success" };
   };
   const addAmendment = trpc.cs.addAmendment.useMutation({ onSuccess: () => { utils.cs.listAmendments.invalidate({ customerId: selected! }); utils.cs.list.invalidate(); setAmendOpen(false); toast.success("Amendment added"); } });
+  const removeCustomer = trpc.cs.delete.useMutation({
+    onSuccess: (_d, vars) => {
+      utils.cs.list.invalidate();
+      utils.cs.kpis.invalidate();
+      if (selected === vars.id) setSelected(null);
+      toast.success("Customer deleted");
+    },
+    onError: (e) => toast.error("Failed to delete customer", { description: e.message }),
+  });
+  const resetCs = trpc.cs.clearAll.useMutation({
+    onSuccess: (data) => {
+      utils.cs.list.invalidate();
+      utils.cs.kpis.invalidate();
+      setSelected(null);
+      toast.success(`Reset — cleared ${data.deletedCustomers} customer record${data.deletedCustomers === 1 ? "" : "s"}`);
+    },
+    onError: (e) => toast.error("Failed to reset", { description: e.message }),
+  });
 
   return (
     <Shell title="Customers">
-      <PageHeader title="Customers" description="Track customer health scores, renewal risk, NPS trends, and expansion potential post-close. Identify at-risk accounts early and surface upsell opportunities before they go cold." pageKey="customers" 
+      <PageHeader title="Customers" description="Track customer health scores, renewal risk, NPS trends, and expansion potential post-close. Identify at-risk accounts early and surface upsell opportunities before they go cold." pageKey="customers"
         icon={<HeartHandshake className="size-5" />}
-      />
+      >
+        {(list?.length ?? 0) > 0 && (
+          <Button
+            size="sm"
+            variant="outline"
+            className="text-muted-foreground hover:text-destructive"
+            onClick={() => {
+              if (window.confirm(`Reset ALL customer-success data for this workspace? This deletes every customer, QBR, support ticket, and contract amendment (${list?.length} customer records). The underlying accounts/contacts/opportunities stay intact. Cannot be undone.`)) {
+                resetCs.mutate();
+              }
+            }}
+            disabled={resetCs.isPending}
+            title="Delete every customer-success record for this workspace"
+          >
+            <RotateCcw className="size-3.5 mr-1" />
+            Reset CS data
+          </Button>
+        )}
+      </PageHeader>
       <div className="p-6 space-y-4">
         {kpis && (
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
@@ -56,6 +92,7 @@ export default function Customers() {
                     <th className="text-left px-3 py-2">Account</th><th className="text-left px-3 py-2">Tier</th>
                     <th className="text-right px-3 py-2">Health</th><th className="text-right px-3 py-2">ARR</th>
                     <th className="text-right px-3 py-2">NPS</th><th className="text-right px-3 py-2">Renewal</th>
+                    <th className="w-8 px-1"></th>
                   </tr></thead>
                   <tbody className="divide-y">
                     {list!.map((c: any) => (
@@ -66,6 +103,19 @@ export default function Customers() {
                         <td className="px-3 py-2 text-right font-mono tabular-nums whitespace-nowrap">{fmt$(Number(c.arr ?? 0))}</td>
                         <td className="px-3 py-2 text-right font-mono tabular-nums">{c.npsScore}</td>
                         <td className="px-3 py-2 text-right text-xs text-muted-foreground">{fmtDate(c.renewalDate)}</td>
+                        <td className="px-1 py-2 text-right" onClick={(e) => e.stopPropagation()}>
+                          <button
+                            className="text-muted-foreground hover:text-destructive p-1 rounded"
+                            title="Delete customer (CS overlay only — account stays)"
+                            onClick={() => {
+                              if (window.confirm(`Delete customer "${c.account?.name ?? "this customer"}" and all its QBRs, tickets, and amendments? The underlying account stays. Cannot be undone.`)) {
+                                removeCustomer.mutate({ id: c.id });
+                              }
+                            }}
+                          >
+                            <Trash2 className="size-3.5" />
+                          </button>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
