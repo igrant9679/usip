@@ -254,6 +254,27 @@ function AccountFormDialog({
     onError: (e) => toast.error(e.message),
   });
 
+  // Inline pre-save SMTP test — opens a real socket via the testConfig
+  // procedure and surfaces the result both inline and as a toast.
+  const [testResult, setTestResult] = useState<
+    { ok: boolean; message: string } | null
+  >(null);
+  const testConfigMutation = trpc.sendingAccounts.testConfig.useMutation({
+    onSuccess: (r) => {
+      if (r.ok) {
+        setTestResult({ ok: true, message: "Connection verified — SMTP handshake + AUTH succeeded." });
+        toast.success("Connection verified");
+      } else {
+        setTestResult({ ok: false, message: r.error ?? "Connection failed" });
+        toast.error(r.error ?? "Connection failed");
+      }
+    },
+    onError: (e) => {
+      setTestResult({ ok: false, message: e.message });
+      toast.error(e.message);
+    },
+  });
+
   function set(field: keyof AccountForm, value: string | boolean) {
     setForm((f) => {
       const next = { ...f, [field]: value };
@@ -576,8 +597,60 @@ function AccountFormDialog({
           </div>
         )}
 
-        <DialogFooter>
+        {/* Inline result of the last connection test — green if passed,
+            red with the SMTP error if it failed. Sticky inside the dialog
+            so it stays visible while the user reads / retries. */}
+        {testResult && (
+          <div
+            className={`rounded-md border px-3 py-2 text-xs flex items-start gap-2 ${
+              testResult.ok
+                ? "border-emerald-300 bg-emerald-50 text-emerald-800"
+                : "border-rose-300 bg-rose-50 text-rose-800"
+            }`}
+          >
+            {testResult.ok ? (
+              <CheckCircle2 className="size-3.5 mt-0.5 flex-shrink-0" />
+            ) : (
+              <AlertCircle className="size-3.5 mt-0.5 flex-shrink-0" />
+            )}
+            <span>{testResult.message}</span>
+          </div>
+        )}
+
+        <DialogFooter className="gap-2">
           <Button variant="outline" onClick={onClose} disabled={isBusy}>Cancel</Button>
+          <Button
+            variant="outline"
+            onClick={() => {
+              setTestResult(null);
+              testConfigMutation.mutate({
+                editId: editId,
+                provider: form.provider,
+                smtpHost: form.smtpHost || undefined,
+                smtpPort: form.smtpPort ? parseInt(form.smtpPort) : undefined,
+                smtpUsername: form.smtpUsername || undefined,
+                smtpPassword: form.smtpPassword || undefined,
+                sesRegion: form.sesRegion || undefined,
+              });
+            }}
+            disabled={
+              isBusy ||
+              testConfigMutation.isPending ||
+              form.provider === "outlook_oauth"
+            }
+            title={
+              form.provider === "outlook_oauth"
+                ? "OAuth accounts are verified during the Microsoft sign-in flow"
+                : "Open a real SMTP connection with these credentials"
+            }
+          >
+            {testConfigMutation.isPending ? (
+              <RefreshCw className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+            ) : (
+              <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
+            )}
+            {testConfigMutation.isPending ? "Testing…" : "Test connection"}
+          </Button>
           <Button onClick={handleSubmit} disabled={isBusy || !form.name || !form.fromEmail}>
             {isBusy ? "Saving..." : editId ? "Save changes" : "Connect account"}
           </Button>

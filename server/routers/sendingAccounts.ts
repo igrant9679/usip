@@ -16,6 +16,7 @@ import {
 } from "../../drizzle/schema";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
+import { buildTransporter } from "./smtpConfig";
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -44,6 +45,13 @@ export function reputationTierFromRate(
  * Validate sending account credentials (lightweight — no live socket).
  * Real production impl would call nodemailer.createTransport().verify().
  */
+/**
+ * Test a sending account's connectivity. For generic_smtp and amazon_ses
+ * this opens a real SMTP socket via nodemailer's verify() (EHLO + STARTTLS
+ * + AUTH) — not just a field-presence check. For outlook_oauth we only
+ * confirm a token is present; a full XOAUTH2 verify needs the token-endpoint
+ * + refresh handshake and lives in the OAuth-flow code path.
+ */
 export async function testSmtpConnection(params: {
   provider: string;
   smtpHost?: string | null;
@@ -62,30 +70,44 @@ export async function testSmtpConnection(params: {
     return { ok: true };
   }
 
-  if (provider === "amazon_ses") {
-    if (!params.smtpUsername || !params.smtpPassword) {
-      return { ok: false, error: "SES SMTP username and password are required" };
-    }
-    if (!params.sesRegion) {
-      return { ok: false, error: "AWS region is required for Amazon SES" };
-    }
-    const expectedHost = `email-smtp.${params.sesRegion}.amazonaws.com`;
-    if (params.smtpHost && params.smtpHost !== expectedHost) {
-      return {
-        ok: false,
-        error: `SES SMTP host should be ${expectedHost} for region ${params.sesRegion}`,
-      };
-    }
-    return { ok: true };
-  }
-
-  // generic_smtp
-  if (!params.smtpHost) return { ok: false, error: "SMTP host is required" };
-  if (!params.smtpUsername) return { ok: false, error: "SMTP username is required" };
-  if (!params.smtpPassword) return { ok: false, error: "SMTP password is required" };
+  // ── Field validation common to generic_smtp + amazon_ses ────────────
+  let host = params.smtpHost ?? "";
   const port = params.smtpPort ?? 587;
   if (port < 1 || port > 65535) return { ok: false, error: "Invalid SMTP port" };
-  return { ok: true };
+  if (!params.smtpUsername) return { ok: false, error: "SMTP username is required" };
+  if (!params.smtpPassword) return { ok: false, error: "SMTP password is required" };
+
+  if (provider === "amazon_ses") {
+    if (!params.sesRegion) return { ok: false, error: "AWS region is required for Amazon SES" };
+    const expectedHost = `email-smtp.${params.sesRegion}.amazonaws.com`;
+    if (host && host !== expectedHost) {
+      return { ok: false, error: `SES SMTP host should be ${expectedHost} for region ${params.sesRegion}` };
+    }
+    if (!host) host = expectedHost;
+  } else {
+    // generic_smtp
+    if (!host) return { ok: false, error: "SMTP host is required" };
+  }
+
+  // ── Real connection check ──────────────────────────────────────────
+  // 465 = implicit TLS; everything else uses STARTTLS upgrade.
+  try {
+    const transporter = buildTransporter({
+      host,
+      port,
+      secure: port === 465,
+      username: params.smtpUsername,
+      password: params.smtpPassword,
+    });
+    await transporter.verify();
+    return { ok: true };
+  } catch (e) {
+    const raw = e instanceof Error ? e.message : String(e);
+    // nodemailer often returns multi-line errors with the full SMTP banner.
+    // Trim to the first line so the UI toast stays readable.
+    const msg = raw.split("\n")[0].slice(0, 240);
+    return { ok: false, error: `SMTP connect failed: ${msg}` };
+  }
 }
 
 // ─── Rotation engine ─────────────────────────────────────────────────────────
@@ -326,6 +348,57 @@ export const sendingAccountsRouter = router({
           ),
         );
       return { ok: true };
+    }),
+
+  /**
+   * Test arbitrary SMTP credentials without saving — used by the Connect/
+   * Edit dialog so users can validate before clicking Save. When editId is
+   * supplied and smtpPassword is blank, falls back to the saved password so
+   * users can re-test an existing account without re-typing the password.
+   */
+  testConfig: workspaceProcedure
+    .input(
+      z.object({
+        editId: z.number().int().optional(),
+        provider: z.enum(["outlook_oauth", "amazon_ses", "generic_smtp"]),
+        smtpHost: z.string().optional(),
+        smtpPort: z.number().int().optional(),
+        smtpUsername: z.string().optional(),
+        smtpPassword: z.string().optional(),
+        sesRegion: z.string().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      let smtpPassword = input.smtpPassword;
+      let oauthAccessToken: string | null | undefined;
+      // For an existing account being edited, fall back to the stored
+      // password / OAuth token when the form left those fields blank.
+      if (input.editId && (!smtpPassword || input.provider === "outlook_oauth")) {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const [existing] = await db
+          .select()
+          .from(sendingAccounts)
+          .where(
+            and(
+              eq(sendingAccounts.id, input.editId),
+              eq(sendingAccounts.workspaceId, ctx.workspace.id),
+            ),
+          );
+        if (existing) {
+          if (!smtpPassword) smtpPassword = existing.smtpPassword ?? undefined;
+          oauthAccessToken = existing.oauthAccessToken ?? null;
+        }
+      }
+      return testSmtpConnection({
+        provider: input.provider,
+        smtpHost: input.smtpHost ?? null,
+        smtpPort: input.smtpPort ?? null,
+        smtpUsername: input.smtpUsername ?? null,
+        smtpPassword: smtpPassword ?? null,
+        sesRegion: input.sesRegion ?? null,
+        oauthAccessToken: oauthAccessToken ?? null,
+      });
     }),
 
   testConnection: workspaceProcedure
