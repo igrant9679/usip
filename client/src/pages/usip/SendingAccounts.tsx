@@ -618,62 +618,59 @@ function AccountCard({ account, onEdit }: { account: any; onEdit: (id: number) =
 
   return (
     <Card className={`transition-all ${!account.enabled ? "opacity-60" : ""}`}>
-      <CardContent className="p-4">
-        <div className="flex items-start gap-3">
+      <CardContent className="p-2.5">
+        <div className="flex items-center gap-2.5">
           {/* Provider icon */}
           <div
-            className={`w-9 h-9 rounded-lg flex items-center justify-center font-bold text-sm flex-shrink-0 ${PROVIDER_COLORS[account.provider as Provider]}`}
+            className={`w-7 h-7 rounded-md flex items-center justify-center font-bold text-xs flex-shrink-0 ${PROVIDER_COLORS[account.provider as Provider]}`}
           >
             {PROVIDER_ICONS[account.provider as Provider]}
           </div>
 
           {/* Main info */}
           <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 flex-wrap">
+            <div className="flex items-center gap-1.5 flex-wrap">
               <span className="font-medium text-sm truncate">{account.name}</span>
               <ConnectionBadge status={account.connectionStatus as ConnectionStatus} />
               <WarmupBadge status={account.warmupStatus as WarmupStatus} />
               <ReputationBadge tier={account.reputationTier as ReputationTier} />
               {account.imapHost && (
-                <Badge className="gap-1 bg-indigo-100 text-indigo-700 border-indigo-200 text-xs">
+                <Badge className="gap-1 bg-indigo-100 text-indigo-700 border-indigo-200 text-[10px] px-1.5 py-0">
                   IMAP
                 </Badge>
               )}
             </div>
-            <p className="text-xs text-muted-foreground mt-0.5">
+            <p
+              className="text-[11px] text-muted-foreground truncate"
+              title={
+                (account.lastTestedAt
+                  ? `Last tested ${new Date(account.lastTestedAt).toLocaleString()}`
+                  : "Never tested") +
+                (account.imapHost ? ` · IMAP ${account.imapHost}:${account.imapPort ?? 993}` : "")
+              }
+            >
               {account.fromEmail}
               {account.fromName ? ` · ${account.fromName}` : ""}
               {" · "}
               <span className="text-foreground/70">{PROVIDER_LABELS[account.provider as Provider]}</span>
-              {account.imapHost && (
-                <span className="ml-1 text-indigo-600">· {account.imapHost}:{account.imapPort ?? 993}</span>
-              )}
             </p>
 
             {/* Usage bar */}
-            <div className="mt-2">
+            <div className="mt-1">
               <UsageBar sent={account.sentToday ?? 0} limit={account.dailySendLimit} />
             </div>
 
-            {/* Last test error */}
+            {/* Last test error only — last-tested moved to title tooltip above */}
             {account.connectionStatus === "error" && account.lastTestError && (
-              <p className="text-xs text-red-600 mt-1.5 flex items-center gap-1">
+              <p className="text-[11px] text-red-600 mt-1 flex items-center gap-1">
                 <AlertCircle className="w-3 h-3 flex-shrink-0" />
                 {account.lastTestError}
-              </p>
-            )}
-
-            {/* Last tested */}
-            {account.lastTestedAt && (
-              <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1">
-                <Clock className="w-3 h-3" />
-                Last tested {new Date(account.lastTestedAt).toLocaleString()}
               </p>
             )}
           </div>
 
           {/* Actions */}
-          <div className="flex items-center gap-1.5 flex-shrink-0">
+          <div className="flex items-center gap-1 flex-shrink-0">
             <Switch
               checked={account.enabled}
               onCheckedChange={(v) => toggleMutation.mutate({ id: account.id, enabled: v })}
@@ -682,26 +679,26 @@ function AccountCard({ account, onEdit }: { account: any; onEdit: (id: number) =
             <Button
               size="icon"
               variant="ghost"
-              className="h-7 w-7"
+              className="h-6 w-6"
               title="Edit account"
               onClick={() => onEdit(account.id)}
             >
-              <Pencil className="w-3.5 h-3.5" />
+              <Pencil className="w-3 h-3" />
             </Button>
             <Button
               size="icon"
               variant="ghost"
-              className="h-7 w-7"
+              className="h-6 w-6"
               title="Test connection"
               disabled={testMutation.isPending}
               onClick={() => testMutation.mutate({ id: account.id })}
             >
-              <RefreshCw className={`w-3.5 h-3.5 ${testMutation.isPending ? "animate-spin" : ""}`} />
+              <RefreshCw className={`w-3 h-3 ${testMutation.isPending ? "animate-spin" : ""}`} />
             </Button>
             <Button
               size="icon"
               variant="ghost"
-              className="h-7 w-7 text-destructive hover:text-destructive"
+              className="h-6 w-6 text-destructive hover:text-destructive"
               title="Remove account"
               onClick={() => {
                 if (confirm(`Remove "${account.name}"?`)) {
@@ -709,7 +706,7 @@ function AccountCard({ account, onEdit }: { account: any; onEdit: (id: number) =
                 }
               }}
             >
-              <Trash2 className="w-3.5 h-3.5" />
+              <Trash2 className="w-3 h-3" />
             </Button>
           </div>
         </div>
@@ -838,7 +835,7 @@ export default function SendingAccounts() {
             </CardContent>
           </Card>
         ) : (
-          <div className="space-y-3">
+          <div className="space-y-1.5">
             {accounts.map((a) => (
               <AccountCard key={a.id} account={a} onEdit={openEdit} />
             ))}
