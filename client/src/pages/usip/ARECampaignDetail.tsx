@@ -1152,6 +1152,9 @@ export default function ARECampaignDetail() {
             <TabsTrigger value="scraper" className="text-xs gap-1.5">
               <Search className="size-3.5" /> Scraper
             </TabsTrigger>
+            <TabsTrigger value="sequences" className="text-xs gap-1.5">
+              <ListOrdered className="size-3.5" /> Sequences
+            </TabsTrigger>
             <TabsTrigger value="ab" className="text-xs gap-1.5">
               <Sparkles className="size-3.5" /> A/B Variants
               {(abVariants?.length ?? 0) > 0 && (
@@ -1178,9 +1181,6 @@ export default function ARECampaignDetail() {
                   {rejectionStats?.total}
                 </span>
               )}
-            </TabsTrigger>
-            <TabsTrigger value="sequences" className="text-xs gap-1.5">
-              <ListOrdered className="size-3.5" /> Sequences
             </TabsTrigger>
             <TabsTrigger value="logs" className="text-xs gap-1.5">
               <ScrollText className="size-3.5" /> Logs

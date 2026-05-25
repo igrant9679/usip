@@ -739,7 +739,11 @@ async function runDiscovery(campaign: Campaign): Promise<number> {
     .filter(Boolean)
     .join(" ")
     .trim();
-  if (!query) return 0; // nothing to search on — skip discovery
+  if (!query) {
+    await emitLog(campaign.workspaceId, campaign.id, "discovery", "warn",
+      "Discovery skipped — campaign has no targeting (titles/industries/geos/keywords). Open the campaign and add targets, or apply a Persona.");
+    return 0;
+  }
 
   const icpContext =
     `Industries: ${industries.join(", ")}; ` +
@@ -823,7 +827,11 @@ async function runDiscovery(campaign: Campaign): Promise<number> {
     );
   }
 
-  if (tasks.length === 0) return 0;
+  if (tasks.length === 0) {
+    await emitLog(campaign.workspaceId, campaign.id, "discovery", "warn",
+      `Discovery skipped — no usable sources configured (campaign.prospectSources=${JSON.stringify(sources)})`);
+    return 0;
+  }
 
   const settled = await Promise.allSettled(tasks);
   let totalNew = 0;
@@ -877,6 +885,8 @@ async function discoverViaLinkedIn(
       console.warn(
         `[AreEngine] campaign ${campaign.id} — no bridged LinkedIn account in workspace ${campaign.workspaceId}, LinkedIn discovery skipped`,
       );
+      await emitLog(campaign.workspaceId, campaign.id, "discovery", "warn",
+        "LinkedIn source skipped — no bridged LinkedIn account in this workspace. Connect one at /my-linkedin or disable the LinkedIn source on this campaign.");
       return [];
     }
     const { items } = await searchLinkedInPeople(acct.unipileAccountId, {

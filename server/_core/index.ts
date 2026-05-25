@@ -181,8 +181,8 @@ async function startServer() {
       console.error("[AreEngine] cron run failed:", e)
     );
   };
-  setTimeout(runAre, 120_000); // first run after 2 min (let DB + migrations settle)
-  setInterval(runAre, 10 * 60 * 1000); // every 10 minutes
+  setTimeout(runAre, 30_000); // first run 30s after boot (so a freshly-launched campaign sees activity fast)
+  setInterval(runAre, 3 * 60 * 1000); // every 3 minutes — feels continuous to the user while still giving each tick room to finish
 
   // Nightly AI pipeline batch: midnight cron for leads above score threshold
   const scheduleNightlyBatch = () => {
