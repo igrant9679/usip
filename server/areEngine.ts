@@ -687,53 +687,111 @@ async function runDiscovery(campaign: Campaign): Promise<number> {
     (keywords.length > 0 ? `; Keywords: ${keywords.join(", ")}` : "") +
     (sizeHint ? `; Company size: ${sizeHint}` : "");
 
-  // Pick a source from the campaign's prospectSources. LinkedIn is the most
-  // useful real-data option (routes through the workspace's bridged Unipile
-  // account, returns actual profiles), so try it first when configured —
-  // Google Business / Web / News are scraper paths that Google often blocks
-  // for niche ICPs and return 0 useful prospects.
+  // Multi-source discovery: every configured scraper-capable source runs
+  // in parallel (Promise.allSettled — one source failing never blocks the
+  // others). Results are deduped both within this tick and against
+  // existing prospect_queue rows so cross-source overlap doesn't create
+  // duplicate prospects. Each source still gets its own scrape_jobs
+  // row so the Scraper tab shows per-source activity.
   const sources = (campaign.prospectSources as string[] | null) ?? ["linkedin"];
-  const sourcePref = ["linkedin", "google_business", "news", "web"];
-  const source = sourcePref.find((s) => sources.includes(s)) ?? "google_business";
 
-  let prospects: Array<Record<string, unknown>> = [];
-  let sourceType: "google_business" | "linkedin_people" | "news" | "web_scrape" = "google_business";
-
-  if (source === "linkedin") {
-    // Real LinkedIn people-search via the workspace's bridged Unipile
-    // account — far more useful than the LLM-imagined stub the engine
-    // used to call here.
-    prospects = await discoverViaLinkedIn(campaign, query);
-    sourceType = "linkedin_people";
-    // Fallback: if real LinkedIn returns 0 (no bridged account, API hiccup,
-    // truly no matches) AND another source is configured, try the next
-    // source so a campaign isn't stuck waiting 10 min for the next tick.
-    if (prospects.length === 0) {
-      const fallback = sourcePref.find((s) => s !== "linkedin" && sources.includes(s));
-      if (fallback === "news") {
-        prospects = await scrapeNews(campaign.workspaceId, campaign.id, query, icpContext);
-        sourceType = "news";
-      } else if (fallback === "web") {
-        prospects = await scrapeWeb(campaign.workspaceId, campaign.id, query, icpContext);
-        sourceType = "web_scrape";
-      } else if (fallback === "google_business") {
-        prospects = await scrapeGoogleBusiness(campaign.workspaceId, campaign.id, query, icpContext);
-        sourceType = "google_business";
-      }
-    }
-  } else if (source === "news") {
-    prospects = await scrapeNews(campaign.workspaceId, campaign.id, query, icpContext);
-    sourceType = "news";
-  } else if (source === "web") {
-    prospects = await scrapeWeb(campaign.workspaceId, campaign.id, query, icpContext);
-    sourceType = "web_scrape";
-  } else {
-    prospects = await scrapeGoogleBusiness(campaign.workspaceId, campaign.id, query, icpContext);
-    sourceType = "google_business";
+  // Seed the dedup set with everything already in the queue for this
+  // campaign — keeps subsequent ticks from re-adding the same people.
+  const existing = await db
+    .select({
+      email: prospectQueue.email,
+      linkedinUrl: prospectQueue.linkedinUrl,
+    })
+    .from(prospectQueue)
+    .where(
+      and(
+        eq(prospectQueue.campaignId, campaign.id),
+        eq(prospectQueue.workspaceId, campaign.workspaceId),
+      ),
+    );
+  const seen = new Set<string>();
+  for (const e of existing) {
+    if (e.email) seen.add("e:" + e.email.toLowerCase());
+    if (e.linkedinUrl) seen.add("u:" + e.linkedinUrl.toLowerCase());
   }
 
-  await saveScrapeJobAndQueue(campaign.workspaceId, campaign.id, sourceType, query, prospects);
-  return prospects.length;
+  type SourceType =
+    | "google_business"
+    | "linkedin_people"
+    | "news"
+    | "web_scrape";
+  type SourceResult = {
+    sourceType: SourceType;
+    query: string;
+    raw: Array<Record<string, unknown>>;
+  };
+
+  const tasks: Array<Promise<SourceResult>> = [];
+  if (sources.includes("linkedin")) {
+    tasks.push(
+      discoverViaLinkedIn(campaign, query).then((raw) => ({
+        sourceType: "linkedin_people" as const,
+        query,
+        raw,
+      })),
+    );
+  }
+  if (sources.includes("google_business")) {
+    tasks.push(
+      scrapeGoogleBusiness(campaign.workspaceId, campaign.id, query, icpContext).then(
+        (raw) => ({ sourceType: "google_business" as const, query, raw }),
+      ),
+    );
+  }
+  if (sources.includes("news")) {
+    tasks.push(
+      scrapeNews(campaign.workspaceId, campaign.id, query, icpContext).then((raw) => ({
+        sourceType: "news" as const,
+        query,
+        raw,
+      })),
+    );
+  }
+  if (sources.includes("web")) {
+    tasks.push(
+      scrapeWeb(campaign.workspaceId, campaign.id, query, icpContext).then((raw) => ({
+        sourceType: "web_scrape" as const,
+        query,
+        raw,
+      })),
+    );
+  }
+
+  if (tasks.length === 0) return 0;
+
+  const settled = await Promise.allSettled(tasks);
+  let totalNew = 0;
+  for (const s of settled) {
+    if (s.status !== "fulfilled") {
+      console.error(`[AreEngine] discovery source failed for campaign ${campaign.id}:`, s.reason);
+      continue;
+    }
+    const { sourceType, query: q, raw } = s.value;
+    // Within-tick + cross-tick dedup by email and LinkedIn URL.
+    const unique = raw.filter((p) => {
+      const email = String(p.email ?? "").toLowerCase().trim();
+      const url = String(p.linkedinUrl ?? "").toLowerCase().trim();
+      const keyE = email ? "e:" + email : null;
+      const keyU = url ? "u:" + url : null;
+      if (keyE && seen.has(keyE)) return false;
+      if (keyU && seen.has(keyU)) return false;
+      if (keyE) seen.add(keyE);
+      if (keyU) seen.add(keyU);
+      return true;
+    });
+    try {
+      await saveScrapeJobAndQueue(campaign.workspaceId, campaign.id, sourceType, q, unique);
+      totalNew += unique.length;
+    } catch (e) {
+      console.error(`[AreEngine] saveScrapeJobAndQueue (${sourceType}) failed:`, e);
+    }
+  }
+  return totalNew;
 }
 
 /**
