@@ -42,6 +42,8 @@ import {
   scrapeNews,
   scrapeWeb,
 } from "./routers/are/scraper";
+import { searchLinkedInPeople, type UnipileLinkedInSearchHit } from "./lib/unipile";
+import { listUsableAccounts } from "./services/linkedinLookup";
 import { sendWorkspaceEmail } from "./emailDelivery";
 
 /* ─── Per-tick bounds (keep LLM cost + wall-time predictable) ───────────── */
@@ -685,17 +687,40 @@ async function runDiscovery(campaign: Campaign): Promise<number> {
     (keywords.length > 0 ? `; Keywords: ${keywords.join(", ")}` : "") +
     (sizeHint ? `; Company size: ${sizeHint}` : "");
 
-  // Pick the first configured source that maps to a scraper.
-  const sources = (campaign.prospectSources as string[] | null) ?? ["google_business"];
-  const source =
-    sources.find((s) => ["google_business", "linkedin", "news", "web"].includes(s)) ??
-    "google_business";
+  // Pick a source from the campaign's prospectSources. LinkedIn is the most
+  // useful real-data option (routes through the workspace's bridged Unipile
+  // account, returns actual profiles), so try it first when configured —
+  // Google Business / Web / News are scraper paths that Google often blocks
+  // for niche ICPs and return 0 useful prospects.
+  const sources = (campaign.prospectSources as string[] | null) ?? ["linkedin"];
+  const sourcePref = ["linkedin", "google_business", "news", "web"];
+  const source = sourcePref.find((s) => sources.includes(s)) ?? "google_business";
 
   let prospects: Array<Record<string, unknown>> = [];
   let sourceType: "google_business" | "linkedin_people" | "news" | "web_scrape" = "google_business";
+
   if (source === "linkedin") {
-    prospects = await scrapeLinkedIn(campaign.workspaceId, campaign.id, query, "people", icpContext);
+    // Real LinkedIn people-search via the workspace's bridged Unipile
+    // account — far more useful than the LLM-imagined stub the engine
+    // used to call here.
+    prospects = await discoverViaLinkedIn(campaign, query);
     sourceType = "linkedin_people";
+    // Fallback: if real LinkedIn returns 0 (no bridged account, API hiccup,
+    // truly no matches) AND another source is configured, try the next
+    // source so a campaign isn't stuck waiting 10 min for the next tick.
+    if (prospects.length === 0) {
+      const fallback = sourcePref.find((s) => s !== "linkedin" && sources.includes(s));
+      if (fallback === "news") {
+        prospects = await scrapeNews(campaign.workspaceId, campaign.id, query, icpContext);
+        sourceType = "news";
+      } else if (fallback === "web") {
+        prospects = await scrapeWeb(campaign.workspaceId, campaign.id, query, icpContext);
+        sourceType = "web_scrape";
+      } else if (fallback === "google_business") {
+        prospects = await scrapeGoogleBusiness(campaign.workspaceId, campaign.id, query, icpContext);
+        sourceType = "google_business";
+      }
+    }
   } else if (source === "news") {
     prospects = await scrapeNews(campaign.workspaceId, campaign.id, query, icpContext);
     sourceType = "news";
@@ -709,4 +734,68 @@ async function runDiscovery(campaign: Campaign): Promise<number> {
 
   await saveScrapeJobAndQueue(campaign.workspaceId, campaign.id, sourceType, query, prospects);
   return prospects.length;
+}
+
+/**
+ * Real LinkedIn discovery for ARE — picks a bridged LinkedIn account from
+ * the workspace pool (most headroom first) and runs Unipile's classic
+ * people-search, then normalises the raw hits into the prospect-queue shape
+ * (same shape the LLM scrapers return so saveScrapeJobAndQueue handles both).
+ * Returns [] on any error so the engine can fall through to the next source.
+ */
+async function discoverViaLinkedIn(
+  campaign: Campaign,
+  keywords: string,
+): Promise<Array<Record<string, unknown>>> {
+  try {
+    const accounts = await listUsableAccounts({
+      workspaceId: campaign.workspaceId,
+      userId: campaign.ownerUserId ?? 0,
+      isAdmin: true, // engine runs without a user; pull from the whole workspace pool
+    });
+    const acct = accounts.find((a) => a.remainingToday > 0) ?? accounts[0];
+    if (!acct) {
+      console.warn(
+        `[AreEngine] campaign ${campaign.id} — no bridged LinkedIn account in workspace ${campaign.workspaceId}, LinkedIn discovery skipped`,
+      );
+      return [];
+    }
+    const { items } = await searchLinkedInPeople(acct.unipileAccountId, {
+      keywords,
+      limit: 15,
+    });
+    return items
+      .map((h: UnipileLinkedInSearchHit) => {
+        let firstName = h.first_name ?? "";
+        let lastName = h.last_name ?? "";
+        const fullName = (h.name ?? `${firstName} ${lastName}`).trim();
+        if (!firstName && !lastName && fullName) {
+          const sp = fullName.lastIndexOf(" ");
+          firstName = sp === -1 ? fullName : fullName.slice(0, sp);
+          lastName = sp === -1 ? "" : fullName.slice(sp + 1);
+        }
+        const c = h.current_company ?? h.company;
+        const company = !c ? "" : typeof c === "string" ? c : (c.name ?? "");
+        const linkedinUrl =
+          h.public_profile_url ??
+          h.profile_url ??
+          (h.public_identifier
+            ? `https://www.linkedin.com/in/${h.public_identifier}`
+            : "");
+        return {
+          firstName,
+          lastName,
+          title: h.headline ?? h.title ?? "",
+          companyName: company,
+          linkedinUrl,
+          sourceUrl: linkedinUrl,
+          geography: h.location ?? "",
+          industry: h.industry ?? "",
+        } as Record<string, unknown>;
+      })
+      .filter((p) => String(p.firstName).length > 0);
+  } catch (e) {
+    console.error(`[AreEngine] LinkedIn discovery for campaign ${campaign.id} failed:`, e);
+    return [];
+  }
 }
