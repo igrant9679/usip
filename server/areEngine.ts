@@ -141,6 +141,21 @@ function normalizeSequence(raw: unknown): NormalizedStep[] {
   });
 }
 
+/** Serialize an unknown thrown value into a JSON-friendly details object
+ *  (name + message + stack + cause). Goes into are_engine_logs.details so
+ *  the Logs tab can expand a row to show the full stack. */
+function errorDetails(e: unknown): Record<string, unknown> {
+  if (e instanceof Error) {
+    return {
+      name: e.name,
+      message: e.message,
+      stack: e.stack,
+      cause: (e as any).cause ? String((e as any).cause) : undefined,
+    };
+  }
+  return { value: String(e) };
+}
+
 /**
  * Best-effort engine log emitter — surfaces per-phase activity to the
  * campaign detail "Logs" tab so the user can see what the engine is actually
@@ -257,7 +272,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
     }
   } catch (e) {
     console.error(`[AreEngine] campaign ${campId} enrich phase failed:`, e);
-    await emitLog(wsId, campId, "enrich", "error", String((e as Error)?.message ?? e));
+    await emitLog(wsId, campId, "enrich", "error", String((e as Error)?.message ?? e), errorDetails(e));
   }
 
   /* ── Phase 2: SCREEN — auto-approve / auto-reject ──────────────────── */
@@ -678,10 +693,8 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
     // pendingCount===0 which stalled new prospects whenever even one row was
     // still enriching — that made the engine appear "idle" for hours.
     if (total < campaign.targetProspectCount) {
-      const found = await runDiscovery(campaign);
-      result.discovered += found;
-      await emitLog(wsId, campId, "discovery", "info",
-        `Discovery added ${found} prospects (queue ${total}/${campaign.targetProspectCount})`);
+      // runDiscovery emits its own detailed per-source summary log.
+      result.discovered += await runDiscovery(campaign);
     } else {
       await emitLog(wsId, campId, "discovery", "info",
         `Discovery skipped — queue full (${total}/${campaign.targetProspectCount})`);
@@ -835,9 +848,14 @@ async function runDiscovery(campaign: Campaign): Promise<number> {
 
   const settled = await Promise.allSettled(tasks);
   let totalNew = 0;
+  const perSource: Record<string, { raw: number; new: number; error?: string }> = {};
   for (const s of settled) {
     if (s.status !== "fulfilled") {
       console.error(`[AreEngine] discovery source failed for campaign ${campaign.id}:`, s.reason);
+      const reason = s.reason instanceof Error ? s.reason.message : String(s.reason);
+      perSource["unknown"] = { raw: 0, new: 0, error: reason };
+      await emitLog(campaign.workspaceId, campaign.id, "discovery", "error",
+        `Discovery source failed: ${reason}`, errorDetails(s.reason));
       continue;
     }
     const { sourceType, query: q, raw } = s.value;
@@ -856,10 +874,20 @@ async function runDiscovery(campaign: Campaign): Promise<number> {
     try {
       await saveScrapeJobAndQueue(campaign.workspaceId, campaign.id, sourceType, q, unique);
       totalNew += unique.length;
+      perSource[sourceType] = { raw: raw.length, new: unique.length };
     } catch (e) {
       console.error(`[AreEngine] saveScrapeJobAndQueue (${sourceType}) failed:`, e);
+      perSource[sourceType] = { raw: raw.length, new: 0, error: String((e as Error)?.message ?? e) };
+      await emitLog(campaign.workspaceId, campaign.id, "discovery", "error",
+        `Failed to save ${sourceType} results: ${(e as Error)?.message ?? e}`, errorDetails(e));
     }
   }
+  // One info-level summary log per call carrying the per-source breakdown
+  // in `details` — expand the row in the Logs tab to see what each source
+  // returned vs how many survived dedup.
+  await emitLog(campaign.workspaceId, campaign.id, "discovery", "info",
+    `Discovery query "${query}" → ${totalNew} new across ${Object.keys(perSource).length} sources`,
+    { query, perSource });
   return totalNew;
 }
 

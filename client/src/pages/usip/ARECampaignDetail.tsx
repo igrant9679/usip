@@ -859,25 +859,63 @@ function LogsTab({ campaignId }: { campaignId: number }) {
         <EmptyState
           icon={ScrollText}
           title="No engine activity logged yet"
-          description="The engine runs every 10 minutes. Click 'Run engine now' to fire a tick immediately."
+          description="The engine runs every 3 minutes. Click 'Run engine now' to fire a tick immediately."
         />
       ) : (
         <div className="border rounded-xl bg-card divide-y max-h-[600px] overflow-y-auto">
           {logs.map((l: any) => (
-            <div key={l.id} className="px-3 py-2 text-xs flex items-start gap-3">
-              <span className="text-[10px] text-muted-foreground tabular-nums w-32 shrink-0">
-                {new Date(l.createdAt).toLocaleString()}
-              </span>
-              <Badge variant="outline" className="text-[10px] w-20 shrink-0 justify-center">{l.phase}</Badge>
-              <Badge
-                variant={l.level === "error" ? "destructive" : l.level === "warn" ? "secondary" : "outline"}
-                className="text-[10px] w-14 shrink-0 justify-center"
-              >
-                {l.level}
-              </Badge>
-              <span className="text-foreground/90 break-words">{l.message}</span>
-            </div>
+            <LogRow key={l.id} log={l} />
           ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Collapsible log row — click to expand and see full message + details JSON. */
+function LogRow({ log }: { log: any }) {
+  const [open, setOpen] = useState(false);
+  const hasDetails = log.details && (typeof log.details === "object" || typeof log.details === "string");
+  const isLong = (log.message ?? "").length > 120;
+  const expandable = hasDetails || isLong;
+  return (
+    <div className={`text-xs ${log.level === "error" ? "bg-destructive/5" : log.level === "warn" ? "bg-amber-500/5" : ""}`}>
+      <button
+        type="button"
+        onClick={() => expandable && setOpen((o) => !o)}
+        className={`w-full px-3 py-2 flex items-start gap-3 text-left ${expandable ? "hover:bg-muted/60 cursor-pointer" : "cursor-default"}`}
+      >
+        <span className="text-[10px] text-muted-foreground/70 w-4 shrink-0 pt-0.5">
+          {expandable ? (open ? "▼" : "▶") : ""}
+        </span>
+        <span className="text-[10px] text-muted-foreground tabular-nums w-32 shrink-0">
+          {new Date(log.createdAt).toLocaleString()}
+        </span>
+        <Badge variant="outline" className="text-[10px] w-20 shrink-0 justify-center">{log.phase}</Badge>
+        <Badge
+          variant={log.level === "error" ? "destructive" : log.level === "warn" ? "secondary" : "outline"}
+          className="text-[10px] w-14 shrink-0 justify-center"
+        >
+          {log.level}
+        </Badge>
+        <span className={`text-foreground/90 break-words ${open ? "" : "line-clamp-2"}`}>{log.message}</span>
+      </button>
+      {open && (
+        <div className="pl-[180px] pr-3 pb-3 space-y-2">
+          {isLong && (
+            <div>
+              <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">Full message</div>
+              <pre className="text-[11px] whitespace-pre-wrap break-words bg-muted/50 rounded p-2 font-mono">{log.message}</pre>
+            </div>
+          )}
+          {hasDetails && (
+            <div>
+              <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">Details</div>
+              <pre className="text-[11px] whitespace-pre-wrap break-words bg-muted/50 rounded p-2 font-mono max-h-80 overflow-auto">
+                {typeof log.details === "string" ? log.details : JSON.stringify(log.details, null, 2)}
+              </pre>
+            </div>
+          )}
         </div>
       )}
     </div>
