@@ -657,6 +657,40 @@ export const prospectsRouter = router({
       return { success: true };
     }),
 
+  /** List every prospect's generated sequence in one campaign — powers the
+   *  campaign Sequences tab (view + inline edit). */
+  listSequences: workspaceProcedure
+    .input(z.object({ campaignId: z.number(), limit: z.number().default(100) }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const rows = await db
+        .select({
+          prospectId: prospectQueue.id,
+          firstName: prospectQueue.firstName,
+          lastName: prospectQueue.lastName,
+          email: prospectQueue.email,
+          title: prospectQueue.title,
+          companyName: prospectQueue.companyName,
+          sequenceStatus: prospectQueue.sequenceStatus,
+          generatedSequence: prospectIntelligence.generatedSequence,
+        })
+        .from(prospectQueue)
+        .leftJoin(
+          prospectIntelligence,
+          eq(prospectIntelligence.prospectQueueId, prospectQueue.id),
+        )
+        .where(
+          and(
+            eq(prospectQueue.campaignId, input.campaignId),
+            eq(prospectQueue.workspaceId, ctx.workspace.id),
+          ),
+        )
+        .limit(input.limit);
+      // Only return rows that actually have a sequence to view/edit.
+      return rows.filter((r) => Array.isArray(r.generatedSequence) && (r.generatedSequence as unknown[]).length > 0);
+    }),
+
   /** Edit a specific step in the generated sequence */
   editSequenceStep: workspaceProcedure
     .input(z.object({

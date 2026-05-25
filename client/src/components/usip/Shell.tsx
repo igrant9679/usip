@@ -224,6 +224,7 @@ const NAV: NavGroup[] = [
       { href: "/lead-scoring", label: "Lead Scoring", icon: Target },
       { href: "/custom-fields", label: "Custom Fields", icon: Database },
       { href: "/brand-voice", label: "Brand Voice", icon: Mic2 },
+      { href: "/personas", label: "Personas", icon: Users },
       { href: "/settings", label: "Settings", icon: Settings },
     ],
   },

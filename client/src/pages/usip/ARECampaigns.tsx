@@ -60,6 +60,53 @@ const EMPLOYEE_BANDS = [
   { value: "5000+", label: "5,000+", min: 5000, max: undefined },
 ] as const;
 
+/** Persona picker for the wizard step 2 — applies a saved/preset persona's
+ *  targeting fields onto the form in one click. */
+function PersonaApplyPicker({ onApply }: { onApply: (p: any) => void }) {
+  const { data: saved = [] } = trpc.personas.list.useQuery();
+  const { data: presets = [] } = trpc.personas.listPresets.useQuery();
+  const [value, setValue] = useState<string>("");
+  const apply = (v: string) => {
+    setValue(v);
+    if (v.startsWith("saved:")) {
+      const id = Number(v.slice(6));
+      const p = saved.find((x: any) => x.id === id);
+      if (p) onApply(p);
+    } else if (v.startsWith("preset:")) {
+      const key = v.slice(7);
+      const p = presets.find((x: any) => x.key === key);
+      if (p) onApply(p);
+    }
+  };
+  if (saved.length === 0 && presets.length === 0) return null;
+  return (
+    <div>
+      <Label className="text-xs text-muted-foreground mb-1.5 block">Apply persona (optional)</Label>
+      <Select value={value} onValueChange={apply}>
+        <SelectTrigger className="text-sm"><SelectValue placeholder="Choose a persona to auto-fill targeting…" /></SelectTrigger>
+        <SelectContent>
+          {saved.length > 0 && (
+            <>
+              <div className="px-2 py-1 text-[10px] uppercase text-muted-foreground">Your personas</div>
+              {saved.map((p: any) => (
+                <SelectItem key={"s" + p.id} value={`saved:${p.id}`}>{p.name}</SelectItem>
+              ))}
+            </>
+          )}
+          {presets.length > 0 && (
+            <>
+              <div className="px-2 py-1 text-[10px] uppercase text-muted-foreground">Presets</div>
+              {presets.map((p: any) => (
+                <SelectItem key={"p" + p.key} value={`preset:${p.key}`}>{p.name}</SelectItem>
+              ))}
+            </>
+          )}
+        </SelectContent>
+      </Select>
+    </div>
+  );
+}
+
 /** Chip-style multi-value text input used by the wizard targeting step. */
 function TagInput({
   values,
@@ -387,6 +434,14 @@ export default function ARECampaigns() {
                   the per-prospect AI enrichment context. Add as many values per field as you like — comma or Enter to add.
                 </span>
               </div>
+              <PersonaApplyPicker
+                onApply={(p) => setForm((f) => ({
+                  ...f,
+                  targetTitles: (p.targetTitles as string[]) ?? f.targetTitles,
+                  targetIndustries: (p.targetIndustries as string[]) ?? f.targetIndustries,
+                  keywords: (p.keywords as string[]) ?? f.keywords,
+                }))}
+              />
               <div>
                 <Label className="text-xs text-muted-foreground mb-1.5 block">Job Titles</Label>
                 <TagInput

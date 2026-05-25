@@ -7,7 +7,7 @@
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod";
-import { areCampaigns, prospectQueue } from "../../../drizzle/schema";
+import { areCampaigns, personas, prospectQueue } from "../../../drizzle/schema";
 import { getDb } from "../../db";
 import { router } from "../../_core/trpc";
 import { workspaceProcedure } from "../../_core/workspace";
@@ -53,6 +53,12 @@ export const campaignsRouter = router({
         autonomyMode: z.enum(["full", "batch_approval", "review_release"]).default("batch_approval"),
         icpProfileId: z.number().optional(),
         /**
+         * Optional reusable persona to seed icpOverrides from. The persona's
+         * targeting fields fill any unset fields on icpOverrides; explicit
+         * icpOverrides keys win.
+         */
+        personaId: z.number().optional(),
+        /**
          * Per-campaign targeting that overrides the workspace ICP for this
          * campaign's discovery. The wizard fills this with
          * { targetTitles, targetIndustries, employeeMin, employeeMax, keywords }.
@@ -83,6 +89,28 @@ export const campaignsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+
+      // Resolve persona → seed icpOverrides if a personaId was supplied.
+      let icpOverrides: any = input.icpOverrides;
+      if (input.personaId) {
+        const [p] = await db
+          .select()
+          .from(personas)
+          .where(and(eq(personas.id, input.personaId), eq(personas.workspaceId, ctx.workspace.id)))
+          .limit(1);
+        if (p) {
+          icpOverrides = {
+            targetTitles: p.targetTitles ?? [],
+            targetIndustries: p.targetIndustries ?? [],
+            targetGeographies: p.targetGeographies ?? [],
+            employeeMin: p.employeeMin ?? undefined,
+            employeeMax: p.employeeMax ?? undefined,
+            keywords: p.keywords ?? [],
+            ...(input.icpOverrides ?? {}),
+          };
+        }
+      }
+
       const [row] = await db
         .insert(areCampaigns)
         .values({
@@ -91,7 +119,7 @@ export const campaignsRouter = router({
           description: input.description,
           autonomyMode: input.autonomyMode,
           icpProfileId: input.icpProfileId,
-          icpOverrides: input.icpOverrides,
+          icpOverrides,
           prospectSources: input.prospectSources,
           targetProspectCount: input.targetProspectCount,
           dailySendCap: input.dailySendCap,

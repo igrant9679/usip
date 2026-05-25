@@ -18,6 +18,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel,
   AlertDialogContent, AlertDialogDescription, AlertDialogFooter,
@@ -72,7 +73,7 @@ import {
   Users,
   X,
   XCircle,
-  Zap, Megaphone
+  Zap, Megaphone, ScrollText, ListOrdered
 } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
 import { Link, useParams, useLocation } from "wouter";
@@ -716,6 +717,173 @@ function ProspectNotes({ prospectId, campaignId }: { prospectId: number; campaig
 }
 
 
+/* ─── Sequences tab: view + edit per-prospect autonomous sequences ──────── */
+function SequencesTab({ campaignId }: { campaignId: number }) {
+  const { data: rows = [], refetch, isLoading } = trpc.are.prospects.listSequences.useQuery({ campaignId });
+  const editStep = trpc.are.prospects.editSequenceStep.useMutation();
+  const [editing, setEditing] = useState<{ prospectId: number; stepIndex: number; subject: string; body: string } | null>(null);
+
+  const save = async () => {
+    if (!editing) return;
+    try {
+      await editStep.mutateAsync({
+        prospectId: editing.prospectId,
+        stepIndex: editing.stepIndex,
+        subject: editing.subject,
+        body: editing.body,
+      });
+      toast.success("Step saved");
+      setEditing(null);
+      await refetch();
+    } catch (e: any) {
+      toast.error(e?.message ?? "Save failed");
+    }
+  };
+
+  if (isLoading) return <div className="text-sm text-muted-foreground p-6 text-center">Loading sequences…</div>;
+  if (rows.length === 0) {
+    return (
+      <EmptyState
+        icon={ListOrdered}
+        title="No sequences generated yet"
+        description="Once the engine generates a sequence for an approved prospect it will appear here for review and editing."
+      />
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {rows.map((r: any) => {
+        const steps = (r.generatedSequence ?? []) as any[];
+        return (
+          <div key={r.prospectId} className="border rounded-xl bg-card">
+            <div className="px-4 py-2.5 border-b flex items-center justify-between">
+              <div className="min-w-0">
+                <div className="text-sm font-medium truncate">
+                  {r.firstName} {r.lastName} <span className="text-muted-foreground font-normal">— {r.title}</span>
+                </div>
+                <div className="text-[11px] text-muted-foreground truncate">{r.companyName} · {r.email}</div>
+              </div>
+              <Badge variant="outline" className="text-[10px]">{r.sequenceStatus}</Badge>
+            </div>
+            <div className="divide-y">
+              {steps.map((s: any, idx: number) => (
+                <div key={idx} className="p-3 text-xs space-y-1">
+                  <div className="flex items-center gap-2 text-muted-foreground">
+                    <Badge variant="secondary" className="text-[10px]">Step {s.stepIndex ?? idx}</Badge>
+                    <span>{s.channel ?? "email"}</span>
+                    {typeof s.day === "number" && <span>· day {s.day}</span>}
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="ml-auto h-6 px-2 text-[11px]"
+                      onClick={() => setEditing({
+                        prospectId: r.prospectId,
+                        stepIndex: s.stepIndex ?? idx,
+                        subject: String(s.subject ?? ""),
+                        body: String(s.body ?? ""),
+                      })}
+                    >
+                      <Pencil className="size-3 mr-1" /> Edit
+                    </Button>
+                  </div>
+                  {s.subject && <div className="font-medium text-foreground">Subject: {s.subject}</div>}
+                  <div className="whitespace-pre-wrap text-foreground/90">{s.body}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+
+      <Dialog open={!!editing} onOpenChange={(o) => !o && setEditing(null)}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader><DialogTitle>Edit sequence step</DialogTitle></DialogHeader>
+          {editing && (
+            <div className="space-y-3">
+              <div className="space-y-1.5">
+                <Label className="text-xs">Subject</Label>
+                <Input value={editing.subject} onChange={(e) => setEditing({ ...editing, subject: e.target.value })} />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">Body</Label>
+                <Textarea rows={10} value={editing.body} onChange={(e) => setEditing({ ...editing, body: e.target.value })} />
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditing(null)}>Cancel</Button>
+            <Button onClick={save} disabled={editStep.isPending}>Save</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+/* ─── Logs tab: backend engine activity for this campaign ─────────────── */
+function LogsTab({ campaignId }: { campaignId: number }) {
+  const { data: logs = [], refetch, isLoading } = trpc.are.engine.getLogs.useQuery({ campaignId, limit: 300 });
+  const runOnce = trpc.are.engine.runOnce.useMutation();
+
+  if (isLoading) return <div className="text-sm text-muted-foreground p-6 text-center">Loading logs…</div>;
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <div className="text-xs text-muted-foreground">
+          {logs.length} {logs.length === 1 ? "entry" : "entries"} · newest first
+        </div>
+        <div className="flex gap-2">
+          <Button size="sm" variant="outline" onClick={() => refetch()}>
+            <RefreshCw className="size-3 mr-1" /> Refresh
+          </Button>
+          <Button
+            size="sm"
+            onClick={async () => {
+              try {
+                await runOnce.mutateAsync();
+                toast.success("Engine tick fired");
+                await refetch();
+              } catch (e: any) {
+                toast.error(e?.message ?? "Failed");
+              }
+            }}
+            disabled={runOnce.isPending}
+          >
+            <Zap className="size-3 mr-1" /> Run engine now
+          </Button>
+        </div>
+      </div>
+      {logs.length === 0 ? (
+        <EmptyState
+          icon={ScrollText}
+          title="No engine activity logged yet"
+          description="The engine runs every 10 minutes. Click 'Run engine now' to fire a tick immediately."
+        />
+      ) : (
+        <div className="border rounded-xl bg-card divide-y max-h-[600px] overflow-y-auto">
+          {logs.map((l: any) => (
+            <div key={l.id} className="px-3 py-2 text-xs flex items-start gap-3">
+              <span className="text-[10px] text-muted-foreground tabular-nums w-32 shrink-0">
+                {new Date(l.createdAt).toLocaleString()}
+              </span>
+              <Badge variant="outline" className="text-[10px] w-20 shrink-0 justify-center">{l.phase}</Badge>
+              <Badge
+                variant={l.level === "error" ? "destructive" : l.level === "warn" ? "secondary" : "outline"}
+                className="text-[10px] w-14 shrink-0 justify-center"
+              >
+                {l.level}
+              </Badge>
+              <span className="text-foreground/90 break-words">{l.message}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ─── Main page ────────────────────────────────────────────────────────────── */
 export default function ARECampaignDetail() {
   const { id } = useParams<{ id: string }>();
@@ -1010,6 +1178,12 @@ export default function ARECampaignDetail() {
                   {rejectionStats?.total}
                 </span>
               )}
+            </TabsTrigger>
+            <TabsTrigger value="sequences" className="text-xs gap-1.5">
+              <ListOrdered className="size-3.5" /> Sequences
+            </TabsTrigger>
+            <TabsTrigger value="logs" className="text-xs gap-1.5">
+              <ScrollText className="size-3.5" /> Logs
             </TabsTrigger>
           </TabsList>
 
@@ -1764,6 +1938,16 @@ export default function ARECampaignDetail() {
                 ))}
               </div>
             )}
+          </TabsContent>
+
+          {/* ── Sequences tab ── */}
+          <TabsContent value="sequences" className="mt-4">
+            <SequencesTab campaignId={campaignId} />
+          </TabsContent>
+
+          {/* ── Logs tab ── */}
+          <TabsContent value="logs" className="mt-4">
+            <LogsTab campaignId={campaignId} />
           </TabsContent>
         </Tabs>
       </div>

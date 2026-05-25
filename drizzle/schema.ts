@@ -2779,6 +2779,58 @@ export const areSignalLog = mysqlTable(
 export type AreSignalLog = typeof areSignalLog.$inferSelect;
 
 /* ──────────────────────────────────────────────────────────────────────────
+   ARE Engine Logs — per-campaign timeline of engine actions (Logs tab)
+   ────────────────────────────────────────────────────────────────────────── */
+export const areEngineLogs = mysqlTable(
+  "are_engine_logs",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    campaignId: int("campaignId").notNull(),
+    /** Phase tag: enrich | screen | sequence | enroll | dispatch | discovery | counters | complete | tick | error */
+    phase: varchar("phase", { length: 32 }).notNull(),
+    /** info | warn | error */
+    level: varchar("level", { length: 8 }).default("info").notNull(),
+    message: text("message").notNull(),
+    details: json("details"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    byCampaign: index("ix_ael_campaign").on(t.campaignId, t.createdAt),
+    byWs: index("ix_ael_ws").on(t.workspaceId, t.createdAt),
+  }),
+);
+export type AreEngineLog = typeof areEngineLogs.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Personas — reusable target-profile templates applied to campaigns,
+   searches, and sequences (Job Titles, Industries, Size, Geo, Keywords).
+   ────────────────────────────────────────────────────────────────────────── */
+export const personas = mysqlTable(
+  "personas",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    name: varchar("name", { length: 120 }).notNull(),
+    description: text("description"),
+    targetTitles: json("targetTitles"),
+    targetIndustries: json("targetIndustries"),
+    targetGeographies: json("targetGeographies"),
+    employeeMin: int("employeeMin"),
+    employeeMax: int("employeeMax"),
+    keywords: json("keywords"),
+    isPreset: boolean("isPreset").default(false).notNull(),
+    createdByUserId: int("createdByUserId"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    byWs: index("ix_personas_ws").on(t.workspaceId),
+  }),
+);
+export type Persona = typeof personas.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
    ARE A/B Variants — message variant performance tracking
    ────────────────────────────────────────────────────────────────────────── */
 export const areAbVariants = mysqlTable(

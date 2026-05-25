@@ -28,6 +28,7 @@ import { and, eq, inArray, lte, sql } from "drizzle-orm";
 import { getDb } from "./db";
 import {
   areCampaigns,
+  areEngineLogs,
   areExecutionQueue,
   areSuppressionList,
   icpProfiles,
@@ -140,6 +141,36 @@ function normalizeSequence(raw: unknown): NormalizedStep[] {
   });
 }
 
+/**
+ * Best-effort engine log emitter — surfaces per-phase activity to the
+ * campaign detail "Logs" tab so the user can see what the engine is actually
+ * doing. Never throws; logging must not break a tick.
+ */
+async function emitLog(
+  workspaceId: number,
+  campaignId: number | null,
+  phase: string,
+  level: "info" | "warn" | "error",
+  message: string,
+  details?: unknown,
+): Promise<void> {
+  try {
+    const db = await getDb();
+    if (!db) return;
+    await db.insert(areEngineLogs).values({
+      workspaceId,
+      campaignId: campaignId ?? null,
+      phase,
+      level,
+      message: message.slice(0, 500),
+      details: details === undefined ? null : (details as any),
+    });
+  } catch (e) {
+    // Logging failures are non-fatal — fall back to console.
+    console.error("[AreEngine] emitLog failed:", e);
+  }
+}
+
 /* ─── Engine entrypoint ─────────────────────────────────────────────────── */
 
 /** In-flight guard — a slow tick must never overlap the next cron firing. */
@@ -219,10 +250,14 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
       const settled = await Promise.allSettled(
         pending.map((p) => runEnrichAgent(p.id, wsId)),
       );
-      result.enriched += settled.filter((s) => s.status === "fulfilled").length;
+      const ok = settled.filter((s) => s.status === "fulfilled").length;
+      result.enriched += ok;
+      await emitLog(wsId, campId, "enrich", "info",
+        `Enriched ${ok}/${pending.length} prospects`);
     }
   } catch (e) {
     console.error(`[AreEngine] campaign ${campId} enrich phase failed:`, e);
+    await emitLog(wsId, campId, "enrich", "error", String((e as Error)?.message ?? e));
   }
 
   /* ── Phase 2: SCREEN — auto-approve / auto-reject ──────────────────── */
@@ -278,8 +313,13 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
       }
       // review_release: leave everything 'pending' for individual review
     }
+    if (enriched.length > 0) {
+      await emitLog(wsId, campId, "screen", "info",
+        `Screened ${enriched.length} (mode=${mode}, threshold=${threshold})`);
+    }
   } catch (e) {
     console.error(`[AreEngine] campaign ${campId} screen phase failed:`, e);
+    await emitLog(wsId, campId, "screen", "error", String((e as Error)?.message ?? e));
   }
 
   /* ── Phase 3: SEQUENCE generation for approved prospects ───────────── */
@@ -304,10 +344,14 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
       const settled = await Promise.allSettled(
         needSequence.map((p) => runSequenceAgent(p.id, wsId, campId)),
       );
-      result.sequencesGenerated += settled.filter((s) => s.status === "fulfilled").length;
+      const ok = settled.filter((s) => s.status === "fulfilled").length;
+      result.sequencesGenerated += ok;
+      await emitLog(wsId, campId, "sequence", "info",
+        `Generated ${ok}/${needSequence.length} sequences`);
     }
   } catch (e) {
     console.error(`[AreEngine] campaign ${campId} sequence phase failed:`, e);
+    await emitLog(wsId, campId, "sequence", "error", String((e as Error)?.message ?? e));
   }
 
   /* ── Phase 4: ENROLL — generatedSequence → are_execution_queue rows ── */
@@ -392,8 +436,13 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
         .where(eq(prospectQueue.id, row.id));
       result.enrolled++;
     }
+    if (rows.length > 0) {
+      await emitLog(wsId, campId, "enroll", "info",
+        `Enrolled ${rows.length} prospects into execution queue`);
+    }
   } catch (e) {
     console.error(`[AreEngine] campaign ${campId} enroll phase failed:`, e);
+    await emitLog(wsId, campId, "enroll", "error", String((e as Error)?.message ?? e));
   }
 
   /* ── Phase 5: DISPATCH due email steps ─────────────────────────────── */
@@ -531,8 +580,11 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
         }
       }
     }
+    await emitLog(wsId, campId, "dispatch", "info",
+      `Dispatched (sent so far this tick: ${result.sent}, daily remaining cap: ${remaining})`);
   } catch (e) {
     console.error(`[AreEngine] campaign ${campId} dispatch phase failed:`, e);
+    await emitLog(wsId, campId, "dispatch", "error", String((e as Error)?.message ?? e));
   }
 
   /* ── Phase 6: COMPLETE — mark prospects whose every step is actioned ─ */
@@ -620,14 +672,23 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
       .from(prospectQueue)
       .where(and(eq(prospectQueue.campaignId, campId), eq(prospectQueue.workspaceId, wsId)));
     const total = Number(counts?.total ?? 0);
-    const pendingCount = Number(counts?.pending ?? 0);
-    // Discover only when the queue is fully drained and we're below target,
-    // so we never run up LLM cost while there is still work to do.
-    if (pendingCount === 0 && total < campaign.targetProspectCount) {
-      result.discovered += await runDiscovery(campaign);
+    // Continuous discovery: run every tick while we're below target. The
+    // scraper sources are bounded per call and the engine itself is bounded
+    // per tick, so this can't blow up cost. Earlier we gated on
+    // pendingCount===0 which stalled new prospects whenever even one row was
+    // still enriching — that made the engine appear "idle" for hours.
+    if (total < campaign.targetProspectCount) {
+      const found = await runDiscovery(campaign);
+      result.discovered += found;
+      await emitLog(wsId, campId, "discovery", "info",
+        `Discovery added ${found} prospects (queue ${total}/${campaign.targetProspectCount})`);
+    } else {
+      await emitLog(wsId, campId, "discovery", "info",
+        `Discovery skipped — queue full (${total}/${campaign.targetProspectCount})`);
     }
   } catch (e) {
     console.error(`[AreEngine] campaign ${campId} discovery phase failed:`, e);
+    await emitLog(wsId, campId, "discovery", "error", String((e as Error)?.message ?? e));
   }
 }
 

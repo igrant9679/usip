@@ -46,6 +46,7 @@ import CustomFields from "@/pages/usip/CustomFields";
 import EmailBuilder from "@/pages/usip/EmailBuilder";
 import Snippets from "@/pages/usip/Snippets";
 import BrandVoice from "@/pages/usip/BrandVoice";
+import Personas from "@/pages/usip/Personas";
 import PromptTemplates from "@/pages/usip/PromptTemplates";
 import ImportContacts from "@/pages/usip/ImportContacts";
 import MyLinkedIn from "@/pages/usip/MyLinkedIn";
@@ -315,6 +316,7 @@ function Router() {
       <Route path="/email-builder/:id"><AuthGate><EmailBuilder /></AuthGate></Route>
       <Route path="/snippets"><AuthGate><Snippets /></AuthGate></Route>
       <Route path="/brand-voice"><AuthGate><BrandVoice /></AuthGate></Route>
+      <Route path="/personas"><AuthGate><Personas /></AuthGate></Route>
       <Route path="/prompt-templates"><AuthGate><PromptTemplates /></AuthGate></Route>
       <Route path="/import"><AuthGate><ImportContacts /></AuthGate></Route>
       <Route path="/my-linkedin"><AuthGate><MyLinkedIn /></AuthGate></Route>

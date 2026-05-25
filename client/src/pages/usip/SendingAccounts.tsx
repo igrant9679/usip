@@ -39,7 +39,7 @@ import {
   Plus,
   RefreshCw,
   Trash2,
-  Zap, AtSign
+  Zap, AtSign, Layers
 } from "lucide-react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -823,12 +823,10 @@ export default function SendingAccounts() {
         
         icon={<AtSign className="size-5" />}
       >
-          <Link
-            href="/sender-pools"
-            className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
-            title="Group sending accounts into pools for sequence load-balancing"
-          >
-            Sender Pools →
+          <Link href="/sender-pools">
+            <Button variant="outline" className="gap-2" title="Group sending accounts into pools for sequence load-balancing">
+              <Layers className="w-4 h-4" /> Sender Pools
+            </Button>
           </Link>
           <Link
             href="/connected-accounts"

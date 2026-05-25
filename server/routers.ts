@@ -48,6 +48,7 @@ import { prospectImportsRouter } from "./routers/prospectImports";
 import { placesSearchRouter } from "./routers/placesSearch";
 import { urlScraperRouter } from "./routers/urlScraper";
 import { linkedinFinderRouter } from "./routers/linkedinFinder";
+import { personasRouter } from "./routers/personas";
 
 export const appRouter = router({
   system: systemRouter,
@@ -137,6 +138,7 @@ export const appRouter = router({
   placesSearch: placesSearchRouter,
   urlScraper: urlScraperRouter,
   linkedinFinder: linkedinFinderRouter,
+  personas: personasRouter,
 });
 
 export type AppRouter = typeof appRouter;

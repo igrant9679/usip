@@ -4,6 +4,7 @@ import { campaignsRouter } from "./campaigns";
 import { prospectsRouter } from "./prospects";
 import { executionRouter } from "./execution";
 import { scraperRouter } from "./scraper";
+import { engineRouter } from "./engine";
 
 export const areRouter = router({
   icp: icpRouter,
@@ -11,4 +12,5 @@ export const areRouter = router({
   prospects: prospectsRouter,
   execution: executionRouter,
   scraper: scraperRouter,
+  engine: engineRouter,
 });

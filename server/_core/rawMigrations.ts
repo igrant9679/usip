@@ -1087,6 +1087,53 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0073: personas + ARE engine logs ────────────────────────────────────
+  // Adds two new tables introduced together:
+  //   personas: reusable target-profile templates (titles/industries/size/
+  //             geographies/keywords) that can be applied to any campaign,
+  //             find-prospects search, or sequence — replaces re-typing the
+  //             same filters into every wizard.
+  //   are_engine_logs: per-campaign timeline of every back-end engine action
+  //             (enrich, screen, sequence, enroll, dispatch, discovery,
+  //             counters, errors). Powers the new Logs tab on the ARE
+  //             campaign detail page so operators can see what the engine
+  //             actually did on each tick instead of just the counter deltas.
+  {
+    name: "0073_personas_and_engine_logs.sql",
+    statements: [
+      `CREATE TABLE IF NOT EXISTS \`personas\` (
+         \`id\` int NOT NULL AUTO_INCREMENT PRIMARY KEY,
+         \`workspaceId\` int NOT NULL,
+         \`name\` varchar(120) NOT NULL,
+         \`description\` text NULL,
+         \`targetTitles\` json NULL,
+         \`targetIndustries\` json NULL,
+         \`targetGeographies\` json NULL,
+         \`employeeMin\` int NULL,
+         \`employeeMax\` int NULL,
+         \`keywords\` json NULL,
+         \`isPreset\` tinyint(1) NOT NULL DEFAULT 0,
+         \`createdByUserId\` int NULL,
+         \`createdAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+         \`updatedAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE INDEX \`ix_personas_ws\` ON \`personas\` (\`workspaceId\`)`,
+
+      `CREATE TABLE IF NOT EXISTS \`are_engine_logs\` (
+         \`id\` int NOT NULL AUTO_INCREMENT PRIMARY KEY,
+         \`workspaceId\` int NOT NULL,
+         \`campaignId\` int NOT NULL,
+         \`phase\` varchar(32) NOT NULL,
+         \`level\` varchar(8) NOT NULL DEFAULT 'info',
+         \`message\` text NOT NULL,
+         \`details\` json NULL,
+         \`createdAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP
+       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE INDEX \`ix_ael_campaign\` ON \`are_engine_logs\` (\`campaignId\`, \`createdAt\`)`,
+      `CREATE INDEX \`ix_ael_ws\` ON \`are_engine_logs\` (\`workspaceId\`, \`createdAt\`)`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------
