@@ -634,7 +634,16 @@ async function runDiscovery(campaign: Campaign): Promise<number> {
   const db = await getDb();
   if (!db) return 0;
 
-  // Build a search query + ICP context from the workspace's active ICP.
+  // Per-campaign targeting from the wizard takes precedence; fall back to
+  // the workspace's active ICP for any field left blank.
+  const overrides = (campaign.icpOverrides ?? {}) as {
+    targetTitles?: string[];
+    targetIndustries?: string[];
+    targetGeographies?: string[];
+    employeeMin?: number;
+    employeeMax?: number;
+    keywords?: string[];
+  };
   const [icp] = await db
     .select()
     .from(icpProfiles)
@@ -645,16 +654,36 @@ async function runDiscovery(campaign: Campaign): Promise<number> {
       ),
     )
     .limit(1);
-  const titles = (icp?.targetTitles as string[] | null) ?? [];
-  const industries = (icp?.targetIndustries as string[] | null) ?? [];
-  const geos = (icp?.targetGeographies as string[] | null) ?? [];
-  const query = [titles[0], industries[0], geos[0]].filter(Boolean).join(" ").trim();
-  if (!query) return 0; // no ICP signal to search on — skip discovery
+  const titles =
+    (overrides.targetTitles && overrides.targetTitles.length > 0
+      ? overrides.targetTitles
+      : (icp?.targetTitles as string[] | null) ?? []) as string[];
+  const industries =
+    (overrides.targetIndustries && overrides.targetIndustries.length > 0
+      ? overrides.targetIndustries
+      : (icp?.targetIndustries as string[] | null) ?? []) as string[];
+  const geos =
+    (overrides.targetGeographies && overrides.targetGeographies.length > 0
+      ? overrides.targetGeographies
+      : (icp?.targetGeographies as string[] | null) ?? []) as string[];
+  const keywords = overrides.keywords ?? [];
+  const sizeHint =
+    overrides.employeeMin || overrides.employeeMax
+      ? `${overrides.employeeMin ?? 1}-${overrides.employeeMax ?? "5000+"} employees`
+      : "";
+
+  const query = [titles[0], industries[0], geos[0], keywords[0], sizeHint]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+  if (!query) return 0; // nothing to search on — skip discovery
 
   const icpContext =
     `Industries: ${industries.join(", ")}; ` +
     `Titles: ${titles.join(", ")}; ` +
-    `Geographies: ${geos.join(", ")}`;
+    `Geographies: ${geos.join(", ")}` +
+    (keywords.length > 0 ? `; Keywords: ${keywords.join(", ")}` : "") +
+    (sizeHint ? `; Company size: ${sizeHint}` : "");
 
   // Pick the first configured source that maps to a scraper.
   const sources = (campaign.prospectSources as string[] | null) ?? ["google_business"];

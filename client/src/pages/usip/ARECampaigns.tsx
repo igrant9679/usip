@@ -13,6 +13,7 @@ import { RichTextEditor } from "@/components/usip/RichTextEditor";
 import { Checkbox } from "@/components/ui/checkbox";
 import { trpc } from "@/lib/trpc";
 import {
+  ArrowLeft,
   ArrowRight,
   Bot,
   CheckCircle2,
@@ -21,9 +22,14 @@ import {
   Play,
   Plus,
   Radar,
-  Trash2, Megaphone
+  Rocket,
+  Target,
+  Trash2,
+  X,
+  Zap,
+  Megaphone,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { toast } from "sonner";
 
@@ -43,26 +49,114 @@ const SOURCE_OPTIONS = [
   { id: "ai_research", label: "AI Research" },
 ];
 
+const EMPLOYEE_BANDS = [
+  { value: "any", label: "Any size", min: undefined, max: undefined },
+  { value: "1-10", label: "1–10", min: 1, max: 10 },
+  { value: "11-50", label: "11–50", min: 11, max: 50 },
+  { value: "51-200", label: "51–200", min: 51, max: 200 },
+  { value: "201-500", label: "201–500", min: 201, max: 500 },
+  { value: "501-1000", label: "501–1,000", min: 501, max: 1000 },
+  { value: "1001-5000", label: "1,001–5,000", min: 1001, max: 5000 },
+  { value: "5000+", label: "5,000+", min: 5000, max: undefined },
+] as const;
+
+/** Chip-style multi-value text input used by the wizard targeting step. */
+function TagInput({
+  values,
+  onChange,
+  placeholder,
+}: {
+  values: string[];
+  onChange: (v: string[]) => void;
+  placeholder?: string;
+}) {
+  const [input, setInput] = useState("");
+  const add = () => {
+    const v = input.trim();
+    if (v && !values.includes(v)) onChange([...values, v]);
+    setInput("");
+  };
+  return (
+    <div className="space-y-1.5">
+      {values.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {values.map((v) => (
+            <Badge key={v} variant="secondary" className="gap-1 pl-2 pr-1 py-0.5 text-xs">
+              {v}
+              <button
+                onClick={() => onChange(values.filter((x) => x !== v))}
+                className="hover:bg-muted-foreground/20 rounded p-0.5"
+                title="Remove"
+                type="button"
+              >
+                <X className="size-2.5" />
+              </button>
+            </Badge>
+          ))}
+        </div>
+      )}
+      <div className="flex gap-1">
+        <Input
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === ",") {
+              e.preventDefault();
+              add();
+            }
+          }}
+          placeholder={placeholder}
+          className="text-sm h-8"
+        />
+        <Button type="button" size="sm" variant="outline" onClick={add} disabled={!input.trim()}>
+          <Plus className="size-3" />
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 export default function ARECampaigns() {
   const [, navigate] = useLocation();
   const utils = trpc.useUtils();
   const { data: campaigns, isLoading } = trpc.are.campaigns.list.useQuery({});
   const [showCreate, setShowCreate] = useState(false);
 
-  const [form, setForm] = useState({
+  const [step, setStep] = useState(1);
+  const TOTAL_STEPS = 4;
+  const blankForm = () => ({
     name: "",
     description: "",
-    autonomyMode: "batch_approval" as "full" | "batch_approval" | "review_release",
+    autonomyMode: "full" as "full" | "batch_approval" | "review_release",
     goalType: "reply" as "meeting_booked" | "reply" | "opportunity_created",
     targetProspectCount: 100,
     dailySendCap: 50,
-    prospectSources: ["internal", "google_business", "linkedin", "news"] as string[],
+    autoApproveThreshold: 60,
+    prospectSources: ["google_business", "news", "web"] as string[],
     channelsEnabled: { email: true, linkedin: false, sms: false, voice: false },
+    // Per-campaign targeting (stored as icpOverrides on save)
+    targetTitles: [] as string[],
+    targetIndustries: [] as string[],
+    employeeBand: "any" as (typeof EMPLOYEE_BANDS)[number]["value"],
+    keywords: [] as string[],
   });
+  const [form, setForm] = useState(blankForm);
+
+  // Reset wizard whenever the dialog reopens.
+  useEffect(() => {
+    if (showCreate) {
+      setStep(1);
+      setForm(blankForm());
+    }
+  }, [showCreate]);
 
   const create = trpc.are.campaigns.create.useMutation({
     onSuccess: (data) => {
-      toast.success("Campaign created");
+      toast.success(
+        data.launched
+          ? "Campaign launched — engine is running. First tick fires now, then every 10 min."
+          : "Campaign saved as draft. Activate it whenever you're ready.",
+      );
       utils.are.campaigns.list.invalidate();
       setShowCreate(false);
       navigate(`/are/campaigns/${data.id}`);
@@ -90,6 +184,32 @@ export default function ARECampaigns() {
         ? f.prospectSources.filter((s) => s !== id)
         : [...f.prospectSources, id],
     }));
+  };
+
+  // Build the create payload — folds the wizard's targeting fields into
+  // icpOverrides (where the engine's discovery phase reads them).
+  const submitCampaign = (launch: boolean) => {
+    const band = EMPLOYEE_BANDS.find((b) => b.value === form.employeeBand);
+    const icpOverrides = {
+      targetTitles: form.targetTitles,
+      targetIndustries: form.targetIndustries,
+      ...(band?.min !== undefined ? { employeeMin: band.min } : {}),
+      ...(band?.max !== undefined ? { employeeMax: band.max } : {}),
+      keywords: form.keywords,
+    };
+    create.mutate({
+      name: form.name,
+      description: form.description || undefined,
+      autonomyMode: form.autonomyMode,
+      goalType: form.goalType,
+      targetProspectCount: form.targetProspectCount,
+      dailySendCap: form.dailySendCap,
+      autoApproveThreshold: form.autoApproveThreshold,
+      prospectSources: form.prospectSources,
+      channelsEnabled: form.channelsEnabled,
+      icpOverrides,
+      launch,
+    });
   };
 
   return (
@@ -176,120 +296,301 @@ export default function ARECampaigns() {
         )}
       </div>
 
-      {/* Create Campaign Dialog */}
+      {/* Create Campaign — multi-step wizard */}
       <Dialog open={showCreate} onOpenChange={setShowCreate}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="max-w-xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Bot className="size-4 text-primary" />
               New Autonomous Campaign
             </DialogTitle>
+            {/* Step progress */}
+            <div className="flex items-center gap-2 pt-2">
+              {[
+                { n: 1, label: "Basics" },
+                { n: 2, label: "Targeting" },
+                { n: 3, label: "Sourcing" },
+                { n: 4, label: "Review" },
+              ].map((s, i) => (
+                <div key={s.n} className="flex items-center gap-2 flex-1">
+                  <div
+                    className={`size-6 rounded-full flex items-center justify-center text-[11px] font-semibold ${
+                      step === s.n
+                        ? "bg-primary text-primary-foreground"
+                        : step > s.n
+                          ? "bg-emerald-500 text-white"
+                          : "bg-muted text-muted-foreground"
+                    }`}
+                  >
+                    {step > s.n ? <CheckCircle2 className="size-3.5" /> : s.n}
+                  </div>
+                  <span
+                    className={`text-[11px] ${step === s.n ? "font-medium text-foreground" : "text-muted-foreground"}`}
+                  >
+                    {s.label}
+                  </span>
+                  {i < 3 && <div className="flex-1 h-px bg-border" />}
+                </div>
+              ))}
+            </div>
           </DialogHeader>
-          <div className="space-y-4 py-2">
-            <div>
-              <Label className="text-xs text-muted-foreground mb-1.5 block">Campaign Name</Label>
-              <Input
-                value={form.name}
-                onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-                placeholder="e.g. Q2 SaaS CFO Outreach"
-              />
-            </div>
-            <div>
-              <Label className="text-xs text-muted-foreground mb-1.5 block">Description (optional)</Label>
-              <RichTextEditor
-                value={form.description}
-                onChange={(html) => setForm((f) => ({ ...f, description: html }))}
-                placeholder="What is this campaign targeting?"
-                minHeight="60px"
-                maxHeight="200px"
-                compact
-              />
-            </div>
-            <div className="grid grid-cols-2 gap-3">
+
+          {/* ── Step 1: Basics ───────────────────────────────────────── */}
+          {step === 1 && (
+            <div className="space-y-4 py-2">
               <div>
-                <Label className="text-xs text-muted-foreground mb-1.5 block">Autonomy Mode</Label>
-                <Select value={form.autonomyMode} onValueChange={(v) => setForm((f) => ({ ...f, autonomyMode: v as typeof form.autonomyMode }))}>
+                <Label className="text-xs text-muted-foreground mb-1.5 block">Campaign Name *</Label>
+                <Input
+                  value={form.name}
+                  onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                  placeholder="e.g. Q2 SaaS RevOps VPs"
+                  autoFocus
+                />
+              </div>
+              <div>
+                <Label className="text-xs text-muted-foreground mb-1.5 block">Description (optional)</Label>
+                <RichTextEditor
+                  value={form.description}
+                  onChange={(html) => setForm((f) => ({ ...f, description: html }))}
+                  placeholder="What is this campaign targeting and why?"
+                  minHeight="60px"
+                  maxHeight="160px"
+                  compact
+                />
+              </div>
+              <div>
+                <Label className="text-xs text-muted-foreground mb-1.5 block">Primary Goal</Label>
+                <Select
+                  value={form.goalType}
+                  onValueChange={(v) => setForm((f) => ({ ...f, goalType: v as typeof form.goalType }))}
+                >
                   <SelectTrigger className="text-sm">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="full">Full Auto</SelectItem>
-                    <SelectItem value="batch_approval">Batch Approval</SelectItem>
-                    <SelectItem value="review_release">Review &amp; Release</SelectItem>
+                    <SelectItem value="reply">Get a reply</SelectItem>
+                    <SelectItem value="meeting_booked">Book a meeting</SelectItem>
+                    <SelectItem value="opportunity_created">Create an opportunity</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
+            </div>
+          )}
+
+          {/* ── Step 2: Targeting filters ────────────────────────────── */}
+          {step === 2 && (
+            <div className="space-y-4 py-2">
+              <div className="rounded-md bg-muted/40 px-3 py-2 text-[11px] text-muted-foreground flex items-start gap-2">
+                <Target className="size-3.5 mt-0.5 flex-shrink-0" />
+                <span>
+                  These filters drive the engine's discovery queries (which prospects to scrape) and feed
+                  the per-prospect AI enrichment context. Add as many values per field as you like — comma or Enter to add.
+                </span>
+              </div>
               <div>
-                <Label className="text-xs text-muted-foreground mb-1.5 block">Goal</Label>
-                <Select value={form.goalType} onValueChange={(v) => setForm((f) => ({ ...f, goalType: v as typeof form.goalType }))}>
+                <Label className="text-xs text-muted-foreground mb-1.5 block">Job Titles</Label>
+                <TagInput
+                  values={form.targetTitles}
+                  onChange={(v) => setForm((f) => ({ ...f, targetTitles: v }))}
+                  placeholder="e.g. VP Revenue Operations"
+                />
+              </div>
+              <div>
+                <Label className="text-xs text-muted-foreground mb-1.5 block">Industries</Label>
+                <TagInput
+                  values={form.targetIndustries}
+                  onChange={(v) => setForm((f) => ({ ...f, targetIndustries: v }))}
+                  placeholder="e.g. SaaS, Fintech"
+                />
+              </div>
+              <div>
+                <Label className="text-xs text-muted-foreground mb-1.5 block">Company Size (employees)</Label>
+                <Select
+                  value={form.employeeBand}
+                  onValueChange={(v) => setForm((f) => ({ ...f, employeeBand: v as typeof form.employeeBand }))}
+                >
                   <SelectTrigger className="text-sm">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="reply">Get a Reply</SelectItem>
-                    <SelectItem value="meeting_booked">Book a Meeting</SelectItem>
-                    <SelectItem value="opportunity_created">Create Opportunity</SelectItem>
+                    {EMPLOYEE_BANDS.map((b) => (
+                      <SelectItem key={b.value} value={b.value}>{b.label}</SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
               <div>
-                <Label className="text-xs text-muted-foreground mb-1.5 block">Target Prospects</Label>
-                <Input
-                  type="number"
-                  value={form.targetProspectCount}
-                  onChange={(e) => setForm((f) => ({ ...f, targetProspectCount: parseInt(e.target.value) || 100 }))}
-                />
-              </div>
-              <div>
-                <Label className="text-xs text-muted-foreground mb-1.5 block">Daily Send Cap</Label>
-                <Input
-                  type="number"
-                  value={form.dailySendCap}
-                  onChange={(e) => setForm((f) => ({ ...f, dailySendCap: parseInt(e.target.value) || 50 }))}
+                <Label className="text-xs text-muted-foreground mb-1.5 block">Keywords (intent / trigger signals)</Label>
+                <TagInput
+                  values={form.keywords}
+                  onChange={(v) => setForm((f) => ({ ...f, keywords: v }))}
+                  placeholder="e.g. forecast accuracy, pipeline visibility"
                 />
               </div>
             </div>
-            <div>
-              <Label className="text-xs text-muted-foreground mb-2 block">Prospect Sources</Label>
-              <div className="grid grid-cols-2 gap-2">
-                {SOURCE_OPTIONS.map((s) => (
-                  <label key={s.id} className="flex items-center gap-2 cursor-pointer">
-                    <Checkbox
-                      checked={form.prospectSources.includes(s.id)}
-                      onCheckedChange={() => toggleSource(s.id)}
-                    />
-                    <span className="text-xs text-foreground">{s.label}</span>
-                  </label>
-                ))}
+          )}
+
+          {/* ── Step 3: Sourcing + Autonomy ──────────────────────────── */}
+          {step === 3 && (
+            <div className="space-y-4 py-2">
+              <div>
+                <Label className="text-xs text-muted-foreground mb-2 block">Where to find prospects</Label>
+                <div className="grid grid-cols-2 gap-2">
+                  {SOURCE_OPTIONS.map((s) => (
+                    <label key={s.id} className="flex items-center gap-2 cursor-pointer">
+                      <Checkbox
+                        checked={form.prospectSources.includes(s.id)}
+                        onCheckedChange={() => toggleSource(s.id)}
+                      />
+                      <span className="text-xs text-foreground">{s.label}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <Label className="text-xs text-muted-foreground mb-1.5 block">Autonomy</Label>
+                <Select
+                  value={form.autonomyMode}
+                  onValueChange={(v) => setForm((f) => ({ ...f, autonomyMode: v as typeof form.autonomyMode }))}
+                >
+                  <SelectTrigger className="text-sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="full">Full Auto — engine approves, sequences, and sends end-to-end</SelectItem>
+                    <SelectItem value="batch_approval">Batch Approval — you approve batches of enriched prospects</SelectItem>
+                    <SelectItem value="review_release">Review &amp; Release — every prospect requires individual approval</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-[11px] text-muted-foreground mt-1">
+                  Full Auto is required for true 24/7 unattended operation.
+                </p>
+              </div>
+              <div>
+                <Label className="text-xs text-muted-foreground mb-1.5 block">
+                  Auto-approve ICP score floor: <span className="font-semibold text-foreground">{form.autoApproveThreshold}</span>
+                </Label>
+                <input
+                  type="range"
+                  min={1}
+                  max={100}
+                  value={form.autoApproveThreshold}
+                  onChange={(e) => setForm((f) => ({ ...f, autoApproveThreshold: parseInt(e.target.value) }))}
+                  className="w-full"
+                />
+                <p className="text-[11px] text-muted-foreground mt-0.5">
+                  In Full Auto, enriched prospects ≥ this score are auto-approved. Lower = looser, higher = stricter.
+                </p>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label className="text-xs text-muted-foreground mb-1.5 block">Target prospects</Label>
+                  <Input
+                    type="number"
+                    value={form.targetProspectCount}
+                    onChange={(e) => setForm((f) => ({ ...f, targetProspectCount: parseInt(e.target.value) || 100 }))}
+                  />
+                </div>
+                <div>
+                  <Label className="text-xs text-muted-foreground mb-1.5 block">Daily send cap</Label>
+                  <Input
+                    type="number"
+                    value={form.dailySendCap}
+                    onChange={(e) => setForm((f) => ({ ...f, dailySendCap: parseInt(e.target.value) || 50 }))}
+                  />
+                </div>
+              </div>
+              <div>
+                <Label className="text-xs text-muted-foreground mb-2 block">Channels</Label>
+                <div className="flex gap-4">
+                  {(["email", "linkedin", "sms", "voice"] as const).map((ch) => (
+                    <label key={ch} className="flex items-center gap-1.5 cursor-pointer">
+                      <Checkbox
+                        checked={form.channelsEnabled[ch]}
+                        onCheckedChange={(v) => setForm((f) => ({ ...f, channelsEnabled: { ...f.channelsEnabled, [ch]: !!v } }))}
+                      />
+                      <span className="text-xs text-foreground capitalize">
+                        {ch}
+                        {ch !== "email" && <span className="text-muted-foreground/60 ml-1">(coming)</span>}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+                <p className="text-[11px] text-muted-foreground mt-1">
+                  v1 engine sends email only — non-email steps are skipped cleanly.
+                </p>
               </div>
             </div>
-            <div>
-              <Label className="text-xs text-muted-foreground mb-2 block">Channels</Label>
-              <div className="flex gap-4">
-                {(["email", "linkedin", "sms", "voice"] as const).map((ch) => (
-                  <label key={ch} className="flex items-center gap-1.5 cursor-pointer">
-                    <Checkbox
-                      checked={form.channelsEnabled[ch]}
-                      onCheckedChange={(v) => setForm((f) => ({ ...f, channelsEnabled: { ...f.channelsEnabled, [ch]: !!v } }))}
-                    />
-                    <span className="text-xs text-foreground capitalize">{ch}</span>
-                  </label>
-                ))}
+          )}
+
+          {/* ── Step 4: Review + Launch ──────────────────────────────── */}
+          {step === 4 && (
+            <div className="space-y-3 py-2 text-sm">
+              <div className="rounded-md border bg-card p-3 space-y-2">
+                <div className="flex items-center gap-2 font-semibold">
+                  <Rocket className="size-4 text-primary" />
+                  {form.name || <span className="text-muted-foreground italic">Untitled</span>}
+                </div>
+                <dl className="text-xs space-y-1 [&>div]:flex [&>div]:gap-2 [&_dt]:w-32 [&_dt]:text-muted-foreground [&_dd]:flex-1">
+                  <div><dt>Goal</dt><dd className="capitalize">{form.goalType.replace(/_/g, " ")}</dd></div>
+                  <div><dt>Autonomy</dt><dd className="capitalize">{form.autonomyMode.replace(/_/g, " ")}</dd></div>
+                  <div><dt>Titles</dt><dd>{form.targetTitles.join(", ") || <span className="text-muted-foreground italic">—</span>}</dd></div>
+                  <div><dt>Industries</dt><dd>{form.targetIndustries.join(", ") || <span className="text-muted-foreground italic">—</span>}</dd></div>
+                  <div><dt>Company size</dt><dd>{EMPLOYEE_BANDS.find((b) => b.value === form.employeeBand)?.label}</dd></div>
+                  <div><dt>Keywords</dt><dd>{form.keywords.join(", ") || <span className="text-muted-foreground italic">—</span>}</dd></div>
+                  <div><dt>Sources</dt><dd>{form.prospectSources.join(", ") || <span className="text-muted-foreground italic">none</span>}</dd></div>
+                  <div><dt>Target / Daily cap</dt><dd>{form.targetProspectCount} prospects · {form.dailySendCap}/day</dd></div>
+                  <div><dt>Approve floor</dt><dd>ICP ≥ {form.autoApproveThreshold}/100</dd></div>
+                </dl>
+              </div>
+              <div className="rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs text-emerald-900 flex items-start gap-2">
+                <Zap className="size-3.5 mt-0.5 flex-shrink-0" />
+                <span>
+                  <strong>Launch now</strong> activates the campaign immediately. The ARE engine will
+                  fire once within seconds and then continue every 10 minutes <strong>24/7 until you
+                  pause or complete it</strong> — scraping prospects, enriching, generating A/B
+                  sequence variants, enrolling, and dispatching email autonomously.
+                </span>
               </div>
             </div>
-          </div>
-          <DialogFooter>
+          )}
+
+          <DialogFooter className="gap-2">
+            {step > 1 && (
+              <Button variant="ghost" onClick={() => setStep((s) => s - 1)} className="gap-1.5">
+                <ArrowLeft className="size-3.5" /> Back
+              </Button>
+            )}
+            <div className="flex-1" />
             <Button variant="ghost" onClick={() => setShowCreate(false)}>Cancel</Button>
-            <Button
-              onClick={() => create.mutate(form)}
-              disabled={create.isPending || !form.name.trim()}
-              className="gap-2"
-            >
-              {create.isPending ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}
-              Create Campaign
-            </Button>
+            {step < TOTAL_STEPS ? (
+              <Button
+                onClick={() => setStep((s) => s + 1)}
+                disabled={step === 1 && !form.name.trim()}
+                className="gap-1.5"
+              >
+                Next <ArrowRight className="size-3.5" />
+              </Button>
+            ) : (
+              <>
+                <Button
+                  variant="outline"
+                  onClick={() => submitCampaign(false)}
+                  disabled={create.isPending || !form.name.trim()}
+                  title="Save as a draft you can review and launch later"
+                >
+                  Save as draft
+                </Button>
+                <Button
+                  onClick={() => submitCampaign(true)}
+                  disabled={create.isPending || !form.name.trim()}
+                  className="gap-2"
+                >
+                  {create.isPending ? <Loader2 className="size-4 animate-spin" /> : <Rocket className="size-4" />}
+                  Launch 24/7
+                </Button>
+              </>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>

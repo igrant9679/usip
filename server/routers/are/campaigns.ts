@@ -52,6 +52,11 @@ export const campaignsRouter = router({
         description: z.string().optional(),
         autonomyMode: z.enum(["full", "batch_approval", "review_release"]).default("batch_approval"),
         icpProfileId: z.number().optional(),
+        /**
+         * Per-campaign targeting that overrides the workspace ICP for this
+         * campaign's discovery. The wizard fills this with
+         * { targetTitles, targetIndustries, employeeMin, employeeMax, keywords }.
+         */
         icpOverrides: z.any().optional(),
         prospectSources: z.array(z.string()).default(["internal", "google_business", "linkedin", "news"]),
         targetProspectCount: z.number().min(1).max(10000).default(100),
@@ -66,6 +71,13 @@ export const campaignsRouter = router({
         goalType: z.enum(["meeting_booked", "reply", "opportunity_created"]).default("reply"),
         autoApproveThreshold: z.number().min(0).max(100).nullable().optional(),
         signalToOpportunityEnabled: z.boolean().default(false),
+        /**
+         * When true, the campaign is created as `active` (not the default
+         * `draft`) and the ARE engine is fired once in the background so the
+         * user sees activity within seconds instead of waiting for the next
+         * 10-minute cron tick.
+         */
+        launch: z.boolean().default(false),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -89,9 +101,18 @@ export const campaignsRouter = router({
           autoApproveThreshold: input.autoApproveThreshold ?? null,
           signalToOpportunityEnabled: input.signalToOpportunityEnabled,
           ownerUserId: ctx.user.id,
+          ...(input.launch ? { status: "active" as const, startedAt: new Date() } : {}),
         })
         .$returningId();
-      return { id: row.id };
+      // Kick the engine once immediately on launch so phase 1 (enrich) and
+      // phase 8 (discovery) fire within seconds — the 10-min cron picks up
+      // every subsequent tick on its own.
+      if (input.launch) {
+        runAreEngine().catch((e) =>
+          console.error("[campaigns.create] launch tick failed:", e),
+        );
+      }
+      return { id: row.id, launched: input.launch };
     }),
 
   update: workspaceProcedure
