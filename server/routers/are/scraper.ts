@@ -270,6 +270,11 @@ export async function saveScrapeJobAndQueue(
   const db = await getDb();
   if (!db) return;
 
+  // A scrape that returned zero prospects is a *failed* run from the
+  // user's perspective — typically the source returned nothing (blocked,
+  // rate-limited, query too narrow) or every result was filtered out by
+  // dedup. Mark it failed so it stands out in the Scraper tab; the
+  // Logs tab still carries the per-source breakdown for why.
   const [job] = await db
     .insert(areScrapeJobs)
     .values({
@@ -277,9 +282,12 @@ export async function saveScrapeJobAndQueue(
       campaignId: campaignId ?? undefined,
       sourceType,
       query,
-      status: "complete",
+      status: prospects.length === 0 ? "failed" : "complete",
       resultCount: prospects.length,
       rawResults: prospects,
+      errorMessage: prospects.length === 0
+        ? "No prospects returned — source returned nothing or every result was deduplicated"
+        : null,
       scrapedAt: new Date(),
     })
     .$returningId();
