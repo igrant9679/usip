@@ -137,15 +137,14 @@ export default function Personas() {
   return (
     <Shell>
       <PageHeader
-        icon={Users}
+        icon={<Users className="size-5" />}
         title="Personas"
-        subtitle="Reusable targeting templates you can apply to any campaign, sequence, or prospect search."
-        actions={
-          <Button onClick={startCreate}>
-            <Plus className="size-4 mr-1" /> New persona
-          </Button>
-        }
-      />
+        description="Reusable targeting templates you can apply to any campaign, sequence, or prospect search."
+      >
+        <Button onClick={startCreate}>
+          <Plus className="size-4 mr-1" /> New persona
+        </Button>
+      </PageHeader>
 
       {/* Preset library */}
       <Card className="mb-4">
