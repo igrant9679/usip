@@ -2655,6 +2655,7 @@ export const prospectQueue = mysqlTable(
     icpMatchBreakdown: json("icpMatchBreakdown"), // {industry, title, size, geo, tech, antiPattern}
     // Status
     enrichmentStatus: mysqlEnum("enrichmentStatus", ["pending", "enriching", "complete", "failed"]).default("pending").notNull(),
+    enrichmentError: text("enrichmentError"),
     enrichedAt: timestamp("enrichedAt"),
     sequenceStatus: mysqlEnum("sequenceStatus", ["pending", "approved", "enrolled", "skipped", "completed", "replied"]).default("pending").notNull(),
     approvedAt: timestamp("approvedAt"),

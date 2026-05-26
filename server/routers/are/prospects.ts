@@ -126,8 +126,9 @@ export async function runEnrichAgent(
     .limit(1);
   if (!prospect) return;
 
-  // Mark as enriching
-  await db.update(prospectQueue).set({ enrichmentStatus: "enriching" }).where(eq(prospectQueue.id, prospectId));
+  // Mark as enriching — also clear any prior enrichmentError so the UI
+  // doesn't keep showing a stale failure reason during a retry.
+  await db.update(prospectQueue).set({ enrichmentStatus: "enriching", enrichmentError: null }).where(eq(prospectQueue.id, prospectId));
 
   try {
     // Get active ICP
@@ -329,7 +330,15 @@ Produce:
     }).where(eq(prospectQueue.id, prospectId));
 
   } catch (err) {
-    await db.update(prospectQueue).set({ enrichmentStatus: "failed" }).where(eq(prospectQueue.id, prospectId));
+    // Persist a human-readable reason so the Prospects tab can surface it
+    // (tooltip + expandable detail) instead of just showing a red 'failed'
+    // chip with no explanation. Cap length so a megabyte stack trace
+    // doesn't bloat the row.
+    const reason = (err instanceof Error ? err.message : String(err)).slice(0, 800);
+    await db.update(prospectQueue).set({
+      enrichmentStatus: "failed",
+      enrichmentError: reason || "Unknown error",
+    }).where(eq(prospectQueue.id, prospectId));
     throw err;
   }
 }

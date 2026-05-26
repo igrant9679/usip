@@ -1134,6 +1134,19 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0074: enrichmentError on prospect_queue ──────────────────────────────
+  // When enrichment fails we previously only flipped enrichmentStatus to
+  // 'failed' and threw — the actual reason vanished into server logs. The
+  // Prospects tab then showed an unexplained red 'failed' chip. Add a text
+  // column so the failure reason persists with the row and can be surfaced
+  // in the UI (tooltip + expandable detail) and used to drive retries.
+  {
+    name: "0074_prospect_queue_enrichment_error.sql",
+    statements: [
+      `ALTER TABLE \`prospect_queue\` ADD COLUMN \`enrichmentError\` TEXT NULL`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

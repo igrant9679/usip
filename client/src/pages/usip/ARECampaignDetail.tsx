@@ -209,12 +209,29 @@ function ProspectRow({
         <div className="text-xs text-muted-foreground truncate">
           {[p.title, p.companyName].filter(Boolean).join(" · ") || "—"}
         </div>
+        {p.enrichmentStatus === "failed" && p.enrichmentError && (
+          <div
+            className="text-[11px] text-destructive/90 mt-0.5 line-clamp-2"
+            title={p.enrichmentError}
+          >
+            ⚠ {p.enrichmentError}
+          </div>
+        )}
+        {p.enrichmentStatus === "failed" && !p.enrichmentError && (
+          <div className="text-[11px] text-destructive/70 mt-0.5 italic">
+            ⚠ Enrichment failed (no reason recorded — try again to capture it)
+          </div>
+        )}
       </div>
 
       {/* Status badges */}
       <div className="hidden sm:flex items-center gap-1.5 shrink-0">
-        <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-5 border-0"
-          style={{ backgroundColor: enrichColor + "22", color: enrichColor }}>
+        <Badge
+          variant="outline"
+          className={`text-[10px] px-1.5 py-0 h-5 border-0 ${p.enrichmentStatus === "failed" ? "cursor-help" : ""}`}
+          style={{ backgroundColor: enrichColor + "22", color: enrichColor }}
+          title={p.enrichmentStatus === "failed" ? (p.enrichmentError ?? "No reason recorded") : undefined}
+        >
           {p.enrichmentStatus}
         </Badge>
         <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-5 border-0"
@@ -227,8 +244,16 @@ function ProspectRow({
       <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
         {p.enrichmentStatus === "pending" && (
           <Button size="sm" variant="ghost" className="h-7 px-2 text-xs text-blue-500 hover:text-blue-600"
+            title="Enrich"
             onClick={() => enrich.mutate({ prospectId: p.id })} disabled={enrich.isPending}>
             {enrich.isPending ? <Loader2 className="size-3 animate-spin" /> : <FlaskConical className="size-3" />}
+          </Button>
+        )}
+        {p.enrichmentStatus === "failed" && (
+          <Button size="sm" variant="ghost" className="h-7 px-2 text-xs text-amber-600 hover:text-amber-700"
+            title="Retry enrichment"
+            onClick={() => enrich.mutate({ prospectId: p.id })} disabled={enrich.isPending}>
+            {enrich.isPending ? <Loader2 className="size-3 animate-spin" /> : <RefreshCw className="size-3" />}
           </Button>
         )}
         {p.enrichmentStatus === "complete" && p.sequenceStatus === "pending" && (
