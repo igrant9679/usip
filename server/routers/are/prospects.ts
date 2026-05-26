@@ -24,6 +24,7 @@ import { z } from "zod";
 import {
   areAbVariants,
   areCampaigns,
+  areExecutionQueue,
   icpProfiles,
   notifications,
   prospectIntelligence,
@@ -691,11 +692,26 @@ export const prospectsRouter = router({
       return rows.filter((r) => Array.isArray(r.generatedSequence) && (r.generatedSequence as unknown[]).length > 0);
     }),
 
-  /** Edit a specific step in the generated sequence */
+  /**
+   * Edit a specific step in the generated sequence.
+   *
+   * Matches by `arrayIndex` (position in the array) rather than the step's
+   * own `stepIndex` field — that handles both the LLM-generated shape
+   * (which always has stepIndex) and the legacy seed shape (which uses
+   * `step` and has no body field).
+   *
+   * Also pushes the edit forward into `are_execution_queue.messageContent`
+   * for any scheduled (not-yet-sent) rows belonging to this prospect at
+   * the matching stepIndex, so the next dispatcher tick sends the EDITED
+   * content instead of the stale enrollment-time snapshot.
+   */
   editSequenceStep: workspaceProcedure
     .input(z.object({
       prospectId: z.number(),
-      stepIndex: z.number(),
+      /** Position in the steps array (0-based). Preferred. */
+      arrayIndex: z.number().optional(),
+      /** Legacy: the step's own stepIndex field. Used as a fallback. */
+      stepIndex: z.number().optional(),
       subject: z.string().optional(),
       body: z.string(),
     }))
@@ -707,17 +723,73 @@ export const prospectsRouter = router({
         .from(prospectIntelligence)
         .where(and(eq(prospectIntelligence.prospectQueueId, input.prospectId), eq(prospectIntelligence.workspaceId, ctx.workspace.id)))
         .limit(1);
-      if (!intel) throw new TRPCError({ code: "NOT_FOUND" });
+      if (!intel) throw new TRPCError({ code: "NOT_FOUND", message: "No intelligence record for this prospect" });
 
       const steps = (intel.generatedSequence as Array<Record<string, unknown>>) ?? [];
-      const updated = steps.map((s) =>
-        s.stepIndex === input.stepIndex
-          ? { ...s, subject: input.subject ?? s.subject, body: input.body }
-          : s,
-      );
+      if (steps.length === 0) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Prospect has no generated sequence to edit" });
+      }
+
+      // Resolve which row in the array to edit.
+      let targetIdx = -1;
+      if (typeof input.arrayIndex === "number" && input.arrayIndex >= 0 && input.arrayIndex < steps.length) {
+        targetIdx = input.arrayIndex;
+      } else if (typeof input.stepIndex === "number") {
+        targetIdx = steps.findIndex((s) =>
+          s.stepIndex === input.stepIndex || (s as { step?: number }).step === input.stepIndex,
+        );
+      }
+      if (targetIdx === -1) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Could not locate the step to edit" });
+      }
+
+      // Update the targeted step. Normalize to the LLM shape (stepIndex+body)
+      // so future edits and the SequencesTab display work consistently.
+      const old = steps[targetIdx];
+      const resolvedStepIndex =
+        typeof old.stepIndex === "number"
+          ? (old.stepIndex as number)
+          : typeof (old as { step?: number }).step === "number"
+            ? ((old as { step?: number }).step as number)
+            : targetIdx;
+      const updatedStep = {
+        ...old,
+        stepIndex: resolvedStepIndex,
+        subject: input.subject ?? (old.subject as string | undefined) ?? "",
+        body: input.body,
+      };
+      const updated = steps.map((s, i) => (i === targetIdx ? updatedStep : s));
       await db.update(prospectIntelligence).set({ generatedSequence: updated })
         .where(eq(prospectIntelligence.prospectQueueId, input.prospectId));
-      return { success: true };
+
+      // Push the edit into any not-yet-sent execution queue rows so the
+      // dispatcher uses the edited content. Only `scheduled` rows are
+      // touched — sent/failed/skipped rows are immutable history.
+      const queueWhere = and(
+        eq(areExecutionQueue.workspaceId, ctx.workspace.id),
+        eq(areExecutionQueue.prospectQueueId, input.prospectId),
+        eq(areExecutionQueue.stepIndex, resolvedStepIndex),
+        eq(areExecutionQueue.status, "scheduled"),
+      );
+      const [pre] = await db
+        .select({ n: sql<number>`count(*)` })
+        .from(areExecutionQueue)
+        .where(queueWhere);
+      const scheduledRowsUpdated = Number(pre?.n ?? 0);
+      if (scheduledRowsUpdated > 0) {
+        await db
+          .update(areExecutionQueue)
+          .set({
+            messageContent: {
+              subject: updatedStep.subject,
+              body: updatedStep.body,
+              variantKey: (updatedStep as { variantKey?: string }).variantKey ?? "A",
+            },
+          })
+          .where(queueWhere);
+      }
+
+      return { success: true, scheduledRowsUpdated };
     }),
 
   /** Get A/B variant performance for a campaign */

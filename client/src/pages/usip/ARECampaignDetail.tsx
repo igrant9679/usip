@@ -721,18 +721,22 @@ function ProspectNotes({ prospectId, campaignId }: { prospectId: number; campaig
 function SequencesTab({ campaignId }: { campaignId: number }) {
   const { data: rows = [], refetch, isLoading } = trpc.are.prospects.listSequences.useQuery({ campaignId });
   const editStep = trpc.are.prospects.editSequenceStep.useMutation();
-  const [editing, setEditing] = useState<{ prospectId: number; stepIndex: number; subject: string; body: string } | null>(null);
+  const [editing, setEditing] = useState<{ prospectId: number; arrayIndex: number; subject: string; body: string } | null>(null);
 
   const save = async () => {
     if (!editing) return;
     try {
-      await editStep.mutateAsync({
+      const res = await editStep.mutateAsync({
         prospectId: editing.prospectId,
-        stepIndex: editing.stepIndex,
+        arrayIndex: editing.arrayIndex,
         subject: editing.subject,
         body: editing.body,
       });
-      toast.success("Step saved");
+      toast.success(
+        res.scheduledRowsUpdated > 0
+          ? `Step saved — ${res.scheduledRowsUpdated} scheduled email${res.scheduledRowsUpdated === 1 ? "" : "s"} updated`
+          : "Step saved",
+      );
       setEditing(null);
       await refetch();
     } catch (e: any) {
@@ -767,30 +771,42 @@ function SequencesTab({ campaignId }: { campaignId: number }) {
               <Badge variant="outline" className="text-[10px]">{r.sequenceStatus}</Badge>
             </div>
             <div className="divide-y">
-              {steps.map((s: any, idx: number) => (
-                <div key={idx} className="p-3 text-xs space-y-1">
-                  <div className="flex items-center gap-2 text-muted-foreground">
-                    <Badge variant="secondary" className="text-[10px]">Step {s.stepIndex ?? idx}</Badge>
-                    <span>{s.channel ?? "email"}</span>
-                    {typeof s.day === "number" && <span>· day {s.day}</span>}
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="ml-auto h-6 px-2 text-[11px]"
-                      onClick={() => setEditing({
-                        prospectId: r.prospectId,
-                        stepIndex: s.stepIndex ?? idx,
-                        subject: String(s.subject ?? ""),
-                        body: String(s.body ?? ""),
-                      })}
-                    >
-                      <Pencil className="size-3 mr-1" /> Edit
-                    </Button>
+              {steps.map((s: any, idx: number) => {
+                // Handle both shapes: LLM (stepIndex+body+day) and legacy
+                // seed (step+waitDays, no body). Show a placeholder when
+                // body is missing so the user knows they need to write one.
+                const labelIdx = s.stepIndex ?? s.step ?? idx;
+                const day = typeof s.day === "number" ? s.day : typeof s.waitDays === "number" ? s.waitDays : null;
+                const body = String(s.body ?? "");
+                return (
+                  <div key={idx} className="p-3 text-xs space-y-1">
+                    <div className="flex items-center gap-2 text-muted-foreground">
+                      <Badge variant="secondary" className="text-[10px]">Step {labelIdx}</Badge>
+                      <span>{s.channel ?? "email"}</span>
+                      {day !== null && <span>· {typeof s.day === "number" ? `day ${day}` : `wait ${day}d`}</span>}
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="ml-auto h-6 px-2 text-[11px]"
+                        onClick={() => setEditing({
+                          prospectId: r.prospectId,
+                          arrayIndex: idx,
+                          subject: String(s.subject ?? ""),
+                          body,
+                        })}
+                      >
+                        <Pencil className="size-3 mr-1" /> Edit
+                      </Button>
+                    </div>
+                    {s.subject && <div className="font-medium text-foreground">Subject: {s.subject}</div>}
+                    {body ? (
+                      <div className="whitespace-pre-wrap text-foreground/90">{body}</div>
+                    ) : (
+                      <div className="italic text-muted-foreground/70">No body yet — click Edit to write one.</div>
+                    )}
                   </div>
-                  {s.subject && <div className="font-medium text-foreground">Subject: {s.subject}</div>}
-                  <div className="whitespace-pre-wrap text-foreground/90">{s.body}</div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         );
