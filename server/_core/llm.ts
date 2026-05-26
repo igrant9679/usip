@@ -581,6 +581,45 @@ async function invokeViaOpenAI(
 type GeminiPart = { text: string } | { inlineData: { mimeType: string; data: string } };
 type GeminiContent = { role: "user" | "model"; parts: GeminiPart[] };
 
+/**
+ * Strip JSON-Schema keywords that Gemini's `responseSchema` rejects.
+ *
+ * Our callers write OpenAI-flavoured strict schemas (`additionalProperties:
+ * false`, `$schema`, `$defs`, etc.). Gemini's structured-output endpoint
+ * only accepts an OpenAPI 3.0 subset and throws 400 "Unknown name
+ * 'additionalProperties' …" on anything else. We deep-clone the schema and
+ * drop the unsupported keys so the same callsite works across providers.
+ */
+function sanitizeSchemaForGemini(input: unknown): unknown {
+  const UNSUPPORTED = new Set([
+    "additionalProperties",
+    "$schema",
+    "$id",
+    "$ref",
+    "$defs",
+    "definitions",
+    "strict",
+    "patternProperties",
+    "unevaluatedProperties",
+    "const",
+    "examples",
+    "default",
+  ]);
+  const walk = (node: unknown): unknown => {
+    if (Array.isArray(node)) return node.map(walk);
+    if (node && typeof node === "object") {
+      const out: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+        if (UNSUPPORTED.has(k)) continue;
+        out[k] = walk(v);
+      }
+      return out;
+    }
+    return node;
+  };
+  return walk(input);
+}
+
 async function invokeViaGemini(
   params: InvokeParams,
   creds: ResolvedCreds
@@ -640,9 +679,9 @@ async function invokeViaGemini(
   if (fmt?.type === "json_object" || fmt?.type === "json_schema" || schema) {
     generationConfig.responseMimeType = "application/json";
     if (fmt?.type === "json_schema") {
-      generationConfig.responseSchema = fmt.json_schema.schema;
+      generationConfig.responseSchema = sanitizeSchemaForGemini(fmt.json_schema.schema);
     } else if (schema) {
-      generationConfig.responseSchema = schema.schema;
+      generationConfig.responseSchema = sanitizeSchemaForGemini(schema.schema);
     }
   }
 
