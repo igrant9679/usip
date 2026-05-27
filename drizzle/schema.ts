@@ -8,6 +8,7 @@ import {
   json,
   mysqlEnum,
   mysqlTable,
+  primaryKey,
   text,
   timestamp,
   uniqueIndex,
@@ -1165,7 +1166,10 @@ export type UsageCounter = typeof usageCounters.$inferSelect;
 export const sequenceNodes = mysqlTable(
   "sequence_nodes",
   {
-    id: varchar("id", { length: 64 }).primaryKey(), // React Flow node id (uuid)
+    // React Flow node id, unique per sequence (not globally). The PK is
+    // composite (sequenceId, id) so the same React-Flow id (e.g.
+    // "start-1") can exist in different sequences.
+    id: varchar("id", { length: 64 }).notNull(),
     sequenceId: int("sequenceId").notNull(),
     workspaceId: int("workspaceId").notNull(),
     type: mysqlEnum("type", ["start", "email", "wait", "condition", "action", "goal", "linkedin_dm", "linkedin_invite"]).notNull(),
@@ -1176,7 +1180,7 @@ export const sequenceNodes = mysqlTable(
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
   (t) => ({
-    bySeq: index("ix_sn_seq").on(t.sequenceId),
+    pk: primaryKey({ columns: [t.sequenceId, t.id] }),
     byWs: index("ix_sn_ws").on(t.workspaceId),
   }),
 );
@@ -1185,7 +1189,9 @@ export type SequenceNode = typeof sequenceNodes.$inferSelect;
 export const sequenceEdges = mysqlTable(
   "sequence_edges",
   {
-    id: varchar("id", { length: 64 }).primaryKey(), // React Flow edge id
+    // React Flow edge id, unique per sequence (not globally) — same
+    // reasoning as sequence_nodes.
+    id: varchar("id", { length: 64 }).notNull(),
     sequenceId: int("sequenceId").notNull(),
     workspaceId: int("workspaceId").notNull(),
     source: varchar("source", { length: 64 }).notNull(),
@@ -1195,7 +1201,7 @@ export const sequenceEdges = mysqlTable(
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
   (t) => ({
-    bySeq: index("ix_se_seq").on(t.sequenceId),
+    pk: primaryKey({ columns: [t.sequenceId, t.id] }),
   }),
 );
 export type SequenceEdge = typeof sequenceEdges.$inferSelect;

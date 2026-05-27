@@ -1173,6 +1173,23 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0077: composite PK on sequence canvas tables ──────────────────────
+  // React Flow gives the start node id "start-1" on every canvas. With a
+  // global single-column PK, the first sequence to save claims it and
+  // every other sequence's save throws "Duplicate entry 'start-1' for key
+  // PRIMARY". Same problem for the auto-numbered email/wait nodes. Fix is
+  // to make the PK composite (sequenceId, id) so the same React Flow id
+  // can exist in different sequences. The old single-column PK was
+  // already unique → all existing rows satisfy the new composite PK, so
+  // the ALTER is safe in-place.
+  {
+    name: "0077_sequence_canvas_composite_pk.sql",
+    statements: [
+      `ALTER TABLE \`sequence_nodes\` DROP PRIMARY KEY, ADD PRIMARY KEY (\`sequenceId\`, \`id\`)`,
+      `ALTER TABLE \`sequence_edges\` DROP PRIMARY KEY, ADD PRIMARY KEY (\`sequenceId\`, \`id\`)`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------
