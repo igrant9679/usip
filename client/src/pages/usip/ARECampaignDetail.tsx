@@ -156,37 +156,92 @@ function IcpRing({ score }: { score: number }) {
   );
 }
 
+/* ─── Single source of truth for cross-tab invalidation ───────────────
+ *
+ * Every campaign tab (Prospects, Sequences, A/B Variants, Logs, Scraper)
+ * reads from the same underlying prospect_queue + prospect_intelligence
+ * + are_ab_variants + are_engine_logs rows. Any state-change mutation
+ * (approve, enrich, skip, generate, edit, cancel, pause, resume) must
+ * invalidate ALL of these or one tab will show stale data while the
+ * other reflects the new state — the exact bug the user filed.
+ *
+ * This hook centralises the invalidation set so every mutation site can
+ * call invalidateAll() and trust that every tab refreshes in lockstep.
+ * Using React Query cache invalidation (already in use via @trpc/react-
+ * query) instead of a separate Zustand/Redux store — the cache IS the
+ * global store, and adding a second one would create the disconnected-
+ * data problem we're trying to fix. */
+function useCampaignSync(campaignId: number) {
+  const utils = trpc.useUtils();
+  return {
+    invalidateAll: () => {
+      // Per-prospect data
+      utils.are.prospects.list.invalidate();
+      utils.are.prospects.listSequences.invalidate({ campaignId });
+      // A/B Variants tab (was never being invalidated — root cause of
+      // "A/B tab out of sync" report)
+      utils.are.prospects.getAbVariants.invalidate({ campaignId });
+      // Logs tab
+      utils.are.engine.getLogs.invalidate({ campaignId });
+      // Campaign-level (header counters)
+      utils.are.campaigns.get.invalidate({ id: campaignId });
+      // Rejection stats (used by Rejections tab)
+      utils.are.prospects.getRejectionStats.invalidate({ campaignId });
+    },
+  };
+}
+
 /* ─── Prospect row ─────────────────────────────────────────────────────────── */
 function ProspectRow({
   p, campaignId, onSelect, selected,
 }: {
   p: any; campaignId: number; onSelect: (id: number) => void; selected: boolean;
 }) {
-  const utils = trpc.useUtils();
-  // Any state-change mutation on a prospect has to invalidate BOTH the
-  // Prospects tab list AND the Sequences tab listSequences feed — they
-  // share the same underlying prospect_queue row, so an action in one
-  // tab needs to be visible in the other immediately.
-  const invalidateProspectsAndSequences = () => {
-    utils.are.prospects.list.invalidate();
-    utils.are.prospects.listSequences.invalidate({ campaignId });
-  };
+  const { invalidateAll } = useCampaignSync(campaignId);
+  const [genStartedAt, setGenStartedAt] = useState<number | null>(null);
+  const [elapsed, setElapsed] = useState(0);
+
+  // Tick a 1s timer while a generate is in flight so the user sees
+  // forward progress instead of an infinite spinner.
+  useEffect(() => {
+    if (genStartedAt == null) { setElapsed(0); return; }
+    const id = setInterval(() => setElapsed(Math.round((Date.now() - genStartedAt) / 1000)), 500);
+    return () => clearInterval(id);
+  }, [genStartedAt]);
 
   const enrich = trpc.are.prospects.enrich.useMutation({
-    onSuccess: () => { toast.success("Enrichment started"); setTimeout(invalidateProspectsAndSequences, 3000); },
+    onSuccess: () => { toast.success("Enrichment started"); setTimeout(invalidateAll, 3000); },
     onError: (e) => toast.error(e.message),
   });
   const approve = trpc.are.prospects.approve.useMutation({
-    onSuccess: () => { toast.success("Approved"); invalidateProspectsAndSequences(); },
+    onSuccess: () => { toast.success("Prospect approved for sequencing"); invalidateAll(); },
     onError: (e) => toast.error(e.message),
   });
   const skip = trpc.are.prospects.skip.useMutation({
-    onSuccess: invalidateProspectsAndSequences,
+    onSuccess: invalidateAll,
     onError: (e) => toast.error(e.message),
   });
+  // Awaited generate — server now blocks until the LLM pipeline finishes
+  // and returns concrete counts, so we can show a precise success toast
+  // and only refetch when there's actually new data to read.
   const genSeq = trpc.are.prospects.generateSequence.useMutation({
-    onSuccess: () => { toast.success("Sequence generation started"); setTimeout(invalidateProspectsAndSequences, 5000); },
-    onError: (e) => toast.error(e.message),
+    onMutate: () => { setGenStartedAt(Date.now()); },
+    onSuccess: (r) => {
+      setGenStartedAt(null);
+      toast.success(
+        r.reused
+          ? `Sequence already existed (${r.steps} steps) — reused`
+          : `Sequence created — ${r.steps} step${r.steps === 1 ? "" : "s"}, quality ${r.qualityScore}/40, ${(r.durationMs / 1000).toFixed(1)}s`,
+        { duration: 6000 },
+      );
+      invalidateAll();
+    },
+    onError: (e) => {
+      setGenStartedAt(null);
+      // Persistent toast — gen failures need to stay visible long enough
+      // for the user to read the underlying LLM error.
+      toast.error(`Sequence generation failed: ${e.message}`, { duration: 10000 });
+    },
   });
 
   const SrcIcon = SOURCE_ICON[p.sourceType] ?? Globe;
@@ -265,9 +320,19 @@ function ProspectRow({
           </Button>
         )}
         {p.enrichmentStatus === "complete" && (p.sequenceStatus === "pending" || p.sequenceStatus === "canceled") && (
-          <Button size="sm" variant="ghost" className="h-7 px-2 text-xs text-violet-500 hover:text-violet-600"
-            onClick={() => genSeq.mutate({ prospectId: p.id, campaignId })} disabled={genSeq.isPending}>
-            {genSeq.isPending ? <Loader2 className="size-3 animate-spin" /> : <Sparkles className="size-3" />}
+          <Button
+            size="sm" variant="ghost"
+            className="h-7 px-2 text-xs text-violet-500 hover:text-violet-600 gap-1"
+            onClick={() => genSeq.mutate({ prospectId: p.id, campaignId })}
+            disabled={genSeq.isPending}
+            title={genSeq.isPending ? `Generating… ${elapsed}s` : "Generate sequence"}
+          >
+            {genSeq.isPending ? (
+              <>
+                <Loader2 className="size-3 animate-spin" />
+                <span className="tabular-nums text-[10px]">{elapsed}s</span>
+              </>
+            ) : <Sparkles className="size-3" />}
           </Button>
         )}
         {p.enrichmentStatus === "complete" && (p.sequenceStatus === "pending" || p.sequenceStatus === "canceled") && (
@@ -829,19 +894,29 @@ function StatusBadgeMini({ status }: { status: string }) {
 }
 
 function SequencesTab({ campaignId, campaign }: { campaignId: number; campaign: any }) {
-  const utils = trpc.useUtils();
   const { data: rows = [], refetch, isLoading } = trpc.are.prospects.listSequences.useQuery({ campaignId });
-  const generate = trpc.are.prospects.generateSequence.useMutation();
-  // Any sequence state change has to invalidate both this tab's view AND
-  // the Prospects tab's list — the row over there reads sequenceStatus
-  // for which action buttons to show (Generate / Approve / Skip), and
-  // it was leaving the stale "enrolled" badge until a manual refresh.
-  const invalidateAll = () => {
-    refetch();
-    utils.are.prospects.list.invalidate({ campaignId, limit: 100 });
-    utils.are.campaigns.get.invalidate({ id: campaignId });
-    utils.are.engine.getLogs.invalidate({ campaignId });
-  };
+  // Centralised sync — hits every tab's query so the user never sees
+  // stale data after a mutation (was the root cause of "A/B tab out of
+  // sync" + "Prospects tab still shows enrolled after cancel").
+  const sync = useCampaignSync(campaignId);
+  const invalidateAll = sync.invalidateAll;
+
+  // Awaited generate — server actually waits for the LLM pipeline and
+  // returns concrete counts on success or throws with the underlying
+  // error on failure. Replaces the previous fire-and-forget that just
+  // returned {started: true} 1 ms after the click.
+  const generate = trpc.are.prospects.generateSequence.useMutation({
+    onSuccess: (r) => {
+      toast.success(
+        r.reused
+          ? `Sequence already existed (${r.steps} steps) — reused`
+          : `Sequence created — ${r.steps} step${r.steps === 1 ? "" : "s"}, quality ${r.qualityScore}/40, ${(r.durationMs / 1000).toFixed(1)}s`,
+        { duration: 6000 },
+      );
+      invalidateAll();
+    },
+    onError: (e) => toast.error(`Generation failed: ${e.message}`, { duration: 10000 }),
+  });
   const cancel = trpc.are.prospects.cancelSequence.useMutation({
     onSuccess: (r) => { toast.success(r.alreadyCanceled ? "Already canceled" : `Canceled — ${r.skippedSteps} scheduled step${r.skippedSteps === 1 ? "" : "s"} stopped`); invalidateAll(); },
     onError: (e) => toast.error(e.message),
@@ -860,6 +935,17 @@ function SequencesTab({ campaignId, campaign }: { campaignId: number; campaign: 
   const [drawerProspectId, setDrawerProspectId] = useState<number | null>(null);
   const [confirmCancel, setConfirmCancel] = useState<{ prospectId: number; name: string } | null>(null);
   const [generatingId, setGeneratingId] = useState<number | null>(null);
+  const [generatingStartedAt, setGeneratingStartedAt] = useState<number | null>(null);
+  const [genElapsed, setGenElapsed] = useState(0);
+  useEffect(() => {
+    if (generatingId == null) { setGeneratingStartedAt(null); setGenElapsed(0); return; }
+    setGeneratingStartedAt(Date.now());
+    const id = setInterval(() => {
+      setGenElapsed((prev) => generatingStartedAt ? Math.round((Date.now() - generatingStartedAt) / 1000) : prev + 1);
+    }, 500);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [generatingId]);
 
   // Derive counts per status for the summary strip.
   const countsByStatus = rows.reduce((acc: Record<string, number>, r: any) => {
@@ -876,15 +962,16 @@ function SequencesTab({ campaignId, campaign }: { campaignId: number; campaign: 
     return true;
   });
 
+  // generate's onSuccess/onError already toast + invalidate; we only
+  // need to track which row is generating so its button shows a spinner.
   const generateFor = async (prospectId: number) => {
     setGeneratingId(prospectId);
     try {
       await generate.mutateAsync({ prospectId, campaignId });
-      toast.success("Generation started — refresh in ~10s");
-    } catch (e: any) {
-      toast.error(e?.message ?? "Generation failed");
+    } catch {
+      // toast already raised by onError
     } finally {
-      setTimeout(() => { setGeneratingId(null); invalidateAll(); }, 8000);
+      setGeneratingId(null);
     }
   };
 
@@ -966,12 +1053,17 @@ function SequencesTab({ campaignId, campaign }: { campaignId: number; campaign: 
                 {/* Quick actions */}
                 <div className="flex items-center gap-0.5 shrink-0" onClick={(e) => e.stopPropagation()}>
                   {!hasSeq && (
-                    <Button size="sm" variant="ghost" className="h-7 px-2 text-[11px]"
+                    <Button size="sm" variant="ghost" className="h-7 px-2 text-[11px] gap-1"
                       onClick={() => generateFor(r.prospectId)}
-                      disabled={generatingId === r.prospectId}
-                      title="Generate sequence"
+                      disabled={generatingId === r.prospectId || generate.isPending}
+                      title={generatingId === r.prospectId ? `Generating… ${genElapsed}s` : "Generate sequence"}
                     >
-                      {generatingId === r.prospectId ? <Loader2 className="size-3 animate-spin" /> : <Sparkles className="size-3" />}
+                      {generatingId === r.prospectId ? (
+                        <>
+                          <Loader2 className="size-3 animate-spin" />
+                          <span className="tabular-nums text-[10px]">{genElapsed}s</span>
+                        </>
+                      ) : <Sparkles className="size-3" />}
                     </Button>
                   )}
                   {r.sequenceStatus === "enrolled" && (

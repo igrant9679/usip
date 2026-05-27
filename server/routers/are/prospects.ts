@@ -574,52 +574,149 @@ async function evaluateSequenceQuality(steps: unknown[], workspaceId: number): P
   };
 }
 
-export async function runSequenceAgent(prospectId: number, workspaceId: number, campaignId: number): Promise<void> {
-  const db = await getDb();
-  if (!db) return;
+/** Result the awaited generateSequence mutation returns so the client
+ *  can render a useful toast + invalidate caches with concrete numbers. */
+export interface SequenceAgentResult {
+  ok: boolean;
+  reused: boolean;
+  steps: number;
+  qualityScore: number;
+  durationMs: number;
+  prospectId: number;
+}
 
+/** Persist a log row tied to the campaign. Best-effort: never throws,
+ *  never blocks the agent. Surfaces in the unified Logs tab. */
+async function emitSeqLog(
+  db: any,
+  workspaceId: number,
+  campaignId: number,
+  level: "info" | "warn" | "error",
+  phase: string,
+  message: string,
+  details?: unknown,
+): Promise<void> {
+  try {
+    await db.insert(areEngineLogs).values({
+      workspaceId,
+      campaignId,
+      phase,
+      level,
+      message: message.slice(0, 500),
+      details: details === undefined ? null : (details as any),
+    });
+  } catch (e) {
+    console.error("[runSequenceAgent] emitSeqLog failed:", e);
+  }
+}
+
+/**
+ * Generate the sequence for one prospect. Awaited; throws with a clear
+ * message on every failure mode so the caller can surface it. Emits
+ * `sequence.*` log entries at every phase boundary for the Logs tab.
+ *
+ * Idempotency: if the prospect already has a non-empty generatedSequence
+ * and force=false, returns immediately with reused=true. Pass force=true
+ * to bypass and regenerate (used by a future Regenerate action).
+ */
+export async function runSequenceAgent(
+  prospectId: number,
+  workspaceId: number,
+  campaignId: number,
+  options: { force?: boolean } = {},
+): Promise<SequenceAgentResult> {
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+
+  const startedAt = Date.now();
   const [prospect] = await db.select().from(prospectQueue).where(eq(prospectQueue.id, prospectId)).limit(1);
   const [intel] = await db.select().from(prospectIntelligence).where(eq(prospectIntelligence.prospectQueueId, prospectId)).limit(1);
   const [campaign] = await db.select().from(areCampaigns).where(eq(areCampaigns.id, campaignId)).limit(1);
-  if (!prospect || !intel || !campaign) return;
 
-  // (1) Ensure the campaign template exists (one LLM call, cached forever).
-  const template = await generateCampaignTemplate(campaign, false);
-  if (template.steps.length === 0) return;
+  if (!prospect) throw new Error(`Prospect ${prospectId} not found`);
+  if (!campaign) throw new Error(`Campaign ${campaignId} not found`);
+  if (!intel) {
+    // The prospect was never enriched (or enrichment failed). Without
+    // intel there's nothing to personalize against.
+    await emitSeqLog(db, workspaceId, campaignId, "warn", "sequence.skip",
+      `Cannot generate sequence — prospect "${prospect.firstName} ${prospect.lastName}" has no enrichment data. Run enrichment first.`,
+      { prospectId, reason: "no_intel" });
+    throw new Error("Prospect has no enrichment data — enrich it first, then generate the sequence");
+  }
 
-  // (2) Personalize for this prospect (one LLM call).
-  const steps = await personalizeForProspect(template, prospect, intel, campaign);
-  if (steps.length === 0) return;
+  // Idempotency: don't waste LLM tokens if a sequence already exists.
+  const existing = (intel.generatedSequence as unknown[]) ?? [];
+  if (!options.force && Array.isArray(existing) && existing.length > 0) {
+    await emitSeqLog(db, workspaceId, campaignId, "info", "sequence.reuse",
+      `Sequence already exists for ${prospect.firstName} ${prospect.lastName} (${existing.length} steps) — reusing without regeneration`,
+      { prospectId, steps: existing.length });
+    return { ok: true, reused: true, steps: existing.length, qualityScore: intel.sequenceQualityScore ?? 0, durationMs: 0, prospectId };
+  }
 
-  // (3) Single-pass quality flag — does NOT trigger a regenerate.
-  const quality = await evaluateSequenceQuality(steps, workspaceId);
+  await emitSeqLog(db, workspaceId, campaignId, "info", "sequence.start",
+    `Sequence generation started for ${prospect.firstName} ${prospect.lastName}`, { prospectId, force: !!options.force });
 
-  // Save sequence + quality flag.
-  await db.update(prospectIntelligence).set({
-    generatedSequence: steps,
-    sequenceQualityScore: quality.score,
-    sequenceQualityBreakdown: { ...quality.breakdown, feedback: quality.feedback },
-    sequenceRewriteCount: 0,
-  }).where(eq(prospectIntelligence.prospectQueueId, prospectId));
+  try {
+    // (1) Ensure the campaign template exists (one LLM call, cached forever).
+    const template = await generateCampaignTemplate(campaign, false);
+    if (template.steps.length === 0) {
+      throw new Error("Campaign template generation returned 0 steps — check the campaign's sequencePrompt + LLM provider");
+    }
+    await emitSeqLog(db, workspaceId, campaignId, "info", "sequence.template",
+      `Campaign template ready: ${template.steps.length} step skeleton (cached)`, { prospectId, steps: template.steps.length });
 
-  // Track the opener for the A/B Variants tab. We only generate variant
-  // A here (opener-only A/B testing is a separate ticket); leaving the
-  // upsert in place keeps the AB tab populated for existing campaigns.
-  if (steps.length > 0) {
-    await db.insert(areAbVariants).values({
-      workspaceId,
-      campaignId,
-      stepIndex: 1,
-      variantKey: "A",
-      hookType: "personalisation",
-      subjectLine: steps[0]?.subject ?? "",
-      bodyPreview: String(steps[0]?.body ?? "").substring(0, 300),
-    }).onDuplicateKeyUpdate({
-      set: {
+    // (2) Personalize for this prospect (one LLM call).
+    const steps = await personalizeForProspect(template, prospect, intel, campaign);
+    if (steps.length === 0) {
+      throw new Error("Personalization returned 0 steps — LLM did not respond with parseable JSON");
+    }
+    await emitSeqLog(db, workspaceId, campaignId, "info", "sequence.personalize",
+      `Personalized ${steps.length} steps for ${prospect.firstName} ${prospect.lastName}`, { prospectId, steps: steps.length });
+
+    // (3) Single-pass quality flag.
+    const quality = await evaluateSequenceQuality(steps, workspaceId);
+    await emitSeqLog(db, workspaceId, campaignId, "info", "sequence.eval",
+      `Quality: ${quality.score}/40`, { prospectId, score: quality.score, breakdown: quality.breakdown });
+
+    // Save sequence + quality flag.
+    await db.update(prospectIntelligence).set({
+      generatedSequence: steps,
+      sequenceQualityScore: quality.score,
+      sequenceQualityBreakdown: { ...quality.breakdown, feedback: quality.feedback },
+      sequenceRewriteCount: 0,
+    }).where(eq(prospectIntelligence.prospectQueueId, prospectId));
+
+    // Refresh A/B Variants — opener-only (variant A). Campaign-level
+    // upsert so the tab picks up the new opener on next query.
+    if (steps.length > 0) {
+      await db.insert(areAbVariants).values({
+        workspaceId,
+        campaignId,
+        stepIndex: 1,
+        variantKey: "A",
+        hookType: "personalisation",
         subjectLine: steps[0]?.subject ?? "",
         bodyPreview: String(steps[0]?.body ?? "").substring(0, 300),
-      },
-    });
+      }).onDuplicateKeyUpdate({
+        set: {
+          subjectLine: steps[0]?.subject ?? "",
+          bodyPreview: String(steps[0]?.body ?? "").substring(0, 300),
+        },
+      });
+    }
+
+    const durationMs = Date.now() - startedAt;
+    await emitSeqLog(db, workspaceId, campaignId, "info", "sequence.complete",
+      `Sequence generated for ${prospect.firstName} ${prospect.lastName} — ${steps.length} steps, quality ${quality.score}/40, ${durationMs}ms`,
+      { prospectId, steps: steps.length, qualityScore: quality.score, durationMs });
+
+    return { ok: true, reused: false, steps: steps.length, qualityScore: quality.score, durationMs, prospectId };
+  } catch (err) {
+    const msg = (err as Error)?.message ?? String(err);
+    await emitSeqLog(db, workspaceId, campaignId, "error", "sequence.error",
+      `Sequence generation failed for ${prospect.firstName} ${prospect.lastName}: ${msg}`,
+      { prospectId, error: msg, stack: (err as Error)?.stack });
+    throw err;
   }
 }
 
@@ -707,12 +804,32 @@ export const prospectsRouter = router({
       return { started: pending.length };
     }),
 
-  /** Generate sequence for a single enriched prospect */
+  /** Generate a sequence for one enriched prospect — AWAITED.
+   *
+   *  Previously this returned {started: true} immediately and let
+   *  runSequenceAgent run in the background with .catch(console.error).
+   *  That made failures invisible (no toast, no log entry) and made the
+   *  client guess at completion time. Now the mutation actually waits
+   *  for the LLM pipeline to finish, then returns the concrete result
+   *  ({ok, reused, steps, qualityScore, durationMs}) or throws a
+   *  TRPCError with the underlying error message. */
   generateSequence: workspaceProcedure
-    .input(z.object({ prospectId: z.number(), campaignId: z.number() }))
+    .input(z.object({
+      prospectId: z.number(),
+      campaignId: z.number(),
+      /** Force regeneration even if a sequence already exists. */
+      force: z.boolean().default(false),
+    }))
     .mutation(async ({ ctx, input }) => {
-      runSequenceAgent(input.prospectId, ctx.workspace.id, input.campaignId).catch(console.error);
-      return { started: true };
+      try {
+        return await runSequenceAgent(input.prospectId, ctx.workspace.id, input.campaignId, { force: input.force });
+      } catch (e) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: (e as Error)?.message ?? "Sequence generation failed",
+          cause: e instanceof Error ? e : undefined,
+        });
+      }
     }),
 
   approve: workspaceProcedure
