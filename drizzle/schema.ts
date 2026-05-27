@@ -3019,6 +3019,20 @@ export const prospects = mysqlTable(
     // Shape: see EnrichmentData in server/services/scraper/index.ts.
     enrichmentData: json("enrichment_data"),
     linkedContactId: int("linked_contact_id"),
+    // ── Discovery v2 verification fields (migration 0078) ───────────────
+    // confidence + verification let a saved prospect carry its provenance
+    // forward: confidenceScore (0-100), tier bucket, status (verified /
+    // needs_review / rejected), human-readable notes, every source URL
+    // that contributed, whether the LinkedIn URL was verified via Unipile,
+    // and which discovery run last touched the row.
+    confidenceScore: int("confidenceScore"),
+    confidenceTier: mysqlEnum("confidenceTier", ["high", "medium", "low"]),
+    verificationStatus: mysqlEnum("verificationStatus", ["verified", "needs_review", "rejected"]),
+    verificationNotes: text("verificationNotes"),
+    sourceUrls: json("sourceUrls"),
+    linkedinUrlVerified: boolean("linkedinUrlVerified").default(false).notNull(),
+    lastEnrichedAt: timestamp("lastEnrichedAt"),
+    lastDiscoveryRunId: int("lastDiscoveryRunId"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
@@ -3028,6 +3042,83 @@ export const prospects = mysqlTable(
   }),
 );
 export type Prospect = typeof prospects.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Discovery v2 — unified person/account search with verification
+   (see server/services/discovery/ for the runtime; migration 0078).
+   ────────────────────────────────────────────────────────────────────────── */
+
+export const rawFinds = mysqlTable(
+  "raw_finds",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    runId: int("runId").notNull(),
+    source: varchar("source", { length: 40 }).notNull(),
+    sourceUrl: text("sourceUrl"),
+    pageTitle: varchar("pageTitle", { length: 400 }),
+    snippet: text("snippet"),
+    firstName: varchar("firstName", { length: 80 }),
+    lastName: varchar("lastName", { length: 80 }),
+    title: varchar("title", { length: 200 }),
+    companyName: varchar("companyName", { length: 200 }),
+    companyDomain: varchar("companyDomain", { length: 200 }),
+    linkedinUrl: text("linkedinUrl"),
+    email: varchar("email", { length: 320 }),
+    phone: varchar("phone", { length: 40 }),
+    location: varchar("location", { length: 200 }),
+    rawJson: json("rawJson"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    byRun: index("ix_rf_run").on(t.runId),
+    byWs: index("ix_rf_ws").on(t.workspaceId, t.createdAt),
+  }),
+);
+export type RawFind = typeof rawFinds.$inferSelect;
+
+export const discoveryRuns = mysqlTable(
+  "discovery_runs",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    userId: int("userId"),
+    mode: mysqlEnum("mode", ["person", "account"]).notNull(),
+    input: json("input").notNull(),
+    status: mysqlEnum("status", ["running", "complete", "failed"]).default("running").notNull(),
+    rawFindCount: int("rawFindCount").default(0).notNull(),
+    prospectsCreated: int("prospectsCreated").default(0).notNull(),
+    highConfidenceCount: int("highConfidenceCount").default(0).notNull(),
+    mediumConfidenceCount: int("mediumConfidenceCount").default(0).notNull(),
+    lowConfidenceCount: int("lowConfidenceCount").default(0).notNull(),
+    durationMs: int("durationMs").default(0).notNull(),
+    errorMessage: text("errorMessage"),
+    startedAt: timestamp("startedAt").defaultNow().notNull(),
+    completedAt: timestamp("completedAt"),
+  },
+  (t) => ({
+    byWs: index("ix_dr_ws").on(t.workspaceId, t.startedAt),
+  }),
+);
+export type DiscoveryRun = typeof discoveryRuns.$inferSelect;
+
+export const discoveryLogs = mysqlTable(
+  "discovery_logs",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    runId: int("runId").notNull(),
+    phase: varchar("phase", { length: 32 }).notNull(),
+    level: varchar("level", { length: 8 }).default("info").notNull(),
+    message: text("message").notNull(),
+    details: json("details"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    byRun: index("ix_dl_run").on(t.runId, t.createdAt),
+  }),
+);
+export type DiscoveryLog = typeof discoveryLogs.$inferSelect;
 
 // ── Async reveal job tracking ─────────────────────────────────────────────────
 export const cloduraRevealJobs = mysqlTable(

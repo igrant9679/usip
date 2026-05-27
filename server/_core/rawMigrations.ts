@@ -1173,6 +1173,88 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0078: Discovery v2 pipeline (raw_finds, runs, logs, prospects ext) ─
+  // Replaces the scattered prospect-search UI with a single guided
+  // Person/Account workflow whose every step is traceable. Three new
+  // tables + verification fields on prospects:
+  //   raw_finds       — every snippet a scraper returned (evidence with
+  //                     a source URL the user can click back to).
+  //   discovery_runs  — one row per user search (mode, input, counters,
+  //                     duration). Powers the new Logs tab.
+  //   discovery_logs  — per-step trace within a run, kept separate from
+  //                     are_engine_logs (which is campaign-bound).
+  //   prospects.*     — confidenceScore + tier + verificationStatus +
+  //                     notes + sourceUrls + linkedinUrlVerified +
+  //                     lastEnrichedAt + lastDiscoveryRunId so a saved
+  //                     prospect always knows where it came from.
+  {
+    name: "0078_discovery_v2.sql",
+    statements: [
+      `CREATE TABLE IF NOT EXISTS \`raw_finds\` (
+         \`id\` int NOT NULL AUTO_INCREMENT PRIMARY KEY,
+         \`workspaceId\` int NOT NULL,
+         \`runId\` int NOT NULL,
+         \`source\` varchar(40) NOT NULL,
+         \`sourceUrl\` text NULL,
+         \`pageTitle\` varchar(400) NULL,
+         \`snippet\` text NULL,
+         \`firstName\` varchar(80) NULL,
+         \`lastName\` varchar(80) NULL,
+         \`title\` varchar(200) NULL,
+         \`companyName\` varchar(200) NULL,
+         \`companyDomain\` varchar(200) NULL,
+         \`linkedinUrl\` text NULL,
+         \`email\` varchar(320) NULL,
+         \`phone\` varchar(40) NULL,
+         \`location\` varchar(200) NULL,
+         \`rawJson\` json NULL,
+         \`createdAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP
+       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE INDEX \`ix_rf_run\` ON \`raw_finds\` (\`runId\`)`,
+      `CREATE INDEX \`ix_rf_ws\` ON \`raw_finds\` (\`workspaceId\`, \`createdAt\`)`,
+
+      `CREATE TABLE IF NOT EXISTS \`discovery_runs\` (
+         \`id\` int NOT NULL AUTO_INCREMENT PRIMARY KEY,
+         \`workspaceId\` int NOT NULL,
+         \`userId\` int NULL,
+         \`mode\` enum('person','account') NOT NULL,
+         \`input\` json NOT NULL,
+         \`status\` enum('running','complete','failed') NOT NULL DEFAULT 'running',
+         \`rawFindCount\` int NOT NULL DEFAULT 0,
+         \`prospectsCreated\` int NOT NULL DEFAULT 0,
+         \`highConfidenceCount\` int NOT NULL DEFAULT 0,
+         \`mediumConfidenceCount\` int NOT NULL DEFAULT 0,
+         \`lowConfidenceCount\` int NOT NULL DEFAULT 0,
+         \`durationMs\` int NOT NULL DEFAULT 0,
+         \`errorMessage\` text NULL,
+         \`startedAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+         \`completedAt\` timestamp NULL
+       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE INDEX \`ix_dr_ws\` ON \`discovery_runs\` (\`workspaceId\`, \`startedAt\`)`,
+
+      `CREATE TABLE IF NOT EXISTS \`discovery_logs\` (
+         \`id\` int NOT NULL AUTO_INCREMENT PRIMARY KEY,
+         \`workspaceId\` int NOT NULL,
+         \`runId\` int NOT NULL,
+         \`phase\` varchar(32) NOT NULL,
+         \`level\` varchar(8) NOT NULL DEFAULT 'info',
+         \`message\` text NOT NULL,
+         \`details\` json NULL,
+         \`createdAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP
+       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE INDEX \`ix_dl_run\` ON \`discovery_logs\` (\`runId\`, \`createdAt\`)`,
+
+      `ALTER TABLE \`prospects\` ADD COLUMN \`confidenceScore\` int NULL`,
+      `ALTER TABLE \`prospects\` ADD COLUMN \`confidenceTier\` enum('high','medium','low') NULL`,
+      `ALTER TABLE \`prospects\` ADD COLUMN \`verificationStatus\` enum('verified','needs_review','rejected') NULL`,
+      `ALTER TABLE \`prospects\` ADD COLUMN \`verificationNotes\` text NULL`,
+      `ALTER TABLE \`prospects\` ADD COLUMN \`sourceUrls\` json NULL`,
+      `ALTER TABLE \`prospects\` ADD COLUMN \`linkedinUrlVerified\` tinyint(1) NOT NULL DEFAULT 0`,
+      `ALTER TABLE \`prospects\` ADD COLUMN \`lastEnrichedAt\` timestamp NULL`,
+      `ALTER TABLE \`prospects\` ADD COLUMN \`lastDiscoveryRunId\` int NULL`,
+    ],
+  },
+
   // ── 0077: composite PK on sequence canvas tables ──────────────────────
   // React Flow gives the start node id "start-1" on every canvas. With a
   // global single-column PK, the first sequence to save claims it and
