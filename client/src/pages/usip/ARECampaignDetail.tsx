@@ -163,21 +163,29 @@ function ProspectRow({
   p: any; campaignId: number; onSelect: (id: number) => void; selected: boolean;
 }) {
   const utils = trpc.useUtils();
+  // Any state-change mutation on a prospect has to invalidate BOTH the
+  // Prospects tab list AND the Sequences tab listSequences feed — they
+  // share the same underlying prospect_queue row, so an action in one
+  // tab needs to be visible in the other immediately.
+  const invalidateProspectsAndSequences = () => {
+    utils.are.prospects.list.invalidate();
+    utils.are.prospects.listSequences.invalidate({ campaignId });
+  };
 
   const enrich = trpc.are.prospects.enrich.useMutation({
-    onSuccess: () => { toast.success("Enrichment started"); setTimeout(() => utils.are.prospects.list.invalidate(), 3000); },
+    onSuccess: () => { toast.success("Enrichment started"); setTimeout(invalidateProspectsAndSequences, 3000); },
     onError: (e) => toast.error(e.message),
   });
   const approve = trpc.are.prospects.approve.useMutation({
-    onSuccess: () => { toast.success("Approved"); utils.are.prospects.list.invalidate(); },
+    onSuccess: () => { toast.success("Approved"); invalidateProspectsAndSequences(); },
     onError: (e) => toast.error(e.message),
   });
   const skip = trpc.are.prospects.skip.useMutation({
-    onSuccess: () => utils.are.prospects.list.invalidate(),
+    onSuccess: invalidateProspectsAndSequences,
     onError: (e) => toast.error(e.message),
   });
   const genSeq = trpc.are.prospects.generateSequence.useMutation({
-    onSuccess: () => { toast.success("Sequence generation started"); setTimeout(() => utils.are.prospects.list.invalidate(), 5000); },
+    onSuccess: () => { toast.success("Sequence generation started"); setTimeout(invalidateProspectsAndSequences, 5000); },
     onError: (e) => toast.error(e.message),
   });
 
@@ -256,13 +264,13 @@ function ProspectRow({
             {enrich.isPending ? <Loader2 className="size-3 animate-spin" /> : <RefreshCw className="size-3" />}
           </Button>
         )}
-        {p.enrichmentStatus === "complete" && p.sequenceStatus === "pending" && (
+        {p.enrichmentStatus === "complete" && (p.sequenceStatus === "pending" || p.sequenceStatus === "canceled") && (
           <Button size="sm" variant="ghost" className="h-7 px-2 text-xs text-violet-500 hover:text-violet-600"
             onClick={() => genSeq.mutate({ prospectId: p.id, campaignId })} disabled={genSeq.isPending}>
             {genSeq.isPending ? <Loader2 className="size-3 animate-spin" /> : <Sparkles className="size-3" />}
           </Button>
         )}
-        {p.enrichmentStatus === "complete" && p.sequenceStatus === "pending" && (
+        {p.enrichmentStatus === "complete" && (p.sequenceStatus === "pending" || p.sequenceStatus === "canceled") && (
           <Button size="sm" variant="ghost" className="h-7 px-2 text-xs text-emerald-600 hover:text-emerald-700"
             onClick={() => approve.mutate({ prospectId: p.id })} disabled={approve.isPending}>
             {approve.isPending ? <Loader2 className="size-3 animate-spin" /> : <CheckCircle2 className="size-3" />}
@@ -824,16 +832,26 @@ function SequencesTab({ campaignId, campaign }: { campaignId: number; campaign: 
   const utils = trpc.useUtils();
   const { data: rows = [], refetch, isLoading } = trpc.are.prospects.listSequences.useQuery({ campaignId });
   const generate = trpc.are.prospects.generateSequence.useMutation();
+  // Any sequence state change has to invalidate both this tab's view AND
+  // the Prospects tab's list — the row over there reads sequenceStatus
+  // for which action buttons to show (Generate / Approve / Skip), and
+  // it was leaving the stale "enrolled" badge until a manual refresh.
+  const invalidateAll = () => {
+    refetch();
+    utils.are.prospects.list.invalidate({ campaignId, limit: 100 });
+    utils.are.campaigns.get.invalidate({ id: campaignId });
+    utils.are.engine.getLogs.invalidate({ campaignId });
+  };
   const cancel = trpc.are.prospects.cancelSequence.useMutation({
-    onSuccess: (r) => { toast.success(r.alreadyCanceled ? "Already canceled" : `Canceled — ${r.skippedSteps} scheduled step${r.skippedSteps === 1 ? "" : "s"} stopped`); refetch(); utils.are.engine.getLogs.invalidate({ campaignId }); },
+    onSuccess: (r) => { toast.success(r.alreadyCanceled ? "Already canceled" : `Canceled — ${r.skippedSteps} scheduled step${r.skippedSteps === 1 ? "" : "s"} stopped`); invalidateAll(); },
     onError: (e) => toast.error(e.message),
   });
   const pause = trpc.are.prospects.pauseSequence.useMutation({
-    onSuccess: () => { toast.success("Paused"); refetch(); utils.are.engine.getLogs.invalidate({ campaignId }); },
+    onSuccess: () => { toast.success("Paused"); invalidateAll(); },
     onError: (e) => toast.error(e.message),
   });
   const resume = trpc.are.prospects.resumeSequence.useMutation({
-    onSuccess: () => { toast.success("Resumed"); refetch(); utils.are.engine.getLogs.invalidate({ campaignId }); },
+    onSuccess: () => { toast.success("Resumed"); invalidateAll(); },
     onError: (e) => toast.error(e.message),
   });
 
@@ -866,7 +884,7 @@ function SequencesTab({ campaignId, campaign }: { campaignId: number; campaign: 
     } catch (e: any) {
       toast.error(e?.message ?? "Generation failed");
     } finally {
-      setTimeout(() => { setGeneratingId(null); refetch(); }, 8000);
+      setTimeout(() => { setGeneratingId(null); invalidateAll(); }, 8000);
     }
   };
 
