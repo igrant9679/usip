@@ -36,6 +36,11 @@ export const prospectsRouter = router({
         emailStatus: z.string().optional(),
         hasEmail: z.boolean().optional(),
         promoted: z.boolean().optional(),
+        /** Discovery v2: filter by verification status to power the
+         *  Needs Review queue and the verified-only feed. */
+        verificationStatus: z.enum(["verified", "needs_review", "rejected"]).optional(),
+        /** Filter by which discovery run produced/last-touched the row. */
+        discoveryRunId: z.number().int().optional(),
       }),
     )
     .query(async ({ ctx, input }) => {
@@ -48,6 +53,8 @@ export const prospectsRouter = router({
       if (input.hasEmail === false) conditions.push(isNull(prospects.email));
       if (input.promoted === true) conditions.push(sql`${prospects.linkedContactId} IS NOT NULL`);
       if (input.promoted === false) conditions.push(isNull(prospects.linkedContactId));
+      if (input.verificationStatus) conditions.push(eq(prospects.verificationStatus, input.verificationStatus));
+      if (input.discoveryRunId) conditions.push(eq(prospects.lastDiscoveryRunId, input.discoveryRunId));
 
       const offset = (input.page - 1) * input.perPage;
       const rows = await db
