@@ -701,16 +701,31 @@ async function invokeViaGemini(
     chosenModel
   )}:generateContent?key=${encodeURIComponent(creds.geminiApiKey)}`;
 
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(payload),
-  });
+  // Retry transient Gemini failures (503 "model overloaded", 429 quota,
+  // 500 server error) with exponential backoff. These are not bugs in our
+  // payload — Google's model just goes down for seconds at a time, and
+  // the prior behavior was to surface the raw error on the prospect row
+  // and require the user to manually retry. Three attempts: 0s, 1s, 3s.
+  const RETRYABLE = new Set([429, 500, 502, 503, 504]);
+  const MAX_ATTEMPTS = 3;
+  let response!: Response;
+  let lastError = "";
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    response = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (response.ok) break;
+    lastError = await response.text();
+    if (!RETRYABLE.has(response.status) || attempt === MAX_ATTEMPTS - 1) break;
+    const delayMs = attempt === 0 ? 1000 : 3000;
+    await new Promise((r) => setTimeout(r, delayMs));
+  }
 
   if (!response.ok) {
-    const errorText = await response.text();
     throw new Error(
-      `Gemini invoke failed: ${response.status} ${response.statusText} – ${errorText}`
+      `Gemini invoke failed: ${response.status} ${response.statusText} – ${lastError}`
     );
   }
 

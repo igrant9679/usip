@@ -1328,7 +1328,21 @@ export default function ARECampaignDetail() {
       <PageHeader
         title={campaign.name}
         pageKey="are-campaign-detail"
-        description={campaign.description ?? undefined}
+        description={
+          campaign.description
+            // Strip HTML tags + decode common entities so a description
+            // saved from the rich-text wizard (e.g. "<p>Target COOs…</p>")
+            // doesn't render as raw markup in the page header.
+            ? campaign.description
+                .replace(/<[^>]+>/g, " ")
+                .replace(/&nbsp;/g, " ")
+                .replace(/&amp;/g, "&")
+                .replace(/&quot;/g, '"')
+                .replace(/&#39;/g, "'")
+                .replace(/\s+/g, " ")
+                .trim() || undefined
+            : undefined
+        }
       
         icon={<Megaphone className="size-5" />}
       >
