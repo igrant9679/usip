@@ -336,90 +336,121 @@ export default function AREHub() {
         </Link>
       </PageHeader>
 
-      <div className="p-4 md:p-6 space-y-8 max-w-7xl mx-auto">
+      <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto">
 
-        {/* ── Pipeline Funnel Metrics ── */}
-        <section data-tour-id="are-funnel-metrics">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Pipeline Funnel</h2>
-            {loadingCampaigns && <Loader2 className="size-3.5 animate-spin text-muted-foreground" />}
-          </div>
-          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
-            {/* Each stage links to the existing page that shows that
-                stage's content. The funnel is aggregated across all
-                campaigns, so the early stages point at the ARE Campaigns
-                list (the entry point to per-campaign prospect pipelines);
-                later stages point at the dedicated pages that surface
-                them (replies → Unified Inbox, meetings → Calendar,
-                opps → Pipeline). */}
-            <Link href="/are/campaigns" className="block rounded-xl hover:ring-2 hover:ring-primary/30 transition" title="View campaigns and their discovered prospects">
-              <StatCard label="Discovered" value={totals.discovered} hint="prospects found" />
-            </Link>
-            <Link href="/are/campaigns" className="block rounded-xl hover:ring-2 hover:ring-primary/30 transition" title="View enriched prospects in campaigns">
-              <StatCard label="Enriched" value={totals.enriched} hint={pct(totals.enriched, totals.discovered) + " of found"} />
-            </Link>
-            <Link href="/are/campaigns" className="block rounded-xl hover:ring-2 hover:ring-primary/30 transition" title="View approved prospects in campaigns">
-              <StatCard label="Approved" value={totals.approved} hint={pct(totals.approved, totals.enriched) + " of enriched"} />
-            </Link>
-            <Link href="/are/campaigns" className="block rounded-xl hover:ring-2 hover:ring-primary/30 transition" title="View contacted prospects in campaigns">
-              <StatCard label="Contacted" value={totals.contacted} hint={pct(totals.contacted, totals.approved) + " of approved"} />
-            </Link>
-            <Link href="/unified-inbox" className="block rounded-xl hover:ring-2 hover:ring-primary/30 transition" title="View replies in the Unified Inbox">
-              <StatCard label="Replied" value={totals.replied} hint={pct(totals.replied, totals.contacted) + " reply rate"} tone={totals.replied > 0 ? "success" : undefined} />
-            </Link>
-            <Link href="/calendar" className="block rounded-xl hover:ring-2 hover:ring-primary/30 transition" title="View booked meetings on the Calendar">
-              <StatCard label="Meetings" value={totals.meetings} hint={pct(totals.meetings, totals.replied) + " of replies"} tone={totals.meetings > 0 ? "success" : undefined} />
-            </Link>
-            <Link href="/pipeline" className="block rounded-xl hover:ring-2 hover:ring-primary/30 transition" title="View generated opportunities on the Pipeline">
-              <StatCard label="Opps Created" value={totals.opps} hint="pipeline generated" tone={totals.opps > 0 ? "success" : undefined} />
-            </Link>
-          </div>
-
-          {/* Funnel visualisation */}
-          {totals.discovered > 0 && (
-            <div className="mt-4 rounded-xl border bg-card p-4">
-              <div className="text-xs text-muted-foreground mb-3 font-medium">Funnel Drop-off</div>
-              <div className="space-y-2.5">
-                {funnelData.map((d, i) => (
-                  <div key={d.name} className="flex items-center gap-3">
-                    <div className="w-20 text-[11px] text-muted-foreground text-right shrink-0">{d.name}</div>
-                    <div className="flex-1">
-                      <FunnelBar
-                        value={d.v}
-                        max={totals.discovered}
-                        color={["#60A5FA","#A78BFA","#34D399","#F59E0B","#F87171","#FB923C","#34D399"][i]}
-                      />
-                    </div>
-                    <div className="w-12 text-[11px] font-mono tabular-nums text-right shrink-0">{d.v.toLocaleString()}</div>
-                    {i > 0 && (
-                      <div className="w-14 text-[10px] text-muted-foreground text-right shrink-0">
-                        {pct(d.v, funnelData[i - 1].v)}
-                      </div>
-                    )}
-                    {i === 0 && <div className="w-14 shrink-0" />}
-                  </div>
-                ))}
+        {/* ── All-in-one Command Card ──────────────────────────────────
+              Bundles campaign totals + pipeline funnel + agent quick
+              actions into a single visualizer at the top of the hub.
+              Responsive: stacks vertically on mobile/iPad, two-column
+              on lg+ so the funnel and agents sit side-by-side. */}
+        <section data-tour-id="are-command-card">
+          <Card className="bg-card border">
+            <CardContent className="p-4 md:p-5 space-y-5">
+              {/* Top strip: campaign + meetings counters */}
+              <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-xs">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-muted-foreground">Campaigns</span>
+                  <span className="font-semibold tabular-nums">{totalCampaigns}</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="size-1.5 rounded-full bg-emerald-400" />
+                  <span className="text-muted-foreground">Active</span>
+                  <span className="font-semibold tabular-nums">{activeCampaigns.length}</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="size-1.5 rounded-full bg-amber-400" />
+                  <span className="text-muted-foreground">Paused</span>
+                  <span className="font-semibold tabular-nums">{pausedCampaigns.length}</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-muted-foreground">Meetings</span>
+                  <span className="font-semibold tabular-nums text-violet-500">{totals.meetings}</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-muted-foreground">Opps</span>
+                  <span className="font-semibold tabular-nums text-emerald-500">{totals.opps}</span>
+                </div>
+                {loadingCampaigns && <Loader2 className="size-3.5 animate-spin text-muted-foreground ml-auto" />}
               </div>
-            </div>
-          )}
-        </section>
 
-        {/* ── Campaign overview stats ── */}
-        <section>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <StatCard label="Total Campaigns" value={totalCampaigns} hint="all time" />
-            <StatCard label="Active" value={activeCampaigns.length} hint="running now" tone={activeCampaigns.length > 0 ? "success" : undefined} />
-            <StatCard label="Paused" value={pausedCampaigns.length} hint="on hold" tone={pausedCampaigns.length > 0 ? "warning" : undefined} />
-            <StatCard label="Meetings Booked" value={totals.meetings} hint="from ARE outreach" tone={totals.meetings > 0 ? "success" : undefined} />
-          </div>
-        </section>
+              <Separator />
 
-        {/* ── AI Agents ── */}
-        <section data-tour-id="are-agents-section">
-          <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">AI Agents</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            {AGENTS.map((a) => <AgentCard key={a.name} {...a} />)}
-          </div>
+              {/* Two-column body: funnel | agents */}
+              <div className="grid grid-cols-1 lg:grid-cols-5 gap-5">
+                {/* Pipeline funnel — 3/5 wide on desktop */}
+                <div className="lg:col-span-3 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Pipeline Funnel</h2>
+                    {totals.discovered > 0 && (
+                      <span className="text-[10px] text-muted-foreground">{totals.discovered.toLocaleString()} discovered</span>
+                    )}
+                  </div>
+
+                  {/* Compact horizontal funnel bars */}
+                  {totals.discovered === 0 ? (
+                    <div className="text-xs text-muted-foreground italic py-6 text-center border border-dashed rounded-lg">
+                      No prospects discovered yet — launch a campaign to populate the funnel.
+                    </div>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {funnelData.map((d, i) => {
+                        const color = ["#60A5FA","#A78BFA","#34D399","#F59E0B","#F87171","#FB923C","#34D399"][i];
+                        const href =
+                          d.name === "Replied" ? "/unified-inbox"
+                          : d.name === "Meetings" ? "/calendar"
+                          : d.name === "Opps" ? "/pipeline"
+                          : "/are/campaigns";
+                        const conversion = i > 0 ? pct(d.v, funnelData[i - 1].v) : null;
+                        return (
+                          <Link key={d.name} href={href} title={`Open ${d.name}`}>
+                            <div className="group flex items-center gap-2 px-1 py-0.5 rounded hover:bg-muted/60 cursor-pointer transition-colors">
+                              <div className="w-20 text-[11px] text-muted-foreground text-right shrink-0">{d.name}</div>
+                              <div className="flex-1">
+                                <FunnelBar value={d.v} max={totals.discovered} color={color} />
+                              </div>
+                              <div className="w-12 text-[11px] font-mono tabular-nums text-right shrink-0">{d.v.toLocaleString()}</div>
+                              <div className="w-12 text-[10px] text-muted-foreground text-right shrink-0">{conversion ?? ""}</div>
+                            </div>
+                          </Link>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* Agents — 2/5 wide, compact button grid */}
+                <div className="lg:col-span-2 space-y-3" data-tour-id="are-agents-section">
+                  <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">AI Agents</h2>
+                  <div className="grid grid-cols-2 gap-2">
+                    {AGENTS.map((a) => (
+                      <Link key={a.name} href={a.href} title={a.description}>
+                        <div
+                          className="group rounded-lg border bg-card hover:border-primary/30 hover:shadow-sm transition-all cursor-pointer p-2.5 h-full flex flex-col gap-1.5"
+                        >
+                          <div className="flex items-center gap-2">
+                            <div
+                              className="size-7 rounded-md flex items-center justify-center shrink-0"
+                              style={{ backgroundColor: a.color + "22" }}
+                            >
+                              <a.icon className="size-3.5" style={{ color: a.color }} />
+                            </div>
+                            <div className="text-[11px] font-medium leading-tight truncate flex-1">{a.name.replace(" Agent", "")}</div>
+                            <ChevronRight className="size-3 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
+                          </div>
+                          {a.stat && (
+                            <div className="flex items-baseline gap-1.5">
+                              <span className="text-base font-bold font-mono tabular-nums leading-none" style={{ color: a.color }}>{a.stat}</span>
+                              {a.statLabel && <span className="text-[10px] text-muted-foreground truncate">{a.statLabel}</span>}
+                            </div>
+                          )}
+                        </div>
+                      </Link>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
         </section>
 
         {/* ── Active Campaigns + Signal Feed ── */}

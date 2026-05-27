@@ -66,7 +66,36 @@ const PROSPECT_EXTRACTION_SCHEMA = {
   },
 };
 
-/* ─── Fetch helper with timeout ─────────────────────────────────────────── */
+/* ─── Fetch helper with timeout + HTML cleanup ──────────────────────────
+ *
+ * Raw HTML is hugely token-inefficient — a typical Google SERP is 200k+
+ * chars of inline scripts, CSS, base64 images, and tracking IDs. The LLM
+ * only needs the visible text + anchor hrefs to extract prospects. We
+ * strip everything else BEFORE sending, which cuts the prompt size ~10×
+ * and the token bill proportionally. Cap at 6000 chars of cleaned text
+ * (was 8000 of raw HTML) — roughly the same useful signal at ~25% the
+ * tokens. */
+
+function cleanForLLM(rawHtml: string): string {
+  let s = rawHtml;
+  // Drop script/style/noscript blocks entirely — pure overhead.
+  s = s.replace(/<script[\s\S]*?<\/script>/gi, " ");
+  s = s.replace(/<style[\s\S]*?<\/style>/gi, " ");
+  s = s.replace(/<noscript[\s\S]*?<\/noscript>/gi, " ");
+  // Drop HTML comments.
+  s = s.replace(/<!--[\s\S]*?-->/g, " ");
+  // Drop SVGs (often huge inline icons).
+  s = s.replace(/<svg[\s\S]*?<\/svg>/gi, " ");
+  // Strip remaining tags but keep their text + href attribute values
+  // so anchor URLs (LinkedIn profile URLs etc.) survive extraction.
+  s = s.replace(/<a[^>]*href=["']([^"']+)["'][^>]*>/gi, " [$1] ");
+  s = s.replace(/<[^>]+>/g, " ");
+  // Decode common HTML entities the LLM doesn't need to see encoded.
+  s = s.replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+  // Collapse whitespace.
+  s = s.replace(/\s+/g, " ").trim();
+  return s.substring(0, 6000);
+}
 
 async function fetchWithTimeout(url: string, timeoutMs = 10000): Promise<string> {
   const controller = new AbortController();
@@ -79,8 +108,7 @@ async function fetchWithTimeout(url: string, timeoutMs = 10000): Promise<string>
       },
     });
     const text = await res.text();
-    // Truncate to 8000 chars to stay within LLM context
-    return text.substring(0, 8000);
+    return cleanForLLM(text);
   } finally {
     clearTimeout(timer);
   }
@@ -116,6 +144,10 @@ export async function scrapeGoogleBusiness(
     ],
     response_format: PROSPECT_EXTRACTION_SCHEMA,
     workspaceId,
+    // Extraction output is small (10 prospects × ~60 tokens = ~600). Cap
+    // hard so we don't pay for the model's default 4096-token budget.
+    maxTokens: 1500,
+    temperature: 0.3,
   });
 
   const content = result.choices[0]?.message?.content;
@@ -147,6 +179,10 @@ export async function scrapeLinkedIn(
     ],
     response_format: PROSPECT_EXTRACTION_SCHEMA,
     workspaceId,
+    // Extraction output is small (10 prospects × ~60 tokens = ~600). Cap
+    // hard so we don't pay for the model's default 4096-token budget.
+    maxTokens: 1500,
+    temperature: 0.3,
   });
 
   const content = result.choices[0]?.message?.content;
@@ -188,6 +224,10 @@ export async function scrapeWeb(
     ],
     response_format: PROSPECT_EXTRACTION_SCHEMA,
     workspaceId,
+    // Extraction output is small (10 prospects × ~60 tokens = ~600). Cap
+    // hard so we don't pay for the model's default 4096-token budget.
+    maxTokens: 1500,
+    temperature: 0.3,
   });
 
   const content = result.choices[0]?.message?.content;
@@ -226,6 +266,10 @@ export async function scrapeNews(
     ],
     response_format: PROSPECT_EXTRACTION_SCHEMA,
     workspaceId,
+    // Extraction output is small (10 prospects × ~60 tokens = ~600). Cap
+    // hard so we don't pay for the model's default 4096-token budget.
+    maxTokens: 1500,
+    temperature: 0.3,
   });
 
   const content = result.choices[0]?.message?.content;
@@ -255,6 +299,10 @@ export async function scrapeIndustryEvents(
     ],
     response_format: PROSPECT_EXTRACTION_SCHEMA,
     workspaceId,
+    // Extraction output is small (10 prospects × ~60 tokens = ~600). Cap
+    // hard so we don't pay for the model's default 4096-token budget.
+    maxTokens: 1500,
+    temperature: 0.3,
   });
 
   const content = result.choices[0]?.message?.content;
