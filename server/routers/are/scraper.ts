@@ -115,6 +115,7 @@ export async function scrapeGoogleBusiness(
       },
     ],
     response_format: PROSPECT_EXTRACTION_SCHEMA,
+    workspaceId,
   });
 
   const content = result.choices[0]?.message?.content;
@@ -145,6 +146,7 @@ export async function scrapeLinkedIn(
       },
     ],
     response_format: PROSPECT_EXTRACTION_SCHEMA,
+    workspaceId,
   });
 
   const content = result.choices[0]?.message?.content;
@@ -185,6 +187,7 @@ export async function scrapeWeb(
       },
     ],
     response_format: PROSPECT_EXTRACTION_SCHEMA,
+    workspaceId,
   });
 
   const content = result.choices[0]?.message?.content;
@@ -222,6 +225,7 @@ export async function scrapeNews(
       },
     ],
     response_format: PROSPECT_EXTRACTION_SCHEMA,
+    workspaceId,
   });
 
   const content = result.choices[0]?.message?.content;
@@ -250,6 +254,7 @@ export async function scrapeIndustryEvents(
       },
     ],
     response_format: PROSPECT_EXTRACTION_SCHEMA,
+    workspaceId,
   });
 
   const content = result.choices[0]?.message?.content;

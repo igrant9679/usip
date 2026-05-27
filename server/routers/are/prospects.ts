@@ -44,8 +44,10 @@ import { workspaceProcedure } from "../../_core/workspace";
 async function scoreIcpMatch(
   prospect: typeof prospectQueue.$inferSelect,
   icp: typeof icpProfiles.$inferSelect,
+  workspaceId: number,
 ): Promise<{ score: number; breakdown: Record<string, number> }> {
   const result = await invokeLLM({
+    workspaceId,
     messages: [
       {
         role: "system",
@@ -142,13 +144,14 @@ export async function runEnrichAgent(
     let icpMatchScore = 50;
     let icpMatchBreakdown: Record<string, number> = {};
     if (icp) {
-      const match = await scoreIcpMatch(prospect, icp);
+      const match = await scoreIcpMatch(prospect, icp, workspaceId);
       icpMatchScore = match.score;
       icpMatchBreakdown = match.breakdown;
     }
 
     // Run deep enrichment via LLM
     const enrichResult = await invokeLLM({
+      workspaceId,
       messages: [
         {
           role: "system",
@@ -409,6 +412,7 @@ export async function generateCampaignTemplate(
     `Return ${stepCount} steps. For each: stepIndex (0-based), day (cumulative from start), channel, archetype (one of: opener | value | social_proof | resource | check_in | break_up), skeleton (1–2 sentences describing what to write — placeholders like {hook}, {pain}, {company}, {firstName} for what the personalizer will fill), and ctaPattern (one short sentence like "Open with question, close with a 15-min Tue/Thu offer").`;
 
   const result = await invokeLLM({
+    workspaceId: campaign.workspaceId,
     messages: [
       { role: "system", content: systemContent },
       { role: "user", content: userContent },
@@ -487,6 +491,7 @@ async function personalizeForProspect(
     `Return one filled step per template step (same stepIndex, day, channel). Keep emails under 120 words. Use {{firstName}} / {{company}} merge tags where natural.`;
 
   const result = await invokeLLM({
+    workspaceId: campaign.workspaceId,
     messages: [
       { role: "system", content: systemContent },
       { role: "user", content: userContent },
@@ -529,9 +534,10 @@ async function personalizeForProspect(
 }
 
 /** Quality flag, not gate. Records a score the UI surfaces as a Review badge. */
-async function evaluateSequenceQuality(steps: unknown[]): Promise<{ score: number; breakdown: Record<string, number>; feedback: string }> {
+async function evaluateSequenceQuality(steps: unknown[], workspaceId: number): Promise<{ score: number; breakdown: Record<string, number>; feedback: string }> {
   if (!Array.isArray(steps) || steps.length === 0) return { score: 0, breakdown: {}, feedback: "Empty sequence" };
   const result = await invokeLLM({
+    workspaceId,
     messages: [
       { role: "system", content: `You are a cold email quality evaluator. Score the sequence on 4 dimensions, each 0-10. Be strict — generic phrases, lack of personalisation, or weak CTAs should score low.` },
       { role: "user", content: `Evaluate:\n\n${JSON.stringify(steps, null, 2)}\n\nScore (0-10 each):\n1. Specificity (verifiable prospect facts referenced)\n2. Clarity (value prop clear)\n3. Brevity (<150 words per email)\n4. CTA (clear, low-friction)` },
@@ -585,7 +591,7 @@ export async function runSequenceAgent(prospectId: number, workspaceId: number, 
   if (steps.length === 0) return;
 
   // (3) Single-pass quality flag — does NOT trigger a regenerate.
-  const quality = await evaluateSequenceQuality(steps);
+  const quality = await evaluateSequenceQuality(steps, workspaceId);
 
   // Save sequence + quality flag.
   await db.update(prospectIntelligence).set({
@@ -1211,7 +1217,7 @@ export const prospectsRouter = router({
         .where(and(eq(icpProfiles.workspaceId, ctx.workspace.id), eq(icpProfiles.isActive, true)))
         .limit(1);
       if (!icp) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "No active ICP profile" });
-      const match = await scoreIcpMatch(prospect, icp);
+      const match = await scoreIcpMatch(prospect, icp, workspaceId);
       const autoApproveThreshold = 70; // fallback default
       const newStatus = match.score >= autoApproveThreshold ? "pending" : "skipped";
       await db.update(prospectQueue).set({
@@ -1277,7 +1283,7 @@ export const prospectsRouter = router({
       let requalified = 0;
       for (const prospect of rejected) {
         try {
-          const match = await scoreIcpMatch(prospect, icp);
+          const match = await scoreIcpMatch(prospect, icp, workspaceId);
           const newStatus = match.score >= autoApproveThreshold ? "pending" : "skipped";
           if (newStatus === "pending") requalified++;
           await db.update(prospectQueue).set({
