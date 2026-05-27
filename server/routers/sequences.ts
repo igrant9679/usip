@@ -246,6 +246,123 @@ const stepSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("linkedin_invite"), note: z.string().optional() }),
 ]);
 
+/* ─── Canvas ↔ list-steps sync ────────────────────────────────────────────
+ *
+ * The list-view (sequences.steps JSON) and the canvas (sequence_nodes /
+ * sequence_edges tables) are two representations of the same workflow. They
+ * MUST stay in lock-step: editing either has to update the other or users
+ * see stale data when they switch views (and the engine actually reads
+ * sequences.steps, so a canvas-only edit silently never sends).
+ *
+ * canvasToSteps: walks from the unique `start` node along outgoing edges,
+ * emitting a linear list of email/wait/task/linkedin_* steps. Skips
+ * canvas-only node types (condition, goal) — they have no list-view
+ * equivalent, so we collapse them out cleanly rather than losing data.
+ *
+ * stepsToCanvas: lays out the list as a simple vertical chain
+ * (start → step[0] → step[1] → …) with sane default positions. If the user
+ * had branching/conditions before, those get flattened when they save from
+ * the list view — accepted trade-off: list view is intentionally simpler.
+ */
+
+type CanvasNode = {
+  id: string;
+  type: "start" | "email" | "wait" | "condition" | "action" | "goal" | "linkedin_dm" | "linkedin_invite";
+  positionX: number;
+  positionY: number;
+  data: Record<string, unknown>;
+};
+type CanvasEdge = { id: string; source: string; target: string; sourceHandle?: string | null; label?: string | null };
+type ListStep =
+  | { type: "email"; subject: string; body?: string }
+  | { type: "wait"; days: number }
+  | { type: "task"; body: string }
+  | { type: "linkedin_dm"; body?: string }
+  | { type: "linkedin_invite"; note?: string };
+
+function canvasToSteps(nodes: CanvasNode[], edges: CanvasEdge[]): ListStep[] {
+  if (nodes.length === 0) return [];
+  const byId = new Map(nodes.map((n) => [n.id, n] as const));
+  // Outgoing edges keyed by source — prefer the "true" branch when a
+  // condition has both true/false handles.
+  const outBySrc = new Map<string, CanvasEdge[]>();
+  for (const e of edges) {
+    const arr = outBySrc.get(e.source) ?? [];
+    arr.push(e);
+    outBySrc.set(e.source, arr);
+  }
+  // Walk from the start node (or first node if no start exists).
+  const start = nodes.find((n) => n.type === "start") ?? nodes[0];
+  if (!start) return [];
+
+  const out: ListStep[] = [];
+  const visited = new Set<string>();
+  let cur: string | null = start.id;
+  while (cur && !visited.has(cur)) {
+    visited.add(cur);
+    const node = byId.get(cur);
+    if (!node) break;
+    if (node.type !== "start" && node.type !== "condition" && node.type !== "goal") {
+      const step = canvasNodeToStep(node);
+      if (step) out.push(step);
+    }
+    // Pick next edge: prefer sourceHandle="true" if present, else first.
+    const outs = outBySrc.get(cur) ?? [];
+    const next = outs.find((e) => e.sourceHandle === "true") ?? outs[0];
+    cur = next ? next.target : null;
+  }
+  return out;
+}
+
+function canvasNodeToStep(node: CanvasNode): ListStep | null {
+  const d = node.data ?? {};
+  switch (node.type) {
+    case "email":
+      return { type: "email", subject: String((d as any).subject ?? ""), body: String((d as any).body ?? "") };
+    case "wait":
+      return { type: "wait", days: Math.max(0, Number((d as any).days ?? 1)) };
+    case "action":
+      return { type: "task", body: String((d as any).body ?? (d as any).label ?? "") };
+    case "linkedin_dm":
+      return { type: "linkedin_dm", body: String((d as any).body ?? "") };
+    case "linkedin_invite":
+      return { type: "linkedin_invite", note: String((d as any).note ?? "") };
+    default:
+      return null;
+  }
+}
+
+function stepsToCanvas(steps: ListStep[]): { nodes: CanvasNode[]; edges: CanvasEdge[] } {
+  // Simple vertical chain: start at (250,50), 130px between nodes.
+  const X = 250;
+  const yFor = (i: number) => 50 + i * 130;
+  const nodes: CanvasNode[] = [
+    { id: "start-1", type: "start", positionX: X, positionY: yFor(0), data: { label: "Sequence start" } },
+  ];
+  steps.forEach((s, i) => {
+    const id = `${s.type}-${i + 1}`;
+    let data: Record<string, unknown> = {};
+    switch (s.type) {
+      case "email": data = { subject: s.subject, body: s.body ?? "" }; break;
+      case "wait": data = { days: s.days, label: `Wait ${s.days}d` }; break;
+      case "task": data = { body: s.body, label: "Task" }; break;
+      case "linkedin_dm": data = { body: s.body ?? "", label: "LinkedIn DM" }; break;
+      case "linkedin_invite": data = { note: s.note ?? "", label: "LinkedIn invite" }; break;
+    }
+    const canvasType: CanvasNode["type"] = s.type === "task" ? "action" : (s.type as CanvasNode["type"]);
+    nodes.push({ id, type: canvasType, positionX: X, positionY: yFor(i + 1), data });
+  });
+  const edges: CanvasEdge[] = [];
+  for (let i = 0; i < nodes.length - 1; i++) {
+    edges.push({
+      id: `e-${nodes[i].id}-${nodes[i + 1].id}`,
+      source: nodes[i].id,
+      target: nodes[i + 1].id,
+    });
+  }
+  return { nodes, edges };
+}
+
 export const sequencesRouter = router({
   list: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
@@ -324,6 +441,25 @@ export const sequencesRouter = router({
       throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot edit steps while sequence is running. Pause it first." });
     }
     await db.update(sequences).set({ steps: input.steps, updatedAt: new Date() }).where(and(eq(sequences.id, input.id), eq(sequences.workspaceId, ctx.workspace.id)));
+
+    // Sync → canvas. Replace the canvas with a linearized chain so the
+    // user opening the Canvas view immediately after sees the same steps
+    // (and the canvas isn't stuck on whatever shape it had before).
+    const { nodes: cnodes, edges: cedges } = stepsToCanvas(input.steps as ListStep[]);
+    await db.delete(sequenceNodes).where(and(eq(sequenceNodes.sequenceId, input.id), eq(sequenceNodes.workspaceId, ctx.workspace.id)));
+    await db.delete(sequenceEdges).where(and(eq(sequenceEdges.sequenceId, input.id), eq(sequenceEdges.workspaceId, ctx.workspace.id)));
+    if (cnodes.length > 0) {
+      await db.insert(sequenceNodes).values(cnodes.map((n) => ({
+        id: n.id, sequenceId: input.id, workspaceId: ctx.workspace.id,
+        type: n.type, positionX: n.positionX, positionY: n.positionY, data: n.data,
+      })));
+    }
+    if (cedges.length > 0) {
+      await db.insert(sequenceEdges).values(cedges.map((e) => ({
+        id: e.id, sequenceId: input.id, workspaceId: ctx.workspace.id,
+        source: e.source, target: e.target, sourceHandle: e.sourceHandle ?? null, label: e.label ?? null,
+      })));
+    }
     return { ok: true };
   }),
 
@@ -380,10 +516,38 @@ export const sequencesRouter = router({
   getCanvas: workspaceProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) return { nodes: [], edges: [] };
-    const [nodes, edges] = await Promise.all([
+    const [nodes, edges, [seq]] = await Promise.all([
       db.select().from(sequenceNodes).where(and(eq(sequenceNodes.sequenceId, input.id), eq(sequenceNodes.workspaceId, ctx.workspace.id))),
       db.select().from(sequenceEdges).where(and(eq(sequenceEdges.sequenceId, input.id), eq(sequenceEdges.workspaceId, ctx.workspace.id))),
+      db.select().from(sequences).where(and(eq(sequences.id, input.id), eq(sequences.workspaceId, ctx.workspace.id))).limit(1),
     ]);
+    // Lazy hydration: legacy sequences created before the canvas existed
+    // have steps[] but no canvas rows. Derive a canvas from steps on read
+    // so the canvas view isn't empty. We don't persist here — the next
+    // saveCanvas writes the user's positions.
+    if (nodes.length === 0 && seq && Array.isArray(seq.steps) && (seq.steps as unknown[]).length > 0) {
+      const derived = stepsToCanvas(seq.steps as ListStep[]);
+      const now = new Date();
+      // Pad with sequenceId/workspaceId/timestamps so the derived shape
+      // matches a real DB row — the client expects the full row shape.
+      return {
+        nodes: derived.nodes.map((n) => ({
+          ...n,
+          sequenceId: input.id,
+          workspaceId: ctx.workspace.id,
+          createdAt: now,
+          updatedAt: now,
+        })),
+        edges: derived.edges.map((e) => ({
+          ...e,
+          sequenceId: input.id,
+          workspaceId: ctx.workspace.id,
+          sourceHandle: e.sourceHandle ?? null,
+          label: e.label ?? null,
+          createdAt: now,
+        })),
+      };
+    }
     return { nodes, edges };
   }),
 
@@ -442,14 +606,17 @@ export const sequencesRouter = router({
           label: e.label ?? null,
         })));
       }
-      // updatedAt write must be scoped to workspace too — the earlier
-      // ownership check filters the SELECT, but the final UPDATE was
-      // running unscoped, which is a latent cross-tenant write risk.
+      // Sync → list view. Derive a linear steps[] from the canvas graph
+      // so the regular edit view + the dispatch engine (which reads
+      // sequences.steps) reflect the new canvas immediately. Without
+      // this, the engine kept sending the old pre-canvas-edit steps and
+      // the list view kept showing them.
+      const derivedSteps = canvasToSteps(input.nodes as CanvasNode[], input.edges as CanvasEdge[]);
       await db
         .update(sequences)
-        .set({ updatedAt: new Date() })
+        .set({ steps: derivedSteps, updatedAt: new Date() })
         .where(and(eq(sequences.id, input.id), eq(sequences.workspaceId, ctx.workspace.id)));
-      return { ok: true };
+      return { ok: true, syncedSteps: derivedSteps.length };
     }),
 
   /* ── Enrollments ── */
