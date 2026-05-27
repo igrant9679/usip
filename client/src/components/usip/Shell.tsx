@@ -51,6 +51,7 @@ import {
   Radar,
   HelpCircle,
   GitFork,
+  ScrollText,
 } from "lucide-react";
 import { ReactNode, useEffect, useState, useRef, createContext, useContext } from "react";
 import { Link, useLocation } from "wouter";
@@ -136,6 +137,7 @@ const NAV: NavGroup[] = [
       // Phase 1 of the multi-source prospect finder (Google Places now,
       // arbitrary-URL scrape + LinkedIn coming in phases 2-3).
       { href: "/find-prospects", label: "Find Prospects", icon: Search },
+      { href: "/discovery-logs", label: "Discovery Logs", icon: ScrollText },
       { href: "/import", label: "Import Contacts", icon: Upload },
       { href: "/data-health", label: "Data Health", icon: BarChart3 },
       // Moved from Operate — Lead Routing manages how new leads are
