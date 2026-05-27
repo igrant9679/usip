@@ -21,6 +21,7 @@ import { getDb } from "../db";
 import { router } from "../_core/trpc";
 import { workspaceProcedure } from "../_core/workspace";
 import { runDiscovery } from "../services/discovery";
+import { processRun } from "../services/discovery/consolidate";
 
 const PersonInput = z.object({
   jobTitle: z.string().optional(),
@@ -96,5 +97,21 @@ export const discoveryRouter = router({
         .where(and(eq(discoveryLogs.runId, input.runId), eq(discoveryLogs.workspaceId, ctx.workspace.id)))
         .orderBy(desc(discoveryLogs.createdAt))
         .limit(input.limit);
+    }),
+
+  /** Re-run the consolidate + score + persist pass against an existing
+   *  run's raw_finds. Useful when scoring weights change or the user
+   *  wants to re-import a run's results without re-spending LLM tokens
+   *  on a fresh scrape. */
+  reprocess: workspaceProcedure
+    .input(z.object({ runId: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [run] = await db.select().from(discoveryRuns)
+        .where(and(eq(discoveryRuns.id, input.runId), eq(discoveryRuns.workspaceId, ctx.workspace.id)))
+        .limit(1);
+      if (!run) throw new TRPCError({ code: "NOT_FOUND" });
+      return processRun(ctx.workspace.id, input.runId, run.mode);
     }),
 });

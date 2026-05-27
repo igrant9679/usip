@@ -36,6 +36,7 @@ import {
   scrapeNews,
   scrapeWeb,
 } from "../../routers/are/scraper";
+import { processRun } from "./consolidate";
 
 export type SearchMode = "person" | "account";
 
@@ -66,6 +67,13 @@ interface RunResult {
   runId: number;
   rawFindCount: number;
   perSource: Record<string, { found: number; error?: string }>;
+  /** Phase 2 outcome (consolidation + scoring + persist into prospects).
+   *  Populated when runDiscovery completes successfully. */
+  prospectsCreated: number;
+  prospectsUpdated: number;
+  highConfidenceCount: number;
+  mediumConfidenceCount: number;
+  lowConfidenceCount: number;
 }
 
 /** Build a single Google-style query string from a structured input. */
@@ -224,7 +232,7 @@ export async function runDiscovery(
       durationMs: Date.now() - startedAt,
       completedAt: new Date(),
     }).where(eq(discoveryRuns.id, runId));
-    return { runId, rawFindCount: 0, perSource: {} };
+    return { runId, rawFindCount: 0, perSource: {}, prospectsCreated: 0, prospectsUpdated: 0, highConfidenceCount: 0, mediumConfidenceCount: 0, lowConfidenceCount: 0 };
   }
 
   // Choose the source mix per mode. Person mode favors profile lookups
@@ -277,17 +285,36 @@ export async function runDiscovery(
     }
   }
 
+  // Update counters BEFORE Phase 2 so the run is queryable even if
+  // consolidation fails (the user still wants to see what came back).
+  await db.update(discoveryRuns).set({
+    rawFindCount: totalFinds,
+  }).where(and(eq(discoveryRuns.id, runId), eq(discoveryRuns.workspaceId, workspaceId)));
+
+  // Phase 2: consolidate raw_finds → score → persist into prospects.
+  // Wrapped in try/catch so a Phase 2 failure still leaves a usable
+  // run (raw_finds are queryable, the user can re-trigger consolidate).
+  let persistResult = { prospectsCreated: 0, prospectsUpdated: 0, highConfidenceCount: 0, mediumConfidenceCount: 0, lowConfidenceCount: 0 };
+  try {
+    if (totalFinds > 0) {
+      persistResult = await processRun(workspaceId, runId, mode);
+    }
+  } catch (e) {
+    await emitLog(workspaceId, runId, "consolidate.error", "error",
+      `Consolidation/persist failed: ${(e as Error)?.message ?? e}`,
+      { stack: (e as Error)?.stack });
+  }
+
   const durationMs = Date.now() - startedAt;
   await db.update(discoveryRuns).set({
     status: "complete",
-    rawFindCount: totalFinds,
     durationMs,
     completedAt: new Date(),
   }).where(and(eq(discoveryRuns.id, runId), eq(discoveryRuns.workspaceId, workspaceId)));
 
   await emitLog(workspaceId, runId, "discovery.complete", "info",
-    `Discovery run complete — ${totalFinds} raw finds across ${Object.keys(perSource).length} sources in ${durationMs}ms`,
-    { perSource, durationMs });
+    `Run complete — ${totalFinds} raw / ${persistResult.prospectsCreated} new + ${persistResult.prospectsUpdated} updated / ${persistResult.highConfidenceCount} high · ${persistResult.mediumConfidenceCount} medium · ${persistResult.lowConfidenceCount} low in ${durationMs}ms`,
+    { perSource, durationMs, persistResult });
 
-  return { runId, rawFindCount: totalFinds, perSource };
+  return { runId, rawFindCount: totalFinds, perSource, ...persistResult };
 }
