@@ -28,6 +28,105 @@ import { isSyntheticNameProspect } from "../services/prospectFromSource";
 import { reoonCheckBalance, getReoonApiKey } from "../services/reoon";
 
 export const prospectsRouter = router({
+  /** Fetch a single prospect (powers the /prospects/:id detail page). */
+  get: workspaceProcedure
+    .input(z.object({ id: z.number().int() }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [row] = await db
+        .select()
+        .from(prospects)
+        .where(and(eq(prospects.id, input.id), eq(prospects.workspaceId, ctx.workspace.id)))
+        .limit(1);
+      if (!row) throw new TRPCError({ code: "NOT_FOUND" });
+      return row;
+    }),
+
+  /** Manual edit of any user-facing field. Persists who/when via audit log
+   *  but does NOT touch confidence/verification fields — those reflect
+   *  pipeline truth and should only change via re-enrichment. */
+  update: workspaceProcedure
+    .input(z.object({
+      id: z.number().int(),
+      firstName: z.string().min(1).max(80).optional(),
+      lastName: z.string().min(1).max(80).optional(),
+      title: z.string().max(200).nullable().optional(),
+      company: z.string().max(200).nullable().optional(),
+      companyDomain: z.string().max(200).nullable().optional(),
+      linkedinUrl: z.string().max(500).nullable().optional(),
+      email: z.string().max(320).nullable().optional(),
+      phone: z.string().max(40).nullable().optional(),
+      city: z.string().max(80).nullable().optional(),
+      state: z.string().max(80).nullable().optional(),
+      country: z.string().max(80).nullable().optional(),
+      industry: z.string().max(80).nullable().optional(),
+      verificationStatus: z.enum(["verified", "needs_review", "rejected"]).optional(),
+      verificationNotes: z.string().max(2000).nullable().optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [before] = await db.select().from(prospects)
+        .where(and(eq(prospects.id, input.id), eq(prospects.workspaceId, ctx.workspace.id)))
+        .limit(1);
+      if (!before) throw new TRPCError({ code: "NOT_FOUND" });
+      const { id, ...rest } = input;
+      const patch: Partial<typeof prospects.$inferInsert> = {};
+      for (const [k, v] of Object.entries(rest)) {
+        if (v !== undefined) (patch as any)[k] = v;
+      }
+      if (Object.keys(patch).length === 0) return { ok: true };
+      await db.update(prospects).set(patch)
+        .where(and(eq(prospects.id, id), eq(prospects.workspaceId, ctx.workspace.id)));
+      await recordAudit({
+        workspaceId: ctx.workspace.id,
+        actorUserId: ctx.user.id,
+        action: "update",
+        entityType: "prospect",
+        entityId: id,
+        before,
+        after: { ...before, ...patch },
+      });
+      return { ok: true };
+    }),
+
+  /** Soft-archive — flips verificationStatus to 'rejected'. Keeps the row
+   *  for audit/history; bulkDelete is still available for hard removal. */
+  archive: workspaceProcedure
+    .input(z.object({ id: z.number().int() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      await db.update(prospects)
+        .set({ verificationStatus: "rejected" })
+        .where(and(eq(prospects.id, input.id), eq(prospects.workspaceId, ctx.workspace.id)));
+      return { ok: true };
+    }),
+
+  /** Re-run discovery scoped to one prospect — uses their stored
+   *  name+company to launch a focused person-mode search. The pipeline's
+   *  merge-on-dedup logic updates this prospect's row in place rather
+   *  than creating a duplicate. */
+  reEnrich: workspaceProcedure
+    .input(z.object({ id: z.number().int() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [p] = await db.select().from(prospects)
+        .where(and(eq(prospects.id, input.id), eq(prospects.workspaceId, ctx.workspace.id)))
+        .limit(1);
+      if (!p) throw new TRPCError({ code: "NOT_FOUND" });
+      const { runDiscovery } = await import("../services/discovery");
+      return runDiscovery(ctx.workspace.id, ctx.user.id, "person", {
+        jobTitle: p.title ?? undefined,
+        industry: p.industry ?? undefined,
+        companyName: p.company ?? undefined,
+        location: [p.city, p.state, p.country].filter(Boolean).join(", ") || undefined,
+        keywords: [`${p.firstName} ${p.lastName}`].filter(Boolean),
+      });
+    }),
+
   list: workspaceProcedure
     .input(
       z.object({

@@ -189,7 +189,7 @@ function ProspectRow({ p }: { p: any }) {
       <div className="flex items-start gap-3">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <Link href={`/prospects?id=${p.id}`}>
+            <Link href={`/prospects/${p.id}`}>
               <span className="font-medium text-sm hover:underline cursor-pointer">{p.firstName} {p.lastName}</span>
             </Link>
             <ConfidenceChip score={p.confidenceScore} tier={p.confidenceTier} />
