@@ -47,11 +47,27 @@ const AccountInput = z.object({
 export const discoveryRouter = router({
   search: workspaceProcedure
     .input(z.discriminatedUnion("mode", [
-      z.object({ mode: z.literal("person"), input: PersonInput }),
-      z.object({ mode: z.literal("account"), input: AccountInput }),
+      z.object({ mode: z.literal("person"), input: PersonInput, campaignId: z.number().optional() }),
+      z.object({ mode: z.literal("account"), input: AccountInput, campaignId: z.number().optional() }),
     ]))
     .mutation(async ({ ctx, input }) => {
-      return runDiscovery(ctx.workspace.id, ctx.user.id, input.mode, input.input);
+      return runDiscovery(ctx.workspace.id, ctx.user.id, input.mode, input.input, input.campaignId ?? null);
+    }),
+
+  /** Recent discovery runs scoped to a campaign (powers the per-campaign
+   *  Logs tab's Discovery section). */
+  listRunsForCampaign: workspaceProcedure
+    .input(z.object({ campaignId: z.number(), limit: z.number().min(1).max(50).default(20) }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      return db.select().from(discoveryRuns)
+        .where(and(
+          eq(discoveryRuns.workspaceId, ctx.workspace.id),
+          eq(discoveryRuns.campaignId, input.campaignId),
+        ))
+        .orderBy(desc(discoveryRuns.startedAt))
+        .limit(input.limit);
     }),
 
   getRun: workspaceProcedure

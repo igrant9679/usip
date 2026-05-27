@@ -3083,6 +3083,10 @@ export const discoveryRuns = mysqlTable(
     id: int("id").autoincrement().primaryKey(),
     workspaceId: int("workspaceId").notNull(),
     userId: int("userId"),
+    /** Optional link to an ARE campaign so the run surfaces in that
+     *  campaign's Logs tab (migration 0079). Null for general searches
+     *  fired from /find-prospects. */
+    campaignId: int("campaignId"),
     mode: mysqlEnum("mode", ["person", "account"]).notNull(),
     input: json("input").notNull(),
     status: mysqlEnum("status", ["running", "complete", "failed"]).default("running").notNull(),

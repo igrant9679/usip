@@ -204,6 +204,7 @@ export async function runDiscovery(
   userId: number | null,
   mode: SearchMode,
   input: DiscoveryInput,
+  campaignId?: number | null,
 ): Promise<RunResult> {
   const db = await getDb();
   if (!db) throw new Error("DB unavailable");
@@ -212,6 +213,7 @@ export async function runDiscovery(
   const [created] = await db.insert(discoveryRuns).values({
     workspaceId,
     userId,
+    campaignId: campaignId ?? null,
     mode,
     input: input as any,
     status: "running",

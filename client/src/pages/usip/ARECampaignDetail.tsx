@@ -1021,21 +1021,57 @@ function SequencesTab({ campaignId, campaign }: { campaignId: number; campaign: 
 }
 
 /* ─── Logs tab: backend engine activity for this campaign ─────────────── */
-function LogsTab({ campaignId }: { campaignId: number }) {
+function LogsTab({ campaignId, campaign }: { campaignId: number; campaign: any }) {
   const { data: logs = [], refetch, isLoading } = trpc.are.engine.getLogs.useQuery({ campaignId, limit: 300 });
+  const { data: discoveryRunsForCampaign = [], refetch: refetchDiscovery } = trpc.discovery.listRunsForCampaign.useQuery({ campaignId, limit: 20 });
   const runOnce = trpc.are.engine.runOnce.useMutation();
+  const runDiscovery = trpc.discovery.search.useMutation({
+    onSuccess: () => { toast.success("Discovery run started"); refetchDiscovery(); refetch(); },
+    onError: (e) => toast.error(e.message),
+  });
+
+  // Pull persona/icpOverrides for this campaign so a campaign-scoped
+  // discovery run inherits its targeting without the user retyping it.
+  const launchDiscovery = () => {
+    const o = (campaign?.icpOverrides ?? {}) as any;
+    const titles: string[] = o.targetTitles ?? [];
+    const industries: string[] = o.targetIndustries ?? [];
+    const geos: string[] = o.targetGeographies ?? [];
+    const keywords: string[] = o.keywords ?? [];
+    runDiscovery.mutate({
+      mode: "person",
+      campaignId,
+      input: {
+        jobTitle: titles[0],
+        industry: industries[0],
+        location: geos[0],
+        keywords: keywords.length ? keywords : undefined,
+      },
+    });
+  };
 
   if (isLoading) return <div className="text-sm text-muted-foreground p-6 text-center">Loading logs…</div>;
 
   return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between">
+    <div className="space-y-5">
+      {/* Action bar */}
+      <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="text-xs text-muted-foreground">
-          {logs.length} {logs.length === 1 ? "entry" : "entries"} · newest first
+          {logs.length} engine {logs.length === 1 ? "entry" : "entries"} · {discoveryRunsForCampaign.length} discovery {discoveryRunsForCampaign.length === 1 ? "run" : "runs"}
         </div>
-        <div className="flex gap-2">
-          <Button size="sm" variant="outline" onClick={() => refetch()}>
+        <div className="flex gap-2 flex-wrap">
+          <Button size="sm" variant="outline" onClick={() => { refetch(); refetchDiscovery(); }}>
             <RefreshCw className="size-3 mr-1" /> Refresh
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={launchDiscovery}
+            disabled={runDiscovery.isPending}
+            title="Fire a one-off discovery run scoped to this campaign's targeting"
+          >
+            {runDiscovery.isPending ? <Loader2 className="size-3 mr-1 animate-spin" /> : <Sparkles className="size-3 mr-1" />}
+            Run discovery now
           </Button>
           <Button
             size="sm"
@@ -1054,17 +1090,77 @@ function LogsTab({ campaignId }: { campaignId: number }) {
           </Button>
         </div>
       </div>
-      {logs.length === 0 ? (
-        <EmptyState
-          icon={ScrollText}
-          title="No engine activity logged yet"
-          description="The engine runs every 3 minutes. Click 'Run engine now' to fire a tick immediately."
-        />
-      ) : (
-        <div className="border rounded-xl bg-card divide-y max-h-[600px] overflow-y-auto">
-          {logs.map((l: any) => (
-            <LogRow key={l.id} log={l} />
-          ))}
+
+      {/* Engine activity */}
+      <div className="space-y-2">
+        <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Engine activity</div>
+        {logs.length === 0 ? (
+          <EmptyState
+            icon={ScrollText}
+            title="No engine activity logged yet"
+            description="The engine runs every 3 minutes. Click 'Run engine now' to fire a tick immediately."
+          />
+        ) : (
+          <div className="border rounded-xl bg-card divide-y max-h-[480px] overflow-y-auto">
+            {logs.map((l: any) => (
+              <LogRow key={l.id} log={l} />
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Discovery runs for this campaign */}
+      <div className="space-y-2">
+        <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Prospect-discovery runs for this campaign</div>
+        {discoveryRunsForCampaign.length === 0 ? (
+          <div className="text-xs text-muted-foreground italic border border-dashed rounded-lg p-4 text-center">
+            No discovery runs linked to this campaign yet. Click <span className="font-medium">Run discovery now</span> above to launch one.
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {discoveryRunsForCampaign.map((r: any) => (
+              <CampaignDiscoveryRunRow key={r.id} run={r} />
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Collapsible discovery-run row embedded inside the campaign Logs tab. */
+function CampaignDiscoveryRunRow({ run }: { run: any }) {
+  const [open, setOpen] = useState(false);
+  const { data: logs = [] } = trpc.discovery.getLogs.useQuery({ runId: run.id, limit: 100 }, { enabled: open });
+  const statusColor =
+    run.status === "complete" ? "bg-emerald-500/15 text-emerald-700" :
+    run.status === "failed" ? "bg-red-500/15 text-red-700" :
+    "bg-amber-500/15 text-amber-700";
+  return (
+    <div className="border rounded-lg bg-card overflow-hidden">
+      <button type="button" onClick={() => setOpen(!open)} className="w-full text-left p-3 hover:bg-muted/40 flex items-center gap-3">
+        <span className="text-[10px] text-muted-foreground/70 w-3 shrink-0">{open ? "▼" : "▶"}</span>
+        <span className="text-xs font-medium shrink-0">Run #{run.id}</span>
+        <Badge className={`text-[10px] ${statusColor} shrink-0`}>{run.status}</Badge>
+        <Badge variant="outline" className="text-[10px] shrink-0">{run.mode}</Badge>
+        <span className="text-[11px] text-muted-foreground flex-1 truncate">
+          {run.rawFindCount} raw · {run.prospectsCreated} new · {run.highConfidenceCount}H/{run.mediumConfidenceCount}M/{run.lowConfidenceCount}L · {run.durationMs}ms
+        </span>
+        <span className="text-[10px] text-muted-foreground tabular-nums shrink-0 hidden sm:inline">
+          {new Date(run.startedAt).toLocaleString()}
+        </span>
+      </button>
+      {open && (
+        <div className="border-t bg-muted/20 p-3 text-[11px] font-mono space-y-0.5 max-h-72 overflow-y-auto">
+          {logs.length === 0 ? <div className="text-muted-foreground italic">Loading trace…</div> :
+            logs.map((l: any) => (
+              <div key={l.id} className="flex gap-2 items-start">
+                <span className="text-muted-foreground shrink-0 tabular-nums">{new Date(l.createdAt).toLocaleTimeString()}</span>
+                <span className={`shrink-0 ${l.level === "error" ? "text-red-500" : l.level === "warn" ? "text-amber-500" : "text-emerald-500"}`}>[{l.phase}]</span>
+                <span className="break-words">{l.message}</span>
+              </div>
+            ))
+          }
         </div>
       )}
     </div>
@@ -2198,7 +2294,7 @@ export default function ARECampaignDetail() {
 
           {/* ── Logs tab ── */}
           <TabsContent value="logs" className="mt-4">
-            <LogsTab campaignId={campaignId} />
+            <LogsTab campaignId={campaignId} campaign={campaign} />
           </TabsContent>
         </Tabs>
       </div>

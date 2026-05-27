@@ -1255,6 +1255,20 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0079: link discovery runs to campaigns ──────────────────────────
+  // Discovery v2 launched as workspace-scoped. The follow-up requirement
+  // is that prospect-discovery activity tied to a specific ARE campaign
+  // surfaces in THAT campaign's Logs tab (no separate page). Add an
+  // optional campaignId column so a run can carry its campaign of
+  // origin; the per-campaign LogsTab filters on it.
+  {
+    name: "0079_discovery_runs_campaign_id.sql",
+    statements: [
+      `ALTER TABLE \`discovery_runs\` ADD COLUMN \`campaignId\` int NULL`,
+      `CREATE INDEX \`ix_dr_campaign\` ON \`discovery_runs\` (\`campaignId\`)`,
+    ],
+  },
+
   // ── 0077: composite PK on sequence canvas tables ──────────────────────
   // React Flow gives the start node id "start-1" on every canvas. With a
   // global single-column PK, the first sequence to save claims it and
