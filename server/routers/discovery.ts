@@ -70,6 +70,38 @@ export const discoveryRouter = router({
         .limit(input.limit);
     }),
 
+  /** All discovery_logs across every run linked to a campaign — joined
+   *  by runId in a single query. Powers the unified Logs feed on the
+   *  ARE Campaign Detail page (merged with are_engine_logs client-side
+   *  into one chronological timeline). */
+  getLogsForCampaign: workspaceProcedure
+    .input(z.object({ campaignId: z.number(), limit: z.number().min(1).max(1000).default(300) }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // Single SELECT JOIN discovery_logs ↔ discovery_runs on runId,
+      // filtered to runs that belong to this workspace + campaign.
+      const rows = await db
+        .select({
+          id: discoveryLogs.id,
+          runId: discoveryLogs.runId,
+          phase: discoveryLogs.phase,
+          level: discoveryLogs.level,
+          message: discoveryLogs.message,
+          details: discoveryLogs.details,
+          createdAt: discoveryLogs.createdAt,
+        })
+        .from(discoveryLogs)
+        .innerJoin(discoveryRuns, eq(discoveryRuns.id, discoveryLogs.runId))
+        .where(and(
+          eq(discoveryRuns.workspaceId, ctx.workspace.id),
+          eq(discoveryRuns.campaignId, input.campaignId),
+        ))
+        .orderBy(desc(discoveryLogs.createdAt))
+        .limit(input.limit);
+      return rows;
+    }),
+
   getRun: workspaceProcedure
     .input(z.object({ id: z.number() }))
     .query(async ({ ctx, input }) => {
