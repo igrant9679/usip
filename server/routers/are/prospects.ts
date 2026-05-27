@@ -343,61 +343,158 @@ Produce:
   }
 }
 
-/* ─── Sequence Agent ─────────────────────────────────────────────────────── */
+/* ─── Sequence Agent ─────────────────────────────────────────────────────
+ *
+ * Two-tier architecture:
+ *   1. generateCampaignTemplate — one LLM call per campaign, cached on
+ *      are_campaigns.generatedTemplate. Produces a 7-step skeleton with
+ *      structure / archetype / day / channel / CTA pattern. No prospect
+ *      data; only the campaign's voice + goal + custom prompt.
+ *   2. personalizeForProspect — one LLM call per prospect that takes the
+ *      template + prospect dossier and fills the parts a human notices
+ *      (subject + body) keeping the structure intact.
+ *
+ * Followed by a single evaluation pass that records a quality score on
+ * prospectIntelligence — but does NOT trigger a regenerate. The score is
+ * a *flag* that the UI surfaces as a 'Review' badge for low scores.
+ *
+ * Result: 1 + N LLM calls for N prospects (was 4–8 × N), roughly 70%
+ * cheaper, while the parts of the email that drive reply rate stay
+ * fully personalized.
+ */
 
-async function generateAndEvaluateSequence(
-  prospect: typeof prospectQueue.$inferSelect,
-  intel: typeof prospectIntelligence.$inferSelect,
+type TemplateStep = {
+  stepIndex: number;
+  day: number;
+  channel: string;
+  archetype: string;
+  skeleton: string;
+  ctaPattern: string;
+};
+
+type CampaignTemplate = { steps: TemplateStep[] };
+
+/**
+ * Generate (or refresh) the campaign-level skeleton. Idempotent: callers
+ * can pass force=false to reuse a cached template, or force=true after
+ * the user edits the campaign's sequencePrompt.
+ */
+export async function generateCampaignTemplate(
   campaign: typeof areCampaigns.$inferSelect,
-  variantKey: "A" | "B",
-): Promise<{ steps: unknown[]; qualityScore: number; breakdown: Record<string, number> }> {
-  const hooks = (intel.personalisationHooks as Array<{ hook: string; source: string; hookType: string }>) ?? [];
-  const triggerEvents = (intel.triggerEvents as Array<{ type: string; description: string }>) ?? [];
-  const painSignals = (intel.painSignals as Array<{ signal: string; evidence: string }>) ?? [];
+  force = false,
+): Promise<CampaignTemplate> {
+  const db = await getDb();
+  if (!db) return { steps: [] };
 
-  // Pick different hooks for A vs B
-  const primaryHook = variantKey === "A"
-    ? (hooks[0]?.hook ?? triggerEvents[0]?.description ?? "your company's growth")
-    : (triggerEvents[0]?.description ?? hooks[1]?.hook ?? painSignals[0]?.signal ?? "a challenge in your space");
-
-  const sequencePrompt = `
-## Prospect
-- Name: ${prospect.firstName} ${prospect.lastName}
-- Title: ${prospect.title ?? "Unknown"}
-- Company: ${prospect.companyName ?? "Unknown"}
-- Industry: ${prospect.industry ?? "Unknown"}
-- Company One-liner: ${intel.companyOneLiner ?? ""}
-- LinkedIn Summary: ${intel.linkedinSummary ?? ""}
-
-## Primary Hook (${variantKey === "A" ? "personalisation" : "trigger event"})
-${primaryHook}
-
-## Pain Signals
-${painSignals.slice(0, 2).map((p) => `- ${p.signal}: ${p.evidence}`).join("\n")}
-
-## Campaign Goal
-${campaign.goalType === "meeting_booked" ? "Book a 15-minute discovery call" : campaign.goalType === "reply" ? "Get a reply to start a conversation" : "Create an opportunity in the pipeline"}
-
-## Channels Enabled
-${JSON.stringify(campaign.channelsEnabled)}
-
-Generate a ${campaign.sequenceTemplate === "standard_7step" ? "7-step" : "5-step"} outreach sequence. Each step must be highly personalised, reference the hook, and feel like it was written by a human who did their research. Avoid generic phrases like "I hope this finds you well" or "I wanted to reach out". Be direct, specific, and brief.
-`;
+  if (!force && campaign.generatedTemplate) {
+    const cached = campaign.generatedTemplate as CampaignTemplate | null;
+    if (cached && Array.isArray(cached.steps) && cached.steps.length > 0) return cached;
+  }
 
   const customInstructions = (campaign.sequencePrompt ?? "").trim();
+  const goalText =
+    campaign.goalType === "meeting_booked" ? "Book a 15-minute discovery call"
+    : campaign.goalType === "reply" ? "Get a reply to start a conversation"
+    : "Create an opportunity in the pipeline";
+  const stepCount = campaign.sequenceTemplate === "standard_7step" ? 7 : 5;
+
   const systemContent =
-    `You are an elite B2B sales copywriter. Write cold outreach sequences that feel warm, specific, and human. Every message must reference something real about the prospect. Never use generic opener phrases.` +
+    `You are an elite B2B sales sequence architect. Design a reusable ${stepCount}-step outreach skeleton for a single campaign. The skeleton will be filled in per-prospect later, so do NOT write subject lines or bodies — write the STRUCTURE (archetype, cadence, what each step should accomplish, the CTA pattern) so that any prospect's data can be slotted in.` +
     (customInstructions ? `\n\n## Campaign-specific instructions\n${customInstructions}` : "");
 
-  const seqResult = await invokeLLM({
+  const userContent =
+    `## Campaign goal\n${goalText}\n\n` +
+    `## Channels enabled\n${JSON.stringify(campaign.channelsEnabled)}\n\n` +
+    `## Cadence rules\n- First step on day 0.\n- 7-day total window for 5-step, 14 days for 7-step.\n- No two consecutive steps on the same channel unless both are email.\n- Final step is a polite break-up.\n\n` +
+    `Return ${stepCount} steps. For each: stepIndex (0-based), day (cumulative from start), channel, archetype (one of: opener | value | social_proof | resource | check_in | break_up), skeleton (1–2 sentences describing what to write — placeholders like {hook}, {pain}, {company}, {firstName} for what the personalizer will fill), and ctaPattern (one short sentence like "Open with question, close with a 15-min Tue/Thu offer").`;
+
+  const result = await invokeLLM({
     messages: [
       { role: "system", content: systemContent },
-      { role: "user", content: sequencePrompt },
+      { role: "user", content: userContent },
     ],
     response_format: {
       type: "json_schema",
       json_schema: {
-        name: "outreach_sequence",
+        name: "campaign_template",
+        strict: true,
+        schema: {
+          type: "object",
+          properties: {
+            steps: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  stepIndex: { type: "number" },
+                  day: { type: "number" },
+                  channel: { type: "string" },
+                  archetype: { type: "string" },
+                  skeleton: { type: "string" },
+                  ctaPattern: { type: "string" },
+                },
+                required: ["stepIndex", "day", "channel", "archetype", "skeleton", "ctaPattern"],
+                additionalProperties: false,
+              },
+            },
+          },
+          required: ["steps"],
+          additionalProperties: false,
+        },
+      },
+    },
+  });
+
+  const content = result.choices[0]?.message?.content;
+  if (!content) return { steps: [] };
+  const parsed = JSON.parse(typeof content === "string" ? content : JSON.stringify(content)) as CampaignTemplate;
+
+  await db.update(areCampaigns)
+    .set({ generatedTemplate: parsed, generatedTemplateAt: new Date() })
+    .where(eq(areCampaigns.id, campaign.id));
+
+  return parsed;
+}
+
+/**
+ * Personalize a prospect's sequence using the campaign template + their
+ * enrichment dossier. One LLM call, no retries. The eval pass that
+ * follows records a quality score but doesn't trigger a regenerate.
+ */
+async function personalizeForProspect(
+  template: CampaignTemplate,
+  prospect: typeof prospectQueue.$inferSelect,
+  intel: typeof prospectIntelligence.$inferSelect,
+  campaign: typeof areCampaigns.$inferSelect,
+): Promise<Array<{ stepIndex: number; day: number; channel: string; subject: string; body: string; variantKey: string }>> {
+  if (template.steps.length === 0) return [];
+
+  const hooks = (intel.personalisationHooks as Array<{ hook: string; source: string; hookType: string }>) ?? [];
+  const triggerEvents = (intel.triggerEvents as Array<{ type: string; description: string }>) ?? [];
+  const painSignals = (intel.painSignals as Array<{ signal: string; evidence: string }>) ?? [];
+  const primaryHook = hooks[0]?.hook ?? triggerEvents[0]?.description ?? painSignals[0]?.signal ?? "your company's growth";
+
+  const customInstructions = (campaign.sequencePrompt ?? "").trim();
+  const systemContent =
+    `You are an elite B2B sales copywriter. You will be given a campaign skeleton and a prospect dossier. Fill in subject+body for each step, keeping the structure, cadence, and CTA pattern from the skeleton. Every message must reference something real about the prospect. Never use generic openers ("I hope this finds you well", "I wanted to reach out").` +
+    (customInstructions ? `\n\n## Campaign-specific instructions\n${customInstructions}` : "");
+
+  const userContent =
+    `## Template (do not change structure, only fill subject + body)\n${JSON.stringify(template.steps, null, 2)}\n\n` +
+    `## Prospect\n- Name: ${prospect.firstName} ${prospect.lastName}\n- Title: ${prospect.title ?? "Unknown"}\n- Company: ${prospect.companyName ?? "Unknown"}\n- Industry: ${prospect.industry ?? "Unknown"}\n- Company one-liner: ${intel.companyOneLiner ?? ""}\n- LinkedIn summary: ${intel.linkedinSummary ?? ""}\n\n` +
+    `## Primary hook\n${primaryHook}\n\n` +
+    `## Pain signals\n${painSignals.slice(0, 2).map((p) => `- ${p.signal}: ${p.evidence}`).join("\n") || "(none)"}\n\n` +
+    `Return one filled step per template step (same stepIndex, day, channel). Keep emails under 120 words. Use {{firstName}} / {{company}} merge tags where natural.`;
+
+  const result = await invokeLLM({
+    messages: [
+      { role: "system", content: systemContent },
+      { role: "user", content: userContent },
+    ],
+    response_format: {
+      type: "json_schema",
+      json_schema: {
+        name: "personalized_sequence",
         strict: true,
         schema: {
           type: "object",
@@ -425,22 +522,19 @@ Generate a ${campaign.sequenceTemplate === "standard_7step" ? "7-step" : "5-step
       },
     },
   });
+  const content = result.choices[0]?.message?.content;
+  if (!content) return [];
+  const parsed = JSON.parse(typeof content === "string" ? content : JSON.stringify(content));
+  return (parsed.steps ?? []).map((s: any) => ({ ...s, variantKey: s.variantKey ?? "A" }));
+}
 
-  const seqContent = seqResult.choices[0]?.message?.content;
-  if (!seqContent) return { steps: [], qualityScore: 0, breakdown: {} };
-  const seqData = JSON.parse(typeof seqContent === "string" ? seqContent : JSON.stringify(seqContent));
-
-  // Self-evaluation pass
-  const evalResult = await invokeLLM({
+/** Quality flag, not gate. Records a score the UI surfaces as a Review badge. */
+async function evaluateSequenceQuality(steps: unknown[]): Promise<{ score: number; breakdown: Record<string, number>; feedback: string }> {
+  if (!Array.isArray(steps) || steps.length === 0) return { score: 0, breakdown: {}, feedback: "Empty sequence" };
+  const result = await invokeLLM({
     messages: [
-      {
-        role: "system",
-        content: `You are a cold email quality evaluator. Score the sequence on 4 dimensions, each 0-10. Be strict — generic phrases, lack of personalisation, or weak CTAs should score low.`,
-      },
-      {
-        role: "user",
-        content: `Evaluate this outreach sequence:\n\n${JSON.stringify(seqData.steps, null, 2)}\n\nScore each dimension 0-10:\n1. Specificity: Does it reference specific, verifiable facts about the prospect?\n2. Clarity: Is the value proposition clear and compelling?\n3. Brevity: Are messages appropriately short (under 150 words for email)?\n4. CTA: Is the call-to-action clear, low-friction, and appropriate for the goal?`,
-      },
+      { role: "system", content: `You are a cold email quality evaluator. Score the sequence on 4 dimensions, each 0-10. Be strict — generic phrases, lack of personalisation, or weak CTAs should score low.` },
+      { role: "user", content: `Evaluate:\n\n${JSON.stringify(steps, null, 2)}\n\nScore (0-10 each):\n1. Specificity (verifiable prospect facts referenced)\n2. Clarity (value prop clear)\n3. Brevity (<150 words per email)\n4. CTA (clear, low-friction)` },
     ],
     response_format: {
       type: "json_schema",
@@ -463,20 +557,13 @@ Generate a ${campaign.sequenceTemplate === "standard_7step" ? "7-step" : "5-step
       },
     },
   });
-
-  const evalContent = evalResult.choices[0]?.message?.content;
-  if (!evalContent) return { steps: seqData.steps, qualityScore: 0, breakdown: {} };
-  const evalData = JSON.parse(typeof evalContent === "string" ? evalContent : JSON.stringify(evalContent));
-
+  const content = result.choices[0]?.message?.content;
+  if (!content) return { score: 0, breakdown: {}, feedback: "Eval LLM returned no content" };
+  const data = JSON.parse(typeof content === "string" ? content : JSON.stringify(content));
   return {
-    steps: seqData.steps,
-    qualityScore: Math.min(40, Math.max(0, Math.round(evalData.totalScore))),
-    breakdown: {
-      specificity: evalData.specificity,
-      clarity: evalData.clarity,
-      brevity: evalData.brevity,
-      cta: evalData.cta,
-    },
+    score: Math.min(40, Math.max(0, Math.round(data.totalScore))),
+    breakdown: { specificity: data.specificity, clarity: data.clarity, brevity: data.brevity, cta: data.cta },
+    feedback: String(data.feedback ?? ""),
   };
 }
 
@@ -489,66 +576,41 @@ export async function runSequenceAgent(prospectId: number, workspaceId: number, 
   const [campaign] = await db.select().from(areCampaigns).where(eq(areCampaigns.id, campaignId)).limit(1);
   if (!prospect || !intel || !campaign) return;
 
-  const QUALITY_THRESHOLD = 28;
-  const MAX_REWRITES = 3;
+  // (1) Ensure the campaign template exists (one LLM call, cached forever).
+  const template = await generateCampaignTemplate(campaign, false);
+  if (template.steps.length === 0) return;
 
-  let bestResult = await generateAndEvaluateSequence(prospect, intel, campaign, "A");
-  let rewriteCount = 0;
+  // (2) Personalize for this prospect (one LLM call).
+  const steps = await personalizeForProspect(template, prospect, intel, campaign);
+  if (steps.length === 0) return;
 
-  // Auto-rewrite loop until quality threshold met
-  while (bestResult.qualityScore < QUALITY_THRESHOLD && rewriteCount < MAX_REWRITES) {
-    rewriteCount++;
-    const retry = await generateAndEvaluateSequence(prospect, intel, campaign, "A");
-    if (retry.qualityScore > bestResult.qualityScore) {
-      bestResult = retry;
-    }
-  }
+  // (3) Single-pass quality flag — does NOT trigger a regenerate.
+  const quality = await evaluateSequenceQuality(steps);
 
-  // Generate B variant with different hook
-  const variantB = await generateAndEvaluateSequence(prospect, intel, campaign, "B");
-
-  // Save to intelligence record
+  // Save sequence + quality flag.
   await db.update(prospectIntelligence).set({
-    generatedSequence: bestResult.steps,
-    sequenceQualityScore: bestResult.qualityScore,
-    sequenceQualityBreakdown: bestResult.breakdown,
-    sequenceRewriteCount: rewriteCount,
+    generatedSequence: steps,
+    sequenceQualityScore: quality.score,
+    sequenceQualityBreakdown: { ...quality.breakdown, feedback: quality.feedback },
+    sequenceRewriteCount: 0,
   }).where(eq(prospectIntelligence.prospectQueueId, prospectId));
 
-  // Save A/B variants
-  const variantASteps = bestResult.steps as Array<{ stepIndex: number; subject?: string; body: string }>;
-  const variantBSteps = variantB.steps as Array<{ stepIndex: number; subject?: string; body: string }>;
-
-  if (variantASteps.length > 0) {
+  // Track the opener for the A/B Variants tab. We only generate variant
+  // A here (opener-only A/B testing is a separate ticket); leaving the
+  // upsert in place keeps the AB tab populated for existing campaigns.
+  if (steps.length > 0) {
     await db.insert(areAbVariants).values({
       workspaceId,
       campaignId,
       stepIndex: 1,
       variantKey: "A",
       hookType: "personalisation",
-      subjectLine: variantASteps[0]?.subject ?? "",
-      bodyPreview: String(variantASteps[0]?.body ?? "").substring(0, 300),
+      subjectLine: steps[0]?.subject ?? "",
+      bodyPreview: String(steps[0]?.body ?? "").substring(0, 300),
     }).onDuplicateKeyUpdate({
       set: {
-        subjectLine: variantASteps[0]?.subject ?? "",
-        bodyPreview: String(variantASteps[0]?.body ?? "").substring(0, 300),
-      },
-    });
-  }
-
-  if (variantBSteps.length > 0) {
-    await db.insert(areAbVariants).values({
-      workspaceId,
-      campaignId,
-      stepIndex: 1,
-      variantKey: "B",
-      hookType: "trigger_event",
-      subjectLine: variantBSteps[0]?.subject ?? "",
-      bodyPreview: String(variantBSteps[0]?.body ?? "").substring(0, 300),
-    }).onDuplicateKeyUpdate({
-      set: {
-        subjectLine: variantBSteps[0]?.subject ?? "",
-        bodyPreview: String(variantBSteps[0]?.body ?? "").substring(0, 300),
+        subjectLine: steps[0]?.subject ?? "",
+        bodyPreview: String(steps[0]?.body ?? "").substring(0, 300),
       },
     });
   }
@@ -688,6 +750,8 @@ export const prospectsRouter = router({
           sequenceStatus: prospectQueue.sequenceStatus,
           enrichmentStatus: prospectQueue.enrichmentStatus,
           generatedSequence: prospectIntelligence.generatedSequence,
+          sequenceQualityScore: prospectIntelligence.sequenceQualityScore,
+          sequenceQualityBreakdown: prospectIntelligence.sequenceQualityBreakdown,
         })
         .from(prospectQueue)
         .leftJoin(

@@ -919,7 +919,39 @@ function SequencesTab({ campaignId, campaign }: { campaignId: number; campaign: 
                 </div>
                 <div className="text-[11px] text-muted-foreground truncate">{r.companyName} · {r.email}</div>
               </div>
-              <Badge variant="outline" className="text-[10px]">{r.sequenceStatus}</Badge>
+              <div className="flex items-center gap-1.5 shrink-0">
+                {/* Quality flag — review badge for low scores. */}
+                {typeof r.sequenceQualityScore === "number" && r.sequenceQualityScore > 0 && (
+                  r.sequenceQualityScore < 24 ? (
+                    <Badge
+                      variant="secondary"
+                      className="text-[10px] bg-amber-500/15 text-amber-700 dark:text-amber-400 cursor-help"
+                      title={
+                        `Quality score: ${r.sequenceQualityScore}/40 — review before enrolling.\n` +
+                        (r.sequenceQualityBreakdown
+                          ? `specificity ${(r.sequenceQualityBreakdown as any).specificity}/10, clarity ${(r.sequenceQualityBreakdown as any).clarity}/10, brevity ${(r.sequenceQualityBreakdown as any).brevity}/10, cta ${(r.sequenceQualityBreakdown as any).cta}/10\n${(r.sequenceQualityBreakdown as any).feedback ?? ""}`
+                          : "")
+                      }
+                    >
+                      ⚠ Review · {r.sequenceQualityScore}/40
+                    </Badge>
+                  ) : (
+                    <Badge
+                      variant="outline"
+                      className="text-[10px] cursor-help"
+                      title={
+                        `Quality score: ${r.sequenceQualityScore}/40\n` +
+                        (r.sequenceQualityBreakdown
+                          ? `specificity ${(r.sequenceQualityBreakdown as any).specificity}/10, clarity ${(r.sequenceQualityBreakdown as any).clarity}/10, brevity ${(r.sequenceQualityBreakdown as any).brevity}/10, cta ${(r.sequenceQualityBreakdown as any).cta}/10`
+                          : "")
+                      }
+                    >
+                      ★ {r.sequenceQualityScore}/40
+                    </Badge>
+                  )
+                )}
+                <Badge variant="outline" className="text-[10px]">{r.sequenceStatus}</Badge>
+              </div>
             </div>
             <div className="divide-y">
               {steps.map((s: any, idx: number) => {

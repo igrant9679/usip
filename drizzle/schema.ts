@@ -2596,6 +2596,11 @@ export const areCampaigns = mysqlTable(
     /** Free-form instructions appended to the Sequence Agent system prompt
      *  for this campaign (voice/tone/constraints). Null → defaults only. */
     sequencePrompt: text("sequencePrompt"),
+    /** Campaign-level 7-step skeleton generated once (one LLM call) and
+     *  reused across every prospect's personalization pass. Stored as
+     *  { steps: [{stepIndex, day, channel, archetype, skeleton, ctaPattern}] }. */
+    generatedTemplate: json("generatedTemplate"),
+    generatedTemplateAt: timestamp("generatedTemplateAt"),
     goalType: mysqlEnum("goalType", ["meeting_booked", "reply", "opportunity_created"]).default("reply").notNull(),
     // Metrics (denormalised for fast dashboard reads)
     prospectsDiscovered: int("prospectsDiscovered").default(0).notNull(),

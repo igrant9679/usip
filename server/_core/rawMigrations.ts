@@ -1159,6 +1159,20 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0076: campaign-level generated template (cached skeleton) ──────────
+  // Top-level architectural change: instead of running a full multi-call
+  // LLM generation per prospect, generate a 7-step *skeleton* once per
+  // campaign (cached on this column) and personalize cheaply per prospect.
+  // Cuts LLM cost ~70% without sacrificing perceived personalization,
+  // because we still rewrite the parts a human notices (opener + hooks).
+  {
+    name: "0076_are_campaigns_generated_template.sql",
+    statements: [
+      `ALTER TABLE \`are_campaigns\` ADD COLUMN \`generatedTemplate\` JSON NULL`,
+      `ALTER TABLE \`are_campaigns\` ADD COLUMN \`generatedTemplateAt\` TIMESTAMP NULL`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

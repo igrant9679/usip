@@ -178,7 +178,15 @@ export const campaignsRouter = router({
       if (rest.dailySendCap !== undefined) updates.dailySendCap = rest.dailySendCap;
       if (rest.channelsEnabled !== undefined) updates.channelsEnabled = rest.channelsEnabled;
       if (rest.sequenceTemplate !== undefined) updates.sequenceTemplate = rest.sequenceTemplate;
-      if (rest.sequencePrompt !== undefined) updates.sequencePrompt = rest.sequencePrompt ?? null;
+      if (rest.sequencePrompt !== undefined) {
+        updates.sequencePrompt = rest.sequencePrompt ?? null;
+        // Clear the cached campaign-level template so the new voice/tone
+        // takes effect on the next sequence generation. Without this, the
+        // user would edit the prompt and wonder why nothing changes — the
+        // template generator only runs when generatedTemplate is null.
+        updates.generatedTemplate = null;
+        updates.generatedTemplateAt = null;
+      }
       if (rest.goalType !== undefined) updates.goalType = rest.goalType;
       if (rest.icpOverrides !== undefined) updates.icpOverrides = rest.icpOverrides;
       if (rest.prospectSources !== undefined) updates.prospectSources = rest.prospectSources;
