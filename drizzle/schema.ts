@@ -2593,6 +2593,9 @@ export const areCampaigns = mysqlTable(
     // Channels
     channelsEnabled: json("channelsEnabled"), // {email:bool, linkedin:bool, sms:bool, voice:bool}
     sequenceTemplate: varchar("sequenceTemplate", { length: 64 }).default("standard_7step").notNull(),
+    /** Free-form instructions appended to the Sequence Agent system prompt
+     *  for this campaign (voice/tone/constraints). Null → defaults only. */
+    sequencePrompt: text("sequencePrompt"),
     goalType: mysqlEnum("goalType", ["meeting_booked", "reply", "opportunity_created"]).default("reply").notNull(),
     // Metrics (denormalised for fast dashboard reads)
     prospectsDiscovered: int("prospectsDiscovered").default(0).notNull(),

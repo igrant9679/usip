@@ -384,12 +384,14 @@ ${JSON.stringify(campaign.channelsEnabled)}
 Generate a ${campaign.sequenceTemplate === "standard_7step" ? "7-step" : "5-step"} outreach sequence. Each step must be highly personalised, reference the hook, and feel like it was written by a human who did their research. Avoid generic phrases like "I hope this finds you well" or "I wanted to reach out". Be direct, specific, and brief.
 `;
 
+  const customInstructions = (campaign.sequencePrompt ?? "").trim();
+  const systemContent =
+    `You are an elite B2B sales copywriter. Write cold outreach sequences that feel warm, specific, and human. Every message must reference something real about the prospect. Never use generic opener phrases.` +
+    (customInstructions ? `\n\n## Campaign-specific instructions\n${customInstructions}` : "");
+
   const seqResult = await invokeLLM({
     messages: [
-      {
-        role: "system",
-        content: `You are an elite B2B sales copywriter. Write cold outreach sequences that feel warm, specific, and human. Every message must reference something real about the prospect. Never use generic opener phrases.`,
-      },
+      { role: "system", content: systemContent },
       { role: "user", content: sequencePrompt },
     ],
     response_format: {
@@ -667,8 +669,9 @@ export const prospectsRouter = router({
       return { success: true };
     }),
 
-  /** List every prospect's generated sequence in one campaign — powers the
-   *  campaign Sequences tab (view + inline edit). */
+  /** List sequence rows for the campaign Sequences tab. Returns both
+   *  prospects with a generated sequence (for view + edit) AND approved
+   *  prospects without one yet (so the user can trigger Generate). */
   listSequences: workspaceProcedure
     .input(z.object({ campaignId: z.number(), limit: z.number().default(100) }))
     .query(async ({ ctx, input }) => {
@@ -683,6 +686,7 @@ export const prospectsRouter = router({
           title: prospectQueue.title,
           companyName: prospectQueue.companyName,
           sequenceStatus: prospectQueue.sequenceStatus,
+          enrichmentStatus: prospectQueue.enrichmentStatus,
           generatedSequence: prospectIntelligence.generatedSequence,
         })
         .from(prospectQueue)
@@ -697,8 +701,15 @@ export const prospectsRouter = router({
           ),
         )
         .limit(input.limit);
-      // Only return rows that actually have a sequence to view/edit.
-      return rows.filter((r) => Array.isArray(r.generatedSequence) && (r.generatedSequence as unknown[]).length > 0);
+      // Keep rows that either HAVE a sequence or COULD have one
+      // (approved/enrolled/etc. with successful enrichment).
+      return rows.filter((r) => {
+        const hasSeq = Array.isArray(r.generatedSequence) && (r.generatedSequence as unknown[]).length > 0;
+        const sequenceableStatus = ["approved", "enrolled", "completed", "replied"].includes(
+          String(r.sequenceStatus),
+        );
+        return hasSeq || sequenceableStatus;
+      });
     }),
 
   /**

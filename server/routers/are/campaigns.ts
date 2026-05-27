@@ -74,6 +74,9 @@ export const campaignsRouter = router({
           voice: z.boolean().default(false),
         }).default({ email: true, linkedin: false, sms: false, voice: false }),
         sequenceTemplate: z.string().default("standard_7step"),
+        /** Optional free-form instructions appended to the Sequence Agent's
+         *  system prompt for this campaign — voice, tone, do/don't lists. */
+        sequencePrompt: z.string().max(4000).nullable().optional(),
         goalType: z.enum(["meeting_booked", "reply", "opportunity_created"]).default("reply"),
         autoApproveThreshold: z.number().min(0).max(100).nullable().optional(),
         signalToOpportunityEnabled: z.boolean().default(false),
@@ -125,6 +128,7 @@ export const campaignsRouter = router({
           dailySendCap: input.dailySendCap,
           channelsEnabled: input.channelsEnabled,
           sequenceTemplate: input.sequenceTemplate,
+          sequencePrompt: input.sequencePrompt ?? null,
           goalType: input.goalType,
           autoApproveThreshold: input.autoApproveThreshold ?? null,
           signalToOpportunityEnabled: input.signalToOpportunityEnabled,
@@ -154,6 +158,7 @@ export const campaignsRouter = router({
         dailySendCap: z.number().min(1).max(500).optional(),
         channelsEnabled: z.any().optional(),
         sequenceTemplate: z.string().optional(),
+        sequencePrompt: z.string().max(4000).nullable().optional(),
         goalType: z.enum(["meeting_booked", "reply", "opportunity_created"]).optional(),
         icpOverrides: z.any().optional(),
         prospectSources: z.array(z.string()).optional(),
@@ -173,6 +178,7 @@ export const campaignsRouter = router({
       if (rest.dailySendCap !== undefined) updates.dailySendCap = rest.dailySendCap;
       if (rest.channelsEnabled !== undefined) updates.channelsEnabled = rest.channelsEnabled;
       if (rest.sequenceTemplate !== undefined) updates.sequenceTemplate = rest.sequenceTemplate;
+      if (rest.sequencePrompt !== undefined) updates.sequencePrompt = rest.sequencePrompt ?? null;
       if (rest.goalType !== undefined) updates.goalType = rest.goalType;
       if (rest.icpOverrides !== undefined) updates.icpOverrides = rest.icpOverrides;
       if (rest.prospectSources !== undefined) updates.prospectSources = rest.prospectSources;

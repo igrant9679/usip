@@ -1147,6 +1147,18 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0075: per-campaign sequence prompt ────────────────────────────────
+  // Lets each campaign tune the system prompt fed to the Sequence Agent.
+  // Without this, every campaign across every workspace used the same
+  // hard-coded copywriter prompt — fine for generic outreach, useless for
+  // a campaign that needs a specific voice (technical, executive, etc.).
+  {
+    name: "0075_are_campaigns_sequence_prompt.sql",
+    statements: [
+      `ALTER TABLE \`are_campaigns\` ADD COLUMN \`sequencePrompt\` TEXT NULL`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

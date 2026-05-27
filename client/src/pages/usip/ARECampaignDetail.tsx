@@ -27,7 +27,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
@@ -742,11 +742,96 @@ function ProspectNotes({ prospectId, campaignId }: { prospectId: number; campaig
 }
 
 
+/* ─── Sequence prompt editor — top of the Sequences tab ────────────────── */
+function SequencePromptCard({ campaignId, currentPrompt }: { campaignId: number; currentPrompt: string | null }) {
+  const utils = trpc.useUtils();
+  const [draft, setDraft] = useState<string | null>(null);
+  const update = trpc.are.campaigns.update.useMutation();
+  const value = draft ?? currentPrompt ?? "";
+  const dirty = draft !== null && draft !== (currentPrompt ?? "");
+
+  const save = async () => {
+    try {
+      await update.mutateAsync({ id: campaignId, sequencePrompt: draft ?? "" });
+      toast.success("Prompt saved — applies to the next generation");
+      setDraft(null);
+      await utils.are.campaigns.get.invalidate({ id: campaignId });
+    } catch (e: any) {
+      toast.error(e?.message ?? "Save failed");
+    }
+  };
+
+  return (
+    <Card className="bg-card border">
+      <CardHeader className="pb-2 pt-4 px-4">
+        <CardTitle className="text-sm flex items-center gap-2">
+          <Sparkles className="size-4 text-violet-500" />
+          AI Prompt for Email Generation
+        </CardTitle>
+        <CardDescription className="text-[11px] leading-relaxed">
+          Free-form instructions appended to the Sequence Agent's system prompt. Use this to set voice
+          (e.g. "casual, no jargon"), constraints (e.g. "always reference their tech stack"), or guardrails
+          (e.g. "never mention pricing"). Applies to the next generation — existing sequences are untouched
+          until regenerated.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="px-4 pb-4 space-y-2">
+        <Textarea
+          rows={6}
+          placeholder={`e.g.\n- Voice: peer-to-peer technical, no fluff.\n- Always reference the prospect's stack or a recent shipping change.\n- Never use the words "synergy", "leverage", or "circle back".\n- Step 1 must be under 80 words. CTA is always a 15-min Tue/Thu slot.`}
+          value={value}
+          onChange={(e) => setDraft(e.target.value)}
+          className="text-xs font-mono"
+        />
+        <div className="flex items-center justify-between">
+          <div className="text-[10px] text-muted-foreground">{value.length} / 4000 chars</div>
+          {dirty && (
+            <div className="flex gap-2">
+              <Button size="sm" variant="ghost" onClick={() => setDraft(null)}>Discard</Button>
+              <Button size="sm" onClick={save} disabled={update.isPending}>
+                {update.isPending ? <Loader2 className="size-3 mr-1 animate-spin" /> : null}
+                Save prompt
+              </Button>
+            </div>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 /* ─── Sequences tab: view + edit per-prospect autonomous sequences ──────── */
-function SequencesTab({ campaignId }: { campaignId: number }) {
+function SequencesTab({ campaignId, campaign }: { campaignId: number; campaign: any }) {
   const { data: rows = [], refetch, isLoading } = trpc.are.prospects.listSequences.useQuery({ campaignId });
   const editStep = trpc.are.prospects.editSequenceStep.useMutation();
+  const generate = trpc.are.prospects.generateSequence.useMutation();
   const [editing, setEditing] = useState<{ prospectId: number; arrayIndex: number; subject: string; body: string } | null>(null);
+  const [generatingId, setGeneratingId] = useState<number | null>(null);
+
+  const generateFor = async (prospectId: number) => {
+    setGeneratingId(prospectId);
+    try {
+      await generate.mutateAsync({ prospectId, campaignId });
+      toast.success("Generation started — refresh in ~10 seconds to see the result");
+    } catch (e: any) {
+      toast.error(e?.message ?? "Generation failed");
+    } finally {
+      setTimeout(() => { setGeneratingId(null); refetch(); }, 8000);
+    }
+  };
+
+  const generateMissing = async () => {
+    const missing = rows.filter((r: any) => !Array.isArray(r.generatedSequence) || r.generatedSequence.length === 0);
+    if (missing.length === 0) {
+      toast.info("Every prospect already has a sequence");
+      return;
+    }
+    toast.success(`Queued generation for ${missing.length} prospect${missing.length === 1 ? "" : "s"}`);
+    for (const r of missing) {
+      generate.mutate({ prospectId: r.prospectId, campaignId });
+    }
+    setTimeout(() => refetch(), 12000);
+  };
 
   const save = async () => {
     if (!editing) return;
@@ -770,20 +855,61 @@ function SequencesTab({ campaignId }: { campaignId: number }) {
   };
 
   if (isLoading) return <div className="text-sm text-muted-foreground p-6 text-center">Loading sequences…</div>;
-  if (rows.length === 0) {
-    return (
-      <EmptyState
-        icon={ListOrdered}
-        title="No sequences generated yet"
-        description="Once the engine generates a sequence for an approved prospect it will appear here for review and editing."
-      />
-    );
-  }
+
+  const missingCount = rows.filter((r: any) => !Array.isArray(r.generatedSequence) || r.generatedSequence.length === 0).length;
 
   return (
     <div className="space-y-4">
+      {/* Prompt editor — top of the tab so the user can tune voice
+          before kicking off generation. */}
+      <SequencePromptCard campaignId={campaignId} currentPrompt={campaign?.sequencePrompt ?? null} />
+
+      {/* Action bar */}
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="text-xs text-muted-foreground">
+          {rows.length} prospect{rows.length === 1 ? "" : "s"} eligible · {rows.length - missingCount} with sequence · {missingCount} pending
+        </div>
+        {missingCount > 0 && (
+          <Button size="sm" onClick={generateMissing} disabled={generate.isPending}>
+            <Sparkles className="size-3.5 mr-1" /> Generate for all ({missingCount})
+          </Button>
+        )}
+      </div>
+
+      {rows.length === 0 && (
+        <EmptyState
+          icon={ListOrdered}
+          title="No approved prospects yet"
+          description="Approve prospects on the Prospects tab first — once approved they'll appear here so you can craft their sequence."
+        />
+      )}
+
       {rows.map((r: any) => {
         const steps = (r.generatedSequence ?? []) as any[];
+        const hasSeq = steps.length > 0;
+        if (!hasSeq) {
+          return (
+            <div key={r.prospectId} className="border rounded-xl bg-card border-dashed">
+              <div className="px-4 py-3 flex items-center justify-between">
+                <div className="min-w-0">
+                  <div className="text-sm font-medium truncate">
+                    {r.firstName} {r.lastName} <span className="text-muted-foreground font-normal">— {r.title}</span>
+                  </div>
+                  <div className="text-[11px] text-muted-foreground">No sequence yet — click Generate to craft one with the prompt above.</div>
+                </div>
+                <Button
+                  size="sm"
+                  onClick={() => generateFor(r.prospectId)}
+                  disabled={generatingId === r.prospectId}
+                >
+                  {generatingId === r.prospectId
+                    ? <><Loader2 className="size-3.5 mr-1 animate-spin" /> Crafting…</>
+                    : <><Sparkles className="size-3.5 mr-1" /> Generate</>}
+                </Button>
+              </div>
+            </div>
+          );
+        }
         return (
           <div key={r.prospectId} className="border rounded-xl bg-card">
             <div className="px-4 py-2.5 border-b flex items-center justify-between">
@@ -2021,7 +2147,7 @@ export default function ARECampaignDetail() {
 
           {/* ── Sequences tab ── */}
           <TabsContent value="sequences" className="mt-4">
-            <SequencesTab campaignId={campaignId} />
+            <SequencesTab campaignId={campaignId} campaign={campaign} />
           </TabsContent>
 
           {/* ── Logs tab ── */}
