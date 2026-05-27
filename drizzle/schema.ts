@@ -2671,7 +2671,7 @@ export const prospectQueue = mysqlTable(
     enrichmentStatus: mysqlEnum("enrichmentStatus", ["pending", "enriching", "complete", "failed"]).default("pending").notNull(),
     enrichmentError: text("enrichmentError"),
     enrichedAt: timestamp("enrichedAt"),
-    sequenceStatus: mysqlEnum("sequenceStatus", ["pending", "approved", "enrolled", "skipped", "completed", "replied"]).default("pending").notNull(),
+    sequenceStatus: mysqlEnum("sequenceStatus", ["pending", "approved", "enrolled", "skipped", "completed", "replied", "paused", "canceled"]).default("pending").notNull(),
     approvedAt: timestamp("approvedAt"),
     approvedByUserId: int("approvedByUserId"),
     rejectedAt: timestamp("rejectedAt"),

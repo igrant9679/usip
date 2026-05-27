@@ -1255,6 +1255,20 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0080: extend sequenceStatus enum with paused + canceled ─────────
+  // Lets a user pause an enrolled prospect (dispatcher already skips
+  // anything where sequenceStatus != 'enrolled', so pause is a no-op
+  // at the queue level — just flip the status). Cancel additionally
+  // marks every scheduled execution_queue row as 'skipped' with a
+  // 'Sequence canceled' reason so nothing accidentally fires later.
+  // Both states keep the prospect row intact + history visible.
+  {
+    name: "0080_sequence_status_paused_canceled.sql",
+    statements: [
+      `ALTER TABLE \`prospect_queue\` MODIFY COLUMN \`sequenceStatus\` ENUM('pending','approved','enrolled','skipped','completed','replied','paused','canceled') NOT NULL DEFAULT 'pending'`,
+    ],
+  },
+
   // ── 0079: link discovery runs to campaigns ──────────────────────────
   // Discovery v2 launched as workspace-scoped. The follow-up requirement
   // is that prospect-discovery activity tied to a specific ARE campaign

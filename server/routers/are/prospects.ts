@@ -24,6 +24,7 @@ import { z } from "zod";
 import {
   areAbVariants,
   areCampaigns,
+  areEngineLogs,
   areExecutionQueue,
   icpProfiles,
   notifications,
@@ -647,7 +648,7 @@ export const prospectsRouter = router({
         conditions.push(eq(prospectQueue.enrichmentStatus, input.enrichmentStatus as "pending" | "enriching" | "complete" | "failed"));
       }
       if (input.sequenceStatus) {
-        conditions.push(eq(prospectQueue.sequenceStatus, input.sequenceStatus as "pending" | "approved" | "enrolled" | "skipped" | "completed" | "replied"));
+        conditions.push(eq(prospectQueue.sequenceStatus, input.sequenceStatus as "pending" | "approved" | "enrolled" | "skipped" | "completed" | "replied" | "paused" | "canceled"));
       }
       const rows = await db
         .select()
@@ -735,6 +736,126 @@ export const prospectsRouter = router({
       await db.update(prospectQueue).set({ sequenceStatus: "skipped" })
         .where(and(eq(prospectQueue.id, input.prospectId), eq(prospectQueue.workspaceId, ctx.workspace.id)));
       return { success: true };
+    }),
+
+  /**
+   * Cancel an enrolled (or paused) prospect's sequence. Hard-stops
+   * future activity but keeps the prospect row + history intact:
+   *   1. flips prospect_queue.sequenceStatus → 'canceled'
+   *   2. marks every still-scheduled are_execution_queue row 'skipped'
+   *      with failureReason='Sequence canceled' so the dispatcher
+   *      cannot accidentally fire any remaining step.
+   *   3. emits an are_engine_logs row (phase='sequence.cancel') with
+   *      before/after status + skipped count + reason for the audit
+   *      trail (surfaces in the campaign Logs tab).
+   * Idempotent: re-cancelling a canceled sequence is a no-op (no log).
+   */
+  cancelSequence: workspaceProcedure
+    .input(z.object({ prospectId: z.number(), reason: z.string().max(500).optional() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [before] = await db.select().from(prospectQueue)
+        .where(and(eq(prospectQueue.id, input.prospectId), eq(prospectQueue.workspaceId, ctx.workspace.id)))
+        .limit(1);
+      if (!before) throw new TRPCError({ code: "NOT_FOUND" });
+      if (before.sequenceStatus === "canceled") {
+        return { ok: true, alreadyCanceled: true, skippedSteps: 0 };
+      }
+      const reasonText = `Sequence canceled${input.reason ? ` — ${input.reason}` : ""}`;
+      // Count + skip every still-scheduled execution queue row for this prospect.
+      const [pre] = await db.select({ n: sql<number>`count(*)` }).from(areExecutionQueue)
+        .where(and(
+          eq(areExecutionQueue.workspaceId, ctx.workspace.id),
+          eq(areExecutionQueue.prospectQueueId, input.prospectId),
+          eq(areExecutionQueue.status, "scheduled"),
+        ));
+      const skipped = Number(pre?.n ?? 0);
+      if (skipped > 0) {
+        await db.update(areExecutionQueue).set({
+          status: "skipped",
+          failureReason: reasonText,
+          executedAt: new Date(),
+        }).where(and(
+          eq(areExecutionQueue.workspaceId, ctx.workspace.id),
+          eq(areExecutionQueue.prospectQueueId, input.prospectId),
+          eq(areExecutionQueue.status, "scheduled"),
+        ));
+      }
+      await db.update(prospectQueue).set({
+        sequenceStatus: "canceled",
+        rejectedAt: new Date(),
+        rejectionReason: reasonText,
+      }).where(and(eq(prospectQueue.id, input.prospectId), eq(prospectQueue.workspaceId, ctx.workspace.id)));
+      await db.insert(areEngineLogs).values({
+        workspaceId: ctx.workspace.id,
+        campaignId: before.campaignId,
+        phase: "sequence.cancel",
+        level: "info",
+        message: `Sequence canceled for ${before.firstName ?? ""} ${before.lastName ?? ""} — ${skipped} scheduled step${skipped === 1 ? "" : "s"} skipped`,
+        details: {
+          prospectId: input.prospectId,
+          before: before.sequenceStatus,
+          after: "canceled",
+          skippedSteps: skipped,
+          reason: input.reason ?? null,
+          actorUserId: ctx.user.id,
+        } as any,
+      });
+      return { ok: true, alreadyCanceled: false, skippedSteps: skipped };
+    }),
+
+  /** Pause an enrolled prospect's sequence. The dispatcher already
+   *  filters on sequenceStatus='enrolled', so pause is a no-op at the
+   *  queue level — we just flip the status. Resuming flips it back. */
+  pauseSequence: workspaceProcedure
+    .input(z.object({ prospectId: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [before] = await db.select().from(prospectQueue)
+        .where(and(eq(prospectQueue.id, input.prospectId), eq(prospectQueue.workspaceId, ctx.workspace.id)))
+        .limit(1);
+      if (!before) throw new TRPCError({ code: "NOT_FOUND" });
+      if (before.sequenceStatus !== "enrolled") {
+        throw new TRPCError({ code: "BAD_REQUEST", message: `Can only pause an enrolled sequence (current status: ${before.sequenceStatus})` });
+      }
+      await db.update(prospectQueue).set({ sequenceStatus: "paused" })
+        .where(and(eq(prospectQueue.id, input.prospectId), eq(prospectQueue.workspaceId, ctx.workspace.id)));
+      await db.insert(areEngineLogs).values({
+        workspaceId: ctx.workspace.id,
+        campaignId: before.campaignId,
+        phase: "sequence.pause",
+        level: "info",
+        message: `Sequence paused for ${before.firstName ?? ""} ${before.lastName ?? ""}`,
+        details: { prospectId: input.prospectId, before: "enrolled", after: "paused", actorUserId: ctx.user.id } as any,
+      });
+      return { ok: true };
+    }),
+
+  resumeSequence: workspaceProcedure
+    .input(z.object({ prospectId: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [before] = await db.select().from(prospectQueue)
+        .where(and(eq(prospectQueue.id, input.prospectId), eq(prospectQueue.workspaceId, ctx.workspace.id)))
+        .limit(1);
+      if (!before) throw new TRPCError({ code: "NOT_FOUND" });
+      if (before.sequenceStatus !== "paused") {
+        throw new TRPCError({ code: "BAD_REQUEST", message: `Can only resume a paused sequence (current status: ${before.sequenceStatus})` });
+      }
+      await db.update(prospectQueue).set({ sequenceStatus: "enrolled" })
+        .where(and(eq(prospectQueue.id, input.prospectId), eq(prospectQueue.workspaceId, ctx.workspace.id)));
+      await db.insert(areEngineLogs).values({
+        workspaceId: ctx.workspace.id,
+        campaignId: before.campaignId,
+        phase: "sequence.resume",
+        level: "info",
+        message: `Sequence resumed for ${before.firstName ?? ""} ${before.lastName ?? ""}`,
+        details: { prospectId: input.prospectId, before: "paused", after: "enrolled", actorUserId: ctx.user.id } as any,
+      });
+      return { ok: true };
     }),
 
   /** List sequence rows for the campaign Sequences tab. Returns both

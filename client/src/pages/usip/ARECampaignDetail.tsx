@@ -30,7 +30,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { trpc } from "@/lib/trpc";
 import {
@@ -800,19 +800,69 @@ function SequencePromptCard({ campaignId, currentPrompt }: { campaignId: number;
   );
 }
 
-/* ─── Sequences tab: view + edit per-prospect autonomous sequences ──────── */
+/* ─── Sequences tab v2 — compact list + filters + side drawer ────────── */
+
+const STATUS_STYLE: Record<string, { label: string; cls: string }> = {
+  pending:   { label: "Pending",   cls: "bg-muted text-muted-foreground" },
+  approved:  { label: "Approved",  cls: "bg-blue-500/15 text-blue-700 dark:text-blue-400" },
+  enrolled:  { label: "Active",    cls: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400" },
+  paused:    { label: "Paused",    cls: "bg-amber-500/15 text-amber-700 dark:text-amber-400" },
+  canceled:  { label: "Canceled",  cls: "bg-zinc-500/15 text-zinc-700 dark:text-zinc-300" },
+  completed: { label: "Completed", cls: "bg-teal-500/15 text-teal-700 dark:text-teal-400" },
+  replied:   { label: "Replied",   cls: "bg-violet-500/15 text-violet-700 dark:text-violet-400" },
+  skipped:   { label: "Skipped",   cls: "bg-zinc-500/10 text-zinc-600 dark:text-zinc-400" },
+};
+const FILTERS = ["all", "enrolled", "paused", "approved", "pending", "canceled", "completed", "replied"] as const;
+type FilterKey = typeof FILTERS[number];
+
+function StatusBadgeMini({ status }: { status: string }) {
+  const s = STATUS_STYLE[status] ?? STATUS_STYLE.pending;
+  return <Badge className={`text-[10px] ${s.cls}`}>{s.label}</Badge>;
+}
+
 function SequencesTab({ campaignId, campaign }: { campaignId: number; campaign: any }) {
+  const utils = trpc.useUtils();
   const { data: rows = [], refetch, isLoading } = trpc.are.prospects.listSequences.useQuery({ campaignId });
-  const editStep = trpc.are.prospects.editSequenceStep.useMutation();
   const generate = trpc.are.prospects.generateSequence.useMutation();
-  const [editing, setEditing] = useState<{ prospectId: number; arrayIndex: number; subject: string; body: string } | null>(null);
+  const cancel = trpc.are.prospects.cancelSequence.useMutation({
+    onSuccess: (r) => { toast.success(r.alreadyCanceled ? "Already canceled" : `Canceled — ${r.skippedSteps} scheduled step${r.skippedSteps === 1 ? "" : "s"} stopped`); refetch(); utils.are.engine.getLogs.invalidate({ campaignId }); },
+    onError: (e) => toast.error(e.message),
+  });
+  const pause = trpc.are.prospects.pauseSequence.useMutation({
+    onSuccess: () => { toast.success("Paused"); refetch(); utils.are.engine.getLogs.invalidate({ campaignId }); },
+    onError: (e) => toast.error(e.message),
+  });
+  const resume = trpc.are.prospects.resumeSequence.useMutation({
+    onSuccess: () => { toast.success("Resumed"); refetch(); utils.are.engine.getLogs.invalidate({ campaignId }); },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const [filter, setFilter] = useState<FilterKey>("enrolled");
+  const [search, setSearch] = useState("");
+  const [drawerProspectId, setDrawerProspectId] = useState<number | null>(null);
+  const [confirmCancel, setConfirmCancel] = useState<{ prospectId: number; name: string } | null>(null);
   const [generatingId, setGeneratingId] = useState<number | null>(null);
+
+  // Derive counts per status for the summary strip.
+  const countsByStatus = rows.reduce((acc: Record<string, number>, r: any) => {
+    acc[r.sequenceStatus] = (acc[r.sequenceStatus] ?? 0) + 1;
+    return acc;
+  }, {});
+  const filteredRows = rows.filter((r: any) => {
+    if (filter !== "all" && r.sequenceStatus !== filter) return false;
+    if (search) {
+      const q = search.toLowerCase();
+      const hay = `${r.firstName ?? ""} ${r.lastName ?? ""} ${r.companyName ?? ""} ${r.title ?? ""}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
 
   const generateFor = async (prospectId: number) => {
     setGeneratingId(prospectId);
     try {
       await generate.mutateAsync({ prospectId, campaignId });
-      toast.success("Generation started — refresh in ~10 seconds to see the result");
+      toast.success("Generation started — refresh in ~10s");
     } catch (e: any) {
       toast.error(e?.message ?? "Generation failed");
     } finally {
@@ -820,180 +870,212 @@ function SequencesTab({ campaignId, campaign }: { campaignId: number; campaign: 
     }
   };
 
-  const generateMissing = async () => {
-    const missing = rows.filter((r: any) => !Array.isArray(r.generatedSequence) || r.generatedSequence.length === 0);
-    if (missing.length === 0) {
-      toast.info("Every prospect already has a sequence");
-      return;
-    }
-    toast.success(`Queued generation for ${missing.length} prospect${missing.length === 1 ? "" : "s"}`);
-    for (const r of missing) {
-      generate.mutate({ prospectId: r.prospectId, campaignId });
-    }
-    setTimeout(() => refetch(), 12000);
-  };
+  if (isLoading) return <div className="text-sm text-muted-foreground p-6 text-center">Loading…</div>;
+
+  const drawerRow = drawerProspectId != null ? rows.find((r: any) => r.prospectId === drawerProspectId) : null;
+
+  return (
+    <div className="space-y-3">
+      {/* AI Prompt — collapsed by default, saves ~280px of vertical space. */}
+      <details className="rounded-lg border bg-card">
+        <summary className="cursor-pointer px-3 py-2 text-xs font-medium flex items-center gap-2 hover:bg-muted/40">
+          <Sparkles className="size-3.5 text-violet-500" /> AI Prompt for Email Generation
+          <span className="text-muted-foreground font-normal ml-auto">{(campaign?.sequencePrompt ?? "").length}/4000 chars</span>
+        </summary>
+        <div className="p-3 border-t">
+          <SequencePromptCard campaignId={campaignId} currentPrompt={campaign?.sequencePrompt ?? null} />
+        </div>
+      </details>
+
+      {/* Summary + filters + search — single dense strip */}
+      <div className="flex flex-wrap items-center gap-2">
+        <Input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search name, company, title…"
+          className="h-8 text-xs flex-1 min-w-[180px] max-w-sm"
+        />
+        <div className="flex flex-wrap gap-1">
+          {FILTERS.map((f) => {
+            const n = f === "all" ? rows.length : (countsByStatus[f] ?? 0);
+            const label = f === "all" ? "All" : (STATUS_STYLE[f]?.label ?? f);
+            return (
+              <Button
+                key={f}
+                size="sm"
+                variant={filter === f ? "default" : "outline"}
+                onClick={() => setFilter(f)}
+                className="h-7 px-2 text-[11px]"
+              >
+                {label} <span className="ml-1 opacity-70">{n}</span>
+              </Button>
+            );
+          })}
+        </div>
+      </div>
+
+      {filteredRows.length === 0 ? (
+        <EmptyState
+          icon={ListOrdered}
+          title={search ? "No matches" : filter === "all" ? "No approved prospects yet" : `No prospects in '${STATUS_STYLE[filter]?.label ?? filter}'`}
+          description={search ? "Try a different search term." : filter === "all" ? "Approve prospects on the Prospects tab to populate this list." : "Switch filter above to see other statuses."}
+        />
+      ) : (
+        <div className="border rounded-lg bg-card divide-y overflow-hidden">
+          {filteredRows.map((r: any) => {
+            const steps = (r.generatedSequence ?? []) as any[];
+            const hasSeq = steps.length > 0;
+            const nm = `${r.firstName ?? ""} ${r.lastName ?? ""}`.trim() || "(no name)";
+            return (
+              <div
+                key={r.prospectId}
+                className="group px-3 py-2 hover:bg-muted/40 transition-colors cursor-pointer flex items-center gap-2 text-xs"
+                onClick={() => setDrawerProspectId(r.prospectId)}
+              >
+                {/* Identity */}
+                <div className="min-w-0 flex-1">
+                  <div className="font-medium truncate">{nm} <span className="text-muted-foreground font-normal">· {r.title ?? "—"}</span></div>
+                  <div className="text-[10px] text-muted-foreground truncate">{r.companyName ?? "—"}{r.email ? ` · ${r.email}` : ""}</div>
+                </div>
+                {/* Step counter (only if there's a sequence) */}
+                {hasSeq ? (
+                  <span className="text-[10px] text-muted-foreground tabular-nums shrink-0">{steps.length} step{steps.length === 1 ? "" : "s"}</span>
+                ) : (
+                  <span className="text-[10px] text-muted-foreground italic shrink-0">no sequence</span>
+                )}
+                {/* Status */}
+                <StatusBadgeMini status={r.sequenceStatus} />
+                {/* Quick actions */}
+                <div className="flex items-center gap-0.5 shrink-0" onClick={(e) => e.stopPropagation()}>
+                  {!hasSeq && (
+                    <Button size="sm" variant="ghost" className="h-7 px-2 text-[11px]"
+                      onClick={() => generateFor(r.prospectId)}
+                      disabled={generatingId === r.prospectId}
+                      title="Generate sequence"
+                    >
+                      {generatingId === r.prospectId ? <Loader2 className="size-3 animate-spin" /> : <Sparkles className="size-3" />}
+                    </Button>
+                  )}
+                  {r.sequenceStatus === "enrolled" && (
+                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Pause"
+                      onClick={() => pause.mutate({ prospectId: r.prospectId })}>
+                      <Pause className="size-3 text-amber-600" />
+                    </Button>
+                  )}
+                  {r.sequenceStatus === "paused" && (
+                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Resume"
+                      onClick={() => resume.mutate({ prospectId: r.prospectId })}>
+                      <Play className="size-3 text-emerald-600" />
+                    </Button>
+                  )}
+                  {(r.sequenceStatus === "enrolled" || r.sequenceStatus === "paused" || r.sequenceStatus === "approved") && (
+                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Cancel sequence"
+                      onClick={() => setConfirmCancel({ prospectId: r.prospectId, name: nm })}>
+                      <X className="size-3 text-destructive" />
+                    </Button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Side drawer — full sequence details, edit, evidence */}
+      <Sheet open={drawerRow != null} onOpenChange={(o) => !o && setDrawerProspectId(null)}>
+        <SheetContent side="right" className="w-full sm:max-w-xl overflow-y-auto">
+          {drawerRow && <SequenceDrawer row={drawerRow} onClose={() => setDrawerProspectId(null)} refetch={refetch} />}
+        </SheetContent>
+      </Sheet>
+
+      {/* Cancel confirmation */}
+      <AlertDialog open={confirmCancel != null} onOpenChange={(o) => !o && setConfirmCancel(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Cancel sequence?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Cancel this sequence for <span className="font-medium text-foreground">{confirmCancel?.name}</span>? This stops all future sequence actions, but the prospect stays saved with their full history intact.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep running</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (confirmCancel) cancel.mutate({ prospectId: confirmCancel.prospectId });
+                setConfirmCancel(null);
+              }}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Cancel sequence
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  );
+}
+
+/** Right-side drawer: full sequence detail + inline step edit. */
+function SequenceDrawer({ row, onClose, refetch }: { row: any; onClose: () => void; refetch: () => void }) {
+  const editStep = trpc.are.prospects.editSequenceStep.useMutation();
+  const [editing, setEditing] = useState<{ arrayIndex: number; subject: string; body: string } | null>(null);
+  const steps = (row.generatedSequence ?? []) as any[];
 
   const save = async () => {
     if (!editing) return;
     try {
       const res = await editStep.mutateAsync({
-        prospectId: editing.prospectId,
-        arrayIndex: editing.arrayIndex,
-        subject: editing.subject,
-        body: editing.body,
+        prospectId: row.prospectId, arrayIndex: editing.arrayIndex,
+        subject: editing.subject, body: editing.body,
       });
-      toast.success(
-        res.scheduledRowsUpdated > 0
-          ? `Step saved — ${res.scheduledRowsUpdated} scheduled email${res.scheduledRowsUpdated === 1 ? "" : "s"} updated`
-          : "Step saved",
-      );
+      toast.success(res.scheduledRowsUpdated > 0
+        ? `Saved — ${res.scheduledRowsUpdated} scheduled email${res.scheduledRowsUpdated === 1 ? "" : "s"} updated`
+        : "Saved");
       setEditing(null);
       await refetch();
-    } catch (e: any) {
-      toast.error(e?.message ?? "Save failed");
-    }
+    } catch (e: any) { toast.error(e?.message ?? "Save failed"); }
   };
 
-  if (isLoading) return <div className="text-sm text-muted-foreground p-6 text-center">Loading sequences…</div>;
-
-  const missingCount = rows.filter((r: any) => !Array.isArray(r.generatedSequence) || r.generatedSequence.length === 0).length;
-
   return (
-    <div className="space-y-4">
-      {/* Prompt editor — top of the tab so the user can tune voice
-          before kicking off generation. */}
-      <SequencePromptCard campaignId={campaignId} currentPrompt={campaign?.sequencePrompt ?? null} />
-
-      {/* Action bar */}
-      <div className="flex items-center justify-between flex-wrap gap-2">
-        <div className="text-xs text-muted-foreground">
-          {rows.length} prospect{rows.length === 1 ? "" : "s"} eligible · {rows.length - missingCount} with sequence · {missingCount} pending
-        </div>
-        {missingCount > 0 && (
-          <Button size="sm" onClick={generateMissing} disabled={generate.isPending}>
-            <Sparkles className="size-3.5 mr-1" /> Generate for all ({missingCount})
-          </Button>
+    <>
+      <SheetHeader className="pb-3 border-b">
+        <SheetTitle className="flex items-center gap-2 flex-wrap">
+          {row.firstName} {row.lastName}
+          <StatusBadgeMini status={row.sequenceStatus} />
+        </SheetTitle>
+        <SheetDescription className="text-xs">
+          {[row.title, row.companyName].filter(Boolean).join(" · ")}
+          {row.email && <span className="ml-1">· {row.email}</span>}
+        </SheetDescription>
+      </SheetHeader>
+      <div className="py-4 space-y-3">
+        {steps.length === 0 ? (
+          <div className="text-sm text-muted-foreground italic text-center py-6">No sequence generated yet.</div>
+        ) : (
+          steps.map((s: any, idx: number) => {
+            const labelIdx = s.stepIndex ?? s.step ?? idx;
+            const day = typeof s.day === "number" ? s.day : typeof s.waitDays === "number" ? s.waitDays : null;
+            const body = String(s.body ?? "");
+            return (
+              <div key={idx} className="border rounded-lg p-3 text-xs space-y-1.5">
+                <div className="flex items-center gap-2 text-muted-foreground">
+                  <Badge variant="secondary" className="text-[10px]">Step {labelIdx}</Badge>
+                  <span>{s.channel ?? "email"}</span>
+                  {day !== null && <span>· {typeof s.day === "number" ? `day ${day}` : `wait ${day}d`}</span>}
+                  <Button size="sm" variant="ghost" className="ml-auto h-6 px-2 text-[11px]"
+                    onClick={() => setEditing({ arrayIndex: idx, subject: String(s.subject ?? ""), body })}>
+                    <Pencil className="size-3 mr-1" /> Edit
+                  </Button>
+                </div>
+                {s.subject && <div className="font-medium text-foreground">Subject: {s.subject}</div>}
+                {body
+                  ? <div className="whitespace-pre-wrap text-foreground/90">{body}</div>
+                  : <div className="italic text-muted-foreground/70">No body yet — click Edit.</div>}
+              </div>
+            );
+          })
         )}
       </div>
-
-      {rows.length === 0 && (
-        <EmptyState
-          icon={ListOrdered}
-          title="No approved prospects yet"
-          description="Approve prospects on the Prospects tab first — once approved they'll appear here so you can craft their sequence."
-        />
-      )}
-
-      {rows.map((r: any) => {
-        const steps = (r.generatedSequence ?? []) as any[];
-        const hasSeq = steps.length > 0;
-        if (!hasSeq) {
-          return (
-            <div key={r.prospectId} className="border rounded-xl bg-card border-dashed">
-              <div className="px-4 py-3 flex items-center justify-between">
-                <div className="min-w-0">
-                  <div className="text-sm font-medium truncate">
-                    {r.firstName} {r.lastName} <span className="text-muted-foreground font-normal">— {r.title}</span>
-                  </div>
-                  <div className="text-[11px] text-muted-foreground">No sequence yet — click Generate to craft one with the prompt above.</div>
-                </div>
-                <Button
-                  size="sm"
-                  onClick={() => generateFor(r.prospectId)}
-                  disabled={generatingId === r.prospectId}
-                >
-                  {generatingId === r.prospectId
-                    ? <><Loader2 className="size-3.5 mr-1 animate-spin" /> Crafting…</>
-                    : <><Sparkles className="size-3.5 mr-1" /> Generate</>}
-                </Button>
-              </div>
-            </div>
-          );
-        }
-        return (
-          <div key={r.prospectId} className="border rounded-xl bg-card">
-            <div className="px-4 py-2.5 border-b flex items-center justify-between">
-              <div className="min-w-0">
-                <div className="text-sm font-medium truncate">
-                  {r.firstName} {r.lastName} <span className="text-muted-foreground font-normal">— {r.title}</span>
-                </div>
-                <div className="text-[11px] text-muted-foreground truncate">{r.companyName} · {r.email}</div>
-              </div>
-              <div className="flex items-center gap-1.5 shrink-0">
-                {/* Quality flag — review badge for low scores. */}
-                {typeof r.sequenceQualityScore === "number" && r.sequenceQualityScore > 0 && (
-                  r.sequenceQualityScore < 24 ? (
-                    <Badge
-                      variant="secondary"
-                      className="text-[10px] bg-amber-500/15 text-amber-700 dark:text-amber-400 cursor-help"
-                      title={
-                        `Quality score: ${r.sequenceQualityScore}/40 — review before enrolling.\n` +
-                        (r.sequenceQualityBreakdown
-                          ? `specificity ${(r.sequenceQualityBreakdown as any).specificity}/10, clarity ${(r.sequenceQualityBreakdown as any).clarity}/10, brevity ${(r.sequenceQualityBreakdown as any).brevity}/10, cta ${(r.sequenceQualityBreakdown as any).cta}/10\n${(r.sequenceQualityBreakdown as any).feedback ?? ""}`
-                          : "")
-                      }
-                    >
-                      ⚠ Review · {r.sequenceQualityScore}/40
-                    </Badge>
-                  ) : (
-                    <Badge
-                      variant="outline"
-                      className="text-[10px] cursor-help"
-                      title={
-                        `Quality score: ${r.sequenceQualityScore}/40\n` +
-                        (r.sequenceQualityBreakdown
-                          ? `specificity ${(r.sequenceQualityBreakdown as any).specificity}/10, clarity ${(r.sequenceQualityBreakdown as any).clarity}/10, brevity ${(r.sequenceQualityBreakdown as any).brevity}/10, cta ${(r.sequenceQualityBreakdown as any).cta}/10`
-                          : "")
-                      }
-                    >
-                      ★ {r.sequenceQualityScore}/40
-                    </Badge>
-                  )
-                )}
-                <Badge variant="outline" className="text-[10px]">{r.sequenceStatus}</Badge>
-              </div>
-            </div>
-            <div className="divide-y">
-              {steps.map((s: any, idx: number) => {
-                // Handle both shapes: LLM (stepIndex+body+day) and legacy
-                // seed (step+waitDays, no body). Show a placeholder when
-                // body is missing so the user knows they need to write one.
-                const labelIdx = s.stepIndex ?? s.step ?? idx;
-                const day = typeof s.day === "number" ? s.day : typeof s.waitDays === "number" ? s.waitDays : null;
-                const body = String(s.body ?? "");
-                return (
-                  <div key={idx} className="p-3 text-xs space-y-1">
-                    <div className="flex items-center gap-2 text-muted-foreground">
-                      <Badge variant="secondary" className="text-[10px]">Step {labelIdx}</Badge>
-                      <span>{s.channel ?? "email"}</span>
-                      {day !== null && <span>· {typeof s.day === "number" ? `day ${day}` : `wait ${day}d`}</span>}
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        className="ml-auto h-6 px-2 text-[11px]"
-                        onClick={() => setEditing({
-                          prospectId: r.prospectId,
-                          arrayIndex: idx,
-                          subject: String(s.subject ?? ""),
-                          body,
-                        })}
-                      >
-                        <Pencil className="size-3 mr-1" /> Edit
-                      </Button>
-                    </div>
-                    {s.subject && <div className="font-medium text-foreground">Subject: {s.subject}</div>}
-                    {body ? (
-                      <div className="whitespace-pre-wrap text-foreground/90">{body}</div>
-                    ) : (
-                      <div className="italic text-muted-foreground/70">No body yet — click Edit to write one.</div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        );
-      })}
 
       <Dialog open={!!editing} onOpenChange={(o) => !o && setEditing(null)}>
         <DialogContent className="max-w-2xl">
@@ -1016,7 +1098,7 @@ function SequencesTab({ campaignId, campaign }: { campaignId: number; campaign: 
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </>
   );
 }
 
