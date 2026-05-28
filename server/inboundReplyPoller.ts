@@ -319,20 +319,47 @@ export async function processInboundReply(data: InboundReplyData) {
     );
   }
 
-  // 7. Log an activity
+  // 7. Log an activity. Write to the contact/lead, AND mirror to every
+  //    open opportunity the contact is on so the opportunity's timeline
+  //    surfaces the reply. Also bumps opportunities.lastActivityAt to
+  //    feed the pipelineAlerts stale-deal scanner.
   if (matchedContactId || matchedLeadId) {
     const relatedType = matchedContactId ? "contact" : "lead";
     const relatedId = matchedContactId ?? matchedLeadId!;
-    await db.insert(activities).values({
+    const activityRow = {
       workspaceId: data.workspaceId,
-      type: "email",
-      relatedType,
-      relatedId,
+      type: "email" as const,
       subject: `Email reply received: ${data.subject || "(no subject)"}`,
       body: data.bodyText?.slice(0, 500),
       actorUserId: data.userId,
       occurredAt: data.receivedAt,
-    });
+    };
+    await db.insert(activities).values({ ...activityRow, relatedType, relatedId });
+
+    if (matchedContactId) {
+      const { opportunityContactRoles, opportunities } = await import("../drizzle/schema");
+      const roles = await db.select({ opportunityId: opportunityContactRoles.opportunityId })
+        .from(opportunityContactRoles)
+        .where(and(
+          eq(opportunityContactRoles.workspaceId, data.workspaceId),
+          eq(opportunityContactRoles.contactId, matchedContactId),
+        ));
+      const oppIds = roles.map((r) => r.opportunityId);
+      if (oppIds.length > 0) {
+        const openOpps = await db.select({ id: opportunities.id, stage: opportunities.stage })
+          .from(opportunities)
+          .where(and(
+            eq(opportunities.workspaceId, data.workspaceId),
+            inArray(opportunities.id, oppIds),
+          ));
+        for (const o of openOpps) {
+          if (o.stage === "won" || o.stage === "lost") continue;
+          await db.insert(activities).values({ ...activityRow, relatedType: "opportunity", relatedId: o.id });
+          await db.update(opportunities).set({ lastActivityAt: data.receivedAt })
+            .where(eq(opportunities.id, o.id));
+        }
+      }
+    }
   }
 
   console.log(`[InboundPoller] Processed reply from ${data.fromEmail} (draft: ${matchedDraft?.id ?? "unmatched"})`);

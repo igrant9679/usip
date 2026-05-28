@@ -1647,6 +1647,38 @@ export const opportunitiesRouter = router({
   }),
 
   /** Stage funnel: count + value per open pipeline stage. */
+  /**
+   * Per-rep forecast rollup: total open, weighted (value × winProb),
+   * commit (≥90% prob), best-case (≥50% prob), won this quarter.
+   * Powers the /forecast page.
+   */
+  forecastByRep: workspaceProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) return [];
+    const opps = await db.select().from(opportunities).where(eq(opportunities.workspaceId, ctx.workspace.id));
+    const now = new Date();
+    const qStart = new Date(now.getFullYear(), Math.floor(now.getMonth() / 3) * 3, 1);
+    const qEnd = new Date(qStart.getFullYear(), qStart.getMonth() + 3, 1);
+    const rollup: Record<string, { ownerUserId: number | null; openCount: number; total: number; weighted: number; commit: number; bestCase: number; wonThisQuarter: number }> = {};
+    for (const o of opps) {
+      const key = String(o.ownerUserId ?? "unassigned");
+      if (!rollup[key]) rollup[key] = { ownerUserId: o.ownerUserId ?? null, openCount: 0, total: 0, weighted: 0, commit: 0, bestCase: 0, wonThisQuarter: 0 };
+      const v = Number(o.value ?? 0);
+      const p = o.winProb ?? 20;
+      if (o.stage === "won") {
+        if (o.closeDate && o.closeDate >= qStart && o.closeDate < qEnd) rollup[key].wonThisQuarter += v;
+        continue;
+      }
+      if (o.stage === "lost") continue;
+      rollup[key].openCount += 1;
+      rollup[key].total += v;
+      rollup[key].weighted += v * (p / 100);
+      if (p >= 90) rollup[key].commit += v;
+      if (p >= 50) rollup[key].bestCase += v;
+    }
+    return Object.values(rollup);
+  }),
+
   stageFunnel: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
     if (!db) return [];
