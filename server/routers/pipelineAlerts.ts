@@ -23,6 +23,96 @@ const ALERT_THRESHOLDS = {
   regressionThreshold: 10,   // win prob dropped by 10+ points
 };
 
+/**
+ * Workspace-scoped pipeline-alert scan. Extracted from the `scan` tRPC
+ * mutation so the cron job can iterate workspaces without going through
+ * a request context. Returns { scanned, created }.
+ *
+ * Idempotent: each (opportunity, alertType) pair only gets a new row
+ * while the previous one is undismissed, so re-running the scan in a
+ * tight loop does not flood the alerts table.
+ */
+export async function scanPipelineAlertsForWorkspace(wsId: number): Promise<{ scanned: number; created: number }> {
+  const db = await getDb();
+  if (!db) return { scanned: 0, created: 0 };
+  const now = new Date();
+  const noActivityCutoff = new Date(now.getTime() - ALERT_THRESHOLDS.noActivityDays * 86400000);
+  const closingSoonCutoff = new Date(now.getTime() + ALERT_THRESHOLDS.closingSoonDays * 86400000);
+
+  const opps = await db.select().from(opportunities).where(eq(opportunities.workspaceId, wsId));
+  const activeOpps = opps.filter((o) => !["won", "lost"].includes(o.stage));
+  let created = 0;
+
+  for (const opp of activeOpps) {
+    // No-activity check
+    const recent = await db.select().from(activities)
+      .where(and(
+        eq(activities.workspaceId, wsId),
+        eq(activities.relatedType, "opportunity"),
+        eq(activities.relatedId, opp.id),
+        gte(activities.createdAt, noActivityCutoff),
+      )).limit(1);
+    if (recent.length === 0) {
+      const existing = await db.select().from(pipelineAlerts)
+        .where(and(eq(pipelineAlerts.opportunityId, opp.id), eq(pipelineAlerts.alertType, "no_activity"), isNull(pipelineAlerts.dismissedAt))).limit(1);
+      if (existing.length === 0) {
+        await db.insert(pipelineAlerts).values({
+          workspaceId: wsId, opportunityId: opp.id, alertType: "no_activity",
+          details: { daysSinceActivity: ALERT_THRESHOLDS.noActivityDays, oppName: opp.name },
+        });
+        created++;
+      }
+    }
+    // Closing-soon-with-low-prob check
+    if (opp.closeDate && opp.closeDate <= closingSoonCutoff && opp.winProb < 50) {
+      const existing = await db.select().from(pipelineAlerts)
+        .where(and(eq(pipelineAlerts.opportunityId, opp.id), eq(pipelineAlerts.alertType, "closing_soon_regression"), isNull(pipelineAlerts.dismissedAt))).limit(1);
+      if (existing.length === 0) {
+        const daysUntilClose = Math.ceil((opp.closeDate.getTime() - now.getTime()) / 86400000);
+        await db.insert(pipelineAlerts).values({
+          workspaceId: wsId, opportunityId: opp.id, alertType: "closing_soon_regression",
+          details: { daysUntilClose, winProb: opp.winProb, closeDate: opp.closeDate.toISOString(), oppName: opp.name },
+        });
+        created++;
+      }
+    }
+    // No-champion check
+    const roles = await db.select().from(opportunityContactRoles).where(eq(opportunityContactRoles.opportunityId, opp.id)).limit(1);
+    if (roles.length === 0) {
+      const existing = await db.select().from(pipelineAlerts)
+        .where(and(eq(pipelineAlerts.opportunityId, opp.id), eq(pipelineAlerts.alertType, "no_champion"), isNull(pipelineAlerts.dismissedAt))).limit(1);
+      if (existing.length === 0) {
+        await db.insert(pipelineAlerts).values({
+          workspaceId: wsId, opportunityId: opp.id, alertType: "no_champion",
+          details: { oppName: opp.name, stage: opp.stage },
+        });
+        created++;
+      }
+    }
+  }
+
+  return { scanned: activeOpps.length, created };
+}
+
+/**
+ * Cron driver — iterates every workspace and runs the alert scan.
+ * Called from server/_core/index.ts on the same 3-min tick as the ARE
+ * engine. Errors per workspace are isolated so one failure doesn't
+ * abort the rest of the sweep.
+ */
+export async function runPipelineAlertsCron(): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  // Source workspaces from the membership table — same approach the ARE
+  // engine uses indirectly. Importing the schema avoids any extra round-trip.
+  const { workspaces } = await import("../../drizzle/schema");
+  const wsRows = await db.select({ id: workspaces.id }).from(workspaces);
+  for (const ws of wsRows) {
+    try { await scanPipelineAlertsForWorkspace(ws.id); }
+    catch (e) { console.error(`[PipelineAlertsCron] workspace ${ws.id} scan failed:`, e); }
+  }
+}
+
 export const pipelineAlertsRouter = router({
   /** Run health scan for all active opportunities in the workspace */
   scan: workspaceProcedure.mutation(async ({ ctx }) => {

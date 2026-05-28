@@ -3,7 +3,7 @@ import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, router } from "./_core/trpc";
 import { workspaceRouter } from "./routers/workspace";
-import { accountsRouter, contactsRouter, crmNotesRouter, crmPipelinesRouter, leadsRouter, opportunitiesRouter, productsRouter, territoriesRouter } from "./routers/crm";
+import { accountsRouter, contactsRouter, crmNotesRouter, crmPipelinesRouter, crmTerritoryRulesRouter, leadsRouter, opportunitiesRouter, productsRouter, territoriesRouter } from "./routers/crm";
 import { activitiesRouter, attachmentsRouter, tasksRouter } from "./routers/activities";
 import { emailDraftsRouter, sequencesRouter, sequenceAbRouter } from "./routers/sequences";
 import { csRouter } from "./routers/cs";
@@ -74,6 +74,7 @@ export const appRouter = router({
   attachments: attachmentsRouter,
   crmNotes: crmNotesRouter,
   crmPipelines: crmPipelinesRouter,
+  crmTerritoryRules: crmTerritoryRulesRouter,
   sequences: sequencesRouter,
   emailDrafts: emailDraftsRouter,
   sequenceAb: sequenceAbRouter,

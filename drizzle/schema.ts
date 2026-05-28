@@ -303,6 +303,29 @@ export const crmPipelineStages = mysqlTable(
 );
 export type CrmPipelineStage = typeof crmPipelineStages.$inferSelect;
 
+export const crmTerritoryRules = mysqlTable(
+  "crm_territory_rules",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    name: varchar("name", { length: 120 }).notNull(),
+    priority: int("priority").default(100).notNull(),
+    industry: varchar("industry", { length: 80 }),
+    country: varchar("country", { length: 80 }),
+    state: varchar("state", { length: 80 }),
+    companyContains: varchar("companyContains", { length: 120 }),
+    territoryId: int("territoryId"),
+    ownerUserId: int("ownerUserId"),
+    active: boolean("active").default(true).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    byWs: index("ix_crm_terr_rules_ws").on(t.workspaceId, t.priority, t.active),
+  }),
+);
+export type CrmTerritoryRule = typeof crmTerritoryRules.$inferSelect;
+
 export const opportunityContactRoles = mysqlTable(
   "opportunity_contact_roles",
   {

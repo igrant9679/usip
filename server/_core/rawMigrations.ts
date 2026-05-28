@@ -1388,6 +1388,35 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0083: territory routing rules ─────────────────────────────────
+  // Simple condition table: a rule matches on industry / country / state
+  // / company-name-contains, in priority order. The first match wins and
+  // sets the new account/lead's territoryId and ownerUserId. Wired into
+  // accounts.create and leads.create on the server. Each match value is
+  // optional — a NULL means "any". Rules with NO conditions are catch-all.
+  {
+    name: "0083_crm_territory_rules.sql",
+    statements: [
+      `CREATE TABLE IF NOT EXISTS \`crm_territory_rules\` (
+        \`id\` int AUTO_INCREMENT NOT NULL,
+        \`workspaceId\` int NOT NULL,
+        \`name\` varchar(120) NOT NULL,
+        \`priority\` int NOT NULL DEFAULT 100,
+        \`industry\` varchar(80) NULL,
+        \`country\` varchar(80) NULL,
+        \`state\` varchar(80) NULL,
+        \`companyContains\` varchar(120) NULL,
+        \`territoryId\` int NULL,
+        \`ownerUserId\` int NULL,
+        \`active\` tinyint(1) NOT NULL DEFAULT 1,
+        \`createdAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        \`updatedAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (\`id\`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE INDEX \`ix_crm_terr_rules_ws\` ON \`crm_territory_rules\` (\`workspaceId\`, \`priority\`, \`active\`)`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

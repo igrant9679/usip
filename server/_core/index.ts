@@ -18,6 +18,7 @@ import { processEnrollments } from "../sequenceEngine";
 import { autoSendForAllWorkspaces } from "../routers/sequences";
 import { runNightlyBatch } from "../nightlyBatch";
 import { runAreEngine } from "../areEngine";
+import { runPipelineAlertsCron } from "../routers/pipelineAlerts";
 import { runSegmentEnrollmentForAllWorkspaces } from "../routers/segmentRules"; // eslint-disable-line
 import { registerEmailTrackingRoutes } from "../emailTracking";
 import { startInboundReplyPoller } from "../inboundReplyPoller";
@@ -183,6 +184,18 @@ async function startServer() {
   };
   setTimeout(runAre, 30_000); // first run 30s after boot (so a freshly-launched campaign sees activity fast)
   setInterval(runAre, 3 * 60 * 1000); // every 3 minutes — feels continuous to the user while still giving each tick room to finish
+
+  // Pipeline-health alerts: scan every workspace's open opportunities for
+  // staleness, low-prob deals closing soon, and no-champion deals. Runs on
+  // its own 15-min loop — alerts are user-actionable, no benefit to the
+  // tighter cadence the ARE engine needs.
+  const runAlerts = () => {
+    runPipelineAlertsCron().catch((e) =>
+      console.error("[PipelineAlertsCron] run failed:", e)
+    );
+  };
+  setTimeout(runAlerts, 2 * 60 * 1000); // first run 2 minutes after boot
+  setInterval(runAlerts, 15 * 60 * 1000); // every 15 minutes
 
   // Nightly AI pipeline batch: midnight cron for leads above score threshold
   const scheduleNightlyBatch = () => {

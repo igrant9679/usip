@@ -9,6 +9,7 @@ import {
   crmNotes,
   crmPipelines,
   crmPipelineStages,
+  crmTerritoryRules,
   customers,
   dealLineItems,
   emailDrafts,
@@ -198,9 +199,24 @@ export const accountsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      const r = await db.insert(accounts).values({ ...input, workspaceId: ctx.workspace.id, ownerUserId: ctx.user.id });
+      // Apply territory rules first; explicit input.territoryId always wins.
+      let resolvedTerritoryId = input.territoryId ?? null;
+      let resolvedOwnerId: number = ctx.user.id;
+      if (!resolvedTerritoryId) {
+        const routed = await applyTerritoryRules(db, ctx.workspace.id, {
+          industry: input.industry ?? null,
+          country: input.region ?? null,
+          state: null,
+          company: input.name,
+        });
+        if (routed) {
+          resolvedTerritoryId = routed.territoryId ?? resolvedTerritoryId;
+          if (routed.ownerUserId) resolvedOwnerId = routed.ownerUserId;
+        }
+      }
+      const r = await db.insert(accounts).values({ ...input, workspaceId: ctx.workspace.id, territoryId: resolvedTerritoryId ?? undefined, ownerUserId: resolvedOwnerId });
       const id = Number((r as any)[0]?.insertId ?? 0);
-      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "create", entityType: "account", entityId: id, after: input });
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "create", entityType: "account", entityId: id, after: { ...input, territoryId: resolvedTerritoryId, ownerUserId: resolvedOwnerId } });
       return { id };
     }),
 
@@ -1752,6 +1768,77 @@ export const productsRouter = router({
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     await db.delete(products).where(and(eq(products.id, input.id), eq(products.workspaceId, ctx.workspace.id)));
+    return { ok: true };
+  }),
+});
+
+/* ──────────────────────────────────────────────────────────────────────── */
+/* Territory routing rules — auto-assign accounts/leads to a territory/owner */
+/* ──────────────────────────────────────────────────────────────────────── */
+
+/**
+ * Apply territory rules to a candidate account/lead payload. Returns the
+ * matched rule's territoryId + ownerUserId or nulls if no rule matched.
+ * First-match-wins by priority (lower priority value = higher precedence).
+ */
+export async function applyTerritoryRules(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  workspaceId: number,
+  payload: { industry?: string | null; country?: string | null; state?: string | null; company?: string | null },
+): Promise<{ territoryId: number | null; ownerUserId: number | null } | null> {
+  const rules = await db.select().from(crmTerritoryRules)
+    .where(and(eq(crmTerritoryRules.workspaceId, workspaceId), eq(crmTerritoryRules.active, true)))
+    .orderBy(crmTerritoryRules.priority, crmTerritoryRules.id);
+  const company = (payload.company ?? "").toLowerCase();
+  for (const r of rules) {
+    if (r.industry && r.industry !== payload.industry) continue;
+    if (r.country && r.country !== payload.country) continue;
+    if (r.state && r.state !== payload.state) continue;
+    if (r.companyContains && !company.includes(r.companyContains.toLowerCase())) continue;
+    return { territoryId: r.territoryId ?? null, ownerUserId: r.ownerUserId ?? null };
+  }
+  return null;
+}
+
+export const crmTerritoryRulesRouter = router({
+  list: workspaceProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) return [];
+    return db.select().from(crmTerritoryRules)
+      .where(eq(crmTerritoryRules.workspaceId, ctx.workspace.id))
+      .orderBy(crmTerritoryRules.priority, crmTerritoryRules.id);
+  }),
+
+  create: repProcedure
+    .input(z.object({
+      name: z.string().min(1).max(120),
+      priority: z.number().int().default(100),
+      industry: z.string().max(80).optional(),
+      country: z.string().max(80).optional(),
+      state: z.string().max(80).optional(),
+      companyContains: z.string().max(120).optional(),
+      territoryId: z.number().optional(),
+      ownerUserId: z.number().optional(),
+      active: z.boolean().default(true),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const r = await db.insert(crmTerritoryRules).values({ ...input, workspaceId: ctx.workspace.id });
+      return { id: Number((r as any)[0]?.insertId ?? 0) };
+    }),
+
+  update: repProcedure.input(z.object({ id: z.number(), patch: z.record(z.string(), z.any()) })).mutation(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    await db.update(crmTerritoryRules).set(input.patch).where(and(eq(crmTerritoryRules.id, input.id), eq(crmTerritoryRules.workspaceId, ctx.workspace.id)));
+    return { ok: true };
+  }),
+
+  delete: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    await db.delete(crmTerritoryRules).where(and(eq(crmTerritoryRules.id, input.id), eq(crmTerritoryRules.workspaceId, ctx.workspace.id)));
     return { ok: true };
   }),
 });

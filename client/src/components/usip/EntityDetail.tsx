@@ -57,27 +57,85 @@ function fmt(t: any): string {
 
 /* ─── Activities tab ────────────────────────────────────────────────── */
 function ActivitiesTab({ entityType, entityId }: { entityType: CrmEntityType; entityId: number }) {
+  const utils = trpc.useUtils();
   const { data, isLoading } = trpc.activities.list.useQuery({ relatedType: entityType, relatedId: entityId });
-  if (isLoading) return <div className="text-sm text-muted-foreground p-6">Loading…</div>;
-  if (!data || data.length === 0) return <EmptyState icon={Activity} title="No activity yet" description="Calls, meetings, emails, and notes will appear here." />;
+  const [callOpen, setCallOpen] = useState(false);
+  const invalidate = () => utils.activities.list.invalidate({ relatedType: entityType, relatedId: entityId });
+  const logCall = trpc.activities.logCall.useMutation({ onSuccess: () => { invalidate(); setCallOpen(false); toast.success("Call logged"); } });
+
   return (
-    <ul className="divide-y rounded-lg border bg-card">
-      {data.map((a: any) => (
-        <li key={a.id} className="p-3 flex gap-3">
-          <div className="mt-0.5 size-6 rounded-full bg-secondary flex items-center justify-center text-muted-foreground">
-            <ActivityIcon type={a.type} />
+    <div className="space-y-3">
+      <div className="flex justify-end">
+        <Button size="sm" variant="outline" onClick={() => setCallOpen(true)}><Phone className="size-3.5 mr-1" /> Log call</Button>
+      </div>
+      {isLoading ? <div className="text-sm text-muted-foreground p-6">Loading…</div> :
+        !data || data.length === 0 ? <EmptyState icon={Activity} title="No activity yet" description="Calls, meetings, emails, and notes will appear here." /> :
+        <ul className="divide-y rounded-lg border bg-card">
+          {data.map((a: any) => (
+            <li key={a.id} className="p-3 flex gap-3">
+              <div className="mt-0.5 size-6 rounded-full bg-secondary flex items-center justify-center text-muted-foreground">
+                <ActivityIcon type={a.type} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 text-sm">
+                  <span className="font-medium">{a.subject ?? a.type}</span>
+                  <Badge variant="outline" className="text-[10px]">{a.type}</Badge>
+                  {a.callDurationSec ? <span className="text-[11px] text-muted-foreground">{Math.round(a.callDurationSec / 60)}m</span> : null}
+                </div>
+                {a.body && <div className="text-xs text-muted-foreground mt-0.5 whitespace-pre-wrap line-clamp-4">{a.body}</div>}
+                <div className="text-[11px] text-muted-foreground mt-1">{fmt(a.occurredAt ?? a.createdAt)}</div>
+              </div>
+            </li>
+          ))}
+        </ul>
+      }
+      {callOpen && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={() => setCallOpen(false)}>
+          <div className="bg-card rounded-lg border p-4 w-[420px] max-w-[90vw] space-y-3" onClick={(e) => e.stopPropagation()}>
+            <h3 className="font-medium">Log call</h3>
+            <CallLogForm onSubmit={(payload) => logCall.mutate({ relatedType: entityType, relatedId: entityId, ...payload })} isPending={logCall.isPending} onCancel={() => setCallOpen(false)} />
           </div>
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 text-sm">
-              <span className="font-medium">{a.subject ?? a.type}</span>
-              <Badge variant="outline" className="text-[10px]">{a.type}</Badge>
-            </div>
-            {a.body && <div className="text-xs text-muted-foreground mt-0.5 whitespace-pre-wrap line-clamp-4">{a.body}</div>}
-            <div className="text-[11px] text-muted-foreground mt-1">{fmt(a.occurredAt ?? a.createdAt)}</div>
-          </div>
-        </li>
-      ))}
-    </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CallLogForm({ onSubmit, isPending, onCancel }: {
+  onSubmit: (p: { disposition: any; durationSec: number; outcome?: string; notes?: string }) => void;
+  isPending: boolean; onCancel: () => void;
+}) {
+  const [disposition, setDisposition] = useState<string>("connected");
+  const [duration, setDuration] = useState<string>("5");
+  const [outcome, setOutcome] = useState<string>("");
+  const [notes, setNotes] = useState<string>("");
+  return (
+    <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); onSubmit({ disposition: disposition as any, durationSec: Math.round(Number(duration) * 60), outcome: outcome || undefined, notes: notes || undefined }); }}>
+      <div>
+        <label className="text-xs text-muted-foreground">Disposition</label>
+        <select className="w-full bg-secondary rounded px-2 py-1.5 text-sm mt-1" value={disposition} onChange={(e) => setDisposition(e.target.value)}>
+          {["connected", "voicemail", "no_answer", "bad_number", "gatekeeper", "callback_requested", "not_interested"].map((d) => <option key={d} value={d}>{d.replace(/_/g, " ")}</option>)}
+        </select>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="text-xs text-muted-foreground">Duration (minutes)</label>
+          <input type="number" min={0} className="w-full bg-secondary rounded px-2 py-1.5 text-sm mt-1" value={duration} onChange={(e) => setDuration(e.target.value)} />
+        </div>
+        <div>
+          <label className="text-xs text-muted-foreground">Outcome (optional)</label>
+          <input type="text" className="w-full bg-secondary rounded px-2 py-1.5 text-sm mt-1" value={outcome} onChange={(e) => setOutcome(e.target.value)} placeholder="next steps…" />
+        </div>
+      </div>
+      <div>
+        <label className="text-xs text-muted-foreground">Notes</label>
+        <Textarea rows={3} value={notes} onChange={(e) => setNotes(e.target.value)} />
+      </div>
+      <div className="flex justify-end gap-2">
+        <Button type="button" variant="ghost" size="sm" onClick={onCancel}>Cancel</Button>
+        <Button type="submit" size="sm" disabled={isPending}>Save call</Button>
+      </div>
+    </form>
   );
 }
 
