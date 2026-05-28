@@ -5,6 +5,7 @@ import { useParams, Link, useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { Shell, PageHeader, EmptyState } from "@/components/usip/Shell";
 import { EntityDetailTabs } from "@/components/usip/EntityDetail";
+import { RelatedTasks } from "@/pages/usip/Tasks";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -23,6 +24,7 @@ export default function ContactDetail() {
   const account = data.account ?? null;
 
   const overview = (
+    <div className="space-y-3">
     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
       <Card><CardContent className="pt-4 space-y-2 text-sm">
         <div className="flex items-center gap-2"><User className="size-4 text-muted-foreground" /><span className="font-medium">{c.firstName} {c.lastName}</span>{c.isPrimary && <Badge>Primary</Badge>}</div>
@@ -43,6 +45,8 @@ export default function ContactDetail() {
           </div>
         ) : <div className="text-xs text-muted-foreground">Not linked to an account.</div>}
       </CardContent></Card>
+    </div>
+    <RelatedTasks entityType="contact" entityId={c.id} />
     </div>
   );
 

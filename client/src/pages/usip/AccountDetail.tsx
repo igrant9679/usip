@@ -9,6 +9,7 @@ import { useParams, Link, useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { Shell, PageHeader, EmptyState } from "@/components/usip/Shell";
 import { EntityDetailTabs } from "@/components/usip/EntityDetail";
+import { RelatedTasks } from "@/pages/usip/Tasks";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -33,6 +34,7 @@ export default function AccountDetail() {
   const accOpps = (opps ?? []).filter((o: any) => o.accountId === account.id);
 
   const overview = (
+    <div className="space-y-3">
     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
       <Card><CardContent className="pt-4 space-y-2 text-sm">
         <div className="flex items-center gap-2"><Building2 className="size-4 text-muted-foreground" /><span className="font-medium">{account.name}</span></div>
@@ -56,6 +58,8 @@ export default function AccountDetail() {
           </ul>
         }
       </CardContent></Card>
+    </div>
+    <RelatedTasks entityType="account" entityId={account.id} />
     </div>
   );
 

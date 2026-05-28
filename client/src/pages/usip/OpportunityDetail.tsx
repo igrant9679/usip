@@ -10,6 +10,7 @@ import { useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { Shell, PageHeader, EmptyState } from "@/components/usip/Shell";
 import { EntityDetailTabs } from "@/components/usip/EntityDetail";
+import { RelatedTasks } from "@/pages/usip/Tasks";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -48,6 +49,7 @@ export default function OpportunityDetail() {
   const reasonValue = isClosedWon ? o.winReason : isClosedLost ? o.lostReason : null;
 
   const overview = (
+    <div className="space-y-3">
     <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
       <Card className="md:col-span-2"><CardContent className="pt-4 space-y-2 text-sm">
         <div className="flex items-center gap-2 font-medium"><KanbanSquare className="size-4 text-muted-foreground" />{o.name}</div>
@@ -90,6 +92,8 @@ export default function OpportunityDetail() {
           </>
         ) : <div className="text-xs text-muted-foreground">No analysis yet — run from Pipeline.</div>}
       </CardContent></Card>
+    </div>
+    <RelatedTasks entityType="opportunity" entityId={o.id} />
     </div>
   );
 
