@@ -1271,7 +1271,8 @@ export const opportunitiesRouter = router({
         name: z.string().min(1),
         accountId: z.number(),
         value: z.number().min(0).default(0),
-        stage: z.enum(["discovery", "qualified", "proposal", "negotiation", "won", "lost"]).default("discovery"),
+        stage: z.string().min(1).max(60).default("discovery"),
+        pipelineId: z.number().optional(),
         winProb: z.number().min(0).max(100).default(20),
         closeDate: z.string().optional(),
       }),
@@ -1282,6 +1283,7 @@ export const opportunitiesRouter = router({
       const r = await db.insert(opportunities).values({
         workspaceId: ctx.workspace.id, accountId: input.accountId, name: input.name,
         value: String(input.value), stage: input.stage, winProb: input.winProb,
+        pipelineId: input.pipelineId ?? null,
         closeDate: input.closeDate ? new Date(input.closeDate) : null, ownerUserId: ctx.user.id,
       });
       const id = Number((r as any)[0]?.insertId ?? 0);
@@ -1290,12 +1292,32 @@ export const opportunitiesRouter = router({
     }),
 
   /** Move card on Kanban. */
-  setStage: repProcedure.input(z.object({ id: z.number(), stage: z.enum(["discovery", "qualified", "proposal", "negotiation", "won", "lost"]) })).mutation(async ({ ctx, input }) => {
+  setStage: repProcedure.input(z.object({ id: z.number(), stage: z.string().min(1).max(60) })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const [before] = await db.select().from(opportunities).where(and(eq(opportunities.id, input.id), eq(opportunities.workspaceId, ctx.workspace.id)));
     if (!before) throw new TRPCError({ code: "NOT_FOUND" });
-    const winProb = input.stage === "won" ? 100 : input.stage === "lost" ? 0 : before.winProb;
+    // Look up the new stage's metadata in the configured pipeline to pick up isWon/isLost/defaultWinProb.
+    // Falls back to legacy heuristics ("won" / "lost") for backwards compatibility with custom-built scripts.
+    let winProb = before.winProb;
+    let isWon = input.stage === "won";
+    let isLost = input.stage === "lost";
+    if (before.pipelineId) {
+      const stageRows = await db.select().from(crmPipelineStages)
+        .where(and(
+          eq(crmPipelineStages.workspaceId, ctx.workspace.id),
+          eq(crmPipelineStages.pipelineId, before.pipelineId),
+          eq(crmPipelineStages.key, input.stage),
+        ));
+      const s = stageRows[0];
+      if (s) {
+        isWon = !!s.isWon;
+        isLost = !!s.isLost;
+        winProb = s.defaultWinProb ?? winProb;
+      }
+    }
+    if (isWon) winProb = 100;
+    if (isLost) winProb = 0;
     await db.update(opportunities).set({ stage: input.stage, winProb, daysInStage: 0 }).where(eq(opportunities.id, input.id));
     await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "opportunity", entityId: input.id, before: { stage: before.stage }, after: { stage: input.stage } });
     return { ok: true };

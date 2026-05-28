@@ -213,14 +213,10 @@ export const opportunities = mysqlTable(
     workspaceId: int("workspaceId").notNull(),
     accountId: int("accountId").notNull(),
     name: varchar("name", { length: 200 }).notNull(),
-    stage: mysqlEnum("stage", [
-      "discovery",
-      "qualified",
-      "proposal",
-      "negotiation",
-      "won",
-      "lost",
-    ]).default("discovery").notNull(),
+    // Widened from ENUM to VARCHAR in migration 0082 so per-workspace
+    // pipelines can define custom stage keys. Legacy values still apply
+    // for the default pipeline.
+    stage: varchar("stage", { length: 60 }).default("discovery").notNull(),
     value: decimal("value", { precision: 14, scale: 2 }).default("0").notNull(),
     winProb: int("winProb").default(20).notNull(),
     closeDate: timestamp("closeDate"),

@@ -12,14 +12,16 @@ import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Link, useLocation } from "wouter";
 
-const STAGES = [
+type StageItem = { id: string; label: string };
+
+const LEGACY_STAGES: StageItem[] = [
   { id: "discovery", label: "Discovery" },
   { id: "qualified", label: "Qualified" },
   { id: "proposal", label: "Proposal" },
   { id: "negotiation", label: "Negotiation" },
   { id: "won", label: "Won" },
   { id: "lost", label: "Lost" },
-] as const;
+];
 
 const STAGE_COLORS: Record<string, string> = {
   discovery: "bg-slate-400",
@@ -29,6 +31,20 @@ const STAGE_COLORS: Record<string, string> = {
   won: "bg-emerald-500",
   lost: "bg-red-400",
 };
+
+/**
+ * Returns the active stage list for a pipeline. Falls back to LEGACY_STAGES
+ * while loading or when the workspace has no configured pipelines yet (which
+ * also seeds the Default pipeline on the server side).
+ */
+function useStagesFor(pipelineId?: number): StageItem[] {
+  const { data } = trpc.crmPipelines.get.useQuery(
+    pipelineId ? { pipelineId } : undefined as any,
+    { staleTime: 60_000 },
+  );
+  if (!data) return LEGACY_STAGES;
+  return data.stages.map((s) => ({ id: s.key, label: s.label }));
+}
 
 function WinProbBadge({ prob, aiGenerated }: { prob: number; aiGenerated?: boolean }) {
   const color =
@@ -46,12 +62,14 @@ function WinProbBadge({ prob, aiGenerated }: { prob: number; aiGenerated?: boole
 }
 
 function DealCard({
-  opp, intel, onOpen, onAnalyze, isAnalyzing, onAcceptStage, isAccepting,
+  opp, intel, onOpen, onAnalyze, isAnalyzing, onAcceptStage, isAccepting, stages,
 }: {
   opp: any; intel: any | null; onOpen: () => void;
   onAnalyze: (e: React.MouseEvent) => void; isAnalyzing: boolean;
   onAcceptStage: (e: React.MouseEvent, toStage: string) => void; isAccepting: boolean;
+  stages: StageItem[];
 }) {
+  const STAGES = stages;
   const winProb = intel ? Math.round(Number(intel.winProbability)) : opp.winProb;
   const nba: any[] = (intel?.nextBestActions as any) ?? [];
   const topNba = nba[0] ?? null;
@@ -166,6 +184,7 @@ function DealCard({
 
 /* ─── Forecast View ─────────────────────────────────────────────────────── */
 function ForecastView() {
+  const STAGES = useStagesFor();
   const [selectedStages, setSelectedStages] = useState<string[]>([]);
   const [commentary, setCommentary] = useState<string | null>(null);
   const commentaryMut = trpc.forecastAi.generateCommentary.useMutation({
@@ -373,6 +392,15 @@ export default function Pipeline() {
   const [acceptingIds, setAcceptingIds] = useState<Set<number>>(new Set());
   const [view, setView] = useState<"board" | "forecast">("board");
 
+  // Multi-pipeline support: list available pipelines, default to the workspace's
+  // default. Persist the selection in URL so a refresh keeps the user on the same
+  // pipeline.
+  const { data: pipelines } = trpc.crmPipelines.list.useQuery();
+  const defaultPipelineId = useMemo(() => pipelines?.find((p) => p.isDefault)?.id ?? pipelines?.[0]?.id, [pipelines]);
+  const [selectedPipelineId, setSelectedPipelineId] = useState<number | undefined>(undefined);
+  const pipelineId = selectedPipelineId ?? defaultPipelineId;
+  const STAGES = useStagesFor(pipelineId);
+
   const generateIntel = trpc.oppIntelligence.generateIntelligence.useMutation({
     onSuccess: (_data, vars) => {
       utils.oppIntelligence.getIntelligenceForBoard.invalidate();
@@ -429,12 +457,22 @@ export default function Pipeline() {
     onSuccess: () => { utils.opportunities.board.invalidate(); setAddOpen(false); toast.success("Opportunity created"); },
   });
 
+  // Filter opps to the selected pipeline. Legacy opps with NULL pipelineId
+  // belong to the default pipeline so they keep showing up after the upgrade.
+  const filteredOpps = useMemo(() => {
+    if (!pipelineId) return data ?? [];
+    return (data ?? []).filter((o: any) => {
+      if (o.pipelineId == null) return pipelineId === defaultPipelineId;
+      return o.pipelineId === pipelineId;
+    });
+  }, [data, pipelineId, defaultPipelineId]);
+
   const grouped = useMemo(() => {
     const buckets: Record<string, typeof data> = {};
     STAGES.forEach((s) => (buckets[s.id] = []));
-    (data ?? []).forEach((o) => buckets[o.stage]?.push(o));
+    filteredOpps.forEach((o: any) => { if (buckets[o.stage]) buckets[o.stage]!.push(o); });
     return buckets;
-  }, [data]);
+  }, [filteredOpps, STAGES]);
 
   return (
     <Shell title="Pipeline">
@@ -453,6 +491,22 @@ export default function Pipeline() {
       <PageHeader title="Pipeline" description="Visualise and advance open opportunities across every stage of your sales funnel. Drag deals between stages, set close dates, and get AI-powered next-step recommendations." pageKey="pipeline"
         icon={<KanbanSquare className="size-5" />}
       >
+        {/* Pipeline switcher (multi-pipeline support) */}
+        {pipelines && pipelines.length > 1 && (
+          <select
+            className="text-sm bg-secondary rounded px-2 py-1.5 border"
+            value={String(pipelineId ?? "")}
+            onChange={(e) => setSelectedPipelineId(Number(e.target.value))}
+            title="Pipeline"
+          >
+            {pipelines.map((p) => (
+              <option key={p.id} value={String(p.id)}>{p.name}{p.isDefault ? " (default)" : ""}</option>
+            ))}
+          </select>
+        )}
+        <Button variant="ghost" size="sm" onClick={() => navigate("/settings/pipelines")} title="Configure pipelines">
+          Configure
+        </Button>
         {/* View toggle */}
         <div className="flex items-center border rounded-md overflow-hidden text-sm" data-tour-id="pipeline-view-toggle">
           {(["board", "forecast"] as const).map((v) => (
@@ -534,6 +588,7 @@ export default function Pipeline() {
                         isAnalyzing={analyzingIds.has(o.id)}
                         onAcceptStage={(e, toStage) => handleAcceptStage(e, o.id, toStage)}
                         isAccepting={acceptingIds.has(o.id)}
+                        stages={STAGES}
                       />
                     ))}
                   </div>
@@ -553,8 +608,9 @@ export default function Pipeline() {
           name: String(f.get("name")),
           accountId: Number(f.get("accountId")),
           value: Number(f.get("value")),
-          stage: f.get("stage") as any,
+          stage: String(f.get("stage")),
           winProb: Number(f.get("winProb") ?? 25),
+          pipelineId,
         })}
       >
         <Field name="name" label="Name" required />

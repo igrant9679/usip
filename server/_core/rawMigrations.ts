@@ -1374,6 +1374,20 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0082: widen opportunities.stage from ENUM to VARCHAR ──────────
+  // The legacy 6 stages (discovery/qualified/proposal/negotiation/won/
+  // lost) were a MySQL ENUM. Multi-pipeline support needs custom stage
+  // keys (e.g. "demo_scheduled", "poc_running") that don't fit in the
+  // enum. Widen to VARCHAR(60). Existing enum values are valid VARCHAR
+  // strings, so no data migration is needed. The drizzle schema mirrors
+  // this with `varchar` in place of `mysqlEnum`.
+  {
+    name: "0082_opportunities_stage_varchar.sql",
+    statements: [
+      `ALTER TABLE \`opportunities\` MODIFY COLUMN \`stage\` VARCHAR(60) NOT NULL DEFAULT 'discovery'`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------
