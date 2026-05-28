@@ -1300,6 +1300,80 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0081: CRM polish — notes, pipelines, opportunity additions ──────
+  // Foundation for the CRM gap-closure work:
+  //  * `crm_notes`: workspace-scoped notes attached to any CRM entity
+  //    (account/contact/lead/opportunity). The existing `activities`
+  //    table covers timeline events; this is a dedicated, pinnable note
+  //    surface so the detail pages can show notes separate from the
+  //    activity log.
+  //  * `crm_pipelines` + `crm_pipeline_stages`: multi-pipeline support
+  //    per workspace. Each workspace bootstraps a "Default" pipeline
+  //    mirroring the legacy 6 stages on first read (handled in router,
+  //    not here, so existing data keeps working). `opportunities` gains
+  //    a nullable `pipelineId` — NULL means "default pipeline" until
+  //    backfilled.
+  //  * `opportunities.winReason`: companion to the existing `lostReason`
+  //    for closed-won revenue intelligence.
+  //  * `opportunities.lastActivityAt`: drives the pipelineAlerts stale-
+  //    deal scanner; updated by `crm.activities.create` and reply
+  //    pollers. Nullable so we don't need a backfill.
+  {
+    name: "0081_crm_polish.sql",
+    statements: [
+      // Opportunity additions
+      `ALTER TABLE \`opportunities\` ADD COLUMN \`winReason\` VARCHAR(120) NULL`,
+      `ALTER TABLE \`opportunities\` ADD COLUMN \`lastActivityAt\` TIMESTAMP NULL`,
+      `ALTER TABLE \`opportunities\` ADD COLUMN \`pipelineId\` INT NULL`,
+      `CREATE INDEX \`ix_opp_pipeline\` ON \`opportunities\` (\`workspaceId\`, \`pipelineId\`)`,
+      `CREATE INDEX \`ix_opp_last_activity\` ON \`opportunities\` (\`workspaceId\`, \`lastActivityAt\`)`,
+
+      // Notes table — one row per note, attached to any CRM entity.
+      `CREATE TABLE IF NOT EXISTS \`crm_notes\` (
+        \`id\` int AUTO_INCREMENT NOT NULL,
+        \`workspaceId\` int NOT NULL,
+        \`entityType\` varchar(30) NOT NULL,
+        \`entityId\` int NOT NULL,
+        \`body\` text NOT NULL,
+        \`pinned\` tinyint(1) NOT NULL DEFAULT 0,
+        \`createdByUserId\` int NULL,
+        \`createdAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        \`updatedAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (\`id\`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE INDEX \`ix_crm_notes_entity\` ON \`crm_notes\` (\`workspaceId\`, \`entityType\`, \`entityId\`)`,
+
+      // Pipelines and stages — per-workspace, ordered, with won/lost flags.
+      `CREATE TABLE IF NOT EXISTS \`crm_pipelines\` (
+        \`id\` int AUTO_INCREMENT NOT NULL,
+        \`workspaceId\` int NOT NULL,
+        \`name\` varchar(120) NOT NULL,
+        \`isDefault\` tinyint(1) NOT NULL DEFAULT 0,
+        \`sortOrder\` int NOT NULL DEFAULT 0,
+        \`createdAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        \`updatedAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (\`id\`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE INDEX \`ix_crm_pipelines_ws\` ON \`crm_pipelines\` (\`workspaceId\`)`,
+
+      `CREATE TABLE IF NOT EXISTS \`crm_pipeline_stages\` (
+        \`id\` int AUTO_INCREMENT NOT NULL,
+        \`workspaceId\` int NOT NULL,
+        \`pipelineId\` int NOT NULL,
+        \`key\` varchar(60) NOT NULL,
+        \`label\` varchar(120) NOT NULL,
+        \`sortOrder\` int NOT NULL DEFAULT 0,
+        \`defaultWinProb\` int NOT NULL DEFAULT 20,
+        \`isWon\` tinyint(1) NOT NULL DEFAULT 0,
+        \`isLost\` tinyint(1) NOT NULL DEFAULT 0,
+        \`createdAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        \`updatedAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (\`id\`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE INDEX \`ix_crm_stages_pipeline\` ON \`crm_pipeline_stages\` (\`workspaceId\`, \`pipelineId\`, \`sortOrder\`)`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

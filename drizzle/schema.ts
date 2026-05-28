@@ -228,6 +228,9 @@ export const opportunities = mysqlTable(
     aiNote: text("aiNote"),
     nextStep: text("nextStep"),
     lostReason: varchar("lostReason", { length: 120 }),
+    winReason: varchar("winReason", { length: 120 }),
+    lastActivityAt: timestamp("lastActivityAt"),
+    pipelineId: int("pipelineId"),
     campaignId: int("campaignId"),
     ownerUserId: int("ownerUserId"),
     customFields: json("customFields"),
@@ -237,9 +240,72 @@ export const opportunities = mysqlTable(
   (t) => ({
     byWs: index("ix_opp_ws").on(t.workspaceId),
     byStage: index("ix_opp_stage").on(t.workspaceId, t.stage),
+    byPipeline: index("ix_opp_pipeline").on(t.workspaceId, t.pipelineId),
+    byLastActivity: index("ix_opp_last_activity").on(t.workspaceId, t.lastActivityAt),
   }),
 );
 export type Opportunity = typeof opportunities.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   CRM polish (migration 0081): notes + multi-pipeline support
+   ────────────────────────────────────────────────────────────────────────── */
+
+export const crmNotes = mysqlTable(
+  "crm_notes",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    entityType: varchar("entityType", { length: 30 }).notNull(), // account|contact|lead|opportunity
+    entityId: int("entityId").notNull(),
+    body: text("body").notNull(),
+    pinned: boolean("pinned").default(false).notNull(),
+    createdByUserId: int("createdByUserId"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    byEntity: index("ix_crm_notes_entity").on(t.workspaceId, t.entityType, t.entityId),
+  }),
+);
+export type CrmNote = typeof crmNotes.$inferSelect;
+
+export const crmPipelines = mysqlTable(
+  "crm_pipelines",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    name: varchar("name", { length: 120 }).notNull(),
+    isDefault: boolean("isDefault").default(false).notNull(),
+    sortOrder: int("sortOrder").default(0).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    byWs: index("ix_crm_pipelines_ws").on(t.workspaceId),
+  }),
+);
+export type CrmPipeline = typeof crmPipelines.$inferSelect;
+
+export const crmPipelineStages = mysqlTable(
+  "crm_pipeline_stages",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    pipelineId: int("pipelineId").notNull(),
+    key: varchar("key", { length: 60 }).notNull(),
+    label: varchar("label", { length: 120 }).notNull(),
+    sortOrder: int("sortOrder").default(0).notNull(),
+    defaultWinProb: int("defaultWinProb").default(20).notNull(),
+    isWon: boolean("isWon").default(false).notNull(),
+    isLost: boolean("isLost").default(false).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    byPipeline: index("ix_crm_stages_pipeline").on(t.workspaceId, t.pipelineId, t.sortOrder),
+  }),
+);
+export type CrmPipelineStage = typeof crmPipelineStages.$inferSelect;
 
 export const opportunityContactRoles = mysqlTable(
   "opportunity_contact_roles",
