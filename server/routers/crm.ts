@@ -16,6 +16,7 @@ import {
   leads,
   opportunities,
   opportunityContactRoles,
+  opportunityStageHistory,
   products,
   enrollments,
   sendingAccounts,
@@ -1335,6 +1336,20 @@ export const opportunitiesRouter = router({
     if (isWon) winProb = 100;
     if (isLost) winProb = 0;
     await db.update(opportunities).set({ stage: input.stage, winProb, daysInStage: 0 }).where(eq(opportunities.id, input.id));
+    // Record the transition for the Stage history tab. Non-fatal on insert
+    // failure — the row update is what users see; history is auxiliary.
+    try {
+      await db.insert(opportunityStageHistory).values({
+        workspaceId: ctx.workspace.id,
+        opportunityId: input.id,
+        fromStage: before.stage,
+        toStage: input.stage,
+        changedByUserId: ctx.user.id,
+        daysInPrevStage: before.daysInStage ?? null,
+      });
+    } catch (e) {
+      console.warn("[crm.setStage] stage-history insert failed:", e);
+    }
     await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "opportunity", entityId: input.id, before: { stage: before.stage }, after: { stage: input.stage } });
     return { ok: true };
   }),
@@ -1647,6 +1662,25 @@ export const opportunitiesRouter = router({
   }),
 
   /** Stage funnel: count + value per open pipeline stage. */
+  /**
+   * Chronological list of stage transitions for one opportunity.
+   * Powers the "Stage history" tab on /opportunities/:id. Joined with
+   * the team list client-side to surface who made each change.
+   */
+  stageHistory: workspaceProcedure
+    .input(z.object({ opportunityId: z.number() }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) return [];
+      return db.select().from(opportunityStageHistory)
+        .where(and(
+          eq(opportunityStageHistory.workspaceId, ctx.workspace.id),
+          eq(opportunityStageHistory.opportunityId, input.opportunityId),
+        ))
+        .orderBy(desc(opportunityStageHistory.createdAt))
+        .limit(100);
+    }),
+
   /**
    * Per-rep forecast rollup: total open, weighted (value × winProb),
    * commit (≥90% prob), best-case (≥50% prob), won this quarter.

@@ -72,7 +72,10 @@ type NavLinkItem = { href: string; label: string; icon: any };
 type NavSubhead = { kind: "subhead"; label: string };
 type NavMiniPipeline = {
   kind: "miniPipeline";
-  stages: { href: string; label: string; short: string }[];
+  // `short` is kept for backwards compatibility but no longer rendered;
+  // `icon` (a lucide component) is what shows in the chip now so the
+  // pipeline reads at narrow widths instead of P→L→C→A→π noise.
+  stages: { href: string; label: string; short: string; icon?: any }[];
 };
 type NavItem = NavLinkItem | NavSubhead | NavMiniPipeline;
 type NavGroup = { label: string; items: NavItem[]; color: string; darkColor: string; activeColor: string; activeBg: string; darkActiveBg: string };
@@ -120,11 +123,11 @@ const NAV: NavGroup[] = [
       {
         kind: "miniPipeline",
         stages: [
-          { href: "/prospects", label: "Prospects", short: "P" },
-          { href: "/leads", label: "Leads", short: "L" },
-          { href: "/contacts", label: "Contacts", short: "C" },
-          { href: "/accounts", label: "Accounts", short: "A" },
-          { href: "/pipeline", label: "Pipeline", short: "Π" },
+          { href: "/prospects", label: "Prospects", short: "P", icon: Radar },
+          { href: "/leads", label: "Leads", short: "L", icon: Target },
+          { href: "/contacts", label: "Contacts", short: "C", icon: Users },
+          { href: "/accounts", label: "Accounts", short: "A", icon: Building2 },
+          { href: "/pipeline", label: "Pipeline", short: "Π", icon: KanbanSquare },
         ],
       },
       { kind: "subhead", label: "Funnel" },
@@ -364,11 +367,12 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
                                 <Link
                                   href={stage.href}
                                   title={stage.label}
+                                  aria-label={stage.label}
                                   className={cn(
-                                    "flex items-center justify-center size-6 rounded text-[10px] font-bold transition-all",
+                                    "flex items-center justify-center size-7 rounded transition-all",
                                     stageActive
                                       ? "text-white shadow-sm"
-                                      : "text-white/60 hover:text-white/90",
+                                      : "text-white/70 hover:text-white",
                                   )}
                                   style={
                                     stageActive
@@ -379,7 +383,9 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
                                         }
                                   }
                                 >
-                                  {stage.short}
+                                  {(stage as any).icon
+                                    ? (() => { const Ico = (stage as any).icon; return <Ico className="size-3.5" />; })()
+                                    : <span className="text-[10px] font-bold">{stage.short}</span>}
                                 </Link>
                                 {sIdx < item.stages.length - 1 && (
                                   <span

@@ -15,7 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { ArrowLeft, KanbanSquare, Building2, Users, DollarSign, Brain } from "lucide-react";
+import { ArrowLeft, KanbanSquare, Building2, Users, DollarSign, Brain, History } from "lucide-react";
 import { toast } from "sonner";
 
 function fmt$(n: any) {
@@ -32,6 +32,8 @@ export default function OpportunityDetail() {
   const { data, isLoading } = trpc.opportunities.getWithRelated.useQuery({ id }, { enabled: !Number.isNaN(id) });
   const { data: lineItems } = trpc.opportunities.listLineItems.useQuery({ opportunityId: id }, { enabled: !Number.isNaN(id) });
   const { data: intel } = trpc.oppIntelligence.getIntelligence.useQuery({ opportunityId: id }, { enabled: !Number.isNaN(id) });
+  const { data: stageHistory } = trpc.opportunities.stageHistory.useQuery({ opportunityId: id }, { enabled: !Number.isNaN(id) });
+  const { data: members } = trpc.team.list.useQuery();
 
   const update = trpc.opportunities.update.useMutation({
     onSuccess: () => { utils.opportunities.getWithRelated.invalidate({ id }); toast.success("Saved"); },
@@ -136,9 +138,43 @@ export default function OpportunityDetail() {
     </div>
   );
 
-  // Stage history table exists in schema but has no router query yet;
-  // expose it later in a follow-up. For now we just don't render the tab.
-  const stageTab: any = null;
+  const memberName = (uid: number | null | undefined): string => {
+    if (!uid) return "—";
+    const m = (members ?? []).find((x: any) => x.userId === uid);
+    return (m as any)?.name ?? `User ${uid}`;
+  };
+  const fmtTs = (t: any): string => { try { return t ? new Date(t).toLocaleString() : "—"; } catch { return "—"; } };
+
+  const stageTab = stageHistory && stageHistory.length > 0 ? {
+    value: "stages",
+    label: "Stage history",
+    content: (
+      <ul className="rounded-lg border bg-card divide-y">
+        {stageHistory.map((h: any) => (
+          <li key={h.id} className="p-3 flex items-center gap-3 text-sm">
+            <Badge variant="outline">{h.fromStage ?? "—"}</Badge>
+            <span className="text-muted-foreground">→</span>
+            <Badge>{h.toStage}</Badge>
+            {typeof h.daysInPrevStage === "number" && (
+              <span className="text-xs text-muted-foreground">{h.daysInPrevStage}d in prev</span>
+            )}
+            <span className="text-xs text-muted-foreground ml-auto">{memberName(h.changedByUserId)} · {fmtTs(h.createdAt)}</span>
+          </li>
+        ))}
+      </ul>
+    ),
+  } : (stageHistory ? {
+    // Loaded but empty — render a friendly placeholder so the tab still
+    // shows up once an opportunity has *any* recorded transition. While
+    // empty we just don't surface it (existing behavior).
+    value: "stages",
+    label: "Stage history",
+    content: (
+      <div className="text-sm text-muted-foreground p-6 rounded-lg border bg-card">
+        No stage transitions recorded yet. Moves on the Pipeline board after this update will appear here.
+      </div>
+    ),
+  } : null);
 
   return (
     <Shell title={o.name}>
