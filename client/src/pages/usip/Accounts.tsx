@@ -1,3 +1,4 @@
+import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -388,7 +389,9 @@ export default function Accounts() {
                       <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
                         <input type="checkbox" checked={selectedIds.has(a.id)} onChange={() => toggleOne(a.id)} className="rounded border-gray-300 cursor-pointer" />
                       </td>
-                      <td className="px-3 py-2 font-medium">{a.name}</td>
+                      <td className="px-3 py-2 font-medium" onClick={(e) => e.stopPropagation()}>
+                        <Link href={`/accounts/${a.id}`} className="hover:underline">{a.name}</Link>
+                      </td>
                       <td className="px-3 py-2 text-muted-foreground">{a.industry ?? "—"}</td>
                       <td className="px-3 py-2 text-muted-foreground">{a.region ?? "—"}</td>
                       <td className="px-3 py-2 text-right font-mono tabular-nums whitespace-nowrap">{fmt$(Number(a.arr ?? 0))}</td>

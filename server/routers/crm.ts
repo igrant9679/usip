@@ -6,6 +6,9 @@ import {
   accounts,
   activities,
   contacts,
+  crmNotes,
+  crmPipelines,
+  crmPipelineStages,
   customers,
   dealLineItems,
   emailDrafts,
@@ -1729,4 +1732,237 @@ export const productsRouter = router({
     await db.delete(products).where(and(eq(products.id, input.id), eq(products.workspaceId, ctx.workspace.id)));
     return { ok: true };
   }),
+});
+
+/* ──────────────────────────────────────────────────────────────────────── */
+/* CRM Notes — pinnable freeform notes on any entity                         */
+/* ──────────────────────────────────────────────────────────────────────── */
+
+const VALID_NOTE_ENTITIES = ["account", "contact", "lead", "opportunity", "customer"] as const;
+
+export const crmNotesRouter = router({
+  list: workspaceProcedure
+    .input(z.object({ entityType: z.enum(VALID_NOTE_ENTITIES), entityId: z.number() }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) return [];
+      return db.select().from(crmNotes)
+        .where(and(
+          eq(crmNotes.workspaceId, ctx.workspace.id),
+          eq(crmNotes.entityType, input.entityType),
+          eq(crmNotes.entityId, input.entityId),
+        ))
+        .orderBy(desc(crmNotes.pinned), desc(crmNotes.createdAt))
+        .limit(200);
+    }),
+
+  create: repProcedure
+    .input(z.object({
+      entityType: z.enum(VALID_NOTE_ENTITIES),
+      entityId: z.number(),
+      body: z.string().min(1).max(8000),
+      pinned: z.boolean().optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const r = await db.insert(crmNotes).values({
+        workspaceId: ctx.workspace.id,
+        entityType: input.entityType,
+        entityId: input.entityId,
+        body: input.body,
+        pinned: input.pinned ?? false,
+        createdByUserId: ctx.user.id,
+      });
+      return { id: Number((r as any)[0]?.insertId ?? 0) };
+    }),
+
+  update: repProcedure
+    .input(z.object({ id: z.number(), body: z.string().min(1).max(8000).optional(), pinned: z.boolean().optional() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const patch: any = {};
+      if (input.body !== undefined) patch.body = input.body;
+      if (input.pinned !== undefined) patch.pinned = input.pinned;
+      if (Object.keys(patch).length === 0) return { ok: true };
+      await db.update(crmNotes).set(patch).where(and(eq(crmNotes.id, input.id), eq(crmNotes.workspaceId, ctx.workspace.id)));
+      return { ok: true };
+    }),
+
+  delete: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    await db.delete(crmNotes).where(and(eq(crmNotes.id, input.id), eq(crmNotes.workspaceId, ctx.workspace.id)));
+    return { ok: true };
+  }),
+});
+
+/* ──────────────────────────────────────────────────────────────────────── */
+/* CRM Pipelines — multi-pipeline with configurable stages per workspace     */
+/* ──────────────────────────────────────────────────────────────────────── */
+
+/** Legacy stage shape; mirrors the hard-coded STAGES that Pipeline.tsx used. */
+const LEGACY_STAGES = [
+  { key: "discovery",   label: "Discovery",   sortOrder: 0, defaultWinProb: 15, isWon: false, isLost: false },
+  { key: "qualified",   label: "Qualified",   sortOrder: 1, defaultWinProb: 30, isWon: false, isLost: false },
+  { key: "proposal",    label: "Proposal",    sortOrder: 2, defaultWinProb: 55, isWon: false, isLost: false },
+  { key: "negotiation", label: "Negotiation", sortOrder: 3, defaultWinProb: 75, isWon: false, isLost: false },
+  { key: "won",         label: "Won",         sortOrder: 4, defaultWinProb: 100, isWon: true,  isLost: false },
+  { key: "lost",        label: "Lost",        sortOrder: 5, defaultWinProb: 0,   isWon: false, isLost: true  },
+];
+
+/** Ensure the workspace has at least one pipeline; seed the legacy 6 stages if not. */
+async function ensureDefaultPipeline(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, workspaceId: number): Promise<number> {
+  const existing = await db.select().from(crmPipelines).where(eq(crmPipelines.workspaceId, workspaceId)).limit(1);
+  if (existing.length > 0) {
+    const def = existing.find((p) => p.isDefault) ?? existing[0];
+    return def.id;
+  }
+  const r = await db.insert(crmPipelines).values({ workspaceId, name: "Default", isDefault: true, sortOrder: 0 });
+  const pipelineId = Number((r as any)[0]?.insertId ?? 0);
+  await db.insert(crmPipelineStages).values(LEGACY_STAGES.map((s) => ({ ...s, workspaceId, pipelineId })));
+  return pipelineId;
+}
+
+export const crmPipelinesRouter = router({
+  /** Returns all pipelines for the workspace, seeding the Default one if none exist. */
+  list: workspaceProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) return [];
+    await ensureDefaultPipeline(db, ctx.workspace.id);
+    return db.select().from(crmPipelines).where(eq(crmPipelines.workspaceId, ctx.workspace.id)).orderBy(crmPipelines.sortOrder, crmPipelines.id);
+  }),
+
+  /** Return one pipeline with its stages. If pipelineId is omitted, returns the default. */
+  get: workspaceProcedure
+    .input(z.object({ pipelineId: z.number().optional() }).optional())
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const pipelineId = input?.pipelineId ?? await ensureDefaultPipeline(db, ctx.workspace.id);
+      const [pipeline] = await db.select().from(crmPipelines)
+        .where(and(eq(crmPipelines.id, pipelineId), eq(crmPipelines.workspaceId, ctx.workspace.id)))
+        .limit(1);
+      if (!pipeline) throw new TRPCError({ code: "NOT_FOUND" });
+      const stages = await db.select().from(crmPipelineStages)
+        .where(and(eq(crmPipelineStages.workspaceId, ctx.workspace.id), eq(crmPipelineStages.pipelineId, pipelineId)))
+        .orderBy(crmPipelineStages.sortOrder, crmPipelineStages.id);
+      return { pipeline, stages };
+    }),
+
+  createPipeline: repProcedure
+    .input(z.object({ name: z.string().min(1).max(120), cloneFromPipelineId: z.number().optional() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const r = await db.insert(crmPipelines).values({ workspaceId: ctx.workspace.id, name: input.name, isDefault: false, sortOrder: 99 });
+      const pipelineId = Number((r as any)[0]?.insertId ?? 0);
+
+      // Seed stages: clone from source pipeline or fall back to legacy template.
+      let stageRows: typeof LEGACY_STAGES = LEGACY_STAGES;
+      if (input.cloneFromPipelineId) {
+        const src = await db.select().from(crmPipelineStages)
+          .where(and(eq(crmPipelineStages.workspaceId, ctx.workspace.id), eq(crmPipelineStages.pipelineId, input.cloneFromPipelineId)))
+          .orderBy(crmPipelineStages.sortOrder);
+        if (src.length > 0) {
+          stageRows = src.map((s) => ({
+            key: s.key, label: s.label, sortOrder: s.sortOrder,
+            defaultWinProb: s.defaultWinProb, isWon: s.isWon, isLost: s.isLost,
+          }));
+        }
+      }
+      await db.insert(crmPipelineStages).values(stageRows.map((s) => ({ ...s, workspaceId: ctx.workspace.id, pipelineId })));
+      return { id: pipelineId };
+    }),
+
+  renamePipeline: repProcedure
+    .input(z.object({ id: z.number(), name: z.string().min(1).max(120) }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      await db.update(crmPipelines).set({ name: input.name }).where(and(eq(crmPipelines.id, input.id), eq(crmPipelines.workspaceId, ctx.workspace.id)));
+      return { ok: true };
+    }),
+
+  setDefault: repProcedure
+    .input(z.object({ id: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // Clear other defaults, then set this one. Not transactional — acceptable per HANDOFF gotcha #4.
+      await db.update(crmPipelines).set({ isDefault: false }).where(eq(crmPipelines.workspaceId, ctx.workspace.id));
+      await db.update(crmPipelines).set({ isDefault: true }).where(and(eq(crmPipelines.id, input.id), eq(crmPipelines.workspaceId, ctx.workspace.id)));
+      return { ok: true };
+    }),
+
+  deletePipeline: repProcedure
+    .input(z.object({ id: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // Don't allow deleting the default pipeline.
+      const [target] = await db.select().from(crmPipelines).where(and(eq(crmPipelines.id, input.id), eq(crmPipelines.workspaceId, ctx.workspace.id))).limit(1);
+      if (!target) throw new TRPCError({ code: "NOT_FOUND" });
+      if (target.isDefault) throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot delete the default pipeline" });
+      await db.delete(crmPipelineStages).where(and(eq(crmPipelineStages.pipelineId, input.id), eq(crmPipelineStages.workspaceId, ctx.workspace.id)));
+      await db.delete(crmPipelines).where(and(eq(crmPipelines.id, input.id), eq(crmPipelines.workspaceId, ctx.workspace.id)));
+      return { ok: true };
+    }),
+
+  createStage: repProcedure
+    .input(z.object({
+      pipelineId: z.number(),
+      key: z.string().min(1).max(60),
+      label: z.string().min(1).max(120),
+      sortOrder: z.number().int().default(0),
+      defaultWinProb: z.number().int().min(0).max(100).default(20),
+      isWon: z.boolean().default(false),
+      isLost: z.boolean().default(false),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const r = await db.insert(crmPipelineStages).values({ ...input, workspaceId: ctx.workspace.id });
+      return { id: Number((r as any)[0]?.insertId ?? 0) };
+    }),
+
+  updateStage: repProcedure
+    .input(z.object({
+      id: z.number(),
+      patch: z.object({
+        key: z.string().min(1).max(60).optional(),
+        label: z.string().min(1).max(120).optional(),
+        sortOrder: z.number().int().optional(),
+        defaultWinProb: z.number().int().min(0).max(100).optional(),
+        isWon: z.boolean().optional(),
+        isLost: z.boolean().optional(),
+      }),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      await db.update(crmPipelineStages).set(input.patch).where(and(eq(crmPipelineStages.id, input.id), eq(crmPipelineStages.workspaceId, ctx.workspace.id)));
+      return { ok: true };
+    }),
+
+  deleteStage: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    await db.delete(crmPipelineStages).where(and(eq(crmPipelineStages.id, input.id), eq(crmPipelineStages.workspaceId, ctx.workspace.id)));
+    return { ok: true };
+  }),
+
+  /** Bulk reorder — pass [{id, sortOrder}]. */
+  reorderStages: repProcedure
+    .input(z.object({ items: z.array(z.object({ id: z.number(), sortOrder: z.number().int() })).min(1) }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      for (const it of input.items) {
+        await db.update(crmPipelineStages).set({ sortOrder: it.sortOrder })
+          .where(and(eq(crmPipelineStages.id, it.id), eq(crmPipelineStages.workspaceId, ctx.workspace.id)));
+      }
+      return { ok: true };
+    }),
 });

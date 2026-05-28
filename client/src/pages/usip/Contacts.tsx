@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -814,10 +815,10 @@ export default function Contacts() {
                         className="rounded border-gray-300 cursor-pointer"
                       />
                     </td>
-                    <td className="px-3 py-2 font-medium">
-                      <span className="underline-offset-2 hover:underline">
+                    <td className="px-3 py-2 font-medium" onClick={(e) => e.stopPropagation()}>
+                      <Link href={`/contacts/${c.id}`} className="underline-offset-2 hover:underline">
                         {c.firstName} {c.lastName}
-                      </span>
+                      </Link>
                     </td>
                     <td className="px-3 py-2 text-muted-foreground">{c.title}</td>
                     <td className="px-3 py-2 text-muted-foreground">{(c as any).accountName}</td>

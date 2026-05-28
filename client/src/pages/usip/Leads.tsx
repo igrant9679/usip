@@ -1,3 +1,4 @@
+import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -320,7 +321,9 @@ export default function Leads() {
                     <td className="px-3 py-2" onClick={(e) => { e.stopPropagation(); toggleOne(l.id); }}>
                       <input type="checkbox" checked={selectedIds.has(l.id)} readOnly className="rounded border-gray-300 cursor-pointer" />
                     </td>
-                    <td className="px-3 py-2 font-medium"><span className="underline-offset-2 hover:underline">{l.firstName} {l.lastName}</span></td>
+                    <td className="px-3 py-2 font-medium" onClick={(e) => e.stopPropagation()}>
+                      <Link href={`/leads/${l.id}`} className="underline-offset-2 hover:underline">{l.firstName} {l.lastName}</Link>
+                    </td>
                     <td className="px-3 py-2 text-muted-foreground">{l.title} · {l.company}</td>
                     <td className="px-3 py-2 text-muted-foreground">{l.email}</td>
                     <td className="px-3 py-2 text-muted-foreground">{l.source}</td>

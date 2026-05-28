@@ -10,7 +10,7 @@ import { trpc } from "@/lib/trpc";
 import { ArrowRight, Brain, Download, Loader2, Plus, TrendingUp, Zap, Filter, X, User, KanbanSquare, Sparkles } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
-import { useLocation } from "wouter";
+import { Link, useLocation } from "wouter";
 
 const STAGES = [
   { id: "discovery", label: "Discovery" },
@@ -73,7 +73,9 @@ function DealCard({
     >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <div className="text-sm font-medium truncate">{opp.name}</div>
+          <Link href={`/opportunities/${opp.id}`} onClick={(e) => e.stopPropagation()} className="text-sm font-medium truncate hover:underline block">
+            {opp.name}
+          </Link>
           <div className="text-[11px] text-muted-foreground truncate mt-0.5">{opp.accountName}</div>
         </div>
         <TooltipProvider>

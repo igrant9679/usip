@@ -23,6 +23,10 @@ import CalendarPage from "@/pages/usip/Calendar";
 import Leads from "@/pages/usip/Leads";
 import Prospects from "@/pages/usip/Prospects";
 import ProspectDetail from "@/pages/usip/ProspectDetail";
+import AccountDetail from "@/pages/usip/AccountDetail";
+import ContactDetail from "@/pages/usip/ContactDetail";
+import LeadDetail from "@/pages/usip/LeadDetail";
+import OpportunityDetail from "@/pages/usip/OpportunityDetail";
 import FindProspects from "@/pages/usip/FindProspects";
 import Pipeline from "@/pages/usip/Pipeline";
 import Products from "@/pages/usip/Products";
@@ -283,7 +287,11 @@ function Router() {
       <Route path="/prospects/:id"><AuthGate><ProspectDetail /></AuthGate></Route>
       <Route path="/find-prospects"><AuthGate><FindProspects /></AuthGate></Route>
       <Route path="/contacts"><AuthGate><Contacts /></AuthGate></Route>
+      <Route path="/contacts/:id"><AuthGate><ContactDetail /></AuthGate></Route>
       <Route path="/accounts"><AuthGate><Accounts /></AuthGate></Route>
+      <Route path="/accounts/:id"><AuthGate><AccountDetail /></AuthGate></Route>
+      <Route path="/leads/:id"><AuthGate><LeadDetail /></AuthGate></Route>
+      <Route path="/opportunities/:id"><AuthGate><OpportunityDetail /></AuthGate></Route>
       <Route path="/pipeline"><AuthGate><Pipeline /></AuthGate></Route>
       <Route path="/sequences"><AuthGate><Sequences /></AuthGate></Route>
       <Route path="/sequences/:id/canvas"><AuthGate><SequenceCanvas /></AuthGate></Route>
