@@ -21,7 +21,7 @@ import { Card, CardContent } from "@/components/ui/card";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 type StepType = "email" | "wait" | "task";
-interface EmailStep { type: "email"; subject: string; body?: string }
+interface EmailStep { type: "email"; subject: string; body?: string; templateId?: number }
 interface WaitStep { type: "wait"; days: number }
 interface TaskStep { type: "task"; body: string }
 type Step = EmailStep | WaitStep | TaskStep;
@@ -132,6 +132,27 @@ function EnrollmentStatsPanel({ sequenceId, steps }: { sequenceId: number; steps
 
 // ─── StepEditor ──────────────────────────────────────────────────────────────
 function StepEditor({ steps, onChange, disabled }: { steps: Step[]; onChange: (s: Step[]) => void; disabled?: boolean }) {
+  // Pull every non-archived workspace template so each email step gets
+  // a template picker. The list endpoint already returns the full row
+  // (htmlOutput included) so apply-template is a single client-side
+  // copy — no extra fetch per pick.
+  const templatesQ = trpc.emailTemplates?.list?.useQuery({ status: "all" });
+  const templates = (templatesQ?.data ?? []).filter((t: any) => t.status !== "archived");
+  const templateById = new Map<number, any>(templates.map((t: any) => [t.id, t]));
+
+  function applyTemplateToStep(i: number, templateId: number) {
+    const t = templateById.get(templateId);
+    if (!t) return;
+    // RichTextEditor stores HTML, so we drop the template's htmlOutput
+    // in verbatim. Subject is plain text. templateId tracked so the
+    // breadcrumb survives reopening the dialog.
+    updateStep(i, {
+      subject: t.subject ?? "",
+      body: t.htmlOutput ?? "",
+      templateId,
+    } as Partial<EmailStep>);
+  }
+
   function addStep(type: StepType) {
     const newStep: Step =
       type === "email" ? { type: "email", subject: "New email", body: "" } :
@@ -178,26 +199,84 @@ function StepEditor({ steps, onChange, disabled }: { steps: Step[]; onChange: (s
             </div>
           </div>
 
-          {step.type === "email" && (
-            <div className="space-y-1.5">
-              <Input
-                placeholder="Subject"
-                value={step.subject}
-                disabled={disabled}
-                onChange={(e) => updateStep(i, { subject: e.target.value })}
-                className="h-7 text-sm"
-              />
-              <RichTextEditor
-                value={step.body ?? ""}
-                onChange={(html) => updateStep(i, { body: html })}
-                placeholder="Body (optional — leave blank to compose with AI at send time)"
-                minHeight="80px"
-                maxHeight="300px"
-                compact
-                disabled={disabled}
-              />
-            </div>
-          )}
+          {step.type === "email" && (() => {
+            const appliedTemplate = step.templateId ? templateById.get(step.templateId) : null;
+            return (
+              <div className="space-y-1.5">
+                {/* Apply-template picker + breadcrumb. Selecting a
+                    template copies its subject + body straight into
+                    this step so the user sees the content immediately
+                    and can edit it inline. The source template stays
+                    untouched. */}
+                <div className="flex items-center gap-2">
+                  <Select
+                    value={step.templateId?.toString() ?? ""}
+                    disabled={disabled}
+                    onValueChange={(v) => applyTemplateToStep(i, Number(v))}
+                  >
+                    <SelectTrigger className="h-7 text-xs flex-1">
+                      <SelectValue placeholder={
+                        templates.length === 0 ? "No templates saved yet" : "Apply a template…"
+                      } />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {templates.map((t: any) => (
+                        <SelectItem key={t.id} value={t.id.toString()} className="text-xs">
+                          <span className="flex items-center gap-2">
+                            <span>{t.name}</span>
+                            {t.status === "draft" && (
+                              <span className="text-[10px] px-1 py-0 rounded bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">
+                                draft
+                              </span>
+                            )}
+                          </span>
+                        </SelectItem>
+                      ))}
+                      {templates.length === 0 && (
+                        <div className="px-3 py-2 text-xs text-muted-foreground">
+                          No templates found — create one in Email Builder.
+                        </div>
+                      )}
+                    </SelectContent>
+                  </Select>
+                </div>
+                {appliedTemplate && (
+                  <div className="flex items-center gap-2 rounded-md bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 px-2.5 py-1 text-[11px] text-blue-700 dark:text-blue-300">
+                    <Mail className="size-3 shrink-0" />
+                    <span className="flex-1 truncate">
+                      Applied from template: <span className="font-medium">{appliedTemplate.name}</span>
+                    </span>
+                    {!disabled && (
+                      <button
+                        type="button"
+                        className="text-[11px] underline-offset-2 hover:underline shrink-0"
+                        onClick={() => updateStep(i, { templateId: undefined } as Partial<EmailStep>)}
+                        title="Detach from the source template (keeps the content)"
+                      >
+                        Detach
+                      </button>
+                    )}
+                  </div>
+                )}
+                <Input
+                  placeholder="Subject"
+                  value={step.subject}
+                  disabled={disabled}
+                  onChange={(e) => updateStep(i, { subject: e.target.value })}
+                  className="h-7 text-sm"
+                />
+                <RichTextEditor
+                  value={step.body ?? ""}
+                  onChange={(html) => updateStep(i, { body: html })}
+                  placeholder="Body (optional — leave blank to compose with AI at send time)"
+                  minHeight="80px"
+                  maxHeight="300px"
+                  compact
+                  disabled={disabled}
+                />
+              </div>
+            );
+          })()}
 
           {step.type === "wait" && (
             <div className="flex items-center gap-2">

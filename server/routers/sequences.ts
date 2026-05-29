@@ -239,7 +239,12 @@ function renderMergeFields(template: string, vars: Record<string, string | null 
 }
 
 const stepSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("email"), subject: z.string(), body: z.string().optional() }),
+  // `templateId` is optional provenance: it records that this step's
+  // subject/body originated from an Email Builder template so the
+  // Sequences edit dialog can render an "Applied from: <name>"
+  // breadcrumb. The send engine ignores it — only subject/body matter
+  // at send time.
+  z.object({ type: z.literal("email"), subject: z.string(), body: z.string().optional(), templateId: z.number().int().optional() }),
   z.object({ type: z.literal("wait"), days: z.number().int().min(0).max(60) }),
   z.object({ type: z.literal("task"), body: z.string() }),
   z.object({ type: z.literal("linkedin_dm"), body: z.string().optional() }),
@@ -274,7 +279,7 @@ type CanvasNode = {
 };
 type CanvasEdge = { id: string; source: string; target: string; sourceHandle?: string | null; label?: string | null };
 type ListStep =
-  | { type: "email"; subject: string; body?: string }
+  | { type: "email"; subject: string; body?: string; templateId?: number }
   | { type: "wait"; days: number }
   | { type: "task"; body: string }
   | { type: "linkedin_dm"; body?: string }
@@ -315,18 +320,30 @@ function canvasToSteps(nodes: CanvasNode[], edges: CanvasEdge[]): ListStep[] {
 }
 
 function canvasNodeToStep(node: CanvasNode): ListStep | null {
-  const d = node.data ?? {};
+  const d: any = node.data ?? {};
   switch (node.type) {
-    case "email":
-      return { type: "email", subject: String((d as any).subject ?? ""), body: String((d as any).body ?? "") };
+    case "email": {
+      // Canvas stores email fields under static* (see NodeEditPanel),
+      // not bare subject/body. Fall back to the bare names for any
+      // legacy nodes that were saved before the rename. Same logic for
+      // templateId provenance.
+      const subject = String(d.staticSubject ?? d.subject ?? "");
+      const body = String(d.staticBody ?? d.body ?? "");
+      const templateId = typeof (d.staticTemplateId ?? d.templateId) === "number"
+        ? (d.staticTemplateId ?? d.templateId)
+        : undefined;
+      return templateId
+        ? { type: "email", subject, body, templateId }
+        : { type: "email", subject, body };
+    }
     case "wait":
-      return { type: "wait", days: Math.max(0, Number((d as any).days ?? 1)) };
+      return { type: "wait", days: Math.max(0, Number(d.days ?? 1)) };
     case "action":
-      return { type: "task", body: String((d as any).body ?? (d as any).label ?? "") };
+      return { type: "task", body: String(d.body ?? d.label ?? "") };
     case "linkedin_dm":
-      return { type: "linkedin_dm", body: String((d as any).body ?? "") };
+      return { type: "linkedin_dm", body: String(d.body ?? "") };
     case "linkedin_invite":
-      return { type: "linkedin_invite", note: String((d as any).note ?? "") };
+      return { type: "linkedin_invite", note: String(d.note ?? "") };
     default:
       return null;
   }
@@ -343,7 +360,17 @@ function stepsToCanvas(steps: ListStep[]): { nodes: CanvasNode[]; edges: CanvasE
     const id = `${s.type}-${i + 1}`;
     let data: Record<string, unknown> = {};
     switch (s.type) {
-      case "email": data = { subject: s.subject, body: s.body ?? "" }; break;
+      case "email":
+        // Write into the field names the canvas NodeEditPanel actually
+        // reads (static*), and carry templateId through as
+        // staticTemplateId so the breadcrumb survives the round-trip.
+        data = {
+          staticSubject: s.subject,
+          staticBody: s.body ?? "",
+          emailMode: "typed",
+          ...(s.templateId ? { staticTemplateId: s.templateId } : {}),
+        };
+        break;
       case "wait": data = { days: s.days, label: `Wait ${s.days}d` }; break;
       case "task": data = { body: s.body, label: "Task" }; break;
       case "linkedin_dm": data = { body: s.body ?? "", label: "LinkedIn DM" }; break;
