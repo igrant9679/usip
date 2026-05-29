@@ -53,7 +53,7 @@ import {
   GitFork,
   ScrollText,
 } from "lucide-react";
-import { ReactNode, useEffect, useState, useRef, createContext, useContext } from "react";
+import { ReactNode, useEffect, useLayoutEffect, useState, useRef, createContext, useContext } from "react";
 import { Link, useLocation } from "wouter";
 import { PageTransition } from "@/components/PageTransition";
 import { useTheme } from "@/contexts/ThemeContext";
@@ -249,13 +249,27 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
   const navRef = useRef<HTMLElement>(null);
   // Preserve sidebar scroll position across route changes so clicking a nav
   // item deep in the list never causes the sidebar to jump back to the top.
-  const navScrollRef = useRef<number>(0);
-  useEffect(() => {
+  //
+  // The previous in-memory useRef silently failed because every page
+  // component renders its own <Shell>, which means Shell unmounts and
+  // remounts on every navigation — the ref reinitialised to 0 each
+  // time. Persisting to sessionStorage survives the remount; using
+  // session (not local) storage so the position resets on tab close,
+  // which is the expected behavior.
+  const SIDEBAR_SCROLL_KEY = "velocity_sidebar_scrollTop";
+  useLayoutEffect(() => {
     const el = navRef.current;
     if (!el) return;
-    // Restore scroll position immediately after re-render from route change
-    el.scrollTop = navScrollRef.current;
-  }, [location]);
+    try {
+      const saved = sessionStorage.getItem(SIDEBAR_SCROLL_KEY);
+      if (saved) {
+        const n = Number(saved);
+        if (Number.isFinite(n)) el.scrollTop = n;
+      }
+    } catch {
+      // sessionStorage can throw in strict privacy modes; safe to ignore.
+    }
+  }, []);
   const { data: unread } = trpc.notifications.unreadCount.useQuery(undefined, { enabled: !!current, refetchInterval: 30_000 });
   const { theme, toggleTheme } = useTheme();
 
@@ -319,7 +333,11 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
         <nav
           ref={navRef}
           className="flex-1 overflow-y-auto py-3 px-0 space-y-2"
-          onScroll={(e) => { navScrollRef.current = (e.currentTarget as HTMLElement).scrollTop; }}
+          onScroll={(e) => {
+            // Cheap direct write — sessionStorage handles scroll-event
+            // frequency fine in modern browsers. No debouncing needed.
+            try { sessionStorage.setItem(SIDEBAR_SCROLL_KEY, String((e.currentTarget as HTMLElement).scrollTop)); } catch {}
+          }}
         >
           {effectiveNav.map((group) => {
             const gc = isDark ? group.darkColor : group.color;
