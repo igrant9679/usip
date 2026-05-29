@@ -1426,22 +1426,37 @@ function Builder({ templateId }: { templateId: number }) {
               <Button
                 size="sm"
                 variant="outline"
-                className="h-7 px-2 text-xs"
+                className="h-7 w-7 p-0"
                 onClick={() => { setMultiSelectMode(true); setSelectedIds(new Set()); }}
                 title="Select multiple blocks to save as a reusable section"
+                aria-label="Select multiple blocks"
               >
-                <CheckSquare size={12} className="mr-1" /> Select
+                <CheckSquare size={14} />
               </Button>
             )
           )}
           <span className={`text-xs ${saveState === "saved" ? "text-green-600" : saveState === "saving" ? "text-amber-500" : "text-muted-foreground"}`}>
             {saveState === "saved" ? "Saved" : saveState === "saving" ? "Saving…" : "Unsaved"}
           </span>
-          <Button size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={handlePreview}>
-            <Eye size={12} className="mr-1" /> Preview
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 w-7 p-0"
+            onClick={handlePreview}
+            title="Preview"
+            aria-label="Preview"
+          >
+            <Eye size={14} />
           </Button>
-          <Button size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={() => duplicateMutation.mutate({ id: templateId })}>
-            <Copy size={12} className="mr-1" /> Duplicate
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 w-7 p-0"
+            onClick={() => duplicateMutation.mutate({ id: templateId })}
+            title="Duplicate"
+            aria-label="Duplicate"
+          >
+            <Copy size={14} />
           </Button>
           {!isReadOnly && (
             <>
