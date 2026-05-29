@@ -138,7 +138,14 @@ function EmailModePanel({
   onChange: (patch: Partial<NodeData>) => void;
 }) {
   const mode = data.emailMode ?? "typed";
-  const templatesQ = trpc.emailTemplates?.list?.useQuery({ status: "active" }, { enabled: mode === "template" });
+  // Show ALL workspace templates (active + draft) when the user is in
+  // template-pick mode. The previous status:"active" filter silently
+  // hid every newly-saved Email Builder template because new templates
+  // are created with status:"draft" and no Publish step existed. We
+  // still drop archived templates and surface a badge so users can
+  // tell what state each option is in.
+  const templatesQ = trpc.emailTemplates?.list?.useQuery({ status: "all" }, { enabled: mode === "template" });
+  const selectableTemplates = (templatesQ?.data ?? []).filter((t: any) => t.status !== "archived");
 
   return (
     <Section title="Email content">
@@ -194,12 +201,19 @@ function EmailModePanel({
                 <SelectValue placeholder="Choose a template…" />
               </SelectTrigger>
               <SelectContent>
-                {templatesQ?.data?.map((t: any) => (
+                {selectableTemplates.map((t: any) => (
                   <SelectItem key={t.id} value={t.id.toString()} className="text-xs">
-                    {t.name}
+                    <span className="flex items-center gap-2">
+                      <span>{t.name}</span>
+                      {t.status === "draft" && (
+                        <span className="text-[10px] px-1 py-0 rounded bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">
+                          draft
+                        </span>
+                      )}
+                    </span>
                   </SelectItem>
                 ))}
-                {(!templatesQ?.data || templatesQ.data.length === 0) && (
+                {selectableTemplates.length === 0 && (
                   <div className="px-3 py-2 text-xs text-muted-foreground">No templates found</div>
                 )}
               </SelectContent>

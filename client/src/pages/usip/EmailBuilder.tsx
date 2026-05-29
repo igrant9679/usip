@@ -982,6 +982,7 @@ const BLOCK_TOOLTIPS: Record<string, string> = {
 /* ─── Main Builder ───────────────────────────────────────────────────────── */
 function Builder({ templateId }: { templateId: number }) {
   const [, navigate] = useLocation();
+  const utils = trpc.useUtils();
   const { data: template, isLoading } = trpc.emailTemplates.get.useQuery({ id: templateId });
   const saveMutation = trpc.emailTemplates.save.useMutation();
   const archiveMutation = trpc.emailTemplates.archive.useMutation({
@@ -989,6 +990,26 @@ function Builder({ templateId }: { templateId: number }) {
   });
   const duplicateMutation = trpc.emailTemplates.duplicate.useMutation({
     onSuccess: (data) => { toast.success("Duplicated"); navigate(`/email-builder/${data.id}`); },
+  });
+  // Publish / unpublish — flips status between draft <-> active. The
+  // sequence-canvas template picker only shows non-archived templates
+  // and badges drafts so users see what state they're in; publishing
+  // promotes a draft into the "primary" workspace template surface.
+  const publishMutation = trpc.emailTemplates.save.useMutation({
+    onSuccess: () => {
+      utils.emailTemplates.get.invalidate({ id: templateId });
+      utils.emailTemplates.list.invalidate();
+      toast.success("Template published");
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const unpublishMutation = trpc.emailTemplates.save.useMutation({
+    onSuccess: () => {
+      utils.emailTemplates.get.invalidate({ id: templateId });
+      utils.emailTemplates.list.invalidate();
+      toast.success("Template moved to draft");
+    },
+    onError: (e) => toast.error(e.message),
   });
   // Streaming AI rewrite — replaces the rewriteBlock tRPC mutation. Updates
   // the block in real-time as tokens arrive so the user sees the rewrite
@@ -1478,6 +1499,34 @@ function Builder({ templateId }: { templateId: number }) {
           >
             <Copy size={14} />
           </Button>
+          {/* Publish / Unpublish — shown for both draft and active states.
+              Draft → Publish (promotes to active so the sequence canvas
+              picker shows it without a "draft" badge). Active → Unpublish
+              (reverts to draft so the builder unlocks for edits). */}
+          {template?.status === "draft" && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 px-2 text-xs"
+              disabled={publishMutation.isPending}
+              onClick={() => publishMutation.mutate({ id: templateId, status: "active" })}
+              title="Publish — makes this template selectable from sequences without a draft badge"
+            >
+              {publishMutation.isPending ? "Publishing…" : "Publish"}
+            </Button>
+          )}
+          {template?.status === "active" && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 px-2 text-xs"
+              disabled={unpublishMutation.isPending}
+              onClick={() => unpublishMutation.mutate({ id: templateId, status: "draft" })}
+              title="Unpublish — moves this template back to draft so you can edit it"
+            >
+              {unpublishMutation.isPending ? "Unpublishing…" : "Unpublish"}
+            </Button>
+          )}
           {!isReadOnly && (
             <>
               <Button size="sm" variant="outline" className="h-7 px-2 text-xs text-destructive hover:text-destructive" onClick={() => archiveMutation.mutate({ id: templateId })}>
