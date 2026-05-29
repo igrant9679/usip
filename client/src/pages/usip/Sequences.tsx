@@ -80,12 +80,19 @@ function EnrollDialog({ sequenceId, open, onClose, onEnrolled }: {
     }
   }, [open]);
 
-  const contactsQ = trpc.contacts.list.useQuery(undefined, { enabled: open });
-  const leadsQ = trpc.leads.list.useQuery(undefined, { enabled: open });
-  // Prospects: verified-only by default since enrolling unverified ones
-  // risks bouncing on bad emails. The picker still shows verification
-  // status per row so the user can spot anomalies.
-  const prospectsQ = trpc.prospects.list.useQuery({ verificationStatus: "verified" }, { enabled: open });
+  // Important: don't gate these on `enabled: open` — that pattern was
+  // returning empty data on first dialog open in some cases. The lists
+  // are tiny and the cache is shared with the main sidebar pages, so
+  // there's no real cost to loading them eagerly.
+  const contactsQ = trpc.contacts.list.useQuery({});
+  const leadsQ = trpc.leads.list.useQuery({});
+  // Prospects: show ALL non-archived (verified + needs_review) so we
+  // surface the entire workspace pool. Verification status is shown
+  // as a per-row badge so users can spot risky ones. The server
+  // promotes whichever ones get enrolled; the engine's per-message
+  // suppression check handles outright-bad addresses at send time.
+  const prospectsVerifiedQ = trpc.prospects.list.useQuery({ verificationStatus: "verified", page: 1, perPage: 200 });
+  const prospectsNeedsReviewQ = trpc.prospects.list.useQuery({ verificationStatus: "needs_review", page: 1, perPage: 200 });
 
   // Already enrolled in this sequence — show a disabled checkbox + "already enrolled" label.
   const { data: existingEnrollments = [] } = trpc.sequences.listEnrollments.useQuery({ sequenceId }, { enabled: open });
@@ -111,10 +118,15 @@ function EnrollDialog({ sequenceId, open, onClose, onEnrolled }: {
     const hay = `${l.firstName ?? ""} ${l.lastName ?? ""} ${l.email ?? ""} ${l.company ?? ""} ${l.title ?? ""}`.toLowerCase();
     return hay.includes(q);
   });
-  // prospects.list returns { data, total, page, perPage } — page-1 of 50
-  // is fine here because most workspaces have well under that in the
-  // verified bucket. If the cap bites we can add infinite-scroll later.
-  const filteredProspects = (((prospectsQ.data as any)?.data ?? []) as any[]).filter((p) => {
+  // prospects.list returns { data, total, page, perPage }. We merge
+  // verified + needs_review pools so the picker shows the full
+  // selectable workspace (200 each = 400 max, plenty for an interactive
+  // dialog; if a workspace genuinely has more we can paginate later).
+  const prospectsCombined: any[] = [
+    ...(((prospectsVerifiedQ.data as any)?.data ?? []) as any[]),
+    ...(((prospectsNeedsReviewQ.data as any)?.data ?? []) as any[]),
+  ];
+  const filteredProspects = prospectsCombined.filter((p) => {
     if (!q) return true;
     const hay = `${p.firstName ?? ""} ${p.lastName ?? ""} ${p.email ?? ""} ${p.companyName ?? p.company ?? ""} ${p.title ?? ""}`.toLowerCase();
     return hay.includes(q);
@@ -222,8 +234,8 @@ function EnrollDialog({ sequenceId, open, onClose, onEnrolled }: {
 
         {tab === "prospects" && (
           <p className="text-[11px] text-muted-foreground mt-2 px-1">
-            Prospects get promoted to contacts on enroll. Verified prospects only —
-            adjust verification on the Prospects page if you need others.
+            Prospects get promoted to contacts on enroll. Shows verified + needs-review
+            prospects from your workspace; status appears as a per-row badge.
           </p>
         )}
 
@@ -231,8 +243,12 @@ function EnrollDialog({ sequenceId, open, onClose, onEnrolled }: {
           {tab === "contacts" ? (
             contactsQ.isLoading ? (
               <div className="p-4 text-sm text-muted-foreground">Loading contacts…</div>
+            ) : contactsQ.error ? (
+              <div className="p-4 text-sm text-destructive">Couldn't load contacts: {contactsQ.error.message}</div>
+            ) : (contactsQ.data ?? []).length === 0 ? (
+              <div className="p-4 text-sm text-muted-foreground">No contacts in this workspace yet.</div>
             ) : filteredContacts.length === 0 ? (
-              <div className="p-4 text-sm text-muted-foreground">No contacts match.</div>
+              <div className="p-4 text-sm text-muted-foreground">No contacts match your search.</div>
             ) : (
               <ul className="divide-y">
                 {filteredContacts.map((c: any) => {
@@ -263,8 +279,12 @@ function EnrollDialog({ sequenceId, open, onClose, onEnrolled }: {
           ) : tab === "leads" ? (
             leadsQ.isLoading ? (
               <div className="p-4 text-sm text-muted-foreground">Loading leads…</div>
+            ) : leadsQ.error ? (
+              <div className="p-4 text-sm text-destructive">Couldn't load leads: {leadsQ.error.message}</div>
+            ) : (leadsQ.data ?? []).length === 0 ? (
+              <div className="p-4 text-sm text-muted-foreground">No leads in this workspace yet.</div>
             ) : filteredLeads.length === 0 ? (
-              <div className="p-4 text-sm text-muted-foreground">No leads match.</div>
+              <div className="p-4 text-sm text-muted-foreground">No leads match your search.</div>
             ) : (
               <ul className="divide-y">
                 {filteredLeads.map((l: any) => {
@@ -293,16 +313,25 @@ function EnrollDialog({ sequenceId, open, onClose, onEnrolled }: {
               </ul>
             )
           ) : (
-            prospectsQ.isLoading ? (
+            (prospectsVerifiedQ.isLoading || prospectsNeedsReviewQ.isLoading) ? (
               <div className="p-4 text-sm text-muted-foreground">Loading prospects…</div>
+            ) : (prospectsVerifiedQ.error || prospectsNeedsReviewQ.error) ? (
+              <div className="p-4 text-sm text-destructive">
+                Couldn't load prospects: {(prospectsVerifiedQ.error ?? prospectsNeedsReviewQ.error)?.message}
+              </div>
+            ) : prospectsCombined.length === 0 ? (
+              <div className="p-4 text-sm text-muted-foreground">
+                No prospects in this workspace yet. Run discovery from <strong>Find Prospects</strong> or an ARE campaign first.
+              </div>
             ) : filteredProspects.length === 0 ? (
-              <div className="p-4 text-sm text-muted-foreground">No verified prospects match.</div>
+              <div className="p-4 text-sm text-muted-foreground">No prospects match your search.</div>
             ) : (
               <ul className="divide-y">
                 {filteredProspects.map((p: any) => {
                   const already = isProspectAlreadyEnrolled(p);
                   const checked = selectedProspectIds.has(p.id);
                   const company = p.companyName ?? p.company ?? "";
+                  const status = p.verificationStatus as string | undefined;
                   return (
                     <li key={p.id} className={`flex items-center gap-3 p-2.5 text-sm ${already ? "opacity-50" : "hover:bg-muted/40 cursor-pointer"}`} onClick={() => toggleProspect(p)}>
                       <input
@@ -314,7 +343,14 @@ function EnrollDialog({ sequenceId, open, onClose, onEnrolled }: {
                         className="size-4 rounded border-gray-300 cursor-pointer"
                       />
                       <div className="flex-1 min-w-0">
-                        <div className="font-medium truncate">{p.firstName} {p.lastName}</div>
+                        <div className="font-medium truncate flex items-center gap-1.5">
+                          {p.firstName} {p.lastName}
+                          {status === "needs_review" && (
+                            <span className="text-[9px] px-1 py-0 rounded bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">
+                              needs review
+                            </span>
+                          )}
+                        </div>
                         <div className="text-xs text-muted-foreground truncate">
                           {p.email ?? "(no email)"}{p.title ? ` · ${p.title}` : ""}{company ? ` · ${company}` : ""}
                         </div>
