@@ -6,6 +6,7 @@ import { trpc } from "@/lib/trpc";
 import { Shell, PageHeader, EmptyState } from "@/components/usip/Shell";
 import { EntityDetailTabs } from "@/components/usip/EntityDetail";
 import { RelatedTasks } from "@/pages/usip/Tasks";
+import { AddToSequenceButton } from "@/components/usip/AddToSequenceButton";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -83,6 +84,7 @@ export default function LeadDetail() {
   return (
     <Shell title={`${lead.firstName} ${lead.lastName}`}>
       <PageHeader title={`${lead.firstName} ${lead.lastName}`} description={lead.company ?? undefined} icon={<Target className="size-5" />}>
+        <AddToSequenceButton entityType="lead" entityId={lead.id} />
         <Button variant="outline" size="sm" onClick={() => setLocation("/leads")}><ArrowLeft className="size-4 mr-1" /> Back</Button>
       </PageHeader>
       <div className="p-6">

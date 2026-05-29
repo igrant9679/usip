@@ -6,6 +6,7 @@ import { trpc } from "@/lib/trpc";
 import { Shell, PageHeader, EmptyState } from "@/components/usip/Shell";
 import { EntityDetailTabs } from "@/components/usip/EntityDetail";
 import { RelatedTasks } from "@/pages/usip/Tasks";
+import { AddToSequenceButton } from "@/components/usip/AddToSequenceButton";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -53,6 +54,7 @@ export default function ContactDetail() {
   return (
     <Shell title={`${c.firstName} ${c.lastName}`}>
       <PageHeader title={`${c.firstName} ${c.lastName}`} description={c.title ?? undefined} icon={<User className="size-5" />}>
+        <AddToSequenceButton entityType="contact" entityId={c.id} />
         <Button variant="outline" size="sm" onClick={() => setLocation("/contacts")}><ArrowLeft className="size-4 mr-1" /> Back</Button>
       </PageHeader>
       <div className="p-6">
