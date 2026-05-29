@@ -86,13 +86,12 @@ function EnrollDialog({ sequenceId, open, onClose, onEnrolled }: {
   // there's no real cost to loading them eagerly.
   const contactsQ = trpc.contacts.list.useQuery({});
   const leadsQ = trpc.leads.list.useQuery({});
-  // Prospects: show ALL non-archived (verified + needs_review) so we
-  // surface the entire workspace pool. Verification status is shown
-  // as a per-row badge so users can spot risky ones. The server
-  // promotes whichever ones get enrolled; the engine's per-message
+  // Prospects: show ALL non-rejected. Single query without a
+  // verificationStatus filter so CSV-imported rows (NULL status) are
+  // included alongside Discovery v2's verified/needs_review rows. We
+  // filter rejected client-side below. The engine's per-message
   // suppression check handles outright-bad addresses at send time.
-  const prospectsVerifiedQ = trpc.prospects.list.useQuery({ verificationStatus: "verified", page: 1, perPage: 200 });
-  const prospectsNeedsReviewQ = trpc.prospects.list.useQuery({ verificationStatus: "needs_review", page: 1, perPage: 200 });
+  const prospectsAllQ = trpc.prospects.list.useQuery({ page: 1, perPage: 200 });
 
   // Already enrolled in this sequence — show a disabled checkbox + "already enrolled" label.
   const { data: existingEnrollments = [] } = trpc.sequences.listEnrollments.useQuery({ sequenceId }, { enabled: open });
@@ -118,14 +117,11 @@ function EnrollDialog({ sequenceId, open, onClose, onEnrolled }: {
     const hay = `${l.firstName ?? ""} ${l.lastName ?? ""} ${l.email ?? ""} ${l.company ?? ""} ${l.title ?? ""}`.toLowerCase();
     return hay.includes(q);
   });
-  // prospects.list returns { data, total, page, perPage }. We merge
-  // verified + needs_review pools so the picker shows the full
-  // selectable workspace (200 each = 400 max, plenty for an interactive
-  // dialog; if a workspace genuinely has more we can paginate later).
-  const prospectsCombined: any[] = [
-    ...(((prospectsVerifiedQ.data as any)?.data ?? []) as any[]),
-    ...(((prospectsNeedsReviewQ.data as any)?.data ?? []) as any[]),
-  ];
+  // prospects.list returns { data, total, page, perPage }. Drop only
+  // rejected (soft-archived) rows; keep verified, needs_review, AND
+  // NULL-status rows (the CSV-import path doesn't set verificationStatus).
+  const prospectsCombined: any[] = (((prospectsAllQ.data as any)?.data ?? []) as any[])
+    .filter((p) => p.verificationStatus !== "rejected");
   const filteredProspects = prospectsCombined.filter((p) => {
     if (!q) return true;
     const hay = `${p.firstName ?? ""} ${p.lastName ?? ""} ${p.email ?? ""} ${p.companyName ?? p.company ?? ""} ${p.title ?? ""}`.toLowerCase();
@@ -312,11 +308,11 @@ function EnrollDialog({ sequenceId, open, onClose, onEnrolled }: {
               </ul>
             )
           ) : (
-            (prospectsVerifiedQ.isLoading || prospectsNeedsReviewQ.isLoading) ? (
+            prospectsAllQ.isLoading ? (
               <div className="p-4 text-sm text-muted-foreground">Loading prospects…</div>
-            ) : (prospectsVerifiedQ.error || prospectsNeedsReviewQ.error) ? (
+            ) : prospectsAllQ.error ? (
               <div className="p-4 text-sm text-destructive">
-                Couldn't load prospects: {(prospectsVerifiedQ.error ?? prospectsNeedsReviewQ.error)?.message}
+                Couldn't load prospects: {prospectsAllQ.error.message}
               </div>
             ) : prospectsCombined.length === 0 ? (
               <div className="p-4 text-sm text-muted-foreground">
