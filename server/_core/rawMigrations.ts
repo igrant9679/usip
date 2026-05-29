@@ -1388,6 +1388,24 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0085: prospects-as-first-class enrollment target ─────────────
+  // Adds prospectId to enrollments + toProspectId to email_drafts so
+  // a Prospect can be sequence-enrolled without first being promoted
+  // to a Contact. The send engine learns the third branch (look up
+  // email from prospects table when prospectId is set) and the reply
+  // poller learns to log activity / pause enrollments matched by
+  // prospect email. Indexes mirror the existing contactId/leadId
+  // patterns. Both columns are nullable — legacy rows keep working.
+  {
+    name: "0085_enrollments_prospect_target.sql",
+    statements: [
+      `ALTER TABLE \`enrollments\` ADD COLUMN \`prospectId\` int NULL`,
+      `CREATE INDEX \`ix_enr_prospect\` ON \`enrollments\` (\`prospectId\`)`,
+      `ALTER TABLE \`email_drafts\` ADD COLUMN \`toProspectId\` int NULL`,
+      `CREATE INDEX \`ix_drafts_to_prospect\` ON \`email_drafts\` (\`toProspectId\`)`,
+    ],
+  },
+
   // ── 0083: territory routing rules ─────────────────────────────────
   // Simple condition table: a rule matches on industry / country / state
   // / company-name-contains, in priority order. The first match wins and

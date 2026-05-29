@@ -20,6 +20,7 @@ import {
   emailDrafts,
   enrollments,
   leads,
+  prospects,
   sequences,
   sequenceAbVariants,
   tasks,
@@ -155,6 +156,7 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
         let toEmail: string | undefined;
         let toContactId: number | undefined;
         let toLeadId: number | undefined;
+        let toProspectId: number | undefined;
 
         if (enrollment.contactId) {
           const [contact] = await db
@@ -170,6 +172,16 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
             .where(eq(leads.id, enrollment.leadId));
           toEmail = lead?.email ?? undefined;
           toLeadId = enrollment.leadId;
+        } else if (enrollment.prospectId) {
+          // Prospect-native enrollment path (migration 0085). No
+          // contact-promotion happened — engine reads the email
+          // straight from the prospects row.
+          const [prospect] = await db
+            .select({ email: prospects.email })
+            .from(prospects)
+            .where(eq(prospects.id, enrollment.prospectId));
+          toEmail = prospect?.email ?? undefined;
+          toProspectId = enrollment.prospectId;
         }
 
         if (toEmail) {
@@ -224,6 +236,7 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
             body: draftBody,
             toContactId,
             toLeadId,
+            toProspectId,
             toEmail,
             sequenceId: enrollment.sequenceId,
             enrollmentId: enrollment.id,
@@ -288,8 +301,8 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
           workspaceId: enrollment.workspaceId,
           title: step.taskTitle ?? "Follow up",
           dueAt,
-          relatedType: enrollment.contactId ? "contact" : "lead",
-          relatedId: (enrollment.contactId ?? enrollment.leadId) as number,
+          relatedType: enrollment.contactId ? "contact" : enrollment.leadId ? "lead" : "prospect",
+          relatedId: (enrollment.contactId ?? enrollment.leadId ?? enrollment.prospectId) as number,
           status: "open",
           priority: "normal",
         });
@@ -313,9 +326,9 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
 
       } else if (step.type === "linkedin_dm" || step.type === "linkedin_invite") {
         // ── LinkedIn outreach via Unipile ──────────────────────────────────────
-        // Resolve the contact/lead's LinkedIn URL (used as provider ID lookup)
+        // Resolve the target's LinkedIn URL (used as provider ID lookup)
         let linkedinUrl: string | null | undefined;
-        let relatedType: "contact" | "lead" = "contact";
+        let relatedType: "contact" | "lead" | "prospect" = "contact";
         let relatedId: number | undefined;
 
         if (enrollment.contactId) {
@@ -330,6 +343,14 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
           relatedType = "lead";
           relatedId = enrollment.leadId;
           // Leads don't have a linkedinUrl field — skip gracefully
+        } else if (enrollment.prospectId) {
+          const [prospect] = await db
+            .select({ linkedinUrl: prospects.linkedinUrl })
+            .from(prospects)
+            .where(eq(prospects.id, enrollment.prospectId));
+          linkedinUrl = prospect?.linkedinUrl;
+          relatedType = "prospect";
+          relatedId = enrollment.prospectId;
         }
 
         // Find the sequence owner's Unipile LinkedIn account

@@ -135,10 +135,8 @@ function EnrollDialog({ sequenceId, open, onClose, onEnrolled }: {
   const bulkEnroll = trpc.sequences.bulkEnroll.useMutation({
     onSuccess: (r) => {
       const parts = [`Enrolled ${r.enrolled}`];
-      if (r.promotedFromProspect > 0) parts.push(`${r.promotedFromProspect} promoted from prospect`);
       if (r.skippedAlreadyEnrolled > 0) parts.push(`${r.skippedAlreadyEnrolled} already enrolled`);
       if (r.blockedInvalidEmail > 0) parts.push(`${r.blockedInvalidEmail} blocked (invalid email)`);
-      if (r.prospectSkipped > 0) parts.push(`${r.prospectSkipped} prospects skipped`);
       toast.success(parts.join(" · "));
       onEnrolled();
       onClose();
@@ -234,8 +232,9 @@ function EnrollDialog({ sequenceId, open, onClose, onEnrolled }: {
 
         {tab === "prospects" && (
           <p className="text-[11px] text-muted-foreground mt-2 px-1">
-            Prospects get promoted to contacts on enroll. Shows verified + needs-review
-            prospects from your workspace; status appears as a per-row badge.
+            Prospects are enrolled as-is — no auto-promotion to contacts. Shows
+            verified + needs-review prospects from your workspace; status appears
+            as a per-row badge. Prospects without an email are not selectable.
           </p>
         )}
 
@@ -329,16 +328,18 @@ function EnrollDialog({ sequenceId, open, onClose, onEnrolled }: {
               <ul className="divide-y">
                 {filteredProspects.map((p: any) => {
                   const already = isProspectAlreadyEnrolled(p);
+                  const noEmail = !p.email;
+                  const disabled = already || noEmail;
                   const checked = selectedProspectIds.has(p.id);
                   const company = p.companyName ?? p.company ?? "";
                   const status = p.verificationStatus as string | undefined;
                   return (
-                    <li key={p.id} className={`flex items-center gap-3 p-2.5 text-sm ${already ? "opacity-50" : "hover:bg-muted/40 cursor-pointer"}`} onClick={() => toggleProspect(p)}>
+                    <li key={p.id} className={`flex items-center gap-3 p-2.5 text-sm ${disabled ? "opacity-50" : "hover:bg-muted/40 cursor-pointer"}`} onClick={() => !disabled && toggleProspect(p)}>
                       <input
                         type="checkbox"
                         checked={checked || already}
-                        disabled={already}
-                        onChange={() => toggleProspect(p)}
+                        disabled={disabled}
+                        onChange={() => !disabled && toggleProspect(p)}
                         onClick={(e) => e.stopPropagation()}
                         className="size-4 rounded border-gray-300 cursor-pointer"
                       />
@@ -356,6 +357,7 @@ function EnrollDialog({ sequenceId, open, onClose, onEnrolled }: {
                         </div>
                       </div>
                       {already && <span className="text-[10px] text-muted-foreground shrink-0">already enrolled</span>}
+                      {!already && noEmail && <span className="text-[10px] text-muted-foreground shrink-0">no email</span>}
                     </li>
                   );
                 })}

@@ -482,12 +482,18 @@ export const enrollments = mysqlTable(
     sequenceId: int("sequenceId").notNull(),
     contactId: int("contactId"),
     leadId: int("leadId"),
+    // Migration 0085: prospects are first-class enrollment targets so
+    // the send engine doesn't have to convert them into contacts first.
+    prospectId: int("prospectId"),
     status: mysqlEnum("status", ["active", "paused", "finished", "exited"]).default("active").notNull(),
     currentStep: int("currentStep").default(0).notNull(),
     startedAt: timestamp("startedAt").defaultNow().notNull(),
     nextActionAt: timestamp("nextActionAt"),
   },
-  (t) => ({ bySeq: index("ix_enr_seq").on(t.sequenceId) }),
+  (t) => ({
+    bySeq: index("ix_enr_seq").on(t.sequenceId),
+    byProspect: index("ix_enr_prospect").on(t.prospectId),
+  }),
 );
 
 export const emailDrafts = mysqlTable(
@@ -499,6 +505,8 @@ export const emailDrafts = mysqlTable(
     body: text("body").notNull(),
     toContactId: int("toContactId"),
     toLeadId: int("toLeadId"),
+    // Migration 0085: prospect-target drafts (no contact promotion).
+    toProspectId: int("toProspectId"),
     toEmail: varchar("toEmail", { length: 320 }),
     sequenceId: int("sequenceId"),
     enrollmentId: int("enrollmentId"),

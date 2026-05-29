@@ -684,21 +684,21 @@ export const sequencesRouter = router({
    * Bulk enroll many contacts, leads, and/or prospects into a single
    * sequence in one call.
    *
-   * Prospects are auto-promoted to contacts before enrollment (mirrors
-   * the prospects.promoteToContact mutation — links via existing
-   * email, otherwise inserts a new contact and back-links the
-   * prospect). This keeps the enrollments table clean of a third
-   * foreign-key column while letting the UI surface prospects as a
-   * first-class enrollment source.
+   * Prospects are enrolled NATIVELY (migration 0085 added prospectId
+   * to the enrollments table). No auto-promotion to contacts happens;
+   * the send engine looks up each prospect's email directly. The user
+   * stays in the Prospect record-type until they decide to promote.
    *
-   * - Dedups against existing non-exited enrollments (a record that's
-   *   already active/paused/finished in this sequence is skipped, not
-   *   re-enrolled — re-enrollment after exit IS allowed).
-   * - Honors workspaceSettings.blockInvalidEmailsFromSequences: contacts
-   *   with emailVerificationStatus="invalid" are counted as
-   *   blockedInvalidEmail and not inserted.
+   * - Dedups against existing non-exited enrollments per target type
+   *   (a prospect that's already enrolled is skipped, a contact that
+   *   was promoted from a prospect won't shadow the prospect's row).
+   * - Honors workspaceSettings.blockInvalidEmailsFromSequences:
+   *     * contacts: blocked when emailVerificationStatus="invalid"
+   *     * prospects: blocked when email is missing or
+   *       emailStatus/verificationStatus suggests it's bad
+   *   Both flow into the same blockedInvalidEmail counter.
    * - Leads have no per-record email-verification status today, so the
-   *   block guard is contact-only — matches the single-record enroll path.
+   *   block guard is contact + prospect only.
    *
    * Returns granular counts so the UI can render an actionable toast.
    */
@@ -712,62 +712,11 @@ export const sequencesRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      let contactIds = Array.from(new Set(input.contactIds ?? []));
+      const contactIds = Array.from(new Set(input.contactIds ?? []));
       const leadIds = Array.from(new Set(input.leadIds ?? []));
-      const prospectIds = Array.from(new Set(input.prospectIds ?? []));
+      let prospectIds = Array.from(new Set(input.prospectIds ?? []));
       if (contactIds.length === 0 && leadIds.length === 0 && prospectIds.length === 0) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Pick at least one contact, lead, or prospect." });
-      }
-
-      // ── Promote prospects → contacts ────────────────────────────
-      // Mirrors prospects.promoteToContact: reuses linkedContactId if
-      // already set, otherwise links by email match, otherwise inserts
-      // a fresh contact. Each promotion is best-effort — if one
-      // prospect fails (missing required fields, weird state) we skip
-      // it and report it in the result rather than failing the whole
-      // batch.
-      let promotedFromProspect = 0;
-      let prospectSkipped = 0;
-      if (prospectIds.length > 0) {
-        const rows = await db.select().from(prospects)
-          .where(and(eq(prospects.workspaceId, ctx.workspace.id), inArray(prospects.id, prospectIds)));
-        for (const p of rows) {
-          try {
-            let contactId: number | null = (p as any).linkedContactId ?? null;
-            if (!contactId && p.email) {
-              const [existing] = await db.select({ id: contacts.id }).from(contacts)
-                .where(and(eq(contacts.workspaceId, ctx.workspace.id), eq(contacts.email, p.email)));
-              if (existing) contactId = existing.id;
-            }
-            if (!contactId) {
-              const [inserted] = await db.insert(contacts).values({
-                workspaceId: ctx.workspace.id,
-                firstName: p.firstName,
-                lastName: p.lastName,
-                title: p.title ?? null,
-                email: p.email ?? null,
-                phone: p.phone ?? null,
-                linkedinUrl: p.linkedinUrl ?? null,
-                city: p.city ?? null,
-                functionalArea: (p as any).functionalArea ?? null,
-                industry: p.industry ?? null,
-                companyDomain: p.companyDomain ?? null,
-                seniority: (p as any).seniority ?? null,
-                sourceProspectId: p.id,
-              } as never);
-              contactId = (inserted as { insertId: number }).insertId;
-              promotedFromProspect++;
-            }
-            await db.update(prospects).set({ linkedContactId: contactId } as never).where(eq(prospects.id, p.id));
-            if (!contactIds.includes(contactId)) contactIds.push(contactId);
-          } catch (e) {
-            console.error(`[bulkEnroll] failed to promote prospect ${p.id}:`, e);
-            prospectSkipped++;
-          }
-        }
-        // Account for prospect IDs that didn't resolve to a row (deleted
-        // between picker render and submit).
-        prospectSkipped += prospectIds.length - rows.length;
       }
 
       // Verify the sequence exists in this workspace before we do any work.
@@ -779,30 +728,55 @@ export const sequencesRouter = router({
         throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot enroll into an archived sequence." });
       }
 
-      // Optional invalid-email block (contacts only).
+      // ── Invalid-email guard (contacts + prospects) ──────────────
       let blockedInvalidEmail = 0;
       let enrollableContactIds = contactIds;
-      if (contactIds.length > 0) {
-        const [settings] = await db.select().from(workspaceSettings)
-          .where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
-        if (settings?.blockInvalidEmailsFromSequences) {
-          const rows = await db.select({ id: contacts.id, status: contacts.emailVerificationStatus })
-            .from(contacts)
-            .where(and(eq(contacts.workspaceId, ctx.workspace.id), inArray(contacts.id, contactIds)));
-          const allowed = new Set<number>();
-          for (const r of rows) {
-            if (r.status === "invalid") blockedInvalidEmail++;
-            else allowed.add(r.id);
-          }
-          enrollableContactIds = enrollableContactIds.filter((id) => allowed.has(id));
+      let enrollableProspectIds = prospectIds;
+      const [settings] = await db.select().from(workspaceSettings)
+        .where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
+      const blockInvalid = !!settings?.blockInvalidEmailsFromSequences;
+      if (blockInvalid && contactIds.length > 0) {
+        const rows = await db.select({ id: contacts.id, status: contacts.emailVerificationStatus })
+          .from(contacts)
+          .where(and(eq(contacts.workspaceId, ctx.workspace.id), inArray(contacts.id, contactIds)));
+        const allowed = new Set<number>();
+        for (const r of rows) {
+          if (r.status === "invalid") blockedInvalidEmail++;
+          else allowed.add(r.id);
         }
+        enrollableContactIds = enrollableContactIds.filter((id) => allowed.has(id));
+      }
+      // Prospects: missing email is always disqualifying (engine has
+      // no way to deliver). emailStatus="unavailable" is also a hard
+      // fail when the workspace flag is on (Discovery v2 marks that
+      // state when verification ruled the address bad). Other states
+      // (verified / unverified / null) are allowed through and the
+      // engine's per-send suppression/bounce checks handle edge cases.
+      if (prospectIds.length > 0) {
+        const rows = await db.select({
+          id: prospects.id,
+          email: prospects.email,
+          emailStatus: prospects.emailStatus,
+        }).from(prospects)
+          .where(and(eq(prospects.workspaceId, ctx.workspace.id), inArray(prospects.id, prospectIds)));
+        const allowed = new Set<number>();
+        for (const r of rows) {
+          if (!r.email) { blockedInvalidEmail++; continue; }
+          if (blockInvalid && r.emailStatus === "unavailable") { blockedInvalidEmail++; continue; }
+          allowed.add(r.id);
+        }
+        enrollableProspectIds = enrollableProspectIds.filter((id) => allowed.has(id));
       }
 
-      // Dedup: drop records already non-exited in this sequence.
-      // (Status 'exited' means a prior enrollment was manually ended →
-      // re-enrolling is intentional.)
-      const existing = await db.select({ contactId: enrollments.contactId, leadId: enrollments.leadId })
-        .from(enrollments)
+      // ── Dedup against existing non-exited enrollments ───────────
+      // Per-target-type. A prospect that's already enrolled is skipped
+      // separately from a contact dedup so promoting later doesn't
+      // double-count.
+      const existing = await db.select({
+        contactId: enrollments.contactId,
+        leadId: enrollments.leadId,
+        prospectId: enrollments.prospectId,
+      }).from(enrollments)
         .where(and(
           eq(enrollments.workspaceId, ctx.workspace.id),
           eq(enrollments.sequenceId, input.sequenceId),
@@ -810,21 +784,31 @@ export const sequencesRouter = router({
         ));
       const existingContactIds = new Set(existing.map((e) => e.contactId).filter((x): x is number => x != null));
       const existingLeadIds = new Set(existing.map((e) => e.leadId).filter((x): x is number => x != null));
+      const existingProspectIds = new Set(existing.map((e) => e.prospectId).filter((x): x is number => x != null));
       const finalContactIds = enrollableContactIds.filter((id) => !existingContactIds.has(id));
       const finalLeadIds = leadIds.filter((id) => !existingLeadIds.has(id));
+      const finalProspectIds = enrollableProspectIds.filter((id) => !existingProspectIds.has(id));
       const skippedAlreadyEnrolled =
         (enrollableContactIds.length - finalContactIds.length) +
-        (leadIds.length - finalLeadIds.length);
+        (leadIds.length - finalLeadIds.length) +
+        (enrollableProspectIds.length - finalProspectIds.length);
 
       const now = new Date();
       const rows: any[] = [];
       for (const cid of finalContactIds) rows.push({
         workspaceId: ctx.workspace.id, sequenceId: input.sequenceId,
-        contactId: cid, leadId: null, status: "active" as const, currentStep: 0, nextActionAt: now,
+        contactId: cid, leadId: null, prospectId: null,
+        status: "active" as const, currentStep: 0, nextActionAt: now,
       });
       for (const lid of finalLeadIds) rows.push({
         workspaceId: ctx.workspace.id, sequenceId: input.sequenceId,
-        contactId: null, leadId: lid, status: "active" as const, currentStep: 0, nextActionAt: now,
+        contactId: null, leadId: lid, prospectId: null,
+        status: "active" as const, currentStep: 0, nextActionAt: now,
+      });
+      for (const pid of finalProspectIds) rows.push({
+        workspaceId: ctx.workspace.id, sequenceId: input.sequenceId,
+        contactId: null, leadId: null, prospectId: pid,
+        status: "active" as const, currentStep: 0, nextActionAt: now,
       });
       if (rows.length > 0) await db.insert(enrollments).values(rows);
 
@@ -832,8 +816,6 @@ export const sequencesRouter = router({
         enrolled: rows.length,
         skippedAlreadyEnrolled,
         blockedInvalidEmail,
-        promotedFromProspect,
-        prospectSkipped,
       };
     }),
 

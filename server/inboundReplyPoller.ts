@@ -191,6 +191,7 @@ export async function processInboundReply(data: InboundReplyData) {
   let matchedDraft: any = null;
   let matchedContactId: number | undefined;
   let matchedLeadId: number | undefined;
+  let matchedProspectId: number | undefined;
   let matchedAccountId: number | undefined;
 
   const stripAngle = (s: string) => s.replace(/^<|>$/g, "").trim();
@@ -248,7 +249,19 @@ export async function processInboundReply(data: InboundReplyData) {
     const [matchedLead] = await db.select({ id: leads.id })
       .from(leads)
       .where(and(eq(leads.workspaceId, data.workspaceId), eq(leads.email, data.fromEmail)));
-    if (matchedLead) matchedLeadId = matchedLead.id;
+    if (matchedLead) {
+      matchedLeadId = matchedLead.id;
+    } else {
+      // Migration 0085: prospects can be the enrollment target. If no
+      // contact or lead matched, try to attribute the reply to a
+      // prospect so the engine pauses the right enrollment row and
+      // the prospect's history surfaces the message.
+      const { prospects } = await import("../drizzle/schema");
+      const [matchedProspect] = await db.select({ id: prospects.id })
+        .from(prospects)
+        .where(and(eq(prospects.workspaceId, data.workspaceId), eq(prospects.email, data.fromEmail)));
+      if (matchedProspect) matchedProspectId = matchedProspect.id;
+    }
   }
 
   // 3. Insert email_reply row (capture the id so the notification can
@@ -293,17 +306,18 @@ export async function processInboundReply(data: InboundReplyData) {
   }
 
   // 5. Pause sequence enrollment if pauseOnReply is set
-  if (matchedContactId || matchedLeadId) {
+  if (matchedContactId || matchedLeadId || matchedProspectId) {
     const enrollmentConditions = [
       eq(enrollments.workspaceId, data.workspaceId),
       eq(enrollments.status, "active"),
     ];
     if (matchedContactId) enrollmentConditions.push(eq(enrollments.contactId, matchedContactId));
     else if (matchedLeadId) enrollmentConditions.push(eq(enrollments.leadId, matchedLeadId));
+    else if (matchedProspectId) enrollmentConditions.push(eq(enrollments.prospectId, matchedProspectId));
 
     const activeEnrollments = await db.select().from(enrollments).where(and(...enrollmentConditions));
     for (const enrollment of activeEnrollments) {
-      // Pause all active enrollments for this contact/lead when a reply is received
+      // Pause all active enrollments for this contact/lead/prospect when a reply is received
       await db.update(enrollments).set({ status: "paused" }).where(eq(enrollments.id, enrollment.id));
     }
   }
@@ -323,9 +337,9 @@ export async function processInboundReply(data: InboundReplyData) {
   //    open opportunity the contact is on so the opportunity's timeline
   //    surfaces the reply. Also bumps opportunities.lastActivityAt to
   //    feed the pipelineAlerts stale-deal scanner.
-  if (matchedContactId || matchedLeadId) {
-    const relatedType = matchedContactId ? "contact" : "lead";
-    const relatedId = matchedContactId ?? matchedLeadId!;
+  if (matchedContactId || matchedLeadId || matchedProspectId) {
+    const relatedType = matchedContactId ? "contact" : matchedLeadId ? "lead" : "prospect";
+    const relatedId = (matchedContactId ?? matchedLeadId ?? matchedProspectId)!;
     const activityRow = {
       workspaceId: data.workspaceId,
       type: "email" as const,
