@@ -680,6 +680,99 @@ export const sequencesRouter = router({
     return { ok: true };
   }),
 
+  /**
+   * Bulk enroll many contacts and/or leads into a single sequence in one call.
+   * - Dedups against existing non-exited enrollments (a record that's
+   *   already active/paused/finished in this sequence is skipped, not
+   *   re-enrolled — re-enrollment after exit IS allowed).
+   * - Honors workspaceSettings.blockInvalidEmailsFromSequences: contacts
+   *   with emailVerificationStatus="invalid" are counted as
+   *   blockedInvalidEmail and not inserted.
+   * - Leads have no per-record email-verification status today, so the
+   *   block guard is contact-only — matches the single-record enroll path.
+   *
+   * Returns granular counts so the UI can render an actionable toast.
+   */
+  bulkEnroll: repProcedure
+    .input(z.object({
+      sequenceId: z.number(),
+      contactIds: z.array(z.number()).optional(),
+      leadIds: z.array(z.number()).optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const contactIds = Array.from(new Set(input.contactIds ?? []));
+      const leadIds = Array.from(new Set(input.leadIds ?? []));
+      if (contactIds.length === 0 && leadIds.length === 0) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Pick at least one contact or lead." });
+      }
+
+      // Verify the sequence exists in this workspace before we do any work.
+      const [seq] = await db.select({ id: sequences.id, status: sequences.status })
+        .from(sequences)
+        .where(and(eq(sequences.id, input.sequenceId), eq(sequences.workspaceId, ctx.workspace.id)));
+      if (!seq) throw new TRPCError({ code: "NOT_FOUND", message: "Sequence not found" });
+      if (seq.status === "archived") {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot enroll into an archived sequence." });
+      }
+
+      // Optional invalid-email block (contacts only).
+      let blockedInvalidEmail = 0;
+      let enrollableContactIds = contactIds;
+      if (contactIds.length > 0) {
+        const [settings] = await db.select().from(workspaceSettings)
+          .where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
+        if (settings?.blockInvalidEmailsFromSequences) {
+          const rows = await db.select({ id: contacts.id, status: contacts.emailVerificationStatus })
+            .from(contacts)
+            .where(and(eq(contacts.workspaceId, ctx.workspace.id), inArray(contacts.id, contactIds)));
+          const allowed = new Set<number>();
+          for (const r of rows) {
+            if (r.status === "invalid") blockedInvalidEmail++;
+            else allowed.add(r.id);
+          }
+          enrollableContactIds = enrollableContactIds.filter((id) => allowed.has(id));
+        }
+      }
+
+      // Dedup: drop records already non-exited in this sequence.
+      // (Status 'exited' means a prior enrollment was manually ended →
+      // re-enrolling is intentional.)
+      const existing = await db.select({ contactId: enrollments.contactId, leadId: enrollments.leadId })
+        .from(enrollments)
+        .where(and(
+          eq(enrollments.workspaceId, ctx.workspace.id),
+          eq(enrollments.sequenceId, input.sequenceId),
+          inArray(enrollments.status, ["active", "paused", "finished"]),
+        ));
+      const existingContactIds = new Set(existing.map((e) => e.contactId).filter((x): x is number => x != null));
+      const existingLeadIds = new Set(existing.map((e) => e.leadId).filter((x): x is number => x != null));
+      const finalContactIds = enrollableContactIds.filter((id) => !existingContactIds.has(id));
+      const finalLeadIds = leadIds.filter((id) => !existingLeadIds.has(id));
+      const skippedAlreadyEnrolled =
+        (enrollableContactIds.length - finalContactIds.length) +
+        (leadIds.length - finalLeadIds.length);
+
+      const now = new Date();
+      const rows: any[] = [];
+      for (const cid of finalContactIds) rows.push({
+        workspaceId: ctx.workspace.id, sequenceId: input.sequenceId,
+        contactId: cid, leadId: null, status: "active" as const, currentStep: 0, nextActionAt: now,
+      });
+      for (const lid of finalLeadIds) rows.push({
+        workspaceId: ctx.workspace.id, sequenceId: input.sequenceId,
+        contactId: null, leadId: lid, status: "active" as const, currentStep: 0, nextActionAt: now,
+      });
+      if (rows.length > 0) await db.insert(enrollments).values(rows);
+
+      return {
+        enrolled: rows.length,
+        skippedAlreadyEnrolled,
+        blockedInvalidEmail,
+      };
+    }),
+
   pauseEnrollment: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });

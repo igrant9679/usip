@@ -12,7 +12,7 @@ import { trpc } from "@/lib/trpc";
 import {
   Activity, GitBranch, Pause, Play, Plus, Power, CheckCircle2, XCircle,
   BarChart3, RefreshCw, Pencil, Trash2, ArrowUp, ArrowDown, Mail, Clock, ClipboardList, TrendingUp,
-  FlaskConical, Trophy, Loader2, ListOrdered
+  FlaskConical, Trophy, Loader2, ListOrdered, UserPlus
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { Link } from "wouter";
@@ -49,8 +49,230 @@ interface WaitStep { type: "wait"; days: number }
 interface TaskStep { type: "task"; body: string }
 type Step = EmailStep | WaitStep | TaskStep;
 
+// ─── EnrollDialog ────────────────────────────────────────────────────────────
+/**
+ * Picker for bulk-enrolling contacts and/or leads into a sequence.
+ * Two tabs (Contacts, Leads), each with a search box and multi-select
+ * checkboxes. The "Enroll N selected" CTA submits one bulkEnroll
+ * mutation per dialog confirm — server handles dedup + invalid-email
+ * gating and returns granular counts that flow into the toast.
+ */
+function EnrollDialog({ sequenceId, open, onClose, onEnrolled }: {
+  sequenceId: number;
+  open: boolean;
+  onClose: () => void;
+  onEnrolled: () => void;
+}) {
+  const [tab, setTab] = useState<"contacts" | "leads">("contacts");
+  const [search, setSearch] = useState("");
+  const [selectedContactIds, setSelectedContactIds] = useState<Set<number>>(new Set());
+  const [selectedLeadIds, setSelectedLeadIds] = useState<Set<number>>(new Set());
+
+  // Reset on every fresh open.
+  useEffect(() => {
+    if (open) {
+      setTab("contacts");
+      setSearch("");
+      setSelectedContactIds(new Set());
+      setSelectedLeadIds(new Set());
+    }
+  }, [open]);
+
+  const contactsQ = trpc.contacts.list.useQuery(undefined, { enabled: open });
+  const leadsQ = trpc.leads.list.useQuery(undefined, { enabled: open });
+
+  // Already enrolled in this sequence — show a disabled checkbox + "already enrolled" label.
+  const { data: existingEnrollments = [] } = trpc.sequences.listEnrollments.useQuery({ sequenceId }, { enabled: open });
+  const alreadyContactIds = new Set<number>();
+  const alreadyLeadIds = new Set<number>();
+  for (const e of existingEnrollments as any[]) {
+    if (e.status === "exited") continue;
+    if (e.contactId) alreadyContactIds.add(e.contactId);
+    if (e.leadId) alreadyLeadIds.add(e.leadId);
+  }
+
+  const q = search.trim().toLowerCase();
+  const filteredContacts = ((contactsQ.data ?? []) as any[]).filter((c) => {
+    if (!q) return true;
+    const hay = `${c.firstName ?? ""} ${c.lastName ?? ""} ${c.email ?? ""} ${(c as any).accountName ?? ""} ${c.title ?? ""}`.toLowerCase();
+    return hay.includes(q);
+  });
+  const filteredLeads = ((leadsQ.data ?? []) as any[]).filter((l) => {
+    if (!q) return true;
+    const hay = `${l.firstName ?? ""} ${l.lastName ?? ""} ${l.email ?? ""} ${l.company ?? ""} ${l.title ?? ""}`.toLowerCase();
+    return hay.includes(q);
+  });
+
+  const bulkEnroll = trpc.sequences.bulkEnroll.useMutation({
+    onSuccess: (r) => {
+      const parts = [`Enrolled ${r.enrolled}`];
+      if (r.skippedAlreadyEnrolled > 0) parts.push(`${r.skippedAlreadyEnrolled} already enrolled`);
+      if (r.blockedInvalidEmail > 0) parts.push(`${r.blockedInvalidEmail} blocked (invalid email)`);
+      toast.success(parts.join(" · "));
+      onEnrolled();
+      onClose();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const totalSelected = selectedContactIds.size + selectedLeadIds.size;
+
+  function toggleContact(id: number) {
+    if (alreadyContactIds.has(id)) return;
+    setSelectedContactIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+  function toggleLead(id: number) {
+    if (alreadyLeadIds.has(id)) return;
+    setSelectedLeadIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+  function selectAllVisible() {
+    if (tab === "contacts") {
+      setSelectedContactIds((prev) => {
+        const next = new Set(prev);
+        for (const c of filteredContacts) if (!alreadyContactIds.has(c.id)) next.add(c.id);
+        return next;
+      });
+    } else {
+      setSelectedLeadIds((prev) => {
+        const next = new Set(prev);
+        for (const l of filteredLeads) if (!alreadyLeadIds.has(l.id)) next.add(l.id);
+        return next;
+      });
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
+      <DialogContent className="max-w-2xl max-h-[80vh] flex flex-col">
+        <DialogHeader>
+          <DialogTitle>Enroll prospects into sequence</DialogTitle>
+        </DialogHeader>
+
+        <div className="flex border-b shrink-0">
+          {([
+            { k: "contacts", label: "Contacts", count: filteredContacts.length },
+            { k: "leads", label: "Leads", count: filteredLeads.length },
+          ] as const).map((t) => (
+            <button key={t.k} onClick={() => setTab(t.k)}
+              className={`px-4 py-2 text-sm ${tab === t.k ? "border-b-2 border-[#14B89A] font-semibold" : "text-muted-foreground"}`}>
+              {t.label} <span className="text-xs text-muted-foreground">({t.count})</span>
+            </button>
+          ))}
+        </div>
+
+        <div className="flex items-center gap-2 pt-3 shrink-0">
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder={`Search ${tab}…`}
+            className="h-8 text-sm"
+          />
+          <Button size="sm" variant="outline" className="h-8 text-xs" onClick={selectAllVisible}>
+            Select all visible
+          </Button>
+        </div>
+
+        <div className="flex-1 min-h-0 overflow-y-auto border rounded-md mt-2">
+          {tab === "contacts" ? (
+            contactsQ.isLoading ? (
+              <div className="p-4 text-sm text-muted-foreground">Loading contacts…</div>
+            ) : filteredContacts.length === 0 ? (
+              <div className="p-4 text-sm text-muted-foreground">No contacts match.</div>
+            ) : (
+              <ul className="divide-y">
+                {filteredContacts.map((c: any) => {
+                  const already = alreadyContactIds.has(c.id);
+                  const checked = selectedContactIds.has(c.id);
+                  return (
+                    <li key={c.id} className={`flex items-center gap-3 p-2.5 text-sm ${already ? "opacity-50" : "hover:bg-muted/40 cursor-pointer"}`} onClick={() => toggleContact(c.id)}>
+                      <input
+                        type="checkbox"
+                        checked={checked || already}
+                        disabled={already}
+                        onChange={() => toggleContact(c.id)}
+                        onClick={(e) => e.stopPropagation()}
+                        className="size-4 rounded border-gray-300 cursor-pointer"
+                      />
+                      <div className="flex-1 min-w-0">
+                        <div className="font-medium truncate">{c.firstName} {c.lastName}</div>
+                        <div className="text-xs text-muted-foreground truncate">
+                          {c.email ?? "(no email)"}{c.title ? ` · ${c.title}` : ""}{(c as any).accountName ? ` · ${(c as any).accountName}` : ""}
+                        </div>
+                      </div>
+                      {already && <span className="text-[10px] text-muted-foreground shrink-0">already enrolled</span>}
+                    </li>
+                  );
+                })}
+              </ul>
+            )
+          ) : (
+            leadsQ.isLoading ? (
+              <div className="p-4 text-sm text-muted-foreground">Loading leads…</div>
+            ) : filteredLeads.length === 0 ? (
+              <div className="p-4 text-sm text-muted-foreground">No leads match.</div>
+            ) : (
+              <ul className="divide-y">
+                {filteredLeads.map((l: any) => {
+                  const already = alreadyLeadIds.has(l.id);
+                  const checked = selectedLeadIds.has(l.id);
+                  return (
+                    <li key={l.id} className={`flex items-center gap-3 p-2.5 text-sm ${already ? "opacity-50" : "hover:bg-muted/40 cursor-pointer"}`} onClick={() => toggleLead(l.id)}>
+                      <input
+                        type="checkbox"
+                        checked={checked || already}
+                        disabled={already}
+                        onChange={() => toggleLead(l.id)}
+                        onClick={(e) => e.stopPropagation()}
+                        className="size-4 rounded border-gray-300 cursor-pointer"
+                      />
+                      <div className="flex-1 min-w-0">
+                        <div className="font-medium truncate">{l.firstName} {l.lastName}</div>
+                        <div className="text-xs text-muted-foreground truncate">
+                          {l.email ?? "(no email)"}{l.title ? ` · ${l.title}` : ""}{l.company ? ` · ${l.company}` : ""}
+                        </div>
+                      </div>
+                      {already && <span className="text-[10px] text-muted-foreground shrink-0">already enrolled</span>}
+                    </li>
+                  );
+                })}
+              </ul>
+            )
+          )}
+        </div>
+
+        <DialogFooter className="shrink-0 pt-2 border-t">
+          <span className="text-xs text-muted-foreground self-center mr-auto">
+            {totalSelected} selected
+          </span>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button
+            disabled={totalSelected === 0 || bulkEnroll.isPending}
+            onClick={() => bulkEnroll.mutate({
+              sequenceId,
+              contactIds: Array.from(selectedContactIds),
+              leadIds: Array.from(selectedLeadIds),
+            })}
+          >
+            {bulkEnroll.isPending ? "Enrolling…" : `Enroll ${totalSelected}`}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ─── EnrollmentStatsPanel ────────────────────────────────────────────────────
 function EnrollmentStatsPanel({ sequenceId, steps }: { sequenceId: number; steps: any[] }) {
+  const utils = trpc.useUtils();
+  const [enrollOpen, setEnrollOpen] = useState(false);
   const { data: stats, isLoading: statsLoading, refetch } = trpc.sequences.getEnrollmentStats.useQuery({ sequenceId });
   const { data: stepStats = [] } = trpc.sequences.getEnrollmentStepStats.useQuery({ sequenceId });
   const { data: enrollmentList = [], isLoading: listLoading } = trpc.sequences.listEnrollments.useQuery({ sequenceId });
@@ -113,7 +335,14 @@ function EnrollmentStatsPanel({ sequenceId, steps }: { sequenceId: number; steps
       )}
 
       <Section title={`Enrollments (${total})`} right={
-        <Button size="sm" variant="ghost" onClick={() => refetch()}><RefreshCw className="h-3 w-3 mr-1" /> Refresh</Button>
+        <div className="flex items-center gap-1">
+          <Button size="sm" onClick={() => setEnrollOpen(true)}>
+            <UserPlus className="h-3 w-3 mr-1" /> Enroll
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => refetch()}>
+            <RefreshCw className="h-3 w-3 mr-1" /> Refresh
+          </Button>
+        </div>
       }>
         {listLoading ? (
           <div className="p-3 text-sm text-muted-foreground">Loading…</div>
@@ -149,6 +378,21 @@ function EnrollmentStatsPanel({ sequenceId, steps }: { sequenceId: number; steps
           </ul>
         )}
       </Section>
+
+      <EnrollDialog
+        sequenceId={sequenceId}
+        open={enrollOpen}
+        onClose={() => setEnrollOpen(false)}
+        onEnrolled={() => {
+          // Refresh the stats + enrollment list so the new rows appear
+          // immediately. invalidate is cheap; refetch() already wired
+          // for the stats block keeps the existing UX.
+          utils.sequences.getEnrollmentStats.invalidate({ sequenceId });
+          utils.sequences.getEnrollmentStepStats.invalidate({ sequenceId });
+          utils.sequences.listEnrollments.invalidate({ sequenceId });
+          refetch();
+        }}
+      />
     </div>
   );
 }
