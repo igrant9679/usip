@@ -22,6 +22,29 @@ import { Card, CardContent } from "@/components/ui/card";
 // ─── Types ───────────────────────────────────────────────────────────────────
 type StepType = "email" | "wait" | "task";
 interface EmailStep { type: "email"; subject: string; body?: string; templateId?: number }
+
+/**
+ * Strip HTML tags and decode common entities into a plaintext preview.
+ * Used by the right-panel step summary so RichTextEditor-encoded bodies
+ * (which store HTML) render as readable text in the line-clamped
+ * preview rather than as visible markup.
+ */
+function htmlToPlainText(html: string): string {
+  if (!html) return "";
+  return html
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|div|li|h[1-6])>/gi, "\n")
+    .replace(/<li[^>]*>/gi, "• ")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
 interface WaitStep { type: "wait"; days: number }
 interface TaskStep { type: "task"; body: string }
 type Step = EmailStep | WaitStep | TaskStep;
@@ -334,25 +357,49 @@ function SequenceEditDialog({ seq, open, onClose }: { seq: any; open: boolean; o
 
   // Steps state
   const [steps, setSteps] = useState<Step[]>([]);
+  // Local flag: bumped each time the user saves steps so we don't
+  // reset their in-progress edits with the just-refetched server data.
+  // (The seq prop is a parent snapshot — if we hydrated unconditionally
+  // on every refresh, save → server refetch → snapshot replacement would
+  // race the user's typing.)
+  const [stepsDirtyAfterLoad, setStepsDirtyAfterLoad] = useState(false);
+
+  // Live query so the dialog stays in sync with parallel edits made
+  // from the canvas / right panel. seq prop seeds the initial load;
+  // liveSeq drives every subsequent refresh so a save (which
+  // invalidates sequences.get) flows back here cleanly.
+  const liveSeqQ = trpc.sequences.get.useQuery({ id: seq?.id }, { enabled: open && !!seq?.id });
+  const liveSeq = liveSeqQ.data ?? seq;
 
   // Same lock rule as the canvas — paused sequences should be editable
   // (that's why users pause). Only lock active (running) and archived.
-  const isLocked = seq?.status === "active" || seq?.status === "archived";
+  const isLocked = liveSeq?.status === "active" || liveSeq?.status === "archived";
 
-  // Pre-fill when dialog opens
+  // Pre-fill when dialog opens, or when the live data updates (and the
+  // user hasn't started editing steps yet — otherwise we'd nuke their
+  // unsaved changes).
   useEffect(() => {
-    if (!seq || !open) return;
-    setName(seq.name ?? "");
-    setDescription(seq.description ?? "");
-    setDailyCap(seq.dailyCap != null ? String(seq.dailyCap) : "");
-    const s = seq.settings ?? {};
+    if (!liveSeq || !open) return;
+    setName(liveSeq.name ?? "");
+    setDescription(liveSeq.description ?? "");
+    setDailyCap(liveSeq.dailyCap != null ? String(liveSeq.dailyCap) : "");
+    const s = liveSeq.settings ?? {};
     setSkipWeekends(s.skipWeekends ?? false);
     setReplyDetection(s.replyDetection ?? true);
     setSendWindowStart(s.sendWindowStart ?? "08:00");
     setSendWindowEnd(s.sendWindowEnd ?? "18:00");
-    setSteps((seq.steps as Step[]) ?? []);
-    setTab("settings");
-  }, [seq, open]);
+    if (!stepsDirtyAfterLoad) {
+      setSteps((liveSeq.steps as Step[]) ?? []);
+    }
+  }, [liveSeq, open, stepsDirtyAfterLoad]);
+
+  // Reset tab + dirty flag whenever the dialog opens fresh.
+  useEffect(() => {
+    if (open) {
+      setTab("settings");
+      setStepsDirtyAfterLoad(false);
+    }
+  }, [open, seq?.id]);
 
   const updateMeta = trpc.sequences.updateMeta.useMutation({
     onSuccess: () => {
@@ -367,6 +414,11 @@ function SequenceEditDialog({ seq, open, onClose }: { seq: any; open: boolean; o
     onSuccess: () => {
       utils.sequences.list.invalidate();
       utils.sequences.get.invalidate({ id: seq.id });
+      // Clear the local dirty flag so the next live-query refresh
+      // (carrying the just-saved data) hydrates the dialog. Without
+      // this, the user's edits would stay frozen as "in-progress" and
+      // any parallel canvas edit would never propagate in.
+      setStepsDirtyAfterLoad(false);
       toast.success("Steps saved");
     },
     onError: (e) => toast.error(e.message),
@@ -390,12 +442,12 @@ function SequenceEditDialog({ seq, open, onClose }: { seq: any; open: boolean; o
     <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
       <DialogContent className="max-w-2xl max-h-[90vh] flex flex-col">
         <DialogHeader>
-          <DialogTitle>Edit sequence — {seq?.name}</DialogTitle>
+          <DialogTitle>Edit sequence — {liveSeq?.name}</DialogTitle>
         </DialogHeader>
 
         {isLocked && (
           <div className="rounded-md bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
-            This sequence is <strong>{seq?.status}</strong>. Settings can be edited, but steps are read-only. Pause the sequence to edit steps.
+            This sequence is <strong>{liveSeq?.status}</strong>. Settings can be edited, but steps are read-only. Pause the sequence to edit steps.
           </div>
         )}
 
@@ -450,7 +502,11 @@ function SequenceEditDialog({ seq, open, onClose }: { seq: any; open: boolean; o
           )}
 
           {tab === "steps" && (
-            <StepEditor steps={steps} onChange={setSteps} disabled={isLocked} />
+            <StepEditor
+              steps={steps}
+              onChange={(next) => { setSteps(next); setStepsDirtyAfterLoad(true); }}
+              disabled={isLocked}
+            />
           )}
         </div>
 
@@ -938,6 +994,13 @@ export default function Sequences() {
     onError: (e) => toast.error("Failed to delete sequence", { description: e.message }),
   });
   const detail = trpc.sequences.get.useQuery({ id: selected! }, { enabled: !!selected });
+  // Workspace templates available for the right-panel "From template: <name>"
+  // chip. Cheap query; result is reused across every step row that has a
+  // templateId, so each step doesn't trigger its own fetch.
+  const allTemplatesQ = trpc.emailTemplates?.list?.useQuery({ status: "all" });
+  const templateNameById = new Map<number, string>(
+    ((allTemplatesQ?.data ?? []) as any[]).map((t) => [t.id as number, t.name as string]),
+  );
 
   return (
     <Shell title="Sequences">
@@ -1037,16 +1100,32 @@ export default function Sequences() {
 
                 {activeTab === "steps" && (
                   <ol className="p-3 space-y-2">
-                    {((detail.data.steps as any[]) ?? []).map((step, i) => (
-                      <li key={i} className="border rounded p-2.5">
-                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                          <span className="font-mono">Step {i + 1}</span> · {step.type}
-                          {step.type === "wait" ? ` · ${step.days}d` : ""}
-                        </div>
-                        {step.subject && <div className="text-sm font-medium mt-1">{step.subject}</div>}
-                        {step.body && <div className="text-xs text-muted-foreground line-clamp-3 mt-1">{step.body}</div>}
-                      </li>
-                    ))}
+                    {((detail.data.steps as any[]) ?? []).map((step, i) => {
+                      // Resolve template provenance for the right-pane chip.
+                      // templateId is plumbed end-to-end (Edit dialog +
+                      // canvas → server stepSchema → here) so the chip
+                      // shows in lock-step with whichever editor the user
+                      // last touched.
+                      const tmplName = step.type === "email" && typeof step.templateId === "number"
+                        ? templateNameById.get(step.templateId)
+                        : null;
+                      const bodyPreview = step.body ? htmlToPlainText(String(step.body)) : "";
+                      return (
+                        <li key={i} className="border rounded p-2.5">
+                          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                            <span className="font-mono">Step {i + 1}</span> · {step.type}
+                            {step.type === "wait" ? ` · ${step.days}d` : ""}
+                            {tmplName && (
+                              <span className="ml-auto text-[10px] px-1.5 py-0 rounded bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300">
+                                from template: {tmplName}
+                              </span>
+                            )}
+                          </div>
+                          {step.subject && <div className="text-sm font-medium mt-1">{step.subject}</div>}
+                          {bodyPreview && <div className="text-xs text-muted-foreground line-clamp-3 mt-1 whitespace-pre-wrap">{bodyPreview}</div>}
+                        </li>
+                      );
+                    })}
                     {((detail.data.steps as any[]) ?? []).length === 0 && (
                       <div className="text-sm text-muted-foreground py-4 text-center">
                         No steps yet. Click <strong>Edit</strong> to add steps, or open the Canvas.
