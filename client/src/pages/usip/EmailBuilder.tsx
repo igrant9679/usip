@@ -1091,6 +1091,11 @@ function Builder({ templateId }: { templateId: number }) {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [showSaveSectionDialog, setShowSaveSectionDialog] = useState(false);
   const [saveState, setSaveState] = useState<"saved" | "unsaved" | "saving">("saved");
+  // Transient flash after a successful save: drives the Save button's
+  // label briefly to "Saved" before reverting to "Save", instead of the
+  // old standalone status pill.
+  const [justSaved, setJustSaved] = useState(false);
+  const justSavedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [previewMode, setPreviewMode] = useState<"desktop" | "mobile">("desktop");
   const [showPreview, setShowPreview] = useState(false);
   const [previewHtml, setPreviewHtml] = useState("");
@@ -1138,7 +1143,18 @@ function Builder({ templateId }: { templateId: number }) {
     return () => { if (autosaveTimer.current) clearTimeout(autosaveTimer.current); };
   }, [saveState, blocks, subject]);
 
-  const markDirty = useCallback(() => setSaveState("unsaved"), []);
+  // Clean up the transient "Saved" flash timer on unmount.
+  useEffect(() => () => {
+    if (justSavedTimer.current) clearTimeout(justSavedTimer.current);
+  }, []);
+
+  const markDirty = useCallback(() => {
+    setSaveState("unsaved");
+    // If the user edited during the 500ms "Saved" flash, cut it short
+    // so the button reads "Save" again immediately.
+    if (justSavedTimer.current) { clearTimeout(justSavedTimer.current); justSavedTimer.current = null; }
+    setJustSaved(false);
+  }, []);
 
   // Insert blocks from a saved section at the end of the canvas
   const insertSectionBlocks = useCallback((newBlocks: Block[]) => {
@@ -1161,6 +1177,13 @@ function Builder({ templateId }: { templateId: number }) {
         designData: blocks,
       });
       setSaveState("saved");
+      // Flash "Saved" on the button for 500ms, then revert to "Save".
+      if (justSavedTimer.current) clearTimeout(justSavedTimer.current);
+      setJustSaved(true);
+      justSavedTimer.current = setTimeout(() => {
+        setJustSaved(false);
+        justSavedTimer.current = null;
+      }, 500);
     } catch {
       setSaveState("unsaved");
       toast.error("Save failed");
@@ -1435,9 +1458,6 @@ function Builder({ templateId }: { templateId: number }) {
               </Button>
             )
           )}
-          <span className={`text-xs ${saveState === "saved" ? "text-green-600" : saveState === "saving" ? "text-amber-500" : "text-muted-foreground"}`}>
-            {saveState === "saved" ? "Saved" : saveState === "saving" ? "Saving…" : "Unsaved"}
-          </span>
           <Button
             size="sm"
             variant="outline"
@@ -1463,8 +1483,14 @@ function Builder({ templateId }: { templateId: number }) {
               <Button size="sm" variant="outline" className="h-7 px-2 text-xs text-destructive hover:text-destructive" onClick={() => archiveMutation.mutate({ id: templateId })}>
                 Archive
               </Button>
-              <Button size="sm" className="h-7 px-3 text-xs" onClick={handleSave} disabled={saveState === "saving"}>
-                <Save size={12} className="mr-1" /> Save
+              <Button
+                size="sm"
+                className="h-7 px-3 text-xs min-w-[72px]"
+                onClick={handleSave}
+                disabled={saveState === "saving"}
+              >
+                <Save size={12} className="mr-1" />
+                {saveState === "saving" ? "Saving…" : justSaved ? "Saved" : "Save"}
               </Button>
             </>
           )}
