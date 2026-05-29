@@ -18,6 +18,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
 import { toast } from "sonner";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -1458,10 +1459,17 @@ function Builder({ templateId }: { templateId: number }) {
         </div>
       </div>
 
-      {/* 3-panel body */}
-      <div className="flex flex-1 overflow-hidden">
+      {/* 3-panel body — resizable. Widths are persisted to localStorage
+          via autoSaveId so each user's preferred layout sticks across
+          sessions. Minimums prevent any panel from being crushed; the
+          right panel collapses cleanly if dragged to its minSize. */}
+      <ResizablePanelGroup
+        direction="horizontal"
+        autoSaveId="email-builder-panels"
+        className="flex-1 overflow-hidden"
+      >
         {/* Left: block palette + saved sections */}
-        <div className="w-48 shrink-0 border-r bg-muted/30 flex flex-col">
+        <ResizablePanel defaultSize={14} minSize={10} maxSize={30} className="border-r bg-muted/30 flex flex-col">
           <Tabs value={palettTab} onValueChange={(v) => setPaletteTab(v as "blocks" | "sections")} className="flex flex-col h-full">
             <TabsList className="w-full rounded-none border-b h-8 shrink-0 bg-transparent px-1 gap-1">
               <TabsTrigger value="blocks" className="flex-1 text-[11px] h-6 data-[state=active]:bg-background data-[state=active]:shadow-sm">
@@ -1503,10 +1511,12 @@ function Builder({ templateId }: { templateId: number }) {
               <SavedSectionsPanel onInsert={insertSectionBlocks} isReadOnly={isReadOnly} />
             </TabsContent>
           </Tabs>
-        </div>
+        </ResizablePanel>
+
+        <ResizableHandle withHandle />
 
         {/* Center: canvas */}
-        <div className="flex-1 overflow-auto bg-muted/20 p-4">
+        <ResizablePanel defaultSize={66} minSize={30} className="overflow-auto bg-muted/20 p-4">
           {/* Tip banner — dismissible, shown once */}
           {showTipBanner && !isReadOnly && (
             <div className="mb-3 px-3 py-2 bg-primary/5 border border-primary/20 rounded-lg text-xs text-primary flex items-center gap-2">
@@ -1608,10 +1618,12 @@ function Builder({ templateId }: { templateId: number }) {
               </div>
             ))}
           </div>
-        </div>
+        </ResizablePanel>
+
+        <ResizableHandle withHandle />
 
         {/* Right: properties panel */}
-        <div className="w-64 shrink-0 border-l bg-card flex flex-col">
+        <ResizablePanel defaultSize={20} minSize={15} maxSize={40} className="border-l bg-card flex flex-col">
           {/* Getting-started hint when nothing is selected */}
           {!selectedBlock && blocks.length === 0 && (
             <div className="p-4 space-y-3">
@@ -1718,8 +1730,8 @@ function Builder({ templateId }: { templateId: number }) {
               <p className="text-xs text-muted-foreground text-center">Click a block to edit its properties</p>
             </div>
           )}
-        </div>
-      </div>
+        </ResizablePanel>
+      </ResizablePanelGroup>
 
       {/* Starter template picker dialog */}
       <Dialog open={showStarterPicker} onOpenChange={setShowStarterPicker}>
