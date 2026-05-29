@@ -1394,6 +1394,28 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
   // sets the new account/lead's territoryId and ownerUserId. Wired into
   // accounts.create and leads.create on the server. Each match value is
   // optional — a NULL means "any". Rules with NO conditions are catch-all.
+  // ── 0084: per-campaign discovery-query rotation state ────────────
+  // Stores the Cartesian product of ICP slices (title × industry × geo
+  // × keyword) the discovery engine cycles through, plus the
+  // lastSearchedAt + lastResultCount per slice. The engine picks the
+  // stalest slice every tick so over time it covers the full ICP grid
+  // instead of hitting the same query string forever.
+  //
+  // Shape (JSON):
+  //   {
+  //     slices: [{ id: "h64hash", q: "VP Sales SaaS US", lastSearchedAt: ts, lastNewCount: N }],
+  //     updatedAt: ts
+  //   }
+  //
+  // Nullable — engine seeds it on first tick. Stored on are_campaigns
+  // because it's strictly per-campaign and bounded (~30 slices max).
+  {
+    name: "0084_are_campaign_discovery_query_state.sql",
+    statements: [
+      `ALTER TABLE \`are_campaigns\` ADD COLUMN \`discoveryQueryState\` JSON NULL`,
+    ],
+  },
+
   {
     name: "0083_crm_territory_rules.sql",
     statements: [

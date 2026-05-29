@@ -2692,6 +2692,12 @@ export const areCampaigns = mysqlTable(
      *  { steps: [{stepIndex, day, channel, archetype, skeleton, ctaPattern}] }. */
     generatedTemplate: json("generatedTemplate"),
     generatedTemplateAt: timestamp("generatedTemplateAt"),
+    /** Per-slice rotation state used by the discovery query fan-out
+     *  (migration 0084). Shape:
+     *    { slices: [{ id, q, lastSearchedAt, lastNewCount }], updatedAt }
+     *  Engine seeds it on first tick and updates after every slice it
+     *  runs, so the stalest slice always fires next. */
+    discoveryQueryState: json("discoveryQueryState"),
     goalType: mysqlEnum("goalType", ["meeting_booked", "reply", "opportunity_created"]).default("reply").notNull(),
     // Metrics (denormalised for fast dashboard reads)
     prospectsDiscovered: int("prospectsDiscovered").default(0).notNull(),

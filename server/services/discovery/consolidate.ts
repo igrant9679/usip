@@ -184,9 +184,39 @@ export function scoreConfidence(c: IdentityCandidate): ScoredCandidate {
   if (c.email && isEmail(c.email)) score += 10;
   else if (c.email) notes.push("Email present but failed format check");
 
-  // Cross-source agreement: multiple sources reinforce confidence.
-  if (c.sources.size >= 2) score += 5;
+  // Cross-source corroboration — strengthened so well-corroborated
+  // candidates clear the 80 threshold instead of stalling at 75 in
+  // needs_review.
+  //
+  //   1 source                → no bump
+  //   2 sources               → +10  (was +5)
+  //   3+ sources              → +15  (cumulative; new tier)
+  //   2+ source URLs          → +5   (unchanged — distinct from sources
+  //                                   because one source can yield
+  //                                   multiple URLs)
+  //   Same LinkedIn URL agreed by 2+ sources → +5 (new)
+  //   Same email present from 2+ sources    → +3 (new)
+  if (c.sources.size >= 3) {
+    score += 15;
+    notes.push(`Corroborated by ${c.sources.size} independent sources`);
+  } else if (c.sources.size >= 2) {
+    score += 10;
+    notes.push("Corroborated by 2 independent sources");
+  }
   if (c.sourceUrls.length >= 2) score += 5;
+
+  // Field-level cross-source agreement — strongest signals get small
+  // additional bumps. Conflicts handled separately below.
+  const liUrlValues = c.conflicts["linkedinUrl"];
+  if (liUrlValues && liUrlValues.size === 1 && c.sources.size >= 2) {
+    score += 5;
+    notes.push("LinkedIn URL agreed by multiple sources");
+  }
+  const emailValues = c.conflicts["email"];
+  if (emailValues && emailValues.size === 1 && c.sources.size >= 2) {
+    score += 3;
+    notes.push("Email agreed by multiple sources");
+  }
 
   // Conflicts deduct. Each contested field is a yellow flag.
   let linkedinUrlVerified = false;

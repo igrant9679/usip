@@ -24,6 +24,7 @@
  * Everything is bounded per tick (LLM cost) and idempotent (safe to re-run).
  * Per-campaign and per-phase try/catch so one failure never blocks the rest.
  */
+import { createHash } from "node:crypto";
 import { and, eq, inArray, lte, sql } from "drizzle-orm";
 import { getDb } from "./db";
 import {
@@ -748,15 +749,50 @@ async function runDiscovery(campaign: Campaign): Promise<number> {
       ? `${overrides.employeeMin ?? 1}-${overrides.employeeMax ?? "5000+"} employees`
       : "";
 
-  const query = [titles[0], industries[0], geos[0], keywords[0], sizeHint]
-    .filter(Boolean)
-    .join(" ")
-    .trim();
-  if (!query) {
+  // ── Query slice fan-out ───────────────────────────────────────────
+  // Old behaviour: build ONE query from titles[0]+industries[0]+geos[0]
+  // +keywords[0] and run it every tick forever — the engine kept
+  // hitting the same top-of-funnel results.
+  //
+  // New behaviour: enumerate the Cartesian product of (title × industry
+  // × geo × keyword?), capped at MAX_SLICES. Each slice is identified
+  // by a stable hash. The campaign's discoveryQueryState JSON tracks
+  // lastSearchedAt and lastNewCount per slice. Every tick the engine
+  // picks the STALEST slice (null first, then oldest) so over time it
+  // covers the full ICP grid without increasing per-tick API spend.
+  const targetingSlices = buildQuerySlices({ titles, industries, geos, keywords, sizeHint });
+  if (targetingSlices.length === 0) {
     await emitLog(campaign.workspaceId, campaign.id, "discovery", "warn",
       "Discovery skipped — campaign has no targeting (titles/industries/geos/keywords). Open the campaign and add targets, or apply a Persona.");
     return 0;
   }
+
+  // Merge with persisted state so we know which slice to run next.
+  const persistedState =
+    (campaign as { discoveryQueryState?: { slices?: Array<{ id: string; q: string; lastSearchedAt?: number | null; lastNewCount?: number | null }> } | null }).discoveryQueryState
+    ?? { slices: [] };
+  const stateById = new Map<string, { id: string; q: string; lastSearchedAt: number | null; lastNewCount: number | null }>();
+  for (const s of persistedState.slices ?? []) {
+    stateById.set(s.id, { id: s.id, q: s.q, lastSearchedAt: s.lastSearchedAt ?? null, lastNewCount: s.lastNewCount ?? null });
+  }
+  // Ensure every current slice has a row; drop persisted rows that no
+  // longer match the targeting (ICP edits invalidate stale slice IDs).
+  const liveSliceIds = new Set(targetingSlices.map((s) => s.id));
+  for (const id of Array.from(stateById.keys())) {
+    if (!liveSliceIds.has(id)) stateById.delete(id);
+  }
+  for (const s of targetingSlices) {
+    if (!stateById.has(s.id)) stateById.set(s.id, { id: s.id, q: s.q, lastSearchedAt: null, lastNewCount: null });
+  }
+
+  // Pick the stalest slice (null lastSearchedAt first, then oldest).
+  const ordered = Array.from(stateById.values()).sort((a, b) => {
+    const aTs = a.lastSearchedAt ?? 0;
+    const bTs = b.lastSearchedAt ?? 0;
+    return aTs - bTs;
+  });
+  const slice = ordered[0];
+  const query = slice.q;
 
   const icpContext =
     `Industries: ${industries.join(", ")}; ` +
@@ -882,13 +918,79 @@ async function runDiscovery(campaign: Campaign): Promise<number> {
         `Failed to save ${sourceType} results: ${(e as Error)?.message ?? e}`, errorDetails(e));
     }
   }
+  // Persist slice rotation state — bump lastSearchedAt + lastNewCount
+  // for the slice we just ran so the next tick picks a different angle.
+  const now = Date.now();
+  const updatedSlice = stateById.get(slice.id);
+  if (updatedSlice) {
+    updatedSlice.lastSearchedAt = now;
+    updatedSlice.lastNewCount = totalNew;
+  }
+  const newState = {
+    slices: Array.from(stateById.values()),
+    updatedAt: now,
+  };
+  try {
+    await db.update(areCampaigns).set({ discoveryQueryState: newState as any })
+      .where(eq(areCampaigns.id, campaign.id));
+  } catch (e) {
+    console.warn(`[AreEngine] failed to persist discoveryQueryState for campaign ${campaign.id}:`, e);
+  }
+
   // One info-level summary log per call carrying the per-source breakdown
   // in `details` — expand the row in the Logs tab to see what each source
-  // returned vs how many survived dedup.
+  // returned vs how many survived dedup. `sliceId` + `sliceIdx` show
+  // which angle of the ICP grid this tick covered.
+  const sliceIdx = targetingSlices.findIndex((s) => s.id === slice.id);
   await emitLog(campaign.workspaceId, campaign.id, "discovery", "info",
-    `Discovery query "${query}" → ${totalNew} new across ${Object.keys(perSource).length} sources`,
-    { query, perSource });
+    `Discovery slice ${sliceIdx + 1}/${targetingSlices.length} "${query}" → ${totalNew} new across ${Object.keys(perSource).length} sources`,
+    { query, sliceId: slice.id, sliceIdx: sliceIdx + 1, sliceCount: targetingSlices.length, perSource });
   return totalNew;
+}
+
+/* ─── Query slice builder ───────────────────────────────────────────── */
+
+/**
+ * Builds the Cartesian product of (title × industry × geo × keyword?)
+ * capped at MAX_SLICES (30). Each slice gets a stable hash id so the
+ * rotation state survives ICP edits that don't change a given slice.
+ *
+ * Strategy:
+ *   - If keywords are present, include them in the product (multiplies
+ *     by keywords.length). Otherwise keyword is omitted from the query.
+ *   - sizeHint is appended to every slice (it's a filter, not an axis).
+ *   - If the raw product exceeds MAX_SLICES, take the first N (round-
+ *     robin would be ideal but for typical ICPs the cap rarely bites).
+ *
+ * Returns [] when there's not enough targeting to form a single slice.
+ */
+function buildQuerySlices(args: {
+  titles: string[];
+  industries: string[];
+  geos: string[];
+  keywords: string[];
+  sizeHint: string;
+}): Array<{ id: string; q: string }> {
+  const MAX_SLICES = 30;
+  const ts = args.titles.length > 0 ? args.titles : [""];
+  const is = args.industries.length > 0 ? args.industries : [""];
+  const gs = args.geos.length > 0 ? args.geos : [""];
+  const ks = args.keywords.length > 0 ? args.keywords : [""];
+  const out: Array<{ id: string; q: string }> = [];
+  for (const t of ts) {
+    for (const i of is) {
+      for (const g of gs) {
+        for (const k of ks) {
+          const q = [t, i, g, k, args.sizeHint].map((p) => p?.trim() ?? "").filter((p) => p.length > 0).join(" ").trim();
+          if (!q) continue;
+          const id = createHash("sha1").update(q).digest("hex").slice(0, 16);
+          out.push({ id, q });
+          if (out.length >= MAX_SLICES) return out;
+        }
+      }
+    }
+  }
+  return out;
 }
 
 /**
