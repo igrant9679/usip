@@ -1,7 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { and, count, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { z } from "zod";
-import { accounts, activities, campaigns, contacts, emailDrafts, emailReplies, enrollments, leads, senderPoolMembers, sendingAccounts, sequenceAbVariants, sequenceEdges, sequenceNodes, sequences, unipileAccounts, users, workspaces, workspaceSettings } from "../../drizzle/schema";
+import { accounts, activities, campaigns, contacts, emailDrafts, emailReplies, enrollments, leads, prospects, senderPoolMembers, sendingAccounts, sequenceAbVariants, sequenceEdges, sequenceNodes, sequences, unipileAccounts, users, workspaces, workspaceSettings } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
 import { getDb } from "../db";
 import { createEmailAdapter } from "../emailAdapter";
@@ -681,7 +681,16 @@ export const sequencesRouter = router({
   }),
 
   /**
-   * Bulk enroll many contacts and/or leads into a single sequence in one call.
+   * Bulk enroll many contacts, leads, and/or prospects into a single
+   * sequence in one call.
+   *
+   * Prospects are auto-promoted to contacts before enrollment (mirrors
+   * the prospects.promoteToContact mutation — links via existing
+   * email, otherwise inserts a new contact and back-links the
+   * prospect). This keeps the enrollments table clean of a third
+   * foreign-key column while letting the UI surface prospects as a
+   * first-class enrollment source.
+   *
    * - Dedups against existing non-exited enrollments (a record that's
    *   already active/paused/finished in this sequence is skipped, not
    *   re-enrolled — re-enrollment after exit IS allowed).
@@ -698,14 +707,67 @@ export const sequencesRouter = router({
       sequenceId: z.number(),
       contactIds: z.array(z.number()).optional(),
       leadIds: z.array(z.number()).optional(),
+      prospectIds: z.array(z.number()).optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      const contactIds = Array.from(new Set(input.contactIds ?? []));
+      let contactIds = Array.from(new Set(input.contactIds ?? []));
       const leadIds = Array.from(new Set(input.leadIds ?? []));
-      if (contactIds.length === 0 && leadIds.length === 0) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "Pick at least one contact or lead." });
+      const prospectIds = Array.from(new Set(input.prospectIds ?? []));
+      if (contactIds.length === 0 && leadIds.length === 0 && prospectIds.length === 0) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Pick at least one contact, lead, or prospect." });
+      }
+
+      // ── Promote prospects → contacts ────────────────────────────
+      // Mirrors prospects.promoteToContact: reuses linkedContactId if
+      // already set, otherwise links by email match, otherwise inserts
+      // a fresh contact. Each promotion is best-effort — if one
+      // prospect fails (missing required fields, weird state) we skip
+      // it and report it in the result rather than failing the whole
+      // batch.
+      let promotedFromProspect = 0;
+      let prospectSkipped = 0;
+      if (prospectIds.length > 0) {
+        const rows = await db.select().from(prospects)
+          .where(and(eq(prospects.workspaceId, ctx.workspace.id), inArray(prospects.id, prospectIds)));
+        for (const p of rows) {
+          try {
+            let contactId: number | null = (p as any).linkedContactId ?? null;
+            if (!contactId && p.email) {
+              const [existing] = await db.select({ id: contacts.id }).from(contacts)
+                .where(and(eq(contacts.workspaceId, ctx.workspace.id), eq(contacts.email, p.email)));
+              if (existing) contactId = existing.id;
+            }
+            if (!contactId) {
+              const [inserted] = await db.insert(contacts).values({
+                workspaceId: ctx.workspace.id,
+                firstName: p.firstName,
+                lastName: p.lastName,
+                title: p.title ?? null,
+                email: p.email ?? null,
+                phone: p.phone ?? null,
+                linkedinUrl: p.linkedinUrl ?? null,
+                city: p.city ?? null,
+                functionalArea: (p as any).functionalArea ?? null,
+                industry: p.industry ?? null,
+                companyDomain: p.companyDomain ?? null,
+                seniority: (p as any).seniority ?? null,
+                sourceProspectId: p.id,
+              } as never);
+              contactId = (inserted as { insertId: number }).insertId;
+              promotedFromProspect++;
+            }
+            await db.update(prospects).set({ linkedContactId: contactId } as never).where(eq(prospects.id, p.id));
+            if (!contactIds.includes(contactId)) contactIds.push(contactId);
+          } catch (e) {
+            console.error(`[bulkEnroll] failed to promote prospect ${p.id}:`, e);
+            prospectSkipped++;
+          }
+        }
+        // Account for prospect IDs that didn't resolve to a row (deleted
+        // between picker render and submit).
+        prospectSkipped += prospectIds.length - rows.length;
       }
 
       // Verify the sequence exists in this workspace before we do any work.
@@ -770,6 +832,8 @@ export const sequencesRouter = router({
         enrolled: rows.length,
         skippedAlreadyEnrolled,
         blockedInvalidEmail,
+        promotedFromProspect,
+        prospectSkipped,
       };
     }),
 

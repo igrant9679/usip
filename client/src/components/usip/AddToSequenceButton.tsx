@@ -22,7 +22,7 @@ import { Badge } from "@/components/ui/badge";
 import { Activity, Loader2, Plus } from "lucide-react";
 import { toast } from "sonner";
 
-export type SequenceEnrollEntityType = "contact" | "lead";
+export type SequenceEnrollEntityType = "contact" | "lead" | "prospect";
 
 export function AddToSequenceButton({
   entityType,
@@ -50,16 +50,31 @@ export function AddToSequenceButton({
     onSuccess: (r, vars) => {
       const seqName = sequences.find((s) => s.id === vars.sequenceId)?.name ?? "sequence";
       if (r.enrolled > 0) {
-        toast.success(`Enrolled in "${seqName}"`);
+        // Prospect-source enrollments get a slightly more informative
+        // toast since the server quietly promoted them to a contact.
+        if (r.promotedFromProspect > 0) {
+          toast.success(`Enrolled in "${seqName}" (promoted to contact)`);
+        } else {
+          toast.success(`Enrolled in "${seqName}"`);
+        }
       } else if (r.skippedAlreadyEnrolled > 0) {
         toast.info(`Already enrolled in "${seqName}"`);
       } else if (r.blockedInvalidEmail > 0) {
         toast.error("Blocked — invalid email on file");
+      } else if (r.prospectSkipped > 0) {
+        toast.error("Couldn't enroll — prospect missing required fields");
       }
       // Refresh that sequence's enrollment views in case the user lands
       // there next. Cheap and silent.
       utils.sequences.listEnrollments.invalidate({ sequenceId: vars.sequenceId });
       utils.sequences.getEnrollmentStats.invalidate({ sequenceId: vars.sequenceId });
+      // If this was a prospect enrollment, the prospect now has a
+      // linkedContactId — invalidate prospect queries so the UI stays
+      // consistent.
+      if (vars.prospectIds && vars.prospectIds.length > 0) {
+        utils.prospects.get.invalidate();
+        utils.prospects.list.invalidate();
+      }
       setOpen(false);
     },
     onError: (e) => toast.error(e.message),
@@ -95,6 +110,7 @@ export function AddToSequenceButton({
                         sequenceId: s.id,
                         contactIds: entityType === "contact" ? [entityId] : undefined,
                         leadIds: entityType === "lead" ? [entityId] : undefined,
+                        prospectIds: entityType === "prospect" ? [entityId] : undefined,
                       })}
                     >
                       <Activity className="size-3.5 mr-2 text-muted-foreground" />

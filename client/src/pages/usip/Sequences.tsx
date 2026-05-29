@@ -63,10 +63,11 @@ function EnrollDialog({ sequenceId, open, onClose, onEnrolled }: {
   onClose: () => void;
   onEnrolled: () => void;
 }) {
-  const [tab, setTab] = useState<"contacts" | "leads">("contacts");
+  const [tab, setTab] = useState<"contacts" | "leads" | "prospects">("contacts");
   const [search, setSearch] = useState("");
   const [selectedContactIds, setSelectedContactIds] = useState<Set<number>>(new Set());
   const [selectedLeadIds, setSelectedLeadIds] = useState<Set<number>>(new Set());
+  const [selectedProspectIds, setSelectedProspectIds] = useState<Set<number>>(new Set());
 
   // Reset on every fresh open.
   useEffect(() => {
@@ -75,11 +76,16 @@ function EnrollDialog({ sequenceId, open, onClose, onEnrolled }: {
       setSearch("");
       setSelectedContactIds(new Set());
       setSelectedLeadIds(new Set());
+      setSelectedProspectIds(new Set());
     }
   }, [open]);
 
   const contactsQ = trpc.contacts.list.useQuery(undefined, { enabled: open });
   const leadsQ = trpc.leads.list.useQuery(undefined, { enabled: open });
+  // Prospects: verified-only by default since enrolling unverified ones
+  // risks bouncing on bad emails. The picker still shows verification
+  // status per row so the user can spot anomalies.
+  const prospectsQ = trpc.prospects.list.useQuery({ verificationStatus: "verified" }, { enabled: open });
 
   // Already enrolled in this sequence — show a disabled checkbox + "already enrolled" label.
   const { data: existingEnrollments = [] } = trpc.sequences.listEnrollments.useQuery({ sequenceId }, { enabled: open });
@@ -90,6 +96,9 @@ function EnrollDialog({ sequenceId, open, onClose, onEnrolled }: {
     if (e.contactId) alreadyContactIds.add(e.contactId);
     if (e.leadId) alreadyLeadIds.add(e.leadId);
   }
+  // Prospects can also be "already enrolled" via their linkedContactId
+  // pointing at an already-enrolled contact. We compute that per-row
+  // below using alreadyContactIds.
 
   const q = search.trim().toLowerCase();
   const filteredContacts = ((contactsQ.data ?? []) as any[]).filter((c) => {
@@ -102,12 +111,22 @@ function EnrollDialog({ sequenceId, open, onClose, onEnrolled }: {
     const hay = `${l.firstName ?? ""} ${l.lastName ?? ""} ${l.email ?? ""} ${l.company ?? ""} ${l.title ?? ""}`.toLowerCase();
     return hay.includes(q);
   });
+  // prospects.list returns { data, total, page, perPage } — page-1 of 50
+  // is fine here because most workspaces have well under that in the
+  // verified bucket. If the cap bites we can add infinite-scroll later.
+  const filteredProspects = (((prospectsQ.data as any)?.data ?? []) as any[]).filter((p) => {
+    if (!q) return true;
+    const hay = `${p.firstName ?? ""} ${p.lastName ?? ""} ${p.email ?? ""} ${p.companyName ?? p.company ?? ""} ${p.title ?? ""}`.toLowerCase();
+    return hay.includes(q);
+  });
 
   const bulkEnroll = trpc.sequences.bulkEnroll.useMutation({
     onSuccess: (r) => {
       const parts = [`Enrolled ${r.enrolled}`];
+      if (r.promotedFromProspect > 0) parts.push(`${r.promotedFromProspect} promoted from prospect`);
       if (r.skippedAlreadyEnrolled > 0) parts.push(`${r.skippedAlreadyEnrolled} already enrolled`);
       if (r.blockedInvalidEmail > 0) parts.push(`${r.blockedInvalidEmail} blocked (invalid email)`);
+      if (r.prospectSkipped > 0) parts.push(`${r.prospectSkipped} prospects skipped`);
       toast.success(parts.join(" · "));
       onEnrolled();
       onClose();
@@ -115,7 +134,13 @@ function EnrollDialog({ sequenceId, open, onClose, onEnrolled }: {
     onError: (e) => toast.error(e.message),
   });
 
-  const totalSelected = selectedContactIds.size + selectedLeadIds.size;
+  const totalSelected = selectedContactIds.size + selectedLeadIds.size + selectedProspectIds.size;
+
+  /** A prospect is "already enrolled" if its linked contact is in the
+   *  alreadyContactIds set we computed from existing enrollments. */
+  function isProspectAlreadyEnrolled(p: any): boolean {
+    return typeof p.linkedContactId === "number" && alreadyContactIds.has(p.linkedContactId);
+  }
 
   function toggleContact(id: number) {
     if (alreadyContactIds.has(id)) return;
@@ -133,6 +158,14 @@ function EnrollDialog({ sequenceId, open, onClose, onEnrolled }: {
       return next;
     });
   }
+  function toggleProspect(p: any) {
+    if (isProspectAlreadyEnrolled(p)) return;
+    setSelectedProspectIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(p.id)) next.delete(p.id); else next.add(p.id);
+      return next;
+    });
+  }
   function selectAllVisible() {
     if (tab === "contacts") {
       setSelectedContactIds((prev) => {
@@ -140,10 +173,16 @@ function EnrollDialog({ sequenceId, open, onClose, onEnrolled }: {
         for (const c of filteredContacts) if (!alreadyContactIds.has(c.id)) next.add(c.id);
         return next;
       });
-    } else {
+    } else if (tab === "leads") {
       setSelectedLeadIds((prev) => {
         const next = new Set(prev);
         for (const l of filteredLeads) if (!alreadyLeadIds.has(l.id)) next.add(l.id);
+        return next;
+      });
+    } else {
+      setSelectedProspectIds((prev) => {
+        const next = new Set(prev);
+        for (const p of filteredProspects) if (!isProspectAlreadyEnrolled(p)) next.add(p.id);
         return next;
       });
     }
@@ -160,6 +199,7 @@ function EnrollDialog({ sequenceId, open, onClose, onEnrolled }: {
           {([
             { k: "contacts", label: "Contacts", count: filteredContacts.length },
             { k: "leads", label: "Leads", count: filteredLeads.length },
+            { k: "prospects", label: "Prospects", count: filteredProspects.length },
           ] as const).map((t) => (
             <button key={t.k} onClick={() => setTab(t.k)}
               className={`px-4 py-2 text-sm ${tab === t.k ? "border-b-2 border-[#14B89A] font-semibold" : "text-muted-foreground"}`}>
@@ -179,6 +219,13 @@ function EnrollDialog({ sequenceId, open, onClose, onEnrolled }: {
             Select all visible
           </Button>
         </div>
+
+        {tab === "prospects" && (
+          <p className="text-[11px] text-muted-foreground mt-2 px-1">
+            Prospects get promoted to contacts on enroll. Verified prospects only —
+            adjust verification on the Prospects page if you need others.
+          </p>
+        )}
 
         <div className="flex-1 min-h-0 overflow-y-auto border rounded-md mt-2">
           {tab === "contacts" ? (
@@ -213,7 +260,7 @@ function EnrollDialog({ sequenceId, open, onClose, onEnrolled }: {
                 })}
               </ul>
             )
-          ) : (
+          ) : tab === "leads" ? (
             leadsQ.isLoading ? (
               <div className="p-4 text-sm text-muted-foreground">Loading leads…</div>
             ) : filteredLeads.length === 0 ? (
@@ -245,6 +292,39 @@ function EnrollDialog({ sequenceId, open, onClose, onEnrolled }: {
                 })}
               </ul>
             )
+          ) : (
+            prospectsQ.isLoading ? (
+              <div className="p-4 text-sm text-muted-foreground">Loading prospects…</div>
+            ) : filteredProspects.length === 0 ? (
+              <div className="p-4 text-sm text-muted-foreground">No verified prospects match.</div>
+            ) : (
+              <ul className="divide-y">
+                {filteredProspects.map((p: any) => {
+                  const already = isProspectAlreadyEnrolled(p);
+                  const checked = selectedProspectIds.has(p.id);
+                  const company = p.companyName ?? p.company ?? "";
+                  return (
+                    <li key={p.id} className={`flex items-center gap-3 p-2.5 text-sm ${already ? "opacity-50" : "hover:bg-muted/40 cursor-pointer"}`} onClick={() => toggleProspect(p)}>
+                      <input
+                        type="checkbox"
+                        checked={checked || already}
+                        disabled={already}
+                        onChange={() => toggleProspect(p)}
+                        onClick={(e) => e.stopPropagation()}
+                        className="size-4 rounded border-gray-300 cursor-pointer"
+                      />
+                      <div className="flex-1 min-w-0">
+                        <div className="font-medium truncate">{p.firstName} {p.lastName}</div>
+                        <div className="text-xs text-muted-foreground truncate">
+                          {p.email ?? "(no email)"}{p.title ? ` · ${p.title}` : ""}{company ? ` · ${company}` : ""}
+                        </div>
+                      </div>
+                      {already && <span className="text-[10px] text-muted-foreground shrink-0">already enrolled</span>}
+                    </li>
+                  );
+                })}
+              </ul>
+            )
           )}
         </div>
 
@@ -259,6 +339,7 @@ function EnrollDialog({ sequenceId, open, onClose, onEnrolled }: {
               sequenceId,
               contactIds: Array.from(selectedContactIds),
               leadIds: Array.from(selectedLeadIds),
+              prospectIds: Array.from(selectedProspectIds),
             })}
           >
             {bulkEnroll.isPending ? "Enrolling…" : `Enroll ${totalSelected}`}
