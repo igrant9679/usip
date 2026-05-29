@@ -1469,7 +1469,7 @@ function Builder({ templateId }: { templateId: number }) {
         className="flex-1 overflow-hidden"
       >
         {/* Left: block palette + saved sections */}
-        <ResizablePanel defaultSize={14} minSize={10} maxSize={30} className="border-r bg-muted/30 flex flex-col">
+        <ResizablePanel defaultSize={14} minSize={10} maxSize={30} className="border-r bg-muted/30 flex flex-col min-h-0">
           <Tabs value={palettTab} onValueChange={(v) => setPaletteTab(v as "blocks" | "sections")} className="flex flex-col h-full">
             <TabsList className="w-full rounded-none border-b h-8 shrink-0 bg-transparent px-1 gap-1">
               <TabsTrigger value="blocks" className="flex-1 text-[11px] h-6 data-[state=active]:bg-background data-[state=active]:shadow-sm">
@@ -1623,27 +1623,35 @@ function Builder({ templateId }: { templateId: number }) {
         <ResizableHandle withHandle />
 
         {/* Right: properties panel */}
-        <ResizablePanel defaultSize={20} minSize={15} maxSize={40} className="border-l bg-card flex flex-col">
-          {/* Getting-started hint when nothing is selected */}
+        {/* min-h-0 is critical: without it, flex-1 children below would
+            expand to fit their content rather than shrinking, defeating
+            the inner ScrollArea. This is the classic flexbox trap that
+            makes Radix's ScrollArea silently not scroll. */}
+        <ResizablePanel defaultSize={20} minSize={15} maxSize={40} className="border-l bg-card flex flex-col min-h-0">
+          {/* Getting-started hint when nothing is selected — wrapped in
+              ScrollArea so the hint scrolls when the user has shrunk the
+              panel vertically (or zoomed in heavily). */}
           {!selectedBlock && blocks.length === 0 && (
-            <div className="p-4 space-y-3">
-              <p className="text-xs font-semibold text-foreground">Getting Started</p>
-              <ol className="space-y-2.5">
-                {[
-                  { step: "1", text: "Click a block type on the left (or use a starter layout) to add it to your canvas" },
-                  { step: "2", text: "Click any block on the canvas to edit its content and style here" },
-                  { step: "3", text: "Use the Preview button to see how your email looks on desktop and mobile" },
-                ].map(({ step, text }) => (
-                  <li key={step} className="flex gap-2.5 text-xs text-muted-foreground">
-                    <span className="shrink-0 w-4 h-4 rounded-full bg-primary/10 text-primary text-[10px] font-bold flex items-center justify-center">{step}</span>
-                    <span>{text}</span>
-                  </li>
-                ))}
-              </ol>
-              <div className="pt-1 border-t">
-                <p className="text-[10px] text-muted-foreground">Use <strong>{"{{firstName}}"}</strong>, <strong>{"{{company}}"}</strong> and other merge tags to personalize each send automatically.</p>
+            <ScrollArea className="flex-1 min-h-0">
+              <div className="p-4 space-y-3">
+                <p className="text-xs font-semibold text-foreground">Getting Started</p>
+                <ol className="space-y-2.5">
+                  {[
+                    { step: "1", text: "Click a block type on the left (or use a starter layout) to add it to your canvas" },
+                    { step: "2", text: "Click any block on the canvas to edit its content and style here" },
+                    { step: "3", text: "Use the Preview button to see how your email looks on desktop and mobile" },
+                  ].map(({ step, text }) => (
+                    <li key={step} className="flex gap-2.5 text-xs text-muted-foreground">
+                      <span className="shrink-0 w-4 h-4 rounded-full bg-primary/10 text-primary text-[10px] font-bold flex items-center justify-center">{step}</span>
+                      <span>{text}</span>
+                    </li>
+                  ))}
+                </ol>
+                <div className="pt-1 border-t">
+                  <p className="text-[10px] text-muted-foreground">Use <strong>{"{{firstName}}"}</strong>, <strong>{"{{company}}"}</strong> and other merge tags to personalize each send automatically.</p>
+                </div>
               </div>
-            </div>
+            </ScrollArea>
           )}
           {!selectedBlock && blocks.length > 0 && (
             <div className="flex-1 flex flex-col items-center justify-center p-4 gap-2">
@@ -1653,13 +1661,13 @@ function Builder({ templateId }: { templateId: number }) {
           )}
           {selectedBlock ? (
             <>
-              <div className="px-3 py-2 border-b flex items-center justify-between">
+              <div className="px-3 py-2 border-b flex items-center justify-between shrink-0">
                 <p className="text-xs font-semibold capitalize">{selectedBlock.type.replace("_", " ")} Properties</p>
                 <button onClick={() => setSelectedId(null)} className="text-muted-foreground hover:text-foreground">
                   <X size={13} />
                 </button>
               </div>
-              <ScrollArea className="flex-1">
+              <ScrollArea className="flex-1 min-h-0">
                 <div className="p-3">
                   <BlockPropsEditor
                     block={selectedBlock}
