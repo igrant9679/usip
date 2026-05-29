@@ -166,14 +166,14 @@ const NAV: NavGroup[] = [
     //   - /connected-accounts   → opens from /sending-accounts
     //   - /email-suppressions   → opens from /sending-accounts
     items: [
-      { href: "/segments", label: "Segments", icon: Filter },
       { href: "/sequences", label: "Sequences", icon: Activity },
+      { href: "/campaigns", label: "Campaigns", icon: Megaphone },
+      { href: "/segments", label: "Segments", icon: Filter },
       { href: "/sending-accounts", label: "Sending Accounts", icon: Mail },
       { href: "/email-builder", label: "Email Builder", icon: LayoutTemplate },
       { href: "/ai-pipeline", label: "AI Pipeline", icon: Sparkles },
       { href: "/unified-inbox", label: "Unified Inbox", icon: MessageSquare },
       { href: "/social", label: "Social", icon: Share2 },
-      { href: "/campaigns", label: "Campaigns", icon: Megaphone },
     ],
   },
   {
