@@ -127,6 +127,30 @@ function TokenButtons({
   );
 }
 
+/**
+ * Strip HTML tags and decode common entities into a plaintext body that
+ * fits the Typed-view Textarea. Preserves paragraph breaks: <br>, </p>,
+ * </div>, </li>, </h*> all collapse to newlines so the resulting body
+ * reads naturally. Intentionally simple — runs entirely client-side and
+ * never touches a DOM parser so it's safe in SSR / tests.
+ */
+function htmlToPlainText(html: string): string {
+  if (!html) return "";
+  return html
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|div|li|h[1-6])>/gi, "\n")
+    .replace(/<li[^>]*>/gi, "• ")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 /* ─── Email mode panel ──────────────────────────────────────────────────── */
 function EmailModePanel({
   data,
@@ -144,8 +168,34 @@ function EmailModePanel({
   // are created with status:"draft" and no Publish step existed. We
   // still drop archived templates and surface a badge so users can
   // tell what state each option is in.
-  const templatesQ = trpc.emailTemplates?.list?.useQuery({ status: "all" }, { enabled: mode === "template" });
+  //
+  // Loaded eagerly (no `enabled:` gate) so we have template metadata
+  // available to render the "Applied from: <name>" breadcrumb in the
+  // Typed view even when mode === "typed".
+  const templatesQ = trpc.emailTemplates?.list?.useQuery({ status: "all" });
   const selectableTemplates = (templatesQ?.data ?? []).filter((t: any) => t.status !== "archived");
+  const appliedTemplate = data.staticTemplateId
+    ? (templatesQ?.data ?? []).find((t: any) => t.id === data.staticTemplateId)
+    : null;
+
+  /**
+   * Apply a template's content into the editable Typed view. We copy
+   * the template's subject + a plain-text rendering of its body into
+   * staticSubject / staticBody and switch the node to "typed" mode so
+   * the user immediately sees and can customise the content. The
+   * staticTemplateId is retained as provenance — the "Applied from"
+   * breadcrumb keeps it discoverable and lets the user re-pick.
+   */
+  const applyTemplate = (templateId: number) => {
+    const t = (templatesQ?.data ?? []).find((row: any) => row.id === templateId);
+    if (!t) return;
+    onChange({
+      staticTemplateId: templateId,
+      staticSubject: t.subject ?? "",
+      staticBody: htmlToPlainText(t.htmlOutput ?? t.plainOutput ?? ""),
+      emailMode: "typed",
+    });
+  };
 
   return (
     <Section title="Email content">
@@ -164,6 +214,24 @@ function EmailModePanel({
 
         {/* ── Typed mode ── */}
         <TabsContent value="typed" className="space-y-3 mt-3">
+          {appliedTemplate && (
+            <div className="flex items-center gap-2 rounded-md bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 px-2.5 py-1.5 text-[11px] text-blue-700 dark:text-blue-300">
+              <FileText className="size-3 shrink-0" />
+              <span className="flex-1 truncate">
+                Applied from template: <span className="font-medium">{appliedTemplate.name}</span>
+              </span>
+              {!readOnly && (
+                <button
+                  type="button"
+                  className="text-[11px] underline-offset-2 hover:underline shrink-0"
+                  onClick={() => onChange({ staticTemplateId: undefined })}
+                  title="Detach this block from the source template (keeps the content)"
+                >
+                  Detach
+                </button>
+              )}
+            </div>
+          )}
           <Field label="Subject line">
             <Input
               value={data.staticSubject ?? ""}
@@ -195,7 +263,7 @@ function EmailModePanel({
             <Select
               value={data.staticTemplateId?.toString() ?? ""}
               disabled={readOnly}
-              onValueChange={(v) => onChange({ staticTemplateId: Number(v) })}
+              onValueChange={(v) => applyTemplate(Number(v))}
             >
               <SelectTrigger className="text-xs">
                 <SelectValue placeholder="Choose a template…" />
@@ -220,7 +288,7 @@ function EmailModePanel({
             </Select>
           </Field>
           <p className="text-[11px] text-muted-foreground">
-            The template subject and body are used as-is with merge tag substitution at send time.
+            Picking a template copies its subject and body into the Typed view so you can customise it per step. The source template stays untouched.
           </p>
         </TabsContent>
 
