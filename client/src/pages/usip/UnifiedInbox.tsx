@@ -310,9 +310,13 @@ export default function UnifiedInbox() {
       ) : (
         <div className="flex h-[calc(100vh-140px)] overflow-hidden">
           {/* ── Left panel: chat list ── */}
-          <div className="w-80 flex-shrink-0 border-r flex flex-col">
+          {/* min-h-0 on both flex-col panes below is critical: without it,
+              the inner ScrollArea (flex-1) gets implicit min-height:auto
+              and grows to fit content instead of constraining to the
+              viewport — same flexbox trap the Email Builder hit. */}
+          <div className="w-80 flex-shrink-0 border-r flex flex-col min-h-0">
             {/* Filters */}
-            <div className="p-3 border-b space-y-2">
+            <div className="p-3 border-b space-y-2 shrink-0">
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 <Input
@@ -339,7 +343,7 @@ export default function UnifiedInbox() {
             </div>
 
             {/* Chat list */}
-            <ScrollArea className="flex-1">
+            <ScrollArea className="flex-1 min-h-0">
               <div className="p-2 space-y-1">
                 {inboxLoading ? (
                   <div className="flex items-center justify-center h-20">
@@ -365,11 +369,11 @@ export default function UnifiedInbox() {
           </div>
 
           {/* ── Right panel: message thread ── */}
-          <div className="flex-1 flex flex-col">
+          <div className="flex-1 flex flex-col min-h-0">
             {selectedChat ? (
               <>
                 {/* Thread header */}
-                <div className="p-4 border-b flex items-center justify-between">
+                <div className="p-4 border-b flex items-center justify-between shrink-0">
                   <div className="flex items-center gap-3">
                     <Avatar className="h-9 w-9">
                       <AvatarFallback
@@ -392,7 +396,7 @@ export default function UnifiedInbox() {
                 </div>
 
                 {/* Messages */}
-                <ScrollArea className="flex-1 p-4">
+                <ScrollArea className="flex-1 min-h-0 p-4">
                   {messagesLoading ? (
                     <div className="flex items-center justify-center h-20">
                       <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
@@ -413,7 +417,7 @@ export default function UnifiedInbox() {
                 </ScrollArea>
 
                 {/* Reply composer */}
-                <div className="p-4 border-t">
+                <div className="p-4 border-t shrink-0">
                   <div className="flex gap-2 items-end">
                     <div className="flex-1">
                       <RichTextEditor
