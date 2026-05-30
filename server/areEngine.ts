@@ -823,6 +823,10 @@ async function runDiscovery(campaign: Campaign): Promise<number> {
     .select({
       email: prospectQueue.email,
       linkedinUrl: prospectQueue.linkedinUrl,
+      firstName: prospectQueue.firstName,
+      lastName: prospectQueue.lastName,
+      companyDomain: prospectQueue.companyDomain,
+      companyName: prospectQueue.companyName,
     })
     .from(prospectQueue)
     .where(
@@ -835,6 +839,8 @@ async function runDiscovery(campaign: Campaign): Promise<number> {
   for (const e of existing) {
     if (e.email) seen.add("e:" + e.email.toLowerCase());
     if (e.linkedinUrl) seen.add("u:" + e.linkedinUrl.toLowerCase());
+    const nk = nameOrgDedupKey(e);
+    if (nk) seen.add(nk);
   }
 
   type SourceType =
@@ -909,10 +915,13 @@ async function runDiscovery(campaign: Campaign): Promise<number> {
       const url = String(p.linkedinUrl ?? "").toLowerCase().trim();
       const keyE = email ? "e:" + email : null;
       const keyU = url ? "u:" + url : null;
+      const keyN = nameOrgDedupKey(p);
       if (keyE && seen.has(keyE)) return false;
       if (keyU && seen.has(keyU)) return false;
+      if (keyN && seen.has(keyN)) return false;
       if (keyE) seen.add(keyE);
       if (keyU) seen.add(keyU);
+      if (keyN) seen.add(keyN);
       return true;
     });
     // Validate + score before queueing. Drop rows with no anchor at all
@@ -1059,6 +1068,21 @@ function scoreIcpMatch(
   if (domain) score += 15; // B2B anchor — enables email pattern lookup
   if (title) score += 5;
   return Math.min(100, score);
+}
+
+/**
+ * Conservative dedup key on normalized name + company/domain, used alongside
+ * exact email/LinkedIn-URL keys so the same person is caught even when their
+ * email is missing or differs between sources. Deliberately a normalized
+ * EXACT match (not edit-distance) to avoid false-merging two different people
+ * at the same company. Returns null when there isn't enough to key on.
+ */
+function nameOrgDedupKey(p: Record<string, unknown>): string | null {
+  const norm = (s: unknown) => String(s ?? "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().replace(/\s+/g, " ");
+  const name = `${norm(p.firstName)} ${norm(p.lastName)}`.trim();
+  const org = norm(p.companyDomain) || norm(p.companyName);
+  if (!name || !org) return null;
+  return `n:${name}@${org}`;
 }
 
 /**
