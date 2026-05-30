@@ -9,7 +9,28 @@ Refreshed at end of the build+audit session. Paste the bottom block into a new c
 - **Repo:** `igrant9679/usip` (origin: `https://github.com/igrant9679/usip.git`)
 - **Local path:** `C:\Users\Admin\usip`
 - **Deploy:** Railway → `https://getvelocityai.app/` (auto-deploys on push to `main`)
-- **Tip of `main`:** `819e11d` (emoji category icons). HELP_CONTENT_PLAN.md is now **implemented + verified live** (5 commits `172a082`→`819e11d`; see "Help content session" below).
+- **Tip of `main`:** `3bc8224` (funnel menu + Home). Help content shipped (`172a082`→`819e11d`);
+  then the **sales-funnel realignment** shipped + verified live (`3682b36`→`3bc8224`; see "Funnel" below).
+
+### Funnel realignment (Prospect → Lead → Opportunity → Customer)
+The CRM was realigned to the canonical Salesforce-style funnel:
+- **Delta 1 — Prospect → Lead** (`3682b36`): the prospect "Promote" now creates a **Lead** (was Contact).
+  New `prospects.promoteToLead` (idempotent), `prospects.linked_lead_id` (**migration 0088**), and the
+  Prospects UI ("Convert to lead", Lead badge, View lead). `promoteToContact` left in the router unused.
+- **Delta 2 — Closed Won → Customer** (`3a5f04d`): `opportunities.setStage` auto-creates a **Customer**
+  for the account when the stage isWon (idempotent, non-fatal); Pipeline toasts on it.
+- **Article** (`79659e1`): "The sales funnel, end to end" (crm-pipeline, ASCII diagram) + rewrote
+  "Prospects, Leads, Contacts & Accounts" to match. Now **22 articles**.
+- **Menu + Home** (`3bc8224`): sidebar Acquire mini-pipeline = Prospects→Leads→Pipeline→Customers;
+  Contacts/Accounts moved under a "Records" sub-head; "Retain" group renamed **Customers**. Dashboard
+  gained a top "Sales funnel" strip (Prospects→Leads→Opportunities→Customers with live counts).
+- **Verified live:** promoteToLead created lead 82 from prospect 19 (back-link persisted); article +
+  diagram present; funnel strip + sidebar render. Delta 2 deployed (new bundle live) but **not fired on
+  a real deal** to avoid mutating the live pipeline — demo Closed-Won on request.
+- **Test data left on LSI Media:** contact 72 (Laurel, from earlier promoteToContact verification) and
+  lead 82 (Dani Barger, from promoteToLead verification). Harmless; delete if undesired.
+- **Decision recorded:** kept account+contact creation at *lead conversion* (not deferred to Closed Won) —
+  that's best practice; "becomes an Account at Won" really means "becomes a **Customer** at Won".
 - **Workspace under test:** **LSI Media** · **Test user:** Idris Grant (super_admin)
 
 ### Live data state of LSI Media (so empty lists don't surprise you)
@@ -124,6 +145,7 @@ filtered by `verificationStatus` which excluded CSV-imported NULL-status prospec
 |---|---|---|
 | 0086 | `are_campaign_min_confidence.sql` | `are_campaigns.minConfidence` int (enrichment fit gate; null→default 40) |
 | 0087 | `are_settings_persisted_fields.sql` | `workspace_settings.areBrandVoice/areScraperSources/areIcpRegenSchedule/areSequenceQualityThreshold` |
+| 0088 | `prospect_linked_lead.sql` | `prospects.linked_lead_id` int (Prospect→Lead funnel link) |
 
 ---
 
