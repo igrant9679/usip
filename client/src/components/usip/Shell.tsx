@@ -465,6 +465,7 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
                       href={item.href}
                       className={cn(
                         "flex items-center gap-2.5 pl-3 pr-2 py-1.5 text-[13px] transition-all duration-150",
+                        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#2DD4BF]/70",
                         active ? "text-white" : "text-white/70 hover:text-white/95",
                       )}
                       style={active ? {
@@ -779,7 +780,7 @@ export function SubNav({ items }: { items: Array<{ href: string; label: string; 
             href={it.href}
             title={it.title}
             className={cn(
-              "text-xs px-2.5 py-1 rounded-md transition-colors",
+              "text-xs px-2.5 py-1 rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
               active
                 ? "bg-secondary text-foreground font-medium"
                 : "text-muted-foreground hover:text-foreground hover:bg-secondary/60",

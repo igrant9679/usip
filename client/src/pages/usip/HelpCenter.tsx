@@ -23,9 +23,13 @@ import {
   ChevronRight,
   Edit,
   GraduationCap,
+  KanbanSquare,
   Layers,
   Loader2,
+  Mail,
   Plus,
+  Radar,
+  Rocket,
   Search,
   Settings,
   ThumbsDown,
@@ -38,6 +42,23 @@ import { toast } from "sonner";
 /* ─── Types ──────────────────────────────────────────────────────────────── */
 
 type Tab = "browse" | "ask" | "tours" | "admin";
+
+/**
+ * Map a help-category name to a crisp Lucide icon. Categories were stored
+ * with emoji glyphs, which render inconsistently across platforms and ignore
+ * theming — this keeps the help center on the same icon language as the rest
+ * of the app. Falls back to a neutral Layers icon.
+ */
+function categoryIcon(name?: string) {
+  const n = (name ?? "").toLowerCase();
+  if (/(start|begin|setup|onboard|welcome)/.test(n)) return Rocket;
+  if (/(prospect|lead|discover|find)/.test(n)) return Radar;
+  if (/(crm|pipeline|deal|account|contact|opportunit)/.test(n)) return KanbanSquare;
+  if (/(sequence|email|outreach|engage|campaign|message)/.test(n)) return Mail;
+  if (/(are|engine|autonomous|\bai\b|agent|automat)/.test(n)) return Bot;
+  if (/(playbook|guide|best|how|tip|reference)/.test(n)) return BookOpen;
+  return Layers;
+}
 
 /* ─── Browse Tab ─────────────────────────────────────────────────────────── */
 
@@ -100,13 +121,13 @@ function BrowseTab() {
             <button
               key={cat.id}
               onClick={() => setSelectedCategory(cat.id === selectedCategory ? null : cat.id)}
-              className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors ${
+              className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium border transition-colors ${
                 selectedCategory === cat.id
-                  ? "bg-violet-600 text-white border-violet-600"
-                  : "bg-card text-muted-foreground border-border hover:border-violet-300"
+                  ? "bg-primary text-primary-foreground border-primary"
+                  : "bg-card text-muted-foreground border-border hover:border-primary/40"
               }`}
             >
-              {cat.icon && <span className="mr-1">{cat.icon}</span>}
+              {(() => { const Ico = categoryIcon(cat.name); return <Ico className="size-3.5" />; })()}
               {cat.name}
             </button>
           ))}
@@ -529,7 +550,9 @@ function AdminTab() {
         <div className="flex flex-col gap-2">
           {categories?.map((cat) => (
             <div key={cat.id} className="flex items-center gap-3 px-3 py-2 rounded-lg border border-border bg-card">
-              <span className="text-lg">{cat.icon ?? "📁"}</span>
+              <span className="size-8 rounded-lg bg-primary/10 text-primary flex items-center justify-center shrink-0">
+                {(() => { const Ico = categoryIcon(cat.name); return <Ico className="size-4" />; })()}
+              </span>
               <div className="flex-1">
                 <p className="text-sm font-medium text-foreground">{cat.name}</p>
                 {/* helpCategories has no `description` column. If/when one
