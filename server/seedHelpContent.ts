@@ -3,7 +3,7 @@
  *
  * Seeds (idempotently, per workspace):
  *   - 6 help categories  (deduped by (workspaceId, name) — no slug column on help_categories)
- *   - 20 help articles   (deduped by (workspaceId, slug), all status:'published')
+ *   - 22 help articles   (deduped by (workspaceId, slug), all status:'published')
  *   - 10 guided tours    (deduped by (workspaceId, name); steps delete+reinsert each run)
  *
  * Also retires the 5 legacy demo tours that the 10 SDR tours supersede
@@ -143,14 +143,55 @@ const ARTICLES: ArticleSeed[] = [
     bodyMarkdown: `Prospects enroll into sequences **natively** — you don't need to convert them to contacts first. From a sequence's **Enrollments → Enroll** dialog, open the **Prospects** tab, select the people you want (those without an email are disabled), and click Enroll. The send engine reads the email straight from the prospect record. You can also enroll from a prospect's detail page via **Add to sequence**. Dedup is automatic — already-enrolled prospects are skipped. Watch the toast for how many enrolled vs. were skipped or blocked for invalid email.`,
   },
   {
+    slug: "sales-funnel-workflow",
+    categorySlug: "crm-pipeline",
+    title: "The sales funnel, end to end",
+    summary: "How a name flows from Find Prospects to a closed Customer.",
+    readingTimeMinutes: 4,
+    tags: ["crm", "funnel", "workflow", "overview"],
+    pageKey: "pipeline",
+    bodyMarkdown: `Every record in Velocity moves through one funnel. **Find Prospects starts it** (scraped or imported names — not yet in the CRM proper), and the funnel ends with a closed **Customer**.
+
+\`\`\`
+Find Prospects  (scrape / import)        ← top of funnel
+        |   outbound sequences · ARE
+        v
+   PROSPECT  --(replies / shows interest)-->  LEAD
+                                               |  qualify
+                                               v
+                            Convert  -->  ACCOUNT + CONTACT + OPPORTUNITY
+                                               |  pipeline stages
+                                               |  (Discovery -> Qualified ->
+                                               |   Proposal -> Negotiation)
+                                               v
+                    +-- CLOSED WON  -->  Account becomes a CUSTOMER
+                    |                    (health · renewals · QBRs)
+                    +-- CLOSED LOST -->  Account + Contact kept;
+                                         re-engage later = a new opportunity
+\`\`\`
+
+**The one idea that makes this click:** separate the *who* from the *deal*.
+**Accounts** (companies) and **Contacts** (people) are durable records that
+persist across many deals. The **Opportunity** is the only thing that travels
+the pipeline and closes Won or Lost.
+
+**Step by step:**
+1. **Prospect → Lead.** A prospect who replies or shows interest is converted to a **Lead** (Prospects table → *Convert to lead*). Leads are scored and routed.
+2. **Lead → Opportunity.** When a lead qualifies, **Convert** it (Leads page) — this creates the **Account** (company), a primary **Contact** (person), and an **Opportunity** (the deal) in one step, and marks the lead converted.
+3. **Work the Opportunity** through the Pipeline stages.
+4. **Closed Won** → the account automatically becomes a **Customer**, handing off to the post-sale module (health score, renewals, QBRs). **Closed Lost** → the Account and Contact are kept for future re-engagement; you open a *new* opportunity when the time is right.
+
+You rarely create Accounts or Contacts by hand — they're produced by converting a lead. Keep new outbound names as **Prospects** and promote them as they engage.`,
+  },
+  {
     slug: "leads-contacts-accounts",
     categorySlug: "crm-pipeline",
     title: "Prospects, Leads, Contacts & Accounts",
-    summary: "The difference between Prospects, Leads, Contacts, and Accounts.",
+    summary: "What each record type is for, and how one becomes the next.",
     readingTimeMinutes: 3,
     tags: ["crm", "data-model"],
-    pageKey: "contacts",
-    bodyMarkdown: `Four record types, four jobs. **Prospects** = your raw outbound list (discovery + CSV), not yet qualified. **Leads** = inbound or qualifying individuals being scored/routed. **Contacts** = people tied to a company **Account** you're actively working. **Accounts** = the companies, with hierarchy and ARR rollup. Flow: a prospect who replies/qualifies becomes a lead or contact; the contact's company is an account; deals on that account are **Opportunities** in the Pipeline. Don't over-think it early — keep new outbound names as Prospects and promote as they engage.`,
+    pageKey: "leads",
+    bodyMarkdown: `Five record types, each with one job. **Prospects** = your raw outbound list (discovery + CSV), not yet engaged. **Leads** = individuals who've shown interest and are being scored/qualified. **Accounts** = the companies you're working (hierarchy + ARR rollup). **Contacts** = the people inside those accounts. **Customers** = accounts that have closed won (post-sale: health, renewals, QBRs). The flow: a **Prospect** who engages becomes a **Lead**; a qualified Lead is **converted**, which creates the **Account + Contact + Opportunity** together; when the Opportunity is **Closed Won**, the account becomes a **Customer**. Accounts and Contacts are durable; the Opportunity is what moves through the pipeline. See "The sales funnel, end to end" for the full picture. Don't over-think it early — keep new outbound names as Prospects and promote as they engage.`,
   },
   {
     slug: "managing-pipeline",
