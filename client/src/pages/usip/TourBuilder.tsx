@@ -19,16 +19,105 @@ import { trpc } from "@/lib/trpc";
 import {
   ArrowDown,
   ArrowUp,
+  Copy,
   Edit,
   GraduationCap,
   Loader2,
   Plus,
   Radio,
   Save,
+  Square,
   Trash2,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import {
+  clearSteps as clearRecorderSteps,
+  getSteps as getRecorderSteps,
+  isRecording as recorderIsRecording,
+  onRecorderUpdate,
+  startRecording,
+  stopRecording,
+  type RecordedStep,
+} from "@/lib/tourRecorder";
+
+/* ─── Record Mode ────────────────────────────────────────────────────────── */
+
+function RecorderPanel() {
+  const [recording, setRecording] = useState(recorderIsRecording());
+  const [steps, setSteps] = useState<RecordedStep[]>(getRecorderSteps());
+
+  useEffect(() => {
+    return onRecorderUpdate(() => {
+      setRecording(recorderIsRecording());
+      setSteps(getRecorderSteps());
+    });
+  }, []);
+
+  const json = JSON.stringify(steps, null, 2);
+
+  return (
+    <div
+      data-tour-recorder-ui
+      className="mt-8 rounded-xl border border-violet-100 dark:border-violet-900 bg-violet-50 dark:bg-violet-950/30 p-4"
+    >
+      <div className="flex items-start gap-3">
+        <Radio className={`h-5 w-5 flex-shrink-0 mt-0.5 ${recording ? "text-red-500 animate-pulse" : "text-violet-600 dark:text-violet-300"}`} />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <p className="text-sm font-semibold text-violet-800 dark:text-violet-200">
+              Record Mode {recording && <span className="text-red-500">· recording ({steps.length})</span>}
+            </p>
+            <div className="flex items-center gap-2">
+              {!recording ? (
+                <Button size="sm" onClick={() => startRecording()} className="gap-1.5">
+                  <Radio className="h-3.5 w-3.5" /> Start recording
+                </Button>
+              ) : (
+                <Button size="sm" variant="destructive" onClick={() => stopRecording()} className="gap-1.5">
+                  <Square className="h-3.5 w-3.5" /> Stop
+                </Button>
+              )}
+              {steps.length > 0 && (
+                <>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="gap-1.5"
+                    onClick={() => {
+                      navigator.clipboard?.writeText(json);
+                      toast.success("Step JSON copied");
+                    }}
+                  >
+                    <Copy className="h-3.5 w-3.5" /> Copy JSON
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => clearRecorderSteps()}>
+                    Clear
+                  </Button>
+                </>
+              )}
+            </div>
+          </div>
+          <p className="text-xs text-violet-600 dark:text-violet-300 mt-1 leading-relaxed">
+            Click <strong>Start recording</strong>, then click through the app — each click captures the
+            element&rsquo;s <code className="bg-violet-100 dark:bg-violet-900 px-1 rounded font-mono">data-tour-id</code>{" "}
+            (or a CSS selector) and the route. Recording continues across pages; come back here and{" "}
+            <strong>Stop</strong>, then <strong>Copy JSON</strong> to paste the steps into a new tour.
+            Avoid clicking destructive buttons while recording — clicks fire normally.
+          </p>
+          {steps.length > 0 && (
+            <Textarea
+              readOnly
+              value={json}
+              className="mt-3 font-mono text-[11px] h-40 bg-card"
+              onFocus={(e) => e.currentTarget.select()}
+            />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 /* ─── Step Editor ────────────────────────────────────────────────────────── */
 
@@ -534,24 +623,8 @@ export default function TourBuilderPage() {
           ))}
         </div>
 
-        {/* Record mode info panel */}
-        <div className="mt-8 rounded-xl border border-violet-100 dark:border-violet-900 bg-violet-50 dark:bg-violet-950/30 p-4">
-          <div className="flex items-start gap-3">
-            <Radio className="h-5 w-5 text-violet-600 dark:text-violet-300 flex-shrink-0 mt-0.5" />
-            <div>
-              <p className="text-sm font-semibold text-violet-800 dark:text-violet-200">Targeting a step to an element</p>
-              <p className="text-xs text-violet-600 dark:text-violet-300 mt-1 leading-relaxed">
-                Add steps with the editor above and point each one at a UI element. The most
-                reliable target is a{" "}
-                <code className="bg-violet-100 dark:bg-violet-900 px-1 rounded font-mono">data-tour-id</code> — to find one,
-                open your browser&rsquo;s inspector (right-click → Inspect) on the element and read its{" "}
-                <code className="bg-violet-100 dark:bg-violet-900 px-1 rounded font-mono">data-tour-id</code> attribute, or
-                use any CSS selector. Set <em>Route</em> on the step so the tour navigates there first;
-                if no element matches, use the <em>coach</em> treatment for a page-level callout.
-              </p>
-            </div>
-          </div>
-        </div>
+        {/* Record mode — capture steps by clicking through the app */}
+        <RecorderPanel />
       </div>
     </Shell>
   );
