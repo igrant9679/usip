@@ -19,8 +19,9 @@ import { ArrowLeft, KanbanSquare, Building2, Users, DollarSign, Brain, History, 
 import { toast } from "sonner";
 
 function fmt$(n: any) {
-  const v = Number(n ?? 0);
-  return v >= 1000 ? `$${(v / 1000).toFixed(1)}K` : `$${v.toFixed(0)}`;
+  // Full, comma-grouped amount to match the list pages (e.g. $1,250,000).
+  // The old K-only format mis-rendered millions as "$5000.0K".
+  return `$${Math.round(Number(n ?? 0)).toLocaleString()}`;
 }
 
 export default function OpportunityDetail() {
