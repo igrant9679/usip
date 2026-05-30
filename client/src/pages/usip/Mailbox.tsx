@@ -17,6 +17,7 @@
 import { useState, useEffect, useRef } from "react";
 import { Shell, PageHeader } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
+import { sanitizeEmailHtml } from "@/lib/sanitizeHtml";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -680,7 +681,7 @@ function ThreadView({
                 {msg.bodyHtml ? (
                   <div
                     className="prose prose-sm max-w-none text-foreground [&_a]:text-primary [&_a]:underline"
-                    dangerouslySetInnerHTML={{ __html: msg.bodyHtml }}
+                    dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(msg.bodyHtml) }}
                   />
                 ) : msg.bodyText ? (
                   <pre className="text-sm whitespace-pre-wrap font-sans leading-relaxed">{msg.bodyText}</pre>

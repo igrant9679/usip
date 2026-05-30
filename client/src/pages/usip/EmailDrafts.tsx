@@ -2,6 +2,7 @@ import { Button } from "@/components/ui/button";
 import { ConfirmButton, Field, FormDialog, SelectField, StatusPill, TextareaField } from "@/components/usip/Common";
 import { EmptyState, PageHeader, Shell } from "@/components/usip/Shell";
 import { RichTextEditor } from "@/components/usip/RichTextEditor";
+import { sanitizeEmailHtml } from "@/lib/sanitizeHtml";
 import { trpc } from "@/lib/trpc";
 import { BarChart2, Check, ChevronDown, ChevronRight, Eye, FileText, MousePointer, Pencil, Send, Sparkles, Trash2, X, Zap, AlertTriangle, XCircle } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -204,7 +205,7 @@ function PreviewResolvedModal({ draftId, open, onClose }: { draftId: number | nu
               <ScrollArea className="h-80 rounded-md border bg-muted/40">
                 <div
                   className="p-4 text-sm prose prose-sm dark:prose-invert max-w-none"
-                  dangerouslySetInnerHTML={{ __html: data.htmlBody }}
+                  dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(data.htmlBody) }}
                 />
               </ScrollArea>
             </div>
