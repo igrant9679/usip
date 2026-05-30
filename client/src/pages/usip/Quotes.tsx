@@ -1,5 +1,5 @@
 import { Button } from "@/components/ui/button";
-import { Field, fmt$, fmtDate, FormDialog, Section, SelectField, StatusPill, TextareaField } from "@/components/usip/Common";
+import { ConfirmButton, Field, fmt$, fmtDate, FormDialog, Section, SelectField, StatusPill, TextareaField } from "@/components/usip/Common";
 import { EmptyState, PageHeader, Shell } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import { ExternalLink, FileText, Plus, Send, Trash2, Receipt, Sparkles, ChevronDown, ChevronUp } from "lucide-react";
@@ -70,9 +70,9 @@ export default function Quotes() {
 
   const create = trpc.quotes.create.useMutation({ onSuccess: () => { utils.quotes.list.invalidate(); setOpenNew(false); setLis([{ name: "", quantity: 1, unitPrice: 0, discountPct: 0 }]); toast.success("Quote created"); } });
   const genPdf = trpc.quotes.generatePdf.useMutation({ onSuccess: (r) => { utils.quotes.list.invalidate(); window.open(r.url, "_blank"); } });
-  const send = trpc.quotes.send.useMutation({ onSuccess: () => { utils.quotes.list.invalidate(); toast.success("Sent"); } });
-  const setStatus = trpc.quotes.setStatus.useMutation({ onSuccess: () => utils.quotes.list.invalidate() });
-  const del = trpc.quotes.delete.useMutation({ onSuccess: () => utils.quotes.list.invalidate() });
+  const send = trpc.quotes.send.useMutation({ onSuccess: () => { utils.quotes.list.invalidate(); toast.success("Sent"); }, onError: (e) => toast.error(e.message) });
+  const setStatus = trpc.quotes.setStatus.useMutation({ onSuccess: () => utils.quotes.list.invalidate(), onError: (e) => toast.error(e.message) });
+  const del = trpc.quotes.delete.useMutation({ onSuccess: () => { utils.quotes.list.invalidate(); toast.success("Quote deleted"); }, onError: (e) => toast.error(e.message) });
 
   const subtotal = lis.reduce((s, li) => s + li.quantity * li.unitPrice, 0);
   const discount = lis.reduce((s, li) => s + li.quantity * li.unitPrice * (li.discountPct / 100), 0);
@@ -106,7 +106,7 @@ export default function Quotes() {
                       <div className="flex gap-1">
                         {!q.pdfUrl && <Button size="sm" variant="ghost" onClick={() => genPdf.mutate({ id: q.id })}>Generate</Button>}
                         {q.pdfUrl && <Button size="sm" variant="ghost" onClick={() => window.open(q.pdfUrl!, "_blank")}><ExternalLink className="size-3.5" /></Button>}
-                        {q.status === "draft" && q.pdfUrl && <Button size="sm" variant="ghost" onClick={() => send.mutate({ id: q.id })}><Send className="size-3.5" /></Button>}
+                        {q.status === "draft" && q.pdfUrl && <ConfirmButton size="sm" variant="ghost" destructive={false} ariaLabel="Send quote" title="Send this quote?" description="The quote will be emailed to the customer. This action is logged and can't be unsent." confirmLabel="Send" onConfirm={() => send.mutate({ id: q.id })}><Send className="size-3.5" /></ConfirmButton>}
                         {q.status === "sent" && (
                           <>
                             <Button size="sm" variant="ghost" onClick={() => setStatus.mutate({ id: q.id, status: "accepted" })}>Accept</Button>

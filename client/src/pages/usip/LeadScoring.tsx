@@ -66,9 +66,11 @@ export default function LeadScoring() {
 
   const save = trpc.leadScoring.saveConfig.useMutation({
     onSuccess: () => { toast.success("Scoring rules saved"); utils.leadScoring.getConfig.invalidate(); },
+    onError: (e) => toast.error(e.message),
   });
   const recomputeAll = trpc.leadScoring.recomputeAll.useMutation({
     onSuccess: (r) => toast.success(`Re-scored ${r.recomputed} leads (${r.failed} failed)`),
+    onError: (e) => toast.error(e.message),
   });
 
   const firmoMax = cfg.firmoOrgTypeWeight + cfg.firmoTitleWeight + cfg.firmoCompletenessWeight;
@@ -186,6 +188,7 @@ function BreakdownPreview() {
   const utils = trpc.useUtils();
   const recompute = trpc.leadScoring.recompute.useMutation({
     onSuccess: () => { utils.leadScoring.breakdown.invalidate(); utils.leads.list.invalidate(); toast.success("Recomputed"); },
+    onError: (e) => toast.error(e.message),
   });
 
   return (

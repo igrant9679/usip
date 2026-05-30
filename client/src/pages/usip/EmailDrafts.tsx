@@ -1,5 +1,5 @@
 import { Button } from "@/components/ui/button";
-import { Field, FormDialog, SelectField, StatusPill, TextareaField } from "@/components/usip/Common";
+import { ConfirmButton, Field, FormDialog, SelectField, StatusPill, TextareaField } from "@/components/usip/Common";
 import { EmptyState, PageHeader, Shell } from "@/components/usip/Shell";
 import { RichTextEditor } from "@/components/usip/RichTextEditor";
 import { trpc } from "@/lib/trpc";
@@ -363,9 +363,12 @@ export default function EmailDrafts() {
           ))}
         </div>
         {filter === "approved" && (
-          <Button size="sm" variant="outline" onClick={() => sendBulkApproved.mutate({})} disabled={sendBulkApproved.isPending}>
+          <ConfirmButton size="sm" variant="outline" destructive={false} disabled={sendBulkApproved.isPending}
+            title="Send all approved drafts?"
+            description="Every approved draft will be emailed to its recipient now. This can't be undone."
+            confirmLabel="Send all" onConfirm={() => sendBulkApproved.mutate({})}>
             <Send className="size-4" /> Send All Approved
-          </Button>
+          </ConfirmButton>
         )}
         <Button onClick={() => setComposeOpen(true)}><Sparkles className="size-4" /> AI compose</Button>
       </PageHeader>
@@ -420,7 +423,10 @@ export default function EmailDrafts() {
                   <>
                     <Button size="sm" variant="ghost" onClick={() => setEditDraft(d)}><Pencil className="size-3.5" /> Edit</Button>
                     <Button size="sm" variant="ghost" onClick={() => setPreviewDraftId(d.id)}><Eye className="size-3.5" /> Preview</Button>
-                    <Button size="sm" onClick={() => sendViaSmtp.mutate({ draftId: d.id })} disabled={sendViaSmtp.isPending}><Send className="size-3.5" /> Send</Button>
+                    <ConfirmButton size="sm" variant="default" destructive={false} disabled={sendViaSmtp.isPending}
+                      title="Send this email?"
+                      description="The draft will be emailed to the recipient now. This can't be undone."
+                      confirmLabel="Send" onConfirm={() => sendViaSmtp.mutate({ draftId: d.id })}><Send className="size-3.5" /> Send</ConfirmButton>
                   </>
                 )}
               </div>
