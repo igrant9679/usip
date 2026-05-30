@@ -4,7 +4,7 @@ import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Section, StatusPill, fmt$ } from "@/components/usip/Common";
-import { PageHeader, Shell, StatCard } from "@/components/usip/Shell";
+import { PageHeader, Shell, StatCard, SubNav } from "@/components/usip/Shell";
 import { Link } from "wouter";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { trpc } from "@/lib/trpc";
@@ -59,22 +59,11 @@ export default function Settings() {
     <Shell title="Settings">
       <PageHeader title="Workspace settings" description="Workspace settings covering general configuration, billing, integrations, and notification preferences. Changes here apply to all members unless overridden at the individual user level." pageKey="settings"
         icon={<SettingsIcon className="size-5" />}
-      >
-        <Link
-          href="/audit"
-          className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
-          title="Workspace-wide audit trail of all admin and data-change actions"
-        >
-          Audit Log →
-        </Link>
-        <Link
-          href="/tour-builder"
-          className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
-          title="Author guided tours for your workspace (super-admin)"
-        >
-          Tour Builder →
-        </Link>
-      </PageHeader>
+      />
+      <SubNav items={[
+        { href: "/audit", label: "Audit Log", title: "Workspace-wide audit trail of all admin and data-change actions" },
+        { href: "/tour-builder", label: "Tour Builder", title: "Author guided tours for your workspace (super-admin)" },
+      ]} />
       <div className="p-6 grid grid-cols-1 md:grid-cols-[220px_1fr] gap-6">
         {/* Tab nav */}
         <nav className="space-y-1">

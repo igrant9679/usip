@@ -5,7 +5,7 @@
  */
 import { useState, useEffect } from "react";
 import { Link } from "wouter";
-import { PageHeader, Shell } from "@/components/usip/Shell";
+import { PageHeader, Shell, SubNav } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -823,36 +823,16 @@ export default function SendingAccounts() {
         
         icon={<AtSign className="size-5" />}
       >
-          <Link href="/sender-pools">
-            <Button variant="outline" className="gap-2" title="Group sending accounts into pools for sequence load-balancing">
-              <Layers className="w-4 h-4" /> Sender Pools
-            </Button>
-          </Link>
-          <Link
-            href="/connected-accounts"
-            className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
-            title="Connected mailboxes and calendars used for sync (read-side)"
-          >
-            Connected Accounts →
-          </Link>
-          <Link
-            href="/email-suppressions"
-            className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
-            title="Opt-outs and global suppression list — required for compliance"
-          >
-            Opt-Outs →
-          </Link>
-          <Link
-            href="/my-linkedin"
-            className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
-            title="Manage your personal LinkedIn bridge"
-          >
-            My LinkedIn →
-          </Link>
           <Button onClick={openAdd} className="gap-2">
             <Plus className="w-4 h-4" /> Connect account
           </Button>
         </PageHeader>
+        <SubNav items={[
+          { href: "/sender-pools", label: "Sender Pools", title: "Group sending accounts into pools for sequence load-balancing" },
+          { href: "/connected-accounts", label: "Connected Accounts", title: "Connected mailboxes and calendars used for sync (read-side)" },
+          { href: "/email-suppressions", label: "Opt-Outs", title: "Opt-outs and global suppression list — required for compliance" },
+          { href: "/my-linkedin", label: "My LinkedIn", title: "Manage your personal LinkedIn bridge" },
+        ]} />
 
         {/* Summary KPIs */}
         <div className="grid grid-cols-3 gap-4">

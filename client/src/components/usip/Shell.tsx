@@ -748,3 +748,32 @@ export function QueryError({ message, onRetry }: { message?: string; onRetry?: (
     </div>
   );
 }
+
+/** Secondary navigation strip for related pages — replaces the cramped inline
+ *  "Foo →" links that used to sit in the PageHeader action row. Highlights the
+ *  active route. Render directly under <PageHeader>. */
+export function SubNav({ items }: { items: Array<{ href: string; label: string; title?: string }> }) {
+  const [loc] = useLocation();
+  return (
+    <nav className="flex items-center gap-1 px-4 md:px-6 pt-3 flex-wrap" aria-label="Section navigation">
+      {items.map((it) => {
+        const active = loc === it.href;
+        return (
+          <Link
+            key={it.href}
+            href={it.href}
+            title={it.title}
+            className={cn(
+              "text-xs px-2.5 py-1 rounded-md transition-colors",
+              active
+                ? "bg-secondary text-foreground font-medium"
+                : "text-muted-foreground hover:text-foreground hover:bg-secondary/60",
+            )}
+          >
+            {it.label}
+          </Link>
+        );
+      })}
+    </nav>
+  );
+}

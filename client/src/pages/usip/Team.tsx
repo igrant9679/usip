@@ -1,7 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Field, FormDialog, SelectField, Section, StatusPill, fmtDate } from "@/components/usip/Common";
-import { EmptyState, PageHeader, Shell } from "@/components/usip/Shell";
+import { EmptyState, PageHeader, Shell, SubNav } from "@/components/usip/Shell";
 import { Link } from "wouter";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { trpc } from "@/lib/trpc";
@@ -348,19 +348,15 @@ export default function Team() {
       <PageHeader title="Workspace team" description="Manage team members, roles, permissions, and workspace access controls. Invite new members, assign roles, view login history, and configure SSO and SCIM provisioning." pageKey="team"
         icon={<UsersRound className="size-5" />}
       >
-        <Link
-          href="/scim"
-          className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
-          title="Automated user provisioning via SCIM (Okta, Azure AD, etc.)"
-        >
-          SCIM Provisioning →
-        </Link>
         {isAdmin && (
           <Button onClick={() => setInviteOpen(true)}>
             <UserPlus className="size-4" /> Invite
           </Button>
         )}
       </PageHeader>
+      <SubNav items={[
+        { href: "/scim", label: "SCIM Provisioning", title: "Automated user provisioning via SCIM (Okta, Azure AD, etc.)" },
+      ]} />
 
       {/* Tab bar */}
       <div className="px-6 border-b flex items-center gap-1">
