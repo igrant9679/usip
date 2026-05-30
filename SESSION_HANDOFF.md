@@ -9,8 +9,8 @@ Refreshed at end of the build+audit session. Paste the bottom block into a new c
 - **Repo:** `igrant9679/usip` (origin: `https://github.com/igrant9679/usip.git`)
 - **Local path:** `C:\Users\Admin\usip`
 - **Deploy:** Railway → `https://getvelocityai.app/` (auto-deploys on push to `main`)
-- **Tip of `main`:** `c4bcf52`. Help content (`172a082`→`819e11d`); sales-funnel realignment
-  (`3682b36`→`3bc8224`); follow-up security/funnel-loop/UX (`dc4c067`→`c4bcf52`). See sections below.
+- **Tip of `main`:** `9631dcb`. Help content (`172a082`→`819e11d`); sales-funnel realignment
+  (`3682b36`→`3bc8224`); security + funnel-loop + UX backlog (`dc4c067`→`9631dcb`). See sections below.
 
 ### Follow-up session (security · funnel loop · UX) — tip `c4bcf52`
 - **Security (`dc4c067`):** Mailbox + EmailDrafts rendered untrusted email HTML via
@@ -29,14 +29,23 @@ Refreshed at end of the build+audit session. Paste the bottom block into a new c
 - **More test data on LSI Media** (delete if undesired): account 27, contact 73, opportunity 67
   (now "won"), customer 16 — all from the Dani test lead.
 
-#### Remaining UX_AUDIT P2/P3 backlog (not yet done — greenlight to continue)
-- **Dark-mode hardcoded colors on other pages:** TourBuilder, Mindmaps, ImportContacts,
-  ProspectImportDialog (same `bg-white`/`text-gray-*` pattern; same token mapping applies).
-- **Bare empty states** (no description/CTA): Accounts, Quotes, Products, QBRs, Sequences, Tasks.
-- **Money formatting** inconsistency (local `$12.0K` fmt$ vs shared `$12,000`).
-- **aria-sort** on sortable headers (EmailAnalytics); **wide-table overflow** (Prospects/Accounts/Quotes).
-- **TourBuilder "Record Mode"** needs `window.__startTourRecorder()` in the console — surface as UI.
-- Save-pending spinners on ProspectDetail/OpportunityDetail.
+#### UX_AUDIT P2/P3 — done this session (`2e20257`→`9631dcb`)
+- ✅ **Dark mode** converted (structural grays → tokens): HelpCenter, HelpDrawer, TourBuilder,
+  MindmapCanvas, ImportContacts. Verified live in dark mode (panels render `bg-card`, no white).
+- ✅ **Empty-state descriptions** added: Accounts, Quotes, Products, QBRs, Tasks.
+- ✅ **aria-sort** + button aria-labels on EmailAnalytics sortable headers.
+- ✅ **Save-pending spinners** on ProspectDetail + OpportunityDetail.
+- ✅ **TourBuilder "Record Mode"** misleading console instructions removed — `window.__startTourRecorder()`
+  /`__stopTourRecorder()` are **defined nowhere** (phantom feature). Panel now gives honest targeting
+  guidance (data-tour-id via inspector). A real click-recorder is a separate FEATURE build, not done.
+
+#### Remaining UX_AUDIT P2/P3 (lower value / higher effort — greenlight to continue)
+- **Money formatting** inconsistency (local `$12.0K` fmt$ vs shared `$12,000` helper) — unify.
+- **Wide-table overflow** on laptop widths (Prospects 9-col / Accounts / Quotes) — truncate long cells.
+- **Semantic status-pill dark variants** on ImportContacts (green/red/yellow `bg-*-50` pills still light
+  in dark mode — need `dark:bg-*-950/40` etc.; structural grays already fixed).
+- **Real Tour recorder** feature (capture clicks → selectors across routes) — see TourBuilder note above.
+- Sequences sub-panel empty states ("None yet") — left untouched (ambiguous copy).
 
 ### Funnel realignment (Prospect → Lead → Opportunity → Customer)
 The CRM was realigned to the canonical Salesforce-style funnel:
