@@ -1457,6 +1457,18 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0086: per-campaign enrichment score gate ─────────────────────
+  // Minimum icpMatchScore a discovered prospect must reach before the
+  // engine spends LLM enrichment budget on it. NULL = use the app
+  // default (40). Rows scored 0 (queued before scoring existed) are
+  // allowed through in the engine query so they aren't stranded.
+  {
+    name: "0086_are_campaign_min_confidence.sql",
+    statements: [
+      `ALTER TABLE \`are_campaigns\` ADD COLUMN \`minConfidence\` int NULL`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

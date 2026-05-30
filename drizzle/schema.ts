@@ -2719,6 +2719,7 @@ export const areCampaigns = mysqlTable(
     ownerUserId: int("ownerUserId"),
     // Automation settings
     autoApproveThreshold: int("autoApproveThreshold"),  // null = manual review; 0-100 = auto-approve if icpMatchScore >= this
+    minConfidence: int("minConfidence"),  // null = default 40; min icpMatchScore a prospect needs before enrichment spends LLM budget
     signalToOpportunityEnabled: boolean("signalToOpportunityEnabled").default(false).notNull(), // auto-create opp on meeting_booked signal
     startedAt: timestamp("startedAt"),
     completedAt: timestamp("completedAt"),

@@ -25,7 +25,7 @@
  * Per-campaign and per-phase try/catch so one failure never blocks the rest.
  */
 import { createHash } from "node:crypto";
-import { and, eq, inArray, lte, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, lte, or, sql } from "drizzle-orm";
 import { getDb } from "./db";
 import {
   areCampaigns,
@@ -251,6 +251,12 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
   try {
     // 'enriching' is included to recover rows left stuck by a crashed run —
     // runEnrichAgent is idempotent (it re-runs and overwrites cleanly).
+    // Score gate: only spend LLM enrichment budget on prospects whose
+    // deterministic ICP-match score clears the campaign threshold. Rows
+    // scored 0 are legacy (queued before scoring existed) — let them through
+    // rather than stranding them. Best-fit first so the per-tick budget goes
+    // to the strongest prospects.
+    const minConfidence = (campaign as { minConfidence?: number | null }).minConfidence ?? 40;
     const pending = await db
       .select({ id: prospectQueue.id })
       .from(prospectQueue)
@@ -259,8 +265,10 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
           eq(prospectQueue.campaignId, campId),
           eq(prospectQueue.workspaceId, wsId),
           inArray(prospectQueue.enrichmentStatus, ["pending", "enriching"]),
+          or(gte(prospectQueue.icpMatchScore, minConfidence), eq(prospectQueue.icpMatchScore, 0)),
         ),
       )
+      .orderBy(desc(prospectQueue.icpMatchScore))
       .limit(ENRICH_PER_TICK);
     if (pending.length > 0) {
       const settled = await Promise.allSettled(
