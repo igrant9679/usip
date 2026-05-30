@@ -9,8 +9,9 @@ Refreshed at end of the build+audit session. Paste the bottom block into a new c
 - **Repo:** `igrant9679/usip` (origin: `https://github.com/igrant9679/usip.git`)
 - **Local path:** `C:\Users\Admin\usip`
 - **Deploy:** Railway → `https://getvelocityai.app/` (auto-deploys on push to `main`)
-- **Tip of `main`:** `9631dcb`. Help content (`172a082`→`819e11d`); sales-funnel realignment
-  (`3682b36`→`3bc8224`); security + funnel-loop + UX backlog (`dc4c067`→`9631dcb`). See sections below.
+- **Tip of `main`:** `6f21ab0`. Help content (`172a082`→`819e11d`); sales-funnel realignment
+  (`3682b36`→`3bc8224`); security + funnel-loop + UX backlog incl. tour recorder
+  (`dc4c067`→`6f21ab0`). See sections below.
 
 ### Follow-up session (security · funnel loop · UX) — tip `c4bcf52`
 - **Security (`dc4c067`):** Mailbox + EmailDrafts rendered untrusted email HTML via
@@ -39,13 +40,21 @@ Refreshed at end of the build+audit session. Paste the bottom block into a new c
   /`__stopTourRecorder()` are **defined nowhere** (phantom feature). Panel now gives honest targeting
   guidance (data-tour-id via inspector). A real click-recorder is a separate FEATURE build, not done.
 
-#### Remaining UX_AUDIT P2/P3 (lower value / higher effort — greenlight to continue)
-- **Money formatting** inconsistency (local `$12.0K` fmt$ vs shared `$12,000` helper) — unify.
-- **Wide-table overflow** on laptop widths (Prospects 9-col / Accounts / Quotes) — truncate long cells.
-- **Semantic status-pill dark variants** on ImportContacts (green/red/yellow `bg-*-50` pills still light
-  in dark mode — need `dark:bg-*-950/40` etc.; structural grays already fixed).
-- **Real Tour recorder** feature (capture clicks → selectors across routes) — see TourBuilder note above.
+#### UX_AUDIT P2/P3 — round 2 done (`0a0a8fe`→`6f21ab0`)
+- ✅ **Money format**: AccountDetail + OpportunityDetail now full comma amounts (was K-only, which
+  mis-rendered millions as `$5000.0K`). KPI/forecast/chart already tier to M (left compact).
+- ✅ **Wide-table overflow**: Prospects (title/company/email) + Accounts (name) truncate with title
+  tooltips. Quotes already used a min-w-0 flex list — no change.
+- ✅ **ImportContacts status pills**: paired `dark:` variants added (readable in dark mode).
+- ✅ **Real Tour recorder** built + verified live: `client/src/lib/tourRecorder.ts` (capture-phase
+  document listener + sessionStorage, survives route changes/reloads) + TourBuilder Start/Stop/Clear/
+  Copy-JSON UI. Captures `data-tour-id`/CSS selector + route per click.
+
+#### Truly remaining (minor)
+- Tour recorder auto-**title** grabs a container's full text for big elements (run-on, truncated to
+  60 chars) — admins rename steps anyway; could refine to nearest button/heading text.
 - Sequences sub-panel empty states ("None yet") — left untouched (ambiguous copy).
+- The whole UX_AUDIT P0/P1 was already shipped in prior sessions; P2/P3 is now essentially cleared.
 
 ### Funnel realignment (Prospect → Lead → Opportunity → Customer)
 The CRM was realigned to the canonical Salesforce-style funnel:
