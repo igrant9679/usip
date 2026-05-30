@@ -63,8 +63,9 @@ export default function LeadDetail() {
           <div className="pt-2">
             <Button size="sm" disabled={convert.isPending}
               onClick={() => convert.mutate({ id: lead.id, createOpportunity: true })}>
-              {convert.isPending ? "Converting…" : "Convert to account + contact + opp"}
+              {convert.isPending ? "Converting…" : "Convert to opportunity"}
             </Button>
+            <p className="text-xs text-muted-foreground mt-1">Creates the account, primary contact, and opportunity, then opens the deal.</p>
           </div>
         )}
         {converted && (

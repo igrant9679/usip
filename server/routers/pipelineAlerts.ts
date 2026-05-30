@@ -6,6 +6,7 @@ import { z } from "zod";
 import { router } from "../_core/trpc";
 import { workspaceProcedure } from "../_core/workspace";
 import { getDb } from "../db";
+import { ensureCustomerForWonOpp } from "../services/wonToCustomer";
 import { TRPCError } from "@trpc/server";
 import { eq, and, isNull, desc, lt, gte, sql } from "drizzle-orm";
 import {
@@ -472,6 +473,11 @@ export const pipelineAlertsRouter = router({
           message: `Unknown pipeline stage "${input.newStage}". Pick a stage from this workspace's pipeline.`,
         });
       }
+      const [opp] = await db
+        .select({ accountId: opportunities.accountId, value: opportunities.value, ownerUserId: opportunities.ownerUserId })
+        .from(opportunities)
+        .where(and(eq(opportunities.id, input.opportunityId), eq(opportunities.workspaceId, ctx.workspace.id)))
+        .limit(1);
       await db
         .update(opportunities)
         .set({ stage: input.newStage, daysInStage: 0 })
@@ -481,7 +487,25 @@ export const pipelineAlertsRouter = router({
             eq(opportunities.workspaceId, ctx.workspace.id),
           )
         );
-      return { ok: true };
+      // Closed Won here too → ensure the account becomes a Customer (same as the
+      // kanban path). Detect won via canonical "won" or a custom isWon stage.
+      let customerCreated = false;
+      if (opp) {
+        const [stageMeta] = await db
+          .select({ isWon: crmPipelineStages.isWon })
+          .from(crmPipelineStages)
+          .where(and(eq(crmPipelineStages.workspaceId, ctx.workspace.id), eq(crmPipelineStages.key, input.newStage)))
+          .limit(1);
+        const isWon = input.newStage === "won" || !!stageMeta?.isWon;
+        if (isWon) {
+          try {
+            customerCreated = await ensureCustomerForWonOpp(db, ctx.workspace.id, opp, ctx.user.id);
+          } catch (e) {
+            console.warn("[pipelineAlerts.moveDealStage] customer creation failed:", e);
+          }
+        }
+      }
+      return { ok: true, customerCreated };
     }),
 
   /**

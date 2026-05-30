@@ -45,6 +45,7 @@ import { router } from "../_core/trpc";
 import { repProcedure, workspaceProcedure } from "../_core/workspace";
 import { isSuppressed, makeUnsubscribeUrl } from "../unsubscribe";
 import { assertSendAllowed } from "../sendLimits";
+import { ensureCustomerForWonOpp } from "../services/wonToCustomer";
 
 function getAppBaseUrl(): string {
   return (
@@ -1433,30 +1434,12 @@ export const opportunitiesRouter = router({
       console.warn("[crm.setStage] stage-history insert failed:", e);
     }
     // Funnel: Closed Won → the account becomes a Customer (post-sale CS handoff:
-    // health, renewals, QBRs). Idempotent — only create if the account isn't
-    // already a customer. Non-fatal on failure so the stage move always lands.
+    // health, renewals, QBRs). Shared helper so every won path behaves the same.
+    // Non-fatal so the stage move always lands.
     let customerCreated = false;
-    if (isWon && before.accountId) {
+    if (isWon) {
       try {
-        const [existingCust] = await db
-          .select({ id: customers.id })
-          .from(customers)
-          .where(and(eq(customers.workspaceId, ctx.workspace.id), eq(customers.accountId, before.accountId)))
-          .limit(1);
-        if (!existingCust) {
-          const start = new Date();
-          const end = new Date(start.getTime() + 365 * 86400000);
-          await db.insert(customers).values({
-            workspaceId: ctx.workspace.id,
-            accountId: before.accountId,
-            arr: before.value ?? "0",
-            contractStart: start,
-            contractEnd: end,
-            cmUserId: before.ownerUserId ?? ctx.user.id,
-            renewalStage: "early",
-          } as never);
-          customerCreated = true;
-        }
+        customerCreated = await ensureCustomerForWonOpp(db, ctx.workspace.id, before, ctx.user.id);
       } catch (e) {
         console.warn("[crm.setStage] closed-won customer creation failed:", e);
       }
