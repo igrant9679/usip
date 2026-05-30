@@ -30,7 +30,7 @@ import {
 } from "@/components/usip/DashboardFilterBar";
 import { WidgetDataRenderer } from "@/components/usip/DashboardWidgets";
 import { Field, FormDialog, Section, SelectField } from "@/components/usip/Common";
-import { EmptyState, PageHeader, Shell, HOME_DASHBOARD_KEY } from "@/components/usip/Shell";
+import { EmptyState, PageHeader, Shell, SubNav, HOME_DASHBOARD_KEY } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import {
   BarChart2,
@@ -395,20 +395,6 @@ export default function Dashboards() {
       <PageHeader title="Dashboards" description="Build custom dashboards with KPI widgets, charts, and live CRM data pulled in real time. Share dashboards with your team or embed them in QBRs and executive reports." pageKey="dashboards"
         icon={<LayoutGrid className="size-5" />}
       >
-        <Link
-          href="/email-analytics"
-          className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
-          title="Open / click / reply rates per sequence and per step"
-        >
-          Email Analytics →
-        </Link>
-        <Link
-          href="/quota"
-          className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
-          title="Set and track per-rep quotas"
-        >
-          Quota Management →
-        </Link>
         <Button size="sm" variant="outline" onClick={() => setOpenSched(true)}>
           <Send className="h-3.5 w-3.5 mr-1" /> Schedule
         </Button>
@@ -418,6 +404,10 @@ export default function Dashboards() {
           {customizeMode ? "Done editing" : "Customize"}
         </Button>
       </PageHeader>
+      <SubNav items={[
+        { href: "/email-analytics", label: "Email Analytics", title: "Open / click / reply rates per sequence and per step" },
+        { href: "/quota", label: "Quota Management", title: "Set and track per-rep quotas" },
+      ]} />
 
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
         {/* Sidebar */}

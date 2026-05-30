@@ -8,7 +8,7 @@
  *   4. Active campaigns — progress bars, autonomy mode, quick actions
  *   5. Live signal feed — colour-coded by sentiment with action badges
  */
-import { Shell, PageHeader, StatCard, EmptyState, useAccentColor } from "@/components/usip/Shell";
+import { Shell, PageHeader, StatCard, EmptyState, SubNav, useAccentColor } from "@/components/usip/Shell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -303,27 +303,6 @@ export default function AREHub() {
 
         icon={<Rocket className="size-5" />}
       >
-        <Link
-          href="/are/icp"
-          className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline self-center"
-          title="Manage the Ideal Customer Profile agent"
-        >
-          ICP Agent →
-        </Link>
-        <Link
-          href="/are/campaigns"
-          className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline self-center"
-          title="All ARE-managed outbound campaigns"
-        >
-          Campaigns →
-        </Link>
-        <Link
-          href="/are/settings"
-          className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline self-center"
-          title="ARE configuration, throttles, and limits"
-        >
-          ARE Settings →
-        </Link>
         <Button variant="outline" size="sm" onClick={() => refetch()} className="gap-1.5 text-xs">
           <RefreshCw className="size-3.5" />
           Refresh
@@ -335,6 +314,11 @@ export default function AREHub() {
           </Button>
         </Link>
       </PageHeader>
+      <SubNav items={[
+        { href: "/are/icp", label: "ICP Agent", title: "Manage the Ideal Customer Profile agent" },
+        { href: "/are/campaigns", label: "Campaigns", title: "All ARE-managed outbound campaigns" },
+        { href: "/are/settings", label: "ARE Settings", title: "ARE configuration, throttles, and limits" },
+      ]} />
 
       <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto">
 
