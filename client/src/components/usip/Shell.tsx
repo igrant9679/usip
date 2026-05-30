@@ -633,7 +633,7 @@ export function PageHeader({ title, description: defaultDescription, pageKey, ic
 
   return (
     <div
-      className={`relative px-4 md:px-6 py-5 border-b border-border bg-card/40 flex flex-col sm:flex-row sm:items-center sm:flex-wrap gap-3 sm:gap-4${className ? ` ${className}` : ""}`}
+      className={`relative shrink-0 px-4 md:px-6 py-5 border-b border-border bg-card/40 flex flex-col sm:flex-row sm:items-center sm:flex-wrap gap-3 sm:gap-4${className ? ` ${className}` : ""}`}
       style={style}
     >
       {/* Thin accent rule along the top — section wayfinding without the old heavy box */}

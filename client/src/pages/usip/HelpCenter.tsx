@@ -767,14 +767,14 @@ export default function HelpCenterPage() {
       />
 
       {/* Tab bar */}
-      <div className="flex gap-1 border-b border-border mb-6 px-6">
+      <div className="flex shrink-0 gap-1 border-b border-border mb-6 px-6">
         {visibleTabs.map((tab) => (
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
             className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
               activeTab === tab.id
-                ? "border-violet-600 text-violet-700"
+                ? "border-primary text-primary"
                 : "border-transparent text-muted-foreground hover:text-foreground"
             }`}
           >

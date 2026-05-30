@@ -359,7 +359,7 @@ export default function Team() {
       ]} />
 
       {/* Tab bar */}
-      <div className="px-6 border-b flex items-center gap-1">
+      <div className="px-6 border-b flex shrink-0 items-center gap-1">
         {TABS.map((t) => (
           <button
             key={t.id}
