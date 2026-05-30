@@ -332,13 +332,17 @@ ${articleContext}`;
         messages,
         maxTokens: 600,
         outputSchema: {
-          type: "object",
-          properties: {
-            answer: { type: "string" },
-            citedArticleIds: { type: "array", items: { type: "number" } },
-            confidence: { type: "number", description: "0-100 confidence score" },
+          name: "help_answer",
+          schema: {
+            type: "object",
+            properties: {
+              answer: { type: "string" },
+              citedArticleIds: { type: "array", items: { type: "number" } },
+              confidence: { type: "number", description: "0-100 confidence score" },
+            },
+            required: ["answer", "citedArticleIds", "confidence"],
+            additionalProperties: false,
           },
-          required: ["answer", "citedArticleIds", "confidence"],
         },
       });
 
@@ -425,15 +429,19 @@ Keep the article under 600 words. Be friendly and action-oriented.`,
         ],
         maxTokens: 1200,
         outputSchema: {
-          type: "object",
-          properties: {
-            title: { type: "string" },
-            summary: { type: "string" },
-            bodyMarkdown: { type: "string" },
-            suggestedSlug: { type: "string" },
-            suggestedTags: { type: "array", items: { type: "string" } },
+          name: "article_draft",
+          schema: {
+            type: "object",
+            properties: {
+              title: { type: "string" },
+              summary: { type: "string" },
+              bodyMarkdown: { type: "string" },
+              suggestedSlug: { type: "string" },
+              suggestedTags: { type: "array", items: { type: "string" } },
+            },
+            required: ["title", "summary", "bodyMarkdown", "suggestedSlug"],
+            additionalProperties: false,
           },
-          required: ["title", "summary", "bodyMarkdown", "suggestedSlug"],
         },
       });
 
