@@ -71,7 +71,7 @@ function BrowseTab() {
     <div className="flex flex-col gap-6">
       {/* Search bar */}
       <div className="relative max-w-xl">
-        <Search className="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
+        <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
         <Input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
@@ -91,7 +91,7 @@ function BrowseTab() {
             className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors ${
               selectedCategory === null
                 ? "bg-violet-600 text-white border-violet-600"
-                : "bg-white text-gray-600 border-gray-200 hover:border-violet-300"
+                : "bg-card text-muted-foreground border-border hover:border-violet-300"
             }`}
           >
             All
@@ -103,7 +103,7 @@ function BrowseTab() {
               className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors ${
                 selectedCategory === cat.id
                   ? "bg-violet-600 text-white border-violet-600"
-                  : "bg-white text-gray-600 border-gray-200 hover:border-violet-300"
+                  : "bg-card text-muted-foreground border-border hover:border-violet-300"
               }`}
             >
               {cat.icon && <span className="mr-1">{cat.icon}</span>}
@@ -130,25 +130,25 @@ function BrowseTab() {
             onClick={() => {
               if (debouncedQuery) logClick.mutate({ query: debouncedQuery, articleId: article.id });
             }}
-            className="block rounded-xl border border-gray-200 bg-white p-4 hover:border-violet-300 hover:shadow-sm transition-all group"
+            className="block rounded-xl border border-border bg-card p-4 hover:border-violet-300 hover:shadow-sm transition-all group"
           >
             <div className="flex items-start justify-between gap-2">
               <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold text-gray-800 group-hover:text-violet-700 line-clamp-2">
+                <p className="text-sm font-semibold text-foreground group-hover:text-violet-700 line-clamp-2">
                   {article.title}
                 </p>
                 {article.summary && (
-                  <p className="text-xs text-gray-500 mt-1 line-clamp-3">{article.summary}</p>
+                  <p className="text-xs text-muted-foreground mt-1 line-clamp-3">{article.summary}</p>
                 )}
               </div>
-              <ChevronRight className="h-4 w-4 text-gray-300 group-hover:text-violet-400 flex-shrink-0 mt-0.5" />
+              <ChevronRight className="h-4 w-4 text-muted-foreground group-hover:text-violet-400 flex-shrink-0 mt-0.5" />
             </div>
             <div className="flex items-center gap-2 mt-3">
               {article.readingTimeMinutes && (
-                <span className="text-xs text-gray-400">{article.readingTimeMinutes} min read</span>
+                <span className="text-xs text-muted-foreground">{article.readingTimeMinutes} min read</span>
               )}
               {(article.helpfulCount + article.notHelpfulCount) > 0 && (
-                <span className="text-xs text-gray-400">
+                <span className="text-xs text-muted-foreground">
                   👍 {Math.round((article.helpfulCount / (article.helpfulCount + article.notHelpfulCount)) * 100)}%
                 </span>
               )}
@@ -214,8 +214,8 @@ function AskAITab() {
             <div className="w-16 h-16 rounded-full bg-violet-100 flex items-center justify-center mx-auto mb-4">
               <Bot className="h-8 w-8 text-violet-600" />
             </div>
-            <h3 className="text-lg font-semibold text-gray-800">Ask me anything</h3>
-            <p className="text-sm text-gray-500 mt-1 max-w-sm mx-auto">
+            <h3 className="text-lg font-semibold text-foreground">Ask me anything</h3>
+            <p className="text-sm text-muted-foreground mt-1 max-w-sm mx-auto">
               I have full knowledge of the platform. Ask about features, workflows, or how to accomplish specific tasks.
             </p>
             <div className="flex flex-wrap gap-2 justify-center mt-4">
@@ -242,7 +242,7 @@ function AskAITab() {
               className={`max-w-[80%] rounded-2xl px-4 py-3 text-sm ${
                 msg.role === "user"
                   ? "bg-violet-600 text-white"
-                  : "bg-white border border-gray-200 text-gray-800 shadow-sm"
+                  : "bg-card border border-border text-foreground shadow-sm"
               }`}
             >
               <p className="whitespace-pre-wrap leading-relaxed">{msg.body}</p>
@@ -256,10 +256,10 @@ function AskAITab() {
         ))}
         {isLoading && (
           <div className="flex justify-start">
-            <div className="bg-white border border-gray-200 rounded-2xl px-4 py-3 shadow-sm">
+            <div className="bg-card border border-border rounded-2xl px-4 py-3 shadow-sm">
               <div className="flex gap-1 items-center">
                 <Loader2 className="h-3 w-3 animate-spin text-violet-400" />
-                <span className="text-xs text-gray-400 ml-1">Thinking…</span>
+                <span className="text-xs text-muted-foreground ml-1">Thinking…</span>
               </div>
             </div>
           </div>
@@ -267,7 +267,7 @@ function AskAITab() {
         <div ref={bottomRef} />
       </div>
 
-      <div className="flex gap-2 pt-3 border-t border-gray-100">
+      <div className="flex gap-2 pt-3 border-t border-border">
         <Input
           value={input}
           onChange={(e) => setInput(e.target.value)}
@@ -345,7 +345,7 @@ function ToursTab() {
     <div className="flex flex-col gap-8">
       {Object.entries(grouped).map(([type, tours]) => (
         <div key={type}>
-          <h3 className="text-sm font-semibold text-gray-700 mb-3">
+          <h3 className="text-sm font-semibold text-foreground mb-3">
             {typeLabel[type] ?? type}
           </h3>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -356,13 +356,13 @@ function ToursTab() {
               return (
                 <div
                   key={tour.id}
-                  className="rounded-xl border border-gray-200 bg-white p-4 flex flex-col gap-3"
+                  className="rounded-xl border border-border bg-card p-4 flex flex-col gap-3"
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm font-semibold text-gray-800 line-clamp-1">{tour.name}</p>
+                      <p className="text-sm font-semibold text-foreground line-clamp-1">{tour.name}</p>
                       {tour.description && (
-                        <p className="text-xs text-gray-500 mt-1 line-clamp-2">{tour.description}</p>
+                        <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{tour.description}</p>
                       )}
                     </div>
                     {isCompleted && (
@@ -374,7 +374,7 @@ function ToursTab() {
                   </div>
                   <div className="flex items-center justify-between">
                     {tour.estimatedMinutes ? (
-                      <span className="text-xs text-gray-400">~{tour.estimatedMinutes} min</span>
+                      <span className="text-xs text-muted-foreground">~{tour.estimatedMinutes} min</span>
                     ) : (
                       <span />
                     )}
@@ -429,7 +429,7 @@ function AdminTab() {
         >
           ← Back to articles
         </button>
-        <h3 className="text-sm font-semibold text-gray-800 mb-4">
+        <h3 className="text-sm font-semibold text-foreground mb-4">
           {isNew ? "New Article" : `Edit: ${editArticle.title}`}
         </h3>
         <ArticleForm
@@ -446,13 +446,13 @@ function AdminTab() {
   return (
     <div className="flex flex-col gap-4">
       {/* Sub-nav */}
-      <div className="flex gap-1 border-b border-gray-100 pb-1">
+      <div className="flex gap-1 border-b border-border pb-1">
         {(["articles", "categories", "insights"] as const).map((v) => (
           <button
             key={v}
             onClick={() => setView(v)}
             className={`px-3 py-1.5 text-xs font-medium rounded-lg capitalize transition-colors ${
-              view === v ? "bg-violet-100 text-violet-700" : "text-gray-500 hover:text-gray-700"
+              view === v ? "bg-violet-100 text-violet-700" : "text-muted-foreground hover:text-foreground"
             }`}
           >
             {v}
@@ -475,20 +475,20 @@ function AdminTab() {
           {articles?.map((article) => (
             <div
               key={article.id}
-              className="flex items-center gap-3 px-3 py-2 rounded-lg border border-gray-100 bg-white hover:border-violet-100"
+              className="flex items-center gap-3 px-3 py-2 rounded-lg border border-border bg-card hover:border-violet-100"
             >
               <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-gray-800 line-clamp-1">{article.title}</p>
+                <p className="text-sm font-medium text-foreground line-clamp-1">{article.title}</p>
                 <div className="flex items-center gap-2 mt-0.5">
                   <span className={`text-xs px-1.5 py-0.5 rounded-full ${
                     article.status === "published" ? "bg-green-100 text-green-700" :
                     article.status === "draft" ? "bg-amber-100 text-amber-700" :
-                    "bg-gray-100 text-gray-500"
+                    "bg-muted text-muted-foreground"
                   }`}>
                     {article.status}
                   </span>
                   {article.viewCount !== undefined && (
-                    <span className="text-xs text-gray-400">{article.viewCount} views</span>
+                    <span className="text-xs text-muted-foreground">{article.viewCount} views</span>
                   )}
                 </div>
               </div>
@@ -496,7 +496,7 @@ function AdminTab() {
                 <Button
                   size="sm"
                   variant="ghost"
-                  className="h-7 w-7 p-0 text-gray-400 hover:text-violet-600"
+                  className="h-7 w-7 p-0 text-muted-foreground hover:text-violet-600"
                   onClick={() => { setEditArticle(article); setIsNew(false); }}
                 >
                   <Edit className="h-3.5 w-3.5" />
@@ -504,7 +504,7 @@ function AdminTab() {
                 <Button
                   size="sm"
                   variant="ghost"
-                  className="h-7 w-7 p-0 text-gray-400 hover:text-red-600"
+                  className="h-7 w-7 p-0 text-muted-foreground hover:text-red-600"
                   onClick={() => {
                     if (confirm("Delete this article?")) deleteMut.mutate({ id: article.id });
                   }}
@@ -528,17 +528,17 @@ function AdminTab() {
       {view === "categories" && (
         <div className="flex flex-col gap-2">
           {categories?.map((cat) => (
-            <div key={cat.id} className="flex items-center gap-3 px-3 py-2 rounded-lg border border-gray-100 bg-white">
+            <div key={cat.id} className="flex items-center gap-3 px-3 py-2 rounded-lg border border-border bg-card">
               <span className="text-lg">{cat.icon ?? "📁"}</span>
               <div className="flex-1">
-                <p className="text-sm font-medium text-gray-800">{cat.name}</p>
+                <p className="text-sm font-medium text-foreground">{cat.name}</p>
                 {/* helpCategories has no `description` column. If/when one
                     is added via migration, render it here. */}
               </div>
             </div>
           ))}
           {(!categories || categories.length === 0) && (
-            <p className="text-sm text-gray-500 text-center py-8">No categories yet</p>
+            <p className="text-sm text-muted-foreground text-center py-8">No categories yet</p>
           )}
         </div>
       )}
@@ -546,45 +546,45 @@ function AdminTab() {
       {/* Insights */}
       {view === "insights" && insights && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div className="rounded-xl border border-gray-200 bg-white p-4">
-            <h4 className="text-sm font-semibold text-gray-700 mb-3">Top Searches</h4>
+          <div className="rounded-xl border border-border bg-card p-4">
+            <h4 className="text-sm font-semibold text-foreground mb-3">Top Searches</h4>
             <div className="flex flex-col gap-1">
               {insights.topSearches?.map((s: any, i: number) => (
                 <div key={i} className="flex items-center justify-between text-xs">
-                  <span className="text-gray-700">{s.query}</span>
-                  <span className="text-gray-400">{s.count}x</span>
+                  <span className="text-foreground">{s.query}</span>
+                  <span className="text-muted-foreground">{s.count}x</span>
                 </div>
               ))}
             </div>
           </div>
-          <div className="rounded-xl border border-gray-200 bg-white p-4">
-            <h4 className="text-sm font-semibold text-gray-700 mb-3">Unanswered Questions</h4>
+          <div className="rounded-xl border border-border bg-card p-4">
+            <h4 className="text-sm font-semibold text-foreground mb-3">Unanswered Questions</h4>
             <div className="flex flex-col gap-1">
               {insights.unansweredQuestions?.map((q: any, i: number) => (
                 <div key={i} className="flex items-center justify-between text-xs">
-                  <span className="text-gray-700 line-clamp-1">{q.query}</span>
-                  <span className="text-gray-400">{q.count}x</span>
+                  <span className="text-foreground line-clamp-1">{q.query}</span>
+                  <span className="text-muted-foreground">{q.count}x</span>
                 </div>
               ))}
             </div>
           </div>
-          <div className="rounded-xl border border-gray-200 bg-white p-4">
-            <h4 className="text-sm font-semibold text-gray-700 mb-3">Most Helpful Articles</h4>
+          <div className="rounded-xl border border-border bg-card p-4">
+            <h4 className="text-sm font-semibold text-foreground mb-3">Most Helpful Articles</h4>
             <div className="flex flex-col gap-1">
               {insights.mostHelpful?.map((a: any, i: number) => (
                 <div key={i} className="flex items-center justify-between text-xs">
-                  <span className="text-gray-700 line-clamp-1">{a.title}</span>
+                  <span className="text-foreground line-clamp-1">{a.title}</span>
                   <span className="text-green-600">👍 {a.helpfulPct}%</span>
                 </div>
               ))}
             </div>
           </div>
-          <div className="rounded-xl border border-gray-200 bg-white p-4">
-            <h4 className="text-sm font-semibold text-gray-700 mb-3">Needs Improvement</h4>
+          <div className="rounded-xl border border-border bg-card p-4">
+            <h4 className="text-sm font-semibold text-foreground mb-3">Needs Improvement</h4>
             <div className="flex flex-col gap-1">
               {insights.needsImprovement?.map((a: any, i: number) => (
                 <div key={i} className="flex items-center justify-between text-xs">
-                  <span className="text-gray-700 line-clamp-1">{a.title}</span>
+                  <span className="text-foreground line-clamp-1">{a.title}</span>
                   <span className="text-red-500">👎 {a.unhelpfulPct}%</span>
                 </div>
               ))}
@@ -744,7 +744,7 @@ export default function HelpCenterPage() {
       />
 
       {/* Tab bar */}
-      <div className="flex gap-1 border-b border-gray-200 mb-6 px-6">
+      <div className="flex gap-1 border-b border-border mb-6 px-6">
         {visibleTabs.map((tab) => (
           <button
             key={tab.id}
@@ -752,7 +752,7 @@ export default function HelpCenterPage() {
             className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
               activeTab === tab.id
                 ? "border-violet-600 text-violet-700"
-                : "border-transparent text-gray-500 hover:text-gray-700"
+                : "border-transparent text-muted-foreground hover:text-foreground"
             }`}
           >
             {tab.icon}

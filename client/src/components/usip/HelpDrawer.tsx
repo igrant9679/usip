@@ -66,7 +66,7 @@ function SearchTab({ pageKey }: { pageKey: string }) {
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search help articles…"
-          className="w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-400 pr-8"
+          className="w-full rounded-lg border border-border bg-muted px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-400 pr-8"
           autoFocus
         />
         {isFetching && (
@@ -75,15 +75,15 @@ function SearchTab({ pageKey }: { pageKey: string }) {
       </div>
 
       {debouncedQuery.length < 2 && (
-        <p className="text-xs text-gray-400 px-1">
+        <p className="text-xs text-muted-foreground px-1">
           {pageArticles?.length ? `Articles for this page` : "Type to search all articles"}
         </p>
       )}
 
       {debouncedQuery.length >= 2 && results?.length === 0 && !isFetching && (
         <div className="text-center py-6">
-          <p className="text-sm text-gray-500">No results for "{debouncedQuery}"</p>
-          <p className="text-xs text-gray-400 mt-1">Try the Ask AI tab for a direct answer</p>
+          <p className="text-sm text-muted-foreground">No results for "{debouncedQuery}"</p>
+          <p className="text-xs text-muted-foreground mt-1">Try the Ask AI tab for a direct answer</p>
         </div>
       )}
 
@@ -95,11 +95,11 @@ function SearchTab({ pageKey }: { pageKey: string }) {
               if (debouncedQuery) logClick.mutate({ query: debouncedQuery, articleId: article.id });
               window.open(`/help/articles/${article.slug}`, "_blank");
             }}
-            className="text-left rounded-lg border border-gray-100 bg-white px-3 py-2.5 hover:border-violet-200 hover:bg-violet-50 transition-colors"
+            className="text-left rounded-lg border border-border bg-card px-3 py-2.5 hover:border-violet-200 hover:bg-violet-50 transition-colors"
           >
-            <p className="text-sm font-medium text-gray-800 line-clamp-1">{article.title}</p>
+            <p className="text-sm font-medium text-foreground line-clamp-1">{article.title}</p>
             {article.summary && (
-              <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">{article.summary}</p>
+              <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{article.summary}</p>
             )}
           </button>
         ))}
@@ -171,8 +171,8 @@ function AskAITab({ pageKey }: { pageKey: string }) {
             <div className="w-12 h-12 rounded-full bg-violet-100 flex items-center justify-center mx-auto mb-3">
               <span className="text-2xl">🤖</span>
             </div>
-            <p className="text-sm font-medium text-gray-700">Ask me anything</p>
-            <p className="text-xs text-gray-400 mt-1">Your in-app SDR enablement coach — grounded in the Help articles.</p>
+            <p className="text-sm font-medium text-foreground">Ask me anything</p>
+            <p className="text-xs text-muted-foreground mt-1">Your in-app SDR enablement coach — grounded in the Help articles.</p>
             <div className="flex flex-col gap-1.5 mt-4 px-2">
               {SUGGESTED_PROMPTS.map((p) => (
                 <button
@@ -195,7 +195,7 @@ function AskAITab({ pageKey }: { pageKey: string }) {
               className={`max-w-[85%] rounded-xl px-3 py-2 text-sm ${
                 msg.role === "user"
                   ? "bg-violet-600 text-white"
-                  : "bg-gray-100 text-gray-800"
+                  : "bg-muted text-foreground"
               }`}
             >
               <p className="whitespace-pre-wrap leading-relaxed">{msg.body}</p>
@@ -209,11 +209,11 @@ function AskAITab({ pageKey }: { pageKey: string }) {
         ))}
         {isLoading && (
           <div className="flex justify-start">
-            <div className="bg-gray-100 rounded-xl px-3 py-2">
+            <div className="bg-muted rounded-xl px-3 py-2">
               <div className="flex gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-gray-400 animate-bounce" style={{ animationDelay: "0ms" }} />
-                <span className="w-1.5 h-1.5 rounded-full bg-gray-400 animate-bounce" style={{ animationDelay: "150ms" }} />
-                <span className="w-1.5 h-1.5 rounded-full bg-gray-400 animate-bounce" style={{ animationDelay: "300ms" }} />
+                <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground animate-bounce" style={{ animationDelay: "0ms" }} />
+                <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground animate-bounce" style={{ animationDelay: "150ms" }} />
+                <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground animate-bounce" style={{ animationDelay: "300ms" }} />
               </div>
             </div>
           </div>
@@ -222,14 +222,14 @@ function AskAITab({ pageKey }: { pageKey: string }) {
       </div>
 
       {/* Input */}
-      <div className="flex gap-2 pt-2 border-t border-gray-100">
+      <div className="flex gap-2 pt-2 border-t border-border">
         <input
           type="text"
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && handleSend()}
           placeholder="Ask a question…"
-          className="flex-1 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-400"
+          className="flex-1 rounded-lg border border-border bg-muted px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-400"
           disabled={isLoading}
         />
         <button
@@ -283,7 +283,7 @@ function TourCard({
   }, [tour.id, utils, startTour]);
 
   return (
-    <div className="rounded-lg border border-gray-100 bg-white px-3 py-2.5 flex items-start gap-3">
+    <div className="rounded-lg border border-border bg-card px-3 py-2.5 flex items-start gap-3">
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-1.5 flex-wrap">
           <span className="text-xs text-violet-500 font-medium">
@@ -296,12 +296,12 @@ function TourCard({
             <span className="text-xs bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full">In progress</span>
           )}
         </div>
-        <p className="text-sm font-medium text-gray-800 mt-0.5 line-clamp-1">{tour.name}</p>
+        <p className="text-sm font-medium text-foreground mt-0.5 line-clamp-1">{tour.name}</p>
         {tour.description && (
-          <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">{tour.description}</p>
+          <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{tour.description}</p>
         )}
         {tour.estimatedMinutes && (
-          <p className="text-xs text-gray-400 mt-1">~{tour.estimatedMinutes} min</p>
+          <p className="text-xs text-muted-foreground mt-1">~{tour.estimatedMinutes} min</p>
         )}
       </div>
       <button
@@ -326,7 +326,7 @@ function ToursTab({ pageKey }: { pageKey: string }) {
     <div className="flex flex-col gap-4">
       {recommended && recommended.length > 0 && (
         <div>
-          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
             Suggested for this page
           </p>
           <div className="flex flex-col gap-2">
@@ -339,7 +339,7 @@ function ToursTab({ pageKey }: { pageKey: string }) {
 
       {allTours && allTours.length > 0 && (
         <div>
-          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
             All tours
           </p>
           <div className="flex flex-col gap-2">
@@ -352,8 +352,8 @@ function ToursTab({ pageKey }: { pageKey: string }) {
 
       {(!allTours || allTours.length === 0) && (
         <div className="text-center py-8">
-          <p className="text-sm text-gray-500">No tours available yet</p>
-          <p className="text-xs text-gray-400 mt-1">Admins can create tours in Help Center → Tour Builder</p>
+          <p className="text-sm text-muted-foreground">No tours available yet</p>
+          <p className="text-xs text-muted-foreground mt-1">Admins can create tours in Help Center → Tour Builder</p>
         </div>
       )}
     </div>
@@ -384,23 +384,23 @@ export function HelpDrawer({ onClose }: { onClose: () => void }) {
       />
 
       {/* Drawer */}
-      <div className="fixed right-0 top-0 bottom-0 z-[9975] w-[380px] bg-white shadow-2xl flex flex-col">
+      <div className="fixed right-0 top-0 bottom-0 z-[9975] w-[380px] bg-card shadow-2xl flex flex-col">
         {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-border">
           <div className="flex items-center gap-2">
             <span className="text-violet-600 font-bold text-sm">Help Center</span>
-            <span className="text-xs text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded">{pageKey}</span>
+            <span className="text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded">{pageKey}</span>
           </div>
           <button
             onClick={onClose}
-            className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600"
+            className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-muted text-muted-foreground hover:text-muted-foreground"
           >
             ✕
           </button>
         </div>
 
         {/* Tabs */}
-        <div className="flex border-b border-gray-100">
+        <div className="flex border-b border-border">
           {tabs.map((tab) => (
             <button
               key={tab.id}
@@ -408,7 +408,7 @@ export function HelpDrawer({ onClose }: { onClose: () => void }) {
               className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 text-xs font-medium transition-colors ${
                 activeTab === tab.id
                   ? "text-violet-600 border-b-2 border-violet-600"
-                  : "text-gray-500 hover:text-gray-700"
+                  : "text-muted-foreground hover:text-foreground"
               }`}
             >
               <span>{tab.icon}</span>
@@ -425,7 +425,7 @@ export function HelpDrawer({ onClose }: { onClose: () => void }) {
         </div>
 
         {/* Footer */}
-        <div className="px-4 py-2 border-t border-gray-100 flex items-center justify-between">
+        <div className="px-4 py-2 border-t border-border flex items-center justify-between">
           <a
             href="/help"
             className="text-xs text-violet-500 hover:text-violet-700 font-medium"
@@ -434,7 +434,7 @@ export function HelpDrawer({ onClose }: { onClose: () => void }) {
           </a>
           <a
             href="/help/tour-builder"
-            className="text-xs text-gray-400 hover:text-gray-600"
+            className="text-xs text-muted-foreground hover:text-muted-foreground"
           >
             Build a tour
           </a>
