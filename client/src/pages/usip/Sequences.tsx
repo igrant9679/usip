@@ -6,7 +6,7 @@ import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Field, FormDialog, Section, SelectField, StatusPill, TextareaField } from "@/components/usip/Common";
-import { EmptyState, PageHeader, Shell } from "@/components/usip/Shell";
+import { EmptyState, PageHeader, Shell, SubNav } from "@/components/usip/Shell";
 import { RichTextEditor } from "@/components/usip/RichTextEditor";
 import { trpc } from "@/lib/trpc";
 import {
@@ -1366,22 +1366,12 @@ export default function Sequences() {
       <PageHeader title="Sequences" description="Build multi-step email and task cadences to engage prospects at scale with personalised touchpoints. Set delays, branching conditions, and auto-stop rules to keep every sequence relevant." pageKey="sequences"
         icon={<ListOrdered className="size-5" />}
       >
-        <Link
-          href="/email-drafts"
-          className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
-          title="Review and edit drafts created by sequence steps"
-        >
-          Email Drafts →
-        </Link>
-        <Link
-          href="/email-analytics"
-          className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
-          title="Open / click / reply rates per sequence and per step"
-        >
-          Email Analytics →
-        </Link>
         <Button onClick={() => setOpen(true)} data-tour-id="sequences-new-button"><Plus className="size-4" /> New sequence</Button>
       </PageHeader>
+      <SubNav items={[
+        { href: "/email-drafts", label: "Email Drafts", title: "Review and edit drafts created by sequence steps" },
+        { href: "/email-analytics", label: "Email Analytics", title: "Open / click / reply rates per sequence and per step" },
+      ]} />
       <div className="p-6 grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="lg:col-span-1">
           <Section title="All sequences">

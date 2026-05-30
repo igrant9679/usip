@@ -6,7 +6,7 @@
  */
 import { useState, useRef, useCallback, useEffect } from "react";
 import { useRoute, useLocation, Link } from "wouter";
-import { Shell, PageHeader } from "@/components/usip/Shell";
+import { Shell, PageHeader, SubNav } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -1937,14 +1937,10 @@ export default function EmailBuilderPage() {
 
         icon={<PenLine className="size-5" />}
       >
-        <Link
-          href="/snippets"
-          className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
-          title="Reusable text fragments inserted into templates"
-        >
-          Snippet Library →
-        </Link>
       </PageHeader>
+      <SubNav items={[
+        { href: "/snippets", label: "Snippet Library", title: "Reusable text fragments inserted into templates" },
+      ]} />
       <div className="flex flex-1 min-h-0 border rounded-xl overflow-hidden bg-card" style={{height: 'calc(100vh - 180px)'}}>
         <TemplateList onOpen={(id) => navigate(`/email-builder/${id}`)} />
       </div>

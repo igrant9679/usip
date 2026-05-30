@@ -3,7 +3,7 @@
  */
 import { useState, useEffect } from "react";
 import { Link } from "wouter";
-import { Shell, PageHeader } from "@/components/usip/Shell";
+import { Shell, PageHeader, SubNav } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -166,17 +166,13 @@ export default function BrandVoicePage() {
 
         icon={<Mic2 className="size-5" />}
       >
-        <Link
-          href="/prompt-templates"
-          className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline self-center"
-          title="Edit the underlying AI prompt templates used by each feature"
-        >
-          Prompt Templates →
-        </Link>
         <Button size="sm" onClick={handleSave} disabled={!isDirty || saveMutation.isPending}>
           <Save size={14} className="mr-1.5" /> {saveMutation.isPending ? "Saving…" : "Save Changes"}
         </Button>
       </PageHeader>
+      <SubNav items={[
+        { href: "/prompt-templates", label: "Prompt Templates", title: "Edit the underlying AI prompt templates used by each feature" },
+      ]} />
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Left: config */}

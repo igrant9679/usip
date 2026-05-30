@@ -1,4 +1,4 @@
-import { Shell, PageHeader } from "@/components/usip/Shell";
+import { Shell, PageHeader, SubNav } from "@/components/usip/Shell";
 import { useState, useMemo, useEffect } from "react";
 import { useLocation, useSearch, Link } from "wouter";
 import { trpc } from "@/lib/trpc";
@@ -579,13 +579,6 @@ export default function Proposals() {
       <PageHeader title="Proposals" description="Create, send, and track client proposals with full version history, e-signature support, and engagement analytics. Know exactly when a prospect opens, reads, and forwards your proposal." pageKey="proposals"
         icon={<ClipboardList className="size-5" />}
       >
-        <Link
-          href="/quotes"
-          className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline self-center"
-          title="Pricing-only quotes — shorter, signature-ready documents"
-        >
-          Quotes →
-        </Link>
         <div className="flex items-center gap-2">
           <Button
             variant="outline"
@@ -608,6 +601,9 @@ export default function Proposals() {
           </Button>
         </div>
       </PageHeader>
+      <SubNav items={[
+        { href: "/quotes", label: "Quotes", title: "Pricing-only quotes — shorter, signature-ready documents" },
+      ]} />
       {/* Bulk action bar */}
       {selectedIds.size > 0 && (
         <div className="flex items-center gap-3 px-6 py-2.5 bg-teal-500/10 border-b border-teal-500/30 shrink-0">

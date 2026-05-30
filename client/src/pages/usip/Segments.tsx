@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Shell, PageHeader, EmptyState } from "@/components/usip/Shell";
+import { Shell, PageHeader, EmptyState, SubNav } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -411,18 +411,14 @@ export default function Segments() {
       
         icon={<Filter className="size-5" />}
       >
-        <Link
-          href="/segment-rules"
-          className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
-          title="Configure segment → sequence auto-enrollment rules"
-        >
-          Auto-Enroll Rules →
-        </Link>
         <Button size="sm" onClick={() => { setEditing(null); setBuilderOpen(true); }}>
           <Plus className="size-3.5 mr-1.5" />
           New Segment
         </Button>
       </PageHeader>
+      <SubNav items={[
+        { href: "/segment-rules", label: "Auto-Enroll Rules", title: "Configure segment → sequence auto-enrollment rules" },
+      ]} />
 
       <div className="p-4 md:p-6">
         {isLoading ? (

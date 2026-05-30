@@ -2,7 +2,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { EmptyState, PageHeader, Shell } from "@/components/usip/Shell";
+import { EmptyState, PageHeader, Shell, SubNav } from "@/components/usip/Shell";
 import { Link } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { ArrowDown, ArrowUp, Pencil, Plus, Sparkles, Trash2, GitMerge } from "lucide-react";
@@ -63,17 +63,13 @@ export default function LeadRouting() {
       <PageHeader title="Lead Routing Engine" description="Configure routing rules that automatically assign inbound leads to the right rep or team. Base assignments on territory, industry, company size, lead score, or round-robin rotation." pageKey="lead-routing"
         icon={<GitMerge className="size-5" />}
       >
-        <Link
-          href="/territories"
-          className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline self-center"
-          title="Define territories used by routing rules (geo / industry / vertical)"
-        >
-          Territories →
-        </Link>
         <Button onClick={() => setEditing({ name: "", priority: ((rules?.length ?? 0) + 1) * 10, enabled: true, conditions: { all: [] }, strategy: "round_robin", targetUserIds: [] })}>
           <Plus className="size-4" /> New rule
         </Button>
       </PageHeader>
+      <SubNav items={[
+        { href: "/territories", label: "Territories", title: "Define territories used by routing rules (geo / industry / vertical)" },
+      ]} />
 
       <div className="p-6">
         {!rules || rules.length === 0 ? (

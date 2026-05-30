@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link } from "wouter";
 import { Switch } from "@/components/ui/switch";
-import { Shell, PageHeader } from "@/components/usip/Shell";
+import { Shell, PageHeader, SubNav } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -441,18 +441,14 @@ export default function AIPipelineQueue() {
       <PageHeader title="AI Pipeline" description="Review and approve AI-generated email drafts. Configure the upstream research stage that feeds drafts into this queue." pageKey="ai-pipeline"
         icon={<Sparkles className="size-5" />}
       >
-        <Link
-          href="/research-pipeline"
-          className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
-          title="Configure the research stage that prepares drafts for this queue"
-        >
-          Research Pipeline →
-        </Link>
         <Button variant="outline" size="sm" onClick={handleRefresh}>
           <RefreshCw className="h-4 w-4 mr-1" />
           Refresh
         </Button>
       </PageHeader>
+      <SubNav items={[
+        { href: "/research-pipeline", label: "Research Pipeline", title: "Configure the research stage that prepares drafts for this queue" },
+      ]} />
       <div className="p-6 space-y-6">
 
       {/* Stats row */}
