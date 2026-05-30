@@ -9,7 +9,7 @@ Refreshed at end of the build+audit session. Paste the bottom block into a new c
 - **Repo:** `igrant9679/usip` (origin: `https://github.com/igrant9679/usip.git`)
 - **Local path:** `C:\Users\Admin\usip`
 - **Deploy:** Railway → `https://getvelocityai.app/` (auto-deploys on push to `main`)
-- **Tip of `main`:** `23caa0d` (Add HELP_CONTENT_PLAN.md). 35 commits landed this session (see below).
+- **Tip of `main`:** `819e11d` (emoji category icons). HELP_CONTENT_PLAN.md is now **implemented + verified live** (5 commits `172a082`→`819e11d`; see "Help content session" below).
 - **Workspace under test:** **LSI Media** · **Test user:** Idris Grant (super_admin)
 
 ### Live data state of LSI Media (so empty lists don't surprise you)
@@ -53,19 +53,29 @@ Quirks: tools need `tabId` (use `tabs_context_mcp({createIfEmpty:true})`); `comp
 
 ---
 
-## ⭐ NEXT TASK — implement `HELP_CONTENT_PLAN.md`
+## ✅ DONE — `HELP_CONTENT_PLAN.md` implemented + verified live
 
-The user wants the Help section massively enhanced for their SDR team (Prospecting + CRM all day):
-**20 help articles, 10 guided tours, SDR daily routines, and a stronger Ask AI.**
-A complete spec with **full article bodies + full tour step copy** is in `HELP_CONTENT_PLAN.md`
-at repo root — drafted while app knowledge was fresh. The new session should **execute it**:
-- Build `server/seedHelpContent.ts` (idempotent: categories/articles by slug, tours by name) →
-  call from `seedWorkspace()` + a one-time boot backfill for existing workspaces.
-- Schema is in place? **No** — `help_categories/help_articles/tours/tour_steps` tables already
-  exist (no new migration needed for these). Verify columns against the plan before seeding.
-- Ask AI is **RAG over the articles** — seeding the 20 articles is itself the Ask-AI upgrade.
-- Verify live: `/help` shows categories/articles, Ask AI cites an article, tours list shows 10.
-- Content is per-workspace (shared by the whole team), matching how tours already seed.
+The SDR Help enhancement is shipped and confirmed on LSI Media (Personal Chrome):
+- **`server/seedHelpContent.ts`** — idempotent `seedHelpContent(db, wsId)` + `seedHelpForAllWorkspaces()`.
+  Categories deduped by **name** (no slug column on `help_categories`), articles by slug, tours by name
+  (steps delete+reinsert each run). Articles linked to their tour via `associatedTourId`. Wired into
+  `seedWorkspace()` (new ws) **and** an `index.ts` boot backfill at 20s (existing ws).
+- **Seeded + verified live:** 6 categories (emoji icons), **21 articles** published, 10 SDR tours
+  (+ 2 kept legacy = 12; a pre-existing **"Enriching Contacts with Clodura"** tour also survives → 13 total).
+  Ask AI answers the Needs-Review question citing `needs-review-queue` (PR-2) at confidence 95.
+- **Decisions made this session:** tours = *merge/dedupe* — the 10 SDR tours supersede 5 legacy demo tours
+  (Welcome / Sequence / Pipeline / ARE / AI Draft Queue), which `seedHelpContent` **retires** per workspace;
+  `seedTours.ts` was trimmed to the 2 non-overlapping keepers (Adding Your First Lead, Renewals & Churn Risk)
+  and refactored to idempotent **upsert-by-name** (the old "seed only if 0 tours" gate broke once
+  seedHelpContent creates tours first). Commit trailer switched to **Opus 4.8**.
+
+### Open follow-ups (optional, not blockers)
+- **Article count is 21, not 20** — the plan's own list (GS3+PR5+CRM4+SEQ4+ARE2+PLAY3) totals 21; the "20"
+  label was an off-by-one in the plan. All 21 specced articles are seeded; nothing missing/duplicated.
+- **"Enriching Contacts with Clodura" tour** pre-existed (not one of the original 7 demo tours, not in the
+  retire list) so it remains. Confirm with the user whether to keep or retire it.
+- Optional polish from the plan: add `data-tour-id` selectors on Find Prospects / Prospects / Enroll dialog /
+  Unified Inbox so those coach tours can spotlight instead of page-level callouts.
 
 ---
 
@@ -151,6 +161,11 @@ filtered by `verificationStatus` which excluded CSV-imported NULL-status prospec
    adding it to BOTH `updateAreSettings` input AND the `getAreSettings` return (we missed this once).
 9. **Verifying a deploy is "green":** a new *client* change being live (new bundle) proves the full
    build (incl. server esbuild) succeeded — Railway builds both in one step and won't deploy a partial.
+10. **`invokeLLM` `outputSchema` shape** = `{ name, schema, strict? }` (schema is the raw JSON-Schema
+    object), NOT a bare `{type:"object",...}`. Passing a bare schema throws **"outputSchema requires both
+    name and schema" → HTTP 500**. (`helpCenter.askAI` + `generateArticleDraft` had this bug; fixed `a4145fc`.)
+11. **`help_categories.icon` renders as a literal string** in `HelpCenter.tsx` (`{cat.icon}`, fallback "📁") —
+    it is an **emoji**, not a lucide component name. Storing "Rocket"/"Search" shows the raw word.
 
 ---
 
