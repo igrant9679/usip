@@ -112,6 +112,13 @@ function SearchTab({ pageKey }: { pageKey: string }) {
 
 type Message = { role: "user" | "assistant"; body: string; citedArticleIds?: number[] };
 
+const SUGGESTED_PROMPTS = [
+  "How do I work the Needs Review queue?",
+  "How do I enroll prospects into a sequence?",
+  "What's a good SDR morning routine?",
+  "How does the pipeline board work?",
+];
+
 function AskAITab({ pageKey }: { pageKey: string }) {
   const [conversationId, setConversationId] = useState<number | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -126,9 +133,9 @@ function AskAITab({ pageKey }: { pageKey: string }) {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  async function handleSend() {
-    if (!input.trim() || isLoading) return;
-    const userMsg = input.trim();
+  async function handleSend(override?: string) {
+    const userMsg = (override ?? input).trim();
+    if (!userMsg || isLoading) return;
     setInput("");
     setMessages((m) => [...m, { role: "user", body: userMsg }]);
     setIsLoading(true);
@@ -165,7 +172,18 @@ function AskAITab({ pageKey }: { pageKey: string }) {
               <span className="text-2xl">🤖</span>
             </div>
             <p className="text-sm font-medium text-gray-700">Ask me anything</p>
-            <p className="text-xs text-gray-400 mt-1">I know everything about this platform</p>
+            <p className="text-xs text-gray-400 mt-1">Your in-app SDR enablement coach — grounded in the Help articles.</p>
+            <div className="flex flex-col gap-1.5 mt-4 px-2">
+              {SUGGESTED_PROMPTS.map((p) => (
+                <button
+                  key={p}
+                  onClick={() => handleSend(p)}
+                  className="text-left text-xs text-violet-700 bg-violet-50 hover:bg-violet-100 border border-violet-100 rounded-lg px-3 py-2"
+                >
+                  {p}
+                </button>
+              ))}
+            </div>
           </div>
         )}
         {messages.map((msg, i) => (
@@ -215,7 +233,7 @@ function AskAITab({ pageKey }: { pageKey: string }) {
           disabled={isLoading}
         />
         <button
-          onClick={handleSend}
+          onClick={() => handleSend()}
           disabled={isLoading || !input.trim()}
           className="px-3 py-2 text-xs font-medium text-white bg-violet-600 hover:bg-violet-700 disabled:opacity-40 rounded-lg"
         >
