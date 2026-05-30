@@ -124,14 +124,15 @@
   --chart-3: oklch(0.75 0.16 60);
   --chart-4: oklch(0.66 0.22 28);
   --chart-5: oklch(0.6 0.14 300);
-  /* Dark mode sidebar — lighter charcoal to contrast against dark canvas */
-  --sidebar: oklch(0.26 0.018 240);
+  /* Dark mode sidebar — raised charcoal rail, clearly lighter than the
+     canvas (0.18) with a crisp seam so the nav reads as its own region. */
+  --sidebar: oklch(0.285 0.018 240);
   --sidebar-foreground: oklch(0.95 0.006 95);
   --sidebar-primary: oklch(0.75 0.16 170);
   --sidebar-primary-foreground: oklch(0.12 0.04 195);
-  --sidebar-accent: oklch(0.32 0.018 240);
+  --sidebar-accent: oklch(0.34 0.018 240);
   --sidebar-accent-foreground: oklch(0.98 0.006 95);
-  --sidebar-border: oklch(0.38 0.018 240);
+  --sidebar-border: oklch(0.42 0.02 240);
   --sidebar-ring: oklch(0.75 0.16 170);
 }
 
