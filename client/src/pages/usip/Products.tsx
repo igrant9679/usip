@@ -22,7 +22,7 @@ export default function Products() {
       </PageHeader>
       <div className="p-6">
         <Section title={`Products (${data?.length ?? 0})`}>
-          {error ? <QueryError message={error.message} onRetry={() => refetch()} /> : isLoading ? <TableSkeleton rows={6} /> : (data ?? []).length === 0 ? <EmptyState icon={Package} title="No products" /> : (
+          {error ? <QueryError message={error.message} onRetry={() => refetch()} /> : isLoading ? <TableSkeleton rows={6} /> : (data ?? []).length === 0 ? <EmptyState icon={Package} title="No products yet" description="Add the products and services you sell. They power opportunity line items and quotes." /> : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="bg-secondary/50 text-xs uppercase">

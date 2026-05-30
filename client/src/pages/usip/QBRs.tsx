@@ -25,7 +25,7 @@ export default function QBRs() {
         <Button onClick={() => setOpen(true)}><Plus className="size-4" /> Schedule QBR</Button>
       </PageHeader>
       <div className="p-6 space-y-3">
-        {error ? <QueryError message={error.message} onRetry={() => refetch()} /> : isLoading ? <TableSkeleton rows={5} /> : (data ?? []).length === 0 ? <EmptyState icon={CalendarCheck2} title="No QBRs" /> : data!.map((q) => {
+        {error ? <QueryError message={error.message} onRetry={() => refetch()} /> : isLoading ? <TableSkeleton rows={5} /> : (data ?? []).length === 0 ? <EmptyState icon={CalendarCheck2} title="No QBRs scheduled" description="Quarterly business reviews you schedule for customers appear here — a good cadence for at-risk and high-value accounts." /> : data!.map((q) => {
           const c: any = cMap.get(q.customerId);
           const prep: any = q.aiPrep;
           return (

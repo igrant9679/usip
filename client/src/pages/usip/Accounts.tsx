@@ -372,7 +372,7 @@ export default function Accounts() {
               <QueryError message={listError.message} onRetry={() => listRefetch()} />
             ) : listLoading ? (
               <TableSkeleton rows={8} />
-            ) : (list ?? []).length === 0 ? <EmptyState icon={Building2} title="No accounts" /> : (
+            ) : (list ?? []).length === 0 ? <EmptyState icon={Building2} title="No accounts yet" description="Accounts are the companies you're working. They're created automatically when you convert a qualified lead, or you can add one manually." /> : (
               <table className="w-full text-sm">
                 <thead className="bg-secondary/50 text-xs uppercase text-muted-foreground">
                   <tr>

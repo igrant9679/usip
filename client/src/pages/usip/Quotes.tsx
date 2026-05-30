@@ -89,7 +89,7 @@ export default function Quotes() {
       </PageHeader>
       <div className="p-6">
         <Section title={`Quotes (${list.data?.length ?? 0})`}>
-          {list.error ? <QueryError message={list.error.message} onRetry={() => list.refetch()} /> : list.isLoading ? <TableSkeleton rows={6} /> : (list.data ?? []).length === 0 ? <EmptyState icon={FileText} title="No quotes" /> : (
+          {list.error ? <QueryError message={list.error.message} onRetry={() => list.refetch()} /> : list.isLoading ? <TableSkeleton rows={6} /> : (list.data ?? []).length === 0 ? <EmptyState icon={FileText} title="No quotes yet" description="Build a quote to send pricing to a customer. Quotes you create — and their accept/reject status — show up here." /> : (
             <ul className="divide-y">
               {list.data!.map((q) => {
                 const o = oppMap.get(q.opportunityId);

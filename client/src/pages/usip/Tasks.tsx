@@ -212,7 +212,7 @@ export default function Tasks() {
             <TabsTrigger value="all">All</TabsTrigger>
           </TabsList>
           <TabsContent value={tab} className="pt-4">
-            {allError ? <QueryError message={allError.message} onRetry={() => allRefetch()} /> : allLoading ? <TableSkeleton rows={6} /> : visible.length === 0 ? <EmptyState icon={ListChecks} title="No tasks" /> :
+            {allError ? <QueryError message={allError.message} onRetry={() => allRefetch()} /> : allLoading ? <TableSkeleton rows={6} /> : visible.length === 0 ? <EmptyState icon={ListChecks} title="No tasks" description="You're all caught up. Tasks created from a deal, contact, or lead — and your follow-ups — show up here." /> :
               <ul className="divide-y rounded-lg border bg-card">
                 {visible.map((t) => (
                   <TaskItem key={t.id} t={t} members={memberOpts}
