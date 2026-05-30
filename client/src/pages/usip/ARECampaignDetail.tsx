@@ -1473,6 +1473,8 @@ export default function ARECampaignDetail() {
 
   const [selectedProspectId, setSelectedProspectId] = useState<number | null>(null);
   const [dossierOpen, setDossierOpen] = useState(false);
+  // Controlled tab state so empty-state CTAs (e.g. "Go to Scraper") can switch tabs.
+  const [tab, setTab] = useState("prospects");
   const [scrapeQuery, setScrapeQuery] = useState("");
   const [scrapeSource, setScrapeSource] = useState<"google_business" | "linkedin" | "web" | "news">("google_business");
   const [thresholdDraft, setThresholdDraft] = useState<number | null>(null);
@@ -1669,7 +1671,7 @@ export default function ARECampaignDetail() {
         </div>
 
         {/* ── Tabs ── */}
-        <Tabs defaultValue="prospects">
+        <Tabs value={tab} onValueChange={setTab}>
           <TabsList className="bg-muted/50 border">
             <TabsTrigger value="prospects" className="text-xs gap-1.5">
               <Users className="size-3.5" />
@@ -1805,7 +1807,7 @@ export default function ARECampaignDetail() {
                 icon={Radar}
                 title="No prospects yet"
                 description="Use the Scraper tab to discover prospects from Google Business, LinkedIn, news, or the web."
-                action={<Button size="sm" variant="outline" onClick={() => {}}>Go to Scraper</Button>}
+                action={<Button size="sm" variant="outline" onClick={() => setTab("scraper")}>Go to Scraper</Button>}
               />
             ) : (
               <div className="space-y-2">
