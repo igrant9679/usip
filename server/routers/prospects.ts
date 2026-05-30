@@ -18,7 +18,7 @@ import { TRPCError } from "@trpc/server";
 import { router } from "../_core/trpc";
 import { workspaceProcedure } from "../_core/workspace";
 import { getDb } from "../db";
-import { contacts, prospects } from "../../drizzle/schema";
+import { contacts, leads, prospects } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
 import { lookupContactInfo, type LookupResult } from "../services/scraper";
 // Shared synthetic-name detector — anchored to the lastName sentinel so it
@@ -150,8 +150,8 @@ export const prospectsRouter = router({
       if (input.emailStatus) conditions.push(eq(prospects.emailStatus, input.emailStatus));
       if (input.hasEmail === true) conditions.push(sql`${prospects.email} IS NOT NULL`);
       if (input.hasEmail === false) conditions.push(isNull(prospects.email));
-      if (input.promoted === true) conditions.push(sql`${prospects.linkedContactId} IS NOT NULL`);
-      if (input.promoted === false) conditions.push(isNull(prospects.linkedContactId));
+      if (input.promoted === true) conditions.push(sql`${prospects.linkedLeadId} IS NOT NULL`);
+      if (input.promoted === false) conditions.push(isNull(prospects.linkedLeadId));
       if (input.verificationStatus) conditions.push(eq(prospects.verificationStatus, input.verificationStatus));
       if (input.discoveryRunId) conditions.push(eq(prospects.lastDiscoveryRunId, input.discoveryRunId));
 
@@ -335,6 +335,85 @@ export const prospectsRouter = router({
       });
 
       return { contactId: contactId!, created: true };
+    }),
+
+  /**
+   * Promote a prospect to a LEAD — the front of the sales funnel
+   * (Prospect → Lead → Opportunity → Account/Customer). Idempotent:
+   *   - If already linked to an existing lead, returns it.
+   *   - If a stale link points at a deleted lead, clears it and re-creates.
+   *   - If a lead with the same email already exists, links to it.
+   *   - Otherwise inserts a new lead (status "new") and links.
+   */
+  promoteToLead: workspaceProcedure
+    .input(z.object({ prospectId: z.number().int() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+
+      const [prospect] = await db
+        .select()
+        .from(prospects)
+        .where(and(eq(prospects.id, input.prospectId), eq(prospects.workspaceId, ctx.workspace.id)))
+        .limit(1);
+      if (!prospect) throw new TRPCError({ code: "NOT_FOUND", message: "Prospect not found" });
+
+      if (prospect.linkedLeadId) {
+        const [stillThere] = await db
+          .select({ id: leads.id })
+          .from(leads)
+          .where(and(eq(leads.id, prospect.linkedLeadId), eq(leads.workspaceId, ctx.workspace.id)))
+          .limit(1);
+        if (stillThere) {
+          return { leadId: prospect.linkedLeadId, created: false };
+        }
+        await db
+          .update(prospects)
+          .set({ linkedLeadId: null })
+          .where(and(eq(prospects.id, input.prospectId), eq(prospects.workspaceId, ctx.workspace.id)));
+      }
+
+      let leadId: number | null = null;
+      if (prospect.email) {
+        const [existing] = await db
+          .select({ id: leads.id })
+          .from(leads)
+          .where(and(eq(leads.workspaceId, ctx.workspace.id), eq(leads.email, prospect.email)))
+          .limit(1);
+        if (existing) leadId = existing.id;
+      }
+
+      if (!leadId) {
+        const [inserted] = await db.insert(leads).values({
+          workspaceId: ctx.workspace.id,
+          firstName: prospect.firstName,
+          lastName: prospect.lastName,
+          email: prospect.email ?? null,
+          phone: prospect.phone ?? null,
+          company: prospect.company ?? null,
+          title: prospect.title ?? null,
+          source: "Prospecting",
+          status: "new",
+          ownerUserId: ctx.user.id,
+        } as never);
+        leadId = (inserted as { insertId: number }).insertId;
+      }
+
+      await db
+        .update(prospects)
+        .set({ linkedLeadId: leadId! })
+        .where(and(eq(prospects.id, input.prospectId), eq(prospects.workspaceId, ctx.workspace.id)));
+
+      await recordAudit({
+        workspaceId: ctx.workspace.id,
+        actorUserId: ctx.user.id,
+        action: "create",
+        entityType: "lead_from_prospect",
+        entityId: leadId!,
+        after: { prospectId: input.prospectId },
+      });
+
+      return { leadId: leadId!, created: true };
     }),
 
   /**

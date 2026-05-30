@@ -3124,6 +3124,9 @@ export const prospects = mysqlTable(
     // Shape: see EnrichmentData in server/services/scraper/index.ts.
     enrichmentData: json("enrichment_data"),
     linkedContactId: int("linked_contact_id"),
+    // Set when a prospect is converted to a Lead (funnel: Prospect → Lead).
+    // Migration 0088. Mirrors linkedContactId but for the lead-first funnel.
+    linkedLeadId: int("linked_lead_id"),
     // ── Discovery v2 verification fields (migration 0078) ───────────────
     // confidence + verification let a saved prospect carry its provenance
     // forward: confidenceScore (0-100), tier bucket, status (verified /

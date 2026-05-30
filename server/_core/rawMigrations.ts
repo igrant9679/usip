@@ -1483,6 +1483,16 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0088: Prospect → Lead funnel link ─────────────────────────────
+  // The funnel now runs Prospect → Lead → Opportunity → Account/Customer.
+  // prospects.promoteToLead sets this; mirrors linked_contact_id. errno 1060 tolerated.
+  {
+    name: "0088_prospect_linked_lead.sql",
+    statements: [
+      `ALTER TABLE \`prospects\` ADD COLUMN \`linked_lead_id\` int NULL`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

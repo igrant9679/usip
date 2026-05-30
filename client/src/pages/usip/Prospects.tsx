@@ -272,9 +272,9 @@ export default function ProspectsPage() {
     retry: false,
   });
 
-  const promote = trpc.prospects.promoteToContact.useMutation({
+  const promote = trpc.prospects.promoteToLead.useMutation({
     onSuccess: (res) => {
-      toast.success(res.created ? "Promoted to contact" : "Linked to existing contact");
+      toast.success(res.created ? "Converted to lead" : "Linked to existing lead");
       utils.prospects.list.invalidate();
     },
     onError: (e) => toast.error(e.message),
@@ -368,7 +368,7 @@ export default function ProspectsPage() {
         // continue
       }
     }
-    toast.success(`Promoted ${promoted} prospect${promoted !== 1 ? "s" : ""} to contacts`);
+    toast.success(`Converted ${promoted} prospect${promoted !== 1 ? "s" : ""} to leads`);
     setSelectedIds(new Set());
   };
 
@@ -447,8 +447,8 @@ export default function ProspectsPage() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All prospects</SelectItem>
-              <SelectItem value="promoted">Promoted to contact</SelectItem>
-              <SelectItem value="not_promoted">Not yet promoted</SelectItem>
+              <SelectItem value="promoted">Converted to lead</SelectItem>
+              <SelectItem value="not_promoted">Not yet converted</SelectItem>
             </SelectContent>
           </Select>
 
@@ -470,7 +470,7 @@ export default function ProspectsPage() {
               </Button>
               <Button size="sm" variant="outline" onClick={handleBulkPromote} disabled={promote.isPending}>
                 <UserPlus className="h-4 w-4 mr-2" />
-                Promote {selectedIds.size}
+                Convert to lead ({selectedIds.size})
               </Button>
               <Button
                 size="sm"
@@ -478,7 +478,7 @@ export default function ProspectsPage() {
                 className="text-destructive border-destructive/40 hover:bg-destructive/10"
                 onClick={() => {
                   const ids = Array.from(selectedIds);
-                  if (confirm(`Delete ${ids.length} prospect${ids.length !== 1 ? "s" : ""}? Promoted contacts will be kept.`)) {
+                  if (confirm(`Delete ${ids.length} prospect${ids.length !== 1 ? "s" : ""}? Converted leads will be kept.`)) {
                     bulkDelete.mutate({ prospectIds: ids });
                   }
                 }}
@@ -614,9 +614,9 @@ export default function ProspectsPage() {
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-1">
-                        {p.linkedContactId ? (
+                        {p.linkedLeadId ? (
                           <Badge variant="default" className="text-xs gap-1">
-                            <CheckCircle2 className="h-3 w-3" /> Promoted
+                            <CheckCircle2 className="h-3 w-3" /> Lead
                           </Badge>
                         ) : (
                           <Badge variant="outline" className="text-xs">Prospect</Badge>
@@ -669,24 +669,24 @@ export default function ProspectsPage() {
                               View enrichment details
                             </DropdownMenuItem>
                           )}
-                          {!p.linkedContactId && (
+                          {!p.linkedLeadId && (
                             <DropdownMenuItem onClick={() => promote.mutate({ prospectId: p.id })}>
                               <UserPlus className="h-4 w-4 mr-2" />
-                              Promote to contact
+                              Convert to lead
                             </DropdownMenuItem>
                           )}
-                          {p.linkedContactId && (
-                            <DropdownMenuItem onClick={() => setLocation(`/contacts/${p.linkedContactId}`)}>
+                          {p.linkedLeadId && (
+                            <DropdownMenuItem onClick={() => setLocation(`/leads/${p.linkedLeadId}`)}>
                               <ExternalLink className="h-4 w-4 mr-2" />
-                              View contact
+                              View lead
                             </DropdownMenuItem>
                           )}
                           <DropdownMenuItem
                             className="text-destructive"
                             onClick={() => {
                               const label = `${p.firstName} ${p.lastName}`.trim() || "this prospect";
-                              const warn = p.linkedContactId
-                                ? `Delete ${label}? They've been promoted to a contact — the contact row will be kept.`
+                              const warn = p.linkedLeadId
+                                ? `Delete ${label}? They've been converted to a lead — the lead row will be kept.`
                                 : `Delete ${label}?`;
                               if (confirm(warn)) deleteProspect.mutate({ prospectId: p.id });
                             }}
