@@ -163,6 +163,7 @@ export const campaignsRouter = router({
         icpOverrides: z.any().optional(),
         prospectSources: z.array(z.string()).optional(),
         autoApproveThreshold: z.number().min(0).max(100).nullable().optional(),
+        minConfidence: z.number().int().min(0).max(100).nullable().optional(),
         signalToOpportunityEnabled: z.boolean().optional(),
       }),
     )
@@ -191,6 +192,7 @@ export const campaignsRouter = router({
       if (rest.icpOverrides !== undefined) updates.icpOverrides = rest.icpOverrides;
       if (rest.prospectSources !== undefined) updates.prospectSources = rest.prospectSources;
       if (rest.autoApproveThreshold !== undefined) updates.autoApproveThreshold = rest.autoApproveThreshold;
+      if (rest.minConfidence !== undefined) updates.minConfidence = rest.minConfidence;
       if (rest.signalToOpportunityEnabled !== undefined) updates.signalToOpportunityEnabled = rest.signalToOpportunityEnabled;
       await db
         .update(areCampaigns)

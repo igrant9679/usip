@@ -102,6 +102,15 @@ function emailStatusBadge(status?: string | null) {
   return <Badge variant={s.variant} className="text-xs">{s.label}</Badge>;
 }
 
+/** ICP-fit badge from a 0–100 confidence score. */
+function fitBadge(score?: number | null) {
+  if (score === null || score === undefined) return <span className="text-xs text-muted-foreground">—</span>;
+  const color = score >= 70 ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300"
+    : score >= 40 ? "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
+    : "bg-rose-100 text-rose-800 dark:bg-rose-900/30 dark:text-rose-300";
+  return <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-xs font-semibold tabular-nums ${color}`} title="ICP-fit confidence score">{score}</span>;
+}
+
 /* ─── Enrichment detail dialog ─────────────────────────────────────────────── */
 function EnrichmentDialog({
   open,
@@ -499,6 +508,7 @@ export default function ProspectsPage() {
                 </TableHead>
                 <TableHead>Name</TableHead>
                 <TableHead>Title</TableHead>
+                <TableHead className="w-12">Fit</TableHead>
                 <TableHead>Company</TableHead>
                 <TableHead>Location</TableHead>
                 <TableHead>Email</TableHead>
@@ -510,14 +520,14 @@ export default function ProspectsPage() {
             <TableBody>
               {isLoading && (
                 <TableRow>
-                  <TableCell colSpan={9} className="text-center py-12">
+                  <TableCell colSpan={10} className="text-center py-12">
                     <Loader2 className="h-6 w-6 animate-spin mx-auto text-muted-foreground" />
                   </TableCell>
                 </TableRow>
               )}
               {!isLoading && data?.data?.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={9} className="text-center py-12 text-muted-foreground">
+                  <TableCell colSpan={10} className="text-center py-12 text-muted-foreground">
                     <div className="flex flex-col items-center gap-3">
                       <Search className="h-10 w-10 opacity-30" />
                       <p className="text-sm">No prospects yet.</p>
@@ -561,6 +571,7 @@ export default function ProspectsPage() {
                       )}
                     </TableCell>
                     <TableCell className="text-sm">{p.title}</TableCell>
+                    <TableCell>{fitBadge((p as any).confidenceScore)}</TableCell>
                     <TableCell className="text-sm">{p.company}</TableCell>
                     <TableCell className="text-xs text-muted-foreground">
                       {[p.city, p.state, p.country].filter(Boolean).join(", ")}

@@ -1476,6 +1476,7 @@ export default function ARECampaignDetail() {
   const [scrapeQuery, setScrapeQuery] = useState("");
   const [scrapeSource, setScrapeSource] = useState<"google_business" | "linkedin" | "web" | "news">("google_business");
   const [thresholdDraft, setThresholdDraft] = useState<number | null>(null);
+  const [minConfDraft, setMinConfDraft] = useState<number | null>(null);
   const [s2oEnabled, setS2oEnabled] = useState<boolean | null>(null);
   // Bulk selection
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
@@ -1542,6 +1543,7 @@ export default function ARECampaignDetail() {
       toast.success("Campaign settings saved");
       utils.are.campaigns.get.invalidate({ id: campaignId });
       setThresholdDraft(null);
+      setMinConfDraft(null);
       setS2oEnabled(null);
     },
     onError: (e) => toast.error(e.message),
@@ -1591,6 +1593,7 @@ export default function ARECampaignDetail() {
   const pendingEnrich = prospects?.filter((p) => p.enrichmentStatus === "pending").length ?? 0;
   const awaitingApproval = prospects?.filter((p) => p.sequenceStatus === "pending" && p.enrichmentStatus === "complete").length ?? 0;
   const autoThreshold = thresholdDraft !== null ? thresholdDraft : (campaign?.autoApproveThreshold ?? null);
+  const minConfidence = minConfDraft !== null ? minConfDraft : ((campaign as any)?.minConfidence ?? 40);
   const s2oActive = s2oEnabled !== null ? s2oEnabled : (campaign?.signalToOpportunityEnabled ?? false);
 
   const statusColor = campaign.status === "active" ? "#34D399" : campaign.status === "paused" ? "#F59E0B" : "#94A3B8";
@@ -2159,6 +2162,38 @@ export default function ARECampaignDetail() {
                 </CardContent>
               </Card>
 
+              {/* Enrichment score gate (minConfidence) */}
+              <Card className="bg-card border">
+                <CardHeader className="pb-2 pt-4 px-4">
+                  <CardTitle className="text-sm flex items-center gap-2">
+                    <Bot className="size-4 text-sky-500" />
+                    Enrichment fit gate
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="px-4 pb-4 space-y-3">
+                  <p className="text-xs text-muted-foreground leading-relaxed">
+                    Only spend AI enrichment budget on discovered prospects whose ICP-match score clears this threshold. Lower-fit prospects stay in the queue but aren't enriched until they qualify.
+                  </p>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-medium">Minimum ICP score to enrich</span>
+                    <span className="text-sm font-bold tabular-nums" style={{ color: minConfidence >= 70 ? "#34D399" : minConfidence >= 40 ? "#F59E0B" : "#F87171" }}>
+                      {minConfidence}
+                    </span>
+                  </div>
+                  <input
+                    type="range" min={0} max={100} step={5}
+                    value={minConfidence}
+                    onChange={(e) => setMinConfDraft(parseInt(e.target.value))}
+                    className="w-full accent-sky-500"
+                  />
+                  <div className="flex justify-between text-[10px] text-muted-foreground">
+                    <span>0 — enrich everything</span>
+                    <span>40 — default</span>
+                    <span>100 — only perfect fit</span>
+                  </div>
+                </CardContent>
+              </Card>
+
               {/* Signal → Opportunity */}
               <Card className="bg-card border">
                 <CardHeader className="pb-2 pt-4 px-4">
@@ -2201,12 +2236,13 @@ export default function ARECampaignDetail() {
               </Card>
 
               {/* Save button */}
-              {(thresholdDraft !== null || s2oEnabled !== null) && (
+              {(thresholdDraft !== null || minConfDraft !== null || s2oEnabled !== null) && (
                 <div className="flex items-center gap-3">
                   <Button
                     onClick={() => updateCampaign.mutate({
                       id: campaignId,
                       autoApproveThreshold: autoThreshold,
+                      minConfidence,
                       signalToOpportunityEnabled: s2oActive,
                     })}
                     disabled={updateCampaign.isPending}
