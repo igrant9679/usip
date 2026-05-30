@@ -14,7 +14,7 @@
 
 import { useState } from "react";
 import { trpc } from "@/lib/trpc";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 import { PageHeader, Shell } from "@/components/usip/Shell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -184,14 +184,21 @@ function ConfidenceChip({ score, tier }: { score: number | null; tier: string | 
 /* ─── Result row ────────────────────────────────────────────────────── */
 function ProspectRow({ p }: { p: any }) {
   const urls = (p.sourceUrls as string[] | null) ?? [];
+  const [, setLocation] = useLocation();
+  const open = () => setLocation(`/prospects/${p.id}`);
   return (
-    <div className="border rounded-lg p-3 bg-card hover:border-primary/30 transition-colors">
+    <div
+      onClick={open}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } }}
+      role="button"
+      tabIndex={0}
+      aria-label={`Open ${p.firstName} ${p.lastName}`}
+      className="border rounded-lg p-3 bg-card hover:border-primary/30 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary transition-colors"
+    >
       <div className="flex items-start gap-3">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <Link href={`/prospects/${p.id}`}>
-              <span className="font-medium text-sm hover:underline cursor-pointer">{p.firstName} {p.lastName}</span>
-            </Link>
+            <span className="font-medium text-sm hover:underline">{p.firstName} {p.lastName}</span>
             <ConfidenceChip score={p.confidenceScore} tier={p.confidenceTier} />
             {p.verificationStatus === "needs_review" && (
               <Badge variant="outline" className="text-[10px] border-amber-500/40 text-amber-700">Needs Review</Badge>
@@ -217,7 +224,7 @@ function ProspectRow({ p }: { p: any }) {
           {urls.length > 0 && (
             <div className="flex flex-wrap gap-1.5 mt-2">
               {urls.slice(0, 5).map((u, i) => (
-                <a key={u + i} href={u} target="_blank" rel="noopener noreferrer"
+                <a key={u + i} href={u} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}
                    className="text-[10px] inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded border bg-muted/40 hover:bg-muted text-muted-foreground hover:text-foreground transition-colors">
                   <ExternalLink className="size-2.5" /> source {i + 1}
                 </a>
@@ -227,7 +234,7 @@ function ProspectRow({ p }: { p: any }) {
           )}
         </div>
         {p.linkedinUrl && (
-          <a href={p.linkedinUrl} target="_blank" rel="noopener noreferrer"
+          <a href={p.linkedinUrl} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}
              className="size-7 rounded flex items-center justify-center hover:bg-muted text-muted-foreground hover:text-foreground transition-colors shrink-0">
             <Linkedin className="size-3.5" />
           </a>
