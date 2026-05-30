@@ -38,11 +38,14 @@ import { bumpCampaignCounter } from "./campaignCounters";
  * extract the original recipient and return it so we can route the event
  * to processBounceEvent.
  *
- * Heuristics — all conservative, false negatives preferred over false
- * positives so we don't accidentally suppress a real reply:
- *   - sender = mailer-daemon / postmaster / bounce / noreply
- *   - OR subject begins with the typical DSN phrasings
- *   - body contains Final-Recipient: or Original-Recipient: with an email
+ * Heuristics — all conservative, false negatives strongly preferred over
+ * false positives so we never suppress a real reply or a legitimate
+ * automated email (login links, newsletters, notifications). A genuine
+ * bounce is a DSN (RFC 3464), which ALWAYS carries a machine-readable
+ * Final-Recipient:/Original-Recipient: header naming the failed address.
+ * We require that header — the recipient is read straight from it, never
+ * scraped out of free-text body, so a noreply@ newsletter that merely
+ * mentions an address in its body can't get that address suppressed.
  */
 function detectBounce(payload: {
   from_attendee?: { identifier?: string };
@@ -51,8 +54,11 @@ function detectBounce(payload: {
   body?: string;
 }): { bouncedEmail: string; bounceType: "hard" | "soft" | "spam"; message: string } | null {
   const senderId = (payload.from_attendee?.identifier ?? "").toLowerCase();
+  // Only true bounce-originating mailboxes count. noreply@/no-reply@/
+  // delivery@ are excluded — they're overwhelmingly legitimate automated
+  // senders (sign-in links, receipts, newsletters), not DSNs.
   const senderLooksBouncy =
-    /^(mailer-daemon|postmaster|noreply|no-reply|bounce[s]?|delivery)@/.test(senderId);
+    /^(mailer-daemon|postmaster|bounce[s]?)@/.test(senderId);
 
   const subj = (payload.subject ?? "").toLowerCase();
   const subjectLooksBouncy =
@@ -68,28 +74,14 @@ function detectBounce(payload: {
       ? payload.body_plain
       : (payload.body ?? "").replace(/<[^>]+>/g, " "));
 
-  // Final-Recipient / Original-Recipient (RFC 3464 DSN format) wins;
-  // fall back to any email address in the first ~2000 chars of the body
-  // that isn't the bounce sender itself.
-  let bouncedEmail: string | null = null;
+  // Require the RFC 3464 DSN structure. No header → not a confirmed bounce;
+  // bail rather than guess at an address from arbitrary body text.
   const finalRcptMatch = rawBody.match(
     /(?:final-recipient|original-recipient)\s*:\s*[^;\n]*;\s*([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})/i,
   );
-  if (finalRcptMatch) {
-    bouncedEmail = finalRcptMatch[1].toLowerCase();
-  } else {
-    const anyEmail = rawBody.slice(0, 2000).match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g);
-    if (anyEmail) {
-      for (const candidate of anyEmail) {
-        const lower = candidate.toLowerCase();
-        if (lower !== senderId && !lower.endsWith("@unipile.local")) {
-          bouncedEmail = lower;
-          break;
-        }
-      }
-    }
-  }
-  if (!bouncedEmail) return null;
+  if (!finalRcptMatch) return null;
+  const bouncedEmail = finalRcptMatch[1].toLowerCase();
+  if (bouncedEmail.endsWith("@unipile.local")) return null;
 
   // Classify hard vs soft. Body usually contains an SMTP code like "5.1.1"
   // (permanent) or "4.x.x" (temporary). Spam complaints are rare via DSN
