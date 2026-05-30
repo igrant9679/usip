@@ -448,35 +448,39 @@ export default function EmailAnalytics() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b bg-muted/20 text-xs text-muted-foreground">
-                  <th className="text-left px-4 py-2.5">
+                  <th className="text-left px-4 py-2.5" aria-sort={sortField === "subject" ? (sortDir === "asc" ? "ascending" : "descending") : "none"}>
                     <button
                       className="flex items-center gap-1"
                       onClick={() => toggleSort("subject")}
+                      aria-label="Sort by subject"
                     >
                       Subject <SortIcon field="subject" />
                     </button>
                   </th>
                   <th className="text-left px-4 py-2.5">Recipient</th>
-                  <th className="text-left px-4 py-2.5">
+                  <th className="text-left px-4 py-2.5" aria-sort={sortField === "sentAt" ? (sortDir === "asc" ? "ascending" : "descending") : "none"}>
                     <button
                       className="flex items-center gap-1"
                       onClick={() => toggleSort("sentAt")}
+                      aria-label="Sort by sent date"
                     >
                       Sent <SortIcon field="sentAt" />
                     </button>
                   </th>
-                  <th className="text-center px-4 py-2.5">
+                  <th className="text-center px-4 py-2.5" aria-sort={sortField === "openCount" ? (sortDir === "asc" ? "ascending" : "descending") : "none"}>
                     <button
                       className="flex items-center gap-1 mx-auto"
                       onClick={() => toggleSort("openCount")}
+                      aria-label="Sort by opens"
                     >
                       Opens <SortIcon field="openCount" />
                     </button>
                   </th>
-                  <th className="text-center px-4 py-2.5">
+                  <th className="text-center px-4 py-2.5" aria-sort={sortField === "clickCount" ? (sortDir === "asc" ? "ascending" : "descending") : "none"}>
                     <button
                       className="flex items-center gap-1 mx-auto"
                       onClick={() => toggleSort("clickCount")}
+                      aria-label="Sort by clicks"
                     >
                       Clicks <SortIcon field="clickCount" />
                     </button>

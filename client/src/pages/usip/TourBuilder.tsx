@@ -539,15 +539,15 @@ export default function TourBuilderPage() {
           <div className="flex items-start gap-3">
             <Radio className="h-5 w-5 text-violet-600 flex-shrink-0 mt-0.5" />
             <div>
-              <p className="text-sm font-semibold text-violet-800">Record Mode</p>
+              <p className="text-sm font-semibold text-violet-800">Targeting a step to an element</p>
               <p className="text-xs text-violet-600 mt-1 leading-relaxed">
-                To use record mode, open the browser console and run{" "}
-                <code className="bg-violet-100 px-1 rounded font-mono">window.__startTourRecorder()</code>.
-                Then click through the UI — each click captures the element's{" "}
-                <code className="bg-violet-100 px-1 rounded font-mono">data-tour-id</code> or CSS selector.
-                When done, run{" "}
-                <code className="bg-violet-100 px-1 rounded font-mono">window.__stopTourRecorder()</code>{" "}
-                to get the step JSON you can paste into a new tour.
+                Add steps with the editor above and point each one at a UI element. The most
+                reliable target is a{" "}
+                <code className="bg-violet-100 px-1 rounded font-mono">data-tour-id</code> — to find one,
+                open your browser&rsquo;s inspector (right-click → Inspect) on the element and read its{" "}
+                <code className="bg-violet-100 px-1 rounded font-mono">data-tour-id</code> attribute, or
+                use any CSS selector. Set <em>Route</em> on the step so the tour navigates there first;
+                if no element matches, use the <em>coach</em> treatment for a page-level callout.
               </p>
             </div>
           </div>
