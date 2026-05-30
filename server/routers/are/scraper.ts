@@ -173,36 +173,21 @@ export async function scrapeGoogleBusiness(
 /* ─── LinkedIn company + people scraper (via Unipile profile API) ────────── */
 
 export async function scrapeLinkedIn(
-  workspaceId: number,
-  campaignId: number | null,
+  _workspaceId: number,
+  _campaignId: number | null,
   query: string,
   searchType: "company" | "people",
-  icpContext: string,
+  _icpContext: string,
 ): Promise<Array<Record<string, unknown>>> {
-  // LinkedIn scraping via LLM-powered research (Unipile handles authenticated requests)
-  const result = await invokeLLM({
-    messages: [
-      {
-        role: "system",
-        content: `You are a B2B sales researcher with deep knowledge of LinkedIn company and people data. Your task is to identify real prospects from LinkedIn based on a search query and ICP criteria. Generate realistic, plausible prospect data based on your knowledge of the industry and typical LinkedIn profiles. ICP context: ${icpContext}`,
-      },
-      {
-        role: "user",
-        content: `LinkedIn ${searchType} search: "${query}"\n\nIdentify up to 10 ${searchType === "people" ? "decision-makers and champions" : "target companies with their key contacts"} that match this search. For each person, provide their LinkedIn URL pattern (linkedin.com/in/firstname-lastname-companyname), title, company, and estimated contact details. Base this on your knowledge of real companies and typical LinkedIn profiles in this space.`,
-      },
-    ],
-    response_format: PROSPECT_EXTRACTION_SCHEMA,
-    workspaceId,
-    // Extraction output is small (10 prospects × ~60 tokens = ~600). Cap
-    // hard so we don't pay for the model's default 4096-token budget.
-    maxTokens: 1500,
-    temperature: 0.3,
-  });
-
-  const content = result.choices[0]?.message?.content;
-  if (!content) return [];
-  const parsed = JSON.parse(typeof content === "string" ? content : JSON.stringify(content));
-  return parsed.prospects ?? [];
+  // DISABLED. This previously asked the LLM to *invent* "realistic, plausible"
+  // LinkedIn profiles — fabricated names, guessed linkedin.com/in/ URLs, and
+  // made-up contact details — which polluted the prospect pool with people who
+  // don't exist. Real LinkedIn discovery runs through Unipile
+  // (discoverViaLinkedIn in areEngine.ts / searchLinkedInProfiles in
+  // linkedinLookup.ts). Return nothing rather than hallucinate; wiring the
+  // manual Scraper-tab buttons to the Unipile search is a follow-up.
+  console.warn(`[scrapeLinkedIn] disabled (was fabricating profiles). Use Unipile-backed LinkedIn discovery instead. query="${query}" type=${searchType}`);
+  return [];
 }
 
 /* ─── General web scraper ────────────────────────────────────────────────── */
@@ -213,33 +198,34 @@ export async function scrapeWeb(
   urlOrQuery: string,
   icpContext: string,
 ): Promise<Array<Record<string, unknown>>> {
-  let rawContent = "";
-  const isUrl = urlOrQuery.startsWith("http");
-  if (isUrl) {
-    try {
-      rawContent = await fetchWithTimeout(urlOrQuery);
-    } catch {
-      rawContent = `URL: ${urlOrQuery}. Could not fetch content.`;
-    }
-  } else {
-    rawContent = `Search query: ${urlOrQuery}`;
+  // A bare (non-URL) query has no live page to extract from — there's no
+  // search API wired here, so the only thing the LLM could do is invent
+  // prospects from memory. Refuse rather than fabricate.
+  if (!urlOrQuery.startsWith("http")) {
+    console.warn(`[scrapeWeb] non-URL query "${urlOrQuery}" skipped — no live page to extract from`);
+    return [];
   }
+  let rawContent = "";
+  try {
+    rawContent = await fetchWithTimeout(urlOrQuery);
+  } catch {
+    return []; // fetch failed — no content, don't guess
+  }
+  if (!rawContent.trim()) return [];
 
   const result = await invokeLLM({
     messages: [
       {
         role: "system",
-        content: `You are a B2B prospect researcher. Extract or infer prospect information from web content. ICP context: ${icpContext}. Look for company listings, team pages, about pages, directory listings, or any content that identifies potential B2B prospects.`,
+        content: `You are a B2B prospect researcher. Extract prospect information ONLY from the provided web page content — never invent people or companies that don't appear in it. ICP context: ${icpContext}. Look for company listings, team pages, about pages, directory listings, or any content that identifies potential B2B prospects.`,
       },
       {
         role: "user",
-        content: `Source: ${urlOrQuery}\n\nContent:\n${rawContent}\n\nExtract up to 10 prospect contacts. For each, identify the most senior decision-maker you can find or infer. If the page is a company website, identify the CEO/Founder/VP Sales as the primary contact.`,
+        content: `Source: ${urlOrQuery}\n\nContent:\n${rawContent}\n\nExtract up to 10 prospect contacts that actually appear in the content above. Identify the most senior decision-maker present. Only output an email if it appears in the content; otherwise leave it blank.`,
       },
     ],
     response_format: PROSPECT_EXTRACTION_SCHEMA,
     workspaceId,
-    // Extraction output is small (10 prospects × ~60 tokens = ~600). Cap
-    // hard so we don't pay for the model's default 4096-token budget.
     maxTokens: 1500,
     temperature: 0.3,
   });
@@ -264,24 +250,23 @@ export async function scrapeNews(
   try {
     rawContent = await fetchWithTimeout(newsUrl);
   } catch {
-    rawContent = `News query: ${query}. Use your knowledge of recent industry news.`;
+    return []; // news feed unreachable — don't fabricate from memory
   }
+  if (!rawContent.trim()) return [];
 
   const result = await invokeLLM({
     messages: [
       {
         role: "system",
-        content: `You are a B2B sales intelligence analyst. Analyse news content to identify companies experiencing trigger events (funding rounds, new executive hires, product launches, expansion announcements, new office openings, partnerships, IPO filings) that make them ideal prospects. ICP context: ${icpContext}`,
+        content: `You are a B2B sales intelligence analyst. Analyse ONLY the provided news content to identify companies experiencing trigger events (funding rounds, new executive hires, product launches, expansion announcements, new office openings, partnerships, IPO filings) that make them ideal prospects — never invent companies or events absent from the content. ICP context: ${icpContext}`,
       },
       {
         role: "user",
-        content: `News search: "${query}"\n\nContent:\n${rawContent}\n\nFor each company in the news, identify: (1) the trigger event, (2) the most relevant decision-maker to contact, (3) why this trigger event makes them a good prospect right now. Extract up to 10 prospects.`,
+        content: `News search: "${query}"\n\nContent:\n${rawContent}\n\nFor each company actually mentioned in the content, identify: (1) the trigger event, (2) the most relevant decision-maker to contact, (3) why this trigger event makes them a good prospect right now. Extract up to 10 prospects. Only output an email if it appears in the content.`,
       },
     ],
     response_format: PROSPECT_EXTRACTION_SCHEMA,
     workspaceId,
-    // Extraction output is small (10 prospects × ~60 tokens = ~600). Cap
-    // hard so we don't pay for the model's default 4096-token budget.
     maxTokens: 1500,
     temperature: 0.3,
   });
@@ -295,34 +280,18 @@ export async function scrapeNews(
 /* ─── Industry events scraper ────────────────────────────────────────────── */
 
 export async function scrapeIndustryEvents(
-  workspaceId: number,
-  campaignId: number | null,
+  _workspaceId: number,
+  _campaignId: number | null,
   query: string,
-  icpContext: string,
+  _icpContext: string,
 ): Promise<Array<Record<string, unknown>>> {
-  const result = await invokeLLM({
-    messages: [
-      {
-        role: "system",
-        content: `You are a B2B sales researcher specialising in conference and industry event intelligence. Identify speakers, exhibitors, and attendees from industry events who match the ICP. ICP context: ${icpContext}`,
-      },
-      {
-        role: "user",
-        content: `Industry event search: "${query}"\n\nIdentify up to 10 prospects who are likely speakers, exhibitors, or key attendees at events matching this query. These are warm prospects because their event participation signals active engagement in the industry and budget authority. For each, provide their likely contact details and the specific event that makes them relevant.`,
-      },
-    ],
-    response_format: PROSPECT_EXTRACTION_SCHEMA,
-    workspaceId,
-    // Extraction output is small (10 prospects × ~60 tokens = ~600). Cap
-    // hard so we don't pay for the model's default 4096-token budget.
-    maxTokens: 1500,
-    temperature: 0.3,
-  });
-
-  const content = result.choices[0]?.message?.content;
-  if (!content) return [];
-  const parsed = JSON.parse(typeof content === "string" ? content : JSON.stringify(content));
-  return parsed.prospects ?? [];
+  // DISABLED. This fetched nothing and asked the LLM to name "likely"
+  // speakers/exhibitors with "their likely contact details" — pure
+  // fabrication. Until a real event-data source (e.g. a conference
+  // agenda/exhibitor-list fetch) is wired in, return nothing rather than
+  // invent attendees.
+  console.warn(`[scrapeIndustryEvents] disabled (was fabricating attendees). query="${query}"`);
+  return [];
 }
 
 /* ─── Shared: save scrape job + queue prospects ─────────────────────────── */
