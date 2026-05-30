@@ -1,7 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Field, fmtDate, FormDialog, Section, SelectField, StatusPill } from "@/components/usip/Common";
-import { EmptyState, PageHeader, Shell } from "@/components/usip/Shell";
+import { EmptyState, PageHeader, QueryError, Shell, TableSkeleton } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import { Play, Plus, Save, Trash2, Workflow, GitBranch, Sparkles } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -44,7 +44,7 @@ type Act = { type: string; params: Record<string, string> };
 
 export default function Workflows() {
   const utils = trpc.useUtils();
-  const { data } = trpc.workflows.list.useQuery();
+  const { data, isLoading, error, refetch } = trpc.workflows.list.useQuery();
   const [selected, setSelected] = useState<number | null>(null);
   const [openNew, setOpenNew] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -106,7 +106,7 @@ export default function Workflows() {
       <div className="p-6 grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="lg:col-span-1">
           <Section title={`Rules (${data?.length ?? 0})`}>
-            {(data ?? []).length === 0 ? <EmptyState icon={Workflow} title="None yet" /> : (
+            {error ? <QueryError message={error.message} onRetry={() => refetch()} /> : isLoading ? <TableSkeleton rows={6} /> : (data ?? []).length === 0 ? <EmptyState icon={Workflow} title="None yet" /> : (
               <ul className="divide-y">
                 {data!.map((r) => (
                   <li key={r.id} className={`p-3 cursor-pointer hover:bg-secondary/40 ${selected === r.id ? "bg-secondary/60" : ""}`} onClick={() => setSelected(r.id)}>

@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { ConfirmButton, Field, fmt$, fmtDate, FormDialog, Section, SelectField, StatusPill, TextareaField } from "@/components/usip/Common";
-import { EmptyState, PageHeader, Shell } from "@/components/usip/Shell";
+import { EmptyState, PageHeader, QueryError, Shell, TableSkeleton } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import { ExternalLink, FileText, Plus, Send, Trash2, Receipt, Sparkles, ChevronDown, ChevronUp } from "lucide-react";
 import { useState } from "react";
@@ -89,7 +89,7 @@ export default function Quotes() {
       </PageHeader>
       <div className="p-6">
         <Section title={`Quotes (${list.data?.length ?? 0})`}>
-          {(list.data ?? []).length === 0 ? <EmptyState icon={FileText} title="No quotes" /> : (
+          {list.error ? <QueryError message={list.error.message} onRetry={() => list.refetch()} /> : list.isLoading ? <TableSkeleton rows={6} /> : (list.data ?? []).length === 0 ? <EmptyState icon={FileText} title="No quotes" /> : (
             <ul className="divide-y">
               {list.data!.map((q) => {
                 const o = oppMap.get(q.opportunityId);

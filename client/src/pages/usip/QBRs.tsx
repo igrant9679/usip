@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { Field, fmtDate, FormDialog, Section, SelectField, StatusPill, TextareaField } from "@/components/usip/Common";
-import { EmptyState, PageHeader, Shell } from "@/components/usip/Shell";
+import { EmptyState, PageHeader, QueryError, Shell, TableSkeleton } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import { CalendarCheck2, Plus, Sparkles, Presentation } from "lucide-react";
 import { useState } from "react";
@@ -8,7 +8,7 @@ import { toast } from "sonner";
 
 export default function QBRs() {
   const utils = trpc.useUtils();
-  const { data } = trpc.cs.listQbrs.useQuery();
+  const { data, isLoading, error, refetch } = trpc.cs.listQbrs.useQuery();
   const { data: customers } = trpc.cs.list.useQuery();
   const cMap = new Map((customers ?? []).map((c: any) => [c.id, c]));
   const [open, setOpen] = useState(false);
@@ -25,7 +25,7 @@ export default function QBRs() {
         <Button onClick={() => setOpen(true)}><Plus className="size-4" /> Schedule QBR</Button>
       </PageHeader>
       <div className="p-6 space-y-3">
-        {(data ?? []).length === 0 ? <EmptyState icon={CalendarCheck2} title="No QBRs" /> : data!.map((q) => {
+        {error ? <QueryError message={error.message} onRetry={() => refetch()} /> : isLoading ? <TableSkeleton rows={5} /> : (data ?? []).length === 0 ? <EmptyState icon={CalendarCheck2} title="No QBRs" /> : data!.map((q) => {
           const c: any = cMap.get(q.customerId);
           const prep: any = q.aiPrep;
           return (

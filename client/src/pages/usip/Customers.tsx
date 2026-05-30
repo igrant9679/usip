@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { fmt$, fmtDate, Field, FormDialog, Section, SelectField, StatusPill, TextareaField } from "@/components/usip/Common";
-import { EmptyState, PageHeader, Shell, StatCard } from "@/components/usip/Shell";
+import { EmptyState, PageHeader, QueryError, Shell, StatCard, TableSkeleton } from "@/components/usip/Shell";
 import { RecordDrawer } from "@/components/usip/RecordDrawer";
 import { trpc } from "@/lib/trpc";
 import { AlertTriangle, FolderOpen, Heart, TrendingUp, HeartHandshake, Trash2, RotateCcw } from "lucide-react";
@@ -14,7 +14,7 @@ const TIER_TONE: Record<string, "success" | "info" | "warning" | "danger"> = {
 export default function Customers() {
   const [selected, setSelected] = useState<number | null>(null);
   const utils = trpc.useUtils();
-  const { data: list } = trpc.cs.list.useQuery();
+  const { data: list, isLoading: listLoading, error: listError, refetch: listRefetch } = trpc.cs.list.useQuery();
   const { data: kpis } = trpc.cs.kpis.useQuery();
   const detail = trpc.cs.get.useQuery({ id: selected! }, { enabled: !!selected });
   const amendments = trpc.cs.listAmendments.useQuery({ customerId: selected! }, { enabled: !!selected });
@@ -86,7 +86,7 @@ export default function Customers() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           <div className="lg:col-span-2">
             <Section title="All customers">
-              {(list ?? []).length === 0 ? <EmptyState icon={Heart} title="No customers" /> : (
+              {listError ? <QueryError message={listError.message} onRetry={() => listRefetch()} /> : listLoading ? <TableSkeleton rows={6} /> : (list ?? []).length === 0 ? <EmptyState icon={Heart} title="No customers" /> : (
                 <table className="w-full text-sm">
                   <thead className="bg-secondary/50 text-xs uppercase text-muted-foreground"><tr>
                     <th className="text-left px-3 py-2">Account</th><th className="text-left px-3 py-2">Tier</th>

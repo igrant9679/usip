@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { ConfirmButton, Field, fmt$, FormDialog, Section, SelectField, StatusPill, TextareaField } from "@/components/usip/Common";
-import { EmptyState, PageHeader, Shell } from "@/components/usip/Shell";
+import { EmptyState, PageHeader, QueryError, Shell, TableSkeleton } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import { Package, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
@@ -8,7 +8,7 @@ import { toast } from "sonner";
 
 export default function Products() {
   const utils = trpc.useUtils();
-  const { data } = trpc.products.list.useQuery();
+  const { data, isLoading, error, refetch } = trpc.products.list.useQuery();
   const [open, setOpen] = useState(false);
   const create = trpc.products.create.useMutation({ onSuccess: () => { utils.products.list.invalidate(); setOpen(false); toast.success("Product added"); }, onError: (e) => toast.error(e.message) });
   const del = trpc.products.delete.useMutation({ onSuccess: () => { utils.products.list.invalidate(); toast.success("Product deleted"); }, onError: (e) => toast.error(e.message) });
@@ -22,7 +22,7 @@ export default function Products() {
       </PageHeader>
       <div className="p-6">
         <Section title={`Products (${data?.length ?? 0})`}>
-          {(data ?? []).length === 0 ? <EmptyState icon={Package} title="No products" /> : (
+          {error ? <QueryError message={error.message} onRetry={() => refetch()} /> : isLoading ? <TableSkeleton rows={6} /> : (data ?? []).length === 0 ? <EmptyState icon={Package} title="No products" /> : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="bg-secondary/50 text-xs uppercase">
