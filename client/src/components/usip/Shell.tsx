@@ -122,21 +122,24 @@ const NAV: NavGroup[] = [
     // are listed vertically under "Funnel" / "Tools" sub-headers.
     items: [
       {
+        // The funnel the rep actually travels: Prospect → Lead → Opportunity
+        // (Pipeline) → Customer (Closed Won). Contacts & Accounts are records
+        // created along the way (see the "Records" sub-head), not stages.
         kind: "miniPipeline",
         stages: [
           { href: "/prospects", label: "Prospects", short: "P", icon: Radar },
           { href: "/leads", label: "Leads", short: "L", icon: Target },
-          { href: "/contacts", label: "Contacts", short: "C", icon: Users },
-          { href: "/accounts", label: "Accounts", short: "A", icon: Building2 },
           { href: "/pipeline", label: "Pipeline", short: "Π", icon: KanbanSquare },
+          { href: "/customers", label: "Customers", short: "★", icon: Heart },
         ],
       },
       { kind: "subhead", label: "Funnel" },
       { href: "/prospects", label: "Prospects", icon: Radar },
       { href: "/leads", label: "Leads", icon: Target },
+      { href: "/pipeline", label: "Pipeline", icon: KanbanSquare },
+      { kind: "subhead", label: "Records" },
       { href: "/contacts", label: "Contacts", icon: Users },
       { href: "/accounts", label: "Accounts", icon: Building2 },
-      { href: "/pipeline", label: "Pipeline", icon: KanbanSquare },
       { kind: "subhead", label: "Tools" },
       // Phase 1 of the multi-source prospect finder (Google Places now,
       // arbitrary-URL scrape + LinkedIn coming in phases 2-3).
@@ -178,7 +181,9 @@ const NAV: NavGroup[] = [
     ],
   },
   {
-    label: "Retain",
+    // Closed Won lands here: the won account becomes a Customer, then CS
+    // retains it (renewals, QBRs). Closes the funnel that starts at Acquire.
+    label: "Customers",
     color: "#DC2626",
     darkColor: "#FCA5A5",
     activeColor: "#DC2626",

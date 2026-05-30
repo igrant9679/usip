@@ -340,6 +340,9 @@ export default function Dashboard() {
   const { data: drafts } = trpc.emailDrafts.list.useQuery({ status: "pending_review" });
   const { data: opps } = trpc.opportunities.board.useQuery();
   const { data: unipileMetrics } = trpc.unipile.metrics.useQuery();
+  // Funnel-strip top-of-funnel count (Prospects). perPage minimal — we only read .total.
+  const { data: prospectsData } = trpc.prospects.list.useQuery({ page: 1, perPage: 10 });
+  const prospectsTotal = prospectsData?.total ?? 0;
 
   const recentOpps = (opps ?? []).slice(0, 6);
   const accent = useAccentColor();
@@ -370,6 +373,33 @@ export default function Dashboard() {
         </div>
       </PageHeader>
       <div className="p-6 space-y-6">
+
+        {/* ── Funnel overview: the workflow at a glance ── */}
+        <div className="rounded-xl border bg-card p-4">
+          <div className="text-xs font-medium text-muted-foreground mb-3">
+            Sales funnel — Prospect → Lead → Opportunity → Customer
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {[
+              { label: "Prospects", href: "/prospects", count: prospectsTotal },
+              { label: "Leads", href: "/leads", count: stats?.activeLeads ?? 0 },
+              { label: "Opportunities", href: "/pipeline", count: stats?.openOppsCount ?? 0 },
+              { label: "Customers", href: "/customers", count: stats?.customerCount ?? 0 },
+            ].map((s, i, arr) => (
+              <div key={s.label} className="flex items-center gap-2 flex-1 min-w-[130px]">
+                <Link href={s.href} className="flex-1">
+                  <div className="rounded-lg border px-3 py-2 hover:bg-secondary transition-colors">
+                    <div className="text-[11px] uppercase tracking-wide text-muted-foreground">{s.label}</div>
+                    <div className="text-xl font-semibold">{(s.count ?? 0).toLocaleString()}</div>
+                  </div>
+                </Link>
+                {i < arr.length - 1 && (
+                  <span aria-hidden className="text-muted-foreground shrink-0">→</span>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
 
         {/* ── Row 1: Live stat cards with goal progress ── */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4" data-tour-id="dashboard-kpi-grid">
