@@ -253,6 +253,24 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
   const [wsOpen, setWsOpen] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const navRef = useRef<HTMLElement>(null);
+  // Collapsible nav groups — persisted to localStorage so the choice survives
+  // Shell's per-navigation remount (each page renders its own <Shell>).
+  const NAV_COLLAPSED_KEY = "velocity_nav_collapsed";
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => {
+    try {
+      const raw = localStorage.getItem(NAV_COLLAPSED_KEY);
+      if (raw) return new Set<string>(JSON.parse(raw));
+    } catch { /* ignore */ }
+    return new Set<string>();
+  });
+  const toggleGroup = (label: string) => {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(label)) next.delete(label); else next.add(label);
+      try { localStorage.setItem(NAV_COLLAPSED_KEY, JSON.stringify([...next])); } catch { /* ignore */ }
+      return next;
+    });
+  };
   // Preserve sidebar scroll position across route changes so clicking a nav
   // item deep in the list never causes the sidebar to jump back to the top.
   //
@@ -302,12 +320,12 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
     ),
   );
   const isDark = theme === "dark";
-  // Unified brand accent (teal-green primary). Replaces the old per-section
-  // rainbow so the shell reads calm and consistent; wayfinding comes from
-  // icons + the active-item highlight instead of a different hue per group.
-  // activeGroup is still computed for the active-state checks below.
-  void activeGroup;
-  const accentColor = isDark ? "#2DD4BF" : "#14B89A";
+  // Per-section accent: the active group's colour drives the PageHeader accent
+  // rule + icon chip, StatCard borders, and the SubNav active pill — so the
+  // whole app visibly reflects which section you're working in.
+  const accentColor = isDark
+    ? (activeGroup?.darkColor ?? "#5EEAD4")
+    : (activeGroup?.color ?? "#14B89A");
 
   // close dropdowns/drawers on route change
   useEffect(() => {
@@ -349,11 +367,11 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
           }}
         >
           {effectiveNav.map((group) => {
-            // Unified accent for every group (teal-green). The per-group
-            // color fields on NAV are retained in data but no longer drive
-            // the UI — the shell now uses one brand accent throughout.
-            const gc = accentColor;
-            const gBg = isDark ? "rgba(45,212,191,0.14)" : "rgba(20,184,154,0.12)";
+            // Per-group colour — each section gets its own hue for separation.
+            const gc = isDark ? group.darkColor : group.color;
+            const gBg = isDark ? group.darkActiveBg : group.activeBg;
+            const isActiveGroup = group === activeGroup;
+            const isCollapsed = collapsedGroups.has(group.label);
             // Collect all hrefs in this group so we can detect prefix collisions.
             // An item is only active via startsWith when no sibling has a longer
             // href that also matches — this prevents /are matching /are/icp etc.
@@ -363,13 +381,32 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
               .map((i) => i.href);
             return (
             <div key={group.label}>
-              {/* Section header — uniform muted label (no per-group color) */}
-              <div className="flex items-center gap-1.5 pl-3 pr-2 pb-1 pt-0.5">
-                <span className="text-[10px] font-bold uppercase tracking-widest text-white/40">
+              {/* Collapsible, colour-coded section header. When the current
+                  route is in this group the whole header lights up (tinted bg
+                  + bright colour + left stripe) so you clearly see where you are. */}
+              <button
+                type="button"
+                onClick={() => toggleGroup(group.label)}
+                aria-expanded={!isCollapsed}
+                className="w-full flex items-center gap-1.5 pl-3 pr-2 py-1.5 rounded-r-md transition-colors hover:bg-white/5 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-white/30"
+                style={{
+                  borderLeft: `3px solid ${isActiveGroup ? gc : "transparent"}`,
+                  backgroundColor: isActiveGroup ? gBg : undefined,
+                }}
+              >
+                <span
+                  className="text-[10px] font-bold uppercase tracking-widest transition-colors"
+                  style={{ color: isActiveGroup ? gc : gc + "b0" }}
+                >
                   {group.label}
                 </span>
-              </div>
-              <div className="space-y-0.5 pl-0">
+                <ChevronDown
+                  className="ml-auto size-3 shrink-0 transition-transform duration-150"
+                  style={{ color: gc + "99", transform: isCollapsed ? "rotate(-90deg)" : undefined }}
+                />
+              </button>
+              {!isCollapsed && (
+              <div className="space-y-0.5 pl-0 pt-0.5">
                 {group.items.map((item, idx) => {
                   // Mini horizontal pipeline (P→L→C→A→Π at top of Acquire).
                   if ("kind" in item && item.kind === "miniPipeline") {
@@ -456,9 +493,10 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
                     );
                   const active = isExact || isPrefixMatch;
                   const Icon = item.icon;
-                  // Inactive icon: neutral muted white (active items get the accent).
-                  // Keeps the rail calm — only the current page lights up teal.
-                  const inactiveIconColor = "rgba(255,255,255,0.5)";
+                  // Inactive icons carry the section colour (muted) so each
+                  // group reads as a coloured cluster; the active item gets the
+                  // full-strength hue + a stronger tinted background.
+                  const inactiveIconColor = gc + "cc";
                   return (
                     <Link
                       key={item.href}
@@ -466,12 +504,13 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
                       className={cn(
                         "flex items-center gap-2.5 pl-3 pr-2 py-1.5 text-[13px] transition-all duration-150",
                         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#2DD4BF]/70",
-                        active ? "text-white" : "text-white/70 hover:text-white/95",
+                        active ? "text-white font-medium" : "text-white/70 hover:text-white/95 hover:bg-white/5",
                       )}
                       style={active ? {
                         borderLeft: `3px solid ${gc}`,
-                        backgroundColor: gBg,
+                        backgroundColor: gc + "33",
                         paddingLeft: '12px',
+                        boxShadow: `inset 0 0 0 1px ${gc}33`,
                       } : {
                         borderLeft: '3px solid transparent',
                         paddingLeft: '12px',
@@ -486,6 +525,7 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
                   );
                 })}
               </div>
+              )}
             </div>
             );
           })}
@@ -770,8 +810,9 @@ export function QueryError({ message, onRetry }: { message?: string; onRetry?: (
  *  active route. Render directly under <PageHeader>. */
 export function SubNav({ items }: { items: Array<{ href: string; label: string; title?: string }> }) {
   const [loc] = useLocation();
+  const accent = useAccentColor();
   return (
-    <nav className="flex items-center gap-1 px-4 md:px-6 pt-3 flex-wrap shrink-0" aria-label="Section navigation">
+    <nav className="flex items-center gap-2 px-4 md:px-6 pt-3 flex-wrap shrink-0" aria-label="Section navigation">
       {items.map((it) => {
         const active = loc === it.href;
         return (
@@ -779,13 +820,24 @@ export function SubNav({ items }: { items: Array<{ href: string; label: string; 
             key={it.href}
             href={it.href}
             title={it.title}
+            aria-current={active ? "page" : undefined}
             className={cn(
-              "text-xs px-2.5 py-1 rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              "inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border transition-all",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
               active
-                ? "bg-secondary text-foreground font-medium"
-                : "text-muted-foreground hover:text-foreground hover:bg-secondary/60",
+                ? "font-semibold shadow-sm"
+                : "bg-card text-muted-foreground border-border hover:text-foreground hover:bg-muted hover:border-foreground/20",
             )}
+            // Active pill is filled with the section accent (tinted) so the
+            // current sub-page is obvious; inactive pills read clearly as
+            // outlined buttons rather than plain text links.
+            style={
+              active
+                ? { backgroundColor: `${accent}1f`, color: accent, borderColor: accent }
+                : undefined
+            }
           >
+            <span aria-hidden className="size-1.5 rounded-full" style={{ backgroundColor: active ? accent : "currentColor", opacity: active ? 1 : 0.4 }} />
             {it.label}
           </Link>
         );
