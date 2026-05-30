@@ -12,7 +12,7 @@ import { useState, useMemo } from "react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Field, FormDialog, SelectField, TextareaField, StatusPill, fmtDate } from "@/components/usip/Common";
-import { EmptyState, PageHeader, Shell } from "@/components/usip/Shell";
+import { EmptyState, PageHeader, QueryError, Shell, TableSkeleton } from "@/components/usip/Shell";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -151,7 +151,7 @@ export default function Tasks() {
   const [relTypeFilter, setRelTypeFilter] = useState<string>(""); // "" = any
   const [open, setOpen] = useState(false);
 
-  const { data: rawAll } = trpc.tasks.list.useQuery({});
+  const { data: rawAll, isLoading: allLoading, error: allError, refetch: allRefetch } = trpc.tasks.list.useQuery({});
   const { data: members } = trpc.team.list.useQuery();
   const memberOpts = useMemo(() => (members ?? []).map((m: any) => ({ userId: m.userId as number, name: m.name as string | null })), [members]);
 
@@ -212,7 +212,7 @@ export default function Tasks() {
             <TabsTrigger value="all">All</TabsTrigger>
           </TabsList>
           <TabsContent value={tab} className="pt-4">
-            {visible.length === 0 ? <EmptyState icon={ListChecks} title="No tasks" /> :
+            {allError ? <QueryError message={allError.message} onRetry={() => allRefetch()} /> : allLoading ? <TableSkeleton rows={6} /> : visible.length === 0 ? <EmptyState icon={ListChecks} title="No tasks" /> :
               <ul className="divide-y rounded-lg border bg-card">
                 {visible.map((t) => (
                   <TaskItem key={t.id} t={t} members={memberOpts}

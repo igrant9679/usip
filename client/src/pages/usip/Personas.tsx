@@ -4,7 +4,7 @@
  * and prospect search.
  */
 import { useState } from "react";
-import { Shell, PageHeader } from "@/components/usip/Shell";
+import { Shell, PageHeader, QueryError, TableSkeleton } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -70,7 +70,7 @@ function TagInput({ label, value, onChange, placeholder }: { label: string; valu
 }
 
 export default function Personas() {
-  const { data: list = [], refetch } = trpc.personas.list.useQuery();
+  const { data: list = [], isLoading, error, refetch } = trpc.personas.list.useQuery();
   const { data: presets = [] } = trpc.personas.listPresets.useQuery();
   const create = trpc.personas.create.useMutation();
   const update = trpc.personas.update.useMutation();
@@ -181,7 +181,7 @@ export default function Personas() {
           <CardTitle className="text-base">Your personas ({list.length})</CardTitle>
         </CardHeader>
         <CardContent>
-          {list.length === 0 ? (
+          {error ? <QueryError message={error.message} onRetry={() => refetch()} /> : isLoading ? <TableSkeleton rows={5} /> : list.length === 0 ? (
             <div className="text-sm text-muted-foreground p-4 text-center">
               No personas yet. Create one above or clone a preset.
             </div>

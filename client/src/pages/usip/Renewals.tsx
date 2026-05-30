@@ -1,5 +1,5 @@
 import { fmt$, fmtDate, StatusPill } from "@/components/usip/Common";
-import { PageHeader, Shell } from "@/components/usip/Shell";
+import { PageHeader, QueryError, Shell, TableSkeleton } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import { RefreshCw, Sparkles, AlertTriangle } from "lucide-react";
 import { useMemo } from "react";
@@ -17,7 +17,7 @@ const STAGES = [
 
 export default function Renewals() {
   const utils = trpc.useUtils();
-  const { data } = trpc.cs.renewalsBoard.useQuery();
+  const { data, isLoading, error, refetch } = trpc.cs.renewalsBoard.useQuery();
   const scoreChurn = trpc.csAi.scoreChurnRisk.useMutation({
     onSuccess: () => utils.cs.renewalsBoard.invalidate(),
     onError: (e: any) => toast.error(e.message),
@@ -34,6 +34,7 @@ export default function Renewals() {
       <PageHeader title="Renewal pipeline" description="Manage the full renewal cycle from early-warning flags through negotiation to signed renewals. Automate renewal reminders, track contract status, and surface expansion opportunities at renewal time." pageKey="renewals"
         icon={<RefreshCw className="size-5" />}
       />
+      {error ? <QueryError message={error.message} onRetry={() => refetch()} /> : isLoading ? <TableSkeleton rows={6} className="p-4" /> : (
       <div className="p-4 overflow-x-auto">
         <div className="flex gap-3 min-w-max" data-tour-id="renewals-board">
           {STAGES.map((s) => {
@@ -90,6 +91,7 @@ export default function Renewals() {
           })}
         </div>
       </div>
+      )}
     </Shell>
   );
 }
