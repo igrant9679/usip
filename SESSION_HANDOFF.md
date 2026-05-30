@@ -73,7 +73,7 @@ The SDR Help enhancement is shipped and confirmed on LSI Media (Personal Chrome)
 - **Article count is 21, not 20** — the plan's own list (GS3+PR5+CRM4+SEQ4+ARE2+PLAY3) totals 21; the "20"
   label was an off-by-one in the plan. All 21 specced articles are seeded; nothing missing/duplicated.
 - **"Enriching Contacts with Clodura" tour** pre-existed (not one of the original 7 demo tours, not in the
-  retire list) so it remains. Confirm with the user whether to keep or retire it.
+  retire list) so it remains — **user confirmed: keep it** (tours list = 13 total).
 - Optional polish from the plan: add `data-tour-id` selectors on Find Prospects / Prospects / Enroll dialog /
   Unified Inbox so those coach tours can spotlight instead of page-level callouts.
 
