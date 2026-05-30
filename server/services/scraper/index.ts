@@ -262,37 +262,38 @@ export async function lookupContactInfo(
   let creditsQuick = 0;
   let creditsPower = 0;
 
-  // Stage A — quick filter
+  // Stage A — quick filter. All patterns share the cheap instant-credit
+  // pool and don't depend on each other, so fire them in parallel (one
+  // batched round-trip) instead of sequentially. Results are processed in
+  // pattern order afterwards so survivor ordering — and thus the power
+  // stage's early-stop on the most-likely pattern — is unchanged.
   type QuickResult = { pattern: EmailPattern; quickStatus: VerificationStatus };
   const survivors: QuickResult[] = [];
-  for (const p of patterns) {
-    try {
-      const r = await reoonVerifySingle(p.email, apiKey, "quick");
-      creditsQuick++;
-      const status = reoonStatusToUsip(r.status);
-      // Record the quick result so the UI can show what was tried.
-      enrichment.patternsVerified.push({
-        email: p.email,
-        pattern: p.pattern,
-        status,
-        overallScore: r.overall_score,
-        mode: "quick",
-      });
-      // Drop only on confident invalid. 'unknown' (quick didn't have a
-      // cached answer) still escalates to power.
-      if (status !== "invalid") survivors.push({ pattern: p, quickStatus: status });
-    } catch (e) {
-      // Quick mode unreachable — be conservative and still try power on
-      // this candidate (don't drop on transient errors).
-      enrichment.patternsVerified.push({
-        email: p.email,
-        pattern: p.pattern,
-        status: "unknown",
-        mode: "quick",
-      });
-      survivors.push({ pattern: p, quickStatus: "unknown" });
-      void e;
-    }
+  const quickResults = await Promise.all(
+    patterns.map(async (p) => {
+      try {
+        const r = await reoonVerifySingle(p.email, apiKey, "quick");
+        return { pattern: p, status: reoonStatusToUsip(r.status), overallScore: r.overall_score, ok: true as const };
+      } catch {
+        // Quick mode unreachable — be conservative and still try power on
+        // this candidate (don't drop on transient errors).
+        return { pattern: p, status: "unknown" as VerificationStatus, overallScore: undefined, ok: false as const };
+      }
+    }),
+  );
+  for (const qr of quickResults) {
+    if (qr.ok) creditsQuick++;
+    // Record the quick result so the UI can show what was tried.
+    enrichment.patternsVerified.push({
+      email: qr.pattern.email,
+      pattern: qr.pattern.pattern,
+      status: qr.status,
+      overallScore: qr.overallScore,
+      mode: "quick",
+    });
+    // Drop only on confident invalid. 'unknown' (quick didn't have a
+    // cached answer) still escalates to power.
+    if (qr.status !== "invalid") survivors.push({ pattern: qr.pattern, quickStatus: qr.status });
   }
 
   // Stage B — power confirmation on survivors. Order by prior (the
