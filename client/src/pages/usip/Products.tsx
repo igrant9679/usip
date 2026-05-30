@@ -1,5 +1,5 @@
 import { Button } from "@/components/ui/button";
-import { Field, fmt$, FormDialog, Section, SelectField, StatusPill, TextareaField } from "@/components/usip/Common";
+import { ConfirmButton, Field, fmt$, FormDialog, Section, SelectField, StatusPill, TextareaField } from "@/components/usip/Common";
 import { EmptyState, PageHeader, Shell } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import { Package, Plus, Trash2 } from "lucide-react";
@@ -11,7 +11,7 @@ export default function Products() {
   const { data } = trpc.products.list.useQuery();
   const [open, setOpen] = useState(false);
   const create = trpc.products.create.useMutation({ onSuccess: () => { utils.products.list.invalidate(); setOpen(false); toast.success("Product added"); }, onError: (e) => toast.error(e.message) });
-  const del = trpc.products.delete.useMutation({ onSuccess: () => utils.products.list.invalidate() });
+  const del = trpc.products.delete.useMutation({ onSuccess: () => { utils.products.list.invalidate(); toast.success("Product deleted"); }, onError: (e) => toast.error(e.message) });
 
   return (
     <Shell title="Product Catalog">
@@ -37,7 +37,7 @@ export default function Products() {
                       <td className="p-2 text-right font-mono tabular-nums whitespace-nowrap">{fmt$(Number(p.listPrice))}</td>
                       <td className="p-2 text-muted-foreground">{p.billingCycle}</td>
                       <td className="p-2"><StatusPill tone={p.active ? "success" : "muted"}>{p.active ? "active" : "inactive"}</StatusPill></td>
-                      <td className="p-2 text-right"><Button size="sm" variant="ghost" onClick={() => del.mutate({ id: p.id })}><Trash2 className="size-3.5" /></Button></td>
+                      <td className="p-2 text-right"><ConfirmButton size="sm" variant="ghost" ariaLabel="Delete product" title={`Delete "${p.name}"?`} description="This removes the product from your catalog." confirmLabel="Delete" onConfirm={() => del.mutate({ id: p.id })}><Trash2 className="size-3.5" /></ConfirmButton></td>
                     </tr>
                   ))}
                 </tbody>

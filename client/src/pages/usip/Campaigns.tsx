@@ -4,6 +4,7 @@
  */
 import { useState } from "react";
 import { Shell, PageHeader, EmptyState, StatCard } from "@/components/usip/Shell";
+import { ConfirmButton } from "@/components/usip/Common";
 import { trpc } from "@/lib/trpc";
 import { EntityPicker } from "@/components/usip/EntityPicker";
 import { Button } from "@/components/ui/button";
@@ -295,15 +296,19 @@ function CampaignDetail({ id, onEdit }: { id: number; onEdit: () => void }) {
             <Settings2 className="h-3.5 w-3.5 mr-1" /> Edit
           </Button>
           {canLaunch && (
-            <Button
+            <ConfirmButton
               size="sm"
+              destructive={false}
               className="bg-emerald-600 hover:bg-emerald-700 text-white"
-              onClick={() => launch.mutate({ id })}
               disabled={launch.isPending}
+              title="Launch campaign?"
+              description="This starts live outreach — real messages will begin sending to enrolled prospects per the campaign's throttle settings."
+              confirmLabel="Launch"
+              onConfirm={() => launch.mutate({ id })}
             >
               {launch.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : <Rocket className="h-3.5 w-3.5 mr-1" />}
               Launch
-            </Button>
+            </ConfirmButton>
           )}
           {isLive && (
             <Button size="sm" variant="outline" onClick={() => pause.mutate({ id })} disabled={pause.isPending}>
@@ -311,15 +316,19 @@ function CampaignDetail({ id, onEdit }: { id: number; onEdit: () => void }) {
               Pause
             </Button>
           )}
-          <Button
+          <ConfirmButton
             size="sm"
             variant="outline"
             className="text-destructive hover:text-destructive"
-            onClick={() => del.mutate({ id })}
+            ariaLabel="Delete campaign"
             disabled={del.isPending}
+            title="Delete this campaign?"
+            description="This permanently removes the campaign and its setup. This cannot be undone."
+            confirmLabel="Delete"
+            onConfirm={() => del.mutate({ id })}
           >
             <Trash2 className="h-3.5 w-3.5" />
-          </Button>
+          </ConfirmButton>
         </div>
       </div>
 

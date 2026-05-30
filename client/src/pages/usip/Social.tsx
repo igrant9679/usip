@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Field, fmtDate, FormDialog, Section, SelectField, StatusPill, TextareaField } from "@/components/usip/Common";
+import { ConfirmButton, Field, fmtDate, FormDialog, Section, SelectField, StatusPill, TextareaField } from "@/components/usip/Common";
 import { EmptyState, PageHeader, Shell, StatCard } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import { Calendar, ExternalLink, Plus, RefreshCw, Send, Share2, Sparkles, Trash2 } from "lucide-react";
@@ -30,12 +30,12 @@ export default function Social() {
   const [recurrenceEndDate, setRecurrenceEndDate] = useState("");
 
   const connect = trpc.social.connectAccount.useMutation({ onSuccess: () => { utils.social.listAccounts.invalidate(); setConnectOpen(false); toast.success("Connected (stub)"); } });
-  const disconnect = trpc.social.disconnectAccount.useMutation({ onSuccess: () => utils.social.listAccounts.invalidate() });
-  const create = trpc.social.createPost.useMutation({ onSuccess: () => { utils.social.listPosts.invalidate(); setComposeOpen(false); setBody(""); setVariants([]); toast.success("Saved"); } });
-  const approve = trpc.social.approvePost.useMutation({ onSuccess: () => utils.social.listPosts.invalidate() });
-  const sched = trpc.social.schedulePost.useMutation({ onSuccess: () => utils.social.listPosts.invalidate() });
-  const pub = trpc.social.publishNowStub.useMutation({ onSuccess: () => { utils.social.listPosts.invalidate(); utils.social.analytics.invalidate(); toast.success("Published (stub)"); } });
-  const del = trpc.social.deletePost.useMutation({ onSuccess: () => utils.social.listPosts.invalidate() });
+  const disconnect = trpc.social.disconnectAccount.useMutation({ onSuccess: () => utils.social.listAccounts.invalidate(), onError: (e) => toast.error(e.message) });
+  const create = trpc.social.createPost.useMutation({ onSuccess: () => { utils.social.listPosts.invalidate(); setComposeOpen(false); setBody(""); setVariants([]); toast.success("Saved"); }, onError: (e) => toast.error(e.message) });
+  const approve = trpc.social.approvePost.useMutation({ onSuccess: () => utils.social.listPosts.invalidate(), onError: (e) => toast.error(e.message) });
+  const sched = trpc.social.schedulePost.useMutation({ onSuccess: () => utils.social.listPosts.invalidate(), onError: (e) => toast.error(e.message) });
+  const pub = trpc.social.publishNowStub.useMutation({ onSuccess: () => { utils.social.listPosts.invalidate(); utils.social.analytics.invalidate(); toast.success("Published (stub)"); }, onError: (e) => toast.error(e.message) });
+  const del = trpc.social.deletePost.useMutation({ onSuccess: () => { utils.social.listPosts.invalidate(); toast.success("Post deleted"); }, onError: (e) => toast.error(e.message) });
   const genVariants = trpc.social.generateVariants.useMutation({ onSuccess: (r) => { setVariants(r.variants); toast.success("Variants generated"); } });
   const setRecurrence = trpc.social.setRecurrence.useMutation({
     onSuccess: () => { utils.social.listPosts.invalidate(); setRecurrencePostId(null); toast.success("Recurrence saved"); },
@@ -130,7 +130,7 @@ export default function Social() {
                           {p.status === "approved" && <Button size="sm" variant="ghost" onClick={() => sched.mutate({ id: p.id, scheduledFor: new Date(Date.now() + 3600000).toISOString() })}>Schedule +1h</Button>}
                           {p.status !== "published" && <Button size="sm" variant="ghost" onClick={() => pub.mutate({ id: p.id })}><Send className="size-3.5" /> Publish now (stub)</Button>}
                           <Button size="sm" variant="ghost" onClick={() => openRecurrenceDialog(p.id)} title="Set recurrence"><RefreshCw className="size-3.5" /></Button>
-                          <Button size="sm" variant="ghost" onClick={() => del.mutate({ id: p.id })}><Trash2 className="size-3.5" /></Button>
+                          <ConfirmButton size="sm" variant="ghost" ariaLabel="Delete post" title="Delete this post?" description="This permanently removes the post and its scheduling. This cannot be undone." confirmLabel="Delete" onConfirm={() => del.mutate({ id: p.id })}><Trash2 className="size-3.5" /></ConfirmButton>
                         </div>
                       </li>
                     );
