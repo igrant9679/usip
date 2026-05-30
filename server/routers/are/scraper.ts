@@ -19,6 +19,41 @@ import { getDb } from "../../db";
 import { invokeLLM } from "../../_core/llm";
 import { router } from "../../_core/trpc";
 import { workspaceProcedure } from "../../_core/workspace";
+import { searchLinkedInProfiles } from "../../services/linkedinLookup";
+
+function isAdminRole(role: string): boolean {
+  return role === "admin" || role === "super_admin";
+}
+
+/**
+ * Real LinkedIn people search via Unipile (replaces the old fabricating
+ * scrapeLinkedIn). Routes through the workspace's bridged LinkedIn account
+ * pool and maps verified hits into the prospect-queue shape. Returns [] when
+ * no account is bridged or the search fails — never invented data.
+ */
+async function realLinkedInSearch(
+  ctx: { workspace: { id: number }; user: { id: number }; member: { role: string } },
+  query: string,
+  limit: number,
+): Promise<Array<Record<string, unknown>>> {
+  const res = await searchLinkedInProfiles({
+    workspaceId: ctx.workspace.id,
+    userId: ctx.user.id,
+    isAdmin: isAdminRole(ctx.member.role),
+    keywords: query,
+    limit: Math.min(Math.max(limit, 1), 25),
+  });
+  if (!res.ok) return [];
+  return res.hits.map((h) => ({
+    firstName: h.firstName,
+    lastName: h.lastName,
+    title: h.headline,
+    companyName: h.company,
+    linkedinUrl: h.linkedinUrl,
+    sourceUrl: h.linkedinUrl,
+    geography: h.location,
+  }));
+}
 
 /* ─── Shared prospect extraction schema ─────────────────────────────────── */
 
@@ -168,26 +203,6 @@ export async function scrapeGoogleBusiness(
     }
   }
   return merged;
-}
-
-/* ─── LinkedIn company + people scraper (via Unipile profile API) ────────── */
-
-export async function scrapeLinkedIn(
-  _workspaceId: number,
-  _campaignId: number | null,
-  query: string,
-  searchType: "company" | "people",
-  _icpContext: string,
-): Promise<Array<Record<string, unknown>>> {
-  // DISABLED. This previously asked the LLM to *invent* "realistic, plausible"
-  // LinkedIn profiles — fabricated names, guessed linkedin.com/in/ URLs, and
-  // made-up contact details — which polluted the prospect pool with people who
-  // don't exist. Real LinkedIn discovery runs through Unipile
-  // (discoverViaLinkedIn in areEngine.ts / searchLinkedInProfiles in
-  // linkedinLookup.ts). Return nothing rather than hallucinate; wiring the
-  // manual Scraper-tab buttons to the Unipile search is a follow-up.
-  console.warn(`[scrapeLinkedIn] disabled (was fabricating profiles). Use Unipile-backed LinkedIn discovery instead. query="${query}" type=${searchType}`);
-  return [];
 }
 
 /* ─── General web scraper ────────────────────────────────────────────────── */
@@ -393,20 +408,20 @@ export const scraperRouter = router({
       return { count: prospects.length, prospects };
     }),
 
-  /** Scrape LinkedIn company pages */
+  /** LinkedIn search (company-oriented keywords) via real Unipile people search */
   scrapeLinkedInCompany: workspaceProcedure
     .input(z.object({ campaignId: z.number().optional(), query: z.string().min(3), icpContext: z.string().default("") }))
     .mutation(async ({ ctx, input }) => {
-      const prospects = await scrapeLinkedIn(ctx.workspace.id, input.campaignId ?? null, input.query, "company", input.icpContext);
+      const prospects = await realLinkedInSearch(ctx, input.query, 25);
       await saveScrapeJobAndQueue(ctx.workspace.id, input.campaignId ?? null, "linkedin_company", input.query, prospects);
       return { count: prospects.length, prospects };
     }),
 
-  /** Scrape LinkedIn people search */
+  /** LinkedIn people search via real Unipile classic search */
   scrapeLinkedInPeople: workspaceProcedure
     .input(z.object({ campaignId: z.number().optional(), query: z.string().min(3), icpContext: z.string().default("") }))
     .mutation(async ({ ctx, input }) => {
-      const prospects = await scrapeLinkedIn(ctx.workspace.id, input.campaignId ?? null, input.query, "people", input.icpContext);
+      const prospects = await realLinkedInSearch(ctx, input.query, 25);
       await saveScrapeJobAndQueue(ctx.workspace.id, input.campaignId ?? null, "linkedin_people", input.query, prospects);
       return { count: prospects.length, prospects };
     }),
@@ -467,14 +482,14 @@ export const scraperRouter = router({
       }
       if (input.queries.linkedinCompany) {
         tasks.push(
-          scrapeLinkedIn(ctx.workspace.id, input.campaignId, input.queries.linkedinCompany, "company", input.icpContext)
+          realLinkedInSearch(ctx, input.queries.linkedinCompany, 25)
             .then((p) => saveScrapeJobAndQueue(ctx.workspace.id, input.campaignId, "linkedin_company", input.queries.linkedinCompany!, p)
               .then(() => { results.linkedinCompany = p.length; })),
         );
       }
       if (input.queries.linkedinPeople) {
         tasks.push(
-          scrapeLinkedIn(ctx.workspace.id, input.campaignId, input.queries.linkedinPeople, "people", input.icpContext)
+          realLinkedInSearch(ctx, input.queries.linkedinPeople, 25)
             .then((p) => saveScrapeJobAndQueue(ctx.workspace.id, input.campaignId, "linkedin_people", input.queries.linkedinPeople!, p)
               .then(() => { results.linkedinPeople = p.length; })),
         );
@@ -523,7 +538,7 @@ export const scraperRouter = router({
         prospects = await scrapeGoogleBusiness(ctx.workspace.id, campaignId, query, "");
         await saveScrapeJobAndQueue(ctx.workspace.id, campaignId, "google_business", query, prospects);
       } else if (source === "linkedin") {
-        prospects = await scrapeLinkedIn(ctx.workspace.id, campaignId, query, "people", "");
+        prospects = await realLinkedInSearch(ctx, query, input.limit);
         await saveScrapeJobAndQueue(ctx.workspace.id, campaignId, "linkedin_people", query, prospects);
       } else if (source === "news") {
         prospects = await scrapeNews(ctx.workspace.id, campaignId, query, "");
