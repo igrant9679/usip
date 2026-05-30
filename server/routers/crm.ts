@@ -27,6 +27,9 @@ import {
   workspaceMembers,
   workspaceSettings,
   proposals,
+  qbrs,
+  supportTickets,
+  contractAmendments,
 } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
 import { getDb } from "../db";
@@ -141,6 +144,28 @@ function renderMergeFields(template: string, vars: Record<string, string | null 
 
 /* ──────────────────────────────────────────────────────────────────────── */
 
+/** Remove the customer-success records owned by the given accounts so deleting
+ *  an account doesn't leave orphaned customer / QBR / ticket / amendment rows
+ *  that render as "—". Scoped to the workspace. */
+async function cascadeDeleteAccountDependents(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  workspaceId: number,
+  accountIds: number[],
+): Promise<void> {
+  if (accountIds.length === 0) return;
+  const custRows = await db
+    .select({ id: customers.id })
+    .from(customers)
+    .where(and(eq(customers.workspaceId, workspaceId), inArray(customers.accountId, accountIds)));
+  const customerIds = custRows.map((c) => c.id);
+  if (customerIds.length > 0) {
+    await db.delete(qbrs).where(and(eq(qbrs.workspaceId, workspaceId), inArray(qbrs.customerId, customerIds)));
+    await db.delete(supportTickets).where(and(eq(supportTickets.workspaceId, workspaceId), inArray(supportTickets.customerId, customerIds)));
+    await db.delete(contractAmendments).where(and(eq(contractAmendments.workspaceId, workspaceId), inArray(contractAmendments.customerId, customerIds)));
+    await db.delete(customers).where(and(eq(customers.workspaceId, workspaceId), inArray(customers.id, customerIds)));
+  }
+}
+
 export const accountsRouter = router({
   list: workspaceProcedure
     .input(z.object({ search: z.string().optional() }).optional())
@@ -237,6 +262,7 @@ export const accountsRouter = router({
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const [before] = await db.select().from(accounts).where(and(eq(accounts.id, input.id), eq(accounts.workspaceId, ctx.workspace.id)));
+    await cascadeDeleteAccountDependents(db, ctx.workspace.id, [input.id]);
     await db.delete(accounts).where(and(eq(accounts.id, input.id), eq(accounts.workspaceId, ctx.workspace.id)));
     await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "delete", entityType: "account", entityId: input.id, before });
     return { ok: true };
@@ -252,6 +278,7 @@ export const accountsRouter = router({
         .from(accounts)
         .where(and(eq(accounts.workspaceId, ctx.workspace.id), inArray(accounts.id, input.ids)));
       if (rows.length === 0) return { deleted: 0 };
+      await cascadeDeleteAccountDependents(db, ctx.workspace.id, rows.map((r) => r.id));
       await db.delete(accounts).where(and(eq(accounts.workspaceId, ctx.workspace.id), inArray(accounts.id, rows.map((r) => r.id))));
       await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "delete", entityType: "account_bulk", entityId: 0, after: { ids: rows.map((r) => r.id) } });
       return { deleted: rows.length };
