@@ -30,6 +30,13 @@ import {
   qbrs,
   supportTickets,
   contractAmendments,
+  quotes,
+  quoteLineItems,
+  opportunityIntelligence,
+  stageApprovals,
+  pipelineAlerts,
+  contactEnrichmentHistory,
+  cloduraEnrichmentJobs,
 } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
 import { getDb } from "../db";
@@ -144,15 +151,25 @@ function renderMergeFields(template: string, vars: Record<string, string | null 
 
 /* ──────────────────────────────────────────────────────────────────────── */
 
-/** Remove the customer-success records owned by the given accounts so deleting
- *  an account doesn't leave orphaned customer / QBR / ticket / amendment rows
- *  that render as "—". Scoped to the workspace. */
+/** Remove the records owned by the given accounts so deleting an account
+ *  doesn't leave orphans pointing at a now-missing account. Covers three
+ *  branches and their hard (NOT NULL) dependents, each deleted child-first:
+ *   - customers → QBRs, support tickets, contract amendments
+ *   - opportunities → contact roles, line items, quotes (+ quote line items),
+ *     stage history, intelligence, stage approvals, pipeline alerts
+ *   - contacts → opportunity contact roles, enrichment history + jobs
+ *  Nullable soft-links (proposals, enrollments, prospects.linkedContactId,
+ *  …) are left intact — they render gracefully when their target is gone.
+ *  Scoped to the workspace; child deletes are bounded by parent ids that were
+ *  themselves workspace-scoped. */
 async function cascadeDeleteAccountDependents(
   db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
   workspaceId: number,
   accountIds: number[],
 ): Promise<void> {
   if (accountIds.length === 0) return;
+
+  // ── Customers + customer-success dependents ──────────────────────────────
   const custRows = await db
     .select({ id: customers.id })
     .from(customers)
@@ -163,6 +180,44 @@ async function cascadeDeleteAccountDependents(
     await db.delete(supportTickets).where(and(eq(supportTickets.workspaceId, workspaceId), inArray(supportTickets.customerId, customerIds)));
     await db.delete(contractAmendments).where(and(eq(contractAmendments.workspaceId, workspaceId), inArray(contractAmendments.customerId, customerIds)));
     await db.delete(customers).where(and(eq(customers.workspaceId, workspaceId), inArray(customers.id, customerIds)));
+  }
+
+  // ── Opportunities + dependents ───────────────────────────────────────────
+  const oppRows = await db
+    .select({ id: opportunities.id })
+    .from(opportunities)
+    .where(and(eq(opportunities.workspaceId, workspaceId), inArray(opportunities.accountId, accountIds)));
+  const oppIds = oppRows.map((o) => o.id);
+  if (oppIds.length > 0) {
+    const quoteRows = await db
+      .select({ id: quotes.id })
+      .from(quotes)
+      .where(and(eq(quotes.workspaceId, workspaceId), inArray(quotes.opportunityId, oppIds)));
+    const quoteIds = quoteRows.map((q) => q.id);
+    if (quoteIds.length > 0) {
+      await db.delete(quoteLineItems).where(inArray(quoteLineItems.quoteId, quoteIds));
+      await db.delete(quotes).where(and(eq(quotes.workspaceId, workspaceId), inArray(quotes.id, quoteIds)));
+    }
+    await db.delete(dealLineItems).where(inArray(dealLineItems.opportunityId, oppIds));
+    await db.delete(opportunityContactRoles).where(inArray(opportunityContactRoles.opportunityId, oppIds));
+    await db.delete(opportunityStageHistory).where(inArray(opportunityStageHistory.opportunityId, oppIds));
+    await db.delete(opportunityIntelligence).where(inArray(opportunityIntelligence.opportunityId, oppIds));
+    await db.delete(stageApprovals).where(inArray(stageApprovals.opportunityId, oppIds));
+    await db.delete(pipelineAlerts).where(inArray(pipelineAlerts.opportunityId, oppIds));
+    await db.delete(opportunities).where(and(eq(opportunities.workspaceId, workspaceId), inArray(opportunities.id, oppIds)));
+  }
+
+  // ── Contacts + dependents ────────────────────────────────────────────────
+  const contactRows = await db
+    .select({ id: contacts.id })
+    .from(contacts)
+    .where(and(eq(contacts.workspaceId, workspaceId), inArray(contacts.accountId, accountIds)));
+  const contactIds = contactRows.map((c) => c.id);
+  if (contactIds.length > 0) {
+    await db.delete(opportunityContactRoles).where(inArray(opportunityContactRoles.contactId, contactIds));
+    await db.delete(contactEnrichmentHistory).where(inArray(contactEnrichmentHistory.contactId, contactIds));
+    await db.delete(cloduraEnrichmentJobs).where(inArray(cloduraEnrichmentJobs.contactId, contactIds));
+    await db.delete(contacts).where(and(eq(contacts.workspaceId, workspaceId), inArray(contacts.id, contactIds)));
   }
 }
 
