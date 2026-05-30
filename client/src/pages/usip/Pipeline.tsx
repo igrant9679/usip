@@ -485,6 +485,7 @@ export default function Pipeline() {
       return { prev };
     },
     onError: (_e, _v, ctx) => { if (ctx?.prev) utils.opportunities.board.setData(undefined, ctx.prev); toast.error("Move failed"); },
+    onSuccess: (res) => { if (res?.customerCreated) { toast.success("Closed won 🎉 — customer created"); utils.cs?.list?.invalidate?.(); } },
     onSettled: () => utils.opportunities.board.invalidate(),
   });
 
