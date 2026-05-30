@@ -350,11 +350,11 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
         mobileOpen ? "translate-x-0" : "-translate-x-full",
       )}>
         <div className="px-4 pt-4 pb-3 border-b border-white/10">
-          <div className="flex items-center gap-2 mb-1">
-            <svg className="size-5 text-[#1D4ED8] shrink-0" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2L4.09 12.97 12 12l-1 9 8.91-10.97L12 11l1-9z"/></svg>
-            <span className="text-[18px] font-bold tracking-tight text-white">Velocity</span>
+          <div className="flex items-center gap-2.5 mb-1">
+            <svg className="size-7 text-[#1D4ED8] shrink-0" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2L4.09 12.97 12 12l-1 9 8.91-10.97L12 11l1-9z"/></svg>
+            <span className="text-[22px] font-bold tracking-tight text-white">Velocity</span>
           </div>
-          <div className="text-[9.5px] text-[#A5B4FC] leading-tight pl-0.5">The Unified Revenue Intelligence Platform</div>
+          <div className="text-[11px] text-[#A5B4FC] leading-tight pl-0.5">The Unified Revenue Intelligence Platform</div>
         </div>
 
         <nav
