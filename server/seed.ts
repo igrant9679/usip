@@ -29,6 +29,7 @@ import {
   workspaces,
 } from "../drizzle/schema";
 import { getDb } from "./db";
+import { seedHelpContent } from "./seedHelpContent";
 
 const COMPANIES = [
   { name: "Avalon Foundation", industry: "Nonprofit", domain: "avalonfnd.org", region: "Northeast" },
@@ -95,6 +96,14 @@ export async function isWorkspaceSeeded(workspaceId: number): Promise<boolean> {
 export async function seedWorkspace(workspaceId: number, ownerUserId: number) {
   const db = await getDb();
   if (!db) return;
+
+  // Help Center content (categories/articles/tours) — idempotent, independent of
+  // the demo-data guard below so new workspaces always get the SDR enablement layer.
+  try {
+    await seedHelpContent(db, workspaceId);
+  } catch (e) {
+    console.error("[SeedHelp] seedWorkspace help seed failed:", (e as Error)?.message ?? e);
+  }
 
   if (await isWorkspaceSeeded(workspaceId)) return;
 

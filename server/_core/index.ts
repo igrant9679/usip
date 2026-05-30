@@ -32,6 +32,7 @@ import { registerEmailBuilderStreamRoutes } from "../emailBuilderStreamRoute";
 import { registerAccountBriefsStreamRoutes } from "../accountBriefsStreamRoute";
 import { registerMailboxStreamRoutes } from "../mailboxStreamRoute";
 import { seedToursForAllWorkspaces } from "../seedTours";
+import { seedHelpForAllWorkspaces } from "../seedHelpContent";
 import { seedAreDemoForAllWorkspaces } from "../seedAreDemo";
 import { runRawMigrations } from "./rawMigrations";
 
@@ -112,6 +113,14 @@ async function startServer() {
       console.error("[SeedTours] startup seed failed:", e)
     );
   }, 15_000); // 15s delay to let DB settle
+  // Seed SDR Help Center content (categories/articles/tours) for all workspaces.
+  // 20s delay so it runs AFTER seedTours — it retires the legacy tours the 10 SDR
+  // tours supersede, then seeds the canonical set. Idempotent.
+  setTimeout(() => {
+    seedHelpForAllWorkspaces().catch((e) =>
+      console.error("[SeedHelp] startup seed failed:", e)
+    );
+  }, 20_000);
   // Seed a populated demo ARE campaign for all workspaces (idempotent).
   // 25s delay so the 0071 are_*/prospect_* migration has applied first.
   setTimeout(() => {
