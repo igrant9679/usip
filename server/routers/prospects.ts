@@ -268,7 +268,22 @@ export const prospectsRouter = router({
       if (!prospect) throw new TRPCError({ code: "NOT_FOUND", message: "Prospect not found" });
 
       if (prospect.linkedContactId) {
-        return { contactId: prospect.linkedContactId, created: false };
+        // Only trust the link if the contact still exists — contacts can be
+        // deleted out from under a prospect (e.g. a bulk contact purge), leaving
+        // a stale linkedContactId that makes Promote a silent permanent no-op.
+        const [stillThere] = await db
+          .select({ id: contacts.id })
+          .from(contacts)
+          .where(and(eq(contacts.id, prospect.linkedContactId), eq(contacts.workspaceId, ctx.workspace.id)))
+          .limit(1);
+        if (stillThere) {
+          return { contactId: prospect.linkedContactId, created: false };
+        }
+        // Stale link: the contact was deleted. Clear it and fall through to re-create.
+        await db
+          .update(prospects)
+          .set({ linkedContactId: null })
+          .where(and(eq(prospects.id, input.prospectId), eq(prospects.workspaceId, ctx.workspace.id)));
       }
 
       let contactId: number | null = null;
