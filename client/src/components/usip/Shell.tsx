@@ -631,13 +631,22 @@ export function PageHeader({ title, description: defaultDescription, pageKey, ic
 
   return (
     <div
-      className={`px-4 md:px-6 py-8 md:py-10 min-h-[120px] border flex flex-col sm:flex-row sm:items-center sm:flex-wrap gap-3 sm:gap-4${className ? ` ${className}` : ""}`}
-      style={{ border: `2px solid ${accent}`, ...style }}
+      className={`relative px-4 md:px-6 py-5 border-b border-border bg-card/40 flex flex-col sm:flex-row sm:items-center sm:flex-wrap gap-3 sm:gap-4${className ? ` ${className}` : ""}`}
+      style={style}
     >
+      {/* Thin accent rule along the top — section wayfinding without the old heavy box */}
+      <span aria-hidden className="absolute inset-x-0 top-0 h-0.5" style={{ backgroundColor: accent }} />
       <div className="flex-1 min-w-0 sm:min-w-[14rem]">
-        <div className="flex items-center gap-2">
-          {icon && <span className="shrink-0" style={{ color: accent }}>{icon}</span>}
-          <h1 className="text-lg md:text-xl font-semibold tracking-tight line-clamp-1" title={title}>{title}</h1>
+        <div className="flex items-center gap-3">
+          {icon && (
+            <span
+              className="shrink-0 size-10 rounded-xl flex items-center justify-center [&_svg]:size-5"
+              style={{ backgroundColor: `${accent}1f`, color: accent }}
+            >
+              {icon}
+            </span>
+          )}
+          <h1 className="text-xl md:text-2xl font-semibold tracking-tight line-clamp-1" title={title}>{title}</h1>
         </div>
         <div className="flex items-center gap-1.5 mt-0.5 group/desc">
           {editing ? (
