@@ -98,7 +98,7 @@ const STATUS_BADGE: Record<string, { label: string; className: string }> = {
   accept_all: { label: "Accept-All", className: "bg-yellow-100 text-yellow-700 border-yellow-200" },
   risky: { label: "Risky", className: "bg-orange-100 text-orange-700 border-orange-200" },
   invalid: { label: "Invalid", className: "bg-red-100 text-red-700 border-red-200" },
-  unknown: { label: "Unknown", className: "bg-gray-100 text-gray-500 border-gray-200" },
+  unknown: { label: "Unknown", className: "bg-muted text-muted-foreground border-border" },
 };
 
 /* ─── Main component ────────────────────────────────────────────────────── */

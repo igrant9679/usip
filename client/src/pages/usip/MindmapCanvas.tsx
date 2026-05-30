@@ -125,7 +125,7 @@ function MindmapNode({ data, selected }: NodeProps) {
         fontWeight: isRoot ? 700 : 500,
       }}
     >
-      <Handle type="target" position={Position.Left} className="!bg-white/60 !border-white/40 !size-2" />
+      <Handle type="target" position={Position.Left} className="!bg-card/60 !border-white/40 !size-2" />
       <div className="flex items-center gap-1.5">
         {d.nodeType === "task" && <CheckSquare className="size-3 shrink-0" />}
         {d.nodeType === "note" && <FileText className="size-3 shrink-0" />}
@@ -138,7 +138,7 @@ function MindmapNode({ data, selected }: NodeProps) {
           {d.linkedEntityType === "task" ? "Task linked" : "Note linked"}
         </div>
       )}
-      <Handle type="source" position={Position.Right} className="!bg-white/60 !border-white/40 !size-2" />
+      <Handle type="source" position={Position.Right} className="!bg-card/60 !border-white/40 !size-2" />
     </div>
   );
 }

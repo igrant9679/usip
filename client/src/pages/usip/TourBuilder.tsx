@@ -78,36 +78,36 @@ function StepCard({
   const [expanded, setExpanded] = useState(index === 0);
 
   return (
-    <div className="rounded-xl border border-gray-200 bg-white overflow-hidden">
+    <div className="rounded-xl border border-border bg-card overflow-hidden">
       {/* Step header */}
       <div
-        className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-gray-50"
+        className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-muted"
         onClick={() => setExpanded(!expanded)}
       >
         <div className="w-6 h-6 rounded-full bg-violet-100 text-violet-700 text-xs font-bold flex items-center justify-center flex-shrink-0">
           {index + 1}
         </div>
-        <p className="flex-1 text-sm font-medium text-gray-700 line-clamp-1">
-          {step.title || <span className="text-gray-400 italic">Untitled step</span>}
+        <p className="flex-1 text-sm font-medium text-foreground line-clamp-1">
+          {step.title || <span className="text-muted-foreground italic">Untitled step</span>}
         </p>
         <div className="flex gap-1">
           <button
             onClick={(e) => { e.stopPropagation(); onMoveUp(); }}
             disabled={index === 0}
-            className="p-1 text-gray-400 hover:text-gray-600 disabled:opacity-30"
+            className="p-1 text-muted-foreground hover:text-muted-foreground disabled:opacity-30"
           >
             <ArrowUp className="h-3.5 w-3.5" />
           </button>
           <button
             onClick={(e) => { e.stopPropagation(); onMoveDown(); }}
             disabled={index === total - 1}
-            className="p-1 text-gray-400 hover:text-gray-600 disabled:opacity-30"
+            className="p-1 text-muted-foreground hover:text-muted-foreground disabled:opacity-30"
           >
             <ArrowDown className="h-3.5 w-3.5" />
           </button>
           <button
             onClick={(e) => { e.stopPropagation(); onDelete(); }}
-            className="p-1 text-gray-400 hover:text-red-500"
+            className="p-1 text-muted-foreground hover:text-red-500"
           >
             <Trash2 className="h-3.5 w-3.5" />
           </button>
@@ -116,7 +116,7 @@ function StepCard({
 
       {/* Step fields */}
       {expanded && (
-        <div className="px-4 pb-4 flex flex-col gap-3 border-t border-gray-100 pt-3">
+        <div className="px-4 pb-4 flex flex-col gap-3 border-t border-border pt-3">
           <div className="grid grid-cols-2 gap-3">
             <div>
               <Label className="text-xs">data-tour-id (preferred)</Label>
@@ -189,7 +189,7 @@ function StepCard({
             </div>
           </div>
           <div className="flex gap-4">
-            <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer">
+            <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
               <input
                 type="checkbox"
                 checked={step.skipAllowed}
@@ -198,7 +198,7 @@ function StepCard({
               />
               Allow skip
             </label>
-            <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer">
+            <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
               <input
                 type="checkbox"
                 checked={step.backAllowed}
@@ -285,8 +285,8 @@ function TourForm({
   return (
     <div className="flex flex-col gap-6">
       {/* Tour metadata */}
-      <div className="rounded-xl border border-gray-200 bg-white p-4 flex flex-col gap-4">
-        <h3 className="text-sm font-semibold text-gray-700">Tour Details</h3>
+      <div className="rounded-xl border border-border bg-card p-4 flex flex-col gap-4">
+        <h3 className="text-sm font-semibold text-foreground">Tour Details</h3>
         <div className="grid grid-cols-2 gap-4">
           <div>
             <Label>Tour Name</Label>
@@ -336,7 +336,7 @@ function TourForm({
             <Input value={form.achievementBadge} onChange={(e) => setForm({ ...form, achievementBadge: e.target.value })} placeholder="🎓 Sequences Master" />
           </div>
           <div className="flex items-end pb-1">
-            <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer">
+            <label className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer">
               <input
                 type="checkbox"
                 checked={form.showProactiveNudge}
@@ -352,7 +352,7 @@ function TourForm({
       {/* Steps */}
       <div className="flex flex-col gap-3">
         <div className="flex items-center justify-between">
-          <h3 className="text-sm font-semibold text-gray-700">Steps ({steps.length})</h3>
+          <h3 className="text-sm font-semibold text-foreground">Steps ({steps.length})</h3>
           <Button size="sm" variant="outline" onClick={addStep} className="h-7 text-xs">
             <Plus className="h-3 w-3 mr-1" /> Add Step
           </Button>
@@ -428,7 +428,7 @@ export default function TourBuilderPage() {
           >
             ← Back to tours
           </button>
-          <h2 className="text-base font-semibold text-gray-800 mb-4">
+          <h2 className="text-base font-semibold text-foreground mb-4">
             {isNew ? "New Tour" : `Edit: ${editing.name}`}
           </h2>
           <TourForm
@@ -483,30 +483,30 @@ export default function TourBuilderPage() {
           {tours?.map((tour) => (
             <div
               key={tour.id}
-              className="flex items-center gap-4 rounded-xl border border-gray-200 bg-white px-4 py-3"
+              className="flex items-center gap-4 rounded-xl border border-border bg-card px-4 py-3"
             >
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <p className="text-sm font-semibold text-gray-800">{tour.name}</p>
+                  <p className="text-sm font-semibold text-foreground">{tour.name}</p>
                   <span className="text-xs text-violet-500">{typeLabel[tour.type] ?? tour.type}</span>
                   <span className={`text-xs px-1.5 py-0.5 rounded-full ${
                     tour.status === "published" ? "bg-green-100 text-green-700" :
                     tour.status === "draft" ? "bg-amber-100 text-amber-700" :
-                    "bg-gray-100 text-gray-500"
+                    "bg-muted text-muted-foreground"
                   }`}>
                     {tour.status}
                   </span>
                 </div>
                 {tour.description && (
-                  <p className="text-xs text-gray-500 mt-0.5 line-clamp-1">{tour.description}</p>
+                  <p className="text-xs text-muted-foreground mt-0.5 line-clamp-1">{tour.description}</p>
                 )}
                 <div className="flex items-center gap-3 mt-1">
-                  <span className="text-xs text-gray-400">{tour.steps?.length ?? 0} steps</span>
+                  <span className="text-xs text-muted-foreground">{tour.steps?.length ?? 0} steps</span>
                   {tour.estimatedMinutes && (
-                    <span className="text-xs text-gray-400">~{tour.estimatedMinutes} min</span>
+                    <span className="text-xs text-muted-foreground">~{tour.estimatedMinutes} min</span>
                   )}
                   {tour.triggerPageKey && (
-                    <span className="text-xs text-gray-400">Triggers on: {tour.triggerPageKey}</span>
+                    <span className="text-xs text-muted-foreground">Triggers on: {tour.triggerPageKey}</span>
                   )}
                 </div>
               </div>
@@ -514,7 +514,7 @@ export default function TourBuilderPage() {
                 <Button
                   size="sm"
                   variant="ghost"
-                  className="h-8 w-8 p-0 text-gray-400 hover:text-violet-600"
+                  className="h-8 w-8 p-0 text-muted-foreground hover:text-violet-600"
                   onClick={() => { setEditing(tour); setIsNew(false); }}
                 >
                   <Edit className="h-3.5 w-3.5" />
@@ -522,7 +522,7 @@ export default function TourBuilderPage() {
                 <Button
                   size="sm"
                   variant="ghost"
-                  className="h-8 w-8 p-0 text-gray-400 hover:text-red-500"
+                  className="h-8 w-8 p-0 text-muted-foreground hover:text-red-500"
                   onClick={() => {
                     if (confirm(`Delete tour "${tour.name}"?`)) deleteMut.mutate({ id: tour.id });
                   }}
