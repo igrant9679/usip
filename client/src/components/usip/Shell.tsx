@@ -760,7 +760,7 @@ export function QueryError({ message, onRetry }: { message?: string; onRetry?: (
 export function SubNav({ items }: { items: Array<{ href: string; label: string; title?: string }> }) {
   const [loc] = useLocation();
   return (
-    <nav className="flex items-center gap-1 px-4 md:px-6 pt-3 flex-wrap" aria-label="Section navigation">
+    <nav className="flex items-center gap-1 px-4 md:px-6 pt-3 flex-wrap shrink-0" aria-label="Section navigation">
       {items.map((it) => {
         const active = loc === it.href;
         return (
