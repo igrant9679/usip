@@ -40,7 +40,6 @@ import { runEnrichAgent, runSequenceAgent } from "./routers/are/prospects";
 import {
   saveScrapeJobAndQueue,
   scrapeGoogleBusiness,
-  scrapeLinkedIn,
   scrapeNews,
   scrapeWeb,
 } from "./routers/are/scraper";

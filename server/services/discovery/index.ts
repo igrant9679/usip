@@ -32,11 +32,40 @@ import {
 } from "../../../drizzle/schema";
 import {
   scrapeGoogleBusiness,
-  scrapeLinkedIn,
   scrapeNews,
   scrapeWeb,
 } from "../../routers/are/scraper";
+import { searchLinkedInProfiles } from "../linkedinLookup";
 import { processRun } from "./consolidate";
+
+/**
+ * Real LinkedIn people search for Discovery v2 (replaces the old fabricating
+ * scrapeLinkedIn). Pulls from the workspace's bridged LinkedIn account pool
+ * (isAdmin so it isn't scoped to one user) and maps hits into the raw-find
+ * shape. Returns [] when no account is bridged or the search fails.
+ */
+async function discoverLinkedInPeople(
+  workspaceId: number,
+  query: string,
+): Promise<Array<Record<string, unknown>>> {
+  const res = await searchLinkedInProfiles({
+    workspaceId,
+    userId: 0,
+    isAdmin: true,
+    keywords: query,
+    limit: 25,
+  });
+  if (!res.ok) return [];
+  return res.hits.map((h) => ({
+    firstName: h.firstName,
+    lastName: h.lastName,
+    title: h.headline,
+    companyName: h.company,
+    linkedinUrl: h.linkedinUrl,
+    sourceUrl: h.linkedinUrl,
+    geography: h.location,
+  }));
+}
 
 export type SearchMode = "person" | "account";
 
@@ -244,14 +273,16 @@ export async function runDiscovery(
   const tasks: Array<Promise<{ source: string; raw: Array<Record<string, unknown>> }>> = [];
   if (mode === "person") {
     tasks.push(
-      scrapeLinkedIn(workspaceId, null, query, "people", icpContext).then((raw) => ({ source: "linkedin_people", raw })),
+      discoverLinkedInPeople(workspaceId, query).then((raw) => ({ source: "linkedin_people", raw })),
       scrapeWeb(workspaceId, null, query, icpContext).then((raw) => ({ source: "web", raw })),
       scrapeNews(workspaceId, null, query, icpContext).then((raw) => ({ source: "news", raw })),
     );
   } else {
+    // Account mode keeps the company-shaped sources. LinkedIn's classic
+    // search is people-only, so there's no real "company" LinkedIn source to
+    // include here — the old scrapeLinkedIn(...,"company") just fabricated.
     tasks.push(
       scrapeGoogleBusiness(workspaceId, null, query, icpContext).then((raw) => ({ source: "google_business", raw })),
-      scrapeLinkedIn(workspaceId, null, query, "company", icpContext).then((raw) => ({ source: "linkedin_company", raw })),
       scrapeWeb(workspaceId, null, query, icpContext).then((raw) => ({ source: "web", raw })),
       scrapeNews(workspaceId, null, query, icpContext).then((raw) => ({ source: "news", raw })),
     );
