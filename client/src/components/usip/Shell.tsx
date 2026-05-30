@@ -354,7 +354,7 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
             <svg className="size-7 text-[#1D4ED8] shrink-0" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2L4.09 12.97 12 12l-1 9 8.91-10.97L12 11l1-9z"/></svg>
             <span className="text-[22px] font-bold tracking-tight text-white">Velocity</span>
           </div>
-          <div className="text-[11px] text-[#A5B4FC] leading-tight pl-0.5">The Unified Revenue Intelligence Platform</div>
+          <div className="text-[10px] tracking-tight whitespace-nowrap text-[#A5B4FC] leading-tight pl-0.5">The Unified Revenue Intelligence Platform</div>
         </div>
 
         <nav
@@ -379,6 +379,19 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
             const groupHrefs = group.items
               .filter((i): i is typeof i & { href: string } => "href" in i)
               .map((i) => i.href);
+            // Per-item accent: items inherit the colour of the most recent
+            // coloured subhead above them (Funnel cyan / Records pink / Tools
+            // orange), falling back to the group colour. So each item's icon +
+            // active highlight matches the sub-section label it lives under.
+            const itemColors: string[] = (() => {
+              let running = gc;
+              return group.items.map((it) => {
+                if ("kind" in it && it.kind === "subhead") {
+                  running = (isDark ? it.darkColor : it.color) ?? gc;
+                }
+                return running;
+              });
+            })();
             return (
             <div key={group.label}>
               {/* Collapsible, colour-coded section header. When the current
@@ -497,10 +510,11 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
                     );
                   const active = isExact || isPrefixMatch;
                   const Icon = item.icon;
-                  // Inactive icons carry the section colour (muted) so each
-                  // group reads as a coloured cluster; the active item gets the
-                  // full-strength hue + a stronger tinted background.
-                  const inactiveIconColor = gc + "cc";
+                  // Colour for THIS item — its sub-section's hue (Funnel/
+                  // Records/Tools) or the group colour. Drives the icon and the
+                  // active highlight so items match their subhead label.
+                  const ic = itemColors[idx];
+                  const inactiveIconColor = ic + "cc";
                   return (
                     <Link
                       key={item.href}
@@ -511,10 +525,10 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
                         active ? "text-white font-medium" : "text-white/70 hover:text-white/95 hover:bg-white/5",
                       )}
                       style={active ? {
-                        borderLeft: `3px solid ${gc}`,
-                        backgroundColor: gc + "33",
+                        borderLeft: `3px solid ${ic}`,
+                        backgroundColor: ic + "33",
                         paddingLeft: '12px',
-                        boxShadow: `inset 0 0 0 1px ${gc}33`,
+                        boxShadow: `inset 0 0 0 1px ${ic}33`,
                       } : {
                         borderLeft: '3px solid transparent',
                         paddingLeft: '12px',
@@ -522,7 +536,7 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
                     >
                       <Icon
                         className="size-4 shrink-0 transition-colors"
-                        style={{ color: active ? gc : inactiveIconColor }}
+                        style={{ color: active ? ic : inactiveIconColor }}
                       />
                       <span className="truncate">{item.label}</span>
                     </Link>
