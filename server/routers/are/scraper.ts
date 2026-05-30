@@ -121,39 +121,53 @@ export async function scrapeGoogleBusiness(
   campaignId: number | null,
   query: string,
   icpContext: string,
+  pages = 3,
 ): Promise<Array<Record<string, unknown>>> {
-  // Use Google Places-style search URL (public, no API key needed for basic listing data)
-  const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(query + " site:google.com/maps OR business")}&num=20`;
-  let rawContent = "";
-  try {
-    rawContent = await fetchWithTimeout(searchUrl);
-  } catch {
-    rawContent = `Search query: ${query}. Unable to fetch live results. Use your knowledge to identify businesses matching this query.`;
+  // Page through the SERP (start=0,10,20…) and extract per page, merging
+  // unique prospects across pages. A page that fails to fetch or comes back
+  // empty stops paging — we do NOT fall back to "use your knowledge", which
+  // would fabricate businesses that don't exist.
+  const merged: Array<Record<string, unknown>> = [];
+  const seen = new Set<string>();
+  for (let page = 0; page < pages; page++) {
+    const start = page * 10;
+    const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(query + " site:google.com/maps OR business")}&num=20&start=${start}`;
+    let rawContent = "";
+    try {
+      rawContent = await fetchWithTimeout(searchUrl);
+    } catch {
+      break;
+    }
+    if (!rawContent.trim()) break;
+
+    const result = await invokeLLM({
+      messages: [
+        {
+          role: "system",
+          content: `You are a B2B prospect researcher. Extract business prospect information ONLY from the provided Google Business search results — never invent businesses that aren't present in the content. Focus on companies matching the ICP: ${icpContext}. For each business found, identify the most likely decision-maker title based on the business type.`,
+        },
+        {
+          role: "user",
+          content: `Search query: "${query}" (results page ${page + 1})\n\nRaw content:\n${rawContent}\n\nExtract up to 10 business prospects that actually appear in the content above. For companies where you cannot find a specific person, use the business owner/manager as the contact. Only output an email if it appears in the content; otherwise leave email blank.`,
+        },
+      ],
+      response_format: PROSPECT_EXTRACTION_SCHEMA,
+      workspaceId,
+      maxTokens: 1500,
+      temperature: 0.3,
+    });
+
+    const content = result.choices[0]?.message?.content;
+    if (!content) continue;
+    const parsed = JSON.parse(typeof content === "string" ? content : JSON.stringify(content));
+    for (const p of (parsed.prospects ?? []) as Array<Record<string, unknown>>) {
+      const key = String(p.linkedinUrl || p.email || `${p.firstName}|${p.lastName}|${p.companyName}`).toLowerCase().trim();
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      merged.push(p);
+    }
   }
-
-  const result = await invokeLLM({
-    messages: [
-      {
-        role: "system",
-        content: `You are a B2B prospect researcher. Extract business prospect information from Google Business search results. Focus on companies matching the ICP: ${icpContext}. For each business found, identify the most likely decision-maker title based on the business type.`,
-      },
-      {
-        role: "user",
-        content: `Search query: "${query}"\n\nRaw content:\n${rawContent}\n\nExtract up to 10 business prospects. For companies where you cannot find a specific person, use the business owner/manager as the contact. Infer email patterns from domain (e.g., info@domain.com or owner@domain.com).`,
-      },
-    ],
-    response_format: PROSPECT_EXTRACTION_SCHEMA,
-    workspaceId,
-    // Extraction output is small (10 prospects × ~60 tokens = ~600). Cap
-    // hard so we don't pay for the model's default 4096-token budget.
-    maxTokens: 1500,
-    temperature: 0.3,
-  });
-
-  const content = result.choices[0]?.message?.content;
-  if (!content) return [];
-  const parsed = JSON.parse(typeof content === "string" ? content : JSON.stringify(content));
-  return parsed.prospects ?? [];
+  return merged;
 }
 
 /* ─── LinkedIn company + people scraper (via Unipile profile API) ────────── */

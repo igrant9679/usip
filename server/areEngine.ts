@@ -1087,9 +1087,13 @@ async function discoverViaLinkedIn(
         "LinkedIn source skipped — no bridged LinkedIn account in this workspace. Connect one at /my-linkedin or disable the LinkedIn source on this campaign.");
       return [];
     }
+    // 25 is the Unipile wrapper's per-call max (searchLinkedInPeople clamps
+    // there). True cursor-based multi-page paging needs Unipile's paging
+    // contract confirmed against a live account before we spend daily-cap
+    // credits on it — tracked as a follow-up.
     const { items } = await searchLinkedInPeople(acct.unipileAccountId, {
       keywords,
-      limit: 15,
+      limit: 25,
     });
     return items
       .map((h: UnipileLinkedInSearchHit) => {
