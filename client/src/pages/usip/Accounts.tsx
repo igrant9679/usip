@@ -394,7 +394,7 @@ export default function Accounts() {
                         <input type="checkbox" checked={selectedIds.has(a.id)} onChange={() => toggleOne(a.id)} className="rounded border-gray-300 cursor-pointer" />
                       </td>
                       <td className="px-3 py-2 font-medium" onClick={(e) => e.stopPropagation()}>
-                        <Link href={`/accounts/${a.id}`} className="hover:underline">{a.name}</Link>
+                        <Link href={`/accounts/${a.id}`} className="hover:underline block max-w-[220px] truncate" title={a.name}>{a.name}</Link>
                       </td>
                       <td className="px-3 py-2 text-muted-foreground">{a.industry ?? "—"}</td>
                       <td className="px-3 py-2 text-muted-foreground">{a.region ?? "—"}</td>

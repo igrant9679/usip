@@ -570,17 +570,17 @@ export default function ProspectsPage() {
                         </a>
                       )}
                     </TableCell>
-                    <TableCell className="text-sm">{p.title}</TableCell>
+                    <TableCell className="text-sm"><div className="max-w-[150px] truncate" title={p.title ?? undefined}>{p.title}</div></TableCell>
                     <TableCell>{fitBadge((p as any).confidenceScore)}</TableCell>
-                    <TableCell className="text-sm">{p.company}</TableCell>
+                    <TableCell className="text-sm"><div className="max-w-[150px] truncate" title={p.company ?? undefined}>{p.company}</div></TableCell>
                     <TableCell className="text-xs text-muted-foreground">
                       {[p.city, p.state, p.country].filter(Boolean).join(", ")}
                     </TableCell>
                     <TableCell>
                       {p.email ? (
-                        <div className="flex items-center gap-1">
-                          <Mail className="h-3 w-3 text-muted-foreground" />
-                          <span className="text-xs">{p.email}</span>
+                        <div className="flex items-center gap-1 max-w-[220px]">
+                          <Mail className="h-3 w-3 text-muted-foreground shrink-0" />
+                          <span className="text-xs truncate min-w-0" title={p.email ?? undefined}>{p.email}</span>
                           {emailStatusBadge(p.emailStatus)}
                         </div>
                       ) : (
