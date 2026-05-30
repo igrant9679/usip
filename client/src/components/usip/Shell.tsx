@@ -809,6 +809,36 @@ export function QueryError({ message, onRetry }: { message?: string; onRetry?: (
   );
 }
 
+/** One pill in the SubNav strip. Every pill is shaded with the current
+ *  section accent — a subtle tint when inactive, a stronger fill + solid
+ *  border + bold text when active — so the in-page nav reads as part of the
+ *  section you're in while keeping a clear active/inactive hierarchy. Hover
+ *  is tracked locally so the tint can deepen on the dynamic accent colour
+ *  (which can't be expressed with a static Tailwind hover class). */
+function SubNavPill({ href, label, title, active, accent }: { href: string; label: string; title?: string; active: boolean; accent: string }) {
+  const [hover, setHover] = useState(false);
+  const bg = active ? `${accent}30` : hover ? `${accent}1f` : `${accent}12`;
+  const border = active ? accent : hover ? `${accent}66` : `${accent}3a`;
+  return (
+    <Link
+      href={href}
+      title={title}
+      aria-current={active ? "page" : undefined}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      className={cn(
+        "inline-flex items-center gap-2 text-[13px] px-4 py-2 rounded-lg border transition-all",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        active ? "font-semibold shadow-sm" : "font-medium",
+      )}
+      style={{ backgroundColor: bg, borderColor: border, color: accent }}
+    >
+      <span aria-hidden className="size-2 rounded-full" style={{ backgroundColor: accent, opacity: active ? 1 : 0.55 }} />
+      {label}
+    </Link>
+  );
+}
+
 /** Secondary navigation strip for related pages — replaces the cramped inline
  *  "Foo →" links that used to sit in the PageHeader action row. Highlights the
  *  active route. Render directly under <PageHeader>. */
@@ -817,35 +847,9 @@ export function SubNav({ items }: { items: Array<{ href: string; label: string; 
   const accent = useAccentColor();
   return (
     <nav className="flex items-center gap-2 px-4 md:px-6 py-3.5 flex-wrap shrink-0" aria-label="Section navigation">
-      {items.map((it) => {
-        const active = loc === it.href;
-        return (
-          <Link
-            key={it.href}
-            href={it.href}
-            title={it.title}
-            aria-current={active ? "page" : undefined}
-            className={cn(
-              "inline-flex items-center gap-2 text-[13px] font-medium px-4 py-2 rounded-lg border transition-all",
-              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-              active
-                ? "font-semibold shadow-sm"
-                : "bg-card text-muted-foreground border-border hover:text-foreground hover:bg-muted hover:border-foreground/20",
-            )}
-            // Active pill is filled with the section accent (tinted) so the
-            // current sub-page is obvious; inactive pills read clearly as
-            // outlined buttons rather than plain text links.
-            style={
-              active
-                ? { backgroundColor: `${accent}1f`, color: accent, borderColor: accent }
-                : undefined
-            }
-          >
-            <span aria-hidden className="size-2 rounded-full" style={{ backgroundColor: active ? accent : "currentColor", opacity: active ? 1 : 0.4 }} />
-            {it.label}
-          </Link>
-        );
-      })}
+      {items.map((it) => (
+        <SubNavPill key={it.href} href={it.href} label={it.label} title={it.title} active={loc === it.href} accent={accent} />
+      ))}
     </nav>
   );
 }
