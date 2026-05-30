@@ -94,10 +94,10 @@ function StepIndicator({ current }: { current: number }) {
 
 /* ─── Verification status badge ─────────────────────────────────────────── */
 const STATUS_BADGE: Record<string, { label: string; className: string }> = {
-  valid: { label: "Valid", className: "bg-green-100 text-green-700 border-green-200" },
-  accept_all: { label: "Accept-All", className: "bg-yellow-100 text-yellow-700 border-yellow-200" },
+  valid: { label: "Valid", className: "bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300 border-green-200" },
+  accept_all: { label: "Accept-All", className: "bg-yellow-100 dark:bg-yellow-900/40 text-yellow-700 dark:text-yellow-300 border-yellow-200" },
   risky: { label: "Risky", className: "bg-orange-100 text-orange-700 border-orange-200" },
-  invalid: { label: "Invalid", className: "bg-red-100 text-red-700 border-red-200" },
+  invalid: { label: "Invalid", className: "bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300 border-red-200" },
   unknown: { label: "Unknown", className: "bg-muted text-muted-foreground border-border" },
 };
 
@@ -266,7 +266,7 @@ export default function ImportContacts() {
                   isDragging
                     ? "border-primary bg-primary/5"
                     : file
-                    ? "border-green-400 bg-green-50"
+                    ? "border-green-400 bg-green-50 dark:bg-green-950/40"
                     : "border-muted-foreground/25 hover:border-primary/50"
                 }`}
                 onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
@@ -283,8 +283,8 @@ export default function ImportContacts() {
                 />
                 {file ? (
                   <div className="space-y-2">
-                    <CheckCircle2 className="h-10 w-10 text-green-500 mx-auto" />
-                    <p className="font-medium text-green-700">{file.name}</p>
+                    <CheckCircle2 className="h-10 w-10 text-green-500 dark:text-green-400 mx-auto" />
+                    <p className="font-medium text-green-700 dark:text-green-300">{file.name}</p>
                     <p className="text-sm text-muted-foreground">
                       {(file.size / 1024).toFixed(1)} KB · Click to replace
                     </p>
@@ -298,9 +298,9 @@ export default function ImportContacts() {
                 )}
               </div>
 
-              <Alert className="border-blue-200 bg-blue-50">
-                <Info className="h-4 w-4 text-blue-600" />
-                <AlertDescription className="text-blue-800 text-sm">
+              <Alert className="border-blue-200 bg-blue-50 dark:bg-blue-950/40">
+                <Info className="h-4 w-4 text-blue-600 dark:text-blue-300" />
+                <AlertDescription className="text-blue-800 dark:text-blue-200 text-sm">
                   <strong>Tip:</strong> Export your contacts from Google Contacts, HubSpot, Salesforce,
                   or LinkedIn Sales Navigator as CSV. Include at minimum: First Name, Last Name, and Email.
                 </AlertDescription>
@@ -420,17 +420,17 @@ export default function ImportContacts() {
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="grid grid-cols-3 gap-3">
-                  <div className="rounded-lg border bg-green-50 p-3 text-center">
-                    <p className="text-2xl font-bold text-green-700">{validCount}</p>
-                    <p className="text-xs text-green-600 mt-0.5">Ready to import</p>
+                  <div className="rounded-lg border bg-green-50 dark:bg-green-950/40 p-3 text-center">
+                    <p className="text-2xl font-bold text-green-700 dark:text-green-300">{validCount}</p>
+                    <p className="text-xs text-green-600 dark:text-green-300 mt-0.5">Ready to import</p>
                   </div>
-                  <div className="rounded-lg border bg-yellow-50 p-3 text-center">
-                    <p className="text-2xl font-bold text-yellow-700">{duplicateCount}</p>
-                    <p className="text-xs text-yellow-600 mt-0.5">Duplicates found</p>
+                  <div className="rounded-lg border bg-yellow-50 dark:bg-yellow-950/40 p-3 text-center">
+                    <p className="text-2xl font-bold text-yellow-700 dark:text-yellow-300">{duplicateCount}</p>
+                    <p className="text-xs text-yellow-600 dark:text-yellow-300 mt-0.5">Duplicates found</p>
                   </div>
-                  <div className="rounded-lg border bg-red-50 p-3 text-center">
-                    <p className="text-2xl font-bold text-red-700">{errorRows.length}</p>
-                    <p className="text-xs text-red-600 mt-0.5">Errors (will skip)</p>
+                  <div className="rounded-lg border bg-red-50 dark:bg-red-950/40 p-3 text-center">
+                    <p className="text-2xl font-bold text-red-700 dark:text-red-300">{errorRows.length}</p>
+                    <p className="text-xs text-red-600 dark:text-red-300 mt-0.5">Errors (will skip)</p>
                   </div>
                 </div>
 
@@ -530,19 +530,19 @@ export default function ImportContacts() {
                 </div>
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">Contacts to import</span>
-                  <span className="font-medium text-green-700">
+                  <span className="font-medium text-green-700 dark:text-green-300">
                     {validCount + (skipDuplicates ? 0 : duplicateCount)}
                   </span>
                 </div>
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">Duplicates</span>
-                  <span className="font-medium text-yellow-700">
+                  <span className="font-medium text-yellow-700 dark:text-yellow-300">
                     {skipDuplicates ? `${duplicateCount} (skipped)` : `${duplicateCount} (included)`}
                   </span>
                 </div>
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">Rows with errors</span>
-                  <span className="font-medium text-red-700">{errorRows.length} (skipped)</span>
+                  <span className="font-medium text-red-700 dark:text-red-300">{errorRows.length} (skipped)</span>
                 </div>
                 {tag && (
                   <div className="flex justify-between text-sm">
@@ -583,8 +583,8 @@ export default function ImportContacts() {
           <Card>
             <CardContent className="pt-8 pb-8 text-center space-y-5">
               <div className="flex justify-center">
-                <div className="w-16 h-16 rounded-full bg-green-100 flex items-center justify-center">
-                  <CheckCircle2 className="h-8 w-8 text-green-600" />
+                <div className="w-16 h-16 rounded-full bg-green-100 dark:bg-green-900/40 flex items-center justify-center">
+                  <CheckCircle2 className="h-8 w-8 text-green-600 dark:text-green-300" />
                 </div>
               </div>
               <div>
@@ -595,17 +595,17 @@ export default function ImportContacts() {
               </div>
 
               <div className="grid grid-cols-3 gap-3 max-w-xs mx-auto">
-                <div className="rounded-lg border bg-green-50 p-3 text-center">
-                  <p className="text-2xl font-bold text-green-700">{importResult.importedRows}</p>
-                  <p className="text-xs text-green-600">Imported</p>
+                <div className="rounded-lg border bg-green-50 dark:bg-green-950/40 p-3 text-center">
+                  <p className="text-2xl font-bold text-green-700 dark:text-green-300">{importResult.importedRows}</p>
+                  <p className="text-xs text-green-600 dark:text-green-300">Imported</p>
                 </div>
-                <div className="rounded-lg border bg-yellow-50 p-3 text-center">
-                  <p className="text-2xl font-bold text-yellow-700">{importResult.skippedRows}</p>
-                  <p className="text-xs text-yellow-600">Skipped</p>
+                <div className="rounded-lg border bg-yellow-50 dark:bg-yellow-950/40 p-3 text-center">
+                  <p className="text-2xl font-bold text-yellow-700 dark:text-yellow-300">{importResult.skippedRows}</p>
+                  <p className="text-xs text-yellow-600 dark:text-yellow-300">Skipped</p>
                 </div>
-                <div className="rounded-lg border bg-red-50 p-3 text-center">
-                  <p className="text-2xl font-bold text-red-700">{importResult.errorRows}</p>
-                  <p className="text-xs text-red-600">Errors</p>
+                <div className="rounded-lg border bg-red-50 dark:bg-red-950/40 p-3 text-center">
+                  <p className="text-2xl font-bold text-red-700 dark:text-red-300">{importResult.errorRows}</p>
+                  <p className="text-xs text-red-600 dark:text-red-300">Errors</p>
                 </div>
               </div>
 
