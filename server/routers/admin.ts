@@ -133,6 +133,10 @@ export const settingsRouter = router({
       areNotifyOnMeetingBooked: s.areNotifyOnMeetingBooked,
       areNotifyOnAutoApprove: s.areNotifyOnAutoApprove,
       areNotifyOnIcpUpdate: s.areNotifyOnIcpUpdate,
+      areBrandVoice: (s as any).areBrandVoice ?? null,
+      areScraperSources: (s as any).areScraperSources ?? null,
+      areIcpRegenSchedule: (s as any).areIcpRegenSchedule ?? null,
+      areSequenceQualityThreshold: (s as any).areSequenceQualityThreshold ?? null,
     };
   }),
 
