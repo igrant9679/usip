@@ -167,7 +167,12 @@ export default function CustomFields() {
                   </div>
                   <div className="flex gap-1 shrink-0">
                     <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openEdit(def)}><Pencil className="h-3.5 w-3.5" /></Button>
-                    <Button variant="ghost" size="icon" className="h-7 w-7 text-red-500 hover:text-red-600" onClick={() => deleteDef.mutate({ id: def.id })}><Trash2 className="h-3.5 w-3.5" /></Button>
+                    <ConfirmButton variant="ghost" size="icon" className="h-7 w-7 text-red-500 hover:text-red-600" ariaLabel="Delete field"
+                      title={`Delete field "${def.label}"?`}
+                      description="Deleting a custom field definition removes its stored values from every record of this type. This cannot be undone."
+                      confirmLabel="Delete" onConfirm={() => deleteDef.mutate({ id: def.id })}>
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </ConfirmButton>
                   </div>
                 </div>
               </CardContent>

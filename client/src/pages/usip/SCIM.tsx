@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
-import { Field, FormDialog, Section, StatusPill, fmtDate } from "@/components/usip/Common";
+import { ConfirmButton, Field, FormDialog, Section, StatusPill, fmtDate } from "@/components/usip/Common";
 import { EmptyState, PageHeader, Shell } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import { Copy, KeyRound, Plus, Trash2, Shield } from "lucide-react";
@@ -13,10 +13,10 @@ export default function SCIM() {
   const events = trpc.scim.events.useQuery();
   const [open, setOpen] = useState(false);
   const [reveal, setReveal] = useState<{ name: string; token: string } | null>(null);
-  const create = trpc.scim.createProvider.useMutation({ onSuccess: (r) => { utils.scim.listProviders.invalidate(); setOpen(false); setReveal({ name: "Just created", token: r.bearerToken }); } });
-  const tog = trpc.scim.toggleProvider.useMutation({ onSuccess: () => utils.scim.listProviders.invalidate() });
-  const rotate = trpc.scim.rotateToken.useMutation({ onSuccess: (r) => { utils.scim.listProviders.invalidate(); setReveal({ name: "Rotated", token: r.bearerToken }); } });
-  const del = trpc.scim.deleteProvider.useMutation({ onSuccess: () => utils.scim.listProviders.invalidate() });
+  const create = trpc.scim.createProvider.useMutation({ onSuccess: (r) => { utils.scim.listProviders.invalidate(); setOpen(false); setReveal({ name: "Just created", token: r.bearerToken }); }, onError: (e) => toast.error(e.message) });
+  const tog = trpc.scim.toggleProvider.useMutation({ onSuccess: () => utils.scim.listProviders.invalidate(), onError: (e) => toast.error(e.message) });
+  const rotate = trpc.scim.rotateToken.useMutation({ onSuccess: (r) => { utils.scim.listProviders.invalidate(); setReveal({ name: "Rotated", token: r.bearerToken }); }, onError: (e) => toast.error(e.message) });
+  const del = trpc.scim.deleteProvider.useMutation({ onSuccess: () => { utils.scim.listProviders.invalidate(); toast.success("Provider deleted"); }, onError: (e) => toast.error(e.message) });
 
   const baseUrl = `${window.location.origin}/api/scim/v2`;
 
@@ -52,8 +52,18 @@ export default function SCIM() {
                       <div className="font-medium">{p.name}</div>
                       <div className="text-xs text-muted-foreground">created {fmtDate(p.createdAt)}</div>
                     </div>
-                    <Button size="sm" variant="ghost" onClick={() => rotate.mutate({ id: p.id })}>Rotate</Button>
-                    <Button size="sm" variant="ghost" onClick={() => del.mutate({ id: p.id })}><Trash2 className="size-3.5" /></Button>
+                    <ConfirmButton size="sm" variant="ghost" destructive={false}
+                      title="Rotate bearer token?"
+                      description="The current token stops working immediately. Your IdP will fail to provision until you update it with the new token."
+                      confirmLabel="Rotate" onConfirm={() => rotate.mutate({ id: p.id })}>
+                      Rotate
+                    </ConfirmButton>
+                    <ConfirmButton size="sm" variant="ghost" ariaLabel="Delete provider"
+                      title="Delete SCIM provider?"
+                      description="This immediately breaks live provisioning from this identity provider for the whole workspace. This cannot be undone."
+                      confirmLabel="Delete" onConfirm={() => del.mutate({ id: p.id })}>
+                      <Trash2 className="size-3.5" />
+                    </ConfirmButton>
                   </li>
                 ))}
               </ul>
