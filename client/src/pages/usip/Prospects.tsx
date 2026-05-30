@@ -542,7 +542,13 @@ export default function ProspectsPage() {
                       />
                     </TableCell>
                     <TableCell>
-                      <div className="font-medium text-sm">{p.firstName} {p.lastName}</div>
+                      <button
+                        type="button"
+                        onClick={() => setLocation(`/prospects/${p.id}`)}
+                        className="font-medium text-sm text-left hover:underline"
+                      >
+                        {p.firstName} {p.lastName}
+                      </button>
                       {p.linkedinUrl && (
                         <a
                           href={p.linkedinUrl}
