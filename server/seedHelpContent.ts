@@ -32,13 +32,15 @@ type AnyDb = NonNullable<Awaited<ReturnType<typeof getDb>>>;
 
 type CatSeed = { slug: string; name: string; icon: string; sortOrder: number };
 
+// NOTE: HelpCenter.tsx renders cat.icon as a literal string (emoji), not a
+// lucide component name — so these are emojis, matching the "📁" fallback.
 const CATEGORIES: CatSeed[] = [
-  { slug: "getting-started", name: "Getting Started", icon: "Rocket", sortOrder: 1 },
-  { slug: "prospecting", name: "Prospecting", icon: "Search", sortOrder: 2 },
-  { slug: "crm-pipeline", name: "CRM & Pipeline", icon: "KanbanSquare", sortOrder: 3 },
-  { slug: "sequences-email", name: "Sequences & Email", icon: "Mail", sortOrder: 4 },
-  { slug: "are", name: "Autonomous Revenue Engine", icon: "Bot", sortOrder: 5 },
-  { slug: "playbooks", name: "Daily Playbooks", icon: "BookOpen", sortOrder: 6 },
+  { slug: "getting-started", name: "Getting Started", icon: "🚀", sortOrder: 1 },
+  { slug: "prospecting", name: "Prospecting", icon: "🔍", sortOrder: 2 },
+  { slug: "crm-pipeline", name: "CRM & Pipeline", icon: "📊", sortOrder: 3 },
+  { slug: "sequences-email", name: "Sequences & Email", icon: "✉️", sortOrder: 4 },
+  { slug: "are", name: "Autonomous Revenue Engine", icon: "🤖", sortOrder: 5 },
+  { slug: "playbooks", name: "Daily Playbooks", icon: "📘", sortOrder: 6 },
 ];
 
 /* ─── Articles (20) ──────────────────────────────────────────────────────── */
