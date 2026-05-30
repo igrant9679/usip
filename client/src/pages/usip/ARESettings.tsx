@@ -175,6 +175,10 @@ export default function ARESettings() {
       areNotifyOnAutoApprove: notifyAutoApprove,
       areNotifyOnIcpUpdate: notifyIcpUpdate,
       areDefaultSequenceTemplate: sequenceTemplate,
+      areBrandVoice: brandVoice,
+      areScraperSources: scraperSources,
+      areIcpRegenSchedule: icpRegenSchedule,
+      areSequenceQualityThreshold: sequenceQualityThreshold,
     });
   };
 

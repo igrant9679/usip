@@ -151,6 +151,10 @@ export const settingsRouter = router({
       areNotifyOnMeetingBooked: z.boolean().optional(),
       areNotifyOnAutoApprove: z.boolean().optional(),
       areNotifyOnIcpUpdate: z.boolean().optional(),
+      areBrandVoice: z.string().max(40).optional(),
+      areScraperSources: z.record(z.string(), z.boolean()).optional(),
+      areIcpRegenSchedule: z.string().max(20).optional(),
+      areSequenceQualityThreshold: z.number().int().min(0).max(100).optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();

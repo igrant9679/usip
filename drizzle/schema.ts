@@ -1187,6 +1187,11 @@ export const workspaceSettings = mysqlTable("workspace_settings", {
   areNotifyOnMeetingBooked: boolean("areNotifyOnMeetingBooked").default(true).notNull(),
   areNotifyOnAutoApprove: boolean("areNotifyOnAutoApprove").default(false).notNull(),
   areNotifyOnIcpUpdate: boolean("areNotifyOnIcpUpdate").default(true).notNull(),
+  // ARE Settings UI fields that previously had no persistence (Migration 0087)
+  areBrandVoice: varchar("areBrandVoice", { length: 40 }),
+  areScraperSources: json("areScraperSources"),
+  areIcpRegenSchedule: varchar("areIcpRegenSchedule", { length: 20 }),
+  areSequenceQualityThreshold: int("areSequenceQualityThreshold"),
   // AI auto-send toggle (Migration 0050)
   aiAutoSendEnabled: boolean("aiAutoSendEnabled").default(false).notNull(),
   aiAutoSendScoreMin: int("aiAutoSendScoreMin").default(70).notNull(),

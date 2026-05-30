@@ -84,7 +84,7 @@ export default function MyLinkedIn() {
         icon={<Linkedin className="size-5" />}
       />
 
-      <div className="max-w-3xl space-y-6">
+      <div className="max-w-3xl space-y-6 p-6">
         {/* Status banner */}
         {isConnected ? (
           <Alert className="border-green-200 bg-green-50">

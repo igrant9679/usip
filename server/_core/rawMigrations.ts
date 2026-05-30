@@ -1469,6 +1469,20 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0087: ARE Settings fields that had a UI but no persistence ────
+  // The ARE Settings page rendered Brand Voice, Scraper Sources, ICP
+  // regen schedule, and sequence-quality threshold, but updateAreSettings
+  // never saved them (no columns existed). Add them so the controls work.
+  {
+    name: "0087_are_settings_persisted_fields.sql",
+    statements: [
+      `ALTER TABLE \`workspace_settings\` ADD COLUMN \`areBrandVoice\` varchar(40) NULL`,
+      `ALTER TABLE \`workspace_settings\` ADD COLUMN \`areScraperSources\` JSON NULL`,
+      `ALTER TABLE \`workspace_settings\` ADD COLUMN \`areIcpRegenSchedule\` varchar(20) NULL`,
+      `ALTER TABLE \`workspace_settings\` ADD COLUMN \`areSequenceQualityThreshold\` int NULL`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------
