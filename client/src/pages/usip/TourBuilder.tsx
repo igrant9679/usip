@@ -535,17 +535,17 @@ export default function TourBuilderPage() {
         </div>
 
         {/* Record mode info panel */}
-        <div className="mt-8 rounded-xl border border-violet-100 bg-violet-50 p-4">
+        <div className="mt-8 rounded-xl border border-violet-100 dark:border-violet-900 bg-violet-50 dark:bg-violet-950/30 p-4">
           <div className="flex items-start gap-3">
-            <Radio className="h-5 w-5 text-violet-600 flex-shrink-0 mt-0.5" />
+            <Radio className="h-5 w-5 text-violet-600 dark:text-violet-300 flex-shrink-0 mt-0.5" />
             <div>
-              <p className="text-sm font-semibold text-violet-800">Targeting a step to an element</p>
-              <p className="text-xs text-violet-600 mt-1 leading-relaxed">
+              <p className="text-sm font-semibold text-violet-800 dark:text-violet-200">Targeting a step to an element</p>
+              <p className="text-xs text-violet-600 dark:text-violet-300 mt-1 leading-relaxed">
                 Add steps with the editor above and point each one at a UI element. The most
                 reliable target is a{" "}
-                <code className="bg-violet-100 px-1 rounded font-mono">data-tour-id</code> — to find one,
+                <code className="bg-violet-100 dark:bg-violet-900 px-1 rounded font-mono">data-tour-id</code> — to find one,
                 open your browser&rsquo;s inspector (right-click → Inspect) on the element and read its{" "}
-                <code className="bg-violet-100 px-1 rounded font-mono">data-tour-id</code> attribute, or
+                <code className="bg-violet-100 dark:bg-violet-900 px-1 rounded font-mono">data-tour-id</code> attribute, or
                 use any CSS selector. Set <em>Route</em> on the step so the tour navigates there first;
                 if no element matches, use the <em>coach</em> treatment for a page-level callout.
               </p>
