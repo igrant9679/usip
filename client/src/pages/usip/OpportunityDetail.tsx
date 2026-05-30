@@ -15,7 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { ArrowLeft, KanbanSquare, Building2, Users, DollarSign, Brain, History } from "lucide-react";
+import { ArrowLeft, KanbanSquare, Building2, Users, DollarSign, Brain, History, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
 function fmt$(n: any) {
@@ -81,8 +81,9 @@ export default function OpportunityDetail() {
             <div className="flex gap-2">
               <Input value={reason} placeholder={isClosedWon ? "Why did we win?" : "Why did we lose?"}
                 onChange={(e) => setReason(e.target.value)} />
-              <Button size="sm" disabled={update.isPending}
+              <Button size="sm" disabled={update.isPending} className="gap-1.5"
                 onClick={() => update.mutate({ id: o.id, patch: isClosedWon ? { winReason: reason } : { lostReason: reason } })}>
+                {update.isPending && <Loader2 className="size-3.5 animate-spin" />}
                 Save
               </Button>
             </div>

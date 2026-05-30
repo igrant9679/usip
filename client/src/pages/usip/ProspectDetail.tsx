@@ -282,7 +282,9 @@ export default function ProspectDetail() {
             <Button
               onClick={() => editing && update.mutate({ id, ...editing })}
               disabled={update.isPending}
+              className="gap-1.5"
             >
+              {update.isPending && <Loader2 className="size-3.5 animate-spin" />}
               Save changes
             </Button>
           </DialogFooter>
