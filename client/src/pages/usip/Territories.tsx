@@ -109,8 +109,10 @@ export default function Territories() {
 
       <FormDialog open={open} onOpenChange={setOpen} title="New territory" isPending={create.isPending}
         onSubmit={(f) => {
-          let rules: any = {};
-          try { rules = JSON.parse(String(f.get("rules") ?? "{}")); } catch {}
+          const raw = (String(f.get("rules") ?? "").trim()) || "{}";
+          let rules: any;
+          try { rules = JSON.parse(raw); } catch { toast.error("Rules must be valid JSON — fix or clear the field."); return; }
+          if (typeof rules !== "object" || rules === null || Array.isArray(rules)) { toast.error("Rules must be a JSON object, e.g. {\"region\":\"NA\"}."); return; }
           create.mutate({ name: String(f.get("name")), rules });
         }}>
         <Field name="name" label="Name" required />

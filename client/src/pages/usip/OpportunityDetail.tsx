@@ -6,7 +6,7 @@
  * is closed. Stage history is exposed as an extra tab.
  */
 import { useParams, Link, useLocation } from "wouter";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { Shell, PageHeader, EmptyState } from "@/components/usip/Shell";
 import { EntityDetailTabs } from "@/components/usip/EntityDetail";
@@ -41,6 +41,13 @@ export default function OpportunityDetail() {
   });
 
   const [reason, setReason] = useState("");
+  // Seed the reason editor from the stored value so saving an unedited field
+  // re-persists it instead of clobbering winReason/lostReason with "".
+  useEffect(() => {
+    const op = data?.opportunity;
+    if (!op) return;
+    setReason((op.stage === "won" ? op.winReason : op.stage === "lost" ? op.lostReason : "") ?? "");
+  }, [data]);
 
   if (isLoading) return <Shell title="Opportunity"><div className="p-6 text-sm text-muted-foreground">Loading…</div></Shell>;
   if (!data) return <Shell title="Opportunity"><EmptyState title="Opportunity not found" /></Shell>;
@@ -72,7 +79,7 @@ export default function OpportunityDetail() {
           <div className="pt-3 border-t mt-3 space-y-1">
             <div className="text-xs font-medium">{isClosedWon ? "Win reason" : "Loss reason"}</div>
             <div className="flex gap-2">
-              <Input defaultValue={reasonValue ?? ""} placeholder={isClosedWon ? "Why did we win?" : "Why did we lose?"}
+              <Input value={reason} placeholder={isClosedWon ? "Why did we win?" : "Why did we lose?"}
                 onChange={(e) => setReason(e.target.value)} />
               <Button size="sm" disabled={update.isPending}
                 onClick={() => update.mutate({ id: o.id, patch: isClosedWon ? { winReason: reason } : { lostReason: reason } })}>
