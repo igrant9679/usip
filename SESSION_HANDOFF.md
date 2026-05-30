@@ -9,9 +9,21 @@ Refreshed at end of the build+audit session. Paste the bottom block into a new c
 - **Repo:** `igrant9679/usip` (origin: `https://github.com/igrant9679/usip.git`)
 - **Local path:** `C:\Users\Admin\usip`
 - **Deploy:** Railway → `https://getvelocityai.app/` (auto-deploys on push to `main`)
-- **Tip of `main`:** `6f21ab0`. Help content (`172a082`→`819e11d`); sales-funnel realignment
+- **Tip of `main`:** `bdd93c7`. Help content (`172a082`→`819e11d`); sales-funnel realignment
   (`3682b36`→`3bc8224`); security + funnel-loop + UX backlog incl. tour recorder
-  (`dc4c067`→`6f21ab0`). See sections below.
+  (`dc4c067`→`6f21ab0`). `bdd93c7` = handoff update. See sections below.
+
+### ⚙️ Local tooling now installed (changed since earlier sessions)
+- **Python 3.12.10** and **Node v24.16.0 + npm 11.13.0** are now installed on this machine (via winget).
+  So the old "no local Node toolchain" note is **partially outdated** — `node`/`npm`/`python` run.
+- **BUT** the project uses **pnpm with a frozen lockfile** (pnpm itself not confirmed installed) and the
+  build runs on **Railway**. Keep verifying via **static review → commit → push → watch Railway →
+  check live in Chrome**, not a local build. Don't add deps without updating `pnpm-lock.yaml`.
+  ⚠️ Windows note: a `python` App-execution-alias stub may shadow real Python in fresh shells — use
+  `py`/the full path if `python` says "not found / Microsoft Store".
+- **7 UI/UX skills installed user-globally** (`C:\Users\Admin\.claude\skills\`): `ui-ux-pro-max`
+  + `ckm:design` / `ckm:design-system` / `ckm:ui-styling` / `ckm:brand` / `ckm:banner-design` /
+  `ckm:slides`. Available in every session — lean on `ui-ux-pro-max` for UI/UX design decisions.
 
 ### Follow-up session (security · funnel loop · UX) — tip `c4bcf52`
 - **Security (`dc4c067`):** Mailbox + EmailDrafts rendered untrusted email HTML via
@@ -255,24 +267,29 @@ filtered by `verificationStatus` which excluded CSV-imported NULL-status prospec
 ## Resume prompt for the new session
 ```
 You're continuing Velocity / usip (igrant9679/usip → getvelocityai.app on Railway).
-Repo: C:\Users\Admin\usip. Tip of main: 23caa0d.
+Repo: C:\Users\Admin\usip. Tip of main: bdd93c7.
 
-Read SESSION_HANDOFF.md and HELP_CONTENT_PLAN.md at the repo root first.
+Read SESSION_HANDOFF.md at the repo root first.
 
-Task: implement HELP_CONTENT_PLAN.md — seed 6 help categories, 20 help articles, and 10 guided
-tours for the SDR team (Prospecting + CRM), plus the Ask AI enhancements. Build an idempotent
-server/seedHelpContent.ts called from seedWorkspace() and a one-time boot backfill for existing
-workspaces. Full article bodies + tour step copy are in the plan — use them verbatim. The
-help_categories/help_articles/tours/tour_steps tables already exist (verify columns vs the plan;
-no new migration needed for them). Tours with no data-tour-id use coach steps + routeTo.
+State: Help Center content, the sales-funnel realignment (Prospect → Lead → Opportunity →
+Customer), a Mailbox/EmailDrafts XSS fix, and the full UX_AUDIT P2/P3 backlog are all SHIPPED and
+verified live (migrations through 0088 applied). No open task — wait for direction.
 
-Hard constraints (from SESSION_HANDOFF.md):
-- No local Node toolchain — static review only. esbuild fails on missing exports; grep before deleting.
-- Schema changes go in drizzle/schema.ts AND server/_core/rawMigrations.ts (idempotent).
-- Commit + push per change with the igrant9679 identity + the Opus co-author trailer.
+Hard constraints (still apply):
+- Build runs on Railway; project uses pnpm + a frozen lockfile. Node 24 + Python 3.12 ARE now
+  installed locally, but DON'T rely on a local build — verify via static review → commit → push →
+  watch Railway → check live in Chrome. Don't add deps without updating pnpm-lock.yaml.
+- esbuild fails on missing exports; grep repo-wide before deleting an export.
+- Schema changes go in drizzle/schema.ts AND server/_core/rawMigrations.ts (idempotent; next is 0089).
+- Commit + push per change with the igrant9679 identity + the Opus 4.8 co-author trailer.
 - Plan first when non-trivial; user approves before large code lands.
-- Reuse ConfirmButton / TableSkeleton / QueryError / SubNav primitives.
+- Reuse ConfirmButton / TableSkeleton / QueryError / SubNav primitives; for dark-mode use theme
+  tokens (bg-card / bg-muted / text-foreground / text-muted-foreground / border-border).
 - Always ask which Chrome browser (Personal Chrome / Browser 2) before driving it.
+- 7 UI/UX skills are installed globally — use `ui-ux-pro-max` for UI/UX design work.
 
-After reading both docs, briefly confirm the plan + the current state, then wait for direction.
+Test data left on LSI Media (delete if undesired): contact 72, lead 82, account 27, contact 73,
+opportunity 67 (won), customer 16 — all from Laurel/Dani verification records.
+
+After reading, briefly confirm current state, then wait for direction.
 ```
