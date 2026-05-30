@@ -9,8 +9,34 @@ Refreshed at end of the build+audit session. Paste the bottom block into a new c
 - **Repo:** `igrant9679/usip` (origin: `https://github.com/igrant9679/usip.git`)
 - **Local path:** `C:\Users\Admin\usip`
 - **Deploy:** Railway → `https://getvelocityai.app/` (auto-deploys on push to `main`)
-- **Tip of `main`:** `3bc8224` (funnel menu + Home). Help content shipped (`172a082`→`819e11d`);
-  then the **sales-funnel realignment** shipped + verified live (`3682b36`→`3bc8224`; see "Funnel" below).
+- **Tip of `main`:** `c4bcf52`. Help content (`172a082`→`819e11d`); sales-funnel realignment
+  (`3682b36`→`3bc8224`); follow-up security/funnel-loop/UX (`dc4c067`→`c4bcf52`). See sections below.
+
+### Follow-up session (security · funnel loop · UX) — tip `c4bcf52`
+- **Security (`dc4c067`):** Mailbox + EmailDrafts rendered untrusted email HTML via
+  `dangerouslySetInnerHTML` with no sanitization (stored-XSS). Added a dependency-free
+  browser sanitizer `client/src/lib/sanitizeHtml.ts` (DOMParser; strips script/iframe/style/
+  on*/js: URLs/etc.). **Dependency-free on purpose: pnpm frozen lockfile + no local toolchain
+  rules out adding DOMPurify** — keep that constraint in mind for any future dep.
+- **Funnel loop (`9d8d378`):** extracted `server/services/wonToCustomer.ts`
+  (`ensureCustomerForWonOpp`), used by BOTH `crm.setStage` and `pipelineAlerts.moveDealStage`
+  (the approval path previously bypassed customer creation). LeadDetail convert button relabeled
+  "Convert to opportunity".
+- **E2E verified live:** full chain on test data — lead 82 → convert → account 27 + contact 73 +
+  opp 67 → setStage won → **customer 16 created** (`customerCreated:true`). Delta 2 confirmed.
+- **UX dark mode (`c4bcf52`):** HelpCenter + HelpDrawer hardcoded light colors → theme tokens
+  (verified: panels now `bg-card`/dark in dark mode). Brand violet/amber accents left as-is.
+- **More test data on LSI Media** (delete if undesired): account 27, contact 73, opportunity 67
+  (now "won"), customer 16 — all from the Dani test lead.
+
+#### Remaining UX_AUDIT P2/P3 backlog (not yet done — greenlight to continue)
+- **Dark-mode hardcoded colors on other pages:** TourBuilder, Mindmaps, ImportContacts,
+  ProspectImportDialog (same `bg-white`/`text-gray-*` pattern; same token mapping applies).
+- **Bare empty states** (no description/CTA): Accounts, Quotes, Products, QBRs, Sequences, Tasks.
+- **Money formatting** inconsistency (local `$12.0K` fmt$ vs shared `$12,000`).
+- **aria-sort** on sortable headers (EmailAnalytics); **wide-table overflow** (Prospects/Accounts/Quotes).
+- **TourBuilder "Record Mode"** needs `window.__startTourRecorder()` in the console — surface as UI.
+- Save-pending spinners on ProspectDetail/OpportunityDetail.
 
 ### Funnel realignment (Prospect → Lead → Opportunity → Customer)
 The CRM was realigned to the canonical Salesforce-style funnel:
