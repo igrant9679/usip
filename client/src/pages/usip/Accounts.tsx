@@ -5,7 +5,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Field, fmt$, FormDialog, SelectField, Section, StatusPill } from "@/components/usip/Common";
-import { EmptyState, PageHeader, Shell } from "@/components/usip/Shell";
+import { EmptyState, PageHeader, QueryError, Shell, TableSkeleton } from "@/components/usip/Shell";
 import { RecordDrawer } from "@/components/usip/RecordDrawer";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { trpc } from "@/lib/trpc";
@@ -285,7 +285,7 @@ export default function Accounts() {
   const [addToSegmentOpen, setAddToSegmentOpen] = useState(false);
   const [editAccount, setEditAccount] = useState<any | null>(null);
   const utils = trpc.useUtils();
-  const { data: list } = trpc.accounts.list.useQuery();
+  const { data: list, isLoading: listLoading, error: listError, refetch: listRefetch } = trpc.accounts.list.useQuery();
   const { data: tree } = trpc.accounts.hierarchy.useQuery();
 
   const create = trpc.accounts.create.useMutation({
@@ -368,7 +368,11 @@ export default function Accounts() {
       <div className="p-6 grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="lg:col-span-2">
           <Section title="All accounts">
-            {(list ?? []).length === 0 ? <EmptyState icon={Building2} title="No accounts" /> : (
+            {listError ? (
+              <QueryError message={listError.message} onRetry={() => listRefetch()} />
+            ) : listLoading ? (
+              <TableSkeleton rows={8} />
+            ) : (list ?? []).length === 0 ? <EmptyState icon={Building2} title="No accounts" /> : (
               <table className="w-full text-sm">
                 <thead className="bg-secondary/50 text-xs uppercase text-muted-foreground">
                   <tr>

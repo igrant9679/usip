@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { EmptyState, PageHeader, Shell } from "@/components/usip/Shell";
+import { EmptyState, PageHeader, QueryError, Shell, TableSkeleton } from "@/components/usip/Shell";
 import { RecordDrawer } from "@/components/usip/RecordDrawer";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { trpc } from "@/lib/trpc";
@@ -206,7 +206,7 @@ export default function Leads() {
   const [addToSegmentOpen, setAddToSegmentOpen] = useState(false);
   const [editLead, setEditLead] = useState<any | null>(null);
   const utils = trpc.useUtils();
-  const { data, isLoading } = trpc.leads.list.useQuery({ search });
+  const { data, isLoading, error, refetch } = trpc.leads.list.useQuery({ search });
 
   const suggestNextAction = trpc.leadsAi.suggestNextAction.useMutation({
     onSuccess: () => utils.leads.list.invalidate(),
@@ -294,7 +294,11 @@ export default function Leads() {
         <Button onClick={() => setCreateOpen(true)} data-tour-id="leads-new-button"><Plus className="size-4" /> New lead</Button>
       </PageHeader>
       <div className="p-6">
-        {isLoading ? <Loader2 className="animate-spin size-4" /> : (data ?? []).length === 0 ? (
+        {error ? (
+          <QueryError message={error.message} onRetry={() => refetch()} />
+        ) : isLoading ? (
+          <div className="rounded-lg border bg-card overflow-hidden"><TableSkeleton rows={8} /></div>
+        ) : (data ?? []).length === 0 ? (
           <EmptyState icon={Target} title="No leads yet" description="Create one or wait for inbound." />
         ) : (
           <div className="rounded-lg border bg-card overflow-hidden">

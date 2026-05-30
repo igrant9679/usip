@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { trpc } from "@/lib/trpc";
@@ -713,6 +714,37 @@ export function EmptyState({ icon: Icon = Sparkles, title, description, action }
       <h3 className="text-sm font-semibold">{title}</h3>
       {description && <p className="text-sm text-muted-foreground mt-1 max-w-sm mx-auto">{description}</p>}
       {action && <div className="mt-4">{action}</div>}
+    </div>
+  );
+}
+
+/** Skeleton placeholder for a loading list/table — drop in where rows render
+ *  so the layout appears instantly instead of a blank spinner. */
+export function TableSkeleton({ rows = 6, className }: { rows?: number; className?: string }) {
+  return (
+    <div className={cn("p-3 space-y-2.5", className)} aria-busy="true" aria-live="polite">
+      {Array.from({ length: rows }).map((_, i) => (
+        <div key={i} className="flex items-center gap-3">
+          <Skeleton className="h-4 w-4 rounded" />
+          <Skeleton className="h-4 flex-1" />
+          <Skeleton className="h-4 w-24" />
+          <Skeleton className="h-4 w-16" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Error state for a failed query, distinct from "empty", with a Retry. */
+export function QueryError({ message, onRetry }: { message?: string; onRetry?: () => void }) {
+  return (
+    <div className="text-center py-16 px-4">
+      <div className="mx-auto size-12 rounded-full bg-destructive/10 flex items-center justify-center mb-3">
+        <AlertTriangle className="size-5 text-destructive" />
+      </div>
+      <h3 className="text-sm font-semibold">Couldn’t load this</h3>
+      <p className="text-sm text-muted-foreground mt-1 max-w-sm mx-auto break-words">{message ?? "Something went wrong fetching this data."}</p>
+      {onRetry && <div className="mt-4"><Button variant="outline" size="sm" onClick={onRetry}>Retry</Button></div>}
     </div>
   );
 }

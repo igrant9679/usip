@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Field, FormDialog, SelectField } from "@/components/usip/Common";
-import { EmptyState, PageHeader, Shell } from "@/components/usip/Shell";
+import { EmptyState, PageHeader, QueryError, Shell, TableSkeleton } from "@/components/usip/Shell";
 import { RecordDrawer } from "@/components/usip/RecordDrawer";
 import { EmailVerificationBadge } from "@/components/usip/EmailVerificationBadge";
 import { trpc } from "@/lib/trpc";
@@ -578,7 +578,7 @@ export default function Contacts() {
   const [verifFilter, setVerifFilter] = useState<VerifFilter>("all");
 
   const utils = trpc.useUtils();
-  const { data: rawContacts } = trpc.contacts.list.useQuery({ search });
+  const { data: rawContacts, isLoading: contactsLoading, error: contactsError, refetch: contactsRefetch } = trpc.contacts.list.useQuery({ search });
   // Apply verification status filter client-side
   const data = verifFilter === "all"
     ? rawContacts
@@ -762,7 +762,11 @@ export default function Contacts() {
       </PageHeader>
 
       <div className="p-6">
-        {(data ?? []).length === 0 ? (
+        {contactsError ? (
+          <QueryError message={contactsError.message} onRetry={() => contactsRefetch()} />
+        ) : contactsLoading ? (
+          <div className="rounded-lg border bg-card overflow-hidden"><TableSkeleton rows={8} /></div>
+        ) : (data ?? []).length === 0 ? (
           <EmptyState icon={Users} title="No contacts" description="Add one or convert a lead." />
         ) : (
           <div className="rounded-lg border bg-card overflow-hidden">
