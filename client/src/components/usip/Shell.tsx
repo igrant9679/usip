@@ -70,7 +70,7 @@ export function useAccentColor() { return useContext(AccentContext); }
 //   - miniPipeline: compact horizontal pipeline at the TOP of a group
 //     (Acquire) — letter-pill per stage, clickable, active-highlighting
 type NavLinkItem = { href: string; label: string; icon: any };
-type NavSubhead = { kind: "subhead"; label: string };
+type NavSubhead = { kind: "subhead"; label: string; color?: string; darkColor?: string };
 type NavMiniPipeline = {
   kind: "miniPipeline";
   // `short` is kept for backwards compatibility but no longer rendered;
@@ -133,14 +133,14 @@ const NAV: NavGroup[] = [
           { href: "/customers", label: "Customers", short: "★", icon: Heart },
         ],
       },
-      { kind: "subhead", label: "Funnel" },
+      { kind: "subhead", label: "Funnel", color: "#0891B2", darkColor: "#22D3EE" },
       { href: "/prospects", label: "Prospects", icon: Radar },
       { href: "/leads", label: "Leads", icon: Target },
       { href: "/pipeline", label: "Pipeline", icon: KanbanSquare },
-      { kind: "subhead", label: "Records" },
+      { kind: "subhead", label: "Records", color: "#DB2777", darkColor: "#F472B6" },
       { href: "/contacts", label: "Contacts", icon: Users },
       { href: "/accounts", label: "Accounts", icon: Building2 },
-      { kind: "subhead", label: "Tools" },
+      { kind: "subhead", label: "Tools", color: "#EA580C", darkColor: "#FB923C" },
       // Phase 1 of the multi-source prospect finder (Google Places now,
       // arbitrary-URL scrape + LinkedIn coming in phases 2-3).
       { href: "/find-prospects", label: "Find Prospects", icon: Search },
@@ -464,15 +464,19 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
                       </div>
                     );
                   }
-                  // Sub-section header (e.g. Acquire "Funnel" / "Tools")
+                  // Sub-section header (e.g. Acquire "Funnel" / "Records" /
+                  // "Tools") — each carries its own unique colour so every
+                  // labelled section in the rail reads as distinct.
                   if ("kind" in item && item.kind === "subhead") {
+                    const sc = isDark ? item.darkColor : item.color;
                     return (
                       <div
                         key={`subhead-${item.label}-${idx}`}
                         className="pt-2 pb-0.5 pl-3 pr-2"
                       >
                         <span
-                          className="text-[9px] font-semibold uppercase tracking-wider text-white/40"
+                          className="text-[9px] font-semibold uppercase tracking-wider"
+                          style={{ color: sc ?? "rgba(255,255,255,0.4)" }}
                         >
                           {item.label}
                         </span>
@@ -812,7 +816,7 @@ export function SubNav({ items }: { items: Array<{ href: string; label: string; 
   const [loc] = useLocation();
   const accent = useAccentColor();
   return (
-    <nav className="flex items-center gap-2 px-4 md:px-6 pt-3 flex-wrap shrink-0" aria-label="Section navigation">
+    <nav className="flex items-center gap-2 px-4 md:px-6 py-3.5 flex-wrap shrink-0" aria-label="Section navigation">
       {items.map((it) => {
         const active = loc === it.href;
         return (
@@ -822,7 +826,7 @@ export function SubNav({ items }: { items: Array<{ href: string; label: string; 
             title={it.title}
             aria-current={active ? "page" : undefined}
             className={cn(
-              "inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border transition-all",
+              "inline-flex items-center gap-2 text-[13px] font-medium px-4 py-2 rounded-lg border transition-all",
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
               active
                 ? "font-semibold shadow-sm"
@@ -837,7 +841,7 @@ export function SubNav({ items }: { items: Array<{ href: string; label: string; 
                 : undefined
             }
           >
-            <span aria-hidden className="size-1.5 rounded-full" style={{ backgroundColor: active ? accent : "currentColor", opacity: active ? 1 : 0.4 }} />
+            <span aria-hidden className="size-2 rounded-full" style={{ backgroundColor: active ? accent : "currentColor", opacity: active ? 1 : 0.4 }} />
             {it.label}
           </Link>
         );
