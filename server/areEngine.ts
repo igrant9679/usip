@@ -907,10 +907,18 @@ async function runDiscovery(campaign: Campaign): Promise<number> {
       if (keyU) seen.add(keyU);
       return true;
     });
+    // Validate + score before queueing. Drop rows with no anchor at all
+    // (neither a company domain nor a title — nothing to enrich or verify),
+    // attach a deterministic ICP-match score, and rank highest-fit first so
+    // the enrichment/enroll picks at the top of the queue are the best ones.
+    const scored = unique
+      .filter((p) => String(p.companyDomain ?? "").trim() !== "" || String(p.title ?? "").trim() !== "")
+      .map((p) => ({ ...p, icpMatchScore: scoreIcpMatch(p, { titles, industries, geos, keywords }) }))
+      .sort((a, b) => (b.icpMatchScore as number) - (a.icpMatchScore as number));
     try {
-      await saveScrapeJobAndQueue(campaign.workspaceId, campaign.id, sourceType, q, unique);
-      totalNew += unique.length;
-      perSource[sourceType] = { raw: raw.length, new: unique.length };
+      await saveScrapeJobAndQueue(campaign.workspaceId, campaign.id, sourceType, q, scored);
+      totalNew += scored.length;
+      perSource[sourceType] = { raw: raw.length, new: scored.length };
     } catch (e) {
       console.error(`[AreEngine] saveScrapeJobAndQueue (${sourceType}) failed:`, e);
       perSource[sourceType] = { raw: raw.length, new: 0, error: String((e as Error)?.message ?? e) };
@@ -1003,6 +1011,46 @@ function buildQuerySlices(args: {
     out.push(all[Math.floor(n * step)]);
   }
   return out;
+}
+
+/**
+ * Deterministic 0–100 relevance score of a discovered prospect against the
+ * campaign ICP. No LLM — pure string matching on title/industry/geo/keywords
+ * plus B2B anchor bonuses (company domain, having a title at all). Used to
+ * rank within a tick and to gate enrichment (campaign.minConfidence).
+ */
+function scoreIcpMatch(
+  p: Record<string, unknown>,
+  icp: { titles: string[]; industries: string[]; geos: string[]; keywords: string[] },
+): number {
+  const norm = (s: unknown) => String(s ?? "").toLowerCase().trim();
+  const title = norm(p.title);
+  const industry = norm(p.industry);
+  const geo = norm(p.geography);
+  const company = norm(p.companyName);
+  const domain = norm(p.companyDomain);
+  const hay = `${title} ${industry} ${geo} ${company}`;
+  let score = 0;
+  // Title / seniority match (the strongest signal).
+  if (icp.titles.length > 0) {
+    const full = icp.titles.some((t) => { const tt = norm(t); return tt && title.includes(tt); });
+    const token = !full && icp.titles.some((t) => norm(t).split(/\s+/).some((tok) => tok.length > 2 && title.includes(tok)));
+    score += full ? 35 : token ? 18 : 0;
+  } else {
+    score += title ? 10 : 0;
+  }
+  if (icp.industries.length > 0) {
+    score += icp.industries.some((i) => { const ii = norm(i); return ii && hay.includes(ii); }) ? 20 : 0;
+  }
+  if (icp.geos.length > 0) {
+    score += icp.geos.some((g) => { const gg = norm(g); return gg && geo.includes(gg); }) ? 15 : 0;
+  }
+  if (icp.keywords.length > 0) {
+    score += icp.keywords.some((k) => { const kk = norm(k); return kk && hay.includes(kk); }) ? 10 : 0;
+  }
+  if (domain) score += 15; // B2B anchor — enables email pattern lookup
+  if (title) score += 5;
+  return Math.min(100, score);
 }
 
 /**

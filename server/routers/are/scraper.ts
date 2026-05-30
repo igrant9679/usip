@@ -371,7 +371,7 @@ export async function saveScrapeJobAndQueue(
       companySize: p.companySize ? String(p.companySize) : undefined,
       industry: p.industry ? String(p.industry) : undefined,
       geography: p.geography ? String(p.geography) : undefined,
-      icpMatchScore: 0,
+      icpMatchScore: Number((p as any).icpMatchScore ?? 0),
       enrichmentStatus: "pending" as const,
       sequenceStatus: "pending" as const,
     }));
