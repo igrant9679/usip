@@ -1987,15 +1987,38 @@ const LEGACY_STAGES = [
   { key: "lost",        label: "Lost",        sortOrder: 5, defaultWinProb: 0,   isWon: false, isLost: true  },
 ];
 
-/** Ensure the workspace has at least one pipeline; seed the legacy 6 stages if not. */
+/** Ensure the workspace has at least one pipeline; seed the legacy 6 stages if not.
+ *  Self-healing: if a past check-then-insert race left more than one pipeline
+ *  flagged isDefault, demote all but the lowest-id one so exactly one default
+ *  exists. The lowest-id pipeline is treated as canonical. */
 async function ensureDefaultPipeline(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, workspaceId: number): Promise<number> {
-  const existing = await db.select().from(crmPipelines).where(eq(crmPipelines.workspaceId, workspaceId)).limit(1);
+  const existing = await db.select().from(crmPipelines)
+    .where(eq(crmPipelines.workspaceId, workspaceId))
+    .orderBy(crmPipelines.id);
   if (existing.length > 0) {
-    const def = existing.find((p) => p.isDefault) ?? existing[0];
-    return def.id;
+    const canonical = existing.find((p) => p.isDefault) ?? existing[0];
+    // Collapse any extra default flags down to the canonical one.
+    const extraDefaults = existing.filter((p) => p.isDefault && p.id !== canonical.id);
+    for (const p of extraDefaults) {
+      await db.update(crmPipelines).set({ isDefault: false }).where(eq(crmPipelines.id, p.id));
+    }
+    return canonical.id;
   }
   const r = await db.insert(crmPipelines).values({ workspaceId, name: "Default", isDefault: true, sortOrder: 0 });
   const pipelineId = Number((r as any)[0]?.insertId ?? 0);
+  // Guard the check-then-insert race: if a concurrent call already inserted a
+  // pipeline, defer to the lowest-id one and drop the row we just created.
+  const after = await db.select().from(crmPipelines)
+    .where(eq(crmPipelines.workspaceId, workspaceId))
+    .orderBy(crmPipelines.id);
+  if (after.length > 1) {
+    const canonical = after[0];
+    if (canonical.id !== pipelineId) {
+      await db.delete(crmPipelineStages).where(eq(crmPipelineStages.pipelineId, pipelineId));
+      await db.delete(crmPipelines).where(eq(crmPipelines.id, pipelineId));
+      return canonical.id;
+    }
+  }
   await db.insert(crmPipelineStages).values(LEGACY_STAGES.map((s) => ({ ...s, workspaceId, pipelineId })));
   return pipelineId;
 }
