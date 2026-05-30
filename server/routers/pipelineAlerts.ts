@@ -15,6 +15,7 @@ import {
   opportunityContactRoles,
   workflowRules,
   users,
+  crmPipelineStages,
 } from "../../drizzle/schema";
 
 const ALERT_THRESHOLDS = {
@@ -456,6 +457,21 @@ export const pipelineAlertsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // Validate the target stage against the workspace's real pipeline stage
+      // keys. Previously any string was written, so a stale/foreign vocabulary
+      // (e.g. "closed_won") could be saved and the kanban — which buckets by
+      // the canonical keys — would silently drop the deal off the board.
+      const validKeys = await db
+        .select({ key: crmPipelineStages.key })
+        .from(crmPipelineStages)
+        .where(eq(crmPipelineStages.workspaceId, ctx.workspace.id));
+      const keySet = new Set(validKeys.map((r) => r.key));
+      if (keySet.size > 0 && !keySet.has(input.newStage)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Unknown pipeline stage "${input.newStage}". Pick a stage from this workspace's pipeline.`,
+        });
+      }
       await db
         .update(opportunities)
         .set({ stage: input.newStage, daysInStage: 0 })

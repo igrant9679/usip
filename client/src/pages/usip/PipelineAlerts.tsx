@@ -39,15 +39,6 @@ import {
 import { toast } from "sonner";
 import { Link } from "wouter";
 
-const PIPELINE_STAGES = [
-  "prospecting",
-  "qualification",
-  "proposal",
-  "negotiation",
-  "closed_won",
-  "closed_lost",
-];
-
 const ALERT_CONFIG: Record<
   string,
   { label: string; icon: React.ComponentType<any>; color: string; bg: string; description: (d: any) => string }
@@ -120,6 +111,14 @@ function MoveStageDialog({
   deal, open, onClose, onSuccess,
 }: { deal: any; open: boolean; onClose: () => void; onSuccess: () => void }) {
   const [newStage, setNewStage] = useState("");
+  // Pull the real stage keys for this deal's pipeline (falls back to the
+  // workspace default pipeline) so the dropdown can never offer a stage the
+  // kanban board doesn't have — which previously orphaned the deal.
+  const pipelineQ = trpc.crmPipelines.get.useQuery(
+    { pipelineId: deal?.pipelineId ?? undefined },
+    { enabled: open },
+  );
+  const stages = pipelineQ.data?.stages ?? [];
   const moveStage = trpc.pipelineAlerts.moveDealStage.useMutation({
     onSuccess: () => { toast.success(`Deal moved to ${newStage}`); setNewStage(""); onSuccess(); onClose(); },
     onError: (e) => toast.error(e.message),
@@ -131,10 +130,10 @@ function MoveStageDialog({
         <div className="space-y-3 py-2">
           <p className="text-sm text-muted-foreground">Current: <span className="font-medium capitalize">{deal?.stage}</span> ({deal?.daysInStage ?? 0} days)</p>
           <Select value={newStage} onValueChange={setNewStage}>
-            <SelectTrigger><SelectValue placeholder="Select new stage…" /></SelectTrigger>
+            <SelectTrigger><SelectValue placeholder={pipelineQ.isLoading ? "Loading stages…" : "Select new stage…"} /></SelectTrigger>
             <SelectContent>
-              {PIPELINE_STAGES.filter((s) => s !== deal?.stage).map((s) => (
-                <SelectItem key={s} value={s}><span className="capitalize">{s.replace(/_/g, " ")}</span></SelectItem>
+              {stages.filter((s: any) => s.key !== deal?.stage).map((s: any) => (
+                <SelectItem key={s.key} value={s.key}>{s.label}</SelectItem>
               ))}
             </SelectContent>
           </Select>

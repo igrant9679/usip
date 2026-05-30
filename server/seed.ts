@@ -61,7 +61,7 @@ const FIRST_NAMES = ["Ava", "Noah", "Liam", "Maya", "Eli", "Zara", "Owen", "Priy
 const LAST_NAMES = ["Okafor", "Chen", "Lindgren", "Shah", "Mercer", "Bishara", "Silva", "Ortega", "Novak", "Park", "Romano", "Bergström", "Adebayo", "Hayashi", "Kerry", "Abrams", "Knox", "Vance", "Seidl", "Dumont", "Kurtz", "Pires", "Amaya", "Trent", "Holloway", "Vogel", "Pryce", "Saldaña", "Halliwell", "Forsyth", "Rask", "Kitamura", "Velasco", "Radcliffe", "Zayid", "Halstead", "Brandt", "Elbaz", "Torres", "Ng", "Mahler", "Albright", "Sosa"];
 const TITLES = ["Chief Executive Officer", "Chief Operating Officer", "Chief Financial Officer", "Chief Revenue Officer", "Chief Technology Officer", "VP of Sales", "VP of Marketing", "VP of Operations", "Director of Development", "Director of Philanthropy", "Director of Partnerships", "Director of Marketing", "Head of Growth", "Senior Manager Revenue Operations", "Major Gifts Officer", "Executive Director", "Programs Director"];
 
-const STAGES = ["discovery", "qualified", "proposal", "negotiation", "won"] as const;
+const STAGES = ["discovery", "qualified", "proposal", "negotiation", "won", "lost"] as const;
 const SOURCES = ["LinkedIn", "Referral", "Inbound", "Event", "CSV import", "Cold outbound"];
 
 export function computeHealth(input: { productUsage: number; engagement: number; supportHealth: number; npsScore: number }): number {
