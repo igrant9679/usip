@@ -7,7 +7,7 @@ import { Field, fmt$, FormDialog, SelectField } from "@/components/usip/Common";
 import { PageHeader, Shell } from "@/components/usip/Shell";
 import { RecordDrawer } from "@/components/usip/RecordDrawer";
 import { trpc } from "@/lib/trpc";
-import { ArrowRight, Brain, Download, Loader2, Plus, TrendingUp, Zap, Filter, X, User, KanbanSquare, Sparkles } from "lucide-react";
+import { ArrowRight, Brain, Download, Loader2, Plus, TrendingUp, Zap, Filter, X, User, KanbanSquare, Sparkles, ChevronLeft, ChevronRight } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Link, useLocation } from "wouter";
@@ -62,14 +62,19 @@ function WinProbBadge({ prob, aiGenerated }: { prob: number; aiGenerated?: boole
 }
 
 function DealCard({
-  opp, intel, onOpen, onAnalyze, isAnalyzing, onAcceptStage, isAccepting, stages,
+  opp, intel, onOpen, onAnalyze, isAnalyzing, onAcceptStage, isAccepting, onMove, stages,
 }: {
   opp: any; intel: any | null; onOpen: () => void;
   onAnalyze: (e: React.MouseEvent) => void; isAnalyzing: boolean;
   onAcceptStage: (e: React.MouseEvent, toStage: string) => void; isAccepting: boolean;
+  onMove: (toStage: string) => void;
   stages: StageItem[];
 }) {
   const STAGES = stages;
+  // Keyboard/click stage moves so the board isn't drag-only (a11y).
+  const curIdx = STAGES.findIndex((s) => s.id === opp.stage);
+  const prevStage = curIdx > 0 ? STAGES[curIdx - 1] : null;
+  const nextStage = curIdx >= 0 && curIdx < STAGES.length - 1 ? STAGES[curIdx + 1] : null;
   const winProb = intel ? Math.round(Number(intel.winProbability)) : opp.winProb;
   const nba: any[] = (intel?.nextBestActions as any) ?? [];
   const topNba = nba[0] ?? null;
@@ -87,7 +92,13 @@ function DealCard({
       draggable
       onDragStart={(e) => e.dataTransfer.setData("text/plain", String(opp.id))}
       onClick={onOpen}
-      className="bg-card border rounded-lg p-3 cursor-pointer hover:shadow-md hover:border-[#14B89A] transition-all group"
+      tabIndex={0}
+      role="button"
+      aria-label={`${opp.name}, ${stageLabel(opp.stage)} stage. Press Enter to open.`}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen(); }
+      }}
+      className="bg-card border rounded-lg p-3 cursor-pointer hover:shadow-md hover:border-[#14B89A] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#14B89A] transition-all group"
     >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
@@ -178,6 +189,33 @@ function DealCard({
           </Tooltip>
         </TooltipProvider>
       )}
+
+      {/* Keyboard/click stage moves — board isn't drag-only. Shown on hover/focus. */}
+      <div
+        className="mt-2 pt-2 border-t border-dashed flex items-center justify-between opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <button
+          type="button"
+          disabled={!prevStage}
+          aria-label={prevStage ? `Move to ${prevStage.label}` : "Already at first stage"}
+          title={prevStage ? `Move to ${prevStage.label}` : undefined}
+          onClick={(e) => { e.stopPropagation(); if (prevStage) onMove(prevStage.id); }}
+          className="flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded hover:bg-muted text-muted-foreground disabled:opacity-30 disabled:cursor-not-allowed"
+        >
+          <ChevronLeft className="size-3" /> {prevStage?.label ?? ""}
+        </button>
+        <button
+          type="button"
+          disabled={!nextStage}
+          aria-label={nextStage ? `Move to ${nextStage.label}` : "Already at last stage"}
+          title={nextStage ? `Move to ${nextStage.label}` : undefined}
+          onClick={(e) => { e.stopPropagation(); if (nextStage) onMove(nextStage.id); }}
+          className="flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded hover:bg-muted text-muted-foreground disabled:opacity-30 disabled:cursor-not-allowed"
+        >
+          {nextStage?.label ?? ""} <ChevronRight className="size-3" />
+        </button>
+      </div>
     </div>
   );
 }
@@ -588,6 +626,7 @@ export default function Pipeline() {
                         isAnalyzing={analyzingIds.has(o.id)}
                         onAcceptStage={(e, toStage) => handleAcceptStage(e, o.id, toStage)}
                         isAccepting={acceptingIds.has(o.id)}
+                        onMove={(toStage) => setStage.mutate({ id: o.id, stage: toStage })}
                         stages={STAGES}
                       />
                     ))}
