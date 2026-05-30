@@ -1,9 +1,75 @@
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import { ReactNode, useState } from "react";
+
+/**
+ * Drop-in button that requires confirmation before running a destructive or
+ * irreversible action (delete / send / publish / rotate / role-change). The
+ * button's content is passed as children; `onConfirm` fires only after the
+ * user accepts the dialog. Standardizes the three inconsistent patterns
+ * (AlertDialog / window.confirm / none) the UX audit found across the app.
+ */
+export function ConfirmButton({
+  onConfirm,
+  title = "Are you sure?",
+  description,
+  confirmLabel = "Confirm",
+  cancelLabel = "Cancel",
+  variant = "ghost",
+  size = "sm",
+  destructive = true,
+  disabled,
+  className,
+  ariaLabel,
+  children,
+}: {
+  onConfirm: () => void;
+  title?: string;
+  description?: ReactNode;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  variant?: "default" | "ghost" | "outline" | "destructive" | "secondary";
+  size?: "sm" | "default" | "icon";
+  destructive?: boolean;
+  disabled?: boolean;
+  className?: string;
+  ariaLabel?: string;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <AlertDialog open={open} onOpenChange={setOpen}>
+      <AlertDialogTrigger asChild>
+        <Button type="button" variant={variant} size={size} disabled={disabled} className={className} aria-label={ariaLabel}>
+          {children}
+        </Button>
+      </AlertDialogTrigger>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{title}</AlertDialogTitle>
+          {description && <AlertDialogDescription>{description}</AlertDialogDescription>}
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>{cancelLabel}</AlertDialogCancel>
+          <AlertDialogAction
+            className={destructive ? "bg-destructive text-destructive-foreground hover:bg-destructive/90" : undefined}
+            onClick={() => onConfirm()}
+          >
+            {confirmLabel}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
 
 export function Section({ title, description, right, children }: { title: string; description?: string; right?: ReactNode; children: ReactNode }) {
   return (
