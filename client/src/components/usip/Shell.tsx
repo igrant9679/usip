@@ -302,9 +302,12 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
     ),
   );
   const isDark = theme === "dark";
-  const accentColor = isDark
-    ? (activeGroup?.darkColor ?? "#93C5FD")
-    : (activeGroup?.color ?? "#1D4ED8");
+  // Unified brand accent (teal-green primary). Replaces the old per-section
+  // rainbow so the shell reads calm and consistent; wayfinding comes from
+  // icons + the active-item highlight instead of a different hue per group.
+  // activeGroup is still computed for the active-state checks below.
+  void activeGroup;
+  const accentColor = isDark ? "#2DD4BF" : "#14B89A";
 
   // close dropdowns/drawers on route change
   useEffect(() => {
@@ -346,8 +349,11 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
           }}
         >
           {effectiveNav.map((group) => {
-            const gc = isDark ? group.darkColor : group.color;
-            const gBg = isDark ? group.darkActiveBg : group.activeBg;
+            // Unified accent for every group (teal-green). The per-group
+            // color fields on NAV are retained in data but no longer drive
+            // the UI — the shell now uses one brand accent throughout.
+            const gc = accentColor;
+            const gBg = isDark ? "rgba(45,212,191,0.14)" : "rgba(20,184,154,0.12)";
             // Collect all hrefs in this group so we can detect prefix collisions.
             // An item is only active via startsWith when no sibling has a longer
             // href that also matches — this prevents /are matching /are/icp etc.
@@ -357,15 +363,9 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
               .map((i) => i.href);
             return (
             <div key={group.label}>
-              {/* Section header with left stripe */}
-              <div
-                className="flex items-center gap-1.5 pl-3 pr-2 pb-1 pt-0.5"
-                style={{ borderLeft: `3px solid ${gc}` }}
-              >
-                <span
-                  className="text-[10px] font-bold uppercase tracking-widest"
-                  style={{ color: gc }}
-                >
+              {/* Section header — uniform muted label (no per-group color) */}
+              <div className="flex items-center gap-1.5 pl-3 pr-2 pb-1 pt-0.5">
+                <span className="text-[10px] font-bold uppercase tracking-widest text-white/40">
                   {group.label}
                 </span>
               </div>
@@ -456,8 +456,9 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
                     );
                   const active = isExact || isPrefixMatch;
                   const Icon = item.icon;
-                  // Inactive icon: use group color at 70% opacity (cc) for minimum legibility
-                  const inactiveIconColor = gc + 'cc';
+                  // Inactive icon: neutral muted white (active items get the accent).
+                  // Keeps the rail calm — only the current page lights up teal.
+                  const inactiveIconColor = "rgba(255,255,255,0.5)";
                   return (
                     <Link
                       key={item.href}
