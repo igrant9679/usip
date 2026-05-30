@@ -262,32 +262,29 @@ export default function UnifiedInbox() {
   return (
     <Shell>
       <PageHeader
-        title="Unified Inbox" description="A single unified inbox for all inbound replies across every connected email account. Reply, forward, and log conversations directly to CRM records without leaving the inbox." pageKey="unified-inbox"
-        subtitle="All your conversations across every channel in one place"
-        actions={
-          <div className="flex gap-2"
+        title="Unified Inbox"
+        description="A single unified inbox for all inbound replies across every connected email account. Reply, forward, and log conversations directly to CRM records without leaving the inbox."
+        pageKey="unified-inbox"
         icon={<Inbox className="size-5" />}
       >
-            <Button variant="outline" size="sm" onClick={() => refetchInbox()}>
-              <RefreshCw className="h-4 w-4 mr-2" />
-              Refresh
-            </Button>
-            <Link href="/connected-accounts">
-              <Button variant="outline" size="sm">
-                <Plug className="h-4 w-4 mr-2" />
-                Manage Accounts
-              </Button>
-            </Link>
-            <Link
-              href="/email-drafts"
-              className="text-xs text-muted-foreground hover:text-foreground self-center underline-offset-2 hover:underline"
-              title="Drafts created by sequences awaiting review"
-            >
-              Email Drafts →
-            </Link>
-          </div>
-        }
-      />
+        <Button variant="outline" size="sm" onClick={() => refetchInbox()}>
+          <RefreshCw className="h-4 w-4 mr-2" />
+          Refresh
+        </Button>
+        <Link href="/connected-accounts">
+          <Button variant="outline" size="sm">
+            <Plug className="h-4 w-4 mr-2" />
+            Manage Accounts
+          </Button>
+        </Link>
+        <Link
+          href="/email-drafts"
+          className="text-xs text-muted-foreground hover:text-foreground self-center underline-offset-2 hover:underline"
+          title="Drafts created by sequences awaiting review"
+        >
+          Email Drafts →
+        </Link>
+      </PageHeader>
 
       {accounts.length === 0 ? (
         <div className="flex flex-col items-center justify-center h-96 gap-4 p-6">

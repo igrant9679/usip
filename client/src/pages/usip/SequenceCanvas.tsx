@@ -241,6 +241,10 @@ function CanvasInner({
   const [edges, setEdges] = useState<Edge[]>([]);
   const [saveState, setSaveState] = useState<"saved" | "unsaved" | "saving">("saved");
   const autosaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Latest unsaved canvas, so we can flush it if the user navigates away
+  // before the debounce fires (previously a 30s window of silent data loss).
+  const pendingSave = useRef<{ n: Node[]; e: Edge[] } | null>(null);
+  const flushRef = useRef<() => void>(() => {});
   const history = useHistory({ nodes: [], edges: [] });
 
   // Panel state
@@ -292,31 +296,46 @@ function CanvasInner({
     setTimeout(() => fitView({ padding: 0.2 }), 100);
   }, [canvasQ.data]);
 
+  const doSave = useCallback((n: Node[], e: Edge[]) => {
+    setSaveState("saving");
+    pendingSave.current = null;
+    saveCanvas.mutate({
+      id: sequenceId,
+      nodes: n.map((nd) => ({
+        id: nd.id,
+        type: nd.type as any,
+        positionX: Math.round(nd.position.x),
+        positionY: Math.round(nd.position.y),
+        data: nd.data as Record<string, any>,
+      })),
+      edges: e.map((ed) => ({
+        id: ed.id,
+        source: ed.source,
+        target: ed.target,
+        sourceHandle: ed.sourceHandle ?? null,
+        label: typeof ed.label === "string" ? ed.label : null,
+      })),
+    });
+  }, [sequenceId, saveCanvas]);
+
   const triggerAutosave = useCallback((n: Node[], e: Edge[]) => {
     if (readOnly) return;
     setSaveState("unsaved");
+    pendingSave.current = { n, e };
     if (autosaveTimer.current) clearTimeout(autosaveTimer.current);
-    autosaveTimer.current = setTimeout(() => {
-      setSaveState("saving");
-      saveCanvas.mutate({
-        id: sequenceId,
-        nodes: n.map((nd) => ({
-          id: nd.id,
-          type: nd.type as any,
-          positionX: Math.round(nd.position.x),
-          positionY: Math.round(nd.position.y),
-          data: nd.data as Record<string, any>,
-        })),
-        edges: e.map((ed) => ({
-          id: ed.id,
-          source: ed.source,
-          target: ed.target,
-          sourceHandle: ed.sourceHandle ?? null,
-          label: typeof ed.label === "string" ? ed.label : null,
-        })),
-      });
-    }, 30_000);
-  }, [readOnly, sequenceId, saveCanvas]);
+    // 2.5s debounce (was 30s). Combined with the unmount flush below, edits
+    // can no longer be silently lost by navigating away mid-window.
+    autosaveTimer.current = setTimeout(() => doSave(n, e), 2_500);
+  }, [readOnly, doSave]);
+
+  // Keep a fresh flush closure and run it once on unmount so any pending
+  // (debounced-but-not-yet-fired) edit is persisted before leaving.
+  flushRef.current = () => {
+    if (autosaveTimer.current) clearTimeout(autosaveTimer.current);
+    const p = pendingSave.current;
+    if (p && !readOnly) doSave(p.n, p.e);
+  };
+  useEffect(() => () => flushRef.current(), []);
 
   const onNodesChange = useCallback((changes: NodeChange[]) => {
     setNodes((nds) => {
