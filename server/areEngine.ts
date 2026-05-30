@@ -959,8 +959,10 @@ async function runDiscovery(campaign: Campaign): Promise<number> {
  *   - If keywords are present, include them in the product (multiplies
  *     by keywords.length). Otherwise keyword is omitted from the query.
  *   - sizeHint is appended to every slice (it's a filter, not an axis).
- *   - If the raw product exceeds MAX_SLICES, take the first N (round-
- *     robin would be ideal but for typical ICPs the cap rarely bites).
+ *   - Build the FULL product (bounded by a safety ceiling), then if it
+ *     exceeds MAX_SLICES, stride-sample so the kept slices stay spread
+ *     across every axis instead of clustering on titles[0]. The old
+ *     "first N" truncation meant combos past slot 30 never ran at all.
  *
  * Returns [] when there's not enough targeting to form a single slice.
  */
@@ -971,24 +973,34 @@ function buildQuerySlices(args: {
   keywords: string[];
   sizeHint: string;
 }): Array<{ id: string; q: string }> {
-  const MAX_SLICES = 30;
+  const MAX_SLICES = 120;
+  // Safety ceiling on the raw build so a pathological ICP (e.g. 10×10×10×10)
+  // can't blow up memory; we stride-sample down to MAX_SLICES afterwards.
+  const BUILD_CEILING = MAX_SLICES * 12;
   const ts = args.titles.length > 0 ? args.titles : [""];
   const is = args.industries.length > 0 ? args.industries : [""];
   const gs = args.geos.length > 0 ? args.geos : [""];
   const ks = args.keywords.length > 0 ? args.keywords : [""];
-  const out: Array<{ id: string; q: string }> = [];
-  for (const t of ts) {
+  const all: Array<{ id: string; q: string }> = [];
+  outer: for (const t of ts) {
     for (const i of is) {
       for (const g of gs) {
         for (const k of ks) {
           const q = [t, i, g, k, args.sizeHint].map((p) => p?.trim() ?? "").filter((p) => p.length > 0).join(" ").trim();
           if (!q) continue;
           const id = createHash("sha1").update(q).digest("hex").slice(0, 16);
-          out.push({ id, q });
-          if (out.length >= MAX_SLICES) return out;
+          all.push({ id, q });
+          if (all.length >= BUILD_CEILING) break outer;
         }
       }
     }
+  }
+  if (all.length <= MAX_SLICES) return all;
+  // Stride-sample to MAX_SLICES so kept slices interleave across the axes.
+  const step = all.length / MAX_SLICES;
+  const out: Array<{ id: string; q: string }> = [];
+  for (let n = 0; n < MAX_SLICES; n++) {
+    out.push(all[Math.floor(n * step)]);
   }
   return out;
 }
