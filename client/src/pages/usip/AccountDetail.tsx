@@ -28,7 +28,7 @@ export default function AccountDetail() {
   const { data, isLoading } = trpc.accounts.getWithContacts.useQuery({ id }, { enabled: !Number.isNaN(id) });
   const { data: opps } = trpc.opportunities.list.useQuery();
 
-  if (isLoading) return <Shell title="Account"><div className="p-6 text-sm text-muted-foreground">Loading…</div></Shell>;
+  if (isLoading) return <Shell title="Account"><div className="p-4 md:p-5 text-sm text-muted-foreground">Loading…</div></Shell>;
   if (!data) return <Shell title="Account"><EmptyState title="Account not found" /></Shell>;
 
   const { account, contacts: accContacts } = data;
@@ -87,7 +87,7 @@ export default function AccountDetail() {
       <PageHeader title={account.name} description={account.industry ?? undefined} icon={<Building2 className="size-5" />}>
         <Button variant="outline" size="sm" onClick={() => setLocation("/accounts")}><ArrowLeft className="size-4 mr-1" /> Back</Button>
       </PageHeader>
-      <div className="p-6">
+      <div className="p-4 md:p-5">
         <EntityDetailTabs entityType="account" entityId={account.id} overview={overview} related={related} />
       </div>
     </Shell>

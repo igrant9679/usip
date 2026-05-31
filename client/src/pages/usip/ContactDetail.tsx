@@ -18,7 +18,7 @@ export default function ContactDetail() {
   const [, setLocation] = useLocation();
   const { data, isLoading } = trpc.contacts.getWithAccount.useQuery({ id }, { enabled: !Number.isNaN(id) });
 
-  if (isLoading) return <Shell title="Contact"><div className="p-6 text-sm text-muted-foreground">Loading…</div></Shell>;
+  if (isLoading) return <Shell title="Contact"><div className="p-4 md:p-5 text-sm text-muted-foreground">Loading…</div></Shell>;
   if (!data || !data.contact) return <Shell title="Contact"><EmptyState title="Contact not found" /></Shell>;
 
   const c = data.contact;
@@ -57,7 +57,7 @@ export default function ContactDetail() {
         <AddToSequenceButton entityType="contact" entityId={c.id} />
         <Button variant="outline" size="sm" onClick={() => setLocation("/contacts")}><ArrowLeft className="size-4 mr-1" /> Back</Button>
       </PageHeader>
-      <div className="p-6">
+      <div className="p-4 md:p-5">
         <EntityDetailTabs entityType="contact" entityId={c.id} overview={overview} />
       </div>
     </Shell>

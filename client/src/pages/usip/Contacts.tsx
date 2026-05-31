@@ -761,7 +761,7 @@ export default function Contacts() {
         </Button>
       </PageHeader>
 
-      <div className="p-6">
+      <div className="p-4 md:p-5">
         {contactsError ? (
           <QueryError message={contactsError.message} onRetry={() => contactsRefetch()} />
         ) : contactsLoading ? (

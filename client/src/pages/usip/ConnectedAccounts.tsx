@@ -464,7 +464,7 @@ export default function ConnectedAccounts() {
           </div>
         </div>
       )}
-      <div className="p-6 space-y-6">
+      <div className="p-4 md:p-5 space-y-6">
         {/* Stats row */}
         <div className="grid grid-cols-3 gap-4">
           <Card className="border-violet-500/30 bg-violet-500/5">

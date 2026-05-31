@@ -372,7 +372,7 @@ export default function Dashboard() {
           </button>
         </div>
       </PageHeader>
-      <div className="p-6 space-y-6">
+      <div className="p-4 md:p-5 space-y-6">
 
         {/* ── Funnel overview: the workflow at a glance ── */}
         <div className="rounded-xl border bg-card p-4">

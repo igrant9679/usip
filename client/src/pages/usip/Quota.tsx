@@ -118,7 +118,7 @@ export default function Quota() {
           </Button>
         </div>
       </PageHeader>
-      <div className="p-6 max-w-5xl mx-auto space-y-6">
+      <div className="p-4 md:p-5 max-w-5xl mx-auto space-y-6">
 
         {/* Quota cards */}
         {targets.length === 0 && (

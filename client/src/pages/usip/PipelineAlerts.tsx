@@ -379,7 +379,7 @@ export default function PipelineAlerts() {
           Run Health Scan
         </Button>
       </PageHeader>
-      <div className="p-6 space-y-6">
+      <div className="p-4 md:p-5 space-y-6">
 
       {/* Summary KPI row */}
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">

@@ -36,7 +36,7 @@ export default function Audit() {
   return (
     <Shell title="Audit log">
       <PageHeader title="Audit log" description="A complete audit trail of all record creates, updates, and deletes with before-and-after field values. Restricted to workspace admins for compliance and security review." pageKey="audit" icon={<ClipboardList className="size-5" />} />
-      <div className="p-6 space-y-3">
+      <div className="p-4 md:p-5 space-y-3">
         <div className="flex flex-wrap items-center gap-2">
           {/* Entity type filter */}
           <label className="text-xs text-muted-foreground">Entity:</label>

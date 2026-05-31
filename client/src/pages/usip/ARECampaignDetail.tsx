@@ -1586,7 +1586,7 @@ export default function ARECampaignDetail() {
   if (!campaign) {
     return (
       <Shell title="Campaign">
-        <div className="p-6 text-muted-foreground">Campaign not found.</div>
+        <div className="p-4 md:p-5 text-muted-foreground">Campaign not found.</div>
       </Shell>
     );
   }

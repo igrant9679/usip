@@ -1372,7 +1372,7 @@ export default function Sequences() {
         { href: "/email-drafts", label: "Email Drafts", title: "Review and edit drafts created by sequence steps" },
         { href: "/email-analytics", label: "Email Analytics", title: "Open / click / reply rates per sequence and per step" },
       ]} />
-      <div className="p-6 grid grid-cols-1 lg:grid-cols-3 gap-4">
+      <div className="p-4 md:p-5 grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="lg:col-span-1">
           <Section title="All sequences">
             {(data ?? []).length === 0 ? <EmptyState icon={Activity} title="None yet" /> : (

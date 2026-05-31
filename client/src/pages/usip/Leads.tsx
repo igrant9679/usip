@@ -293,7 +293,7 @@ export default function Leads() {
         </Button>
         <Button onClick={() => setCreateOpen(true)} data-tour-id="leads-new-button"><Plus className="size-4" /> New lead</Button>
       </PageHeader>
-      <div className="p-6">
+      <div className="p-4 md:p-5">
         {error ? (
           <QueryError message={error.message} onRetry={() => refetch()} />
         ) : isLoading ? (

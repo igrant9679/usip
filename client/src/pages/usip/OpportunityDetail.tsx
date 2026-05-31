@@ -50,7 +50,7 @@ export default function OpportunityDetail() {
     setReason((op.stage === "won" ? op.winReason : op.stage === "lost" ? op.lostReason : "") ?? "");
   }, [data]);
 
-  if (isLoading) return <Shell title="Opportunity"><div className="p-6 text-sm text-muted-foreground">Loading…</div></Shell>;
+  if (isLoading) return <Shell title="Opportunity"><div className="p-4 md:p-5 text-sm text-muted-foreground">Loading…</div></Shell>;
   if (!data) return <Shell title="Opportunity"><EmptyState title="Opportunity not found" /></Shell>;
 
   const { opportunity: o, account, contactRoles } = data;
@@ -190,7 +190,7 @@ export default function OpportunityDetail() {
       <PageHeader title={o.name} description={account?.name ?? undefined} icon={<KanbanSquare className="size-5" />}>
         <Button variant="outline" size="sm" onClick={() => setLocation("/pipeline")}><ArrowLeft className="size-4 mr-1" /> Back to pipeline</Button>
       </PageHeader>
-      <div className="p-6">
+      <div className="p-4 md:p-5">
         <EntityDetailTabs
           entityType="opportunity"
           entityId={o.id}

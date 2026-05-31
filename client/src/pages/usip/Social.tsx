@@ -90,7 +90,7 @@ export default function Social() {
         <Button onClick={() => setComposeOpen(true)}><Plus className="size-4" /> New post</Button>
       </PageHeader>
 
-      <div className="p-6 space-y-4">
+      <div className="p-4 md:p-5 space-y-4">
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <StatCard label="Connected" value={(accounts.data ?? []).filter((a) => a.connected).length} />
           <StatCard label="Published" value={analytics.data?.totalPosts ?? 0} />

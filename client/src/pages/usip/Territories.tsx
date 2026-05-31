@@ -29,7 +29,7 @@ export default function Territories() {
         <Button variant="outline" onClick={() => setRuleOpen(true)}><Zap className="size-4" /> New routing rule</Button>
         <Button onClick={() => setOpen(true)}><Plus className="size-4" /> New territory</Button>
       </PageHeader>
-      <div className="p-6 space-y-6">
+      <div className="p-4 md:p-5 space-y-6">
         <Section title={`Territories (${data?.length ?? 0})`}>
           {(data ?? []).length === 0 ? <EmptyState icon={Map} title="None yet" /> : (
             <ul className="divide-y">

@@ -377,7 +377,7 @@ export default function Team() {
 
       {/* ── Members tab ── */}
       {activeTab === "members" && (
-        <div className="p-6 space-y-4">
+        <div className="p-4 md:p-5 space-y-4">
           {/* Filter bar */}
           <div className="flex items-center gap-2 flex-wrap">
             <Input
@@ -661,7 +661,7 @@ export default function Team() {
 
       {/* ── Login History tab ── */}
       {activeTab === "login_history" && (
-        <div className="p-6 space-y-4">
+        <div className="p-4 md:p-5 space-y-4">
           {/* Filter bar */}
           <div className="flex flex-wrap items-end gap-3 rounded-lg border bg-card p-3">
             <div className="space-y-1">
@@ -777,7 +777,7 @@ export default function Team() {
 
       {/* ── Settings tab ── */}
       {activeTab === "settings" && isAdmin && (
-        <div className="p-6 max-w-lg space-y-6">
+        <div className="p-4 md:p-5 max-w-lg space-y-6">
           <Section title="Invitation expiry">
             <div className="p-4 space-y-4">
               <p className="text-sm text-muted-foreground">

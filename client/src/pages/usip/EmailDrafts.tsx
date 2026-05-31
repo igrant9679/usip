@@ -373,7 +373,7 @@ export default function EmailDrafts() {
         )}
         <Button onClick={() => setComposeOpen(true)}><Sparkles className="size-4" /> AI compose</Button>
       </PageHeader>
-      <div className="p-6 space-y-3">
+      <div className="p-4 md:p-5 space-y-3">
         {(data ?? []).length === 0 ? <EmptyState icon={FileText} title="No drafts" /> : data!.map((d) => (
           <div key={d.id} className={`rounded-lg border bg-card p-4 ${d.bouncedAt ? "border-red-500/30" : ""}`}>
             <div className="flex items-center gap-2 flex-wrap">

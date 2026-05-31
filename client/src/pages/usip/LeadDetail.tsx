@@ -30,7 +30,7 @@ export default function LeadDetail() {
     onError: (e) => toast.error(e.message),
   });
 
-  if (isLoading) return <Shell title="Lead"><div className="p-6 text-sm text-muted-foreground">Loading…</div></Shell>;
+  if (isLoading) return <Shell title="Lead"><div className="p-4 md:p-5 text-sm text-muted-foreground">Loading…</div></Shell>;
   if (!lead) return <Shell title="Lead"><EmptyState title="Lead not found" /></Shell>;
 
   const converted = lead.status === "converted";
@@ -88,7 +88,7 @@ export default function LeadDetail() {
         <AddToSequenceButton entityType="lead" entityId={lead.id} />
         <Button variant="outline" size="sm" onClick={() => setLocation("/leads")}><ArrowLeft className="size-4 mr-1" /> Back</Button>
       </PageHeader>
-      <div className="p-6">
+      <div className="p-4 md:p-5">
         <EntityDetailTabs entityType="lead" entityId={lead.id} overview={overview} />
       </div>
     </Shell>

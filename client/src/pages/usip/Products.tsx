@@ -20,7 +20,7 @@ export default function Products() {
       >
         <Button onClick={() => setOpen(true)}><Plus className="size-4" /> New product</Button>
       </PageHeader>
-      <div className="p-6">
+      <div className="p-4 md:p-5">
         <Section title={`Products (${data?.length ?? 0})`}>
           {error ? <QueryError message={error.message} onRetry={() => refetch()} /> : isLoading ? <TableSkeleton rows={6} /> : (data ?? []).length === 0 ? <EmptyState icon={Package} title="No products yet" description="Add the products and services you sell. They power opportunity line items and quotes." /> : (
             <div className="overflow-x-auto">

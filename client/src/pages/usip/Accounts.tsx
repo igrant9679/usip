@@ -365,7 +365,7 @@ export default function Accounts() {
         </Button>
         <Button onClick={() => setOpen(true)}><Plus className="size-4" /> New account</Button>
       </PageHeader>
-      <div className="p-6 grid grid-cols-1 lg:grid-cols-3 gap-4">
+      <div className="p-4 md:p-5 grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="lg:col-span-2">
           <Section title="All accounts">
             {listError ? (

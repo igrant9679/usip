@@ -64,7 +64,7 @@ export default function NotificationPrefs() {
         </Button>
       </PageHeader>
 
-      <div className="p-6 max-w-2xl space-y-6">
+      <div className="p-4 md:p-5 max-w-2xl space-y-6">
         <Section title="Notification email">
           <div className="p-4">
             <p className="text-sm text-muted-foreground mb-3">

@@ -185,7 +185,7 @@ export default function Tasks() {
         icon={<CheckSquare className="size-5" />}>
         <Button onClick={() => setOpen(true)}><Plus className="size-4" /> New task</Button>
       </PageHeader>
-      <div className="p-6 space-y-4">
+      <div className="p-4 md:p-5 space-y-4">
         <div className="flex flex-wrap items-center gap-3">
           <div className="flex items-center gap-2 text-xs">
             <span className="text-muted-foreground">Assignee</span>

@@ -71,7 +71,7 @@ export default function LeadRouting() {
         { href: "/territories", label: "Territories", title: "Define territories used by routing rules (geo / industry / vertical)" },
       ]} />
 
-      <div className="p-6">
+      <div className="p-4 md:p-5">
         {!rules || rules.length === 0 ? (
           <EmptyState icon={Sparkles} title="No routing rules yet" description="Add a rule to auto-assign new leads on creation." />
         ) : (

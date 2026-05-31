@@ -59,7 +59,7 @@ export default function SegmentRules() {
         )}
       </PageHeader>
 
-      <div className="p-6 space-y-6">
+      <div className="p-4 md:p-5 space-y-6">
         {isAdmin && (
           <div className="border border-border rounded-lg p-4 bg-card">
             <h3 className="text-sm font-medium mb-3 flex items-center gap-2">

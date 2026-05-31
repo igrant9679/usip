@@ -107,7 +107,7 @@ export default function ResearchPipeline() {
       <PageHeader title="AI Research Pipeline" description="Run the 5-stage AI research pipeline: org signals → contact fit → angle generation → draft variants → final review. Each stage is fully auditable and can be paused for human approval." pageKey="research-pipeline" 
         icon={<FlaskConical className="size-5" />}
       />
-      <div className="p-6 max-w-5xl mx-auto space-y-6">
+      <div className="p-4 md:p-5 max-w-5xl mx-auto space-y-6">
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Left: Start panel */}

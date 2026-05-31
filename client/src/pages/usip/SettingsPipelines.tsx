@@ -75,7 +75,7 @@ export default function SettingsPipelines() {
         <Button size="sm" onClick={() => setNewOpen(true)}><Plus className="size-4 mr-1" /> New pipeline</Button>
       </PageHeader>
 
-      <div className="p-6 grid grid-cols-1 md:grid-cols-[280px_1fr] gap-4">
+      <div className="p-4 md:p-5 grid grid-cols-1 md:grid-cols-[280px_1fr] gap-4">
         {/* Left: pipeline list */}
         <Card><CardContent className="pt-4 space-y-1">
           {!pipelines ? <div className="text-sm text-muted-foreground">Loading…</div> :

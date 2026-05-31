@@ -116,7 +116,7 @@ export default function CustomFields() {
           <Plus className="h-4 w-4 mr-1" /> Add Field
         </Button>
       </PageHeader>
-      <div className="p-6 max-w-4xl mx-auto space-y-6">
+      <div className="p-4 md:p-5 max-w-4xl mx-auto space-y-6">
 
         {/* Entity tabs */}
         <div className="flex gap-2 flex-wrap">

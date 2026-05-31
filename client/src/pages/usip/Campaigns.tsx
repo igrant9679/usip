@@ -606,7 +606,7 @@ export default function Campaigns() {
         </Button>
       </PageHeader>
 
-      <div className="p-6 grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="p-4 md:p-5 grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Left: Campaign list */}
         <div className="space-y-3">
           <span className="text-sm font-medium text-muted-foreground">

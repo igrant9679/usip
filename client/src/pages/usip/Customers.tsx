@@ -71,7 +71,7 @@ export default function Customers() {
           </Button>
         )}
       </PageHeader>
-      <div className="p-6 space-y-4">
+      <div className="p-4 md:p-5 space-y-4">
         {kpis && (
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
             <StatCard label="ARR" value={fmt$(kpis.arr)} />

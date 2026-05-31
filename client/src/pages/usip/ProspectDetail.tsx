@@ -94,10 +94,10 @@ export default function ProspectDetail() {
   const [editing, setEditing] = useState<EditDraft | null>(null);
 
   if (isLoading) {
-    return <Shell title="Prospect"><div className="p-6 text-center text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin inline mr-2" /> Loading…</div></Shell>;
+    return <Shell title="Prospect"><div className="p-4 md:p-5 text-center text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin inline mr-2" /> Loading…</div></Shell>;
   }
   if (!p) {
-    return <Shell title="Prospect"><div className="p-6 text-center text-sm text-muted-foreground">Prospect not found.</div></Shell>;
+    return <Shell title="Prospect"><div className="p-4 md:p-5 text-center text-sm text-muted-foreground">Prospect not found.</div></Shell>;
   }
 
   const sourceUrls = (p.sourceUrls as string[] | null) ?? [];

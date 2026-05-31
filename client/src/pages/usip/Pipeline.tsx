@@ -245,7 +245,7 @@ function ForecastView() {
 
   if (isLoading) {
     return (
-      <div className="p-6 space-y-6">
+      <div className="p-4 md:p-5 space-y-6">
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
           {[1, 2, 3, 4].map((i) => <Skeleton key={i} className="h-24 rounded-xl" />)}
         </div>
@@ -269,7 +269,7 @@ function ForecastView() {
   const stageLabel = (id: string) => STAGES.find((s) => s.id === id)?.label ?? id;
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-4 md:p-5 space-y-6">
       {/* Stage filter toolbar */}
       {availableStages.length > 0 && (
         <div className="flex flex-wrap items-center gap-2">

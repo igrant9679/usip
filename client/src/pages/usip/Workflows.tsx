@@ -103,7 +103,7 @@ export default function Workflows() {
           </ul>
         </div>
       )}
-      <div className="p-6 grid grid-cols-1 lg:grid-cols-3 gap-4">
+      <div className="p-4 md:p-5 grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="lg:col-span-1">
           <Section title={`Rules (${data?.length ?? 0})`}>
             {error ? <QueryError message={error.message} onRetry={() => refetch()} /> : isLoading ? <TableSkeleton rows={6} /> : (data ?? []).length === 0 ? <EmptyState icon={Workflow} title="None yet" /> : (

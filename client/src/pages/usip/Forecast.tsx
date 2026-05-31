@@ -46,7 +46,7 @@ export default function Forecast() {
   return (
     <Shell title="Forecast">
       <PageHeader title="Forecast" description="Per-rep pipeline rollup. Commit = ≥90% win prob. Best-case = ≥50%. Weighted = value × win prob." icon={<TrendingUp className="size-5" />} />
-      <div className="p-6 space-y-4">
+      <div className="p-4 md:p-5 space-y-4">
         <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
           <StatCard label="Total open" value={fmt$(totals.open)} />
           <StatCard label="Weighted" value={fmt$(totals.weighted)} hint="value × win prob" />

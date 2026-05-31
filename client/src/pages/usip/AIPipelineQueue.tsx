@@ -449,7 +449,7 @@ export default function AIPipelineQueue() {
       <SubNav items={[
         { href: "/research-pipeline", label: "Research Pipeline", title: "Configure the research stage that prepares drafts for this queue" },
       ]} />
-      <div className="p-6 space-y-6">
+      <div className="p-4 md:p-5 space-y-6">
 
       {/* Stats row */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4" data-tour-id="ai-queue-stats">

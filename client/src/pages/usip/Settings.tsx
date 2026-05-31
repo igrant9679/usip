@@ -64,7 +64,7 @@ export default function Settings() {
         { href: "/audit", label: "Audit Log", title: "Workspace-wide audit trail of all admin and data-change actions" },
         { href: "/tour-builder", label: "Tour Builder", title: "Author guided tours for your workspace (super-admin)" },
       ]} />
-      <div className="p-6 grid grid-cols-1 md:grid-cols-[220px_1fr] gap-6">
+      <div className="p-4 md:p-5 grid grid-cols-1 md:grid-cols-[220px_1fr] gap-6">
         {/* Tab nav */}
         <nav className="space-y-1">
           {TABS.map(({ id, label, icon: Icon }) => (
@@ -739,7 +739,7 @@ function IntegrationsTab() {
     <>
       <Section title="Integrations" description="Connect and configure external services. Built-in integrations are always active with no setup required.">
         {listQ.isLoading ? (
-          <div className="p-6 flex justify-center"><Loader2 className="size-5 animate-spin text-muted-foreground" /></div>
+          <div className="p-4 md:p-5 flex justify-center"><Loader2 className="size-5 animate-spin text-muted-foreground" /></div>
         ) : (
           <ul className="divide-y">
             {providers.map(({ provider, meta, row }) => (
@@ -1019,7 +1019,7 @@ function AIProvidersSection({ isAdmin }: { isAdmin: boolean }) {
   return (
     <Section title="AI Providers" description="Bring your own API keys for Anthropic, OpenAI, or Gemini. Keys are encrypted at rest. Falls back to server-level keys if none set.">
       {credsQ.isLoading ? (
-        <div className="p-6 flex justify-center"><Loader2 className="size-5 animate-spin text-muted-foreground" /></div>
+        <div className="p-4 md:p-5 flex justify-center"><Loader2 className="size-5 animate-spin text-muted-foreground" /></div>
       ) : (
         <div className="divide-y">
           {AI_PROVIDERS.map((p) => {

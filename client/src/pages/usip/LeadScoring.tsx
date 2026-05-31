@@ -94,9 +94,9 @@ export default function LeadScoring() {
       </PageHeader>
 
       {isLoading ? (
-        <div className="p-6 flex items-center gap-2 text-muted-foreground"><Loader2 className="size-4 animate-spin" /> Loading…</div>
+        <div className="p-4 md:p-5 flex items-center gap-2 text-muted-foreground"><Loader2 className="size-4 animate-spin" /> Loading…</div>
       ) : (
-        <div className="p-6 grid gap-6 lg:grid-cols-3">
+        <div className="p-4 md:p-5 grid gap-6 lg:grid-cols-3">
           {/* Firmographic */}
           <Card title="Firmographic" subtitle={`Max ${firmoMax} pts`}>
             <NumField label="Org type weight (B2B vs free email)" value={cfg.firmoOrgTypeWeight} onChange={(v) => setCfg({ ...cfg, firmoOrgTypeWeight: v })} />

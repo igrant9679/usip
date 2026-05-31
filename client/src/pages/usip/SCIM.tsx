@@ -27,7 +27,7 @@ export default function SCIM() {
       >
         <Button onClick={() => setOpen(true)}><Plus className="size-4" /> New provider</Button>
       </PageHeader>
-      <div className="p-6 grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <div className="p-4 md:p-5 grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div className="space-y-3">
           <Section title="SCIM endpoints">
             <div className="p-3 text-xs space-y-2 font-mono">
