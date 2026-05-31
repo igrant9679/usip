@@ -9,9 +9,33 @@ Refreshed at end of the build+audit session. Paste the bottom block into a new c
 - **Repo:** `igrant9679/usip` (origin: `https://github.com/igrant9679/usip.git`)
 - **Local path:** `C:\Users\Admin\usip`
 - **Deploy:** Railway → `https://getvelocityai.app/` (auto-deploys on push to `main`)
-- **Tip of `main`:** `bdd93c7`. Help content (`172a082`→`819e11d`); sales-funnel realignment
-  (`3682b36`→`3bc8224`); security + funnel-loop + UX backlog incl. tour recorder
-  (`dc4c067`→`6f21ab0`). `bdd93c7` = handoff update. See sections below.
+- **Tip of `main`:** `6cec0cb` (+ this handoff commit). Most recent work = the **UI/UX shell
+  overhaul** (`e301e71`→`6cec0cb`) — see the section just below. Earlier: Help content
+  (`172a082`→`819e11d`); sales-funnel realignment (`3682b36`→`3bc8224`); security + funnel-loop +
+  UX backlog incl. tour recorder (`dc4c067`→`6f21ab0`).
+
+### UI/UX shell overhaul (`e301e71`→`6cec0cb`) — most recent session
+- **Critical bug fixed — dead in-page controls:** a global `.flex { min-height: 0 }` rule
+  (index.css) + PageTransition's `height:100%` flex-column made any **thin top-level flex row**
+  under the shell (SubNav strips, custom tab bars) collapse to its padding on tall pages; its
+  children overflowed and the next sibling painted over them → unclickable. Fixed with `shrink-0`
+  on `SubNav`, `PageHeader`, and the HelpCenter/Team tab bars. **See memory
+  `project_velocity_flex_collapse_bugclass`. Any new bare top-level flex row needs `shrink-0`.**
+- **Dead button:** "Go to Scraper" empty-state had `onClick={() => {}}` → made its Tabs controlled.
+- **Redesign (mostly `components/usip/Shell.tsx` + `index.css`):**
+  - PageHeader: dropped the heavy 2px accent box → slim header (accent icon chip, top accent
+    rule, bottom hairline, ~half height). Is `shrink-0`.
+  - Sidebar: per-section colour (each NAV group + the Acquire **Funnel/Records/Tools** subheads
+    have unique hues; items inherit their subhead's colour). **Collapsible groups** (chevron
+    toggle, persisted in localStorage key `velocity_nav_collapsed`). Stronger active-section +
+    active-item highlight. Bigger logo + single-line tagline.
+  - `SubNav` → `SubNavPill` button-style pills, shaded with the section accent (`useAccentColor`).
+  - Dark-mode: raised sidebar surface + `border-r` seam. AccentContext = active group's colour.
+  - HelpCenter: emoji category icons → Lucide (`categoryIcon()` keyword map); off-brand violet →
+    primary on the "All" chip + CTAs + Ask-AI bubble.
+  - Density: list-page content wrappers `p-6` → `p-4 md:p-5` (~40 files, padding only).
+- **Verified live** in Chrome (light + dark) across Dashboard, ARE Hub, Sequences, Help Center,
+  Prospects. Collapse-persistence confirmed across navigation.
 
 ### ⚙️ Local tooling now installed (changed since earlier sessions)
 - **Python 3.12.10** and **Node v24.16.0 + npm 11.13.0** are now installed on this machine (via winget).
@@ -267,13 +291,16 @@ filtered by `verificationStatus` which excluded CSV-imported NULL-status prospec
 ## Resume prompt for the new session
 ```
 You're continuing Velocity / usip (igrant9679/usip → getvelocityai.app on Railway).
-Repo: C:\Users\Admin\usip. Tip of main: bdd93c7.
+Repo: C:\Users\Admin\usip. Tip of main: 6cec0cb (+ a handoff commit).
 
-Read SESSION_HANDOFF.md at the repo root first.
+Read SESSION_HANDOFF.md at the repo root first (esp. the "UI/UX shell overhaul" section).
 
 State: Help Center content, the sales-funnel realignment (Prospect → Lead → Opportunity →
-Customer), a Mailbox/EmailDrafts XSS fix, and the full UX_AUDIT P2/P3 backlog are all SHIPPED and
-verified live (migrations through 0088 applied). No open task — wait for direction.
+Customer), a Mailbox/EmailDrafts XSS fix, the full UX_AUDIT P2/P3 backlog, AND a full UI/UX shell
+overhaul (PageHeader redesign, colour-coded collapsible sidebar, button-style section-shaded
+SubNav pills, dark-mode separation, a fixed flex-collapse dead-control bug class, density pass)
+are all SHIPPED and verified live (migrations through 0088 applied). No open task — wait for
+direction.
 
 Hard constraints (still apply):
 - Build runs on Railway; project uses pnpm + a frozen lockfile. Node 24 + Python 3.12 ARE now
