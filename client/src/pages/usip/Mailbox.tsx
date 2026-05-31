@@ -376,7 +376,7 @@ function ComposeDialog({ state, onClose }: { state: ComposeState; onClose: () =>
     <Dialog open onOpenChange={onClose}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2 justify-between">
+          <DialogTitle className="flex items-center gap-2 justify-between pr-10">
             <span className="flex items-center gap-2"><ModeIcon className="size-4" /> {modeLabel}</span>
             <Popover open={templatePickerOpen} onOpenChange={setTemplatePickerOpen}>
               <PopoverTrigger asChild>

@@ -808,13 +808,17 @@ export function RecordDrawer({
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent className="w-full sm:max-w-2xl flex flex-col">
         <SheetHeader>
-          <SheetTitle className="flex items-center justify-between">
-            <span>{title}</span>
-            <div className="flex items-center gap-2">
+          {/* pr-12 reserves space for the Sheet's absolute top-right Close (X)
+              so header actions — especially the destructive Delete — never sit
+              flush against it (misclick hazard). The Delete is further set apart
+              with a divider + margin from the other header actions. */}
+          <SheetTitle className="flex items-center justify-between gap-2 pr-12">
+            <span className="min-w-0 truncate">{title}</span>
+            <div className="flex items-center gap-2 shrink-0">
               {headerExtras}
               {relatedId && (relatedType === "contact" || relatedType === "account" || relatedType === "lead" || relatedType === "opportunity") && (
                 <button
-                  className="text-muted-foreground hover:text-destructive p-1 rounded"
+                  className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 p-1.5 rounded-md ml-1 border-l border-border pl-2"
                   title={`Delete this ${relatedType}`}
                   onClick={deleteRecord}
                   disabled={delContact.isPending || delAccount.isPending || delLead.isPending || delOpp.isPending}

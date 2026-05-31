@@ -1149,7 +1149,7 @@ function SequenceDrawer({ row, onClose, refetch }: { row: any; onClose: () => vo
   return (
     <>
       <SheetHeader className="pb-3 border-b">
-        <SheetTitle className="flex items-center gap-2 flex-wrap">
+        <SheetTitle className="flex items-center gap-2 flex-wrap pr-10">
           {row.firstName} {row.lastName}
           <StatusBadgeMini status={row.sequenceStatus} />
         </SheetTitle>
@@ -2527,7 +2527,7 @@ export default function ARECampaignDetail() {
       <Sheet open={dossierOpen} onOpenChange={setDossierOpen}>
         <SheetContent side="right" className="w-full sm:max-w-xl overflow-y-auto">
           <SheetHeader className="pb-4 border-b">
-            <SheetTitle className="flex items-center gap-2">
+            <SheetTitle className="flex items-center gap-2 pr-10">
               <Brain className="size-4 text-violet-500" />
               Intelligence Dossier
             </SheetTitle>
