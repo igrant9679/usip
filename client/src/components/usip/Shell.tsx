@@ -401,7 +401,7 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
                 type="button"
                 onClick={() => toggleGroup(group.label)}
                 aria-expanded={!isCollapsed}
-                className="w-full flex items-center gap-1.5 pl-3 pr-2 py-1.5 rounded-r-md transition-colors hover:bg-white/5 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-white/30"
+                className="group/nav w-full flex items-center gap-1.5 pl-3 pr-2 py-1.5 rounded-r-md transition-colors hover:bg-white/5 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-white/30"
                 style={{
                   borderLeft: `3px solid ${isActiveGroup ? gc : "transparent"}`,
                   backgroundColor: isActiveGroup ? gBg : undefined,
@@ -413,10 +413,19 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
                 >
                   {group.label}
                 </span>
-                <ChevronDown
-                  className="ml-auto size-3 shrink-0 transition-transform duration-150"
-                  style={{ color: gc + "99", transform: isCollapsed ? "rotate(-90deg)" : undefined }}
-                />
+                {/* Collapse/expand affordance — a rounded chip with a clear
+                    background + a bold, bright chevron so the toggle is easy to
+                    see on the dark rail regardless of the section's hue. */}
+                <span
+                  aria-hidden
+                  className="ml-auto shrink-0 flex items-center justify-center size-5 rounded-md bg-white/10 group-hover/nav:bg-white/15 transition-colors"
+                >
+                  <ChevronDown
+                    className="size-3.5 transition-transform duration-150"
+                    strokeWidth={2.75}
+                    style={{ color: group.darkColor, transform: isCollapsed ? "rotate(-90deg)" : undefined }}
+                  />
+                </span>
               </button>
               {!isCollapsed && (
               <div className="space-y-0.5 pl-0 pt-0.5">
