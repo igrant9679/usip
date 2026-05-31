@@ -111,8 +111,8 @@ function BrowseTab() {
             onClick={() => setSelectedCategory(null)}
             className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors ${
               selectedCategory === null
-                ? "bg-violet-600 text-white border-violet-600"
-                : "bg-card text-muted-foreground border-border hover:border-violet-300"
+                ? "bg-primary text-primary-foreground border-primary"
+                : "bg-card text-muted-foreground border-border hover:border-primary/40"
             }`}
           >
             All
@@ -262,7 +262,7 @@ function AskAITab() {
             <div
               className={`max-w-[80%] rounded-2xl px-4 py-3 text-sm ${
                 msg.role === "user"
-                  ? "bg-violet-600 text-white"
+                  ? "bg-primary text-primary-foreground"
                   : "bg-card border border-border text-foreground shadow-sm"
               }`}
             >
@@ -300,7 +300,7 @@ function AskAITab() {
         <Button
           onClick={handleSend}
           disabled={isLoading || !input.trim()}
-          className="bg-violet-600 hover:bg-violet-700 text-white"
+          className="bg-primary hover:bg-primary/90 text-primary-foreground"
         >
           Send
         </Button>
@@ -482,7 +482,7 @@ function AdminTab() {
         <div className="ml-auto">
           <Button
             size="sm"
-            className="bg-violet-600 hover:bg-violet-700 text-white h-7 text-xs"
+            className="bg-primary hover:bg-primary/90 text-primary-foreground h-7 text-xs"
             onClick={() => { setIsNew(true); setEditArticle(null); }}
           >
             <Plus className="h-3 w-3 mr-1" /> New Article
@@ -730,7 +730,7 @@ function ArticleForm({ editArticle, isNew, categories, onCancel, onSaved }: Arti
       <div className="flex gap-2 justify-end">
         <Button variant="outline" onClick={onCancel}>Cancel</Button>
         <Button
-          className="bg-violet-600 hover:bg-violet-700 text-white"
+          className="bg-primary hover:bg-primary/90 text-primary-foreground"
           onClick={save}
           disabled={createMut.isPending || updateMut.isPending}
         >
