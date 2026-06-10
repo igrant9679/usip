@@ -9,6 +9,7 @@ import { Field, FormDialog, Section, SelectField, StatusPill, TextareaField } fr
 import { EmptyState, PageHeader, Shell, SubNav } from "@/components/usip/Shell";
 import { RichTextEditor } from "@/components/usip/RichTextEditor";
 import { EmailClientPreview } from "@/components/usip/EmailClientPreview";
+import { sanitizeEmailHtml } from "@/lib/sanitizeHtml";
 import { trpc } from "@/lib/trpc";
 import {
   Activity, GitBranch, Pause, Play, Plus, Power, CheckCircle2, XCircle,
@@ -628,37 +629,66 @@ function StepEditor({ steps, onChange, disabled }: { steps: Step[]; onChange: (s
                 {appliedTemplate && (
                   <div className="flex items-center gap-2 rounded-md bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 px-2.5 py-1 text-[11px] text-blue-700 dark:text-blue-300">
                     <Mail className="size-3 shrink-0" />
-                    <span className="flex-1 truncate">
-                      Applied from template: <span className="font-medium">{appliedTemplate.name}</span>
-                    </span>
+                    <Link
+                      href={`/email-builder/${appliedTemplate.id}`}
+                      className="flex-1 truncate hover:underline underline-offset-2"
+                      title="Open this template in Email Builder"
+                    >
+                      From template: <span className="font-medium">{appliedTemplate.name}</span> →
+                    </Link>
                     {!disabled && (
                       <button
                         type="button"
                         className="text-[11px] underline-offset-2 hover:underline shrink-0"
-                        onClick={() => updateStep(i, { templateId: undefined } as Partial<EmailStep>)}
-                        title="Detach from the source template (keeps the content)"
+                        onClick={() => updateStep(i, {
+                          templateId: undefined,
+                          // Copy the template's CURRENT content (what's shown
+                          // above) so the detached step starts from exactly
+                          // what the user was looking at.
+                          subject: appliedTemplate.subject ?? step.subject,
+                          body: appliedTemplate.htmlOutput ?? step.body,
+                        } as Partial<EmailStep>)}
+                        title="Detach from the source template (keeps a copy for inline editing)"
                       >
                         Detach
                       </button>
                     )}
                   </div>
                 )}
-                <Input
-                  placeholder="Subject"
-                  value={step.subject}
-                  disabled={disabled}
-                  onChange={(e) => updateStep(i, { subject: e.target.value })}
-                  className="h-7 text-sm"
-                />
-                <RichTextEditor
-                  value={step.body ?? ""}
-                  onChange={(html) => updateStep(i, { body: html })}
-                  placeholder="Body (optional — leave blank to compose with AI at send time)"
-                  minHeight="80px"
-                  maxHeight="300px"
-                  compact
-                  disabled={disabled}
-                />
+                {appliedTemplate ? (
+                  /* Linked step — the template is the source of truth. Show
+                     its CURRENT subject + fully formatted output read-only
+                     (the rich-text editor can't faithfully edit builder
+                     HTML), so what you see here is exactly what the Email
+                     Builder produces. Edit there via the link, or Detach
+                     for a one-off inline copy. */
+                  <>
+                    <div className="text-sm font-medium px-1">{appliedTemplate.subject || step.subject || "(no subject)"}</div>
+                    <div
+                      className="border rounded-md bg-white text-[#202124] p-3 text-sm max-h-[300px] overflow-y-auto [&_a]:text-blue-600 [&_a]:underline [&_p]:my-2 break-words [&_table]:max-w-full [&_td]:break-words [&_img]:max-w-full [&_img]:h-auto"
+                      dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(appliedTemplate.htmlOutput ?? step.body ?? "") }}
+                    />
+                  </>
+                ) : (
+                  <>
+                    <Input
+                      placeholder="Subject"
+                      value={step.subject}
+                      disabled={disabled}
+                      onChange={(e) => updateStep(i, { subject: e.target.value })}
+                      className="h-7 text-sm"
+                    />
+                    <RichTextEditor
+                      value={step.body ?? ""}
+                      onChange={(html) => updateStep(i, { body: html })}
+                      placeholder="Body (optional — leave blank to compose with AI at send time)"
+                      minHeight="80px"
+                      maxHeight="300px"
+                      compact
+                      disabled={disabled}
+                    />
+                  </>
+                )}
               </div>
             );
           })()}
@@ -799,8 +829,21 @@ function SequenceEditDialog({ seq, open, onClose }: { seq: any; open: boolean; o
     });
   }
 
+  // The send engine reads steps.subject/body JSON, so template-linked steps
+  // must carry content. Re-sync linked steps from the template's CURRENT
+  // subject/htmlOutput at save time — keeps Email Builder formatting
+  // constant across the builder, this editor, the preview, and what's sent.
+  const allTemplatesForSyncQ = trpc.emailTemplates?.list?.useQuery({ status: "all" });
   function handleSaveSteps() {
-    updateSteps.mutate({ id: seq.id, steps });
+    const tplById = new Map<number, any>(((allTemplatesForSyncQ?.data ?? []) as any[]).map((t) => [t.id, t]));
+    const synced = steps.map((s) => {
+      if (s.type === "email" && (s as EmailStep).templateId) {
+        const t = tplById.get((s as EmailStep).templateId!);
+        if (t) return { ...s, subject: t.subject ?? (s as EmailStep).subject, body: t.htmlOutput ?? (s as EmailStep).body };
+      }
+      return s;
+    });
+    updateSteps.mutate({ id: seq.id, steps: synced });
   }
 
   return (
@@ -1489,14 +1532,24 @@ export default function Sequences() {
                           <div className="flex items-center gap-2 text-xs text-muted-foreground">
                             <span className="font-mono">Step {i + 1}</span> · {step.type}
                             {step.type === "wait" ? ` · ${step.days}d` : ""}
-                            {tmplName && (
-                              <span className="ml-auto text-[10px] px-1.5 py-0 rounded bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300">
-                                from template: {tmplName}
-                              </span>
-                            )}
                           </div>
-                          {step.subject && <div className="text-sm font-medium mt-1">{step.subject}</div>}
-                          {bodyPreview && <div className="text-xs text-muted-foreground line-clamp-3 mt-1 whitespace-pre-wrap">{bodyPreview}</div>}
+                          {tmplName ? (
+                            /* Template-linked step: the template is the source
+                               of truth, so no subject/body dump here — just a
+                               link straight to it in Email Builder. */
+                            <Link
+                              href={`/email-builder/${step.templateId}`}
+                              className="inline-flex items-center gap-1.5 mt-1 text-sm font-medium text-blue-700 dark:text-blue-300 hover:underline underline-offset-2"
+                              title="Open this template in Email Builder"
+                            >
+                              <Mail className="size-3.5" /> From template: {tmplName} →
+                            </Link>
+                          ) : (
+                            <>
+                              {step.subject && <div className="text-sm font-medium mt-1">{step.subject}</div>}
+                              {bodyPreview && <div className="text-xs text-muted-foreground line-clamp-3 mt-1 whitespace-pre-wrap">{bodyPreview}</div>}
+                            </>
+                          )}
                         </li>
                       );
                     })}

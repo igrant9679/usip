@@ -21,6 +21,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { sanitizeEmailHtml } from "@/lib/sanitizeHtml";
+import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { useIsMobile } from "@/hooks/useMobile";
 import {
@@ -89,7 +90,7 @@ interface PreviewEmail {
   body: string;
 }
 
-function extractEmails(steps: any[]): PreviewEmail[] {
+function extractEmails(steps: any[], templateById?: Map<number, any>): PreviewEmail[] {
   const out: PreviewEmail[] = [];
   let day = 1;
   let n = 0;
@@ -98,7 +99,17 @@ function extractEmails(steps: any[]): PreviewEmail[] {
     if (s?.type === "wait") day += Number(s.days) || 0;
     if (s?.type === "email") {
       n++;
-      out.push({ stepIndex: i, emailNumber: n, day, subject: String(s.subject ?? ""), body: String(s.body ?? "") });
+      // Template-linked steps preview the template's CURRENT content so the
+      // Email Builder formatting stays constant everywhere (builder, step
+      // editors, this preview). The step's stored copy is the fallback.
+      const tpl = typeof s.templateId === "number" ? templateById?.get(s.templateId) : null;
+      out.push({
+        stepIndex: i,
+        emailNumber: n,
+        day,
+        subject: String(tpl?.subject ?? s.subject ?? ""),
+        body: String(tpl?.htmlOutput ?? s.body ?? ""),
+      });
     }
   }
   return out;
@@ -364,7 +375,15 @@ export function EmailClientPreview({ open, onClose, steps, sequenceName }: {
   const [device, setDevice] = useState<"desktop" | "mobile">("desktop");
   useEffect(() => { setDevice(isMobile ? "mobile" : "desktop"); }, [isMobile]);
 
-  const emails = useMemo(() => extractEmails(steps), [steps]);
+  // Resolve template-linked steps against the live template list (cheap —
+  // shared trpc cache with the step editor's identical query).
+  const templatesQ = trpc.emailTemplates?.list?.useQuery({ status: "all" }, { enabled: open });
+  const templateById = useMemo(
+    () => new Map<number, any>(((templatesQ?.data ?? []) as any[]).map((t) => [t.id, t])),
+    [templatesQ?.data],
+  );
+
+  const emails = useMemo(() => extractEmails(steps, templateById), [steps, templateById]);
   const current = emails[Math.min(emailIdx, Math.max(0, emails.length - 1))];
 
   const rendered = useMemo(() => {
