@@ -250,7 +250,11 @@ export default function ProspectsPage() {
   const [page, setPage] = useState(1);
   const [perPage] = useState(50);
   const [emailStatusFilter, setEmailStatusFilter] = useState<string>("all");
-  const [promotedFilter, setPromotedFilter] = useState<string>("all");
+  // Default to hiding prospects that have already been promoted to a lead:
+  // once promoted, the record lives on the Leads page, so it drops out of the
+  // default Prospects view. Still reachable via the "Converted to lead" / "All
+  // prospects" filter options below (the linked-lead back-link is preserved).
+  const [promotedFilter, setPromotedFilter] = useState<string>("not_promoted");
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [enrichOpenFor, setEnrichOpenFor] = useState<{
     name: string;
