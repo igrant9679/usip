@@ -179,7 +179,7 @@ function PreviewResolvedModal({ draftId, open, onClose }: { draftId: number | nu
   );
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="max-w-[calc(100%-2rem)] sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>Preview Resolved Email</DialogTitle>
         </DialogHeader>
@@ -242,7 +242,7 @@ function EditDraftDialog({ draft, open, onClose }: { draft: any | null; open: bo
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="max-w-[calc(100%-2rem)] sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>Edit draft</DialogTitle>
         </DialogHeader>

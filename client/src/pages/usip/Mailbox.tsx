@@ -374,7 +374,7 @@ function ComposeDialog({ state, onClose }: { state: ComposeState; onClose: () =>
 
   return (
     <Dialog open onOpenChange={onClose}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="max-w-[calc(100%-2rem)] sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 justify-between pr-10">
             <span className="flex items-center gap-2"><ModeIcon className="size-4" /> {modeLabel}</span>

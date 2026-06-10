@@ -1833,7 +1833,7 @@ function Builder({ templateId }: { templateId: number }) {
 
       {/* Starter template picker dialog */}
       <Dialog open={showStarterPicker} onOpenChange={setShowStarterPicker}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="max-w-[calc(100%-2rem)] sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>Choose a Starter Layout</DialogTitle>
           </DialogHeader>
@@ -1879,7 +1879,7 @@ function Builder({ templateId }: { templateId: number }) {
 
       {/* Preview dialog */}
       <Dialog open={showPreview} onOpenChange={setShowPreview}>
-        <DialogContent className="max-w-3xl max-h-[90vh] flex flex-col">
+        <DialogContent className="max-w-[calc(100%-2rem)] sm:max-w-3xl max-h-[90vh] flex flex-col">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-3">
               Preview

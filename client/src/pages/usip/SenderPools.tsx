@@ -185,7 +185,7 @@ function PoolFormDialog({
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="max-w-[calc(100%-2rem)] sm:max-w-xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{editId ? "Edit Sender Pool" : "Create Sender Pool"}</DialogTitle>
         </DialogHeader>
