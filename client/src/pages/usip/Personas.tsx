@@ -14,7 +14,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { Users, Plus, Pencil, Trash2, Sparkles } from "lucide-react";
+import { Users, Plus, Pencil, Trash2, Sparkles, ChevronDown } from "lucide-react";
 
 interface PersonaForm {
   name: string;
@@ -80,6 +80,16 @@ export default function Personas() {
   const [open, setOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [form, setForm] = useState<PersonaForm>(EMPTY);
+  const [presetsCollapsed, setPresetsCollapsed] = useState<boolean>(() => {
+    try { return localStorage.getItem("velocity_personas_presets_collapsed") === "1"; } catch { return false; }
+  });
+  const togglePresets = () => {
+    setPresetsCollapsed((c) => {
+      const next = !c;
+      try { localStorage.setItem("velocity_personas_presets_collapsed", next ? "1" : "0"); } catch {}
+      return next;
+    });
+  };
 
   const startCreate = () => { setForm(EMPTY); setEditingId(null); setOpen(true); };
   const startEdit = (p: any) => {
@@ -149,30 +159,42 @@ export default function Personas() {
       {/* Preset library */}
       <Card className="mb-4">
         <CardHeader>
-          <CardTitle className="text-base flex items-center gap-2">
-            <Sparkles className="size-4" /> Preset library
-          </CardTitle>
-          <CardDescription>One-click starting points. Click to clone into your personas list.</CardDescription>
+          <button
+            type="button"
+            onClick={togglePresets}
+            aria-expanded={!presetsCollapsed}
+            className="flex w-full items-center gap-2 text-left"
+          >
+            <CardTitle className="text-base flex items-center gap-2 flex-1">
+              <Sparkles className="size-4" /> Preset library
+            </CardTitle>
+            <ChevronDown className={`size-4 text-muted-foreground transition-transform ${presetsCollapsed ? "-rotate-90" : ""}`} />
+          </button>
+          {!presetsCollapsed && (
+            <CardDescription>One-click starting points. Click to clone into your personas list.</CardDescription>
+          )}
         </CardHeader>
-        <CardContent>
-          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-            {presets.map((p: any) => (
-              <button
-                key={p.key}
-                onClick={() => applyPreset(p.key)}
-                className="text-left border rounded p-3 hover:bg-accent transition"
-              >
-                <div className="font-medium text-sm">{p.name}</div>
-                <div className="text-xs text-muted-foreground mt-1">{p.description}</div>
-                <div className="flex flex-wrap gap-1 mt-2">
-                  {(p.targetTitles as string[]).slice(0, 3).map((t) => (
-                    <Badge key={t} variant="outline" className="text-[10px]">{t}</Badge>
-                  ))}
-                </div>
-              </button>
-            ))}
-          </div>
-        </CardContent>
+        {!presetsCollapsed && (
+          <CardContent>
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              {presets.map((p: any) => (
+                <button
+                  key={p.key}
+                  onClick={() => applyPreset(p.key)}
+                  className="text-left border rounded p-3 hover:bg-accent transition"
+                >
+                  <div className="font-medium text-sm">{p.name}</div>
+                  <div className="text-xs text-muted-foreground mt-1">{p.description}</div>
+                  <div className="flex flex-wrap gap-1 mt-2">
+                    {(p.targetTitles as string[]).slice(0, 3).map((t) => (
+                      <Badge key={t} variant="outline" className="text-[10px]">{t}</Badge>
+                    ))}
+                  </div>
+                </button>
+              ))}
+            </div>
+          </CardContent>
+        )}
       </Card>
 
       {/* Saved personas */}
