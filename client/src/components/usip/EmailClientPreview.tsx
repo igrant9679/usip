@@ -15,16 +15,18 @@
  * - The email canvas is deliberately light in both clients even when the
  *   app is in dark mode: that's what the prospect actually sees.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { sanitizeEmailHtml } from "@/lib/sanitizeHtml";
 import { useAuth } from "@/_core/hooks/useAuth";
+import { useIsMobile } from "@/hooks/useMobile";
 import {
-  Archive, ChevronDown, Forward, MoreVertical, Printer, Reply, ReplyAll,
-  Star, Trash2, UserRound,
+  Archive, ArrowLeft, BatteryFull, ChevronDown, Forward, Mail, Monitor,
+  MoreVertical, Printer, Reply, ReplyAll, Smartphone, Star, Trash2,
+  UserRound, Wifi,
 } from "lucide-react";
 
 /* ─── Sample persona (editable in the dialog) ─────────────────────────── */
@@ -201,6 +203,138 @@ function OutlookFrame({ subject, bodyHtml, sender, persona }: {
   );
 }
 
+/* ─── iPhone shell shared by the mobile app frames ────────────────────── */
+function PhoneShell({ children }: { children: ReactNode }) {
+  return (
+    <div className="mx-auto w-full max-w-[375px]">
+      <div className="rounded-[2rem] border-[6px] border-[#1c1c1e] bg-white overflow-hidden shadow-lg">
+        {/* iOS status bar */}
+        <div className="flex items-center justify-between px-5 pt-2 pb-1 bg-white text-[#1c1c1e]">
+          <span className="text-[12px] font-semibold tracking-tight">9:41</span>
+          <span className="flex items-center gap-1">
+            <Wifi className="size-3.5" />
+            <BatteryFull className="size-4" />
+          </span>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/* ─── Gmail iPhone app chrome ─────────────────────────────────────────── */
+function GmailMobileFrame({ subject, bodyHtml, sender, persona }: {
+  subject: string; bodyHtml: string; sender: { name: string; email: string }; persona: PreviewPersona;
+}) {
+  return (
+    <PhoneShell>
+      <div className="bg-white text-[#1f1f1f]" style={{ fontFamily: "Roboto, Arial, sans-serif" }}>
+        {/* App bar */}
+        <div className="flex items-center gap-4 px-4 py-2.5 text-[#444746]">
+          <ArrowLeft className="size-5" />
+          <span className="ml-auto flex items-center gap-4">
+            <Archive className="size-5" />
+            <Trash2 className="size-5" />
+            <Mail className="size-5" />
+            <MoreVertical className="size-5" />
+          </span>
+        </div>
+        {/* Subject + star */}
+        <div className="px-4 pt-1 pb-2 flex items-start gap-2">
+          <h2 className="text-[19px] leading-6 font-normal flex-1 min-w-0 break-words">{subject || "(no subject)"}</h2>
+          <Star className="size-5 text-[#444746] shrink-0 mt-0.5" />
+        </div>
+        {/* Sender row */}
+        <div className="px-4 pb-2 flex items-start gap-3">
+          <div className="size-9 rounded-full bg-[#7b1fa2] text-white flex items-center justify-center text-xs font-medium shrink-0">
+            {initials(sender.name)}
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-baseline gap-2">
+              <span className="text-[13px] font-bold truncate">{sender.name}</span>
+              <span className="ml-auto text-[11px] text-[#5f6368] shrink-0">9:14 AM</span>
+            </div>
+            <div className="text-[11px] text-[#5f6368] flex items-center gap-0.5">
+              to {persona.firstName || "me"} <ChevronDown className="size-3" />
+            </div>
+          </div>
+        </div>
+        {/* Body */}
+        <div
+          className="px-4 pb-3 text-[14px] leading-[1.45] [&_a]:text-[#1a73e8] [&_a]:underline [&_p]:my-2 break-words [&_table]:max-w-full [&_td]:break-words [&_img]:max-w-full [&_img]:h-auto"
+          dangerouslySetInnerHTML={{ __html: bodyHtml }}
+        />
+        {/* Bottom action pills — Gmail app style */}
+        <div className="px-4 pb-4 pt-1 grid grid-cols-3 gap-2">
+          {[
+            { icon: Reply, label: "Reply" },
+            { icon: ReplyAll, label: "Reply all" },
+            { icon: Forward, label: "Forward" },
+          ].map(({ icon: Icon, label }) => (
+            <button key={label} type="button" className="flex items-center justify-center gap-1.5 text-[12px] text-[#444746] border border-[#dadce0] rounded-full py-1.5 hover:bg-[#f1f3f4]">
+              <Icon className="size-3.5" /> {label}
+            </button>
+          ))}
+        </div>
+      </div>
+    </PhoneShell>
+  );
+}
+
+/* ─── Outlook iPhone app chrome ───────────────────────────────────────── */
+function OutlookMobileFrame({ subject, bodyHtml, sender, persona }: {
+  subject: string; bodyHtml: string; sender: { name: string; email: string }; persona: PreviewPersona;
+}) {
+  return (
+    <PhoneShell>
+      <div className="bg-white text-[#242424]" style={{ fontFamily: '"Segoe UI", system-ui, sans-serif' }}>
+        {/* App bar */}
+        <div className="flex items-center gap-4 px-4 py-2.5 text-[#0f6cbd]">
+          <ArrowLeft className="size-5" />
+          <span className="ml-auto flex items-center gap-4">
+            <Trash2 className="size-5" />
+            <Archive className="size-5" />
+            <MoreVertical className="size-5" />
+          </span>
+        </div>
+        {/* Subject */}
+        <div className="px-4 pt-1 pb-2">
+          <h2 className="text-[17px] leading-6 font-semibold break-words">{subject || "(no subject)"}</h2>
+        </div>
+        {/* Sender card */}
+        <div className="px-4 pb-2 flex items-start gap-3">
+          <div className="size-9 rounded-full bg-[#0f6cbd] text-white flex items-center justify-center text-xs font-semibold shrink-0">
+            {initials(sender.name)}
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-baseline gap-2">
+              <span className="text-[13px] font-semibold truncate">{sender.name}</span>
+              <span className="ml-auto text-[11px] text-[#616161] shrink-0">9:14 AM</span>
+            </div>
+            <div className="text-[11px] text-[#616161] truncate">
+              To: {persona.firstName || persona.lastName ? `${persona.firstName} ${persona.lastName}`.trim() : "You"}
+            </div>
+          </div>
+        </div>
+        {/* Body */}
+        <div
+          className="px-4 pb-3 text-[14px] leading-[1.5] [&_a]:text-[#0f6cbd] [&_a]:underline [&_p]:my-2 break-words [&_table]:max-w-full [&_td]:break-words [&_img]:max-w-full [&_img]:h-auto"
+          dangerouslySetInnerHTML={{ __html: bodyHtml }}
+        />
+        {/* Bottom bar — Outlook app style */}
+        <div className="px-4 pb-4 pt-1 flex gap-2">
+          <button type="button" className="flex-1 flex items-center justify-center gap-1.5 text-[12px] font-medium text-white bg-[#0f6cbd] rounded-full py-2">
+            <ReplyAll className="size-3.5" /> Reply all
+          </button>
+          <button type="button" className="flex items-center justify-center text-[#0f6cbd] border border-[#e1dfdd] rounded-full px-3">
+            <Forward className="size-3.5" />
+          </button>
+        </div>
+      </div>
+    </PhoneShell>
+  );
+}
+
 /* ─── Main dialog ──────────────────────────────────────────────────────── */
 export function EmailClientPreview({ open, onClose, steps, sequenceName }: {
   open: boolean;
@@ -219,6 +353,13 @@ export function EmailClientPreview({ open, onClose, steps, sequenceName }: {
   const [persona, setPersona] = useState<PreviewPersona>(DEFAULT_PERSONA);
   const [personaOpen, setPersonaOpen] = useState(false);
 
+  // Device chrome: phone viewers get the Gmail/Outlook iPhone-app look
+  // automatically; the toggle lets desktop users check the mobile rendering
+  // (and vice versa).
+  const isMobile = useIsMobile();
+  const [device, setDevice] = useState<"desktop" | "mobile">("desktop");
+  useEffect(() => { setDevice(isMobile ? "mobile" : "desktop"); }, [isMobile]);
+
   const emails = useMemo(() => extractEmails(steps), [steps]);
   const current = emails[Math.min(emailIdx, Math.max(0, emails.length - 1))];
 
@@ -234,10 +375,11 @@ export function EmailClientPreview({ open, onClose, steps, sequenceName }: {
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
-      {/* sm:max-w-3xl (not bare max-w-3xl): DialogContent's default ends with
+      {/* sm:max-w-4xl (not bare max-w-*): DialogContent's default ends with
           sm:max-w-lg, which would win at ≥640px and shrink the dialog enough
-          to clip 600px-wide table-based email templates. */}
-      <DialogContent className="max-w-[calc(100%-2rem)] sm:max-w-3xl max-h-[92vh] flex flex-col">
+          to clip 600px-wide table-based email templates. 4xl gives the
+          desktop chrome a comfortable desktop aspect. */}
+      <DialogContent className="max-w-[calc(100%-2rem)] sm:max-w-4xl max-h-[92vh] flex flex-col">
         <DialogHeader className="pr-10">
           <DialogTitle className="text-base">
             Prospect preview{sequenceName ? ` — ${sequenceName}` : ""}
@@ -261,6 +403,22 @@ export function EmailClientPreview({ open, onClose, steps, sequenceName }: {
                     className={`px-3 py-1.5 text-xs font-medium capitalize ${client === c ? "bg-primary text-primary-foreground" : "bg-card text-muted-foreground hover:bg-muted"}`}
                   >
                     {c === "gmail" ? "Gmail" : "Outlook"}
+                  </button>
+                ))}
+              </div>
+              <div className="inline-flex rounded-md border overflow-hidden">
+                {([
+                  ["desktop", Monitor],
+                  ["mobile", Smartphone],
+                ] as const).map(([d, Icon]) => (
+                  <button
+                    key={d}
+                    type="button"
+                    onClick={() => setDevice(d)}
+                    title={d === "desktop" ? "Desktop view" : "Mobile app view (iPhone)"}
+                    className={`px-2.5 py-1.5 ${device === d ? "bg-primary text-primary-foreground" : "bg-card text-muted-foreground hover:bg-muted"}`}
+                  >
+                    <Icon className="size-3.5" />
                   </button>
                 ))}
               </div>
@@ -313,7 +471,13 @@ export function EmailClientPreview({ open, onClose, steps, sequenceName }: {
 
             {/* The rendered email — always light, like a real inbox */}
             <div className="overflow-y-auto flex-1 rounded-lg bg-[#f6f8fc] dark:bg-[#1f1f1f] p-3 sm:p-5">
-              {client === "gmail" ? (
+              {device === "mobile" ? (
+                client === "gmail" ? (
+                  <GmailMobileFrame subject={rendered.subject} bodyHtml={rendered.bodyHtml} sender={sender} persona={persona} />
+                ) : (
+                  <OutlookMobileFrame subject={rendered.subject} bodyHtml={rendered.bodyHtml} sender={sender} persona={persona} />
+                )
+              ) : client === "gmail" ? (
                 <GmailFrame subject={rendered.subject} bodyHtml={rendered.bodyHtml} sender={sender} persona={persona} />
               ) : (
                 <OutlookFrame subject={rendered.subject} bodyHtml={rendered.bodyHtml} sender={sender} persona={persona} />

@@ -197,7 +197,9 @@ function EnrollDialog({ sequenceId, open, onClose, onEnrolled }: {
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
-      <DialogContent className="max-w-2xl max-h-[80vh] flex flex-col">
+      {/* sm:max-w-* (not bare max-w-*): DialogContent's default className ends
+          with sm:max-w-lg which wins at ≥640px and squeezes the dialog. */}
+      <DialogContent className="max-w-[calc(100%-2rem)] sm:max-w-2xl max-h-[80vh] flex flex-col">
         <DialogHeader>
           <DialogTitle>Enroll prospects into sequence</DialogTitle>
         </DialogHeader>
@@ -803,7 +805,9 @@ function SequenceEditDialog({ seq, open, onClose }: { seq: any; open: boolean; o
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
-      <DialogContent className="max-w-2xl max-h-[90vh] flex flex-col">
+      {/* sm:max-w-3xl: bare max-w-2xl lost to the default sm:max-w-lg, which
+          squeezed the editor to 512px on desktop. */}
+      <DialogContent className="max-w-[calc(100%-2rem)] sm:max-w-3xl max-h-[90vh] flex flex-col">
         <DialogHeader>
           <DialogTitle>Edit sequence — {liveSeq?.name}</DialogTitle>
         </DialogHeader>
