@@ -19,7 +19,7 @@
  *   4. Generates A/B variant with different hook type
  */
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
   areAbVariants,
@@ -746,6 +746,13 @@ export const prospectsRouter = router({
       }
       if (input.sequenceStatus) {
         conditions.push(eq(prospectQueue.sequenceStatus, input.sequenceStatus as "pending" | "approved" | "enrolled" | "skipped" | "completed" | "replied" | "paused" | "canceled"));
+      } else {
+        // Rejected prospects (reject/bulkReject set sequenceStatus="skipped")
+        // belong in the Rejections tab only — getRejectionStats selects exactly
+        // these. Exclude them from the review queue so the two tabs are
+        // complementary (a prospect is in Prospects XOR Rejections). Callers
+        // that explicitly ask for sequenceStatus="skipped" still get them.
+        conditions.push(ne(prospectQueue.sequenceStatus, "skipped"));
       }
       const rows = await db
         .select()
