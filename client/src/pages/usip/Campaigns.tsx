@@ -123,7 +123,7 @@ function CampaignDialog({ open, onClose, initial }: CampaignDialogProps) {
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="max-w-xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="max-w-[calc(100%-2rem)] sm:max-w-xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{isEdit ? "Edit Campaign" : "New Campaign"}</DialogTitle>
         </DialogHeader>

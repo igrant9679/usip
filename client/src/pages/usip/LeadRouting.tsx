@@ -148,7 +148,7 @@ function RuleEditor({ rule, members, onClose, onSaved }: { rule: Rule | null; me
 
   return (
     <Dialog open={!!rule} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="max-w-[calc(100%-2rem)] sm:max-w-2xl">
         <DialogHeader><DialogTitle>{rule?.id ? "Edit routing rule" : "New routing rule"}</DialogTitle></DialogHeader>
 
         <div className="space-y-3">

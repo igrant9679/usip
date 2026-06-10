@@ -1188,7 +1188,7 @@ function SequenceDrawer({ row, onClose, refetch }: { row: any; onClose: () => vo
       </div>
 
       <Dialog open={!!editing} onOpenChange={(o) => !o && setEditing(null)}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="max-w-[calc(100%-2rem)] sm:max-w-2xl">
           <DialogHeader><DialogTitle>Edit sequence step</DialogTitle></DialogHeader>
           {editing && (
             <div className="space-y-3">

@@ -270,7 +270,7 @@ export default function PromptTemplatesPage() {
 
       {/* Create / Edit dialog */}
       <Dialog open={showDialog} onOpenChange={(o) => { setShowDialog(o); if (!o) { setEditId(null); setForm(DEFAULT_FORM); } }}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-[calc(100%-2rem)] sm:max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{editId ? "Edit Prompt Template" : "New Prompt Template"}</DialogTitle>
           </DialogHeader>
