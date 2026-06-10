@@ -9,12 +9,12 @@ Refreshed at end of the build+audit session. Paste the bottom block into a new c
 - **Repo:** `igrant9679/usip` (origin: `https://github.com/igrant9679/usip.git`)
 - **Local path:** `C:\Users\Admin\usip`
 - **Deploy:** Railway → `https://getvelocityai.app/` (auto-deploys on push to `main`)
-- **Tip of `main`:** `6cec0cb` (+ this handoff commit). Most recent work = the **UI/UX shell
-  overhaul** (`e301e71`→`6cec0cb`) — see the section just below. Earlier: Help content
+- **Tip of `main`:** `62e2255` (+ this handoff commit). Most recent work = the **UI/UX shell
+  overhaul** (`e301e71`→`62e2255`) — see the section just below. Earlier: Help content
   (`172a082`→`819e11d`); sales-funnel realignment (`3682b36`→`3bc8224`); security + funnel-loop +
   UX backlog incl. tour recorder (`dc4c067`→`6f21ab0`).
 
-### UI/UX shell overhaul (`e301e71`→`6cec0cb`) — most recent session
+### UI/UX shell overhaul (`e301e71`→`62e2255`) — most recent session
 - **Critical bug fixed — dead in-page controls:** a global `.flex { min-height: 0 }` rule
   (index.css) + PageTransition's `height:100%` flex-column made any **thin top-level flex row**
   under the shell (SubNav strips, custom tab bars) collapse to its padding on tall pages; its
@@ -34,8 +34,18 @@ Refreshed at end of the build+audit session. Paste the bottom block into a new c
   - HelpCenter: emoji category icons → Lucide (`categoryIcon()` keyword map); off-brand violet →
     primary on the "All" chip + CTAs + Ask-AI bubble.
   - Density: list-page content wrappers `p-6` → `p-4 md:p-5` (~40 files, padding only).
+- **Safety — header actions vs. the Sheet/Dialog close (X)** (`2a7943b`): the record drawer's
+  Delete (trash) sat flush against the auto top-right Close → misclick hazard. Reserved space on
+  title rows (`pr-10`/`pr-12`) + set the destructive Delete apart with a divider/margin. Same
+  reserve applied to the Mailbox compose dialog + both ARE detail sheets. **Pattern: any custom
+  action in a Sheet/Dialog title row must reserve right padding so it clears the absolute close X.**
+- **Collapse/expand chevrons made visible** (`62e2255`): were faint (section colour @60%, 12px) →
+  now wrapped in a `size-5 rounded-md bg-white/10` chip with a 14px, bold (strokeWidth 2.75),
+  full-bright chevron; chip brightens on header hover (`group/nav`).
 - **Verified live** in Chrome (light + dark) across Dashboard, ARE Hub, Sequences, Help Center,
-  Prospects. Collapse-persistence confirmed across navigation.
+  Prospects, and the Leads record drawer. Collapse-persistence + the close↔delete 32px gap
+  confirmed by DOM measurement. **Note: Railway deploys ran slow this session (3–9 min); verify
+  live via computed styles/DOM rather than trusting the first screenshot.**
 
 ### ⚙️ Local tooling now installed (changed since earlier sessions)
 - **Python 3.12.10** and **Node v24.16.0 + npm 11.13.0** are now installed on this machine (via winget).
@@ -291,7 +301,7 @@ filtered by `verificationStatus` which excluded CSV-imported NULL-status prospec
 ## Resume prompt for the new session
 ```
 You're continuing Velocity / usip (igrant9679/usip → getvelocityai.app on Railway).
-Repo: C:\Users\Admin\usip. Tip of main: 6cec0cb (+ a handoff commit).
+Repo: C:\Users\Admin\usip. Tip of main: 62e2255 (+ a handoff commit).
 
 Read SESSION_HANDOFF.md at the repo root first (esp. the "UI/UX shell overhaul" section).
 
