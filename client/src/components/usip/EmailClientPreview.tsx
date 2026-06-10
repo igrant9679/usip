@@ -259,9 +259,13 @@ function GmailMobileFrame({ subject, bodyHtml, sender, persona }: {
             </div>
           </div>
         </div>
-        {/* Body */}
+        {/* Body — table-fixed + w-full: fixed-width (600px) template tables
+            can't shrink below min-content with max-width alone, so they'd
+            clip at the phone edge. Forcing fixed layout reflows the cells to
+            the phone width — matching how mobile mail apps fit desktop
+            emails. */}
         <div
-          className="px-4 pb-3 text-[14px] leading-[1.45] [&_a]:text-[#1a73e8] [&_a]:underline [&_p]:my-2 break-words [&_table]:max-w-full [&_td]:break-words [&_img]:max-w-full [&_img]:h-auto"
+          className="px-4 pb-3 text-[14px] leading-[1.45] [&_a]:text-[#1a73e8] [&_a]:underline [&_p]:my-2 break-words [&_table]:max-w-full [&_table]:w-full [&_table]:table-fixed [&_td]:break-words [&_img]:max-w-full [&_img]:h-auto"
           dangerouslySetInnerHTML={{ __html: bodyHtml }}
         />
         {/* Bottom action pills — Gmail app style */}
@@ -316,9 +320,9 @@ function OutlookMobileFrame({ subject, bodyHtml, sender, persona }: {
             </div>
           </div>
         </div>
-        {/* Body */}
+        {/* Body — same table-fixed reflow as the Gmail mobile frame */}
         <div
-          className="px-4 pb-3 text-[14px] leading-[1.5] [&_a]:text-[#0f6cbd] [&_a]:underline [&_p]:my-2 break-words [&_table]:max-w-full [&_td]:break-words [&_img]:max-w-full [&_img]:h-auto"
+          className="px-4 pb-3 text-[14px] leading-[1.5] [&_a]:text-[#0f6cbd] [&_a]:underline [&_p]:my-2 break-words [&_table]:max-w-full [&_table]:w-full [&_table]:table-fixed [&_td]:break-words [&_img]:max-w-full [&_img]:h-auto"
           dangerouslySetInnerHTML={{ __html: bodyHtml }}
         />
         {/* Bottom bar — Outlook app style */}
