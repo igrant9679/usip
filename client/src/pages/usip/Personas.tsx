@@ -90,6 +90,16 @@ export default function Personas() {
       return next;
     });
   };
+  const [personasCollapsed, setPersonasCollapsed] = useState<boolean>(() => {
+    try { return localStorage.getItem("velocity_personas_list_collapsed") === "1"; } catch { return false; }
+  });
+  const togglePersonas = () => {
+    setPersonasCollapsed((c) => {
+      const next = !c;
+      try { localStorage.setItem("velocity_personas_list_collapsed", next ? "1" : "0"); } catch {}
+      return next;
+    });
+  };
 
   const startCreate = () => { setForm(EMPTY); setEditingId(null); setOpen(true); };
   const startEdit = (p: any) => {
@@ -157,7 +167,7 @@ export default function Personas() {
       </PageHeader>
 
       {/* Preset library */}
-      <Card className="mb-4">
+      <Card className="mb-4 shrink-0">
         <CardHeader>
           <button
             type="button"
@@ -176,7 +186,7 @@ export default function Personas() {
         </CardHeader>
         {!presetsCollapsed && (
           <CardContent>
-            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3 max-h-[40vh] overflow-y-auto pr-1">
               {presets.map((p: any) => (
                 <button
                   key={p.key}
@@ -198,17 +208,26 @@ export default function Personas() {
       </Card>
 
       {/* Saved personas */}
-      <Card>
+      <Card className="shrink-0">
         <CardHeader>
-          <CardTitle className="text-base">Your personas ({list.length})</CardTitle>
+          <button
+            type="button"
+            onClick={togglePersonas}
+            aria-expanded={!personasCollapsed}
+            className="flex w-full items-center gap-2 text-left"
+          >
+            <CardTitle className="text-base flex-1">Your personas ({list.length})</CardTitle>
+            <ChevronDown className={`size-4 text-muted-foreground transition-transform ${personasCollapsed ? "-rotate-90" : ""}`} />
+          </button>
         </CardHeader>
+        {!personasCollapsed && (
         <CardContent>
           {error ? <QueryError message={error.message} onRetry={() => refetch()} /> : isLoading ? <TableSkeleton rows={5} /> : list.length === 0 ? (
             <div className="text-sm text-muted-foreground p-4 text-center">
               No personas yet. Create one above or clone a preset.
             </div>
           ) : (
-            <div className="space-y-2">
+            <div className="space-y-2 max-h-[50vh] overflow-y-auto pr-1">
               {list.map((p: any) => (
                 <div key={p.id} className="flex items-start justify-between border rounded p-3">
                   <div className="min-w-0 flex-1">
@@ -241,6 +260,7 @@ export default function Personas() {
             </div>
           )}
         </CardContent>
+        )}
       </Card>
 
       {/* Editor dialog */}
