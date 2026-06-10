@@ -125,7 +125,7 @@ function EnrichmentDialog({
 }) {
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="max-w-[calc(100%-2rem)] sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>Contact info — {prospectName}</DialogTitle>
           <DialogDescription>

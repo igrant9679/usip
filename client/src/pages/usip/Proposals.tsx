@@ -944,7 +944,7 @@ export default function Proposals() {
       </Dialog>
       {/* Extension Management Dialog */}
       <Dialog open={extMgmtOpen} onOpenChange={setExtMgmtOpen}>
-        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+        <DialogContent className="max-w-[calc(100%-2rem)] sm:max-w-2xl max-h-[80vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <CalendarCheck className="size-5 text-orange-600" />
