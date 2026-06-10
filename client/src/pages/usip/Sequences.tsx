@@ -8,11 +8,12 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Field, FormDialog, Section, SelectField, StatusPill, TextareaField } from "@/components/usip/Common";
 import { EmptyState, PageHeader, Shell, SubNav } from "@/components/usip/Shell";
 import { RichTextEditor } from "@/components/usip/RichTextEditor";
+import { EmailClientPreview } from "@/components/usip/EmailClientPreview";
 import { trpc } from "@/lib/trpc";
 import {
   Activity, GitBranch, Pause, Play, Plus, Power, CheckCircle2, XCircle,
   BarChart3, RefreshCw, Pencil, Trash2, ArrowUp, ArrowDown, Mail, Clock, ClipboardList, TrendingUp,
-  FlaskConical, Trophy, Loader2, ListOrdered, UserPlus
+  FlaskConical, Trophy, Loader2, ListOrdered, UserPlus, Eye
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { Link } from "wouter";
@@ -722,6 +723,9 @@ function SequenceEditDialog({ seq, open, onClose }: { seq: any; open: boolean; o
   // on every refresh, save → server refetch → snapshot replacement would
   // race the user's typing.)
   const [stepsDirtyAfterLoad, setStepsDirtyAfterLoad] = useState(false);
+  // Prospect-POV preview (Gmail/Outlook chrome). Uses the LOCAL steps
+  // state so unsaved edits preview live.
+  const [previewOpen, setPreviewOpen] = useState(false);
 
   // Live query so the dialog stays in sync with parallel edits made
   // from the canvas / right panel. seq prop seeds the initial load;
@@ -877,12 +881,24 @@ function SequenceEditDialog({ seq, open, onClose }: { seq: any; open: boolean; o
             </Button>
           )}
           {tab === "steps" && (
-            <Button onClick={handleSaveSteps} disabled={updateSteps.isPending || isLocked}>
-              {updateSteps.isPending ? "Saving…" : "Save steps"}
-            </Button>
+            <>
+              <Button variant="outline" onClick={() => setPreviewOpen(true)} disabled={steps.length === 0}>
+                <Eye className="size-3.5" /> Preview
+              </Button>
+              <Button onClick={handleSaveSteps} disabled={updateSteps.isPending || isLocked}>
+                {updateSteps.isPending ? "Saving…" : "Save steps"}
+              </Button>
+            </>
           )}
         </DialogFooter>
       </DialogContent>
+
+      <EmailClientPreview
+        open={previewOpen}
+        onClose={() => setPreviewOpen(false)}
+        steps={steps}
+        sequenceName={liveSeq?.name}
+      />
     </Dialog>
   );
 }
@@ -1331,6 +1347,7 @@ function SequenceStepBreakdown({ sequenceId }: { sequenceId: number }) {
 export default function Sequences() {
   const [open, setOpen] = useState(false);
   const [editSeq, setEditSeq] = useState<any | null>(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
   const [selected, setSelected] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState<"steps" | "stats" | "analytics" | "ab">("steps");
   const utils = trpc.useUtils();
@@ -1416,6 +1433,10 @@ export default function Sequences() {
                   <div className="flex gap-1 flex-wrap">
                     <Button size="sm" variant="outline" onClick={() => setEditSeq(detail.data)}>
                       <Pencil className="size-3.5" /> Edit
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => setPreviewOpen(true)}
+                      title="Preview emails as the prospect will see them (Gmail / Outlook)">
+                      <Eye className="size-3.5" /> Preview
                     </Button>
                     <Link href={`/sequences/${detail.data.id}/canvas`}>
                       <Button size="sm" variant="outline"><GitBranch className="size-3.5" /> Canvas</Button>
@@ -1534,6 +1555,16 @@ export default function Sequences() {
           seq={editSeq}
           open={!!editSeq}
           onClose={() => setEditSeq(null)}
+        />
+      )}
+
+      {/* Prospect-POV preview (right-panel button) — saved steps */}
+      {detail.data && (
+        <EmailClientPreview
+          open={previewOpen}
+          onClose={() => setPreviewOpen(false)}
+          steps={(detail.data.steps as any[]) ?? []}
+          sequenceName={detail.data.name}
         />
       )}
     </Shell>
