@@ -145,9 +145,10 @@ function GmailFrame({ subject, bodyHtml, sender, persona }: {
           </div>
         </div>
       </div>
-      {/* Body */}
+      {/* Body — fixed-width table templates (the email-HTML norm) are
+          constrained to the frame so nothing clips; long words still wrap. */}
       <div
-        className="px-5 pb-4 text-sm leading-6 [&_a]:text-[#1a73e8] [&_a]:underline [&_p]:my-2 break-words"
+        className="px-5 pb-4 text-sm leading-6 [&_a]:text-[#1a73e8] [&_a]:underline [&_p]:my-2 break-words [&_table]:max-w-full [&_td]:break-words [&_img]:max-w-full [&_img]:h-auto"
         dangerouslySetInnerHTML={{ __html: bodyHtml }}
       />
       {/* Reply / Forward pills */}
@@ -191,9 +192,9 @@ function OutlookFrame({ subject, bodyHtml, sender, persona }: {
         </div>
       </div>
       <div className="px-5 pb-1 text-xs text-[#616161]">Tue 6/9/2026 9:14 AM</div>
-      {/* Body */}
+      {/* Body — same table/img constraints as the Gmail frame */}
       <div
-        className="px-5 py-4 text-[15px] leading-[1.5] [&_a]:text-[#0f6cbd] [&_a]:underline [&_p]:my-2 break-words"
+        className="px-5 py-4 text-[15px] leading-[1.5] [&_a]:text-[#0f6cbd] [&_a]:underline [&_p]:my-2 break-words [&_table]:max-w-full [&_td]:break-words [&_img]:max-w-full [&_img]:h-auto"
         dangerouslySetInnerHTML={{ __html: bodyHtml }}
       />
     </div>
@@ -233,7 +234,10 @@ export function EmailClientPreview({ open, onClose, steps, sequenceName }: {
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
-      <DialogContent className="max-w-3xl max-h-[92vh] flex flex-col">
+      {/* sm:max-w-3xl (not bare max-w-3xl): DialogContent's default ends with
+          sm:max-w-lg, which would win at ≥640px and shrink the dialog enough
+          to clip 600px-wide table-based email templates. */}
+      <DialogContent className="max-w-[calc(100%-2rem)] sm:max-w-3xl max-h-[92vh] flex flex-col">
         <DialogHeader className="pr-10">
           <DialogTitle className="text-base">
             Prospect preview{sequenceName ? ` — ${sequenceName}` : ""}
