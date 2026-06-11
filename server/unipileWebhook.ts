@@ -107,6 +107,32 @@ import { sql } from "drizzle-orm";
 // Statuses that mean the account needs re-authentication
 const EXPIRED_STATUSES = new Set(["CREDENTIALS", "ERROR", "STOPPED"]);
 
+/**
+ * Shared-secret guard for every Unipile webhook endpoint. The endpoints
+ * mutate state (suppressions, sequence pauses, campaign counters) from
+ * unauthenticated POSTs, so anyone who learns the URL can forge events.
+ *
+ * Opt-in: set UNIPILE_WEBHOOK_SECRET on the server AND re-register the
+ * webhooks (the register* admin actions pass it as Unipile's secretKey,
+ * which Unipile then echoes back as a `Unipile-Auth` header on every
+ * delivery). When the env var is unset, behavior is unchanged (open) so
+ * existing registrations keep working until re-registered.
+ */
+let warnedNoWebhookSecret = false;
+function unipileWebhookAuthorized(req: Request): boolean {
+  const secret = process.env.UNIPILE_WEBHOOK_SECRET;
+  if (!secret) {
+    if (!warnedNoWebhookSecret) {
+      warnedNoWebhookSecret = true;
+      console.warn(
+        "[UnipileWebhook] UNIPILE_WEBHOOK_SECRET is not set — webhook endpoints accept unauthenticated POSTs. Set it and re-register the webhooks to enable verification.",
+      );
+    }
+    return true;
+  }
+  return req.headers["unipile-auth"] === secret;
+}
+
 export function registerUnipileWebhookRoutes(app: Express) {
   // ─── 1. Hosted Auth Wizard notify_url ─────────────────────────────────────
   /**
@@ -332,6 +358,10 @@ export function registerUnipileWebhookRoutes(app: Express) {
     "/api/unipile/status-webhook",
     async (req: Request, res: Response) => {
       res.status(200).json({ ok: true });
+      if (!unipileWebhookAuthorized(req)) {
+        console.warn("[UnipileWebhook] status-webhook: bad/missing Unipile-Auth header — dropped");
+        return;
+      }
 
       try {
         const body = req.body as {
@@ -479,6 +509,10 @@ export function registerUnipileWebhookRoutes(app: Express) {
     async (req: Request, res: Response) => {
       // Ack immediately so Unipile doesn't retry.
       res.status(200).json({ ok: true });
+      if (!unipileWebhookAuthorized(req)) {
+        console.warn("[UnipileMailWebhook] bad/missing Unipile-Auth header — dropped");
+        return;
+      }
 
       try {
         const payload = req.body as MailWebhookPayload;
@@ -749,6 +783,10 @@ export function registerUnipileWebhookRoutes(app: Express) {
     "/api/unipile/calendar-webhook",
     async (req: Request, res: Response) => {
       res.status(200).json({ ok: true });
+      if (!unipileWebhookAuthorized(req)) {
+        console.warn("[UnipileCalendarWebhook] bad/missing Unipile-Auth header — dropped");
+        return;
+      }
 
       try {
         const payload = req.body as CalendarWebhookPayload;
@@ -815,6 +853,10 @@ export function registerUnipileWebhookRoutes(app: Express) {
     "/api/unipile/email-tracking-webhook",
     async (req: Request, res: Response) => {
       res.status(200).json({ ok: true });
+      if (!unipileWebhookAuthorized(req)) {
+        console.warn("[UnipileEmailTrackingWebhook] bad/missing Unipile-Auth header — dropped");
+        return;
+      }
 
       try {
         const payload = req.body as EmailTrackingWebhookPayload;

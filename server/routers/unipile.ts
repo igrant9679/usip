@@ -552,6 +552,9 @@ export const unipileRouter = router({
       const result = await registerWebhook({
         requestUrl,
         source: "email",
+        // Unipile echoes this back as a Unipile-Auth header on every
+        // delivery; the webhook endpoints verify it when the env var is set.
+        secretKey: process.env.UNIPILE_WEBHOOK_SECRET || undefined,
       });
       // result.id may be null if Unipile's response shape doesn't include
       // one (we've observed at least three variants). The toast on the
@@ -584,6 +587,7 @@ export const unipileRouter = router({
       const result = await registerWebhook({
         requestUrl,
         source: "calendar_event",
+        secretKey: process.env.UNIPILE_WEBHOOK_SECRET || undefined,
       });
       return { webhookId: result.id, requestUrl, raw: result.raw };
     }),
@@ -613,6 +617,7 @@ export const unipileRouter = router({
       const result = await registerWebhook({
         requestUrl,
         source: "email_tracking",
+        secretKey: process.env.UNIPILE_WEBHOOK_SECRET || undefined,
         events: ["mail_opened", "mail_link_clicked"],
         // Field names on the LEFT (what we read in the webhook handler)
         // mirror the Unipile data keys on the RIGHT (their internal field).
