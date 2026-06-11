@@ -53,12 +53,50 @@ type AutoEnrollEvent =
   | { kind: "tag_applied"; workspaceId: number; contactId: number; tag: string }
   | { kind: "score_threshold"; workspaceId: number; contactId?: number; leadId?: number; score: number };
 
+// ─── Sequence-timezone clock ──────────────────────────────────────────────────
+
+/**
+ * Current wall-clock info in an IANA timezone (no deps — Intl only).
+ * Falls back to UTC on a bad/missing timezone string.
+ */
+function nowInTz(tz: string | undefined): { hhmm: string; dow: number; dateKey: string } {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz || "UTC",
+      hourCycle: "h23",
+      weekday: "short",
+      year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit",
+    }).formatToParts(new Date());
+    const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+    const dowMap: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+    return {
+      hhmm: `${get("hour")}:${get("minute")}`,
+      dow: dowMap[get("weekday")] ?? 1,
+      dateKey: `${get("year")}-${get("month")}-${get("day")}`,
+    };
+  } catch {
+    const d = new Date();
+    return { hhmm: d.toISOString().slice(11, 16), dow: d.getUTCDay(), dateKey: d.toISOString().slice(0, 10) };
+  }
+}
+
+type SequenceSendSettings = {
+  timezone?: string;
+  sendWindowStart?: string;
+  sendWindowEnd?: string;
+  skipWeekends?: boolean;
+};
+
 // ─── Daily email cap tracking (in-memory, resets at midnight) ─────────────────
 
 const dailyEmailCounts: Map<string, number> = new Map();
 const WORKSPACE_DAILY_CAP = 100;
 
 function getDailyKey(workspaceId: number): string {
+  // Workspace-wide cap stays on the UTC day: there is no workspace-level
+  // timezone setting, and a single boundary beats per-sequence drift here.
+  // Per-SEQUENCE caps + send windows use the sequence's own timezone below.
   const today = new Date().toISOString().slice(0, 10);
   return `${workspaceId}:${today}`;
 }
@@ -135,9 +173,26 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
       const hasNextStep = nextStepIndex < steps.length;
 
       if (step.type === "email") {
-        // Enforce daily caps
+        // Enforce the sequence's send window + weekend skip in ITS timezone.
+        // These settings existed in the editor but were never consulted in
+        // the send path — emails went out at any hour, any day, and the
+        // daily key reset at UTC midnight regardless of the configured tz.
+        const sendCfg = (seq.settings ?? {}) as SequenceSendSettings;
+        const local = nowInTz(sendCfg.timezone);
+        if (sendCfg.skipWeekends && (local.dow === 0 || local.dow === 6)) {
+          continue; // weekend in the sequence's timezone — try next tick
+        }
+        const winStart = sendCfg.sendWindowStart ?? "08:00";
+        const winEnd = sendCfg.sendWindowEnd ?? "18:00";
+        // Zero-padded HH:MM strings compare correctly lexicographically.
+        if (local.hhmm < winStart || local.hhmm >= winEnd) {
+          continue; // outside the send window — try next tick
+        }
+
+        // Enforce daily caps (per-sequence key rolls at the sequence's
+        // local midnight, not UTC)
         const seqDailyCap = seq.dailyCap ?? Infinity;
-        const seqKey = `seq:${seq.id}:${new Date().toISOString().slice(0, 10)}`;
+        const seqKey = `seq:${seq.id}:${local.dateKey}`;
         const seqCount = dailyEmailCounts.get(seqKey) ?? 0;
 
         if (seqCount >= seqDailyCap) {
