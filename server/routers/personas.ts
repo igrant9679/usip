@@ -6,9 +6,9 @@
  * campaigns, but reusable across sequences and prospect search.
  */
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq } from "drizzle-orm";
 import { z } from "zod";
-import { personas } from "../../drizzle/schema";
+import { personaCategories, personas } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { router } from "../_core/trpc";
 import { workspaceProcedure } from "../_core/workspace";
@@ -22,7 +22,18 @@ const PersonaInput = z.object({
   employeeMin: z.number().int().min(1).nullable().optional(),
   employeeMax: z.number().int().min(1).nullable().optional(),
   keywords: z.array(z.string()).default([]),
+  categoryId: z.number().int().nullable().optional(),
 });
+
+/** Caller-controlled categoryId is hostile until proven workspace-owned. */
+async function assertCategoryInWorkspace(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, categoryId: number, workspaceId: number) {
+  const [row] = await db
+    .select({ id: personaCategories.id })
+    .from(personaCategories)
+    .where(and(eq(personaCategories.id, categoryId), eq(personaCategories.workspaceId, workspaceId)))
+    .limit(1);
+  if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Category not found" });
+}
 
 /**
  * Built-in preset library — surfaced from `listPresets` so the user can
@@ -119,6 +130,7 @@ export const personasRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      if (input.categoryId != null) await assertCategoryInWorkspace(db, input.categoryId, ctx.workspace.id);
       const [row] = await db
         .insert(personas)
         .values({
@@ -131,6 +143,7 @@ export const personasRouter = router({
           employeeMin: input.employeeMin ?? null,
           employeeMax: input.employeeMax ?? null,
           keywords: input.keywords,
+          categoryId: input.categoryId ?? null,
           createdByUserId: ctx.user.id,
         })
         .$returningId();
@@ -190,6 +203,10 @@ export const personasRouter = router({
       if (rest.employeeMin !== undefined) updates.employeeMin = rest.employeeMin ?? null;
       if (rest.employeeMax !== undefined) updates.employeeMax = rest.employeeMax ?? null;
       if (rest.keywords !== undefined) updates.keywords = rest.keywords;
+      if (rest.categoryId !== undefined) {
+        if (rest.categoryId != null) await assertCategoryInWorkspace(db, rest.categoryId, ctx.workspace.id);
+        updates.categoryId = rest.categoryId ?? null;
+      }
       await db
         .update(personas)
         .set(updates)
@@ -205,6 +222,87 @@ export const personasRouter = router({
       await db
         .delete(personas)
         .where(and(eq(personas.id, input.id), eq(personas.workspaceId, ctx.workspace.id)));
+      return { success: true };
+    }),
+
+  // ── Categories ─────────────────────────────────────────────────────
+  listCategories: workspaceProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    return db
+      .select()
+      .from(personaCategories)
+      .where(eq(personaCategories.workspaceId, ctx.workspace.id))
+      .orderBy(asc(personaCategories.sortOrder), asc(personaCategories.id));
+  }),
+
+  createCategory: workspaceProcedure
+    .input(z.object({ name: z.string().min(1).max(120) }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // New categories land at the end of the current order.
+      const existing = await db
+        .select({ sortOrder: personaCategories.sortOrder })
+        .from(personaCategories)
+        .where(eq(personaCategories.workspaceId, ctx.workspace.id))
+        .orderBy(desc(personaCategories.sortOrder))
+        .limit(1);
+      const [row] = await db
+        .insert(personaCategories)
+        .values({
+          workspaceId: ctx.workspace.id,
+          name: input.name.trim(),
+          sortOrder: (existing[0]?.sortOrder ?? -1) + 1,
+        })
+        .$returningId();
+      return { id: row.id };
+    }),
+
+  updateCategory: workspaceProcedure
+    .input(z.object({ id: z.number(), name: z.string().min(1).max(120) }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      await assertCategoryInWorkspace(db, input.id, ctx.workspace.id);
+      await db
+        .update(personaCategories)
+        .set({ name: input.name.trim() })
+        .where(and(eq(personaCategories.id, input.id), eq(personaCategories.workspaceId, ctx.workspace.id)));
+      return { success: true };
+    }),
+
+  /** Personas in the category survive — they fall back to Uncategorized. */
+  deleteCategory: workspaceProcedure
+    .input(z.object({ id: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      await assertCategoryInWorkspace(db, input.id, ctx.workspace.id);
+      await db
+        .update(personas)
+        .set({ categoryId: null })
+        .where(and(eq(personas.categoryId, input.id), eq(personas.workspaceId, ctx.workspace.id)));
+      await db
+        .delete(personaCategories)
+        .where(and(eq(personaCategories.id, input.id), eq(personaCategories.workspaceId, ctx.workspace.id)));
+      return { success: true };
+    }),
+
+  /** Full ordered id list → sortOrder = array index. Ids not owned by the
+   *  workspace are ignored by the scoped WHERE (not an error — a stale
+   *  client list shouldn't fail the whole reorder). */
+  reorderCategories: workspaceProcedure
+    .input(z.object({ ids: z.array(z.number().int()).min(1).max(200) }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      for (let i = 0; i < input.ids.length; i++) {
+        await db
+          .update(personaCategories)
+          .set({ sortOrder: i })
+          .where(and(eq(personaCategories.id, input.ids[i]), eq(personaCategories.workspaceId, ctx.workspace.id)));
+      }
       return { success: true };
     }),
 });

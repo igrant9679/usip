@@ -1493,6 +1493,28 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0089: Persona categories ───────────────────────────────────────
+  // User-defined groupings on the Personas page (create/rename/delete/
+  // reorder, per-section collapse). personas.categoryId NULL =
+  // uncategorized; deleting a category nulls its personas' categoryId
+  // in the router (no FK — schema has none).
+  {
+    name: "0089_persona_categories.sql",
+    statements: [
+      `CREATE TABLE IF NOT EXISTS \`persona_categories\` (
+        \`id\` int AUTO_INCREMENT NOT NULL,
+        \`workspaceId\` int NOT NULL,
+        \`name\` varchar(120) NOT NULL,
+        \`sortOrder\` int NOT NULL DEFAULT 0,
+        \`createdAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        \`updatedAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (\`id\`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE INDEX \`ix_persona_categories_ws\` ON \`persona_categories\` (\`workspaceId\`, \`sortOrder\`)`,
+      `ALTER TABLE \`personas\` ADD COLUMN \`categoryId\` int NULL`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

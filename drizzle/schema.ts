@@ -2940,6 +2940,7 @@ export const personas = mysqlTable(
     employeeMax: int("employeeMax"),
     keywords: json("keywords"),
     isPreset: boolean("isPreset").default(false).notNull(),
+    categoryId: int("categoryId"),
     createdByUserId: int("createdByUserId"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
@@ -2949,6 +2950,24 @@ export const personas = mysqlTable(
   }),
 );
 export type Persona = typeof personas.$inferSelect;
+
+/** User-defined groupings for the Personas page. NULL personas.categoryId =
+ *  uncategorized. sortOrder drives section order (no FK — schema has none). */
+export const personaCategories = mysqlTable(
+  "persona_categories",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    name: varchar("name", { length: 120 }).notNull(),
+    sortOrder: int("sortOrder").default(0).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    byWs: index("ix_persona_categories_ws").on(t.workspaceId, t.sortOrder),
+  }),
+);
+export type PersonaCategory = typeof personaCategories.$inferSelect;
 
 /* ──────────────────────────────────────────────────────────────────────────
    ARE A/B Variants — message variant performance tracking
