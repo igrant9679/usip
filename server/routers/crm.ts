@@ -1517,6 +1517,11 @@ export const opportunitiesRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // opportunityId is caller-controlled — verify it belongs to this
+      // workspace before attaching items or rewriting its value.
+      const [opp] = await db.select({ id: opportunities.id }).from(opportunities)
+        .where(and(eq(opportunities.id, input.opportunityId), eq(opportunities.workspaceId, ctx.workspace.id)));
+      if (!opp) throw new TRPCError({ code: "NOT_FOUND", message: "Opportunity not found" });
       const lineTotal = input.quantity * input.unitPrice * (1 - input.discountPct / 100);
       await db.insert(dealLineItems).values({
         workspaceId: ctx.workspace.id,
@@ -1527,10 +1532,10 @@ export const opportunitiesRouter = router({
         discountPct: String(input.discountPct),
         lineTotal: String(lineTotal),
       });
-      // Update opp value to sum of line items
+      // Update opp value to sum of line items (workspace-scoped)
       const items = await db.select().from(dealLineItems).where(and(eq(dealLineItems.opportunityId, input.opportunityId), eq(dealLineItems.workspaceId, ctx.workspace.id)));
       const total = items.reduce((s, i) => s + Number(i.lineTotal), 0);
-      await db.update(opportunities).set({ value: String(total) }).where(eq(opportunities.id, input.opportunityId));
+      await db.update(opportunities).set({ value: String(total) }).where(and(eq(opportunities.id, input.opportunityId), eq(opportunities.workspaceId, ctx.workspace.id)));
       return { ok: true };
     }),
 
@@ -1540,7 +1545,9 @@ export const opportunitiesRouter = router({
     await db.delete(dealLineItems).where(and(eq(dealLineItems.id, input.id), eq(dealLineItems.workspaceId, ctx.workspace.id)));
     const items = await db.select().from(dealLineItems).where(and(eq(dealLineItems.opportunityId, input.opportunityId), eq(dealLineItems.workspaceId, ctx.workspace.id)));
     const total = items.reduce((s, i) => s + Number(i.lineTotal), 0);
-    await db.update(opportunities).set({ value: String(total) }).where(eq(opportunities.id, input.opportunityId));
+    // Workspace-scoped: opportunityId is caller-controlled, so an unscoped
+    // update could rewrite another tenant's opportunity value.
+    await db.update(opportunities).set({ value: String(total) }).where(and(eq(opportunities.id, input.opportunityId), eq(opportunities.workspaceId, ctx.workspace.id)));
     return { ok: true };
   }),
 

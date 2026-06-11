@@ -100,6 +100,11 @@ export const csRouter = router({
   })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    // Validate the customer belongs to THIS workspace before writing anything.
+    // customerId is caller-controlled; without this check the amendment insert
+    // and the ARR update below could target another tenant's customer.
+    const [c] = await db.select().from(customers).where(and(eq(customers.id, input.customerId), eq(customers.workspaceId, ctx.workspace.id)));
+    if (!c) throw new TRPCError({ code: "NOT_FOUND", message: "Customer not found" });
     await db.insert(contractAmendments).values({
       workspaceId: ctx.workspace.id,
       customerId: input.customerId,
@@ -109,12 +114,9 @@ export const csRouter = router({
       notes: input.notes,
       createdByUserId: ctx.user.id,
     });
-    // Apply ARR delta to customer
-    const [c] = await db.select().from(customers).where(eq(customers.id, input.customerId));
-    if (c) {
-      const newArr = Math.max(0, Number(c.arr) + input.arrDelta);
-      await db.update(customers).set({ arr: String(newArr) }).where(eq(customers.id, c.id));
-    }
+    // Apply ARR delta to customer (workspace-scoped)
+    const newArr = Math.max(0, Number(c.arr) + input.arrDelta);
+    await db.update(customers).set({ arr: String(newArr) }).where(and(eq(customers.id, c.id), eq(customers.workspaceId, ctx.workspace.id)));
     await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "create", entityType: "contract_amendment", after: input });
     return { ok: true };
   }),
