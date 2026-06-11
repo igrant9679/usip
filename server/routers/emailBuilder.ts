@@ -233,7 +233,13 @@ export const emailTemplatesRouter = router({
         description: z.string().optional(),
         category: z.string().optional(),
         subject: z.string().optional(),
-        designData: z.array(z.any()).optional(),
+        // Bare Block[] (editor) OR the legacy { blocks: Block[] } wrapper
+        // (seeded / AI-generated templates) — the renderer accepts both, but
+        // the old array-only schema made legacy templates unsaveable via API.
+        designData: z
+          .union([z.array(z.any()), z.object({ blocks: z.array(z.any()) })])
+          .optional()
+          .transform((d) => (d && !Array.isArray(d) ? d.blocks : d)),
         status: z.enum(["draft", "active", "archived"]).optional(),
       }),
     )

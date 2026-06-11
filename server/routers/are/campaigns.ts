@@ -5,7 +5,7 @@
  *   list, get, create, update, setStatus, approveBatch
  */
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import { areCampaigns, personas, prospectQueue } from "../../../drizzle/schema";
 import { getDb } from "../../db";
@@ -224,8 +224,9 @@ export const campaignsRouter = router({
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       if (input.prospectIds.length === 0) return { approved: 0 };
 
+      let approved = 0;
       for (const pid of input.prospectIds) {
-        await db
+        const result = await db
           .update(prospectQueue)
           .set({
             sequenceStatus: "approved",
@@ -239,17 +240,29 @@ export const campaignsRouter = router({
               eq(prospectQueue.workspaceId, ctx.workspace.id),
             ),
           );
+        if ((result[0] as { affectedRows?: number }).affectedRows) approved++;
       }
 
-      // Update campaign counter
+      // Recount from the queue instead of writing the batch size — the old
+      // `prospectsApproved: input.prospectIds.length` RESET the counter on
+      // every batch (10 approved + 5 more showed 5). A recount is drift-proof
+      // and idempotent. Workspace-scoped (the old update wasn't).
+      const [{ n }] = await db
+        .select({ n: sql<number>`count(*)` })
+        .from(prospectQueue)
+        .where(
+          and(
+            eq(prospectQueue.campaignId, input.campaignId),
+            eq(prospectQueue.workspaceId, ctx.workspace.id),
+            eq(prospectQueue.sequenceStatus, "approved"),
+          ),
+        );
       await db
         .update(areCampaigns)
-        .set({
-          prospectsApproved: input.prospectIds.length,
-        })
-        .where(eq(areCampaigns.id, input.campaignId));
+        .set({ prospectsApproved: Number(n) })
+        .where(and(eq(areCampaigns.id, input.campaignId), eq(areCampaigns.workspaceId, ctx.workspace.id)));
 
-      return { approved: input.prospectIds.length };
+      return { approved };
     }),
 
   delete: workspaceProcedure

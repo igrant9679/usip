@@ -1,5 +1,5 @@
 import type { Express, Request, Response, NextFunction } from "express";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { scimEvents, scimProviders, users, workspaceMembers } from "../drizzle/schema";
 import { getDb } from "./db";
 
@@ -134,8 +134,10 @@ export function registerScimRoutes(app: Express) {
     const id = Number(req.params.id);
     const body = req.body ?? {};
     if (typeof body.active === "boolean" && body.active === false) {
-      // Soft-deprovision: remove from this workspace
-      await db.delete(workspaceMembers).where(eq(workspaceMembers.userId, id));
+      // Soft-deprovision: remove from THIS provider's workspace only — the
+      // unscoped delete removed the user's memberships in EVERY workspace,
+      // so one IdP deactivating a user revoked unrelated workspaces too.
+      await db.delete(workspaceMembers).where(and(eq(workspaceMembers.userId, id), eq(workspaceMembers.workspaceId, provider.workspaceId)));
       await db.insert(scimEvents).values({ workspaceId: provider.workspaceId, providerId: provider.id, resource: "Users", method: "PATCH", payload: body, responseStatus: 200 });
     }
     const rows = await db.select().from(users).where(eq(users.id, id)).limit(1);
@@ -150,7 +152,8 @@ export function registerScimRoutes(app: Express) {
     const db = await getDb();
     if (!db) return res.status(503).end();
     const id = Number(req.params.id);
-    await db.delete(workspaceMembers).where(eq(workspaceMembers.userId, id));
+    // Scoped to the provider's workspace (same fix as handleReplace above).
+    await db.delete(workspaceMembers).where(and(eq(workspaceMembers.userId, id), eq(workspaceMembers.workspaceId, provider.workspaceId)));
     await db.insert(scimEvents).values({ workspaceId: provider.workspaceId, providerId: provider.id, resource: "Users", method: "DELETE", payload: { id } as any, responseStatus: 204 });
     res.status(204).end();
   });
