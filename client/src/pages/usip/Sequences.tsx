@@ -14,9 +14,9 @@ import { trpc } from "@/lib/trpc";
 import {
   Activity, GitBranch, Pause, Play, Plus, Power, CheckCircle2, XCircle,
   BarChart3, RefreshCw, Pencil, Trash2, ArrowUp, ArrowDown, Mail, Clock, ClipboardList, TrendingUp,
-  FlaskConical, Trophy, Loader2, ListOrdered, UserPlus, Eye
+  FlaskConical, Trophy, Loader2, ListOrdered, UserPlus, Eye, ChevronDown, ChevronRight
 } from "lucide-react";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Link } from "wouter";
 import { toast } from "sonner";
 import { Card, CardContent } from "@/components/ui/card";
@@ -526,6 +526,40 @@ function StepEditor({ steps, onChange, disabled }: { steps: Step[]; onChange: (s
   const templates = (templatesQ?.data ?? []).filter((t: any) => t.status !== "archived");
   const templateById = new Map<number, any>(templates.map((t: any) => [t.id, t]));
 
+  // Per-step minimize. Keyed by index (steps have no stable ids), so
+  // move/remove below remap the set to follow the step. Email steps
+  // that already carry content start minimized — the editor opens as a
+  // compact subject-line outline instead of a wall of rendered emails;
+  // wait/task steps are small and start expanded. Init once per mount
+  // (steps can hydrate async after the dialog's live query resolves).
+  const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
+  const collapseInitRef = useRef(false);
+  useEffect(() => {
+    if (collapseInitRef.current || steps.length === 0) return;
+    collapseInitRef.current = true;
+    setCollapsed(new Set(steps.flatMap((s, i) =>
+      s.type === "email" && (s.templateId || (s.body ?? "").trim() !== "") ? [i] : []
+    )));
+  }, [steps]);
+
+  function toggleCollapsed(i: number) {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(i)) next.delete(i); else next.add(i);
+      return next;
+    });
+  }
+
+  /** One-line summary shown in a minimized step's header. */
+  function stepSummary(step: Step): string {
+    if (step.type === "email") {
+      const linked = step.templateId ? templateById.get(step.templateId) : null;
+      return linked?.subject || step.subject || "(no subject)";
+    }
+    if (step.type === "wait") return `${step.days} day${step.days === 1 ? "" : "s"}`;
+    return htmlToPlainText(step.body ?? "");
+  }
+
   function applyTemplateToStep(i: number, templateId: number) {
     const t = templateById.get(templateId);
     if (!t) return;
@@ -549,6 +583,14 @@ function StepEditor({ steps, onChange, disabled }: { steps: Step[]; onChange: (s
 
   function removeStep(i: number) {
     onChange(steps.filter((_, idx) => idx !== i));
+    setCollapsed((prev) => {
+      const next = new Set<number>();
+      for (const idx of prev) {
+        if (idx < i) next.add(idx);
+        else if (idx > i) next.add(idx - 1);
+      }
+      return next;
+    });
   }
 
   function moveStep(i: number, dir: -1 | 1) {
@@ -557,6 +599,15 @@ function StepEditor({ steps, onChange, disabled }: { steps: Step[]; onChange: (s
     if (j < 0 || j >= arr.length) return;
     [arr[i], arr[j]] = [arr[j], arr[i]];
     onChange(arr);
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      const hadI = next.has(i);
+      const hadJ = next.has(j);
+      next.delete(i); next.delete(j);
+      if (hadI) next.add(j);
+      if (hadJ) next.add(i);
+      return next;
+    });
   }
 
   function updateStep(i: number, patch: Partial<Step>) {
@@ -570,22 +621,42 @@ function StepEditor({ steps, onChange, disabled }: { steps: Step[]; onChange: (s
       {steps.length === 0 && (
         <p className="text-sm text-muted-foreground text-center py-4">No steps yet. Add one below.</p>
       )}
-      {steps.map((step, i) => (
+      {steps.map((step, i) => {
+        const isCollapsed = collapsed.has(i);
+        return (
         <div key={i} className="border rounded-md p-3 bg-card space-y-2">
           <div className="flex items-center gap-2">
-            {step.type === "email" && <Mail className="h-3.5 w-3.5 text-blue-500 shrink-0" />}
-            {step.type === "wait"  && <Clock className="h-3.5 w-3.5 text-amber-500 shrink-0" />}
-            {step.type === "task"  && <ClipboardList className="h-3.5 w-3.5 text-purple-500 shrink-0" />}
-            <span className="text-xs font-mono text-muted-foreground">Step {i + 1}</span>
-            <span className="text-xs capitalize text-muted-foreground">· {step.type}</span>
-            <div className="ml-auto flex gap-1">
+            {/* Whole header (minus the action buttons) toggles minimize.
+                When minimized, a one-line summary (email subject / wait
+                days / task snippet) stands in for the content below. */}
+            <button
+              type="button"
+              onClick={() => toggleCollapsed(i)}
+              className="flex items-center gap-2 flex-1 min-w-0 text-left"
+              title={isCollapsed ? "Expand step" : "Minimize step"}
+            >
+              {isCollapsed
+                ? <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                : <ChevronDown className="h-3.5 w-3.5 text-muted-foreground shrink-0" />}
+              {step.type === "email" && <Mail className="h-3.5 w-3.5 text-blue-500 shrink-0" />}
+              {step.type === "wait"  && <Clock className="h-3.5 w-3.5 text-amber-500 shrink-0" />}
+              {step.type === "task"  && <ClipboardList className="h-3.5 w-3.5 text-purple-500 shrink-0" />}
+              <span className="text-xs font-mono text-muted-foreground shrink-0">Step {i + 1}</span>
+              <span className="text-xs capitalize text-muted-foreground shrink-0">· {step.type}</span>
+              {isCollapsed && (
+                <span className="text-xs truncate min-w-0" title={stepSummary(step)}>
+                  — {stepSummary(step)}
+                </span>
+              )}
+            </button>
+            <div className="ml-auto flex gap-1 shrink-0">
               <Button size="sm" variant="ghost" className="h-6 w-6 p-0" disabled={disabled || i === 0} onClick={() => moveStep(i, -1)}><ArrowUp className="h-3 w-3" /></Button>
               <Button size="sm" variant="ghost" className="h-6 w-6 p-0" disabled={disabled || i === steps.length - 1} onClick={() => moveStep(i, 1)}><ArrowDown className="h-3 w-3" /></Button>
               <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-destructive" disabled={disabled} onClick={() => removeStep(i)}><Trash2 className="h-3 w-3" /></Button>
             </div>
           </div>
 
-          {step.type === "email" && (() => {
+          {!isCollapsed && step.type === "email" && (() => {
             const appliedTemplate = step.templateId ? templateById.get(step.templateId) : null;
             return (
               <div className="space-y-1.5">
@@ -693,7 +764,7 @@ function StepEditor({ steps, onChange, disabled }: { steps: Step[]; onChange: (s
             );
           })()}
 
-          {step.type === "wait" && (
+          {!isCollapsed && step.type === "wait" && (
             <div className="flex items-center gap-2">
               <Label className="text-xs text-muted-foreground shrink-0">Wait days</Label>
               <Input
@@ -708,7 +779,7 @@ function StepEditor({ steps, onChange, disabled }: { steps: Step[]; onChange: (s
             </div>
           )}
 
-          {step.type === "task" && (
+          {!isCollapsed && step.type === "task" && (
             <RichTextEditor
               value={step.body ?? ""}
               onChange={(html) => updateStep(i, { body: html })}
@@ -720,7 +791,8 @@ function StepEditor({ steps, onChange, disabled }: { steps: Step[]; onChange: (s
             />
           )}
         </div>
-      ))}
+        );
+      })}
 
       {!disabled && (
         <div className="flex gap-2 pt-1">
