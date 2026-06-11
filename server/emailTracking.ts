@@ -450,7 +450,7 @@ export function registerEmailTrackingRoutes(app: Express) {
             kind: "system",
             title: `Follow-up needed: "${proposal.title}"`,
             body: `This proposal was sent 48+ hours ago but the client hasn't opened the email yet. A follow-up task has been created.`,
-            isRead: false,
+            // unread = readAt NULL (default); the old isRead key doesn't exist on the table
           });
 
           // Log activity
@@ -591,7 +591,7 @@ export function registerEmailTrackingRoutes(app: Express) {
               kind: "system",
               title: `Proposal expiring ${countdownText}: "${rp.title}"`,
               body: `A reminder email was sent to ${rp.clientEmail}. The proposal expires on ${expDate.toLocaleDateString()}.`,
-              isRead: false,
+              // unread = readAt NULL (default); the old isRead key doesn't exist on the table
             });
           }
           remindersSent++;
@@ -708,7 +708,7 @@ export function registerEmailTrackingRoutes(app: Express) {
             kind: "system",
             title: "Extension request overdue",
             body: `The extension request for "${propTitle}" has been pending for over 48 hours without a response.`,
-            read: false,
+            // unread = readAt NULL (default); the old `read` key doesn't exist on the table
             createdAt: new Date(),
           });
           // Log a dedup marker activity
