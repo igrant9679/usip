@@ -37,7 +37,7 @@ import {
 } from "../../../drizzle/schema";
 import { getDb } from "../../db";
 import { parseLlmJson } from "./llmJson";
-import { invokeLLM } from "../../_core/llm";
+import { invokeLLM, isRetryableLLMError } from "../../_core/llm";
 import { router } from "../../_core/trpc";
 import { workspaceProcedure } from "../../_core/workspace";
 
@@ -340,10 +340,21 @@ Produce:
     // chip with no explanation. Cap length so a megabyte stack trace
     // doesn't bloat the row.
     const reason = (err instanceof Error ? err.message : String(err)).slice(0, 800);
-    await db.update(prospectQueue).set({
-      enrichmentStatus: "failed",
-      enrichmentError: reason || "Unknown error",
-    }).where(eq(prospectQueue.id, prospectId));
+    if (isRetryableLLMError(err)) {
+      // Provider rate limit / overload — a fact about the moment, not about
+      // this prospect. Back to 'pending' so the engine's next tick retries
+      // it, instead of stranding a red 'failed' chip with raw 429 JSON the
+      // user has to retry by hand.
+      await db.update(prospectQueue).set({
+        enrichmentStatus: "pending",
+        enrichmentError: `AI provider is rate-limited — enrichment will retry automatically on the next engine pass. (${reason.slice(0, 300)})`,
+      }).where(eq(prospectQueue.id, prospectId));
+    } else {
+      await db.update(prospectQueue).set({
+        enrichmentStatus: "failed",
+        enrichmentError: reason || "Unknown error",
+      }).where(eq(prospectQueue.id, prospectId));
+    }
     throw err;
   }
 }

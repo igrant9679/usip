@@ -150,6 +150,50 @@ const DEFAULT_MODELS: Record<ProviderName, string> = {
 };
 
 // ---------------------------------------------------------------------------
+// Global concurrency gate
+//
+// The ARE engine fans out enrichment/sequence agents with Promise.allSettled
+// (up to ~8 simultaneous calls per tick), which tripped Anthropic's
+// concurrent-connection rate limit (429 "Number of concurrent connections has
+// exceeded your rate limit"). All invokeLLM calls process-wide now queue
+// through this semaphore so bursts serialize instead of erroring. Override
+// with LLM_MAX_CONCURRENCY when the account's tier allows more.
+// ---------------------------------------------------------------------------
+
+const LLM_MAX_CONCURRENCY = Math.max(1, Number(process.env.LLM_MAX_CONCURRENCY ?? "") || 2);
+let llmActive = 0;
+const llmWaiters: Array<() => void> = [];
+
+async function acquireLlmSlot(): Promise<void> {
+  if (llmActive < LLM_MAX_CONCURRENCY) {
+    llmActive++;
+    return;
+  }
+  await new Promise<void>((resolve) => llmWaiters.push(resolve));
+  llmActive++;
+}
+
+function releaseLlmSlot(): void {
+  llmActive--;
+  const next = llmWaiters.shift();
+  if (next) next();
+}
+
+/**
+ * True for transient provider errors (rate limit / overload / 5xx) that a
+ * background job should retry later rather than persist as a hard failure.
+ * SDK errors carry a numeric `status`; raw-fetch paths only have the message.
+ */
+export function isRetryableLLMError(err: unknown): boolean {
+  const status = (err as { status?: number } | null)?.status;
+  if (typeof status === "number" && [408, 429, 500, 502, 503, 504, 529].includes(status)) {
+    return true;
+  }
+  const msg = err instanceof Error ? err.message : String(err);
+  return /rate[_ ]?limit|overloaded|too many (concurrent )?(request|connection)|\b429\b|\b529\b/i.test(msg);
+}
+
+// ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------
 
@@ -325,7 +369,11 @@ async function invokeViaAnthropic(
       "Anthropic API key is not configured (workspace or ANTHROPIC_API_KEY env)"
     );
   }
-  const client = new Anthropic({ apiKey: creds.anthropicApiKey });
+  // maxRetries 4 (SDK default 2): the SDK honors retry-after and backs off
+  // exponentially on 429/5xx/529 — concurrent-connection 429s clear in
+  // seconds once the semaphore has drained the burst, so a deeper retry
+  // budget converts most of them into slow successes instead of failures.
+  const client = new Anthropic({ apiKey: creds.anthropicApiKey, maxRetries: 4 });
 
   const {
     messages,
@@ -797,12 +845,17 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
   const workspaceId = params.workspaceId ?? getRequestWorkspaceId();
   const creds = await loadCreds(workspaceId);
   const provider = resolveProvider(params.provider, creds);
-  switch (provider) {
-    case "anthropic":
-      return invokeViaAnthropic(params, creds);
-    case "openai":
-      return invokeViaOpenAI(params, creds);
-    case "gemini":
-      return invokeViaGemini(params, creds);
+  await acquireLlmSlot();
+  try {
+    switch (provider) {
+      case "anthropic":
+        return await invokeViaAnthropic(params, creds);
+      case "openai":
+        return await invokeViaOpenAI(params, creds);
+      case "gemini":
+        return await invokeViaGemini(params, creds);
+    }
+  } finally {
+    releaseLlmSlot();
   }
 }
