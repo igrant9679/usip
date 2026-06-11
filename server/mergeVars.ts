@@ -18,7 +18,7 @@
 
 import { eq } from "drizzle-orm";
 import { getDb } from "./db";
-import { contacts, accounts } from "../drizzle/schema";
+import { contacts, accounts, leads, prospects } from "../drizzle/schema";
 
 export type MergeContext = {
   contact?: {
@@ -168,20 +168,69 @@ export function textToHtml(text: string): string {
 }
 
 /**
- * Load contact + account data from DB and build a MergeContext.
+ * Load recipient data from DB and build a MergeContext.
+ *
+ * Accepts either a bare contactId (legacy signature) or an object with any
+ * of { contactId, leadId, prospectId } — drafts created by the sequence
+ * engine target leads/prospects with NO contact row, and previously got an
+ * empty context (so every {{tag}} reached the recipient unresolved).
+ * Resolution priority: contact → lead → prospect.
  */
 export async function buildMergeContextFromDb(
-  contactId: number | null | undefined,
+  ref:
+    | number
+    | null
+    | undefined
+    | { contactId?: number | null; leadId?: number | null; prospectId?: number | null },
 ): Promise<MergeContext> {
-  if (!contactId) return {};
-
+  const ids = typeof ref === "number" ? { contactId: ref } : (ref ?? {});
   const db = await getDb();
   if (!db) return {};
+
+  if (!ids.contactId) {
+    // Lead recipient: leads carry their own name/company columns (no account row).
+    if (ids.leadId) {
+      const [lead] = await db.select().from(leads).where(eq(leads.id, ids.leadId)).limit(1);
+      if (lead) {
+        return {
+          contact: {
+            firstName: lead.firstName,
+            lastName: lead.lastName,
+            title: lead.title,
+            email: lead.email,
+            phone: lead.phone,
+          },
+          account: lead.company ? { name: lead.company } : undefined,
+        };
+      }
+    }
+    // Prospect recipient: prospects carry name/company/domain/industry columns.
+    if (ids.prospectId) {
+      const [p] = await db.select().from(prospects).where(eq(prospects.id, ids.prospectId)).limit(1);
+      if (p) {
+        return {
+          contact: {
+            firstName: p.firstName,
+            lastName: p.lastName,
+            title: p.title,
+            email: p.email,
+            phone: p.phone,
+            city: p.city,
+            linkedinUrl: p.linkedinUrl,
+          },
+          account: p.company || p.companyDomain
+            ? { name: p.company, domain: p.companyDomain, industry: p.industry }
+            : undefined,
+        };
+      }
+    }
+    return {};
+  }
 
   const [contact] = await db
     .select()
     .from(contacts)
-    .where(eq(contacts.id, contactId))
+    .where(eq(contacts.id, ids.contactId))
     .limit(1);
 
   if (!contact) return {};

@@ -238,14 +238,26 @@ export const smtpConfigRouter = router({
 
       const transporter = buildTransporter({ host: cfg.host, port: cfg.port, secure: cfg.secure, username: cfg.username, password });
 
+      // Resolve merge vars before sending — bulk send (sendBulkApproved)
+      // already did this; the single-send path was skipped, so drafts went
+      // out with literal {{firstName}} tokens.
+      const mergeCtx = await buildMergeContextFromDb({
+        contactId: draft.toContactId,
+        leadId: draft.toLeadId,
+        prospectId: draft.toProspectId,
+      });
+      mergeCtx.sender = { name: cfg.fromName, email: cfg.fromEmail };
+      const resolvedSubject = resolveMergeVars(draft.subject, mergeCtx);
+      const resolvedBody = resolveMergeVars(draft.body, mergeCtx);
+
       try {
         await transporter.sendMail({
           from: cfg.fromName ? `"${cfg.fromName}" <${cfg.fromEmail}>` : cfg.fromEmail,
           to: toEmail,
           replyTo: cfg.replyTo ?? undefined,
-          subject: draft.subject,
-          text: draft.body,
-          html: draft.body.replace(/\n/g, "<br>"),
+          subject: resolvedSubject,
+          text: resolvedBody,
+          html: resolvedBody.replace(/\n/g, "<br>"),
         });
       } catch (err: any) {
         throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: `Failed to send email: ${err?.message}` });
@@ -321,8 +333,13 @@ export const smtpConfigRouter = router({
         const isSuppressed = await isEmailSuppressed(ctx.workspace.id, toEmail);
         if (isSuppressed) { skipped++; continue; }
         try {
-          // Pre-send: resolve merge vars
-          const mergeCtx = await buildMergeContextFromDb(draft.toContactId ?? null);
+          // Pre-send: resolve merge vars — drafts may target a contact, lead,
+          // or prospect (sequence-engine drafts often have no contact row).
+          const mergeCtx = await buildMergeContextFromDb({
+            contactId: draft.toContactId,
+            leadId: draft.toLeadId,
+            prospectId: draft.toProspectId,
+          });
           mergeCtx.sender = { name: cfg.fromName, email: cfg.fromEmail };
           const resolvedSubject = resolveMergeVars(draft.subject, mergeCtx);
           const resolvedBody = resolveMergeVars(draft.body, mergeCtx);
@@ -436,11 +453,16 @@ export const smtpConfigRouter = router({
         .limit(1);
       if (!draft) throw new TRPCError({ code: "NOT_FOUND" });
 
-      // Build merge context from DB
-      const mergeCtx = await buildMergeContextFromDb(draft.toContactId ?? undefined);
-      // Inject sender info into context
-      (mergeCtx as any).senderName = ctx.user.name ?? "";
-      (mergeCtx as any).senderEmail = ctx.user.email ?? "";
+      // Build merge context from DB (contact, lead, or prospect recipient)
+      const mergeCtx = await buildMergeContextFromDb({
+        contactId: draft.toContactId,
+        leadId: draft.toLeadId,
+        prospectId: draft.toProspectId,
+      });
+      // Inject sender info into context. (Was assigned as top-level
+      // senderName/senderEmail keys, which buildVarMap never reads — so
+      // {{senderName}}/{{senderEmail}} stayed unresolved in previews.)
+      mergeCtx.sender = { name: ctx.user.name ?? "", email: ctx.user.email ?? "" };
 
       const resolvedSubject = resolveMergeVars(draft.subject ?? "", mergeCtx);
       const resolvedBody = resolveMergeVars(draft.body ?? "", mergeCtx);
