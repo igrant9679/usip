@@ -785,13 +785,49 @@ export const sequencesRouter = router({
       const existingContactIds = new Set(existing.map((e) => e.contactId).filter((x): x is number => x != null));
       const existingLeadIds = new Set(existing.map((e) => e.leadId).filter((x): x is number => x != null));
       const existingProspectIds = new Set(existing.map((e) => e.prospectId).filter((x): x is number => x != null));
-      const finalContactIds = enrollableContactIds.filter((id) => !existingContactIds.has(id));
-      const finalLeadIds = leadIds.filter((id) => !existingLeadIds.has(id));
-      const finalProspectIds = enrollableProspectIds.filter((id) => !existingProspectIds.has(id));
-      const skippedAlreadyEnrolled =
+      let finalContactIds = enrollableContactIds.filter((id) => !existingContactIds.has(id));
+      let finalLeadIds = leadIds.filter((id) => !existingLeadIds.has(id));
+      let finalProspectIds = enrollableProspectIds.filter((id) => !existingProspectIds.has(id));
+      let skippedAlreadyEnrolled =
         (enrollableContactIds.length - finalContactIds.length) +
         (leadIds.length - finalLeadIds.length) +
         (enrollableProspectIds.length - finalProspectIds.length);
+
+      // ── Cross-type dedup by EMAIL ────────────────────────────────
+      // Id-based dedup misses the same human across record types: a
+      // prospect promoted to a lead/contact is a new row with a new id,
+      // so they could be enrolled twice and receive duplicate emails.
+      // Collect the emails behind existing enrollments + this batch and
+      // skip any candidate whose email is already covered.
+      const emailOf = async (
+        tbl: typeof contacts | typeof leads | typeof prospects,
+        ids: number[],
+      ): Promise<Map<number, string>> => {
+        if (ids.length === 0) return new Map();
+        const rows = await db.select({ id: tbl.id, email: tbl.email }).from(tbl)
+          .where(and(eq(tbl.workspaceId, ctx.workspace.id), inArray(tbl.id, ids)));
+        return new Map(rows.filter((r) => r.email).map((r) => [r.id, r.email!.toLowerCase()]));
+      };
+      const [existCEmails, existLEmails, existPEmails, candCEmails, candLEmails, candPEmails] = await Promise.all([
+        emailOf(contacts, [...existingContactIds]),
+        emailOf(leads, [...existingLeadIds]),
+        emailOf(prospects, [...existingProspectIds]),
+        emailOf(contacts, finalContactIds),
+        emailOf(leads, finalLeadIds),
+        emailOf(prospects, finalProspectIds),
+      ]);
+      const seenEmails = new Set<string>([...existCEmails.values(), ...existLEmails.values(), ...existPEmails.values()]);
+      const dedupByEmail = (ids: number[], emails: Map<number, string>): number[] =>
+        ids.filter((id) => {
+          const em = emails.get(id);
+          if (!em) return true; // no email — engine-level checks handle it
+          if (seenEmails.has(em)) { skippedAlreadyEnrolled++; return false; }
+          seenEmails.add(em);
+          return true;
+        });
+      finalContactIds = dedupByEmail(finalContactIds, candCEmails);
+      finalLeadIds = dedupByEmail(finalLeadIds, candLEmails);
+      finalProspectIds = dedupByEmail(finalProspectIds, candPEmails);
 
       const now = new Date();
       const rows: any[] = [];

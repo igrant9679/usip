@@ -24,6 +24,7 @@ import {
   campaigns,
   enrollments,
   activities,
+  sequences,
 } from "../drizzle/schema";
 import { eq, and, or, desc, inArray, isNull } from "drizzle-orm";
 import { decryptField } from "./emailAdapter";
@@ -316,9 +317,23 @@ export async function processInboundReply(data: InboundReplyData) {
     else if (matchedProspectId) enrollmentConditions.push(eq(enrollments.prospectId, matchedProspectId));
 
     const activeEnrollments = await db.select().from(enrollments).where(and(...enrollmentConditions));
-    for (const enrollment of activeEnrollments) {
-      // Pause all active enrollments for this contact/lead/prospect when a reply is received
-      await db.update(enrollments).set({ status: "paused" }).where(eq(enrollments.id, enrollment.id));
+    if (activeEnrollments.length > 0) {
+      // Honor each sequence's "Pause enrollment on reply" toggle — it was a
+      // no-op here (every active enrollment got paused unconditionally).
+      // Default stays pause-on-reply; only sequences that explicitly set
+      // settings.replyDetection === false keep running.
+      const seqIds = [...new Set(activeEnrollments.map((e) => e.sequenceId))];
+      const seqRows = await db
+        .select({ id: sequences.id, settings: sequences.settings })
+        .from(sequences)
+        .where(and(eq(sequences.workspaceId, data.workspaceId), inArray(sequences.id, seqIds)));
+      const pauseBySeq = new Map(
+        seqRows.map((s) => [s.id, (s.settings as { replyDetection?: boolean } | null)?.replyDetection !== false]),
+      );
+      for (const enrollment of activeEnrollments) {
+        if (pauseBySeq.get(enrollment.sequenceId) === false) continue;
+        await db.update(enrollments).set({ status: "paused" }).where(eq(enrollments.id, enrollment.id));
+      }
     }
   }
 
