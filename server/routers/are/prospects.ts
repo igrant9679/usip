@@ -36,6 +36,7 @@ import {
   workspaceMembers,
 } from "../../../drizzle/schema";
 import { getDb } from "../../db";
+import { parseLlmJson } from "./llmJson";
 import { invokeLLM } from "../../_core/llm";
 import { router } from "../../_core/trpc";
 import { workspaceProcedure } from "../../_core/workspace";
@@ -100,7 +101,7 @@ Score each dimension 0-20 and provide a total score 0-100.
 
   const content = result.choices[0]?.message?.content;
   if (!content) return { score: 0, breakdown: {} };
-  const parsed = JSON.parse(typeof content === "string" ? content : JSON.stringify(content));
+  const parsed = parseLlmJson(content, "scoreIcpMatch");
   return {
     score: Math.min(100, Math.max(0, Math.round(parsed.total))),
     breakdown: {
@@ -290,7 +291,7 @@ Produce:
 
     const enrichContent = enrichResult.choices[0]?.message?.content;
     if (!enrichContent) throw new Error("Enrichment returned no content");
-    const enrichData = JSON.parse(typeof enrichContent === "string" ? enrichContent : JSON.stringify(enrichContent));
+    const enrichData = parseLlmJson(enrichContent, "enrichAgent");
 
     // Upsert intelligence record
     const existing = await db
@@ -452,7 +453,7 @@ export async function generateCampaignTemplate(
 
   const content = result.choices[0]?.message?.content;
   if (!content) return { steps: [] };
-  const parsed = JSON.parse(typeof content === "string" ? content : JSON.stringify(content)) as CampaignTemplate;
+  const parsed = parseLlmJson(content, "generateCampaignTemplate") as CampaignTemplate;
 
   await db.update(areCampaigns)
     .set({ generatedTemplate: parsed, generatedTemplateAt: new Date() })
@@ -530,7 +531,7 @@ async function personalizeForProspect(
   });
   const content = result.choices[0]?.message?.content;
   if (!content) return [];
-  const parsed = JSON.parse(typeof content === "string" ? content : JSON.stringify(content));
+  const parsed = parseLlmJson(content, "personalizeForProspect");
   return (parsed.steps ?? []).map((s: any) => ({ ...s, variantKey: s.variantKey ?? "A" }));
 }
 
@@ -566,7 +567,7 @@ async function evaluateSequenceQuality(steps: unknown[], workspaceId: number): P
   });
   const content = result.choices[0]?.message?.content;
   if (!content) return { score: 0, breakdown: {}, feedback: "Eval LLM returned no content" };
-  const data = JSON.parse(typeof content === "string" ? content : JSON.stringify(content));
+  const data = parseLlmJson(content, "evaluateSequenceQuality");
   return {
     score: Math.min(40, Math.max(0, Math.round(data.totalScore))),
     breakdown: { specificity: data.specificity, clarity: data.clarity, brevity: data.brevity, cta: data.cta },

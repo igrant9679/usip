@@ -29,14 +29,14 @@ export default function Social() {
   const [recurrenceDays, setRecurrenceDays] = useState<number[]>([]);
   const [recurrenceEndDate, setRecurrenceEndDate] = useState("");
 
-  const connect = trpc.social.connectAccount.useMutation({ onSuccess: () => { utils.social.listAccounts.invalidate(); setConnectOpen(false); toast.success("Connected (stub)"); } });
+  const connect = trpc.social.connectAccount.useMutation({ onSuccess: () => { utils.social.listAccounts.invalidate(); setConnectOpen(false); toast.success("Connected (stub)"); }, onError: (e) => toast.error(e.message) });
   const disconnect = trpc.social.disconnectAccount.useMutation({ onSuccess: () => utils.social.listAccounts.invalidate(), onError: (e) => toast.error(e.message) });
   const create = trpc.social.createPost.useMutation({ onSuccess: () => { utils.social.listPosts.invalidate(); setComposeOpen(false); setBody(""); setVariants([]); toast.success("Saved"); }, onError: (e) => toast.error(e.message) });
   const approve = trpc.social.approvePost.useMutation({ onSuccess: () => utils.social.listPosts.invalidate(), onError: (e) => toast.error(e.message) });
   const sched = trpc.social.schedulePost.useMutation({ onSuccess: () => utils.social.listPosts.invalidate(), onError: (e) => toast.error(e.message) });
   const pub = trpc.social.publishNowStub.useMutation({ onSuccess: () => { utils.social.listPosts.invalidate(); utils.social.analytics.invalidate(); toast.success("Published (stub)"); }, onError: (e) => toast.error(e.message) });
   const del = trpc.social.deletePost.useMutation({ onSuccess: () => { utils.social.listPosts.invalidate(); toast.success("Post deleted"); }, onError: (e) => toast.error(e.message) });
-  const genVariants = trpc.social.generateVariants.useMutation({ onSuccess: (r) => { setVariants(r.variants); toast.success("Variants generated"); } });
+  const genVariants = trpc.social.generateVariants.useMutation({ onSuccess: (r) => { setVariants(r.variants); toast.success("Variants generated"); }, onError: (e) => toast.error(e.message) });
   const setRecurrence = trpc.social.setRecurrence.useMutation({
     onSuccess: () => { utils.social.listPosts.invalidate(); setRecurrencePostId(null); toast.success("Recurrence saved"); },
     onError: (e) => toast.error(e.message),

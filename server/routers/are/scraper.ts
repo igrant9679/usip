@@ -16,6 +16,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { areScrapeJobs, prospectQueue } from "../../../drizzle/schema";
 import { getDb } from "../../db";
+import { parseLlmJson } from "./llmJson";
 import { invokeLLM } from "../../_core/llm";
 import { router } from "../../_core/trpc";
 import { workspaceProcedure } from "../../_core/workspace";
@@ -194,7 +195,7 @@ export async function scrapeGoogleBusiness(
 
     const content = result.choices[0]?.message?.content;
     if (!content) continue;
-    const parsed = JSON.parse(typeof content === "string" ? content : JSON.stringify(content));
+    const parsed = parseLlmJson(content, "scrapeGoogleBusiness");
     for (const p of (parsed.prospects ?? []) as Array<Record<string, unknown>>) {
       const key = String(p.linkedinUrl || p.email || `${p.firstName}|${p.lastName}|${p.companyName}`).toLowerCase().trim();
       if (!key || seen.has(key)) continue;
@@ -247,7 +248,7 @@ export async function scrapeWeb(
 
   const content = result.choices[0]?.message?.content;
   if (!content) return [];
-  const parsed = JSON.parse(typeof content === "string" ? content : JSON.stringify(content));
+  const parsed = parseLlmJson(content, "scrapeWeb");
   return parsed.prospects ?? [];
 }
 
@@ -288,7 +289,7 @@ export async function scrapeNews(
 
   const content = result.choices[0]?.message?.content;
   if (!content) return [];
-  const parsed = JSON.parse(typeof content === "string" ? content : JSON.stringify(content));
+  const parsed = parseLlmJson(content, "scrapeNews");
   return parsed.prospects ?? [];
 }
 
