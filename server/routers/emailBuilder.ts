@@ -123,6 +123,7 @@ export function renderDesignToHtml(
   designData: Block[],
   subject: string,
   mergeOverrides: Record<string, string> = {},
+  opts: { resolveTags?: boolean } = {},
 ): string {
   // designData may be a bare Block[] (saved by the editor) or a legacy
   // { blocks: Block[] } wrapper (seeded / AI-generated templates).
@@ -144,7 +145,14 @@ export function renderDesignToHtml(
 </table>
 </body>
 </html>`;
-  return resolveMergeTags(html, mergeOverrides);
+  // resolveTags=false is for PERSISTENCE: stored htmlOutput must keep
+  // {{tags}} intact so send-time resolution (server/mergeVars.ts) can fill
+  // each recipient's real data. Resolving here baked the DEMO values
+  // ("Alex"/"Acme Corp") into saved templates — and every sequence step
+  // copied from them — so prospects would have received the demo names.
+  // Previews (renderPreview, savedSections) keep the default resolve.
+  const { resolveTags = true } = opts;
+  return resolveTags ? resolveMergeTags(html, mergeOverrides) : html;
 }
 
 /* ─── emailTemplatesRouter ───────────────────────────────────────────────── */
@@ -209,7 +217,7 @@ export const emailTemplatesRouter = router({
         category: input.category,
         subject: input.subject,
         designData: input.designData,
-        htmlOutput: renderDesignToHtml(input.designData as Block[], input.subject),
+        htmlOutput: renderDesignToHtml(input.designData as Block[], input.subject, {}, { resolveTags: false }),
         plainOutput: "",
         status: "draft",
         createdByUserId: ctx.user.id,
@@ -246,7 +254,7 @@ export const emailTemplatesRouter = router({
 
       const designData = (input.designData ?? existing.designData) as Block[];
       const subject = input.subject ?? existing.subject ?? "";
-      const htmlOutput = renderDesignToHtml(designData, subject);
+      const htmlOutput = renderDesignToHtml(designData, subject, {}, { resolveTags: false });
 
       await db
         .update(emailTemplates)
