@@ -37,6 +37,25 @@ function roleTone(r: Role) {
   return r === "super_admin" ? "danger" : r === "admin" ? "warning" : r === "manager" ? "info" : "muted";
 }
 
+type InviteState = "active" | "pending" | "expired" | "deactivated";
+
+/**
+ * Derive a member's invitation lifecycle state for display. An accepted
+ * member has a real loginMethod and no outstanding invite token; a pending
+ * invite still carries one. We also treat a pending invite whose
+ * inviteExpiresAt has passed as expired even before the nightly
+ * expireInvitations job flips loginMethod to "expired_invite", so the badge
+ * never lags reality.
+ */
+function inviteStateOf(m: any): InviteState {
+  if (m.deactivatedAt) return "deactivated";
+  const pendingMethod = m.loginMethod === "invite" || m.loginMethod === "expired_invite";
+  if (!pendingMethod && !m.invitePending) return "active";
+  const expiredByDate = m.inviteExpiresAt && new Date(m.inviteExpiresAt).getTime() <= Date.now();
+  if (m.loginMethod === "expired_invite" || expiredByDate) return "expired";
+  return "pending";
+}
+
 type Tab = "members" | "login_history" | "settings";
 
 export default function Team() {
@@ -465,6 +484,7 @@ export default function Team() {
                       const editable = canChange(m.role, m.userId);
                       const isPendingInvite = m.loginMethod === "invite";
                       const isExpiredInvite = m.loginMethod === "expired_invite";
+                      const inviteState = inviteStateOf(m);
                       // member who signed in via any real OAuth method but never set a password — eligible for password-setup resend
                       const pendingInviteMethods = ["invite", "expired_invite"];
                       const missedPasswordStep = !pendingInviteMethods.includes(m.loginMethod ?? "") && !m.hasPassword && !isInactive;
@@ -492,12 +512,12 @@ export default function Team() {
                               <div className="min-w-0">
                                 <div className="font-medium truncate flex items-center gap-1.5">
                                   {m.name ?? m.email}
-                                  {isPendingInvite && (
+                                  {inviteState === "pending" && (
                                     <span className="inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
                                       <Mail className="size-2.5" /> Pending
                                     </span>
                                   )}
-                                  {isExpiredInvite && (
+                                  {inviteState === "expired" && (
                                     <span className="inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400">
                                       <Clock className="size-2.5" /> Expired
                                     </span>
@@ -540,10 +560,26 @@ export default function Team() {
                             {m.deactivatedAt ? fmtDate(m.deactivatedAt) : "—"}
                           </td>
                           <td className="px-3 py-2">
-                            {isInactive ? (
+                            {inviteState === "deactivated" ? (
                               <StatusPill tone="muted">deactivated</StatusPill>
-                            ) : (
+                            ) : inviteState === "active" ? (
                               <StatusPill tone="success">active</StatusPill>
+                            ) : inviteState === "pending" ? (
+                              <div className="space-y-0.5">
+                                <StatusPill tone="warning">invited</StatusPill>
+                                <div className="text-[11px] text-muted-foreground leading-tight">
+                                  {m.invitedAt && <div>Sent {fmtDate(m.invitedAt)}</div>}
+                                  {m.inviteExpiresAt ? <div>Expires {fmtDate(m.inviteExpiresAt)}</div> : <div>No expiry</div>}
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="space-y-0.5">
+                                <StatusPill tone="danger">invite expired</StatusPill>
+                                <div className="text-[11px] text-muted-foreground leading-tight">
+                                  {m.invitedAt && <div>Sent {fmtDate(m.invitedAt)}</div>}
+                                  {m.inviteExpiresAt && <div>Expired {fmtDate(m.inviteExpiresAt)}</div>}
+                                </div>
+                              </div>
                             )}
                           </td>
                           <td className="px-3 py-2 text-right">

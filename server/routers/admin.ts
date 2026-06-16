@@ -214,6 +214,14 @@ export const teamRouter = router({
         deactivatedAt: workspaceMembers.deactivatedAt,
         lastActiveAt: workspaceMembers.lastActiveAt,
         notifEmail: workspaceMembers.notifEmail,
+        // Invitation lifecycle. invitedAt = when the membership row was
+        // created (the invite was sent). invitePending is 1 only while the
+        // invite token is outstanding (cleared to null on acceptance), so it
+        // distinguishes a not-yet-accepted invite from an active member. The
+        // raw token is intentionally NOT returned — it's an acceptance secret.
+        invitedAt: workspaceMembers.createdAt,
+        inviteExpiresAt: workspaceMembers.inviteExpiresAt,
+        invitePending: sql<number>`CASE WHEN ${workspaceMembers.inviteToken} IS NOT NULL THEN 1 ELSE 0 END`,
       })
       .from(workspaceMembers)
       .innerJoin(users, eq(workspaceMembers.userId, users.id))
