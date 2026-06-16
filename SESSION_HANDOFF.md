@@ -1,6 +1,6 @@
 # Velocity / usip — Session Handoff (Continue from here)
 
-Refreshed at end of the features + full-functionality-audit session. Paste the bottom block into a new chat to resume.
+Refreshed at end of the "stability + invitations" session. Paste the bottom block into a new chat to resume.
 
 ---
 
@@ -8,60 +8,60 @@ Refreshed at end of the features + full-functionality-audit session. Paste the b
 
 - **Repo:** `igrant9679/usip` (origin: `https://github.com/igrant9679/usip.git`)
 - **Local path:** `C:\Users\Admin\usip`
-- **Deploy:** Railway → `https://getvelocityai.app/` (auto-deploys on push to `main`; deploys ran 5–12 min this session — verify live via API probes / DOM, not the first screenshot)
-- **Tip of `main`:** `5831f9f` (+ this handoff commit). All work below is deployed and the touched routers health-checked live.
+- **Deploy:** Railway → `https://getvelocityai.app/` (auto-deploys on push to `main`; deploys run ~5–12 min — verify live via API probes / DOM, not the first screenshot)
+- **Tip of `main`:** `e056eda`. All work below is deployed; the invite flow + LLM/crash fixes were probed live in Personal Chrome.
+- **Custom domain note:** the app moved from a `*.manus.space` domain to `getvelocityai.app` (Railway). This matters for anything domain-bound (see the OAuth removal below).
 
 ## This session's work (newest first)
 
-### Full functionality audit → fixes (`6cc4e62`→`5831f9f`)
-Six parallel auditors swept server routers, email/sequence engine, ARE, client pages, schema/auth. Every headline claim was hand-verified before fixing. **All fixes below are shipped + deployed; the security ones were probed live** (bogus ids now 404; legacy template save canary passed).
+### Invitations: overhauled end-to-end
+The team-invite system was broken in several layered ways. All fixed + deployed; the full flow was verified live.
 
-- **P0 `6cc4e62` — Email Builder baked DEMO merge values into saved templates.** `renderDesignToHtml` ran `resolveMergeTags` before persisting `htmlOutput`, so saved templates contained "Alex"/"Acme Corp" (the demo map) and typo'd tags became `[brackets]`. Sequences copy `htmlOutput` → prospects would have been greeted "Hi Alex". Fixed with `opts.resolveTags=false` at the two persistence sites (previews still resolve). **All 7 live templates re-saved with `{{tags}}` intact; sequence 10's step re-synced.**
-- **P0 `d342565` — cross-tenant writes:** `cs.addAmendment` (caller-controlled customerId; unscoped ARR update) and `crm.addLineItem/removeLineItem` (unvalidated opportunityId; unscoped value rewrite). Both now validate ownership (404) + scope updates.
-- **P1 `b6b0d10` — merge vars:** `buildMergeContextFromDb` now accepts `{contactId, leadId, prospectId}` (lead/prospect recipients used to get an EMPTY context → literal `{{tokens}}` in sent emails); `sendDraft` (single send) now resolves vars like the bulk path; preview path's sender vars fixed (`mergeCtx.sender`, not top-level keys).
-- **P1 `f7b5200` — Unipile webhook auth (OPT-IN, action required):** all event webhooks (mail/status/calendar/email-tracking) accepted unauthenticated POSTs → forged bounces/replies could suppress emails, pause sequences. Now verified against a `Unipile-Auth` header **when `UNIPILE_WEBHOOK_SECRET` is set**; register* admin actions pass it as Unipile's secretKey. Unset = unchanged behavior. **⚠️ USER ACTION: set `UNIPILE_WEBHOOK_SECRET` on Railway, then re-run the three register-webhook admin actions.** Residual: `/api/unipile/account-webhook` (Hosted-Auth notify_url) can't carry headers, stays open.
-- **P1 `952c0eb`:** ARE `approveBatch` RESET the campaign counter to batch size (now recounts approved from the queue, drift-proof, workspace-scoped, returns real affectedRows); SCIM deprovision (PATCH `active:false` + DELETE) removed memberships in EVERY workspace (now scoped to the provider's workspace); `emailTemplates.save` rejected legacy `{blocks:[...]}` designData (now accepts both shapes, normalizes).
-- **P1 `5831f9f` — send window was NEVER enforced:** per-sequence `sendWindowStart/End` + `skipWeekends` were editable but never consulted — emails went out any hour/day. Engine now gates email steps in the sequence's own IANA timezone (Intl-based `nowInTz`, no deps); per-sequence daily-cap key rolls at local midnight (workspace-wide cap stays UTC — no ws-level timezone exists). Sequences without saved settings now follow the editor's 08:00–18:00 default.
-- **P2 `6133c0e`:** reply detection now honors each sequence's "Pause enrollment on reply" toggle (`settings.replyDetection` was a no-op — everything got paused); `bulkEnroll` now ALSO dedups by **email across contact/lead/prospect types** (a promoted prospect could be enrolled twice).
-- **P2 `7661785`:** new `server/routers/are/llmJson.ts` `parseLlmJson` (strips markdown fences, throws descriptive error w/ payload snippet) at all 8 LLM JSON.parse sites; Social.tsx `connect`/`generateVariants` gained onError toasts.
-- **P2 `7394c78`:** Prospects page resets to page 1 on filter change; removed dead `isRead`/`read` keys on notifications inserts (column is `readAt`).
-- **Audited false alarms (do NOT re-fix):** stuck-"enriching" recovery exists (engine retries `enriching` rows each tick; failures persist `enrichmentError`); `/are/settings` is linked from ARE Hub SubNav; SequenceCanvas autosave closure is safe (timer in shared ref, react-query `mutate` safe from old closures); cs.ts:33/143 account reads aren't leaks (accountId comes from a scoped row); "two workspaces share id N" claims impossible (single auto-increment PKs).
-- **Unverified agent-reported backlog (credible, NOT yet fixed):** `are/execution.ts processSignal` fetches rows by bare id (check the caller chain before "fixing"); areEngine dispatch prospect lookup by id only; per-prospect skip not validating campaignId; name+org dedup fragility (acme.com vs acme).
+- **`e056eda` — Invite acceptance migrated OFF the removed Manus OAuth portal → native auth (THE big one).** `client/src/pages/InviteAccept.tsx` still redirected to the old Manus/Meta OAuth portal (`<portal>/app-auth` → `/api/oauth/callback`), which now **410s** and whose project rejected the `getvelocityai.app` redirect domain (the "redirect_uri domain not allowed" error the user hit). OAuth was replaced by native email+password (see Auth model below). Fix: a not-signed-in invitee now sets a password on the invite card, which POSTs to **`/api/auth/register`** — that endpoint **upgrades the invite placeholder in place** (sets passwordHash, `loginMethod="password"`, keeps the membership) and issues the session cookie. The page reloads with `?setup=done` so the now-authenticated page skips straight to `finaliseAcceptance` (clears the token). "Already have an account" → `/?returnPath=<invite>` (the native Landing auth form). Removed the dead OAuth redirect helper. **Verified live:** deployed bundle has zero `/app-auth` / `/api/oauth/callback` markers and contains `/api/auth/register` + the "Create account & join" CTA; the invite page renders the native password card, not the OAuth error.
+- **`f2c6456` / `4252ec9` — resend / copy-link / re-invite now handle EXPIRED invites.** `resendInvitation` + `copyInviteLink` guarded on `loginMethod === "invite"`, but the nightly job flips unaccepted invites to `"expired_invite"` — so resending an expired invite (the whole point) failed with the misleading "Member has already accepted their invitation and signed in." Both now treat `invite` + `expired_invite` as pending and revive the user's `loginMethod` back to `"invite"` when re-issuing a token. The Invite-dialog re-issue path does the same.
+- **`63d49bd` — invite mutation re-issues pending invites instead of CONFLICT.** It threw "already a member" on ANY membership row, so anyone who let a first invite lapse was permanently locked out. Now: pending invite (non-null `inviteToken`) → re-issue (fresh token/expiry, apply new role/title/quota, resend email, returns `reInvited:true`); genuinely active → CONFLICT; deactivated → "reactivate instead."
+- **`e8384bd` — Team page shows invitation status.** `team.list` now returns `invitedAt`, `inviteExpiresAt`, and `invitePending` (token-presence boolean; raw token never leaves the server). The Status column shows **active / invited (with sent + expiry dates) / invite expired / deactivated**; a pending invite past its expiry renders as expired immediately (doesn't wait for the nightly job). 7-day expiry already existed (invite mutation default + `expireInvitations` nightly + 48h warning emails in `inviteExpiry.ts`); this makes it visible.
 
-### Template-linked steps = Email Builder is source of truth (`09649e1`)
-- Sequences right-panel Steps tab: linked steps show ONLY a clickable **"From template: <name> →"** deep-linking to `/email-builder/:id` (no subject/body dump).
-- Edit dialog: linked steps render the template's CURRENT subject + formatted output **read-only** (sanitized) with the same link; **Detach** copies the template's current content for inline editing. Subject input + RichTextEditor only for unlinked steps.
-- `handleSaveSteps` re-syncs linked steps from the template's current subject/htmlOutput (send engine reads steps JSON — a later template edit still needs one sequence re-save to reach in-flight sends).
-- EmailClientPreview resolves linked steps against the live template list.
+### Stability fixes
+- **`8fdb816` — process-level crash guard.** Node 20 terminates on an unhandled promise rejection / uncaught exception by default, and the server had **zero** process handlers — one stray promise anywhere crashed the whole instance (the hard crash that needed a manual restart). Added `process.on("unhandledRejection")` + `("uncaughtException")` in `server/_core/index.ts` that log `[FATAL-GUARD] …` with full stack and keep the server alive. **If it crashes again, grep Railway logs for `[FATAL-GUARD]` — that's the root-cause pointer (a missing `.catch()`).**
+- **`ca197b7` — LLM 429 "concurrent connections" fix.** ARE engine ticks fan out ~8 simultaneous Anthropic calls (`Promise.allSettled` over enrich+sequence agents), tripping the concurrent-connection rate limit. `invokeLLM` now serializes through a **process-wide semaphore** (default 2, override `LLM_MAX_CONCURRENCY`); the Anthropic client uses `maxRetries: 4` (honors `retry-after`). `runEnrichAgent` now treats 429/5xx/overload as **transient** (new export `isRetryableLLMError` in `server/_core/llm.ts`) → resets the prospect to `pending` for the next tick instead of stamping a hard `failed` with raw 429 JSON.
 
-### Prospect-POV email preview (`6ba7083`, `d2e615f`, `1f0b9fb`, `4552b7d`)
-- `client/src/components/usip/EmailClientPreview.tsx` — **Preview** button on the Sequences right panel (saved steps) AND in Edit→Steps (previews unsaved edits live).
-- Gmail ↔ Outlook chrome toggle; **desktop + iPhone-app views** (Monitor/Smartphone toggle, auto-switches on mobile viewports via `useIsMobile`); step pills with day offsets from wait steps; editable "Preview as…" sample persona; client-side mirror of server mergeVars semantics (unknown tokens stay visible); bodies via `sanitizeEmailHtml`.
-- Clipping lessons: 600px table templates need `[&_table]:max-w-full` (desktop) and `table-fixed w-full` (mobile frames); email canvas stays light in app dark mode on purpose.
+### Features earlier in the session
+- **`64bbaa7` — Personas categories.** New `persona_categories` table (**migration 0089**) + `personas.categoryId`. Page renders one collapsible section per category with create / rename / delete (personas fall back to Uncategorized) / reorder (server `sortOrder`) / per-section collapse (localStorage). Persona editor + each section header gained a category picker / quick-add. Router: workspace-scoped `listCategories`/`createCategory`/`updateCategory`/`deleteCategory`/`reorderCategories`; caller-supplied `categoryId` is ownership-validated.
+- **`9c5d8f0` — Sequence step editor minimize.** `StepEditor` (in `Sequences.tsx`) — each step header is a click-to-collapse toggle; email steps with content start minimized as a subject-line outline. Collapse state remaps correctly on move/remove.
 
-### 🪤 NEW BUG CLASS — DialogContent `sm:max-w-lg` (memory `velocity-dialog-maxw-bugclass`)
-`ui/dialog.tsx` DialogContent's default className ends with `sm:max-w-lg`; a consumer's bare `max-w-2xl` LOSES at ≥640px (different variants — tailwind-merge keeps both) → dialog silently renders 512px on desktop. **Always override with the same prefix: `sm:max-w-2xl`** (+ optional `max-w-[calc(100%-2rem)]`). A parallel-session sweep fixed all ~59 instances (`1b20ce9`, `ae1cbcf`, `83d0106`) — repo now has ZERO bare wide max-w on DialogContent. Don't reintroduce.
+## 🔑 Auth model (learned this session — durable, read before touching auth/invites)
+- **Auth is native email + password (`server/passwordAuth.ts`). The Manus/Meta OAuth flow was REMOVED.** `/api/oauth/callback` returns **410 Gone**. Do not reintroduce OAuth-portal redirects.
+- **There is NO `/login` route.** The login/signup UI is the `Landing` component **inside `client/src/App.tsx`** (rendered by `AuthGate` when unauthenticated). It posts to `/api/auth/password-login` (signin) or `/api/auth/register` (signup), reads `?returnPath=` from the URL, and has both modes. `client/src/pages/PasswordLogin.tsx` exists but is **not routed** — ignore it.
+- **`/api/auth/register` upgrades an invite placeholder in place** (sets password, `loginMethod="password"`, preserves `workspaceMembers`); 409 only if the email already has a real password.
+- **Invite lifecycle:** placeholder user has `openId = "invite:<email>"`, `loginMethod="invite"` (pending) → nightly `expireInvitations` flips to `"expired_invite"` → acceptance sets a real `loginMethod` and clears `inviteToken`. **`inviteToken` non-null ⇔ outstanding/unaccepted.** `hasPassword` + `loginMethod` distinguish accepted from pending. Invite expiry default **7 days** (per-workspace `workspaceSettings.inviteExpiryDays`, `0` = never; editable in Team → Settings).
+- `finaliseAcceptance` (in `routers/admin.ts`) clears the token and accepts both `invite`/`expired_invite` as pending; a real `loginMethod` takes the "already accepted" branch.
 
-### Funnel/UX changes earlier in the session
-- **Personas (`f7e73d9`, `42c9b5e`):** Preset library + "Your personas" cards are minimizable (chevron, localStorage `velocity_personas_presets_collapsed` / `velocity_personas_list_collapsed`), `shrink-0` (flex-collapse class), internal scroll (`max-h-[40vh]`/`[50vh]`).
-- **Prospects (`2fd7bfe`):** promoted prospects leave the DEFAULT list (filter defaults to `not_promoted`); record + linkedLeadId kept, reachable via "Converted to lead"/"All prospects". Verified E2E with a temp prospect (created→promoted→disappeared→cleaned up).
-- **ARE (`925ed3b`):** `are.prospects.list` excludes `sequenceStatus="skipped"` (= rejected) unless explicitly filtered — rejected prospects now appear ONLY in the Rejections tab (verified: campaign 7 went 11/11-duplicated → 0 Prospects / 11 Rejections).
-- **Pipeline page data CLEARED (user-approved):** all 65 opportunities (ids 1–65, orphaned demo data) + Customer 16 (incl. QBRs/tickets/amendments via cs.delete) deleted via authenticated tRPC. Board verified 0.
+## 🪤 Bug classes (do not reintroduce)
+- **DialogContent `sm:max-w-lg`:** `ui/dialog.tsx` default className ends with `sm:max-w-lg`; a bare `max-w-2xl` LOSES at ≥640px (tailwind-merge keeps both). Always override with the same prefix: `sm:max-w-2xl` (+ optional `max-w-[calc(100%-2rem)]`). Repo had a full sweep to zero bare instances — keep it that way.
+- **Flex-collapse:** bare top-level flex rows under the shell need `shrink-0` or they collapse / steal clicks. SubNav/PageHeader are `shrink-0`. `min-h-0` trap on flex children that scroll.
+- **Migration drift:** schema = drizzle journal ∪ `server/_core/rawMigrations.ts`. Schema changes go in BOTH `drizzle/schema.ts` AND rawMigrations. Latest applied: **0089** (persona_categories). **Next is 0090.** rawMigrations are idempotent (tolerated errnos 1050/1060/1061/1091/1146/1826), run 5s post-boot, never block startup.
 
-## Live data state of LSI Media
-- **Pipeline: 0 opportunities. Customers/Accounts/Contacts/Leads/Prospects: all 0** (orphan child rows like stage history may linger harmlessly — no FKs in schema).
-- **Sequences:** 1 — "AI CONSULT - INITIAL OUTREACH" (id 10, paused), 1 email step **linked to template 6**; steps were edited down by the user mid-session.
-- **Email templates:** 7 (ids 2–8); ALL re-saved this session so htmlOutput keeps `{{tags}}` (ids 6/7/8 = AI CONSULT steps; 2/3/4 legacy seeded; 5 untitled). Template 6 fixed: `{{firstName|there}}` / `{{company|your team}}`.
-- ARE: 5 campaigns; campaign 7 "AI Audit - COO Operations Efficiency" has 11 rejected prospects (Rejections tab only).
+## How this codebase works (essentials)
+- **Stack:** React + Vite + wouter + tRPC v11 + Drizzle ORM (mysql2) + Express. **Node 20** in prod (`.node-version` = 20). esbuild does NOT typecheck but FAILS on missing exports/unresolved imports — grep repo-wide before deleting an export. TS type errors only surface at runtime.
+- **Build:** Railway runs `vite build && esbuild server/_core/index.ts --platform=node --packages=external --bundle --format=esm`. pnpm frozen lockfile — don't add deps without updating `pnpm-lock.yaml`. Verify locally with `npx esbuild <file> --loader:.tsx=tsx --jsx=automatic --outfile=NUL` (parse check) or the full bundle command to a temp dir.
+- **No local toolchain for running** — verify via static review → commit → push → watch Railway → check live in Chrome.
+- tRPC: `workspaceProcedure` etc.; **every DB query must filter by `ctx.workspace.id`**; treat any caller-controlled id as hostile (validate ownership → 404).
+- Engine crons (`server/_core/index.ts`, all `.catch()`-guarded): `runAreEngine()` ~3min, `processEnrollments()` ~5min (enforces send window/timezone), `runPipelineAlertsCron()` ~15min, nightly batch (incl. `expireInvitations` + invite warning emails). `invokeLLM` (server/_core/llm.ts) default model `claude-haiku-4-5`, global concurrency semaphore, `isRetryableLLMError` export. Email send via `sendWorkspaceEmail` (workspace SMTP / Email Delivery settings; failures non-fatal).
+- **Reuse:** ConfirmButton / TableSkeleton / QueryError / SubNav / EmailClientPreview. Dark mode via theme tokens. New dialogs: `sm:max-w-*` overrides only.
 
-## How this codebase works (essentials — unchanged)
-- **Stack:** React + Vite + wouter + tRPC v11 + Drizzle ORM (mysql2) + Express. esbuild does NOT typecheck but FAILS on missing exports/unresolved imports — grep repo-wide before deleting an export. TS type errors only surface at runtime.
-- Build runs on Railway (pnpm, frozen lockfile). Node 24 + Python 3.12 are installed locally but verify via: static review → commit → push → watch Railway → check live in Chrome. Don't add deps without updating pnpm-lock.yaml.
-- **Schema** = drizzle journal 0000–0047 ∪ `server/_core/rawMigrations.ts` (0048+, idempotent; latest 0088; **next is 0089**). Schema changes go in `drizzle/schema.ts` AND rawMigrations.
-- tRPC: `workspaceProcedure` etc.; **every DB query must filter by `ctx.workspace.id`** — the audit found unscoped ones; treat any caller-controlled id as hostile.
-- Engine crons (`server/_core/index.ts`): `runAreEngine()` ~3min, `runPipelineAlertsCron()` ~15min, `processEnrollments()` (now enforces send window/timezone). `invokeLLM` outputSchema = `{name, schema}`. Email send: `sendWorkspaceEmail` / smtpConfig paths (both resolve merge vars now).
-- Key gotchas live in the previous handoff's list — still valid: drizzle `.update()` returns `[ResultSetHeader, …]`; `prospects` ≠ `prospect_queue`; `getAreSettings` curated return; flex `min-h-0` trap + `shrink-0` bug class; Sheet/Dialog title rows need `pr-10`/`pr-12` clear of the close X; SubNav/PageHeader are `shrink-0`.
-- **Reuse:** ConfirmButton / TableSkeleton / QueryError / SubNav / `EmailClientPreview`. Dark mode via theme tokens. New dialogs: `sm:max-w-*` overrides only.
+## Live data state of LSI Media (workspace id 2)
+- **Team (4 members):** `idris.grant@lsi-media.com` (you, admin), `sabine.grant`, `lucas.grant`, **`bianca.espeso@lsi-media.com`** — pending **admin** invite, fresh link **expires 2026-06-23**, no password yet. Her acceptance flow was verified working live this session.
+- **Pipeline / Customers / Accounts / Contacts / Leads / Prospects:** empty (cleared in an earlier session).
+- **Sequences:** 1 — "AI CONSULT - INITIAL OUTREACH" (id 10, paused), 1 email step linked to template 6.
+- **Email templates:** 7 (ids 2–8), all with clean `{{tags}}` htmlOutput.
+- **ARE:** campaign 7 has 11 rejected prospects (Rejections tab only).
+- **Personas:** no user categories created yet (feature shipped; all personas currently Uncategorized).
+
+## OPEN USER ACTIONS
+- **bianca:** nothing required from the dev side — she can accept via her invite link (set a password on the card) or sign up at `getvelocityai.app` with her email. Optionally confirm she reaches the dashboard.
+- **Unipile webhook auth (from a prior session, still open):** set `UNIPILE_WEBHOOK_SECRET` on Railway, then re-run the three register-webhook admin actions to activate verification.
+- **If the instance crashes again:** grep Railway logs for `[FATAL-GUARD]` to find the offending stray promise (the guard keeps it alive + logs the stack).
 
 ## Git identity (every commit)
 ```bash
@@ -73,59 +73,66 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
 EOF
 )"
 ```
-Commit + push per change. Stage specific files (parallel sessions may have dirty/untracked files — e.g. HANDOFF.md / UX_AUDIT.md at root belong to another session; leave them).
+Commit + push per change. Stage specific files (parallel sessions leave untracked files at root — `HANDOFF.md` / `UX_AUDIT.md` belong to another session; leave them).
 
 ## Verification: Personal Chrome via Claude-in-Chrome MCP
-- `list_connected_browsers` first and **ask which browser**; if names are generic, use `switch_browser` so the user picks in-Chrome ("Personal Chrome").
-- Tools need `tabId` (`tabs_context_mcp({createIfEmpty:true})`). Driving tRPC via `javascript_tool` fetch (`/api/trpc/<proc>?batch=1...`, superjson: results under `result.data.json`, POST body `{"0":{json:{...}}}`) is the fastest server verification. Screenshots intermittently time out — retry. Long-running tabs' renderers degrade (async evals hang) — open a fresh tab. Login: user signs in themselves; the MCP tab needs its own session.
-- Client-deploy canary: a behavior probe beats bundle-hash scans (entry hash doesn't change for chunk-only edits; transitive chunk scans freeze the renderer).
+- `list_connected_browsers` → `select_browser` (deviceId for **"Personal Chrome"**, isLocal). Always confirm which browser.
+- `tabs_context_mcp({createIfEmpty:true})` for a tab. Driving tRPC via `javascript_tool` fetch is the fastest server probe: queries `GET /api/trpc/<proc>?batch=1&input=...` (results under `[0].result.data.json`); mutations `POST /api/trpc/<proc>?batch=1` body `{"0":{json:{...}}}`. The session runs as **idris** (admin) — `team.list`, `team.copyInviteLink`, `team.resendInvitation`, `team.getLoginHistory`, `auth.me` all work.
+- Caveat: loading `/invite/accept` in this browser shows the **signed-in** card (idris's cookie), not the logged-out invitee card — don't submit it (would set the invitee's password). The session cookie is HttpOnly; you can't clear it from JS, and you can't sign idris back in. Verify logged-out paths by scanning the deployed JS bundle instead.
 
 ---
 
 ## Resume prompt for the new session
 ```
 You're continuing Velocity / usip (igrant9679/usip → getvelocityai.app on Railway).
-Repo: C:\Users\Admin\usip. Tip of main: 5831f9f (+ a handoff commit).
+Repo: C:\Users\Admin\usip. Tip of main: e056eda.
 
-Read SESSION_HANDOFF.md at the repo root first (esp. the audit-fixes section and the
-DialogContent sm:max-w-lg bug class).
+Read SESSION_HANDOFF.md at the repo root first — especially the "Auth model" and
+"Bug classes" sections.
 
-State: a full functionality audit was completed and ALL approved fixes are shipped +
-deployed (P0s: Email Builder demo-merge-value baking, two cross-tenant write holes;
-P1s: lead/prospect merge vars, Unipile webhook auth (opt-in), approveBatch counter,
-SCIM deprovision scope, legacy template save, send-window/timezone enforcement; P2s:
-reply-pause toggle, cross-type enrollment dedup, LLM JSON parsing, pagination reset,
-misc). Earlier in the session: prospect-POV email preview (Gmail/Outlook, desktop +
-iPhone views), template-linked steps with Email Builder as source of truth, Personas
-card minimize, promoted-prospects hidden from default list, ARE rejected-prospects
-tab split, Pipeline demo data cleared, and a repo-wide dialog-width sweep. No open
-task — wait for direction.
+State (all shipped + deployed this session):
+- Invitations overhauled: acceptance migrated OFF the removed Manus OAuth portal to
+  native email+password (InviteAccept.tsx → /api/auth/register, which upgrades the
+  invite placeholder in place); resend/copy-link/re-invite now handle expired invites
+  instead of "already a member"; Team page shows invitation status (active / invited /
+  expired) with sent+expiry dates. 7-day invite expiry is the default.
+- Stability: process-level crash guard ([FATAL-GUARD] logs, keeps Node alive — Node 20
+  was crashing on unhandled rejections); LLM global concurrency semaphore + maxRetries 4
+  + transient-429 handling fixed the ARE "concurrent connections rate limit" enrichment
+  failures (isRetryableLLMError in server/_core/llm.ts, LLM_MAX_CONCURRENCY override).
+- Features: Personas categories (migration 0089, create/rename/delete/reorder/collapse);
+  sequence step-editor per-step minimize.
 
-OPEN USER ACTION: set UNIPILE_WEBHOOK_SECRET on Railway, then re-run the three
-register-webhook admin actions to activate webhook verification.
-
-Unverified audit backlog (credible, not yet fixed — verify caller chains first):
-are/execution.ts processSignal bare-id row fetches; areEngine dispatch prospect
-lookup by id; skip mutation not validating campaignId; name+org dedup fragility.
+KEY ARCHITECTURE (learned this session):
+- Auth is native email+password (passwordAuth.ts). OAuth was REMOVED; /api/oauth/callback
+  is 410. There is NO /login route — the login/signup UI is the Landing component inside
+  App.tsx (AuthGate renders it when unauthenticated; reads ?returnPath=). PasswordLogin.tsx
+  is unrouted, ignore it. /api/auth/register upgrades an invite placeholder in place.
+- Invite lifecycle: openId "invite:<email>", loginMethod "invite"→"expired_invite"
+  (nightly expireInvitations)→real method on acceptance; inviteToken non-null = unaccepted.
 
 Hard constraints (still apply):
-- Build runs on Railway; pnpm frozen lockfile. Verify via static review → commit →
-  push → watch Railway → check live in Chrome. Don't add deps without pnpm-lock.yaml.
+- Build runs on Railway (Node 20); pnpm frozen lockfile. Verify via static review →
+  commit → push → watch Railway → check live in Chrome. Don't add deps without lockfile.
 - esbuild fails on missing exports; grep repo-wide before deleting an export.
-- Schema changes go in drizzle/schema.ts AND server/_core/rawMigrations.ts (next: 0089).
+- Schema changes go in drizzle/schema.ts AND server/_core/rawMigrations.ts (next: 0090).
 - Commit + push per change, igrant9679 identity + Opus 4.8 co-author trailer; stage
-  specific files (parallel sessions leave untracked files at root).
+  specific files (HANDOFF.md / UX_AUDIT.md at root belong to another session — leave them).
 - Every DB query filters by ctx.workspace.id; treat caller-controlled ids as hostile.
 - Plan first when non-trivial; user approves before large code lands.
-- Reuse ConfirmButton / TableSkeleton / QueryError / SubNav / EmailClientPreview;
-  theme tokens for dark mode; dialogs need sm:max-w-* overrides (never bare max-w-*).
-- Always ask which Chrome browser before driving it (switch_browser if names generic).
+- Reuse ConfirmButton / TableSkeleton / QueryError / SubNav / EmailClientPreview; theme
+  tokens for dark mode; dialogs need sm:max-w-* overrides (never bare max-w-*).
+- Always ask which Chrome browser before driving it (Personal Chrome, isLocal). The MCP
+  session runs as idris (admin); drive tRPC via javascript_tool fetch.
 - ui-ux-pro-max skill for UI/UX design work.
 
-Live data: Pipeline/Customers/Accounts/Contacts/Leads/Prospects all EMPTY on LSI
-Media. 1 paused sequence (id 10, 1 email step linked to template 6). 7 templates,
-all with clean {{tags}} htmlOutput. Campaign 7 has 11 rejected prospects
-(Rejections tab only).
+Live data: LSI Media (ws id 2), 4 members incl. bianca.espeso (pending admin invite,
+link expires 2026-06-23, no password yet — acceptance flow verified live). Pipeline/CRM
+empty. 1 paused sequence (id 10). 7 clean templates. Campaign 7 has 11 rejected prospects.
+
+OPEN: (1) bianca can self-accept, optionally confirm she reaches dashboard; (2) set
+UNIPILE_WEBHOOK_SECRET on Railway + re-run 3 register-webhook actions (prior session);
+(3) if it crashes, grep Railway logs for [FATAL-GUARD].
 
 After reading, briefly confirm current state, then wait for direction.
 ```
