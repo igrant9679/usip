@@ -5,27 +5,33 @@
  * prospects through discovery → enrichment → approval → sequencing → send.
  * This module is that engine. It is invoked on a cron from _core/index.ts.
  *
- * Each run, for every campaign with status='active', it performs one bounded
- * "tick" through the pipeline phases:
+ * Each run first performs a single GLOBAL enrichment pass
+ * (enrichPendingGlobally): pending prospects across EVERY campaign — active or
+ * paused — are enriched ONE AT A TIME (strictly serial), best-fit first,
+ * bounded per cycle. Enrichment is deliberately decoupled from campaign status
+ * so dossiers keep building even while a campaign is paused, and serial so it
+ * never trips the LLM provider's concurrent-connection limit.
  *
- *   1. ENRICH     — runEnrichAgent on pending prospects (ICP score + dossier).
- *   2. SCREEN     — auto-approve / auto-reject enriched prospects per the
+ * Then, for every campaign with status='active', it performs one bounded
+ * "tick" through the remaining pipeline phases:
+ *
+ *   1. SCREEN     — auto-approve / auto-reject enriched prospects per the
  *                   campaign's autonomyMode + autoApproveThreshold.
- *   3. SEQUENCE   — runSequenceAgent on approved prospects with no sequence.
- *   4. ENROLL     — turn a prospect's generatedSequence into are_execution_queue
+ *   2. SEQUENCE   — runSequenceAgent on approved prospects with no sequence.
+ *   3. ENROLL     — turn a prospect's generatedSequence into are_execution_queue
  *                   rows (one per step) and mark it 'enrolled'.
- *   5. DISPATCH   — send due email steps via the workspace SMTP config,
+ *   4. DISPATCH   — send due email steps via the workspace SMTP config,
  *                   respecting dailySendCap and the suppression list.
- *   6. COMPLETE   — mark prospects whose every step has been actioned.
- *   7. COUNTERS   — recompute the campaign's denormalised funnel counters.
- *   8. DISCOVERY  — if the queue is drained and below target, scrape one
+ *   5. COMPLETE   — mark prospects whose every step has been actioned.
+ *   6. COUNTERS   — recompute the campaign's denormalised funnel counters.
+ *   7. DISCOVERY  — if the queue is drained and below target, scrape one
  *                   source to top it up.
  *
  * Everything is bounded per tick (LLM cost) and idempotent (safe to re-run).
  * Per-campaign and per-phase try/catch so one failure never blocks the rest.
  */
 import { createHash } from "node:crypto";
-import { and, desc, eq, gte, inArray, lte, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, lte, sql } from "drizzle-orm";
 import { getDb } from "./db";
 import {
   areCampaigns,
@@ -48,7 +54,12 @@ import { listUsableAccounts } from "./services/linkedinLookup";
 import { sendWorkspaceEmail } from "./emailDelivery";
 
 /* ─── Per-tick bounds (keep LLM cost + wall-time predictable) ───────────── */
-const ENRICH_PER_TICK = 4;
+/** Max prospects enriched per engine cycle. Enrichment runs ONE AT A TIME
+ *  (strictly serial) across ALL campaigns regardless of status, so a paused
+ *  campaign's prospects still get dossiers and the LLM provider never sees more
+ *  than one concurrent enrichment call. Bounded so a large backlog drains
+ *  steadily over multiple ticks instead of stalling dispatch for other work. */
+const ENRICH_PER_TICK = 5;
 const SEQUENCE_PER_TICK = 3;
 const ENROLL_PER_TICK = 10;
 /** icpMatchScore below this is auto-screened out even in human-approval modes. */
@@ -211,6 +222,14 @@ export async function runAreEngine(): Promise<AreEngineResult> {
 
   engineRunning = true;
   try {
+    // Global, serial, bounded enrichment FIRST — independent of campaign status
+    // so paused campaigns' prospects still get dossiers, one LLM call at a time.
+    try {
+      await enrichPendingGlobally(result);
+    } catch (e) {
+      console.error("[AreEngine] global enrich pass failed:", e);
+    }
+
     const active = await db
       .select()
       .from(areCampaigns)
@@ -228,7 +247,7 @@ export async function runAreEngine(): Promise<AreEngineResult> {
     engineRunning = false;
   }
 
-  if (result.campaignsProcessed > 0) {
+  if (result.campaignsProcessed > 0 || result.enriched > 0) {
     console.log(
       `[AreEngine] tick complete — campaigns=${result.campaignsProcessed} ` +
         `enriched=${result.enriched} approved=${result.approved} rejected=${result.rejected} ` +
@@ -239,6 +258,69 @@ export async function runAreEngine(): Promise<AreEngineResult> {
   return result;
 }
 
+/* ─── Global enrichment pass (serial, bounded, status-agnostic) ─────────── */
+/**
+ * Enrich the next batch of pending prospects across EVERY campaign in EVERY
+ * workspace — active or paused — ONE AT A TIME. This is intentionally separate
+ * from the per-campaign tick (which only runs for active campaigns): a paused
+ * campaign should keep building dossiers so the moment it's resumed, screening
+ * and sequencing have data to work with.
+ *
+ * Strictly serial (await each enrichment before the next) so only one LLM call
+ * is ever in flight — the whole point of the request: never overload the API.
+ * Bounded by ENRICH_PER_TICK so a large backlog drains steadily over multiple
+ * ticks rather than stalling the rest of the engine in a single long tick.
+ */
+async function enrichPendingGlobally(result: AreEngineResult): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+
+  // Next batch, best-fit first, gated by each campaign's own minConfidence
+  // (default 40) so enrichment budget only goes to prospects that clear the bar.
+  // Rows scored 0 are legacy (queued before scoring existed) and always pass.
+  // 'enriching' is included to recover rows left stuck by a crashed run —
+  // runEnrichAgent is idempotent and overwrites cleanly.
+  const pending = await db
+    .select({
+      id: prospectQueue.id,
+      workspaceId: prospectQueue.workspaceId,
+      campaignId: prospectQueue.campaignId,
+    })
+    .from(prospectQueue)
+    .innerJoin(areCampaigns, eq(areCampaigns.id, prospectQueue.campaignId))
+    .where(
+      and(
+        inArray(prospectQueue.enrichmentStatus, ["pending", "enriching"]),
+        sql`(${prospectQueue.icpMatchScore} >= COALESCE(${areCampaigns.minConfidence}, 40) OR ${prospectQueue.icpMatchScore} = 0)`,
+      ),
+    )
+    .orderBy(desc(prospectQueue.icpMatchScore))
+    .limit(ENRICH_PER_TICK);
+
+  if (pending.length === 0) return;
+
+  // One enrichment at a time. A single prospect failing must not abort the rest.
+  const perCampaign = new Map<number, { ws: number; ok: number; total: number }>();
+  for (const p of pending) {
+    const bucket = perCampaign.get(p.campaignId) ?? { ws: p.workspaceId, ok: 0, total: 0 };
+    bucket.total++;
+    try {
+      await runEnrichAgent(p.id, p.workspaceId);
+      bucket.ok++;
+      result.enriched++;
+    } catch (e) {
+      console.error(`[AreEngine] enrich prospect ${p.id} (campaign ${p.campaignId}) failed:`, e);
+    }
+    perCampaign.set(p.campaignId, bucket);
+  }
+
+  // One summary log per campaign so each campaign's Logs tab shows its activity.
+  for (const [campId, b] of perCampaign) {
+    await emitLog(b.ws, campId, "enrich", "info",
+      `Enriched ${b.ok}/${b.total} prospects (serial, global pass)`);
+  }
+}
+
 /* ─── Per-campaign tick ─────────────────────────────────────────────────── */
 async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promise<void> {
   const db = await getDb();
@@ -246,44 +328,11 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
   const wsId = campaign.workspaceId;
   const campId = campaign.id;
 
-  /* ── Phase 1: ENRICH pending prospects ─────────────────────────────── */
-  try {
-    // 'enriching' is included to recover rows left stuck by a crashed run —
-    // runEnrichAgent is idempotent (it re-runs and overwrites cleanly).
-    // Score gate: only spend LLM enrichment budget on prospects whose
-    // deterministic ICP-match score clears the campaign threshold. Rows
-    // scored 0 are legacy (queued before scoring existed) — let them through
-    // rather than stranding them. Best-fit first so the per-tick budget goes
-    // to the strongest prospects.
-    const minConfidence = (campaign as { minConfidence?: number | null }).minConfidence ?? 40;
-    const pending = await db
-      .select({ id: prospectQueue.id })
-      .from(prospectQueue)
-      .where(
-        and(
-          eq(prospectQueue.campaignId, campId),
-          eq(prospectQueue.workspaceId, wsId),
-          inArray(prospectQueue.enrichmentStatus, ["pending", "enriching"]),
-          or(gte(prospectQueue.icpMatchScore, minConfidence), eq(prospectQueue.icpMatchScore, 0)),
-        ),
-      )
-      .orderBy(desc(prospectQueue.icpMatchScore))
-      .limit(ENRICH_PER_TICK);
-    if (pending.length > 0) {
-      const settled = await Promise.allSettled(
-        pending.map((p) => runEnrichAgent(p.id, wsId)),
-      );
-      const ok = settled.filter((s) => s.status === "fulfilled").length;
-      result.enriched += ok;
-      await emitLog(wsId, campId, "enrich", "info",
-        `Enriched ${ok}/${pending.length} prospects`);
-    }
-  } catch (e) {
-    console.error(`[AreEngine] campaign ${campId} enrich phase failed:`, e);
-    await emitLog(wsId, campId, "enrich", "error", String((e as Error)?.message ?? e), errorDetails(e));
-  }
+  // NOTE: enrichment is NOT a per-campaign phase — it runs once, globally and
+  // serially, in enrichPendingGlobally() before this loop (so paused campaigns
+  // enrich too, one LLM call at a time). The tick below starts at SCREEN.
 
-  /* ── Phase 2: SCREEN — auto-approve / auto-reject ──────────────────── */
+  /* ── Phase 1: SCREEN — auto-approve / auto-reject ──────────────────── */
   try {
     const enriched = await db
       .select()
@@ -345,7 +394,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
     await emitLog(wsId, campId, "screen", "error", String((e as Error)?.message ?? e));
   }
 
-  /* ── Phase 3: SEQUENCE generation for approved prospects ───────────── */
+  /* ── Phase 2: SEQUENCE generation for approved prospects ───────────── */
   try {
     const needSequence = await db
       .select({ id: prospectQueue.id })
@@ -377,7 +426,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
     await emitLog(wsId, campId, "sequence", "error", String((e as Error)?.message ?? e));
   }
 
-  /* ── Phase 4: ENROLL — generatedSequence → are_execution_queue rows ── */
+  /* ── Phase 3: ENROLL — generatedSequence → are_execution_queue rows ── */
   try {
     const rows = await db
       .select({
@@ -468,7 +517,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
     await emitLog(wsId, campId, "enroll", "error", String((e as Error)?.message ?? e));
   }
 
-  /* ── Phase 5: DISPATCH due email steps ─────────────────────────────── */
+  /* ── Phase 4: DISPATCH due email steps ─────────────────────────────── */
   try {
     const channels = (campaign.channelsEnabled ?? {}) as Record<string, boolean>;
     const emailEnabled = channels.email !== false; // null/undefined ⇒ enabled
@@ -610,7 +659,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
     await emitLog(wsId, campId, "dispatch", "error", String((e as Error)?.message ?? e));
   }
 
-  /* ── Phase 6: COMPLETE — mark prospects whose every step is actioned ─ */
+  /* ── Phase 5: COMPLETE — mark prospects whose every step is actioned ─ */
   try {
     const enrolledProspects = await db
       .select({ id: prospectQueue.id })
@@ -647,7 +696,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
     console.error(`[AreEngine] campaign ${campId} complete phase failed:`, e);
   }
 
-  /* ── Phase 7: COUNTERS — recompute the campaign funnel ─────────────── */
+  /* ── Phase 6: COUNTERS — recompute the campaign funnel ─────────────── */
   try {
     const [agg] = await db
       .select({
@@ -685,7 +734,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
     console.error(`[AreEngine] campaign ${campId} counter phase failed:`, e);
   }
 
-  /* ── Phase 8: DISCOVERY — replenish a fully drained queue ──────────── */
+  /* ── Phase 7: DISCOVERY — replenish a fully drained queue ──────────── */
   try {
     const [counts] = await db
       .select({
