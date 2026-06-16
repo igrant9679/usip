@@ -29,25 +29,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Loader2, CheckCircle2, XCircle, Building2, UserCheck, Eye, EyeOff, Lock, SkipForward } from "lucide-react";
 
-// Calls /api/auth/set-return to store the returnPath in a server-side HttpOnly
-// cookie before redirecting to the OAuth portal. The OAuth callback reads this
-// cookie and redirects directly to the invite page after authentication.
-async function redirectToLoginWithReturn(returnPath: string): Promise<void> {
-  const oauthPortalUrl = import.meta.env.VITE_OAUTH_PORTAL_URL as string;
-  const appId = import.meta.env.VITE_APP_ID as string;
-  // Store the returnPath server-side so the OAuth callback can redirect to it.
-  // This avoids modifying the redirectUri (which is validated against an allowlist).
-  await fetch(`/api/auth/set-return?path=${encodeURIComponent(returnPath)}`);
-  const redirectUri = `${window.location.origin}/api/oauth/callback`;
-  const state = btoa(redirectUri);
-  const url = new URL(`${oauthPortalUrl}/app-auth`);
-  url.searchParams.set("appId", appId);
-  url.searchParams.set("redirectUri", redirectUri);
-  url.searchParams.set("state", state);
-  url.searchParams.set("type", "signIn");
-  window.location.href = url.toString();
-}
-
 const ROLE_LABELS: Record<string, string> = {
   super_admin: "Super Admin",
   admin: "Admin",
@@ -73,12 +54,63 @@ export default function InviteAccept() {
   );
 
   // Step 2: password-creation state
-  // "pending" = show form, "done" = password saved or skipped, proceed to finalise
-  const [passwordStep, setPasswordStep] = useState<"pending" | "done">("pending");
+  // "pending" = show form, "done" = password saved or skipped, proceed to finalise.
+  // After native registration we reload back here with ?setup=done so the
+  // (now signed-in) page skips straight to finalise instead of re-prompting.
+  const [passwordStep, setPasswordStep] = useState<"pending" | "done">(
+    () => (params.get("setup") === "done" ? "done" : "pending"),
+  );
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [passwordError, setPasswordError] = useState<string | null>(null);
+
+  // Native registration (replaces the removed OAuth portal). A brand-new
+  // invitee has a placeholder user with no password; /api/auth/register
+  // upgrades it in place (sets password, keeps the membership) and issues the
+  // session cookie. We then reload back here authenticated to finalise.
+  const [registering, setRegistering] = useState(false);
+  const [accountExists, setAccountExists] = useState(false);
+
+  async function registerAndJoin() {
+    setPasswordError(null);
+    setAccountExists(false);
+    if (password.length < 8) {
+      setPasswordError("Password must be at least 8 characters.");
+      return;
+    }
+    if (password !== confirmPassword) {
+      setPasswordError("Passwords do not match.");
+      return;
+    }
+    const inviteEmail = previewQuery.data?.userEmail;
+    if (!inviteEmail) {
+      setPasswordError("This invite is missing an email address. Ask your admin to resend it.");
+      return;
+    }
+    setRegistering(true);
+    try {
+      const returnTo = `/invite/accept?token=${encodeURIComponent(token)}&setup=done`;
+      const res = await fetch("/api/auth/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ email: inviteEmail, password, returnPath: returnTo }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        if (res.status === 409) setAccountExists(true);
+        setPasswordError(data.error ?? "Could not create your account. Please try again.");
+        return;
+      }
+      // Session cookie set — reload to the invite page (now authenticated) to finalise.
+      window.location.href = data.redirect ?? returnTo;
+    } catch {
+      setPasswordError("Network error. Please check your connection and try again.");
+    } finally {
+      setRegistering(false);
+    }
+  }
 
   const setInvitePasswordMutation = trpc.team.setInvitePassword.useMutation({
     onSuccess: () => {
@@ -456,21 +488,81 @@ export default function InviteAccept() {
                 "Accept Invitation"
               )}
             </Button>
+          ) : accountExists ? (
+            // Email already has a real account — they should sign in, not register.
+            <div className="space-y-3">
+              <p className="text-center text-sm text-muted-foreground">
+                You already have an account. Sign in to accept this invitation.
+              </p>
+              <Button className="w-full" onClick={() => navigate(`/?returnPath=${encodeURIComponent(returnPath)}`)}>
+                Sign in
+              </Button>
+            </div>
           ) : (
-            <Button
-              className="w-full"
-              onClick={() => redirectToLoginWithReturn(returnPath)}
-            >
-              {passwordSetupOnly ? "Sign in to Set Password" : "Sign in to Accept Invitation"}
-            </Button>
+            // Brand-new invitee: set a password to create the account and join.
+            <div className="space-y-4">
+              <div className="space-y-1.5">
+                <Label htmlFor="join-password">Create a password</Label>
+                <div className="relative">
+                  <Input
+                    id="join-password"
+                    type={showPassword ? "text" : "password"}
+                    placeholder="At least 8 characters"
+                    value={password}
+                    onChange={(e) => { setPassword(e.target.value); setPasswordError(null); }}
+                    className="pr-10"
+                    autoComplete="new-password"
+                  />
+                  <button
+                    type="button"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    onClick={() => setShowPassword((v) => !v)}
+                    tabIndex={-1}
+                  >
+                    {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="join-confirm">Confirm password</Label>
+                <Input
+                  id="join-confirm"
+                  type={showPassword ? "text" : "password"}
+                  placeholder="Re-enter your password"
+                  value={confirmPassword}
+                  onChange={(e) => { setConfirmPassword(e.target.value); setPasswordError(null); }}
+                  autoComplete="new-password"
+                />
+              </div>
+              {passwordError && <p className="text-sm text-destructive">{passwordError}</p>}
+              <Button className="w-full" onClick={registerAndJoin} disabled={registering || !password}>
+                {registering ? (
+                  <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Creating account…</>
+                ) : (
+                  passwordSetupOnly ? "Set password & continue" : "Create account & join"
+                )}
+              </Button>
+              <p className="text-center text-xs text-muted-foreground">
+                Already have an account?{" "}
+                <button
+                  type="button"
+                  className="underline underline-offset-2 hover:text-foreground"
+                  onClick={() => navigate(`/?returnPath=${encodeURIComponent(returnPath)}`)}
+                >
+                  Sign in instead
+                </button>
+              </p>
+            </div>
           )}
 
-          <p className="text-center text-xs text-muted-foreground">
-            {passwordSetupOnly
-              ? "Password is required to sign in to your account."
-              : "By accepting, you agree to join this workspace and its data policies."
-            }
-          </p>
+          {!user ? null : (
+            <p className="text-center text-xs text-muted-foreground">
+              {passwordSetupOnly
+                ? "Password is required to sign in to your account."
+                : "By accepting, you agree to join this workspace and its data policies."
+              }
+            </p>
+          )}
         </CardContent>
       </Card>
     </div>
