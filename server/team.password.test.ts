@@ -13,12 +13,14 @@ const mockUsers: Record<number, { id: number; email: string; name: string; login
   10: { id: 10, email: "alice@acme.com", name: "Alice", loginMethod: "oauth", passwordHash: null },
   20: { id: 20, email: "bob@acme.com", name: "Bob", loginMethod: "invite", passwordHash: null },
   30: { id: 30, email: "carol@acme.com", name: "Carol", loginMethod: "invite", passwordHash: null },
+  40: { id: 40, email: "dave@acme.com", name: "Dave", loginMethod: "expired_invite", passwordHash: null },
 };
 
 const mockMembers: Record<number, { id: number; userId: number; workspaceId: number; role: string; deactivatedAt: Date | null }> = {
   1: { id: 1, userId: 10, workspaceId: 99, role: "admin", deactivatedAt: null },
   2: { id: 2, userId: 20, workspaceId: 99, role: "rep", deactivatedAt: null },
   3: { id: 3, userId: 30, workspaceId: 99, role: "rep", deactivatedAt: new Date() }, // deactivated
+  4: { id: 4, userId: 40, workspaceId: 99, role: "rep", deactivatedAt: null }, // expired invite
 };
 
 // ── Helpers that replicate the procedure logic ─────────────────────────────
@@ -47,7 +49,7 @@ async function resendInvitation(callerRole: string, targetMemberId: number) {
   if (!member) throw new Error("Member not found");
   const user = mockUsers[member.userId];
   if (!user) throw new Error("User not found");
-  if (user.loginMethod !== "invite") throw new Error("Member has already accepted their invitation and signed in");
+  if (!["invite", "expired_invite"].includes(user.loginMethod ?? "")) throw new Error("Member has already accepted their invitation and signed in");
   if (member.deactivatedAt) throw new Error("Cannot resend invitation to a deactivated member");
   return { ok: true };
 }
@@ -91,6 +93,11 @@ describe("team.setMemberPassword", () => {
 describe("team.resendInvitation", () => {
   it("succeeds for a pending invite member", async () => {
     const result = await resendInvitation("admin", 2);
+    expect(result.ok).toBe(true);
+  });
+
+  it("succeeds for an expired invite member (resend is exactly the point)", async () => {
+    const result = await resendInvitation("admin", 4);
     expect(result.ok).toBe(true);
   });
 

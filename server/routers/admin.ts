@@ -687,7 +687,11 @@ export const teamRouter = router({
         .innerJoin(users, eq(workspaceMembers.userId, users.id))
         .where(and(eq(workspaceMembers.id, input.memberId), eq(workspaceMembers.workspaceId, ctx.workspace.id)));
       if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Member not found" });
-      if (row.loginMethod !== "invite") {
+      // A pending invite is either still "invite" or has been flipped to
+      // "expired_invite" by the nightly expiry job. BOTH are resendable —
+      // an expired invite is precisely the one you need to resend. Only a
+      // genuinely accepted member (a real loginMethod) is blocked.
+      if (!["invite", "expired_invite"].includes(row.loginMethod ?? "")) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Member has already accepted their invitation and signed in" });
       }
       if (row.deactivatedAt) {
@@ -706,6 +710,11 @@ export const teamRouter = router({
       await db.update(workspaceMembers)
         .set({ inviteToken: newToken, inviteExpiresAt: newExpiresAt })
         .where(eq(workspaceMembers.id, input.memberId));
+      // Revive an expired invite back to pending so the UI shows it correctly
+      // and the fresh token/expiry actually mean something.
+      if (row.loginMethod === "expired_invite") {
+        await db.update(users).set({ loginMethod: "invite" }).where(eq(users.id, row.userId));
+      }
       // Resend invitation email via workspace SMTP (Email Delivery settings)
       try {
         const { sendWorkspaceEmail } = await import("../emailDelivery");
@@ -852,7 +861,9 @@ export const teamRouter = router({
         .innerJoin(users, eq(workspaceMembers.userId, users.id))
         .where(and(eq(workspaceMembers.id, input.memberId), eq(workspaceMembers.workspaceId, ctx.workspace.id)));
       if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Member not found" });
-      if (row.loginMethod !== "invite") {
+      // Both "invite" and "expired_invite" are pending (un-accepted) — allow
+      // copying a link for either. Only a genuinely accepted member is blocked.
+      if (!["invite", "expired_invite"].includes(row.loginMethod ?? "")) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Member has already accepted their invitation" });
       }
       if (row.deactivatedAt) {
@@ -872,6 +883,10 @@ export const teamRouter = router({
         await db.update(workspaceMembers)
           .set({ inviteToken: token, inviteExpiresAt: expiresAt })
           .where(eq(workspaceMembers.id, input.memberId));
+        // Revive an expired invite to pending so a freshly-issued link works.
+        if (row.loginMethod === "expired_invite") {
+          await db.update(users).set({ loginMethod: "invite" }).where(eq(users.id, row.userId));
+        }
       }
       return { url: `${input.origin}/invite/accept?token=${token}` };
     }),
