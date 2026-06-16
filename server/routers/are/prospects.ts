@@ -408,6 +408,8 @@ export async function generateCampaignTemplate(
   }
 
   const customInstructions = (campaign.sequencePrompt ?? "").trim();
+  const subjectGuidance = (campaign.promptSubject ?? "").trim();
+  const bodyGuidance = (campaign.promptBody ?? "").trim();
   const goalText =
     campaign.goalType === "meeting_booked" ? "Book a 15-minute discovery call"
     : campaign.goalType === "reply" ? "Get a reply to start a conversation"
@@ -416,7 +418,9 @@ export async function generateCampaignTemplate(
 
   const systemContent =
     `You are an elite B2B sales sequence architect. Design a reusable ${stepCount}-step outreach skeleton for a single campaign. The skeleton will be filled in per-prospect later, so do NOT write subject lines or bodies — write the STRUCTURE (archetype, cadence, what each step should accomplish, the CTA pattern) so that any prospect's data can be slotted in.` +
-    (customInstructions ? `\n\n## Campaign-specific instructions\n${customInstructions}` : "");
+    (customInstructions ? `\n\n## Campaign-specific instructions\n${customInstructions}` : "") +
+    (subjectGuidance ? `\n\n## Subject line preferences (the per-prospect writer will follow these)\n${subjectGuidance}` : "") +
+    (bodyGuidance ? `\n\n## Body preferences (the per-prospect writer will follow these)\n${bodyGuidance}` : "");
 
   const userContent =
     `## Campaign goal\n${goalText}\n\n` +
@@ -492,9 +496,17 @@ async function personalizeForProspect(
   const primaryHook = hooks[0]?.hook ?? triggerEvents[0]?.description ?? painSignals[0]?.signal ?? "your company's growth";
 
   const customInstructions = (campaign.sequencePrompt ?? "").trim();
+  const subjectGuidance = (campaign.promptSubject ?? "").trim();
+  const bodyGuidance = (campaign.promptBody ?? "").trim();
+  const signature = (campaign.promptSignature ?? "").trim();
   const systemContent =
     `You are an elite B2B sales copywriter. You will be given a campaign skeleton and a prospect dossier. Fill in subject+body for each step, keeping the structure, cadence, and CTA pattern from the skeleton. Every message must reference something real about the prospect. Never use generic openers ("I hope this finds you well", "I wanted to reach out").` +
-    (customInstructions ? `\n\n## Campaign-specific instructions\n${customInstructions}` : "");
+    (customInstructions ? `\n\n## Campaign-specific instructions\n${customInstructions}` : "") +
+    (subjectGuidance ? `\n\n## Subject line instructions\n${subjectGuidance}` : "") +
+    (bodyGuidance ? `\n\n## Body instructions\n${bodyGuidance}` : "") +
+    // The signature is appended verbatim after generation, so the model must
+    // NOT invent its own — otherwise every email ends with two sign-offs.
+    (signature ? `\n\n## Sign-off\nDo NOT write any closing, sign-off, or signature (no "Best,", no name) — a fixed signature is appended automatically. End the body on the CTA.` : "");
 
   const userContent =
     `## Template (do not change structure, only fill subject + body)\n${JSON.stringify(template.steps, null, 2)}\n\n` +
@@ -543,7 +555,17 @@ async function personalizeForProspect(
   const content = result.choices[0]?.message?.content;
   if (!content) return [];
   const parsed = parseLlmJson(content, "personalizeForProspect");
-  return (parsed.steps ?? []).map((s: any) => ({ ...s, variantKey: s.variantKey ?? "A" }));
+  return (parsed.steps ?? []).map((s: any) => {
+    const channel = String(s.channel ?? "email").toLowerCase();
+    let body = String(s.body ?? "");
+    // Append the literal campaign signature to email steps only. Stored on the
+    // generated sequence so it's visible in the viewer and goes out on send.
+    // Guard against a re-run double-append (force regen reuses the same step).
+    if (signature && channel === "email" && !body.includes(signature)) {
+      body = `${body.trimEnd()}\n\n${signature}`;
+    }
+    return { ...s, body, variantKey: s.variantKey ?? "A" };
+  });
 }
 
 /** Quality flag, not gate. Records a score the UI surfaces as a Review badge. */

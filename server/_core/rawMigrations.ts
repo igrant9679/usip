@@ -1515,6 +1515,21 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0090: Structured sequence prompting editor ─────────────────────
+  // Breaks the single free-form sequencePrompt into purpose-specific
+  // fields surfaced in the Sequences tab editor. promptSubject/promptBody
+  // are AI guidance woven into the template + personalization prompts;
+  // promptSignature is a literal block appended to every generated email.
+  // All NULL → identical behaviour to before. errno 1060 tolerated.
+  {
+    name: "0090_sequence_prompt_fields.sql",
+    statements: [
+      `ALTER TABLE \`are_campaigns\` ADD COLUMN \`promptSubject\` text NULL`,
+      `ALTER TABLE \`are_campaigns\` ADD COLUMN \`promptBody\` text NULL`,
+      `ALTER TABLE \`are_campaigns\` ADD COLUMN \`promptSignature\` text NULL`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

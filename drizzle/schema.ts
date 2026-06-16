@@ -2700,6 +2700,14 @@ export const areCampaigns = mysqlTable(
     /** Free-form instructions appended to the Sequence Agent system prompt
      *  for this campaign (voice/tone/constraints). Null → defaults only. */
     sequencePrompt: text("sequencePrompt"),
+    /** Structured prompting editor (migration 0090). promptSubject/promptBody
+     *  are AI GUIDANCE woven into the template + personalization prompts;
+     *  promptSignature is a LITERAL block appended verbatim to every generated
+     *  email body (the agent is told not to write its own sign-off). All null
+     *  → behave exactly as before. */
+    promptSubject: text("promptSubject"),
+    promptBody: text("promptBody"),
+    promptSignature: text("promptSignature"),
     /** Campaign-level 7-step skeleton generated once (one LLM call) and
      *  reused across every prospect's personalization pass. Stored as
      *  { steps: [{stepIndex, day, channel, archetype, skeleton, ctaPattern}] }. */

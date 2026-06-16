@@ -77,6 +77,11 @@ export const campaignsRouter = router({
         /** Optional free-form instructions appended to the Sequence Agent's
          *  system prompt for this campaign — voice, tone, do/don't lists. */
         sequencePrompt: z.string().max(4000).nullable().optional(),
+        /** Structured prompting editor (0090). Subject/body are AI guidance;
+         *  signature is a literal block appended to every generated email. */
+        promptSubject: z.string().max(2000).nullable().optional(),
+        promptBody: z.string().max(4000).nullable().optional(),
+        promptSignature: z.string().max(2000).nullable().optional(),
         goalType: z.enum(["meeting_booked", "reply", "opportunity_created"]).default("reply"),
         autoApproveThreshold: z.number().min(0).max(100).nullable().optional(),
         signalToOpportunityEnabled: z.boolean().default(false),
@@ -129,6 +134,9 @@ export const campaignsRouter = router({
           channelsEnabled: input.channelsEnabled,
           sequenceTemplate: input.sequenceTemplate,
           sequencePrompt: input.sequencePrompt ?? null,
+          promptSubject: input.promptSubject ?? null,
+          promptBody: input.promptBody ?? null,
+          promptSignature: input.promptSignature ?? null,
           goalType: input.goalType,
           autoApproveThreshold: input.autoApproveThreshold ?? null,
           signalToOpportunityEnabled: input.signalToOpportunityEnabled,
@@ -159,6 +167,9 @@ export const campaignsRouter = router({
         channelsEnabled: z.any().optional(),
         sequenceTemplate: z.string().optional(),
         sequencePrompt: z.string().max(4000).nullable().optional(),
+        promptSubject: z.string().max(2000).nullable().optional(),
+        promptBody: z.string().max(4000).nullable().optional(),
+        promptSignature: z.string().max(2000).nullable().optional(),
         goalType: z.enum(["meeting_booked", "reply", "opportunity_created"]).optional(),
         icpOverrides: z.any().optional(),
         prospectSources: z.array(z.string()).optional(),
@@ -179,12 +190,29 @@ export const campaignsRouter = router({
       if (rest.dailySendCap !== undefined) updates.dailySendCap = rest.dailySendCap;
       if (rest.channelsEnabled !== undefined) updates.channelsEnabled = rest.channelsEnabled;
       if (rest.sequenceTemplate !== undefined) updates.sequenceTemplate = rest.sequenceTemplate;
+      // sequencePrompt, promptSubject, and promptBody all feed the LLM prompts
+      // that build the cached campaign skeleton. Editing any of them must clear
+      // generatedTemplate so the change takes effect on the next generation —
+      // otherwise the user edits the prompt and nothing changes (the template
+      // generator only runs when generatedTemplate is null). promptSignature is
+      // appended AFTER generation, so it doesn't need to bust the cache.
+      let bustTemplate = false;
       if (rest.sequencePrompt !== undefined) {
         updates.sequencePrompt = rest.sequencePrompt ?? null;
-        // Clear the cached campaign-level template so the new voice/tone
-        // takes effect on the next sequence generation. Without this, the
-        // user would edit the prompt and wonder why nothing changes — the
-        // template generator only runs when generatedTemplate is null.
+        bustTemplate = true;
+      }
+      if (rest.promptSubject !== undefined) {
+        updates.promptSubject = rest.promptSubject ?? null;
+        bustTemplate = true;
+      }
+      if (rest.promptBody !== undefined) {
+        updates.promptBody = rest.promptBody ?? null;
+        bustTemplate = true;
+      }
+      if (rest.promptSignature !== undefined) {
+        updates.promptSignature = rest.promptSignature ?? null;
+      }
+      if (bustTemplate) {
         updates.generatedTemplate = null;
         updates.generatedTemplateAt = null;
       }

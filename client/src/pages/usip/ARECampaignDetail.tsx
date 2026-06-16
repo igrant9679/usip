@@ -815,19 +815,79 @@ function ProspectNotes({ prospectId, campaignId }: { prospectId: number; campaig
 }
 
 
-/* ─── Sequence prompt editor — top of the Sequences tab ────────────────── */
-function SequencePromptCard({ campaignId, currentPrompt }: { campaignId: number; currentPrompt: string | null }) {
+/* ─── Email prompt editor — top of the Sequences tab ───────────────────── */
+/**
+ * Structured prompting editor. Four fields drive how the Sequence Agent writes
+ * each prospect's email:
+ *   - General / Subject / Body are AI GUIDANCE woven into the LLM prompts.
+ *   - Signature is a LITERAL block appended verbatim to every email step (the
+ *     agent is told not to write its own sign-off).
+ * All four persist on the campaign; subject/body/general edits clear the cached
+ * template server-side so they take effect on the next generation.
+ */
+const PROMPT_FIELDS = [
+  {
+    key: "sequencePrompt" as const,
+    label: "General instructions",
+    kind: "AI guidance",
+    max: 4000,
+    rows: 5,
+    help: "Overall voice, tone, and guardrails for every message.",
+    placeholder: `e.g.\n- Voice: peer-to-peer technical, no fluff.\n- Never use "synergy", "leverage", or "circle back".\n- Always reference the prospect's stack or a recent change.`,
+  },
+  {
+    key: "promptSubject" as const,
+    label: "Subject line",
+    kind: "AI guidance",
+    max: 2000,
+    rows: 3,
+    help: "How the agent should write each step's subject line.",
+    placeholder: `e.g.\n- Under 6 words, lowercase, no emojis.\n- Reference the company or a specific trigger event.\n- Never use "Quick question" or "Touching base".`,
+  },
+  {
+    key: "promptBody" as const,
+    label: "Body",
+    kind: "AI guidance",
+    max: 4000,
+    rows: 5,
+    help: "How the agent should structure the email body and CTA.",
+    placeholder: `e.g.\n- Max 90 words. Three short paragraphs.\n- Open on their context, not us. One clear ask.\n- CTA is always a 15-min Tue/Thu slot.`,
+  },
+  {
+    key: "promptSignature" as const,
+    label: "Signature",
+    kind: "Literal — appended to every email",
+    max: 2000,
+    rows: 4,
+    help: "Stamped verbatim onto each email; the agent won't write its own sign-off. Merge tags like {{firstName}} still resolve at send.",
+    placeholder: `Best,\nIdris Grant\nFounder, LSI Media\nidris@lsi-media.com · book a call: cal.com/lsi`,
+  },
+];
+
+function SequencePromptCard({ campaignId, campaign }: { campaignId: number; campaign: any }) {
   const utils = trpc.useUtils();
-  const [draft, setDraft] = useState<string | null>(null);
+  // Per-field draft overrides; null = "use the saved value".
+  const [drafts, setDrafts] = useState<Record<string, string | null>>({});
   const update = trpc.are.campaigns.update.useMutation();
-  const value = draft ?? currentPrompt ?? "";
-  const dirty = draft !== null && draft !== (currentPrompt ?? "");
+
+  const saved = (key: string): string => (campaign?.[key] ?? "") as string;
+  const valueOf = (key: string): string => {
+    const d = drafts[key];
+    return d !== undefined && d !== null ? d : saved(key);
+  };
+  const dirtyFields = PROMPT_FIELDS.filter((f) => {
+    const d = drafts[f.key];
+    return d !== undefined && d !== null && d !== saved(f.key);
+  });
+  const dirty = dirtyFields.length > 0;
 
   const save = async () => {
     try {
-      await update.mutateAsync({ id: campaignId, sequencePrompt: draft ?? "" });
-      toast.success("Prompt saved — applies to the next generation");
-      setDraft(null);
+      const payload: Record<string, any> = { id: campaignId };
+      for (const f of dirtyFields) payload[f.key] = valueOf(f.key);
+      await update.mutateAsync(payload);
+      toast.success("Saved — applies to the next generation (existing sequences are untouched until regenerated)");
+      setDrafts({});
       await utils.are.campaigns.get.invalidate({ id: campaignId });
     } catch (e: any) {
       toast.error(e?.message ?? "Save failed");
@@ -839,34 +899,46 @@ function SequencePromptCard({ campaignId, currentPrompt }: { campaignId: number;
       <CardHeader className="pb-2 pt-4 px-4">
         <CardTitle className="text-sm flex items-center gap-2">
           <Sparkles className="size-4 text-violet-500" />
-          AI Prompt for Email Generation
+          Email Prompt Editor
         </CardTitle>
         <CardDescription className="text-[11px] leading-relaxed">
-          Free-form instructions appended to the Sequence Agent's system prompt. Use this to set voice
-          (e.g. "casual, no jargon"), constraints (e.g. "always reference their tech stack"), or guardrails
-          (e.g. "never mention pricing"). Applies to the next generation — existing sequences are untouched
-          until regenerated.
+          Controls how the Sequence Agent writes each prospect's email. Subject and Body are instructions
+          that steer the AI; the Signature is added to every email exactly as you type it. Changes apply to
+          the next generation — existing sequences are untouched until regenerated.
         </CardDescription>
       </CardHeader>
-      <CardContent className="px-4 pb-4 space-y-2">
-        <Textarea
-          rows={6}
-          placeholder={`e.g.\n- Voice: peer-to-peer technical, no fluff.\n- Always reference the prospect's stack or a recent shipping change.\n- Never use the words "synergy", "leverage", or "circle back".\n- Step 1 must be under 80 words. CTA is always a 15-min Tue/Thu slot.`}
-          value={value}
-          onChange={(e) => setDraft(e.target.value)}
-          className="text-xs font-mono"
-        />
-        <div className="flex items-center justify-between">
-          <div className="text-[10px] text-muted-foreground">{value.length} / 4000 chars</div>
-          {dirty && (
-            <div className="flex gap-2">
-              <Button size="sm" variant="ghost" onClick={() => setDraft(null)}>Discard</Button>
-              <Button size="sm" onClick={save} disabled={update.isPending}>
-                {update.isPending ? <Loader2 className="size-3 mr-1 animate-spin" /> : null}
-                Save prompt
-              </Button>
+      <CardContent className="px-4 pb-4 space-y-4">
+        {PROMPT_FIELDS.map((f) => {
+          const v = valueOf(f.key);
+          return (
+            <div key={f.key} className="space-y-1">
+              <div className="flex items-center gap-2">
+                <label className="text-xs font-medium">{f.label}</label>
+                <Badge variant="outline" className="text-[9px] px-1 py-0 h-4 text-muted-foreground border-muted-foreground/30">
+                  {f.kind}
+                </Badge>
+                <span className="text-[10px] text-muted-foreground ml-auto tabular-nums">{v.length}/{f.max}</span>
+              </div>
+              <p className="text-[10px] text-muted-foreground leading-snug">{f.help}</p>
+              <Textarea
+                rows={f.rows}
+                maxLength={f.max}
+                placeholder={f.placeholder}
+                value={v}
+                onChange={(e) => setDrafts((d) => ({ ...d, [f.key]: e.target.value }))}
+                className={`text-xs ${f.key === "promptSignature" ? "" : "font-mono"}`}
+              />
             </div>
+          );
+        })}
+        <div className="flex items-center justify-end gap-2 pt-1 border-t">
+          {dirty && (
+            <Button size="sm" variant="ghost" onClick={() => setDrafts({})}>Discard</Button>
           )}
+          <Button size="sm" onClick={save} disabled={!dirty || update.isPending}>
+            {update.isPending ? <Loader2 className="size-3 mr-1 animate-spin" /> : null}
+            {dirty ? `Save ${dirtyFields.length} change${dirtyFields.length === 1 ? "" : "s"}` : "Saved"}
+          </Button>
         </div>
       </CardContent>
     </Card>
@@ -981,14 +1053,20 @@ function SequencesTab({ campaignId, campaign }: { campaignId: number; campaign: 
 
   return (
     <div className="space-y-3">
-      {/* AI Prompt — collapsed by default, saves ~280px of vertical space. */}
+      {/* Email prompt editor — collapsed by default, saves ~280px of vertical space. */}
       <details className="rounded-lg border bg-card">
         <summary className="cursor-pointer px-3 py-2 text-xs font-medium flex items-center gap-2 hover:bg-muted/40">
-          <Sparkles className="size-3.5 text-violet-500" /> AI Prompt for Email Generation
-          <span className="text-muted-foreground font-normal ml-auto">{(campaign?.sequencePrompt ?? "").length}/4000 chars</span>
+          <Sparkles className="size-3.5 text-violet-500" /> Email Prompt Editor
+          <span className="text-muted-foreground font-normal ml-auto">
+            {(() => {
+              const set = [campaign?.sequencePrompt, campaign?.promptSubject, campaign?.promptBody, campaign?.promptSignature]
+                .filter((v) => (v ?? "").trim().length > 0).length;
+              return set === 0 ? "defaults" : `${set}/4 set`;
+            })()}
+          </span>
         </summary>
         <div className="p-3 border-t">
-          <SequencePromptCard campaignId={campaignId} currentPrompt={campaign?.sequencePrompt ?? null} />
+          <SequencePromptCard campaignId={campaignId} campaign={campaign} />
         </div>
       </details>
 
