@@ -3,6 +3,33 @@ import "dotenv/config";
 import { webcrypto } from "crypto";
 if (!globalThis.crypto) (globalThis as unknown as Record<string, unknown>).crypto = webcrypto;
 
+// ---------------------------------------------------------------------------
+// Process-level safety net.
+//
+// Node terminates the process by default on an unhandled promise rejection or
+// an uncaught exception. A single stray promise anywhere in the codebase that
+// isn't `.catch()`-guarded (a background job, a webhook handler, an SDK
+// callback) would therefore take the WHOLE instance down — which is what
+// caused the hard crash that needed a manual restart. These handlers log the
+// failure with full detail and keep the server alive: the right tradeoff for a
+// long-running multi-tenant service where one tenant's stray rejection must
+// not knock everyone offline. Logged errors here are real bugs to chase down,
+// not noise to ignore — each one points at a missing `.catch()`.
+// ---------------------------------------------------------------------------
+process.on("unhandledRejection", (reason: unknown) => {
+  const err = reason instanceof Error ? reason : new Error(String(reason));
+  console.error(
+    `[FATAL-GUARD] Unhandled promise rejection (kept alive): ${err.message}`,
+    err.stack ?? err,
+  );
+});
+process.on("uncaughtException", (err: Error, origin: string) => {
+  console.error(
+    `[FATAL-GUARD] Uncaught exception (kept alive, origin=${origin}): ${err?.message ?? err}`,
+    err?.stack ?? err,
+  );
+});
+
 import express from "express";
 import { createServer } from "http";
 import net from "net";
