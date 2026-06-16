@@ -263,13 +263,32 @@ export const teamRouter = router({
         userId = Number((inserted as any)[0]?.insertId ?? 0);
       }
 
-      // Existing membership?
+      // Existing membership? Distinguish a *pending* invite (never accepted)
+      // from a genuinely active member. A membership's invite token is set at
+      // invite time and cleared to null only when the invitee accepts (see
+      // finaliseAcceptance). So a non-null inviteToken == "invited but never
+      // activated" — re-inviting should re-issue the invite (fresh token +
+      // expiry, resend the email), NOT error. Previously ANY membership row
+      // threw CONFLICT, which permanently locked out anyone who let their
+      // first invite lapse without accepting.
       const [existingMember] = await db
         .select()
         .from(workspaceMembers)
         .where(and(eq(workspaceMembers.workspaceId, ctx.workspace.id), eq(workspaceMembers.userId, userId)));
+      let reIssueMemberId: number | null = null;
       if (existingMember) {
-        throw new TRPCError({ code: "CONFLICT", message: "User is already a member of this workspace" });
+        if (existingMember.deactivatedAt) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: "This person was previously a member and is deactivated. Reactivate them from the team list instead of re-inviting.",
+          });
+        }
+        if (existingMember.inviteToken) {
+          // Pending invite, never accepted — re-issue below.
+          reIssueMemberId = existingMember.id;
+        } else {
+          throw new TRPCError({ code: "CONFLICT", message: "User is already an active member of this workspace" });
+        }
       }
 
       // Generate invite token and expiry
@@ -282,23 +301,37 @@ export const teamRouter = router({
       const inviteExpiresAt = expiryDays && expiryDays > 0
         ? new Date(Date.now() + expiryDays * 86400_000)
         : null;
-      await db.insert(workspaceMembers).values({
-        workspaceId: ctx.workspace.id,
-        userId,
-        role: input.role,
-        title: input.title ?? null,
-        quota: input.quota !== undefined ? String(input.quota) : null,
-        inviteToken,
-        inviteExpiresAt,
-      });
+      if (reIssueMemberId !== null) {
+        // Refresh the pending invite in place: new token/expiry, and apply any
+        // role/title/quota the admin set on this re-invite.
+        await db.update(workspaceMembers)
+          .set({
+            role: input.role,
+            title: input.title ?? null,
+            quota: input.quota !== undefined ? String(input.quota) : null,
+            inviteToken,
+            inviteExpiresAt,
+          })
+          .where(eq(workspaceMembers.id, reIssueMemberId));
+      } else {
+        await db.insert(workspaceMembers).values({
+          workspaceId: ctx.workspace.id,
+          userId,
+          role: input.role,
+          title: input.title ?? null,
+          quota: input.quota !== undefined ? String(input.quota) : null,
+          inviteToken,
+          inviteExpiresAt,
+        });
+      }
 
       await recordAudit({
         workspaceId: ctx.workspace.id,
         actorUserId: ctx.user.id,
-        action: "create",
+        action: reIssueMemberId !== null ? "update" : "create",
         entityType: "workspace_member",
         entityId: userId,
-        after: { email: input.email, role: input.role },
+        after: { email: input.email, role: input.role, reInvited: reIssueMemberId !== null },
       });
       // Send invitation email via workspace SMTP (Email Delivery settings)
       try {
@@ -325,7 +358,7 @@ export const teamRouter = router({
       } catch (_e) {
         // Non-fatal: invitation email failure should not block the invite
       }
-      return { ok: true, userId };
+      return { ok: true, userId, reInvited: reIssueMemberId !== null };
     }),
 
   changeRole: adminWsProcedure

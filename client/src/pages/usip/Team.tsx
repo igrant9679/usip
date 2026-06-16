@@ -119,10 +119,10 @@ export default function Team() {
   }, [data, filter, roleFilter, showInactive]);
 
   const invite = trpc.team.invite.useMutation({
-    onSuccess: () => {
+    onSuccess: (res) => {
       utils.team.list.invalidate();
       setInviteOpen(false);
-      toast.success("Member invited");
+      toast.success(res?.reInvited ? "Invitation re-sent" : "Member invited");
     },
     onError: (e) => toast.error(e.message),
   });
