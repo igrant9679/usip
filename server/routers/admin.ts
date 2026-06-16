@@ -321,6 +321,11 @@ export const teamRouter = router({
             inviteExpiresAt,
           })
           .where(eq(workspaceMembers.id, reIssueMemberId));
+        // If the prior invite had expired, revive it to pending so the UI and
+        // accept flow treat the fresh token as a live invitation.
+        if (existingUser && (existingUser.loginMethod === "expired_invite")) {
+          await db.update(users).set({ loginMethod: "invite" }).where(eq(users.id, userId));
+        }
       } else {
         await db.insert(workspaceMembers).values({
           workspaceId: ctx.workspace.id,
