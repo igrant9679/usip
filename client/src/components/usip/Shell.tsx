@@ -66,7 +66,7 @@ export function useAccentColor() { return useContext(AccentContext); }
 // Entry kinds that can appear in a NavGroup's `items` array:
 //   - default link (no `kind` field): renders as a clickable nav row
 //   - subhead: small uppercase label inside the group (e.g. Acquire's
-//     "Funnel" / "Tools" sub-headers)
+//     "Prospect and enrich" / "Tools" sub-headers)
 //   - miniPipeline: compact horizontal pipeline at the TOP of a group
 //     (Acquire) — letter-pill per stage, clickable, active-highlighting
 type NavLinkItem = { href: string; label: string; icon: any };
@@ -119,7 +119,7 @@ const NAV: NavGroup[] = [
     darkActiveBg: "rgba(252,211,77,0.12)",
     // Mini horizontal pipeline at the top reads as the "story" of this
     // section at a glance. Below it, the same stages plus support tools
-    // are listed vertically under "Funnel" / "Tools" sub-headers.
+    // are listed vertically under "Prospect and enrich" / "Tools" sub-headers.
     items: [
       {
         // The funnel the rep actually travels: Prospect → Lead → Opportunity
@@ -380,7 +380,7 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
               .filter((i): i is typeof i & { href: string } => "href" in i)
               .map((i) => i.href);
             // Per-item accent: items inherit the colour of the most recent
-            // coloured subhead above them (Funnel cyan / Records pink / Tools
+            // coloured subhead above them (Prospect and enrich cyan / Records pink / Tools
             // orange), falling back to the group colour. So each item's icon +
             // active highlight matches the sub-section label it lives under.
             const itemColors: string[] = (() => {
@@ -486,7 +486,7 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
                       </div>
                     );
                   }
-                  // Sub-section header (e.g. Acquire "Funnel" / "Records" /
+                  // Sub-section header (e.g. Acquire "Prospect and enrich" / "Records" /
                   // "Tools") — each carries its own unique colour so every
                   // labelled section in the rail reads as distinct.
                   if ("kind" in item && item.kind === "subhead") {
@@ -519,7 +519,7 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
                     );
                   const active = isExact || isPrefixMatch;
                   const Icon = item.icon;
-                  // Colour for THIS item — its sub-section's hue (Funnel/
+                  // Colour for THIS item — its sub-section's hue (Prospect and enrich/
                   // Records/Tools) or the group colour. Drives the icon and the
                   // active highlight so items match their subhead label.
                   const ic = itemColors[idx];
