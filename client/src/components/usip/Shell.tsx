@@ -53,6 +53,16 @@ import {
   HelpCircle,
   GitFork,
   ScrollText,
+  Home,
+  Send,
+  DollarSign,
+  Wrench,
+  ArrowRightCircle,
+  ChevronRight,
+  ChevronsLeft,
+  MoreHorizontal,
+  Phone,
+  Globe,
 } from "lucide-react";
 import { ReactNode, useEffect, useLayoutEffect, useState, useRef, createContext, useContext } from "react";
 import { Link, useLocation } from "wouter";
@@ -81,7 +91,10 @@ type NavMiniPipeline = {
 type NavItem = NavLinkItem | NavSubhead | NavMiniPipeline;
 type NavGroup = { label: string; items: NavItem[]; color: string; darkColor: string; activeColor: string; activeBg: string; darkActiveBg: string };
 
-const NAV: NavGroup[] = [
+// Legacy nav (pre-redesign). Retained for reference only — the live sidebar is
+// built from TOP_LINKS / SECTIONS / MORE_SECTION / BOTTOM_LINKS below. Every
+// link here is preserved under the new "More" section, so nothing was lost.
+const _LEGACY_NAV: NavGroup[] = [
   {
     label: "Overview",
     color: "#1D4ED8",
@@ -243,6 +256,126 @@ const NAV: NavGroup[] = [
   // for a one-item section.
 ];
 
+// ── Redesigned sidebar model ─────────────────────────────────────────────────
+// Light, sectioned rail. Top quick-links, collapsible sections, then a "More"
+// section that preserves every pre-redesign page. New section items point at
+// /v2/* placeholder pages we build out one at a time.
+type NavLink = { href: string; label: string; icon: any; badge?: string; trailingChevron?: boolean };
+type NavSection = { label: string; icon: any; items: NavLink[] };
+
+const TOP_LINKS: NavLink[] = [
+  { href: "/", label: "Home", icon: Home },
+  { href: "/v2/ai-assistant", label: "AI Assistant", icon: Sparkles },
+];
+
+const SECTIONS: NavSection[] = [
+  {
+    label: "Prospect and enrich",
+    icon: Search,
+    items: [
+      { href: "/v2/people", label: "People", icon: Users },
+      { href: "/v2/companies", label: "Companies", icon: Building2 },
+      { href: "/v2/lists", label: "Lists", icon: ListChecks },
+      { href: "/v2/data-enrichment", label: "Data enrichment", icon: Database },
+    ],
+  },
+  {
+    label: "Engage",
+    icon: Send,
+    items: [
+      { href: "/v2/sequences", label: "Sequences", icon: Activity },
+      { href: "/v2/emails", label: "Emails", icon: Mail },
+      { href: "/v2/calls", label: "Calls", icon: Phone },
+      { href: "/v2/tasks", label: "Tasks", icon: ListChecks },
+    ],
+  },
+  {
+    label: "Win deals",
+    icon: DollarSign,
+    items: [
+      { href: "/v2/meetings", label: "Meetings", icon: CalendarDays },
+      { href: "/v2/conversations", label: "Conversations", icon: MessageSquare },
+      { href: "/v2/deals", label: "Deals", icon: KanbanSquare },
+    ],
+  },
+  {
+    label: "Tools and automation",
+    icon: Wrench,
+    items: [
+      { href: "/v2/workflows", label: "Workflows", icon: Workflow },
+      { href: "/v2/analytics", label: "Analytics", icon: BarChart3 },
+    ],
+  },
+  {
+    label: "Inbound",
+    icon: ArrowRightCircle,
+    items: [
+      { href: "/v2/website-visitors", label: "Website visitors", icon: Globe, badge: "New" },
+      { href: "/v2/forms", label: "Forms", icon: FileText },
+    ],
+  },
+  {
+    label: "Saved records",
+    icon: Users,
+    items: [
+      { href: "/v2/saved-people", label: "People", icon: Users },
+      { href: "/v2/saved-companies", label: "Companies", icon: Building2 },
+    ],
+  },
+];
+
+// Every pre-redesign page, preserved so nothing is lost while the new surface is
+// built page-by-page. Collapsed by default.
+const MORE_SECTION: NavSection = {
+  label: "More",
+  icon: MoreHorizontal,
+  items: [
+    { href: "/", label: "Dashboard", icon: LayoutDashboard },
+    { href: "/inbox", label: "Inbox", icon: Inbox },
+    { href: "/mailbox", label: "My Mailbox", icon: MailOpen },
+    { href: "/calendar", label: "My Calendar", icon: CalendarDays },
+    { href: "/are", label: "ARE Hub", icon: Bot },
+    { href: "/prospects", label: "Prospects", icon: Radar },
+    { href: "/leads", label: "Leads", icon: Target },
+    { href: "/pipeline", label: "Pipeline", icon: KanbanSquare },
+    { href: "/contacts", label: "Contacts", icon: Users },
+    { href: "/accounts", label: "Accounts", icon: Building2 },
+    { href: "/customers", label: "Customers", icon: Heart },
+    { href: "/find-prospects", label: "Find Prospects", icon: Search },
+    { href: "/import", label: "Import Contacts", icon: Upload },
+    { href: "/data-health", label: "Data Health", icon: BarChart3 },
+    { href: "/lead-routing", label: "Lead Routing", icon: Sparkles },
+    { href: "/pipeline-alerts", label: "Pipeline Alerts", icon: AlertTriangle },
+    { href: "/sequences", label: "Sequences", icon: Activity },
+    { href: "/campaigns", label: "Campaigns", icon: Megaphone },
+    { href: "/segments", label: "Segments", icon: Filter },
+    { href: "/sending-accounts", label: "Sending Accounts", icon: Mail },
+    { href: "/email-builder", label: "Email Builder", icon: LayoutTemplate },
+    { href: "/ai-pipeline", label: "AI Pipeline", icon: Sparkles },
+    { href: "/unified-inbox", label: "Unified Inbox", icon: MessageSquare },
+    { href: "/social", label: "Social", icon: Share2 },
+    { href: "/renewals", label: "Renewals", icon: CalendarClock },
+    { href: "/qbrs", label: "QBRs", icon: ClipboardCheck },
+    { href: "/tasks", label: "Tasks", icon: ListChecks },
+    { href: "/mindmaps", label: "Mindmaps", icon: GitFork },
+    { href: "/workflows", label: "Workflows", icon: Workflow },
+    { href: "/dashboards", label: "Dashboards", icon: PieChart },
+    { href: "/products", label: "Products", icon: Package },
+    { href: "/proposals", label: "Proposals", icon: ClipboardList },
+    { href: "/team", label: "Team", icon: Users },
+    { href: "/lead-scoring", label: "Lead Scoring", icon: Target },
+    { href: "/custom-fields", label: "Custom Fields", icon: Database },
+    { href: "/brand-voice", label: "Brand Voice", icon: Mic2 },
+    { href: "/personas", label: "Personas", icon: Users },
+    { href: "/settings", label: "Settings", icon: Settings },
+  ],
+};
+
+const BOTTOM_LINKS: NavLink[] = [
+  { href: "/v2/deliverability", label: "Deliverability suite", icon: Network },
+  { href: "/settings", label: "Admin Settings", icon: Settings, trailingChevron: true },
+];
+
 /** Key used by Dashboards.tsx to persist the user's chosen home dashboard. */
 export const HOME_DASHBOARD_KEY = "velocity_home_dashboard";
 
@@ -261,7 +394,7 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
       const raw = localStorage.getItem(NAV_COLLAPSED_KEY);
       if (raw) return new Set<string>(JSON.parse(raw));
     } catch { /* ignore */ }
-    return new Set<string>();
+    return new Set<string>(["More"]);
   });
   const toggleGroup = (label: string) => {
     setCollapsedGroups((prev) => {
@@ -300,32 +433,67 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
   // Respect the user's "Set as Home" preference for the Dashboard nav link
   const homeDashboardHref = (typeof window !== "undefined" ? localStorage.getItem(HOME_DASHBOARD_KEY) : null) ?? "/";
 
-  // Build effective nav with the resolved home href. Non-link items
-  // (subheads, miniPipeline — see Acquire section) pass through unchanged.
-  const effectiveNav = NAV.map((g) => ({
-    ...g,
-    items: g.items.map((i) =>
-      "href" in i && i.href === "/" ? { ...i, href: homeDashboardHref } : i,
-    ),
-  }));
+  // Home quick-link honours the user's "Set as Home" dashboard preference.
+  const topLinks = TOP_LINKS.map((l) => (l.href === "/" ? { ...l, href: homeDashboardHref } : l));
 
-  // Derive current category accent from active route. Only `link` items
-  // contribute hrefs to the active-group match.
-  const activeGroup = effectiveNav.find((g) =>
-    g.items.some(
-      (i) =>
-        "href" in i &&
-        (i.href === location ||
-          (i.href !== "/" && i.href !== homeDashboardHref && location.startsWith(i.href))),
-    ),
-  );
   const isDark = theme === "dark";
-  // Per-section accent: the active group's colour drives the PageHeader accent
-  // rule + icon chip, StatCard borders, and the SubNav active pill — so the
-  // whole app visibly reflects which section you're working in.
-  const accentColor = isDark
-    ? (activeGroup?.darkColor ?? "#5EEAD4")
-    : (activeGroup?.color ?? "#14B89A");
+  // The redesigned rail isn't colour-per-section; expose a single brand accent
+  // so PageHeader / StatCard / SubNav (which read AccentContext) stay consistent.
+  const accentColor = isDark ? "#5EEAD4" : "#14B89A";
+
+  // ── Sidebar renderers (light, sectioned rail) ──────────────────────────
+  const renderNavLink = (l: NavLink, opts?: { indented?: boolean }) => {
+    const active = location === l.href || (l.href !== "/" && location.startsWith(l.href + "/"));
+    const Icon = l.icon;
+    return (
+      <Link
+        key={`${l.href}-${l.label}`}
+        href={l.href}
+        className={cn(
+          "flex items-center gap-2.5 rounded-md px-3 py-2 text-[13px] transition-colors",
+          opts?.indented && "ml-3",
+          active
+            ? "bg-foreground text-background font-medium"
+            : "text-muted-foreground hover:text-foreground hover:bg-muted",
+        )}
+      >
+        <Icon className="size-4 shrink-0" />
+        <span className="flex-1 truncate">{l.label}</span>
+        {l.badge && (
+          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">
+            {l.badge}
+          </span>
+        )}
+        {l.trailingChevron && <ChevronRight className="size-4 shrink-0 opacity-60" />}
+      </Link>
+    );
+  };
+
+  const renderSection = (s: NavSection) => {
+    const collapsed = collapsedGroups.has(s.label);
+    const SIcon = s.icon;
+    return (
+      <div key={s.label} className="pt-1">
+        <button
+          type="button"
+          onClick={() => toggleGroup(s.label)}
+          aria-expanded={!collapsed}
+          className="w-full flex items-center gap-2.5 rounded-md px-3 py-2 text-[13px] font-medium text-foreground hover:bg-muted transition-colors"
+        >
+          <SIcon className="size-4 shrink-0 text-muted-foreground" />
+          <span className="flex-1 text-left truncate">{s.label}</span>
+          <ChevronDown
+            className={cn("size-4 shrink-0 text-muted-foreground transition-transform", collapsed && "-rotate-90")}
+          />
+        </button>
+        {!collapsed && (
+          <div className="mt-0.5 space-y-0.5">
+            {s.items.map((it) => renderNavLink(it, { indented: true }))}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   // close dropdowns/drawers on route change
   useEffect(() => {
@@ -345,235 +513,60 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
       )}
       {/* Sidebar */}
       <aside data-tour-id="sidebar-nav" className={cn(
-        "w-60 shrink-0 bg-sidebar text-sidebar-foreground flex flex-col border-r border-sidebar-border",
+        "w-60 shrink-0 bg-background text-foreground flex flex-col border-r border-border",
         "fixed inset-y-0 left-0 z-50 transform transition-transform duration-200 md:translate-x-0 md:static md:transform-none",
         mobileOpen ? "translate-x-0" : "-translate-x-full",
       )}>
-        <div className="px-4 pt-4 pb-3 border-b border-white/10">
-          <div className="flex items-center gap-2.5 mb-1">
-            <svg className="size-7 text-[#1D4ED8] shrink-0" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2L4.09 12.97 12 12l-1 9 8.91-10.97L12 11l1-9z"/></svg>
-            <span className="text-[22px] font-bold tracking-tight text-white">Velocity</span>
-          </div>
-          <div className="text-[10px] tracking-tight whitespace-nowrap text-[#A5B4FC] leading-tight pl-0.5">The Unified Revenue Intelligence Platform</div>
+        {/* Logo header — existing Velocity mark kept */}
+        <div className="px-4 pt-4 pb-3 flex items-center gap-2.5">
+          <svg className="size-7 text-[#1D4ED8] shrink-0" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2L4.09 12.97 12 12l-1 9 8.91-10.97L12 11l1-9z"/></svg>
+          <span className="text-[20px] font-bold tracking-tight">Velocity</span>
+          <button
+            type="button"
+            onClick={() => setMobileOpen(false)}
+            className="ml-auto shrink-0 p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted"
+            title="Collapse sidebar"
+            aria-label="Collapse sidebar"
+          >
+            <ChevronsLeft className="size-4" />
+          </button>
         </div>
 
         <nav
           ref={navRef}
-          className="flex-1 overflow-y-auto py-3 px-0 space-y-2"
+          className="flex-1 overflow-y-auto px-2 py-2 space-y-0.5"
           onScroll={(e) => {
-            // Cheap direct write — sessionStorage handles scroll-event
-            // frequency fine in modern browsers. No debouncing needed.
             try { sessionStorage.setItem(SIDEBAR_SCROLL_KEY, String((e.currentTarget as HTMLElement).scrollTop)); } catch {}
           }}
         >
-          {effectiveNav.map((group) => {
-            // Per-group colour — each section gets its own hue for separation.
-            const gc = isDark ? group.darkColor : group.color;
-            const gBg = isDark ? group.darkActiveBg : group.activeBg;
-            const isActiveGroup = group === activeGroup;
-            const isCollapsed = collapsedGroups.has(group.label);
-            // Collect all hrefs in this group so we can detect prefix collisions.
-            // An item is only active via startsWith when no sibling has a longer
-            // href that also matches — this prevents /are matching /are/icp etc.
-            // Only `link` items contribute hrefs to the prefix-collision check.
-            const groupHrefs = group.items
-              .filter((i): i is typeof i & { href: string } => "href" in i)
-              .map((i) => i.href);
-            // Per-item accent: items inherit the colour of the most recent
-            // coloured subhead above them (Prospect and enrich cyan / Records pink / Tools
-            // orange), falling back to the group colour. So each item's icon +
-            // active highlight matches the sub-section label it lives under.
-            const itemColors: string[] = (() => {
-              let running = gc;
-              return group.items.map((it) => {
-                if ("kind" in it && it.kind === "subhead") {
-                  running = (isDark ? it.darkColor : it.color) ?? gc;
-                }
-                return running;
-              });
-            })();
-            return (
-            <div key={group.label}>
-              {/* Collapsible, colour-coded section header. When the current
-                  route is in this group the whole header lights up (tinted bg
-                  + bright colour + left stripe) so you clearly see where you are. */}
-              <button
-                type="button"
-                onClick={() => toggleGroup(group.label)}
-                aria-expanded={!isCollapsed}
-                className="group/nav w-full flex items-center gap-1.5 pl-3 pr-2 py-1.5 rounded-r-md transition-colors hover:bg-white/5 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-white/30"
-                style={{
-                  borderLeft: `3px solid ${isActiveGroup ? gc : "transparent"}`,
-                  backgroundColor: isActiveGroup ? gBg : undefined,
-                }}
-              >
-                <span
-                  className="text-[10px] font-bold uppercase tracking-widest transition-colors"
-                  style={{ color: isActiveGroup ? gc : gc + "b0" }}
-                >
-                  {group.label}
-                </span>
-                {/* Collapse/expand affordance — a rounded chip with a clear
-                    background + a bold, bright chevron so the toggle is easy to
-                    see on the dark rail regardless of the section's hue. */}
-                <span
-                  aria-hidden
-                  className="ml-auto shrink-0 flex items-center justify-center size-5 rounded-md bg-white/10 group-hover/nav:bg-white/15 transition-colors"
-                >
-                  <ChevronDown
-                    className="size-3.5 transition-transform duration-150"
-                    strokeWidth={2.75}
-                    style={{ color: group.darkColor, transform: isCollapsed ? "rotate(-90deg)" : undefined }}
-                  />
-                </span>
-              </button>
-              {!isCollapsed && (
-              <div className="space-y-0.5 pl-0 pt-0.5">
-                {group.items.map((item, idx) => {
-                  // Mini horizontal pipeline (P→L→C→A→Π at top of Acquire).
-                  if ("kind" in item && item.kind === "miniPipeline") {
-                    return (
-                      <div
-                        key={`pipeline-${idx}`}
-                        className="px-3 pt-2 pb-3"
-                      >
-                        <div className="flex items-center justify-between gap-0.5">
-                          {item.stages.map((stage, sIdx) => {
-                            const stageActive =
-                              location === stage.href ||
-                              (stage.href !== "/" && location.startsWith(stage.href + "/"));
-                            return (
-                              <div
-                                key={stage.href}
-                                className="flex items-center gap-0.5 flex-1 last:flex-initial"
-                              >
-                                <Link
-                                  href={stage.href}
-                                  title={stage.label}
-                                  aria-label={stage.label}
-                                  className={cn(
-                                    "flex items-center justify-center size-7 rounded transition-all",
-                                    stageActive
-                                      ? "text-white shadow-sm"
-                                      : "text-white/70 hover:text-white",
-                                  )}
-                                  style={
-                                    stageActive
-                                      ? { backgroundColor: gc }
-                                      : {
-                                          backgroundColor: gc + "22" /* 13% */,
-                                          border: `1px solid ${gc}55` /* 33% */,
-                                        }
-                                  }
-                                >
-                                  {(stage as any).icon
-                                    ? (() => { const Ico = (stage as any).icon; return <Ico className="size-3.5" />; })()
-                                    : <span className="text-[10px] font-bold">{stage.short}</span>}
-                                </Link>
-                                {sIdx < item.stages.length - 1 && (
-                                  <span
-                                    className="text-[9px] flex-1 text-center select-none pointer-events-none"
-                                    style={{ color: gc + "88" /* 53% */ }}
-                                    aria-hidden="true"
-                                  >
-                                    →
-                                  </span>
-                                )}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    );
-                  }
-                  // Sub-section header (e.g. Acquire "Prospect and enrich" / "Records" /
-                  // "Tools") — each carries its own unique colour so every
-                  // labelled section in the rail reads as distinct.
-                  if ("kind" in item && item.kind === "subhead") {
-                    const sc = isDark ? item.darkColor : item.color;
-                    return (
-                      <div
-                        key={`subhead-${item.label}-${idx}`}
-                        className="pt-2 pb-0.5 pl-3 pr-2"
-                      >
-                        <span
-                          className="text-[9px] font-semibold uppercase tracking-wider"
-                          style={{ color: sc ?? "rgba(255,255,255,0.4)" }}
-                        >
-                          {item.label}
-                        </span>
-                      </div>
-                    );
-                  }
-                  // Normal link item.
-                  // An item is active if:
-                  //   1. Exact match, OR
-                  //   2. location starts with item.href AND no sibling href is a
-                  //      longer prefix of location (prevents /are matching /are/icp).
-                  const isExact = location === item.href;
-                  const isPrefixMatch =
-                    item.href !== "/" &&
-                    location.startsWith(item.href) &&
-                    !groupHrefs.some(
-                      (h) => h !== item.href && h.startsWith(item.href) && location.startsWith(h),
-                    );
-                  const active = isExact || isPrefixMatch;
-                  const Icon = item.icon;
-                  // Colour for THIS item — its sub-section's hue (Prospect and enrich/
-                  // Records/Tools) or the group colour. Drives the icon and the
-                  // active highlight so items match their subhead label.
-                  const ic = itemColors[idx];
-                  const inactiveIconColor = ic + "cc";
-                  return (
-                    <Link
-                      key={item.href}
-                      href={item.href}
-                      className={cn(
-                        "flex items-center gap-2.5 pl-3 pr-2 py-1.5 text-[13px] transition-all duration-150",
-                        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#2DD4BF]/70",
-                        active ? "text-white font-medium" : "text-white/70 hover:text-white/95 hover:bg-white/5",
-                      )}
-                      style={active ? {
-                        borderLeft: `3px solid ${ic}`,
-                        backgroundColor: ic + "33",
-                        paddingLeft: '12px',
-                        boxShadow: `inset 0 0 0 1px ${ic}33`,
-                      } : {
-                        borderLeft: '3px solid transparent',
-                        paddingLeft: '12px',
-                      }}
-                    >
-                      <Icon
-                        className="size-4 shrink-0 transition-colors"
-                        style={{ color: active ? ic : inactiveIconColor }}
-                      />
-                      <span className="truncate">{item.label}</span>
-                    </Link>
-                  );
-                })}
-              </div>
-              )}
-            </div>
-            );
-          })}
+          {/* Top quick-links */}
+          {topLinks.map((l) => renderNavLink(l))}
+
+          <div className="my-2 border-t border-border" />
+
+          {/* Sectioned rail */}
+          {SECTIONS.map((s) => renderSection(s))}
+
+          {/* Everything from before the redesign, preserved */}
+          {renderSection(MORE_SECTION)}
         </nav>
 
-        <div className="px-3 py-3 border-t border-white/10 text-[12px] text-white/60 flex items-center gap-2">
-          <div className="size-7 rounded-full bg-white/10 flex items-center justify-center">{(user?.name ?? "?").slice(0, 1).toUpperCase()}</div>
-          <div className="flex-1 min-w-0">
-            <div className="text-white truncate text-[13px]">{user?.name ?? "Anonymous"}</div>
-            <div className="truncate">{current?.role ?? ""}</div>
+        {/* Pinned bottom: deliverability + admin settings, then the user row */}
+        <div className="border-t border-border px-2 py-2 space-y-0.5">
+          {BOTTOM_LINKS.map((l) => renderNavLink(l))}
+          <div className="flex items-center gap-2 px-2 pt-2 mt-1 border-t border-border text-[12px] text-muted-foreground">
+            <div className="size-7 rounded-full bg-muted flex items-center justify-center text-foreground">{(user?.name ?? "?").slice(0, 1).toUpperCase()}</div>
+            <div className="flex-1 min-w-0">
+              <div className="text-foreground truncate text-[13px]">{user?.name ?? "Anonymous"}</div>
+              <div className="truncate">{current?.role ?? ""}</div>
+            </div>
+            <Link href="/help" className="hover:text-foreground shrink-0" title="Help Center">
+              <HelpCircle className="size-4" />
+            </Link>
+            <button onClick={() => logout()} className="hover:text-foreground shrink-0" title="Sign out">
+              <LogOut className="size-4" />
+            </button>
           </div>
-          <Link
-            href="/help"
-            className="text-white/60 hover:text-white shrink-0"
-            title="Help Center"
-          >
-            <HelpCircle className="size-4" />
-          </Link>
-          <button onClick={() => logout()} className="text-white/60 hover:text-white shrink-0" title="Sign out">
-            <LogOut className="size-4" />
-          </button>
         </div>
       </aside>
 

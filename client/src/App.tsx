@@ -66,6 +66,7 @@ import ConnectedAccounts from "@/pages/usip/ConnectedAccounts";
 import UnifiedInbox from "@/pages/usip/UnifiedInbox";
 import InviteAccept from "@/pages/InviteAccept";
 import JoinViaLink from "@/pages/JoinViaLink";
+import Placeholder from "@/pages/Placeholder";
 import Proposals from "@/pages/usip/Proposals";
 import ProposalDetail from "@/pages/usip/ProposalDetail";
 import ProposalPortal from "@/pages/ProposalPortal";
@@ -353,6 +354,27 @@ function Router() {
       <Route path="/p/:token"><ProposalPortal /></Route>
       <Route path="/invite/accept"><InviteAccept /></Route>
       <Route path="/join"><JoinViaLink /></Route>
+
+      {/* Redesigned sidebar — placeholder pages for the new IA (built out page-by-page) */}
+      <Route path="/v2/ai-assistant"><AuthGate><Placeholder title="AI Assistant" /></AuthGate></Route>
+      <Route path="/v2/people"><AuthGate><Placeholder title="People" /></AuthGate></Route>
+      <Route path="/v2/companies"><AuthGate><Placeholder title="Companies" /></AuthGate></Route>
+      <Route path="/v2/lists"><AuthGate><Placeholder title="Lists" /></AuthGate></Route>
+      <Route path="/v2/data-enrichment"><AuthGate><Placeholder title="Data enrichment" /></AuthGate></Route>
+      <Route path="/v2/sequences"><AuthGate><Placeholder title="Sequences" /></AuthGate></Route>
+      <Route path="/v2/emails"><AuthGate><Placeholder title="Emails" /></AuthGate></Route>
+      <Route path="/v2/calls"><AuthGate><Placeholder title="Calls" /></AuthGate></Route>
+      <Route path="/v2/tasks"><AuthGate><Placeholder title="Tasks" /></AuthGate></Route>
+      <Route path="/v2/meetings"><AuthGate><Placeholder title="Meetings" /></AuthGate></Route>
+      <Route path="/v2/conversations"><AuthGate><Placeholder title="Conversations" /></AuthGate></Route>
+      <Route path="/v2/deals"><AuthGate><Placeholder title="Deals" /></AuthGate></Route>
+      <Route path="/v2/workflows"><AuthGate><Placeholder title="Workflows" /></AuthGate></Route>
+      <Route path="/v2/analytics"><AuthGate><Placeholder title="Analytics" /></AuthGate></Route>
+      <Route path="/v2/website-visitors"><AuthGate><Placeholder title="Website visitors" /></AuthGate></Route>
+      <Route path="/v2/forms"><AuthGate><Placeholder title="Forms" /></AuthGate></Route>
+      <Route path="/v2/saved-people"><AuthGate><Placeholder title="Saved · People" /></AuthGate></Route>
+      <Route path="/v2/saved-companies"><AuthGate><Placeholder title="Saved · Companies" /></AuthGate></Route>
+      <Route path="/v2/deliverability"><AuthGate><Placeholder title="Deliverability suite" /></AuthGate></Route>
       <Route path="/help"><AuthGate><HelpCenter /></AuthGate></Route>
       <Route path="/tour-builder"><AuthGate><TourBuilder /></AuthGate></Route>
       <Route path="/mindmaps"><AuthGate><Mindmaps /></AuthGate></Route>
