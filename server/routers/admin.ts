@@ -528,6 +528,117 @@ export const teamRouter = router({
       return { ok: true };
     }),
 
+  /**
+   * Hard-delete a member — "as if they were never invited". Unlike deactivate
+   * (a reversible soft state), this removes the membership row outright, and
+   * deletes the underlying users row when that user has no remaining memberships
+   * anywhere (covers invite placeholders and single-workspace accounts), so a
+   * future invite to the same email starts completely fresh.
+   *
+   * Same authority guards as deactivate (no self, no peer/higher unless
+   * super_admin, never the sole super_admin). Owned leads / opportunities /
+   * open tasks must be reassigned first — if the member owns any and no
+   * reassign target is given, the call fails with the counts so the UI can
+   * prompt. There are no DB-level foreign keys, so historical references
+   * (audit, closed tasks) simply keep the old id; nothing cascades.
+   */
+  delete: adminWsProcedure
+    .input(z.object({ memberId: z.number().int(), reassignToUserId: z.number().int().optional() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+
+      const [target] = await db
+        .select()
+        .from(workspaceMembers)
+        .where(and(eq(workspaceMembers.id, input.memberId), eq(workspaceMembers.workspaceId, ctx.workspace.id)));
+      if (!target) throw new TRPCError({ code: "NOT_FOUND" });
+      if (target.userId === ctx.user.id) throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot delete yourself" });
+      if (
+        ctx.member.role !== "super_admin" &&
+        roleRank(target.role) >= roleRank(ctx.member.role)
+      ) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Cannot delete a peer or higher" });
+      }
+      // Sole super_admin guard
+      if (target.role === "super_admin") {
+        const [{ c }] = await db
+          .select({ c: count() })
+          .from(workspaceMembers)
+          .where(and(eq(workspaceMembers.workspaceId, ctx.workspace.id), eq(workspaceMembers.role, "super_admin")));
+        if (Number(c) <= 1) throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot delete the sole super_admin" });
+      }
+
+      // Owned-work guard — mirrors deactivate (leads, opps, open tasks).
+      const [leadRows] = await db.execute(sql`SELECT COUNT(*) AS n FROM leads WHERE workspaceId = ${ctx.workspace.id} AND ownerUserId = ${target.userId}`) as any;
+      const [oppRows] = await db.execute(sql`SELECT COUNT(*) AS n FROM opportunities WHERE workspaceId = ${ctx.workspace.id} AND ownerUserId = ${target.userId}`) as any;
+      const [taskRows] = await db.execute(sql`SELECT COUNT(*) AS n FROM tasks WHERE workspaceId = ${ctx.workspace.id} AND ownerUserId = ${target.userId} AND status = 'open'`) as any;
+      const owned = {
+        leads: Number(leadRows?.[0]?.n ?? 0),
+        opportunities: Number(oppRows?.[0]?.n ?? 0),
+        openTasks: Number(taskRows?.[0]?.n ?? 0),
+      };
+      const totalOwned = owned.leads + owned.opportunities + owned.openTasks;
+
+      let reassigned = { leads: 0, opportunities: 0, openTasks: 0 };
+      if (totalOwned > 0) {
+        if (!input.reassignToUserId) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `This member still owns ${owned.leads} lead(s), ${owned.opportunities} opportunit${owned.opportunities === 1 ? "y" : "ies"}, and ${owned.openTasks} open task(s). Choose a member to reassign their work to before deleting.`,
+          });
+        }
+        if (input.reassignToUserId === target.userId) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot reassign work to the member being deleted" });
+        }
+        const [rcpt] = await db
+          .select()
+          .from(workspaceMembers)
+          .where(and(eq(workspaceMembers.workspaceId, ctx.workspace.id), eq(workspaceMembers.userId, input.reassignToUserId)));
+        if (!rcpt) throw new TRPCError({ code: "BAD_REQUEST", message: "Reassign target is not a workspace member" });
+        if (rcpt.deactivatedAt) throw new TRPCError({ code: "BAD_REQUEST", message: "Reassign target is deactivated" });
+
+        const [leadUpd] = await db.execute(sql`UPDATE leads SET ownerUserId = ${input.reassignToUserId} WHERE workspaceId = ${ctx.workspace.id} AND ownerUserId = ${target.userId}`) as any;
+        const [oppUpd] = await db.execute(sql`UPDATE opportunities SET ownerUserId = ${input.reassignToUserId} WHERE workspaceId = ${ctx.workspace.id} AND ownerUserId = ${target.userId}`) as any;
+        const [taskUpd] = await db.execute(sql`UPDATE tasks SET ownerUserId = ${input.reassignToUserId} WHERE workspaceId = ${ctx.workspace.id} AND ownerUserId = ${target.userId} AND status = 'open'`) as any;
+        reassigned = {
+          leads: Number(leadUpd?.affectedRows ?? 0),
+          opportunities: Number(oppUpd?.affectedRows ?? 0),
+          openTasks: Number(taskUpd?.affectedRows ?? 0),
+        };
+      }
+
+      // Capture identity for the audit trail before the rows are gone.
+      const [tgtUser] = await db.select().from(users).where(eq(users.id, target.userId));
+
+      // Remove the membership row.
+      await db.delete(workspaceMembers).where(eq(workspaceMembers.id, target.id));
+
+      // Delete the user row only when no memberships remain anywhere — so a
+      // multi-workspace user keeps their account but a placeholder / single-
+      // workspace account is fully removed (fresh re-invite next time).
+      let deletedUser = false;
+      const [{ remaining }] = await db
+        .select({ remaining: count() })
+        .from(workspaceMembers)
+        .where(eq(workspaceMembers.userId, target.userId));
+      if (Number(remaining) === 0 && tgtUser) {
+        await db.delete(users).where(eq(users.id, target.userId));
+        deletedUser = true;
+      }
+
+      await recordAudit({
+        workspaceId: ctx.workspace.id,
+        actorUserId: ctx.user.id,
+        action: "delete",
+        entityType: "workspace_member",
+        entityId: target.userId,
+        before: { email: tgtUser?.email, role: target.role },
+        after: { deleted: true, deletedUser, reassignedTo: input.reassignToUserId ?? null },
+      });
+      return { ok: true, deletedUser, reassigned };
+    }),
+
   bulkChangeRole: adminWsProcedure
     .input(z.object({ memberIds: z.array(z.number().int()).min(1).max(200), role: ROLE_ENUM }))
     .mutation(async ({ ctx, input }) => {

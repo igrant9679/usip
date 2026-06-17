@@ -21,6 +21,7 @@ import {
   Pencil,
   RefreshCw,
   Shield,
+  Trash2,
   UserMinus,
   UserPlus,
   Users,
@@ -75,6 +76,8 @@ export default function Team() {
   const [inviteOpen, setInviteOpen] = useState(false);
   const [deactivateTarget, setDeactivateTarget] = useState<any | null>(null);
   const [reassignTo, setReassignTo] = useState<number | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<any | null>(null);
+  const [deleteReassignTo, setDeleteReassignTo] = useState<number | null>(null);
 
   // Edit Member dialog
   const [editTarget, setEditTarget] = useState<any | null>(null);
@@ -166,6 +169,20 @@ export default function Team() {
       utils.team.list.invalidate();
       toast.success("Reactivated");
     },
+  });
+  const del = trpc.team.delete.useMutation({
+    onSuccess: (res) => {
+      utils.team.list.invalidate();
+      setDeleteTarget(null);
+      setDeleteReassignTo(null);
+      const moved = res.reassigned.leads + res.reassigned.opportunities + res.reassigned.openTasks;
+      toast.success(
+        res.deletedUser
+          ? `Deleted — removed completely${moved ? `, reassigned ${moved} item(s)` : ""}`
+          : `Removed from this workspace${moved ? `, reassigned ${moved} item(s)` : ""}`,
+      );
+    },
+    onError: (e) => toast.error(e.message),
   });
   const bulkChange = trpc.team.bulkChangeRole.useMutation({
     onSuccess: () => {
@@ -586,13 +603,26 @@ export default function Team() {
                             {isAdmin && (
                               <div className="flex items-center gap-1 justify-end flex-wrap">
                                 {isInactive ? (
-                                  <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    onClick={() => reactivate.mutate({ memberId: m.memberId })}
-                                  >
-                                    Reactivate
-                                  </Button>
+                                  <>
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      onClick={() => reactivate.mutate({ memberId: m.memberId })}
+                                    >
+                                      Reactivate
+                                    </Button>
+                                    {editable && (
+                                      <Button
+                                        size="sm"
+                                        variant="ghost"
+                                        className="text-rose-600"
+                                        title="Permanently delete — as if never invited"
+                                        onClick={() => { setDeleteTarget(m); setDeleteReassignTo(null); }}
+                                      >
+                                        <Trash2 className="size-3.5" /> Delete
+                                      </Button>
+                                    )}
+                                  </>
                                 ) : (
                                   <>
                                     {editable && (
@@ -677,6 +707,19 @@ export default function Team() {
                                         onClick={() => { setDeactivateTarget(m); setReassignTo(null); }}
                                       >
                                         <UserMinus className="size-3.5" /> Deactivate
+                                      </Button>
+                                    )}
+                                    {editable && (
+                                      <Button
+                                        size="sm"
+                                        variant="ghost"
+                                        className="text-rose-600"
+                                        title={(isPendingInvite || isExpiredInvite)
+                                          ? "Permanently delete this invitation — as if never sent"
+                                          : "Permanently delete this member — as if never invited"}
+                                        onClick={() => { setDeleteTarget(m); setDeleteReassignTo(null); }}
+                                      >
+                                        <Trash2 className="size-3.5" /> Delete
                                       </Button>
                                     )}
                                   </>
@@ -1187,6 +1230,57 @@ export default function Team() {
               }}
             >
               <Mail className="size-4" /> Deactivate & reassign
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete (hard) Dialog — permanent, "as if never invited" */}
+      <Dialog open={!!deleteTarget} onOpenChange={(v) => { if (!v) { setDeleteTarget(null); setDeleteReassignTo(null); } }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete {deleteTarget?.name ?? deleteTarget?.email}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 text-sm">
+            <div className="rounded-md border border-rose-500/30 bg-rose-500/10 p-3 text-rose-700 dark:text-rose-300">
+              <p className="font-medium">This permanently removes them — as if they were never invited.</p>
+              <p className="text-xs mt-1">
+                {(deleteTarget && (deleteTarget.loginMethod === "invite" || deleteTarget.loginMethod === "expired_invite"))
+                  ? "The invitation and its placeholder account are deleted. A future invite to this email starts completely fresh."
+                  : "Their account is removed from this workspace and the user record is deleted if they belong to no other workspace. This cannot be undone — use Deactivate instead if you might restore them."}
+              </p>
+            </div>
+            <div className="space-y-1">
+              <Label>Reassign owned work to <span className="text-muted-foreground font-normal">(only required if they own leads, opportunities, or open tasks)</span></Label>
+              <select
+                className="w-full border rounded-md px-2 py-1.5 bg-background"
+                value={deleteReassignTo ?? ""}
+                onChange={(e) => setDeleteReassignTo(e.target.value ? Number(e.target.value) : null)}
+              >
+                <option value="">— none / not needed —</option>
+                {(data ?? [])
+                  .filter((m: any) => !m.deactivatedAt && m.userId !== deleteTarget?.userId)
+                  .map((m: any) => (
+                    <option key={m.userId} value={m.userId}>
+                      {m.name ?? m.email} · {m.role}
+                    </option>
+                  ))}
+              </select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => { setDeleteTarget(null); setDeleteReassignTo(null); }}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={del.isPending}
+              onClick={() => {
+                if (!deleteTarget) return;
+                del.mutate({ memberId: deleteTarget.memberId, reassignToUserId: deleteReassignTo ?? undefined });
+              }}
+            >
+              <Trash2 className="size-4" /> {del.isPending ? "Deleting…" : "Delete permanently"}
             </Button>
           </DialogFooter>
         </DialogContent>
