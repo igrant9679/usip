@@ -51,6 +51,25 @@ export const workspaces = mysqlTable("workspaces", {
 });
 export type Workspace = typeof workspaces.$inferSelect;
 
+/** Email-less, role-scoped activation links (migration 0091). A recipient who
+ *  opens /join?token=… registers their OWN email + password and is added to
+ *  this workspace at `role`. Single-use: `usedAt` is set on the first
+ *  successful registration and the link stops working. Expiry mirrors the
+ *  workspace invite-expiry setting (null = never). */
+export const workspaceInviteLinks = mysqlTable("workspace_invite_links", {
+  id: int("id").autoincrement().primaryKey(),
+  workspaceId: int("workspaceId").notNull(),
+  token: varchar("token", { length: 64 }).notNull().unique(),
+  role: mysqlEnum("role", ["super_admin", "admin", "manager", "rep"]).default("rep").notNull(),
+  title: varchar("title", { length: 120 }),
+  quota: decimal("quota", { precision: 14, scale: 2 }),
+  createdByUserId: int("createdByUserId").notNull(),
+  expiresAt: timestamp("expiresAt"),
+  usedAt: timestamp("usedAt"),
+  usedByUserId: int("usedByUserId"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
 export const workspaceMembers = mysqlTable(
   "workspace_members",
   {

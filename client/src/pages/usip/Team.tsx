@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Field, FormDialog, SelectField, Section, StatusPill, fmtDate } from "@/components/usip/Common";
+import { Field, SelectField, Section, StatusPill, fmtDate } from "@/components/usip/Common";
 import { EmptyState, PageHeader, Shell, SubNav } from "@/components/usip/Shell";
 import { Link } from "wouter";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
@@ -74,10 +74,10 @@ export default function Team() {
   const [selected, setSelected] = useState<Set<number>>(new Set());
 
   const [inviteOpen, setInviteOpen] = useState(false);
-  // Invite delivery options + the link surfaced after a "generate link" invite.
-  const [inviteSendEmail, setInviteSendEmail] = useState(true);
-  const [inviteGenLink, setInviteGenLink] = useState(false);
-  const [generatedLink, setGeneratedLink] = useState<string | null>(null);
+  const [inviteTab, setInviteTab] = useState<"email" | "link">("email");
+  // Activation-link tab: chosen role + the generated single-use URL to copy.
+  const [linkRole, setLinkRole] = useState<Role>("rep");
+  const [activationUrl, setActivationUrl] = useState<string | null>(null);
   const [deactivateTarget, setDeactivateTarget] = useState<any | null>(null);
   const [reassignTo, setReassignTo] = useState<number | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<any | null>(null);
@@ -148,15 +148,15 @@ export default function Team() {
     onSuccess: (res: any) => {
       utils.team.list.invalidate();
       setInviteOpen(false);
-      if (res?.inviteUrl) {
-        setGeneratedLink(res.inviteUrl);
-        navigator.clipboard?.writeText(res.inviteUrl).catch(() => {});
-      }
-      const base = res?.reInvited ? "Invitation re-issued" : "Member added";
-      const how = res?.inviteUrl
-        ? (res.emailSent ? " — email sent, link copied" : " — activation link copied")
-        : (res?.emailSent ? " — invitation email sent" : "");
-      toast.success(base + how);
+      toast.success(res?.reInvited ? "Invitation re-sent" : "Invitation email sent");
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const createInviteLink = trpc.team.createInviteLink.useMutation({
+    onSuccess: (res) => {
+      setActivationUrl(res.url);
+      navigator.clipboard?.writeText(res.url).catch(() => {});
+      toast.success("Activation link generated & copied");
     },
     onError: (e) => toast.error(e.message),
   });
@@ -397,7 +397,7 @@ export default function Team() {
         icon={<UsersRound className="size-5" />}
       >
         {isAdmin && (
-          <Button onClick={() => { setInviteSendEmail(true); setInviteGenLink(false); setInviteOpen(true); }}>
+          <Button onClick={() => { setInviteTab("email"); setLinkRole("rep"); setActivationUrl(null); setInviteOpen(true); }}>
             <UserPlus className="size-4" /> Invite
           </Button>
         )}
@@ -1119,99 +1119,110 @@ export default function Team() {
         </DialogContent>
       </Dialog>
 
-      {/* Invite dialog */}
-      <FormDialog
-        open={inviteOpen}
-        onOpenChange={setInviteOpen}
-        title="Invite member"
-        isPending={invite.isPending}
-        submitLabel={inviteGenLink && !inviteSendEmail ? "Generate activation link" : "Send invite"}
-        onSubmit={(f) => {
-          const quotaStr = String(f.get("quota") ?? "").trim();
-          invite.mutate({
-            email: String(f.get("email") ?? "").trim(),
-            name: String(f.get("name") ?? "").trim() || undefined,
-            role: (f.get("role") as Role) ?? "rep",
-            title: String(f.get("title") ?? "").trim() || undefined,
-            quota: quotaStr ? Number(quotaStr) : undefined,
-            origin: window.location.origin,
-            sendEmail: inviteSendEmail,
-            returnLink: inviteGenLink,
-          });
-        }}
-      >
-        <Field name="email" label="Work email" type="email" required placeholder="sam@acme.com" />
-        <Field name="name" label="Full name (optional)" />
-        <Field name="title" label="Title (optional)" placeholder="Account Executive" />
-        <SelectField
-          name="role"
-          label="Role"
-          defaultValue="rep"
-          options={ROLES.filter((r) => ROLE_RANK[r] <= ROLE_RANK[myRole]).map((r) => ({ value: r, label: r }))}
-        />
-        <Field name="quota" label="Annual quota (optional)" type="number" placeholder="250000" />
-
-        {/* Delivery options */}
-        <div className="space-y-2 rounded-md border bg-muted/30 p-3">
-          <div className="text-xs font-medium text-muted-foreground">Delivery</div>
-          <label className="flex items-center gap-2 text-sm cursor-pointer">
-            <input
-              type="checkbox"
-              checked={inviteSendEmail}
-              onChange={(e) => setInviteSendEmail(e.target.checked)}
-            />
-            Send invitation email
-          </label>
-          <label className="flex items-center gap-2 text-sm cursor-pointer">
-            <input
-              type="checkbox"
-              checked={inviteGenLink}
-              onChange={(e) => setInviteGenLink(e.target.checked)}
-            />
-            Generate activation link to copy &amp; share
-          </label>
-          {!inviteSendEmail && !inviteGenLink && (
-            <p className="text-[11px] text-amber-600">
-              Neither option selected — the member is created, but you'll need to use “Copy Link” on their row to get the activation link.
-            </p>
-          )}
-        </div>
-      </FormDialog>
-
-      {/* Activation link result — shown after a "generate link" invite */}
-      <Dialog open={!!generatedLink} onOpenChange={(v) => { if (!v) setGeneratedLink(null); }}>
+      {/* Invite dialog — Email invite + Activation link tabs */}
+      <Dialog open={inviteOpen} onOpenChange={setInviteOpen}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle>Activation link</DialogTitle>
+            <DialogTitle>Invite member</DialogTitle>
           </DialogHeader>
-          <div className="space-y-3 text-sm">
-            <p className="text-muted-foreground">
-              Share this link with the new member. Opening it lets them set a password and join the workspace.
-              It's already copied to your clipboard.
-            </p>
-            <div className="flex items-center gap-2">
-              <Input readOnly value={generatedLink ?? ""} onFocus={(e) => e.currentTarget.select()} className="font-mono text-xs" />
-              <Button
-                size="sm"
-                variant="outline"
-                className="shrink-0"
-                onClick={() => {
-                  if (!generatedLink) return;
-                  navigator.clipboard?.writeText(generatedLink)
-                    .then(() => toast.success("Copied"))
-                    .catch(() => toast.success(`Link: ${generatedLink}`));
+          <Tabs value={inviteTab} onValueChange={(v) => setInviteTab(v as "email" | "link")}>
+            <TabsList className="grid w-full grid-cols-2">
+              <TabsTrigger value="email">Email invite</TabsTrigger>
+              <TabsTrigger value="link">Activation link</TabsTrigger>
+            </TabsList>
+
+            {/* ── Email invite ── */}
+            <TabsContent value="email" className="mt-4">
+              <form
+                className="space-y-3"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const f = new FormData(e.currentTarget);
+                  const quotaStr = String(f.get("quota") ?? "").trim();
+                  invite.mutate({
+                    email: String(f.get("email") ?? "").trim(),
+                    name: String(f.get("name") ?? "").trim() || undefined,
+                    role: (f.get("role") as Role) ?? "rep",
+                    title: String(f.get("title") ?? "").trim() || undefined,
+                    quota: quotaStr ? Number(quotaStr) : undefined,
+                    origin: window.location.origin,
+                  });
                 }}
               >
-                <Copy className="size-3.5" /> Copy
-              </Button>
-            </div>
-            <p className="text-[11px] text-muted-foreground">
-              Treat it like a password — anyone with the link can join as this member until it's accepted or expires.
-            </p>
-          </div>
-          <DialogFooter>
-            <Button onClick={() => setGeneratedLink(null)}>Done</Button>
-          </DialogFooter>
+                <Field name="email" label="Work email" type="email" required placeholder="sam@acme.com" />
+                <Field name="name" label="Full name (optional)" />
+                <Field name="title" label="Title (optional)" placeholder="Account Executive" />
+                <SelectField
+                  name="role"
+                  label="Role"
+                  defaultValue="rep"
+                  options={ROLES.filter((r) => ROLE_RANK[r] <= ROLE_RANK[myRole]).map((r) => ({ value: r, label: r }))}
+                />
+                <Field name="quota" label="Annual quota (optional)" type="number" placeholder="250000" />
+                <DialogFooter>
+                  <Button type="button" variant="ghost" onClick={() => setInviteOpen(false)}>Cancel</Button>
+                  <Button type="submit" disabled={invite.isPending}>
+                    {invite.isPending ? "Sending…" : "Send invite"}
+                  </Button>
+                </DialogFooter>
+              </form>
+            </TabsContent>
+
+            {/* ── Activation link (email-less, role-only) ── */}
+            <TabsContent value="link" className="mt-4 space-y-3">
+              <p className="text-sm text-muted-foreground">
+                Generate a link that lets someone register their own email &amp; password and join as the
+                role you pick — no email required. It's <strong>single-use</strong> and expires per your
+                invite-expiry setting.
+              </p>
+              <div className="space-y-1">
+                <Label htmlFor="link-role">Role</Label>
+                <select
+                  id="link-role"
+                  className="w-full text-sm rounded-md border bg-background px-3 py-2 h-10"
+                  value={linkRole}
+                  onChange={(e) => { setLinkRole(e.target.value as Role); setActivationUrl(null); }}
+                >
+                  {ROLES.filter((r) => ROLE_RANK[r] <= ROLE_RANK[myRole]).map((r) => (
+                    <option key={r} value={r}>{r}</option>
+                  ))}
+                </select>
+              </div>
+
+              {activationUrl && (
+                <div className="space-y-2 rounded-md border bg-muted/30 p-3">
+                  <div className="text-xs font-medium text-emerald-600 flex items-center gap-1">
+                    <CheckCircle2 className="size-3.5" /> Link generated &amp; copied
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Input readOnly value={activationUrl} onFocus={(e) => e.currentTarget.select()} className="font-mono text-xs" />
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="shrink-0"
+                      onClick={() => navigator.clipboard?.writeText(activationUrl).then(() => toast.success("Copied")).catch(() => toast.success(activationUrl))}
+                    >
+                      <Copy className="size-3.5" /> Copy
+                    </Button>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground">
+                    Treat it like a password — anyone with it can join as <strong>{linkRole}</strong> until it's used or expires.
+                  </p>
+                </div>
+              )}
+
+              <DialogFooter>
+                <Button type="button" variant="ghost" onClick={() => setInviteOpen(false)}>Close</Button>
+                <Button
+                  onClick={() => createInviteLink.mutate({ role: linkRole, origin: window.location.origin })}
+                  disabled={createInviteLink.isPending}
+                >
+                  <Link2 className="size-4 mr-1" />
+                  {createInviteLink.isPending ? "Generating…" : activationUrl ? "Generate new link" : "Generate link"}
+                </Button>
+              </DialogFooter>
+            </TabsContent>
+          </Tabs>
         </DialogContent>
       </Dialog>
 

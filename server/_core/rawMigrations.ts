@@ -1530,6 +1530,33 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0091: Role-scoped activation links ─────────────────────────────
+  // Email-less, single-use invite links. A recipient opens /join?token=…,
+  // registers their own email+password, and is added to the link's
+  // workspace at the preset role. usedAt is set on first registration.
+  // errno 1050 (table exists) tolerated.
+  {
+    name: "0091_workspace_invite_links.sql",
+    statements: [
+      `CREATE TABLE IF NOT EXISTS \`workspace_invite_links\` (
+        \`id\` int AUTO_INCREMENT NOT NULL,
+        \`workspaceId\` int NOT NULL,
+        \`token\` varchar(64) NOT NULL,
+        \`role\` enum('super_admin','admin','manager','rep') NOT NULL DEFAULT 'rep',
+        \`title\` varchar(120) NULL,
+        \`quota\` decimal(14,2) NULL,
+        \`createdByUserId\` int NOT NULL,
+        \`expiresAt\` timestamp NULL,
+        \`usedAt\` timestamp NULL,
+        \`usedByUserId\` int NULL,
+        \`createdAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (\`id\`),
+        UNIQUE KEY \`uq_wil_token\` (\`token\`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE INDEX \`ix_wil_workspace\` ON \`workspace_invite_links\` (\`workspaceId\`)`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

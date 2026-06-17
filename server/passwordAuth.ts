@@ -16,11 +16,11 @@
  */
 import type { Express, Request, Response } from "express";
 import bcrypt from "bcryptjs";
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import rateLimit from "express-rate-limit";
 import { nanoid } from "nanoid";
 import { getDb } from "./db";
-import { users, loginHistory, workspaceMembers } from "../drizzle/schema";
+import { users, loginHistory, workspaceMembers, workspaceInviteLinks } from "../drizzle/schema";
 import { sdk } from "./_core/sdk";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
@@ -170,7 +170,7 @@ export function registerPasswordAuthRoutes(app: Express) {
     "/api/auth/register",
     registerLimiter,
     async (req: Request, res: Response) => {
-      const { email, password, name, returnPath } = req.body ?? {};
+      const { email, password, name, returnPath, inviteLinkToken } = req.body ?? {};
 
       if (typeof email !== "string" || !isValidEmail(email.trim())) {
         res.status(400).json({ error: "Please enter a valid email address." });
@@ -191,6 +191,34 @@ export function registerPasswordAuthRoutes(app: Express) {
       if (!db) {
         res.status(500).json({ error: "Database unavailable" });
         return;
+      }
+
+      // Activation-link registration: validate the link up front so we never
+      // create an account for a dead link. The membership is created (and the
+      // link consumed) after the user is created, below.
+      const linkToken =
+        typeof inviteLinkToken === "string" && inviteLinkToken.length >= 10 ? inviteLinkToken : null;
+      let inviteLink:
+        | { id: number; workspaceId: number; role: "super_admin" | "admin" | "manager" | "rep"; title: string | null; quota: string | null }
+        | null = null;
+      if (linkToken) {
+        const [row] = await db
+          .select({
+            id: workspaceInviteLinks.id,
+            workspaceId: workspaceInviteLinks.workspaceId,
+            role: workspaceInviteLinks.role,
+            title: workspaceInviteLinks.title,
+            quota: workspaceInviteLinks.quota,
+            usedAt: workspaceInviteLinks.usedAt,
+            expiresAt: workspaceInviteLinks.expiresAt,
+          })
+          .from(workspaceInviteLinks)
+          .where(eq(workspaceInviteLinks.token, linkToken));
+        if (!row || row.usedAt || (row.expiresAt && row.expiresAt <= new Date())) {
+          res.status(400).json({ error: "This activation link is invalid or has expired. Ask for a new one." });
+          return;
+        }
+        inviteLink = { id: row.id, workspaceId: row.workspaceId, role: row.role, title: row.title, quota: row.quota };
       }
 
       // Look for an existing row by email (real account or invite placeholder)
@@ -243,6 +271,33 @@ export function registerPasswordAuthRoutes(app: Express) {
           lastSignedIn: now,
         });
         userId = (insertResult as unknown as { insertId: number }).insertId;
+      }
+
+      // Consume the activation link (single-use) and add the new user to its
+      // workspace at the link's role. The conditional UPDATE (usedAt IS NULL)
+      // makes consumption atomic so two concurrent registrations can't both win.
+      if (inviteLink) {
+        const consumed = await db
+          .update(workspaceInviteLinks)
+          .set({ usedAt: now, usedByUserId: userId })
+          .where(and(eq(workspaceInviteLinks.id, inviteLink.id), isNull(workspaceInviteLinks.usedAt)));
+        const ok = Number((consumed as any)?.[0]?.affectedRows ?? (consumed as any)?.affectedRows ?? 0) > 0;
+        if (ok) {
+          // Don't double-add if they somehow already belong to this workspace.
+          const [member] = await db
+            .select({ id: workspaceMembers.id })
+            .from(workspaceMembers)
+            .where(and(eq(workspaceMembers.workspaceId, inviteLink.workspaceId), eq(workspaceMembers.userId, userId)));
+          if (!member) {
+            await db.insert(workspaceMembers).values({
+              workspaceId: inviteLink.workspaceId,
+              userId,
+              role: inviteLink.role,
+              title: inviteLink.title,
+              quota: inviteLink.quota,
+            });
+          }
+        }
       }
 
       try {

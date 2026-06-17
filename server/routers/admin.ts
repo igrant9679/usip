@@ -26,7 +26,9 @@ import {
   tasks,
   usageCounters,
   users,
+  workspaceInviteLinks,
   workspaceMembers,
+  workspaces,
   workspaceSettings,
 } from "../../drizzle/schema";
 import { checkPermission, getDb } from "../db";
@@ -1027,6 +1029,77 @@ export const teamRouter = router({
         }
       }
       return { url: `${input.origin}/invite/accept?token=${token}` };
+    }),
+
+  /**
+   * Generate an email-less, single-use activation link bound to a role. Anyone
+   * who opens it registers their own email + password and is added to THIS
+   * workspace at `role`. Role cannot exceed the creator's own role. Expiry
+   * mirrors the workspace invite-expiry setting (0 = never).
+   */
+  createInviteLink: adminWsProcedure
+    .input(z.object({
+      role: ROLE_ENUM.default("rep"),
+      title: z.string().max(120).optional(),
+      quota: z.number().nonnegative().optional(),
+      origin: z.string().url(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      if (roleRank(input.role) > roleRank(ctx.member.role)) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Cannot create a link for a role higher than your own" });
+      }
+      const token = crypto.randomBytes(32).toString("hex");
+      const [settings] = await db
+        .select({ inviteExpiryDays: workspaceSettings.inviteExpiryDays })
+        .from(workspaceSettings)
+        .where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
+      const expiryDays = settings?.inviteExpiryDays ?? 7;
+      const expiresAt = expiryDays && expiryDays > 0 ? new Date(Date.now() + expiryDays * 86400_000) : null;
+      await db.insert(workspaceInviteLinks).values({
+        workspaceId: ctx.workspace.id,
+        token,
+        role: input.role,
+        title: input.title ?? null,
+        quota: input.quota !== undefined ? String(input.quota) : null,
+        createdByUserId: ctx.user.id,
+        expiresAt,
+      });
+      await recordAudit({
+        workspaceId: ctx.workspace.id,
+        actorUserId: ctx.user.id,
+        action: "create",
+        entityType: "workspace_member",
+        after: { activationLink: true, role: input.role },
+      });
+      return { url: `${input.origin}/join?token=${token}`, token, role: input.role, expiresAt };
+    }),
+
+  /**
+   * Public preview for the /join page: validate an activation-link token and
+   * return just enough to render the registration screen. Never leaks the token
+   * or any PII beyond the workspace name + role being offered.
+   */
+  inviteLinkPreview: publicProcedure
+    .input(z.object({ token: z.string().min(10) }))
+    .query(async ({ input }) => {
+      const db = await getDb();
+      if (!db) return { valid: false as const, reason: "unavailable" };
+      const [link] = await db
+        .select({
+          workspaceId: workspaceInviteLinks.workspaceId,
+          role: workspaceInviteLinks.role,
+          expiresAt: workspaceInviteLinks.expiresAt,
+          usedAt: workspaceInviteLinks.usedAt,
+        })
+        .from(workspaceInviteLinks)
+        .where(eq(workspaceInviteLinks.token, input.token));
+      if (!link) return { valid: false as const, reason: "not_found" };
+      if (link.usedAt) return { valid: false as const, reason: "used" };
+      if (link.expiresAt && link.expiresAt <= new Date()) return { valid: false as const, reason: "expired" };
+      const [ws] = await db.select({ name: workspaces.name }).from(workspaces).where(eq(workspaces.id, link.workspaceId));
+      return { valid: true as const, workspaceName: ws?.name ?? "the workspace", role: link.role };
     }),
 
   /**

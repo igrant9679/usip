@@ -65,6 +65,7 @@ import SegmentRules from "@/pages/usip/SegmentRules";
 import ConnectedAccounts from "@/pages/usip/ConnectedAccounts";
 import UnifiedInbox from "@/pages/usip/UnifiedInbox";
 import InviteAccept from "@/pages/InviteAccept";
+import JoinViaLink from "@/pages/JoinViaLink";
 import Proposals from "@/pages/usip/Proposals";
 import ProposalDetail from "@/pages/usip/ProposalDetail";
 import ProposalPortal from "@/pages/ProposalPortal";
@@ -351,6 +352,7 @@ function Router() {
       <Route path="/are/settings"><AuthGate><ARESettings /></AuthGate></Route>
       <Route path="/p/:token"><ProposalPortal /></Route>
       <Route path="/invite/accept"><InviteAccept /></Route>
+      <Route path="/join"><JoinViaLink /></Route>
       <Route path="/help"><AuthGate><HelpCenter /></AuthGate></Route>
       <Route path="/tour-builder"><AuthGate><TourBuilder /></AuthGate></Route>
       <Route path="/mindmaps"><AuthGate><Mindmaps /></AuthGate></Route>
