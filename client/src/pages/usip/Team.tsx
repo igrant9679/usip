@@ -74,6 +74,10 @@ export default function Team() {
   const [selected, setSelected] = useState<Set<number>>(new Set());
 
   const [inviteOpen, setInviteOpen] = useState(false);
+  // Invite delivery options + the link surfaced after a "generate link" invite.
+  const [inviteSendEmail, setInviteSendEmail] = useState(true);
+  const [inviteGenLink, setInviteGenLink] = useState(false);
+  const [generatedLink, setGeneratedLink] = useState<string | null>(null);
   const [deactivateTarget, setDeactivateTarget] = useState<any | null>(null);
   const [reassignTo, setReassignTo] = useState<number | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<any | null>(null);
@@ -141,10 +145,18 @@ export default function Team() {
   }, [data, filter, roleFilter, showInactive]);
 
   const invite = trpc.team.invite.useMutation({
-    onSuccess: (res) => {
+    onSuccess: (res: any) => {
       utils.team.list.invalidate();
       setInviteOpen(false);
-      toast.success(res?.reInvited ? "Invitation re-sent" : "Member invited");
+      if (res?.inviteUrl) {
+        setGeneratedLink(res.inviteUrl);
+        navigator.clipboard?.writeText(res.inviteUrl).catch(() => {});
+      }
+      const base = res?.reInvited ? "Invitation re-issued" : "Member added";
+      const how = res?.inviteUrl
+        ? (res.emailSent ? " — email sent, link copied" : " — activation link copied")
+        : (res?.emailSent ? " — invitation email sent" : "");
+      toast.success(base + how);
     },
     onError: (e) => toast.error(e.message),
   });
@@ -385,7 +397,7 @@ export default function Team() {
         icon={<UsersRound className="size-5" />}
       >
         {isAdmin && (
-          <Button onClick={() => setInviteOpen(true)}>
+          <Button onClick={() => { setInviteSendEmail(true); setInviteGenLink(false); setInviteOpen(true); }}>
             <UserPlus className="size-4" /> Invite
           </Button>
         )}
@@ -1113,7 +1125,7 @@ export default function Team() {
         onOpenChange={setInviteOpen}
         title="Invite member"
         isPending={invite.isPending}
-        submitLabel="Send invite"
+        submitLabel={inviteGenLink && !inviteSendEmail ? "Generate activation link" : "Send invite"}
         onSubmit={(f) => {
           const quotaStr = String(f.get("quota") ?? "").trim();
           invite.mutate({
@@ -1123,6 +1135,8 @@ export default function Team() {
             title: String(f.get("title") ?? "").trim() || undefined,
             quota: quotaStr ? Number(quotaStr) : undefined,
             origin: window.location.origin,
+            sendEmail: inviteSendEmail,
+            returnLink: inviteGenLink,
           });
         }}
       >
@@ -1136,7 +1150,70 @@ export default function Team() {
           options={ROLES.filter((r) => ROLE_RANK[r] <= ROLE_RANK[myRole]).map((r) => ({ value: r, label: r }))}
         />
         <Field name="quota" label="Annual quota (optional)" type="number" placeholder="250000" />
+
+        {/* Delivery options */}
+        <div className="space-y-2 rounded-md border bg-muted/30 p-3">
+          <div className="text-xs font-medium text-muted-foreground">Delivery</div>
+          <label className="flex items-center gap-2 text-sm cursor-pointer">
+            <input
+              type="checkbox"
+              checked={inviteSendEmail}
+              onChange={(e) => setInviteSendEmail(e.target.checked)}
+            />
+            Send invitation email
+          </label>
+          <label className="flex items-center gap-2 text-sm cursor-pointer">
+            <input
+              type="checkbox"
+              checked={inviteGenLink}
+              onChange={(e) => setInviteGenLink(e.target.checked)}
+            />
+            Generate activation link to copy &amp; share
+          </label>
+          {!inviteSendEmail && !inviteGenLink && (
+            <p className="text-[11px] text-amber-600">
+              Neither option selected — the member is created, but you'll need to use “Copy Link” on their row to get the activation link.
+            </p>
+          )}
+        </div>
       </FormDialog>
+
+      {/* Activation link result — shown after a "generate link" invite */}
+      <Dialog open={!!generatedLink} onOpenChange={(v) => { if (!v) setGeneratedLink(null); }}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Activation link</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 text-sm">
+            <p className="text-muted-foreground">
+              Share this link with the new member. Opening it lets them set a password and join the workspace.
+              It's already copied to your clipboard.
+            </p>
+            <div className="flex items-center gap-2">
+              <Input readOnly value={generatedLink ?? ""} onFocus={(e) => e.currentTarget.select()} className="font-mono text-xs" />
+              <Button
+                size="sm"
+                variant="outline"
+                className="shrink-0"
+                onClick={() => {
+                  if (!generatedLink) return;
+                  navigator.clipboard?.writeText(generatedLink)
+                    .then(() => toast.success("Copied"))
+                    .catch(() => toast.success(`Link: ${generatedLink}`));
+                }}
+              >
+                <Copy className="size-3.5" /> Copy
+              </Button>
+            </div>
+            <p className="text-[11px] text-muted-foreground">
+              Treat it like a password — anyone with the link can join as this member until it's accepted or expires.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button onClick={() => setGeneratedLink(null)}>Done</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Set Password dialog */}
       <Dialog open={!!pwTarget} onOpenChange={(v) => { if (!v) { setPwTarget(null); setPwValue(""); setPwConfirm(""); } }}>

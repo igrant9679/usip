@@ -245,6 +245,13 @@ export const teamRouter = router({
         title: z.string().max(120).optional(),
         quota: z.number().nonnegative().optional(),
         origin: z.string().url().optional(),
+        /** Whether to email the invitation. Off when the admin only wants a
+         *  shareable activation link (e.g. email delivery isn't configured). */
+        sendEmail: z.boolean().default(true),
+        /** Return the activation link in the response so the admin can copy and
+         *  share it manually. The link is the same acceptance secret exposed by
+         *  copyInviteLink, so it's only handed back to the admin who created it. */
+        returnLink: z.boolean().default(false),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -346,11 +353,17 @@ export const teamRouter = router({
         entityId: userId,
         after: { email: input.email, role: input.role, reInvited: reIssueMemberId !== null },
       });
-      // Send invitation email via workspace SMTP (Email Delivery settings)
-      try {
+      // Build the activation link once — used by both the email and the
+      // optional returnLink response. Falls back to the configured origin only
+      // when the caller didn't pass one (the UI always passes window.origin).
+      const appOrigin = input.origin ?? process.env.VITE_OAUTH_PORTAL_URL ?? "https://manus.im";
+      const inviteUrl = `${appOrigin}/invite/accept?token=${inviteToken}`;
+
+      // Send invitation email via workspace SMTP (Email Delivery settings),
+      // unless the admin opted to only generate a shareable link.
+      if (input.sendEmail) {
+       try {
         const { sendWorkspaceEmail } = await import("../emailDelivery");
-        const appOrigin = input.origin ?? process.env.VITE_OAUTH_PORTAL_URL ?? "https://manus.im";
-        const inviteUrl = `${appOrigin}/invite/accept?token=${inviteToken}`;
         const recipientName = input.name ?? input.email.split("@")[0];
         await sendWorkspaceEmail(ctx.workspace.id, {
           to: input.email,
@@ -368,10 +381,19 @@ export const teamRouter = router({
   <p style="color:#9ca3af;font-size:12px">If you did not expect this invitation, you can safely ignore this email.</p>
 </div>`,
         });
-      } catch (_e) {
+       } catch (_e) {
         // Non-fatal: invitation email failure should not block the invite
+       }
       }
-      return { ok: true, userId, reInvited: reIssueMemberId !== null };
+      return {
+        ok: true,
+        userId,
+        reInvited: reIssueMemberId !== null,
+        emailSent: input.sendEmail,
+        // Only handed back when explicitly requested, so the response isn't a
+        // token leak by default.
+        inviteUrl: input.returnLink ? inviteUrl : null,
+      };
     }),
 
   changeRole: adminWsProcedure
