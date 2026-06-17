@@ -27,7 +27,7 @@ import {
   Users,
   XCircle, UsersRound
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
 type Role = "super_admin" | "admin" | "manager" | "rep";
@@ -57,7 +57,21 @@ function inviteStateOf(m: any): InviteState {
   return "pending";
 }
 
-type Tab = "members" | "login_history" | "settings";
+type Tab = "members" | "login_history" | "links" | "settings";
+
+/** Humanise milliseconds-until-expiry for the activation-link countdowns. */
+function fmtCountdown(ms: number): string {
+  if (ms <= 0) return "expired";
+  const s = Math.floor(ms / 1000);
+  const d = Math.floor(s / 86400);
+  const h = Math.floor((s % 86400) / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${sec}s`;
+  return `${sec}s`;
+}
 
 export default function Team() {
   const { current } = useWorkspace();
@@ -156,10 +170,27 @@ export default function Team() {
     onSuccess: (res) => {
       setActivationUrl(res.url);
       navigator.clipboard?.writeText(res.url).catch(() => {});
+      utils.team.listInviteLinks.invalidate();
       toast.success("Activation link generated & copied");
     },
     onError: (e) => toast.error(e.message),
   });
+  // Active activation links + a ticking clock so the expiry countdowns update
+  // live. Both are only active while the Links tab is open.
+  const inviteLinks = trpc.team.listInviteLinks.useQuery(
+    { origin: window.location.origin },
+    { enabled: isAdmin && activeTab === "links", refetchInterval: 60_000 },
+  );
+  const revokeLink = trpc.team.revokeInviteLink.useMutation({
+    onSuccess: () => { utils.team.listInviteLinks.invalidate(); toast.success("Activation link revoked"); },
+    onError: (e) => toast.error(e.message),
+  });
+  const [nowTick, setNowTick] = useState(() => Date.now());
+  useEffect(() => {
+    if (activeTab !== "links") return;
+    const t = setInterval(() => setNowTick(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [activeTab]);
   const changeRole = trpc.team.changeRole.useMutation({
     onSuccess: () => {
       utils.team.list.invalidate();
@@ -382,6 +413,7 @@ export default function Team() {
   const TABS: { id: Tab; label: string }[] = [
     { id: "members", label: "Members" },
     { id: "login_history", label: "Login History" },
+    ...(isAdmin ? [{ id: "links" as Tab, label: "Activation Links" }] : []),
     ...(isAdmin ? [{ id: "settings" as Tab, label: "Settings" }] : []),
   ];
 
@@ -863,6 +895,95 @@ export default function Team() {
               </div>
             )}
           </Section>
+        </div>
+      )}
+
+      {/* ── Activation Links tab ── */}
+      {activeTab === "links" && isAdmin && (
+        <div className="p-4 md:p-5 space-y-4">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div>
+              <h2 className="text-sm font-semibold">Active activation links</h2>
+              <p className="text-xs text-muted-foreground">
+                Single-use links that let someone self-register into this workspace. They drop off this list once used, revoked, or expired.
+              </p>
+            </div>
+            <Button size="sm" onClick={() => { setInviteTab("link"); setLinkRole("rep"); setActivationUrl(null); setInviteOpen(true); }}>
+              <Link2 className="size-3.5" /> New link
+            </Button>
+          </div>
+
+          {inviteLinks.isLoading ? (
+            <div className="text-sm text-muted-foreground py-10 text-center">Loading…</div>
+          ) : !inviteLinks.data || inviteLinks.data.length === 0 ? (
+            <EmptyState
+              icon={Link2}
+              title="No active activation links"
+              description="Generate one from the Invite dialog's “Activation link” tab — it'll appear here with a live expiry countdown."
+            />
+          ) : (
+            <div className="overflow-x-auto rounded-lg border">
+              <table className="w-full text-sm">
+                <thead className="text-xs text-muted-foreground border-b bg-muted/30">
+                  <tr className="text-left">
+                    <th className="px-3 py-2">Role</th>
+                    <th className="px-3 py-2">Created</th>
+                    <th className="px-3 py-2">Created by</th>
+                    <th className="px-3 py-2">Expires in</th>
+                    <th className="px-3 py-2 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {inviteLinks.data.map((lnk: any) => {
+                    const remaining = lnk.expiresAt ? new Date(lnk.expiresAt).getTime() - nowTick : null;
+                    const tone =
+                      remaining === null ? "text-muted-foreground"
+                      : remaining < 3_600_000 ? "text-rose-600"
+                      : remaining < 86_400_000 ? "text-amber-600"
+                      : "text-emerald-600";
+                    return (
+                      <tr key={lnk.id} className="border-b last:border-0">
+                        <td className="px-3 py-2"><StatusPill tone={roleTone(lnk.role)}>{lnk.role}</StatusPill></td>
+                        <td className="px-3 py-2 text-xs text-muted-foreground whitespace-nowrap">{fmtDate(lnk.createdAt)}</td>
+                        <td className="px-3 py-2 text-xs text-muted-foreground">{lnk.createdBy}</td>
+                        <td className="px-3 py-2">
+                          {remaining === null ? (
+                            <StatusPill tone="muted">Never expires</StatusPill>
+                          ) : (
+                            <span className={`inline-flex items-center gap-1 text-xs font-medium tabular-nums ${tone}`}>
+                              <Clock className="size-3.5" /> {fmtCountdown(remaining)}
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2">
+                          <div className="flex items-center gap-1 justify-end">
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              title="Copy link"
+                              onClick={() => navigator.clipboard?.writeText(lnk.url).then(() => toast.success("Copied")).catch(() => toast.success(lnk.url))}
+                            >
+                              <Copy className="size-3.5" /> <span className="hidden sm:inline ml-1">Copy</span>
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="text-rose-600"
+                              title="Revoke this link"
+                              disabled={revokeLink.isPending}
+                              onClick={() => revokeLink.mutate({ id: lnk.id })}
+                            >
+                              <Trash2 className="size-3.5" /> <span className="hidden sm:inline ml-1">Revoke</span>
+                            </Button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
 

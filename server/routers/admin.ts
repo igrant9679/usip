@@ -13,7 +13,7 @@
  *   - team.bulkChangeRole                    (admin+ only)
  */
 import { TRPCError } from "@trpc/server";
-import { and, count, desc, eq, gte, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
+import { and, count, desc, eq, gt, gte, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
@@ -1100,6 +1100,74 @@ export const teamRouter = router({
       if (link.expiresAt && link.expiresAt <= new Date()) return { valid: false as const, reason: "expired" };
       const [ws] = await db.select({ name: workspaces.name }).from(workspaces).where(eq(workspaces.id, link.workspaceId));
       return { valid: true as const, workspaceName: ws?.name ?? "the workspace", role: link.role };
+    }),
+
+  /**
+   * List active (unused, unexpired) activation links for monitoring. The token
+   * is folded into a ready-to-share url; the raw token isn't returned alone.
+   */
+  listInviteLinks: adminWsProcedure
+    .input(z.object({ origin: z.string().url() }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const now = new Date();
+      const rows = await db
+        .select({
+          id: workspaceInviteLinks.id,
+          token: workspaceInviteLinks.token,
+          role: workspaceInviteLinks.role,
+          createdAt: workspaceInviteLinks.createdAt,
+          expiresAt: workspaceInviteLinks.expiresAt,
+          createdByName: users.name,
+          createdByEmail: users.email,
+        })
+        .from(workspaceInviteLinks)
+        .leftJoin(users, eq(users.id, workspaceInviteLinks.createdByUserId))
+        .where(and(
+          eq(workspaceInviteLinks.workspaceId, ctx.workspace.id),
+          isNull(workspaceInviteLinks.usedAt),
+          or(isNull(workspaceInviteLinks.expiresAt), gt(workspaceInviteLinks.expiresAt, now)),
+        ))
+        .orderBy(desc(workspaceInviteLinks.createdAt));
+      return rows.map((r) => ({
+        id: r.id,
+        role: r.role,
+        createdAt: r.createdAt,
+        expiresAt: r.expiresAt,
+        createdBy: r.createdByName ?? r.createdByEmail ?? "—",
+        url: `${input.origin}/join?token=${r.token}`,
+      }));
+    }),
+
+  /**
+   * Revoke an activation link by consuming it — the single-use machinery treats
+   * a set usedAt as spent, so the link immediately stops working and drops out
+   * of listInviteLinks. No schema change needed (usedByUserId stays null,
+   * distinguishing a revoke from a real registration).
+   */
+  revokeInviteLink: adminWsProcedure
+    .input(z.object({ id: z.number().int() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      await db
+        .update(workspaceInviteLinks)
+        .set({ usedAt: new Date() })
+        .where(and(
+          eq(workspaceInviteLinks.id, input.id),
+          eq(workspaceInviteLinks.workspaceId, ctx.workspace.id),
+          isNull(workspaceInviteLinks.usedAt),
+        ));
+      await recordAudit({
+        workspaceId: ctx.workspace.id,
+        actorUserId: ctx.user.id,
+        action: "delete",
+        entityType: "workspace_member",
+        entityId: input.id,
+        after: { activationLinkRevoked: true },
+      });
+      return { ok: true };
     }),
 
   /**
