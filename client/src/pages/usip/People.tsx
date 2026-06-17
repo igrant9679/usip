@@ -19,7 +19,7 @@
  */
 import { useMemo, useState } from "react";
 import { useLocation } from "wouter";
-import { Shell, PageHeader } from "@/components/usip/Shell";
+import { Shell } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -142,7 +142,7 @@ function FilterGroup({
 }) {
   return (
     <div className="border-b border-border/60">
-      <div className="group/grp flex items-center gap-1.5 px-3 py-2">
+      <div className="group/grp flex items-center gap-1.5 px-3 py-1.5">
         <button
           type="button"
           onClick={() => !locked && onToggle(id)}
@@ -185,7 +185,7 @@ function FilterGroup({
           </>
         )}
       </div>
-      {open && !locked && children && <div className="px-3 pb-3 pt-0.5 space-y-2">{children}</div>}
+      {open && !locked && children && <div className="px-3 pb-2 pt-0 space-y-1.5">{children}</div>}
     </div>
   );
 }
@@ -400,7 +400,7 @@ export default function People() {
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Name, title, company, email…"
-              className="h-8 text-[13px]"
+              className="h-7 text-[13px]"
             />
           </FilterGroup>
         );
@@ -473,7 +473,7 @@ export default function People() {
       case "jobTitles":
         return (
           <FilterGroup key={id} {...common} label="Job titles" icon={Briefcase} count={titleQ ? 1 : 0}>
-            <Input value={titleQ} onChange={(e) => setTitleQ(e.target.value)} placeholder="e.g. VP of Sales" className="h-8 text-[13px]" />
+            <Input value={titleQ} onChange={(e) => setTitleQ(e.target.value)} placeholder="e.g. VP of Sales" className="h-7 text-[13px]" />
           </FilterGroup>
         );
       case "seniority":
@@ -489,19 +489,19 @@ export default function People() {
       case "company":
         return (
           <FilterGroup key={id} {...common} label="Company" icon={Building2} count={companyQ ? 1 : 0}>
-            <Input value={companyQ} onChange={(e) => setCompanyQ(e.target.value)} placeholder="Company name…" className="h-8 text-[13px]" />
+            <Input value={companyQ} onChange={(e) => setCompanyQ(e.target.value)} placeholder="Company name…" className="h-7 text-[13px]" />
           </FilterGroup>
         );
       case "location":
         return (
           <FilterGroup key={id} {...common} label="Location" icon={MapPin} count={locationQ ? 1 : 0}>
-            <Input value={locationQ} onChange={(e) => setLocationQ(e.target.value)} placeholder="City, state, or country…" className="h-8 text-[13px]" />
+            <Input value={locationQ} onChange={(e) => setLocationQ(e.target.value)} placeholder="City, state, or country…" className="h-7 text-[13px]" />
           </FilterGroup>
         );
       case "industry":
         return (
           <FilterGroup key={id} {...common} label="Industry & keywords" icon={Globe} count={industryQ ? 1 : 0}>
-            <Input value={industryQ} onChange={(e) => setIndustryQ(e.target.value)} placeholder="e.g. SaaS, Fintech…" className="h-8 text-[13px]" />
+            <Input value={industryQ} onChange={(e) => setIndustryQ(e.target.value)} placeholder="e.g. SaaS, Fintech…" className="h-7 text-[13px]" />
           </FilterGroup>
         );
       case "fit":
@@ -543,15 +543,15 @@ export default function People() {
   return (
     <Shell title="People">
       <div className="flex flex-col h-full min-h-0">
-        <PageHeader
-          title="Find people"
-          description="Search and filter your prospect universe. The filters on the left are the fulcrum — every change reshapes the results."
-          pageKey="v2-people"
-        >
+        {/* Compact title row — kept deliberately thin so the filter rail and
+            results fit the viewport with minimal scrolling (Apollo-style). */}
+        <div className="shrink-0 flex items-center gap-2 px-4 h-11 border-b border-border bg-card/40">
+          <h1 className="text-[15px] font-semibold tracking-tight">Find people</h1>
+          <div className="flex-1" />
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="sm" className="gap-1.5">
-                <Upload className="size-4" /> Import <ChevronDown className="size-3.5 opacity-60" />
+              <Button variant="outline" size="sm" className="h-7 gap-1.5">
+                <Upload className="size-3.5" /> Import <ChevronDown className="size-3 opacity-60" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
@@ -560,7 +560,7 @@ export default function People() {
               <DropdownMenuItem onClick={() => setLocation("/are")}><Sparkles className="size-4 mr-2" /> Auto-discover (ARE)</DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-        </PageHeader>
+        </div>
 
         {/* body: filter rail | results | detail panel */}
         <div className="flex flex-1 min-h-0">
@@ -574,8 +574,8 @@ export default function People() {
                   { l: "Net new", v: fmtNum(netNewOnPage) },
                   { l: "Saved", v: fmtNum(savedOnPage) },
                 ].map((s) => (
-                  <div key={s.l} className="bg-card px-2 py-2 text-center">
-                    <div className="text-sm font-semibold tabular-nums">{s.v}</div>
+                  <div key={s.l} className="bg-card px-2 py-1.5 text-center leading-tight">
+                    <div className="text-[13px] font-semibold tabular-nums">{s.v}</div>
                     <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{s.l}</div>
                   </div>
                 ))}
@@ -586,7 +586,7 @@ export default function People() {
                 {orderedGroups.map((id) => renderGroup(id))}
 
                 {/* locked / premium */}
-                <div className="px-3 pt-3 pb-1 text-[11px] uppercase tracking-wide text-muted-foreground">Advanced (upgrade)</div>
+                <div className="px-3 pt-2 pb-0.5 text-[11px] uppercase tracking-wide text-muted-foreground">Advanced (upgrade)</div>
                 {LOCKED.map((f) => (
                   <FilterGroup key={f.id} id={f.id} label={f.label} icon={f.icon} locked open={false} onToggle={() => {}} />
                 ))}
@@ -616,7 +616,7 @@ export default function People() {
           {/* ── centre column ── */}
           <section className="flex-1 min-w-0 flex flex-col min-h-0">
             {/* toolbar */}
-            <div className="shrink-0 border-b border-border px-3 py-2 flex items-center gap-2 flex-wrap bg-card/40">
+            <div className="shrink-0 border-b border-border px-3 py-1.5 flex items-center gap-1.5 flex-wrap bg-card/40 [&_button]:h-7">
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="outline" size="sm" className="gap-1.5">Default view <ChevronDown className="size-3.5 opacity-60" /></Button>
@@ -634,7 +634,7 @@ export default function People() {
                 <Filter className="size-4" /> {hideFilters ? "Show" : "Hide"} filters{activeCount ? ` (${activeCount})` : ""}
               </Button>
 
-              <div className="flex items-center gap-2 px-2.5 h-8 rounded-md border bg-background text-sm min-w-0 flex-1 max-w-xs">
+              <div className="flex items-center gap-2 px-2.5 h-7 rounded-md border bg-background text-sm min-w-0 flex-1 max-w-xs">
                 <Search className="size-4 text-muted-foreground shrink-0" />
                 <input
                   value={search}
@@ -743,15 +743,15 @@ export default function People() {
                 <table className="w-full text-sm">
                   <thead className="sticky top-0 z-10 bg-card border-b border-border">
                     <tr className="text-left text-[11px] uppercase tracking-wide text-muted-foreground">
-                      <th className="w-10 px-3 py-2"><Checkbox checked={allOnPageChecked} onCheckedChange={toggleAll} className="size-3.5" /></th>
-                      <th className="px-2 py-2 font-medium">Name</th>
-                      <th className="px-2 py-2 font-medium">Title</th>
-                      <th className="px-2 py-2 font-medium">Fit</th>
-                      <th className="px-2 py-2 font-medium">Company</th>
-                      <th className="px-2 py-2 font-medium">Location</th>
-                      <th className="px-2 py-2 font-medium">Email</th>
-                      <th className="px-2 py-2 font-medium">Phone</th>
-                      <th className="w-8 px-2 py-2" />
+                      <th className="w-10 px-3 py-1.5"><Checkbox checked={allOnPageChecked} onCheckedChange={toggleAll} className="size-3.5" /></th>
+                      <th className="px-2 py-1.5 font-medium">Name</th>
+                      <th className="px-2 py-1.5 font-medium">Title</th>
+                      <th className="px-2 py-1.5 font-medium">Fit</th>
+                      <th className="px-2 py-1.5 font-medium">Company</th>
+                      <th className="px-2 py-1.5 font-medium">Location</th>
+                      <th className="px-2 py-1.5 font-medium">Email</th>
+                      <th className="px-2 py-1.5 font-medium">Phone</th>
+                      <th className="w-8 px-2 py-1.5" />
                     </tr>
                   </thead>
                   <tbody>
@@ -764,7 +764,7 @@ export default function People() {
                           selectedId === p.id && "bg-muted",
                         )}
                       >
-                        <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
+                        <td className="px-3 py-1.5" onClick={(e) => e.stopPropagation()}>
                           <Checkbox
                             checked={checked.has(p.id)}
                             onCheckedChange={() =>
@@ -777,7 +777,7 @@ export default function People() {
                             className="size-3.5"
                           />
                         </td>
-                        <td className="px-2 py-2">
+                        <td className="px-2 py-1.5">
                           <div className="font-medium">{p.firstName} {p.lastName}</div>
                           {p.linkedinUrl && (
                             <a href={p.linkedinUrl} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="text-[11px] text-blue-600 hover:underline inline-flex items-center gap-0.5">
@@ -785,11 +785,11 @@ export default function People() {
                             </a>
                           )}
                         </td>
-                        <td className="px-2 py-2"><div className="max-w-[160px] truncate" title={p.title ?? undefined}>{p.title ?? "—"}</div></td>
-                        <td className="px-2 py-2">{fitBadge(p.confidenceScore)}</td>
-                        <td className="px-2 py-2"><div className="max-w-[150px] truncate" title={p.company ?? undefined}>{p.company ?? "—"}</div></td>
-                        <td className="px-2 py-2 text-xs text-muted-foreground"><div className="max-w-[140px] truncate">{[p.city, p.state, p.country].filter(Boolean).join(", ") || "—"}</div></td>
-                        <td className="px-2 py-2">
+                        <td className="px-2 py-1.5"><div className="max-w-[160px] truncate" title={p.title ?? undefined}>{p.title ?? "—"}</div></td>
+                        <td className="px-2 py-1.5">{fitBadge(p.confidenceScore)}</td>
+                        <td className="px-2 py-1.5"><div className="max-w-[150px] truncate" title={p.company ?? undefined}>{p.company ?? "—"}</div></td>
+                        <td className="px-2 py-1.5 text-xs text-muted-foreground"><div className="max-w-[140px] truncate">{[p.city, p.state, p.country].filter(Boolean).join(", ") || "—"}</div></td>
+                        <td className="px-2 py-1.5">
                           {p.email ? (
                             <div className="flex items-center gap-1 max-w-[200px]">
                               <span className="text-xs truncate min-w-0" title={p.email}>{p.email}</span>
@@ -799,8 +799,8 @@ export default function People() {
                             <span className="text-xs text-muted-foreground inline-flex items-center gap-1"><Mail className="size-3" /> —</span>
                           )}
                         </td>
-                        <td className="px-2 py-2">{p.phone ? <span className="text-xs">{p.phone}</span> : <span className="text-xs text-muted-foreground">—</span>}</td>
-                        <td className="px-2 py-2 text-right"><ChevronRight className="size-4 text-muted-foreground" /></td>
+                        <td className="px-2 py-1.5">{p.phone ? <span className="text-xs">{p.phone}</span> : <span className="text-xs text-muted-foreground">—</span>}</td>
+                        <td className="px-2 py-1.5 text-right"><ChevronRight className="size-4 text-muted-foreground" /></td>
                       </tr>
                     ))}
                   </tbody>

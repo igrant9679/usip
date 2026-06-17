@@ -80,7 +80,6 @@ import HelpCenter from "@/pages/usip/HelpCenter";
 import TourBuilder from "@/pages/usip/TourBuilder";
 import Mindmaps from "@/pages/usip/Mindmaps";
 import MindmapCanvas from "@/pages/usip/MindmapCanvas";
-import { HelpButton } from "@/components/usip/HelpDrawer";
 import { TourEngineProvider } from "@/components/usip/TourEngine";
 import { Loader2, Eye, EyeOff, LogIn } from "lucide-react";
 import { Route, Switch, useLocation } from "wouter";
@@ -394,7 +393,6 @@ function App() {
           <TourEngineProvider>
             <Toaster />
             <Router />
-            <HelpButton />
           </TourEngineProvider>
         </TooltipProvider>
       </ThemeProvider>
