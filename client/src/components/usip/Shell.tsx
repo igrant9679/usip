@@ -133,7 +133,7 @@ const NAV: NavGroup[] = [
           { href: "/customers", label: "Customers", short: "★", icon: Heart },
         ],
       },
-      { kind: "subhead", label: "Funnel", color: "#0891B2", darkColor: "#22D3EE" },
+      { kind: "subhead", label: "Prospect and enrich", color: "#0891B2", darkColor: "#22D3EE" },
       { href: "/prospects", label: "Prospects", icon: Radar },
       { href: "/leads", label: "Leads", icon: Target },
       { href: "/pipeline", label: "Pipeline", icon: KanbanSquare },
