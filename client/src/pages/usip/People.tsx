@@ -19,7 +19,7 @@
  */
 import { useMemo, useState } from "react";
 import { useLocation } from "wouter";
-import { Shell } from "@/components/usip/Shell";
+import { Shell, useAccentColor } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -152,7 +152,10 @@ function FilterGroup({
           <Icon className="size-3.5 shrink-0 text-muted-foreground" />
           <span className="truncate text-left">{label}</span>
           {count ? (
-            <span className="ml-0.5 inline-flex items-center justify-center rounded-full bg-foreground text-background text-[10px] font-semibold size-4 shrink-0">
+            <span
+              className="ml-0.5 inline-flex items-center justify-center rounded-full text-white text-[10px] font-semibold size-4 shrink-0"
+              style={{ backgroundColor: "var(--people-accent, hsl(var(--foreground)))" }}
+            >
               {count}
             </span>
           ) : null}
@@ -232,6 +235,7 @@ const SENIORITY_OPTIONS = ["c-level", "vp", "director", "manager", "senior", "en
 
 export default function People() {
   const [, setLocation] = useLocation();
+  const accent = useAccentColor();
 
   // ── server-backed filters (drive prospects.list → Total + pagination) ──
   const [emailStatus, setEmailStatus] = useState<string>(""); // "" = any
@@ -542,10 +546,12 @@ export default function People() {
 
   return (
     <Shell title="People">
-      <div className="flex flex-col h-full min-h-0">
+      <div className="flex flex-col h-full min-h-0" style={{ ["--people-accent" as any]: accent }}>
         {/* Compact title row — kept deliberately thin so the filter rail and
             results fit the viewport with minimal scrolling (Apollo-style). */}
-        <div className="shrink-0 flex items-center gap-2 px-4 h-11 border-b border-border bg-card/40">
+        <div className="relative shrink-0 flex items-center gap-2 px-4 h-11 border-b border-border bg-card/40">
+          <span aria-hidden className="absolute inset-x-0 top-0 h-0.5" style={{ backgroundColor: accent }} />
+          <Users className="size-4" style={{ color: accent }} />
           <h1 className="text-[15px] font-semibold tracking-tight">Find people</h1>
           <div className="flex-1" />
           <DropdownMenu>
@@ -575,7 +581,7 @@ export default function People() {
                   { l: "Saved", v: fmtNum(savedOnPage) },
                 ].map((s) => (
                   <div key={s.l} className="bg-card px-2 py-1.5 text-center leading-tight">
-                    <div className="text-[13px] font-semibold tabular-nums">{s.v}</div>
+                    <div className="text-[13px] font-semibold tabular-nums" style={{ color: accent }}>{s.v}</div>
                     <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{s.l}</div>
                   </div>
                 ))}
@@ -694,7 +700,7 @@ export default function People() {
 
             {/* selection action bar */}
             {checked.size > 0 && (
-              <div className="shrink-0 border-b border-border px-3 py-1.5 flex items-center gap-3 bg-foreground text-background text-[13px]">
+              <div className="shrink-0 border-b border-border px-3 py-1.5 flex items-center gap-3 text-white text-[13px]" style={{ backgroundColor: accent }}>
                 <span className="font-medium">{checked.size} selected</span>
                 <Button variant="secondary" size="sm" className="h-7" onClick={() => setLocation("/sequences")}>Add to sequence</Button>
                 <Button variant="secondary" size="sm" className="h-7" onClick={() => setLocation("/v2/lists")}>Add to list</Button>
@@ -845,8 +851,9 @@ export default function People() {
 function DetailPanel({ p, onClose, onOpenFull }: { p: Prospect; onClose: () => void; onOpenFull: () => void }) {
   const loc = [p.city, p.state, p.country].filter(Boolean).join(", ");
   return (
-    <aside className="w-96 shrink-0 border-l border-border flex flex-col min-h-0 bg-card">
-      <div className="shrink-0 flex items-start justify-between px-4 py-3 border-b border-border">
+    <aside className="w-96 shrink-0 border-l border-border flex flex-col min-h-0 bg-card shadow-sm">
+      <div className="relative shrink-0 flex items-start justify-between px-4 py-3 border-b border-border">
+        <span aria-hidden className="absolute inset-x-0 top-0 h-0.5" style={{ backgroundColor: "var(--people-accent, hsl(var(--foreground)))" }} />
         <div className="min-w-0">
           <div className="text-base font-semibold truncate">{p.firstName} {p.lastName}</div>
           <div className="text-sm text-muted-foreground truncate">{p.title ?? "—"}</div>
@@ -929,7 +936,10 @@ function AiEmptyState({
 }) {
   return (
     <div className="max-w-2xl mx-auto px-4 py-14 text-center">
-      <div className="mx-auto size-12 rounded-xl bg-foreground text-background flex items-center justify-center mb-4">
+      <div
+        className="mx-auto size-12 rounded-xl text-white flex items-center justify-center mb-4 shadow-sm"
+        style={{ backgroundColor: "var(--people-accent, hsl(var(--foreground)))" }}
+      >
         <Sparkles className="size-6" />
       </div>
       <h2 className="text-lg font-semibold">Use Velocity AI to find the right prospects</h2>

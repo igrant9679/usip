@@ -260,18 +260,22 @@ const _LEGACY_NAV: NavGroup[] = [
 // Light, sectioned rail. Top quick-links, collapsible sections, then a "More"
 // section that preserves every pre-redesign page. New section items point at
 // /v2/* placeholder pages we build out one at a time.
-type NavLink = { href: string; label: string; icon: any; badge?: string; trailingChevron?: boolean };
-type NavSection = { label: string; icon: any; items: NavLink[] };
+type NavLink = { href: string; label: string; icon: any; badge?: string; trailingChevron?: boolean; color?: string; darkColor?: string };
+type NavSection = { label: string; icon: any; items: NavLink[]; color: string; darkColor: string };
 
+// Top quick-links carry their own accent (brand blue / assistant violet) so the
+// rail reads with colour from the very top.
 const TOP_LINKS: NavLink[] = [
-  { href: "/", label: "Home", icon: Home },
-  { href: "/v2/ai-assistant", label: "AI Assistant", icon: Sparkles },
+  { href: "/", label: "Home", icon: Home, color: "#1D4ED8", darkColor: "#93C5FD" },
+  { href: "/v2/ai-assistant", label: "AI Assistant", icon: Sparkles, color: "#7C3AED", darkColor: "#C4B5FD" },
 ];
 
 const SECTIONS: NavSection[] = [
   {
     label: "Prospect and enrich",
     icon: Search,
+    color: "#2563EB",
+    darkColor: "#60A5FA",
     items: [
       { href: "/v2/people", label: "People", icon: Users },
       { href: "/v2/companies", label: "Companies", icon: Building2 },
@@ -282,6 +286,8 @@ const SECTIONS: NavSection[] = [
   {
     label: "Engage",
     icon: Send,
+    color: "#7C3AED",
+    darkColor: "#C4B5FD",
     items: [
       { href: "/v2/sequences", label: "Sequences", icon: Activity },
       { href: "/v2/emails", label: "Emails", icon: Mail },
@@ -292,6 +298,8 @@ const SECTIONS: NavSection[] = [
   {
     label: "Win deals",
     icon: DollarSign,
+    color: "#059669",
+    darkColor: "#6EE7B7",
     items: [
       { href: "/v2/meetings", label: "Meetings", icon: CalendarDays },
       { href: "/v2/conversations", label: "Conversations", icon: MessageSquare },
@@ -301,6 +309,8 @@ const SECTIONS: NavSection[] = [
   {
     label: "Tools and automation",
     icon: Wrench,
+    color: "#D97706",
+    darkColor: "#FBBF24",
     items: [
       { href: "/v2/workflows", label: "Workflows", icon: Workflow },
       { href: "/v2/analytics", label: "Analytics", icon: BarChart3 },
@@ -309,6 +319,8 @@ const SECTIONS: NavSection[] = [
   {
     label: "Inbound",
     icon: ArrowRightCircle,
+    color: "#0D9488",
+    darkColor: "#5EEAD4",
     items: [
       { href: "/v2/website-visitors", label: "Website visitors", icon: Globe, badge: "New" },
       { href: "/v2/forms", label: "Forms", icon: FileText },
@@ -317,6 +329,8 @@ const SECTIONS: NavSection[] = [
   {
     label: "Saved records",
     icon: Users,
+    color: "#E11D48",
+    darkColor: "#FDA4AF",
     items: [
       { href: "/v2/saved-people", label: "People", icon: Users },
       { href: "/v2/saved-companies", label: "Companies", icon: Building2 },
@@ -329,6 +343,8 @@ const SECTIONS: NavSection[] = [
 const MORE_SECTION: NavSection = {
   label: "More",
   icon: MoreHorizontal,
+  color: "#475569",
+  darkColor: "#94A3B8",
   items: [
     { href: "/", label: "Dashboard", icon: LayoutDashboard },
     { href: "/inbox", label: "Inbox", icon: Inbox },
@@ -372,9 +388,51 @@ const MORE_SECTION: NavSection = {
 };
 
 const BOTTOM_LINKS: NavLink[] = [
-  { href: "/v2/deliverability", label: "Deliverability suite", icon: Network },
-  { href: "/settings", label: "Admin Settings", icon: Settings, trailingChevron: true },
+  { href: "/v2/deliverability", label: "Deliverability suite", icon: Network, color: "#0891B2", darkColor: "#22D3EE" },
+  { href: "/settings", label: "Admin Settings", icon: Settings, trailingChevron: true, color: "#475569", darkColor: "#94A3B8" },
 ];
+
+// ── Route → accent colour maps ───────────────────────────────────────────────
+// Built once from the nav models so the page accent (PageHeader rule, StatCard,
+// SubNav — all read AccentContext) tracks whichever section the route lives in.
+// This is what spreads the per-section colour across the whole app, including
+// the legacy pages reached via "More".
+const SECTION_COLOR_BY_HREF: Record<string, { c: string; d: string }> = (() => {
+  const m: Record<string, { c: string; d: string }> = {};
+  for (const s of SECTIONS) for (const it of s.items) m[it.href] = { c: s.color, d: s.darkColor };
+  for (const l of [...TOP_LINKS, ...BOTTOM_LINKS]) if (l.color) m[l.href] = { c: l.color, d: l.darkColor ?? l.color };
+  return m;
+})();
+
+const LEGACY_COLOR_BY_HREF: Record<string, { c: string; d: string }> = (() => {
+  const m: Record<string, { c: string; d: string }> = {};
+  for (const g of _LEGACY_NAV) {
+    for (const it of g.items) {
+      if ("href" in it) m[it.href] = { c: g.activeColor, d: g.darkColor };
+      else if (it.kind === "miniPipeline") for (const st of it.stages) m[st.href] = { c: g.activeColor, d: g.darkColor };
+    }
+  }
+  return m;
+})();
+
+/** Resolve the accent colour for a route by longest-prefix match against the
+ *  section maps (v2 sections first, then legacy), falling back to brand blue. */
+function resolveAccent(loc: string, isDark: boolean): string {
+  const pick = (map: Record<string, { c: string; d: string }>) => {
+    let best: { c: string; d: string } | null = null;
+    let bestLen = -1;
+    for (const href in map) {
+      if ((loc === href || (href !== "/" && loc.startsWith(href + "/"))) && href.length > bestLen) {
+        best = map[href];
+        bestLen = href.length;
+      }
+    }
+    return best;
+  };
+  const hit = pick(SECTION_COLOR_BY_HREF) ?? pick(LEGACY_COLOR_BY_HREF);
+  if (hit) return isDark ? hit.d : hit.c;
+  return isDark ? "#93C5FD" : "#1D4ED8";
+}
 
 /** Key used by Dashboards.tsx to persist the user's chosen home dashboard. */
 export const HOME_DASHBOARD_KEY = "velocity_home_dashboard";
@@ -437,14 +495,16 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
   const topLinks = TOP_LINKS.map((l) => (l.href === "/" ? { ...l, href: homeDashboardHref } : l));
 
   const isDark = theme === "dark";
-  // The redesigned rail isn't colour-per-section; expose a single brand accent
-  // so PageHeader / StatCard / SubNav (which read AccentContext) stay consistent.
-  const accentColor = isDark ? "#5EEAD4" : "#14B89A";
+  // Accent tracks the active section's colour and is published on AccentContext,
+  // so PageHeader / StatCard / SubNav across the whole app pick up the hue of
+  // whatever section the current route belongs to.
+  const accentColor = resolveAccent(location, isDark);
 
-  // ── Sidebar renderers (light, sectioned rail) ──────────────────────────
-  const renderNavLink = (l: NavLink, opts?: { indented?: boolean }) => {
+  // ── Sidebar renderers (light, sectioned, colour-per-section rail) ───────
+  const renderNavLink = (l: NavLink, opts?: { indented?: boolean; color?: string; darkColor?: string }) => {
     const active = location === l.href || (l.href !== "/" && location.startsWith(l.href + "/"));
     const Icon = l.icon;
+    const color = (isDark ? (l.darkColor ?? opts?.darkColor) : (l.color ?? opts?.color)) ?? accentColor;
     return (
       <Link
         key={`${l.href}-${l.label}`}
@@ -452,12 +512,11 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
         className={cn(
           "flex items-center gap-2.5 rounded-md px-3 py-2 text-[13px] transition-colors",
           opts?.indented && "ml-3",
-          active
-            ? "bg-foreground text-background font-medium"
-            : "text-muted-foreground hover:text-foreground hover:bg-muted",
+          active ? "font-medium shadow-sm" : "text-muted-foreground hover:text-foreground hover:bg-muted",
         )}
+        style={active ? { backgroundColor: `${color}1f`, color } : undefined}
       >
-        <Icon className="size-4 shrink-0" />
+        <Icon className="size-4 shrink-0" style={{ color, opacity: active ? 1 : 0.85 }} />
         <span className="flex-1 truncate">{l.label}</span>
         {l.badge && (
           <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">
@@ -472,23 +531,25 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
   const renderSection = (s: NavSection) => {
     const collapsed = collapsedGroups.has(s.label);
     const SIcon = s.icon;
+    const color = isDark ? s.darkColor : s.color;
     return (
       <div key={s.label} className="pt-1">
         <button
           type="button"
           onClick={() => toggleGroup(s.label)}
           aria-expanded={!collapsed}
-          className="w-full flex items-center gap-2.5 rounded-md px-3 py-2 text-[13px] font-medium text-foreground hover:bg-muted transition-colors"
+          className="w-full flex items-center gap-2.5 rounded-md px-3 py-2 text-[13px] font-semibold text-foreground hover:bg-muted transition-colors"
         >
-          <SIcon className="size-4 shrink-0 text-muted-foreground" />
+          <SIcon className="size-4 shrink-0" style={{ color }} />
           <span className="flex-1 text-left truncate">{s.label}</span>
           <ChevronDown
-            className={cn("size-4 shrink-0 text-muted-foreground transition-transform", collapsed && "-rotate-90")}
+            className={cn("size-4 shrink-0 transition-transform", collapsed && "-rotate-90")}
+            style={{ color }}
           />
         </button>
         {!collapsed && (
-          <div className="mt-0.5 space-y-0.5">
-            {s.items.map((it) => renderNavLink(it, { indented: true }))}
+          <div className="mt-0.5 ml-3 space-y-0.5 border-l pl-1.5" style={{ borderColor: `${color}33` }}>
+            {s.items.map((it) => renderNavLink(it, { color: s.color, darkColor: s.darkColor }))}
           </div>
         )}
       </div>
@@ -761,11 +822,12 @@ export function StatCard({ label, value, hint, tone }: { label: string; value: R
   const titleStr = typeof value === "string" || typeof value === "number" ? String(value) : undefined;
   return (
     <div
-      className={cn("rounded-lg border bg-card p-4 min-w-0 overflow-hidden", toneCls)}
+      className={cn("rounded-lg border bg-card p-4 min-w-0 overflow-hidden shadow-sm", toneCls)}
       style={!tone ? {
         borderLeftWidth: "3px",
         borderLeftStyle: "solid",
         borderLeftColor: accent,
+        backgroundImage: `linear-gradient(180deg, ${accent}0d 0%, transparent 60%)`,
       } : undefined}
     >
       <div className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium truncate">{label}</div>
