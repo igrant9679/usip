@@ -504,7 +504,14 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
   const renderNavLink = (l: NavLink, opts?: { indented?: boolean; color?: string; darkColor?: string }) => {
     const active = location === l.href || (l.href !== "/" && location.startsWith(l.href + "/"));
     const Icon = l.icon;
-    const color = (isDark ? (l.darkColor ?? opts?.darkColor) : (l.color ?? opts?.color)) ?? accentColor;
+    // Colour precedence: explicit link colour → the page's legacy section hue
+    // (this is what gives every "More" item its own functional-area colour)
+    // → the enclosing section colour → the route accent.
+    const legacy = LEGACY_COLOR_BY_HREF[l.href];
+    const color =
+      (isDark
+        ? (l.darkColor ?? legacy?.d ?? opts?.darkColor)
+        : (l.color ?? legacy?.c ?? opts?.color)) ?? accentColor;
     return (
       <Link
         key={`${l.href}-${l.label}`}
