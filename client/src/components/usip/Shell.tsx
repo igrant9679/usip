@@ -266,15 +266,15 @@ type NavSection = { label: string; icon: any; items: NavLink[]; color: string; d
 // Top quick-links carry their own accent (brand blue / assistant violet) so the
 // rail reads with colour from the very top.
 const TOP_LINKS: NavLink[] = [
-  { href: "/", label: "Home", icon: Home, color: "#1D4ED8", darkColor: "#93C5FD" },
-  { href: "/v2/ai-assistant", label: "AI Assistant", icon: Sparkles, color: "#7C3AED", darkColor: "#C4B5FD" },
+  { href: "/", label: "Home", icon: Home, color: "#3B82F6", darkColor: "#93C5FD" },
+  { href: "/v2/ai-assistant", label: "AI Assistant", icon: Sparkles, color: "#9333EA", darkColor: "#D8B4FE" },
 ];
 
 const SECTIONS: NavSection[] = [
   {
     label: "Prospect and enrich",
     icon: Search,
-    color: "#2563EB",
+    color: "#3B82F6",
     darkColor: "#60A5FA",
     items: [
       { href: "/v2/people", label: "People", icon: Users },
@@ -286,8 +286,8 @@ const SECTIONS: NavSection[] = [
   {
     label: "Engage",
     icon: Send,
-    color: "#7C3AED",
-    darkColor: "#C4B5FD",
+    color: "#9333EA",
+    darkColor: "#D8B4FE",
     items: [
       { href: "/v2/sequences", label: "Sequences", icon: Activity },
       { href: "/v2/emails", label: "Emails", icon: Mail },
@@ -298,8 +298,8 @@ const SECTIONS: NavSection[] = [
   {
     label: "Win deals",
     icon: DollarSign,
-    color: "#059669",
-    darkColor: "#6EE7B7",
+    color: "#10B981",
+    darkColor: "#34D399",
     items: [
       { href: "/v2/meetings", label: "Meetings", icon: CalendarDays },
       { href: "/v2/conversations", label: "Conversations", icon: MessageSquare },
@@ -309,7 +309,7 @@ const SECTIONS: NavSection[] = [
   {
     label: "Tools and automation",
     icon: Wrench,
-    color: "#D97706",
+    color: "#F59E0B",
     darkColor: "#FBBF24",
     items: [
       { href: "/v2/workflows", label: "Workflows", icon: Workflow },
@@ -319,8 +319,8 @@ const SECTIONS: NavSection[] = [
   {
     label: "Inbound",
     icon: ArrowRightCircle,
-    color: "#0D9488",
-    darkColor: "#5EEAD4",
+    color: "#14B8A6",
+    darkColor: "#2DD4BF",
     items: [
       { href: "/v2/website-visitors", label: "Website visitors", icon: Globe, badge: "New" },
       { href: "/v2/forms", label: "Forms", icon: FileText },
@@ -329,8 +329,8 @@ const SECTIONS: NavSection[] = [
   {
     label: "Saved records",
     icon: Users,
-    color: "#E11D48",
-    darkColor: "#FDA4AF",
+    color: "#F43F5E",
+    darkColor: "#FB7185",
     items: [
       { href: "/v2/saved-people", label: "People", icon: Users },
       { href: "/v2/saved-companies", label: "Companies", icon: Building2 },
@@ -343,7 +343,7 @@ const SECTIONS: NavSection[] = [
 const MORE_SECTION: NavSection = {
   label: "More",
   icon: MoreHorizontal,
-  color: "#475569",
+  color: "#64748B",
   darkColor: "#94A3B8",
   items: [
     { href: "/", label: "Dashboard", icon: LayoutDashboard },
@@ -388,8 +388,8 @@ const MORE_SECTION: NavSection = {
 };
 
 const BOTTOM_LINKS: NavLink[] = [
-  { href: "/v2/deliverability", label: "Deliverability suite", icon: Network, color: "#0891B2", darkColor: "#22D3EE" },
-  { href: "/settings", label: "Admin Settings", icon: Settings, trailingChevron: true, color: "#475569", darkColor: "#94A3B8" },
+  { href: "/v2/deliverability", label: "Deliverability suite", icon: Network, color: "#06B6D4", darkColor: "#22D3EE" },
+  { href: "/settings", label: "Admin Settings", icon: Settings, trailingChevron: true, color: "#64748B", darkColor: "#94A3B8" },
 ];
 
 // ── Route → accent colour maps ───────────────────────────────────────────────
@@ -512,11 +512,15 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
         className={cn(
           "flex items-center gap-2.5 rounded-md px-3 py-2 text-[13px] transition-colors",
           opts?.indented && "ml-3",
-          active ? "font-medium shadow-sm" : "text-muted-foreground hover:text-foreground hover:bg-muted",
+          active ? "font-semibold" : "text-muted-foreground hover:text-foreground hover:bg-muted",
         )}
-        style={active ? { backgroundColor: `${color}1f`, color } : undefined}
+        style={active ? {
+          background: `linear-gradient(135deg, ${color}3d, ${color}1a)`,
+          color,
+          boxShadow: `0 2px 8px -2px ${color}80, inset 0 0 0 1px ${color}59`,
+        } : undefined}
       >
-        <Icon className="size-4 shrink-0" style={{ color, opacity: active ? 1 : 0.85 }} />
+        <Icon className="size-4 shrink-0" style={{ color, opacity: active ? 1 : 0.95 }} />
         <span className="flex-1 truncate">{l.label}</span>
         {l.badge && (
           <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">
@@ -548,7 +552,7 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
           />
         </button>
         {!collapsed && (
-          <div className="mt-0.5 ml-3 space-y-0.5 border-l pl-1.5" style={{ borderColor: `${color}33` }}>
+          <div className="mt-0.5 ml-3 space-y-0.5 border-l-2 pl-1.5" style={{ borderColor: `${color}66` }}>
             {s.items.map((it) => renderNavLink(it, { color: s.color, darkColor: s.darkColor }))}
           </div>
         )}
@@ -822,12 +826,13 @@ export function StatCard({ label, value, hint, tone }: { label: string; value: R
   const titleStr = typeof value === "string" || typeof value === "number" ? String(value) : undefined;
   return (
     <div
-      className={cn("rounded-lg border bg-card p-4 min-w-0 overflow-hidden shadow-sm", toneCls)}
+      className={cn("rounded-lg border bg-card p-4 min-w-0 overflow-hidden", toneCls)}
       style={!tone ? {
-        borderLeftWidth: "3px",
+        borderLeftWidth: "4px",
         borderLeftStyle: "solid",
         borderLeftColor: accent,
-        backgroundImage: `linear-gradient(180deg, ${accent}0d 0%, transparent 60%)`,
+        backgroundImage: `linear-gradient(135deg, ${accent}26 0%, ${accent}0a 45%, transparent 75%)`,
+        boxShadow: `0 4px 14px -6px ${accent}66`,
       } : undefined}
     >
       <div className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium truncate">{label}</div>

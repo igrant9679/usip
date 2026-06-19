@@ -580,8 +580,12 @@ export default function People() {
                   { l: "Net new", v: fmtNum(netNewOnPage) },
                   { l: "Saved", v: fmtNum(savedOnPage) },
                 ].map((s) => (
-                  <div key={s.l} className="bg-card px-2 py-1.5 text-center leading-tight">
-                    <div className="text-[13px] font-semibold tabular-nums" style={{ color: accent }}>{s.v}</div>
+                  <div
+                    key={s.l}
+                    className="bg-card px-2 py-1.5 text-center leading-tight"
+                    style={{ backgroundImage: `linear-gradient(180deg, ${accent}1f, transparent)` }}
+                  >
+                    <div className="text-[13px] font-bold tabular-nums" style={{ color: accent }}>{s.v}</div>
                     <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{s.l}</div>
                   </div>
                 ))}
