@@ -24,6 +24,10 @@ import Leads from "@/pages/usip/Leads";
 import Prospects from "@/pages/usip/Prospects";
 import People from "@/pages/usip/People";
 import Companies from "@/pages/usip/Companies";
+import AIAssistant from "@/pages/usip/AIAssistant";
+import Deliverability from "@/pages/usip/Deliverability";
+import Calls from "@/pages/usip/Calls";
+import WebsiteVisitors from "@/pages/usip/WebsiteVisitors";
 import ProspectDetail from "@/pages/usip/ProspectDetail";
 import AccountDetail from "@/pages/usip/AccountDetail";
 import ContactDetail from "@/pages/usip/ContactDetail";
@@ -365,28 +369,30 @@ function Router() {
           Emails→Mailbox, Tasks→Tasks, Meetings→Calendar,
           Conversations→Unified Inbox, Deals→Pipeline, Workflows→Workflows,
           Analytics→Dashboards, Saved People→Contacts, Saved Companies→Accounts.
-        No existing counterpart yet (kept as placeholders): AI Assistant, Calls,
-        Website visitors, Forms, Deliverability suite.
+        Bespoke standalone pages (no single existing page to reuse): AI Assistant
+        (helpCenter chat), Deliverability suite (sending accounts + suppressions
+        + pools), Calls (call-type tasks), Website visitors (tracking scaffold).
+        Still a placeholder (no backend yet): Forms.
       */}
-      <Route path="/v2/ai-assistant"><AuthGate><Placeholder title="AI Assistant" /></AuthGate></Route>
+      <Route path="/v2/ai-assistant"><AuthGate><AIAssistant /></AuthGate></Route>
       <Route path="/v2/people"><AuthGate><People /></AuthGate></Route>
       <Route path="/v2/companies"><AuthGate><Companies /></AuthGate></Route>
       <Route path="/v2/lists"><AuthGate><Segments /></AuthGate></Route>
       <Route path="/v2/data-enrichment"><AuthGate><DataHealth /></AuthGate></Route>
       <Route path="/v2/sequences"><AuthGate><Sequences /></AuthGate></Route>
       <Route path="/v2/emails"><AuthGate><Mailbox /></AuthGate></Route>
-      <Route path="/v2/calls"><AuthGate><Placeholder title="Calls" /></AuthGate></Route>
+      <Route path="/v2/calls"><AuthGate><Calls /></AuthGate></Route>
       <Route path="/v2/tasks"><AuthGate><Tasks /></AuthGate></Route>
       <Route path="/v2/meetings"><AuthGate><CalendarPage /></AuthGate></Route>
       <Route path="/v2/conversations"><AuthGate><UnifiedInbox /></AuthGate></Route>
       <Route path="/v2/deals"><AuthGate><Pipeline /></AuthGate></Route>
       <Route path="/v2/workflows"><AuthGate><Workflows /></AuthGate></Route>
       <Route path="/v2/analytics"><AuthGate><Dashboards /></AuthGate></Route>
-      <Route path="/v2/website-visitors"><AuthGate><Placeholder title="Website visitors" /></AuthGate></Route>
+      <Route path="/v2/website-visitors"><AuthGate><WebsiteVisitors /></AuthGate></Route>
       <Route path="/v2/forms"><AuthGate><Placeholder title="Forms" /></AuthGate></Route>
       <Route path="/v2/saved-people"><AuthGate><Contacts /></AuthGate></Route>
       <Route path="/v2/saved-companies"><AuthGate><Accounts /></AuthGate></Route>
-      <Route path="/v2/deliverability"><AuthGate><Placeholder title="Deliverability suite" /></AuthGate></Route>
+      <Route path="/v2/deliverability"><AuthGate><Deliverability /></AuthGate></Route>
       <Route path="/help"><AuthGate><HelpCenter /></AuthGate></Route>
       <Route path="/tour-builder"><AuthGate><TourBuilder /></AuthGate></Route>
       <Route path="/mindmaps"><AuthGate><Mindmaps /></AuthGate></Route>
