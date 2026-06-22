@@ -23,6 +23,7 @@ import CalendarPage from "@/pages/usip/Calendar";
 import Leads from "@/pages/usip/Leads";
 import Prospects from "@/pages/usip/Prospects";
 import People from "@/pages/usip/People";
+import Companies from "@/pages/usip/Companies";
 import ProspectDetail from "@/pages/usip/ProspectDetail";
 import AccountDetail from "@/pages/usip/AccountDetail";
 import ContactDetail from "@/pages/usip/ContactDetail";
@@ -358,7 +359,7 @@ function Router() {
       {/* Redesigned sidebar — placeholder pages for the new IA (built out page-by-page) */}
       <Route path="/v2/ai-assistant"><AuthGate><Placeholder title="AI Assistant" /></AuthGate></Route>
       <Route path="/v2/people"><AuthGate><People /></AuthGate></Route>
-      <Route path="/v2/companies"><AuthGate><Placeholder title="Companies" /></AuthGate></Route>
+      <Route path="/v2/companies"><AuthGate><Companies /></AuthGate></Route>
       <Route path="/v2/lists"><AuthGate><Placeholder title="Lists" /></AuthGate></Route>
       <Route path="/v2/data-enrichment"><AuthGate><Placeholder title="Data enrichment" /></AuthGate></Route>
       <Route path="/v2/sequences"><AuthGate><Placeholder title="Sequences" /></AuthGate></Route>
