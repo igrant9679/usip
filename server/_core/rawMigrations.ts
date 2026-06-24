@@ -1557,6 +1557,18 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0092: Prospect education (People → Education filter) ────────────
+  // Free-text school / university on a prospect so the People page's
+  // Education filter is a real, queryable field instead of a locked
+  // placeholder. NULL → no match (same as before); populated by
+  // enrichment going forward. errno 1060 (duplicate column) tolerated.
+  {
+    name: "0092_prospect_education.sql",
+    statements: [
+      `ALTER TABLE \`prospects\` ADD COLUMN \`education\` varchar(200) NULL`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

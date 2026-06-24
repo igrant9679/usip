@@ -3161,6 +3161,9 @@ export const prospects = mysqlTable(
     company: varchar("company", { length: 200 }),
     companyDomain: varchar("company_domain", { length: 200 }),
     industry: varchar("industry", { length: 80 }),
+    // Free-text school / university, powering the People → Education filter.
+    // Populated by enrichment; NULL until then. Migration 0092.
+    education: varchar("education", { length: 200 }),
     emailStatus: varchar("email_status", { length: 20 }), // verified|unverified|unavailable
     emailRevealedAt: timestamp("email_revealed_at"),
     phoneRevealedAt: timestamp("phone_revealed_at"),

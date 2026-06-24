@@ -222,6 +222,7 @@ type Prospect = {
   company?: string | null;
   companyDomain?: string | null;
   industry?: string | null;
+  education?: string | null;
   confidenceScore?: number | null;
   confidenceTier?: string | null;
   verificationStatus?: string | null;
@@ -251,6 +252,7 @@ export default function People() {
   const [companyQ, setCompanyQ] = useState("");
   const [locationQ, setLocationQ] = useState("");
   const [industryQ, setIndustryQ] = useState("");
+  const [educationQ, setEducationQ] = useState("");
   const [hasPhone, setHasPhone] = useState(false);
   const [hasLinkedin, setHasLinkedin] = useState(false);
   const [tiers, setTiers] = useState<Set<string>>(new Set());
@@ -314,6 +316,7 @@ export default function People() {
         if (!loc.includes(locationQ.toLowerCase())) return false;
       }
       if (industryQ && !(p.industry ?? "").toLowerCase().includes(industryQ.toLowerCase())) return false;
+      if (educationQ && !(p.education ?? "").toLowerCase().includes(educationQ.toLowerCase())) return false;
       if (hasPhone && !p.phone) return false;
       if (hasLinkedin && !p.linkedinUrl) return false;
       if (tiers.size && !tiers.has((p.confidenceTier ?? "").toLowerCase())) return false;
@@ -330,7 +333,7 @@ export default function People() {
       company_asc: (a, b) => (a.company ?? "").localeCompare(b.company ?? ""),
     };
     return [...out].sort(cmp[sort] ?? cmp.fit_desc);
-  }, [pageRows, search, titleQ, companyQ, locationQ, industryQ, hasPhone, hasLinkedin, tiers, seniorities, sort]);
+  }, [pageRows, search, titleQ, companyQ, locationQ, industryQ, educationQ, hasPhone, hasLinkedin, tiers, seniorities, sort]);
 
   const selected = useMemo(() => rows.find((r) => r.id === selectedId) ?? pageRows.find((r) => r.id === selectedId) ?? null, [rows, pageRows, selectedId]);
 
@@ -354,6 +357,7 @@ export default function People() {
     (companyQ ? 1 : 0) +
     (locationQ ? 1 : 0) +
     (industryQ ? 1 : 0) +
+    (educationQ ? 1 : 0) +
     (hasPhone ? 1 : 0) +
     (hasLinkedin ? 1 : 0) +
     tiers.size +
@@ -361,7 +365,7 @@ export default function People() {
 
   const clearAll = () => {
     setEmailStatus(""); setHasEmail(false); setVerification(""); setPromoted("all");
-    setSearch(""); setTitleQ(""); setCompanyQ(""); setLocationQ(""); setIndustryQ("");
+    setSearch(""); setTitleQ(""); setCompanyQ(""); setLocationQ(""); setIndustryQ(""); setEducationQ("");
     setHasPhone(false); setHasLinkedin(false); setTiers(new Set()); setSeniorities(new Set());
     setPage(1);
   };
@@ -384,7 +388,7 @@ export default function People() {
   };
 
   /* ── pinned groups render first ── */
-  const groupOrder = ["quick", "lists", "emailStatus", "verification", "saved", "jobTitles", "seniority", "company", "location", "industry", "fit", "contactInfo"];
+  const groupOrder = ["quick", "lists", "emailStatus", "verification", "saved", "jobTitles", "seniority", "company", "location", "industry", "education", "fit", "contactInfo"];
   const orderedGroups = [...groupOrder].sort((a, b) => Number(pinned.has(b)) - Number(pinned.has(a)));
 
   /* ── render a single filter group by id ── */
@@ -508,6 +512,13 @@ export default function People() {
             <Input value={industryQ} onChange={(e) => setIndustryQ(e.target.value)} placeholder="e.g. SaaS, Fintech…" className="h-7 text-[13px]" />
           </FilterGroup>
         );
+      case "education":
+        return (
+          <FilterGroup key={id} {...common} label="Education" icon={GraduationCap} count={educationQ ? 1 : 0}>
+            <Input value={educationQ} onChange={(e) => setEducationQ(e.target.value)} placeholder="School or university…" className="h-7 text-[13px]" />
+            <p className="text-[11px] text-muted-foreground">Matches the prospect's school/university. Populated as prospects are enriched.</p>
+          </FilterGroup>
+        );
       case "fit":
         return (
           <FilterGroup key={id} {...common} label="ICP fit score" icon={Target} count={tiers.size}>
@@ -541,7 +552,6 @@ export default function People() {
     { id: "revenue", label: "Revenue", icon: BarChart3 },
     { id: "funding", label: "Funding", icon: BarChart3 },
     { id: "intent", label: "Buying intent", icon: Target },
-    { id: "education", label: "Education", icon: GraduationCap },
   ];
 
   return (
@@ -892,6 +902,7 @@ function DetailPanel({ p, onClose, onOpenFull }: { p: Prospect; onClose: () => v
           <Field icon={Building2} label="Company" value={p.company} />
           <Field icon={Globe} label="Domain" value={p.companyDomain} />
           <Field icon={Briefcase} label="Industry" value={p.industry} />
+          <Field icon={GraduationCap} label="Education" value={p.education} />
           <Field icon={Layers} label="Seniority" value={p.seniority} />
         </div>
       </div>
