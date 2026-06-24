@@ -31,6 +31,7 @@ import WebsiteVisitors from "@/pages/usip/WebsiteVisitors";
 import Lists from "@/pages/usip/Lists";
 import ListDetail from "@/pages/usip/ListDetail";
 import DataEnrichment from "@/pages/usip/DataEnrichment";
+import SequencesV2 from "@/pages/usip/SequencesV2";
 import ProspectDetail from "@/pages/usip/ProspectDetail";
 import AccountDetail from "@/pages/usip/AccountDetail";
 import ContactDetail from "@/pages/usip/ContactDetail";
@@ -380,7 +381,7 @@ function Router() {
       <Route path="/v2/lists/:id"><AuthGate><ListDetail /></AuthGate></Route>
       <Route path="/v2/lists"><AuthGate><Lists /></AuthGate></Route>
       <Route path="/v2/data-enrichment"><AuthGate><DataEnrichment /></AuthGate></Route>
-      <Route path="/v2/sequences"><AuthGate><Placeholder title="Sequences" /></AuthGate></Route>
+      <Route path="/v2/sequences"><AuthGate><SequencesV2 /></AuthGate></Route>
       <Route path="/v2/emails"><AuthGate><Placeholder title="Emails" /></AuthGate></Route>
       <Route path="/v2/calls"><AuthGate><Calls /></AuthGate></Route>
       <Route path="/v2/tasks"><AuthGate><Placeholder title="Tasks" /></AuthGate></Route>
