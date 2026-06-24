@@ -362,36 +362,33 @@ function Router() {
 
       {/*
         Redesigned sidebar — new IA routes.
-        People & Companies are bespoke Apollo-style pages. The rest reuse the
-        existing, fully-working pages (their real data + behaviour) under the new
-        nav so each section is functional rather than a placeholder:
-          Lists→Segments, Data enrichment→Data Health, Sequences→Sequences,
-          Emails→Mailbox, Tasks→Tasks, Meetings→Calendar,
-          Conversations→Unified Inbox, Deals→Pipeline, Workflows→Workflows,
-          Analytics→Dashboards, Saved People→Contacts, Saved Companies→Accounts.
-        Bespoke standalone pages (no single existing page to reuse): AI Assistant
-        (helpCenter chat), Deliverability suite (sending accounts + suppressions
-        + pools), Calls (call-type tasks), Website visitors (tracking scaffold).
-        Still a placeholder (no backend yet): Forms.
+        Bespoke new pages we're actively building (kept):
+          People, Companies, AI Assistant, Deliverability suite, Calls,
+          Website visitors.
+        The remaining items are intentionally NOT linked to the existing pages
+        yet — they render placeholders so the new pages can be built fresh. The
+        existing, fully-working pages stay reachable via the "More" section
+        (Segments, Data Health, Sequences, Mailbox, Tasks, Calendar, Unified
+        Inbox, Pipeline, Workflows, Dashboards, Contacts, Accounts).
       */}
       <Route path="/v2/ai-assistant"><AuthGate><AIAssistant /></AuthGate></Route>
       <Route path="/v2/people"><AuthGate><People /></AuthGate></Route>
       <Route path="/v2/companies"><AuthGate><Companies /></AuthGate></Route>
-      <Route path="/v2/lists"><AuthGate><Segments /></AuthGate></Route>
-      <Route path="/v2/data-enrichment"><AuthGate><DataHealth /></AuthGate></Route>
-      <Route path="/v2/sequences"><AuthGate><Sequences /></AuthGate></Route>
-      <Route path="/v2/emails"><AuthGate><Mailbox /></AuthGate></Route>
+      <Route path="/v2/lists"><AuthGate><Placeholder title="Lists" /></AuthGate></Route>
+      <Route path="/v2/data-enrichment"><AuthGate><Placeholder title="Data enrichment" /></AuthGate></Route>
+      <Route path="/v2/sequences"><AuthGate><Placeholder title="Sequences" /></AuthGate></Route>
+      <Route path="/v2/emails"><AuthGate><Placeholder title="Emails" /></AuthGate></Route>
       <Route path="/v2/calls"><AuthGate><Calls /></AuthGate></Route>
-      <Route path="/v2/tasks"><AuthGate><Tasks /></AuthGate></Route>
-      <Route path="/v2/meetings"><AuthGate><CalendarPage /></AuthGate></Route>
-      <Route path="/v2/conversations"><AuthGate><UnifiedInbox /></AuthGate></Route>
-      <Route path="/v2/deals"><AuthGate><Pipeline /></AuthGate></Route>
-      <Route path="/v2/workflows"><AuthGate><Workflows /></AuthGate></Route>
-      <Route path="/v2/analytics"><AuthGate><Dashboards /></AuthGate></Route>
+      <Route path="/v2/tasks"><AuthGate><Placeholder title="Tasks" /></AuthGate></Route>
+      <Route path="/v2/meetings"><AuthGate><Placeholder title="Meetings" /></AuthGate></Route>
+      <Route path="/v2/conversations"><AuthGate><Placeholder title="Conversations" /></AuthGate></Route>
+      <Route path="/v2/deals"><AuthGate><Placeholder title="Deals" /></AuthGate></Route>
+      <Route path="/v2/workflows"><AuthGate><Placeholder title="Workflows" /></AuthGate></Route>
+      <Route path="/v2/analytics"><AuthGate><Placeholder title="Analytics" /></AuthGate></Route>
       <Route path="/v2/website-visitors"><AuthGate><WebsiteVisitors /></AuthGate></Route>
       <Route path="/v2/forms"><AuthGate><Placeholder title="Forms" /></AuthGate></Route>
-      <Route path="/v2/saved-people"><AuthGate><Contacts /></AuthGate></Route>
-      <Route path="/v2/saved-companies"><AuthGate><Accounts /></AuthGate></Route>
+      <Route path="/v2/saved-people"><AuthGate><Placeholder title="Saved · People" /></AuthGate></Route>
+      <Route path="/v2/saved-companies"><AuthGate><Placeholder title="Saved · Companies" /></AuthGate></Route>
       <Route path="/v2/deliverability"><AuthGate><Deliverability /></AuthGate></Route>
       <Route path="/help"><AuthGate><HelpCenter /></AuthGate></Route>
       <Route path="/tour-builder"><AuthGate><TourBuilder /></AuthGate></Route>
