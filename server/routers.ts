@@ -24,6 +24,7 @@ import { emailVerificationRouter } from "./routers/emailVerification";
 import { linkedinRouter } from "./routers/linkedin";
 import { dataHealthRouter } from "./routers/dataHealth";
 import { segmentsRouter } from "./routers/segments";
+import { recordListsRouter } from "./routers/recordLists";
 import { aiPipelineRouter } from "./routers/aiPipeline";
 import { pipelineAlertsRouter } from "./routers/pipelineAlerts";
 import { accountBriefsRouter } from "./routers/accountBriefs";
@@ -110,6 +111,7 @@ export const appRouter = router({
   linkedin: linkedinRouter,
   dataHealth: dataHealthRouter,
   segments: segmentsRouter,
+  recordLists: recordListsRouter,
   aiPipeline: aiPipelineRouter,
   pipelineAlerts: pipelineAlertsRouter,
   accountBriefs: accountBriefsRouter,

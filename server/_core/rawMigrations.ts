@@ -1569,6 +1569,40 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0093: Static record lists (Apollo-style Lists) ─────────────────
+  // record_lists holds named People/Companies lists; record_list_members
+  // holds the explicit membership (recordType + recordId). Distinct from
+  // the rule-based audience_segments. errno 1050 (table exists) tolerated.
+  {
+    name: "0093_record_lists.sql",
+    statements: [
+      `CREATE TABLE IF NOT EXISTS \`record_lists\` (
+        \`id\` int AUTO_INCREMENT NOT NULL,
+        \`workspaceId\` int NOT NULL,
+        \`name\` varchar(200) NOT NULL,
+        \`entity_type\` varchar(16) NOT NULL DEFAULT 'people',
+        \`description\` text NULL,
+        \`created_by_user_id\` int NULL,
+        \`created_at\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        \`updated_at\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (\`id\`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE INDEX \`ix_rl_ws\` ON \`record_lists\` (\`workspaceId\`)`,
+      `CREATE TABLE IF NOT EXISTS \`record_list_members\` (
+        \`id\` int AUTO_INCREMENT NOT NULL,
+        \`workspaceId\` int NOT NULL,
+        \`list_id\` int NOT NULL,
+        \`record_type\` varchar(16) NOT NULL,
+        \`record_id\` int NOT NULL,
+        \`added_by_user_id\` int NULL,
+        \`added_at\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (\`id\`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE INDEX \`ix_rlm_list\` ON \`record_list_members\` (\`list_id\`)`,
+      `CREATE INDEX \`ix_rlm_ws\` ON \`record_list_members\` (\`workspaceId\`)`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

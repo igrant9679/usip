@@ -1910,6 +1910,41 @@ export const audienceSegments = mysqlTable(
 );
 export type AudienceSegment = typeof audienceSegments.$inferSelect;
 
+// ── Record lists (Apollo-style static saved-record lists) ───────────────────
+// Unlike audienceSegments (dynamic, rule-based), these hold an explicit set of
+// members you add/remove by hand. entityType groups them People vs Companies on
+// the /v2/lists index; members live in record_list_members. Migration 0093.
+export const recordLists = mysqlTable(
+  "record_lists",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    name: varchar("name", { length: 200 }).notNull(),
+    entityType: varchar("entity_type", { length: 16 }).default("people").notNull(), // people | companies
+    description: text("description"),
+    createdByUserId: int("created_by_user_id"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({ byWs: index("ix_rl_ws").on(t.workspaceId) }),
+);
+export type RecordList = typeof recordLists.$inferSelect;
+
+export const recordListMembers = mysqlTable(
+  "record_list_members",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    listId: int("list_id").notNull(),
+    recordType: varchar("record_type", { length: 16 }).notNull(), // prospect | contact | account
+    recordId: int("record_id").notNull(),
+    addedByUserId: int("added_by_user_id"),
+    addedAt: timestamp("added_at").defaultNow().notNull(),
+  },
+  (t) => ({ byList: index("ix_rlm_list").on(t.listId), byWs: index("ix_rlm_ws").on(t.workspaceId) }),
+);
+export type RecordListMember = typeof recordListMembers.$inferSelect;
+
 /* ──────────────────────────────────────────────────────────────────────────
    AI Research-to-Email Pipeline Jobs (MKT-014..MKT-017)
    ────────────────────────────────────────────────────────────────────────── */
