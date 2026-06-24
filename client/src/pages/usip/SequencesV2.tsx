@@ -26,8 +26,29 @@ import {
 import {
   Send, Plus, Search, Filter, Save, ArrowUpDown, Settings2, ChevronDown,
   Star, UserCircle2, Tag, Activity, BarChart3, Folder, Share2, X,
-  MoreHorizontal, ExternalLink, Layers, Users,
+  MoreHorizontal, ExternalLink, Layers, Users, Sparkles, BookOpen, PenLine,
 } from "lucide-react";
+
+const AI_STEPS = [
+  { type: "email", subject: "Quick question, {{first_name}}", body: "Hi {{first_name}},\n\nNoticed {{company}} is scaling — wanted to share how teams like yours speed up pipeline. Worth a quick chat?\n\nBest," },
+  { type: "wait", days: 3 },
+  { type: "email", subject: "Re: quick question", body: "Floating this back to the top, {{first_name}} — happy to keep it to 15 minutes." },
+];
+const TEMPLATES: { name: string; desc: string; steps: any[] }[] = [
+  { name: "Cold outbound (3-step)", desc: "Email → wait → follow-up email", steps: AI_STEPS },
+  { name: "Email + LinkedIn", desc: "Email, connect on LinkedIn, then follow up", steps: [
+    { type: "email", subject: "{{company}} + a quick idea", body: "Hi {{first_name}}, …" },
+    { type: "wait", days: 2 },
+    { type: "linkedin_invite", note: "Hi {{first_name}}, enjoyed reading about {{company}}." },
+    { type: "wait", days: 3 },
+    { type: "email", subject: "Following up", body: "Circling back, {{first_name}}…" },
+  ] },
+  { name: "Break-up sequence", desc: "Two emails ending in a polite break-up", steps: [
+    { type: "email", subject: "Worth a chat?", body: "Hi {{first_name}}, …" },
+    { type: "wait", days: 4 },
+    { type: "email", subject: "Closing the loop", body: "Haven't heard back, so I'll close this out — door's open if timing changes." },
+  ] },
+];
 
 type Sequence = {
   id: number;
@@ -89,7 +110,11 @@ export default function SequencesV2() {
   const { data, isLoading } = trpc.sequences.list.useQuery();
   const sequences = (data ?? []) as Sequence[];
   const createMut = trpc.sequences.create.useMutation({
-    onSuccess: () => { utils.sequences.list.invalidate(); setCreateOpen(false); setNewName(""); },
+    onSuccess: (res: any) => {
+      utils.sequences.list.invalidate();
+      setChoiceOpen(false); setTplOpen(false); setCreateOpen(false); setNewName(""); setNewDesc("");
+      if (res?.id) setLocation(`/v2/sequences/${res.id}`);
+    },
   });
 
   const [tab, setTab] = useState<Tab>("All Sequences");
@@ -100,8 +125,13 @@ export default function SequencesV2() {
   const [hideFilters, setHideFilters] = useState(false);
   const [openGroups, setOpenGroups] = useState<Set<string>>(new Set(["Status", "Owned by"]));
   const [checked, setChecked] = useState<Set<number>>(new Set());
+  const [choiceOpen, setChoiceOpen] = useState(false);
+  const [tplOpen, setTplOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [newName, setNewName] = useState("");
+  const [newDesc, setNewDesc] = useState("");
+
+  const createWith = (name: string, steps: any[] = []) => createMut.mutate({ name, steps } as any);
 
   const toggleGroup = (k: string) => setOpenGroups((p) => { const n = new Set(p); n.has(k) ? n.delete(k) : n.add(k); return n; });
   const toggleStatus = (s: string) => setStatusSel((p) => { const n = new Set(p); n.has(s) ? n.delete(s) : n.add(s); return n; });
@@ -138,7 +168,7 @@ export default function SequencesV2() {
             <Send className="size-4" style={{ color: accent }} />
             <h1 className="text-[15px] font-semibold tracking-tight">Sequences</h1>
             <div className="flex-1" />
-            <Button size="sm" className="h-7 gap-1.5" style={{ backgroundColor: accent }} onClick={() => { setNewName(""); setCreateOpen(true); }}><Plus className="size-3.5" /> Create sequence</Button>
+            <Button size="sm" className="h-7 gap-1.5" style={{ backgroundColor: accent }} onClick={() => setChoiceOpen(true)}><Plus className="size-3.5" /> Create sequence</Button>
           </div>
           <div className="flex items-center gap-1 mt-1.5">
             {TABS.map((t) => (
@@ -222,7 +252,7 @@ export default function SequencesV2() {
                     <p className="text-sm text-muted-foreground">{sequences.length === 0 ? "No sequences yet!" : "No sequences match your filters."}</p>
                     <p className="text-sm text-muted-foreground">Create a new sequence to start engaging.</p>
                     <div className="mt-4 flex items-center gap-2">
-                      <Button size="sm" style={{ backgroundColor: accent }} onClick={() => { setNewName(""); setCreateOpen(true); }}>Create a sequence</Button>
+                      <Button size="sm" style={{ backgroundColor: accent }} onClick={() => setChoiceOpen(true)}>Create a sequence</Button>
                       {activeCount > 0 && <Button variant="outline" size="sm" onClick={clearFilters}>Clear filters</Button>}
                     </div>
                   </div>
@@ -241,7 +271,7 @@ export default function SequencesV2() {
                     </thead>
                     <tbody>
                       {rows.map((s) => (
-                        <tr key={s.id} className="border-b border-border/60 hover:bg-muted/40 cursor-pointer" onClick={() => setLocation("/sequences")}>
+                        <tr key={s.id} className="border-b border-border/60 hover:bg-muted/40 cursor-pointer" onClick={() => setLocation(`/v2/sequences/${s.id}`)}>
                           <td className="px-3 py-1.5" onClick={(e) => e.stopPropagation()}>
                             <Checkbox checked={checked.has(s.id)} onCheckedChange={() => setChecked((p) => { const n = new Set(p); n.has(s.id) ? n.delete(s.id) : n.add(s.id); return n; })} className="size-3.5" />
                           </td>
@@ -253,7 +283,7 @@ export default function SequencesV2() {
                           <td className="px-2 py-1.5 text-right" onClick={(e) => e.stopPropagation()}>
                             <DropdownMenu>
                               <DropdownMenuTrigger asChild><Button variant="ghost" size="icon-sm"><MoreHorizontal className="size-4" /></Button></DropdownMenuTrigger>
-                              <DropdownMenuContent align="end"><DropdownMenuItem onClick={() => setLocation("/sequences")}><ExternalLink className="size-4 mr-2" /> Open in builder</DropdownMenuItem></DropdownMenuContent>
+                              <DropdownMenuContent align="end"><DropdownMenuItem onClick={() => setLocation(`/v2/sequences/${s.id}`)}><ExternalLink className="size-4 mr-2" /> Open in builder</DropdownMenuItem></DropdownMenuContent>
                             </DropdownMenu>
                           </td>
                         </tr>
@@ -276,18 +306,70 @@ export default function SequencesV2() {
         )}
       </div>
 
-      {/* create dialog */}
+      {/* 1 — "Create a sequence" choice modal */}
+      <Dialog open={choiceOpen} onOpenChange={setChoiceOpen}>
+        <DialogContent className="sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Create a sequence</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground -mt-1">Sequences are a series of automated or manual touchpoints designed to drive deeper engagement with your contacts.</p>
+          <div className="grid sm:grid-cols-3 gap-3 py-2">
+            {[
+              { icon: Sparkles, t: "AI-assisted", b: "Create a simple outbound sequence with one click.", onClick: () => createWith("AI outbound sequence", AI_STEPS) },
+              { icon: BookOpen, t: "Templates", b: "Start with one of our sequence templates.", onClick: () => { setChoiceOpen(false); setTplOpen(true); } },
+              { icon: PenLine, t: "From scratch", b: "Create a new sequence from scratch.", onClick: () => { setChoiceOpen(false); setNewName(""); setNewDesc(""); setCreateOpen(true); } },
+            ].map((c) => {
+              const Icon = c.icon;
+              return (
+                <button key={c.t} type="button" onClick={c.onClick} disabled={createMut.isPending} className="rounded-xl border p-4 text-center hover:bg-muted/40 hover:shadow-sm transition-all disabled:opacity-50">
+                  <div className="mx-auto size-10 rounded-xl flex items-center justify-center mb-2" style={{ backgroundColor: `${accent}1f`, color: accent }}><Icon className="size-5" /></div>
+                  <div className="text-[13px] font-semibold">{c.t}</div>
+                  <p className="text-[11px] text-muted-foreground mt-1">{c.b}</p>
+                </button>
+              );
+            })}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* 2 — New Sequence (from scratch) dialog */}
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="sm:max-w-lg">
           <DialogHeader><DialogTitle>New sequence</DialogTitle></DialogHeader>
-          <div className="py-1">
-            <div className="text-[13px] font-medium mb-1.5">Sequence name</div>
-            <Input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="e.g. Q3 outbound — VPs of Sales" autoFocus onKeyDown={(e) => { if (e.key === "Enter" && newName.trim()) createMut.mutate({ name: newName.trim(), steps: [] }); }} />
-            <p className="text-[11px] text-muted-foreground mt-1.5">Creates a draft you can add steps to.</p>
+          <div className="space-y-3 py-1">
+            <div>
+              <div className="text-[13px] font-medium mb-1.5">Sequence name</div>
+              <Input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="e.g. Q3 outbound — VPs of Sales" autoFocus onKeyDown={(e) => { if (e.key === "Enter" && newName.trim()) createMut.mutate({ name: newName.trim(), description: newDesc.trim() || undefined, steps: [] }); }} />
+            </div>
+            <div>
+              <div className="text-[13px] font-medium mb-1.5">Description <span className="text-muted-foreground font-normal">(optional)</span></div>
+              <textarea value={newDesc} onChange={(e) => setNewDesc(e.target.value)} rows={3} className="w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-2" style={{ ["--tw-ring-color" as any]: `${accent}55` }} />
+            </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setCreateOpen(false)}>Cancel</Button>
-            <Button disabled={!newName.trim() || createMut.isPending} style={{ backgroundColor: accent }} onClick={() => createMut.mutate({ name: newName.trim(), steps: [] })}>{createMut.isPending ? "Creating…" : "Create"}</Button>
+            <Button variant="outline" onClick={() => { setCreateOpen(false); setChoiceOpen(true); }}>Back</Button>
+            <Button disabled={!newName.trim() || createMut.isPending} style={{ backgroundColor: accent }} onClick={() => createMut.mutate({ name: newName.trim(), description: newDesc.trim() || undefined, steps: [] })}>{createMut.isPending ? "Creating…" : "Create"}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 3 — Templates modal */}
+      <Dialog open={tplOpen} onOpenChange={setTplOpen}>
+        <DialogContent className="sm:max-w-2xl">
+          <DialogHeader><DialogTitle>Sequence templates</DialogTitle></DialogHeader>
+          <p className="text-sm text-muted-foreground -mt-1">Leverage automation in your outreach so you can focus on building relationships.</p>
+          <div className="grid sm:grid-cols-3 gap-3 py-2">
+            {TEMPLATES.map((t) => (
+              <div key={t.name} className="rounded-xl border p-3 flex flex-col">
+                <div className="text-[13px] font-semibold">{t.name}</div>
+                <p className="text-[11px] text-muted-foreground mt-1 flex-1">{t.desc}</p>
+                <div className="text-[10px] text-muted-foreground mt-2">{t.steps.length} steps</div>
+                <Button size="sm" className="mt-2 h-7" style={{ backgroundColor: accent }} disabled={createMut.isPending} onClick={() => createWith(t.name, t.steps)}>Use template</Button>
+              </div>
+            ))}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setTplOpen(false); setNewName(""); setNewDesc(""); setCreateOpen(true); }}>Create from scratch</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

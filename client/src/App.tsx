@@ -32,6 +32,7 @@ import Lists from "@/pages/usip/Lists";
 import ListDetail from "@/pages/usip/ListDetail";
 import DataEnrichment from "@/pages/usip/DataEnrichment";
 import SequencesV2 from "@/pages/usip/SequencesV2";
+import SequenceEditor from "@/pages/usip/SequenceEditor";
 import ProspectDetail from "@/pages/usip/ProspectDetail";
 import AccountDetail from "@/pages/usip/AccountDetail";
 import ContactDetail from "@/pages/usip/ContactDetail";
@@ -381,6 +382,7 @@ function Router() {
       <Route path="/v2/lists/:id"><AuthGate><ListDetail /></AuthGate></Route>
       <Route path="/v2/lists"><AuthGate><Lists /></AuthGate></Route>
       <Route path="/v2/data-enrichment"><AuthGate><DataEnrichment /></AuthGate></Route>
+      <Route path="/v2/sequences/:id"><AuthGate><SequenceEditor /></AuthGate></Route>
       <Route path="/v2/sequences"><AuthGate><SequencesV2 /></AuthGate></Route>
       <Route path="/v2/emails"><AuthGate><Placeholder title="Emails" /></AuthGate></Route>
       <Route path="/v2/calls"><AuthGate><Calls /></AuthGate></Route>
