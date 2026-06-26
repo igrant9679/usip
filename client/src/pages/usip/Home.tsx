@@ -25,6 +25,7 @@ import {
 } from "lucide-react";
 
 const LS_KEY = "velocity_home_layout_v1";
+const LS_HEIGHTS = "velocity_home_heights_v1";
 
 type Ctx = {
   accent: string;
@@ -151,6 +152,13 @@ function loadLayout(): string[] {
   } catch { /* ignore */ }
   return DEFAULT_LAYOUT;
 }
+function loadHeights(): Record<string, number> {
+  try {
+    const raw = localStorage.getItem(LS_HEIGHTS);
+    if (raw) { const obj = JSON.parse(raw); if (obj && typeof obj === "object") return obj; }
+  } catch { /* ignore */ }
+  return {};
+}
 
 export default function Home() {
   const [, setLocation] = useLocation();
@@ -160,6 +168,8 @@ export default function Home() {
   const [editing, setEditing] = useState(false);
   const [layout, setLayout] = useState<string[]>(loadLayout);
   const [draft, setDraft] = useState<string[]>([]);
+  const [heights, setHeights] = useState<Record<string, number>>(loadHeights);
+  const [draftHeights, setDraftHeights] = useState<Record<string, number>>({});
   const [libOpen, setLibOpen] = useState(false);
   const [dragIdx, setDragIdx] = useState<number | null>(null);
 
@@ -173,9 +183,13 @@ export default function Home() {
 
   const current = editing ? draft : layout;
 
-  const startEdit = () => { setDraft([...layout]); setEditing(true); };
-  const cancelEdit = () => { setEditing(false); setLibOpen(false); setDraft([]); };
-  const saveEdit = () => { setLayout(draft); try { localStorage.setItem(LS_KEY, JSON.stringify(draft)); } catch { /* ignore */ } setEditing(false); setLibOpen(false); };
+  const startEdit = () => { setDraft([...layout]); setDraftHeights({ ...heights }); setEditing(true); };
+  const cancelEdit = () => { setEditing(false); setLibOpen(false); setDraft([]); setDraftHeights({}); };
+  const saveEdit = () => {
+    setLayout(draft); setHeights(draftHeights);
+    try { localStorage.setItem(LS_KEY, JSON.stringify(draft)); localStorage.setItem(LS_HEIGHTS, JSON.stringify(draftHeights)); } catch { /* ignore */ }
+    setEditing(false); setLibOpen(false);
+  };
 
   const removeWidget = (key: string) => setDraft((d) => d.filter((k) => k !== key));
   const addWidget = (key: string) => setDraft((d) => (d.includes(key) ? d : [...d, key]));
@@ -207,7 +221,18 @@ export default function Home() {
 
         <div className="flex flex-1 min-h-0">
           {/* canvas */}
-          <div className="flex-1 min-w-0 overflow-auto p-4 md:p-6">
+          <div className="flex-1 min-w-0 relative">
+            {editing && (
+              <button
+                onClick={() => setLibOpen((v) => !v)}
+                title="Add widget"
+                aria-label="Add widget"
+                className="absolute top-3 right-4 z-20 size-9 rounded-lg border bg-card shadow-sm flex items-center justify-center hover:bg-muted"
+              >
+                <Plus className="size-4" style={{ color: accent }} />
+              </button>
+            )}
+            <div className="h-full overflow-auto p-4 md:p-6">
             <div className="max-w-4xl mx-auto space-y-4">
               {current.length === 0 && (
                 <div className="text-center py-16 border border-dashed rounded-xl">
@@ -219,6 +244,7 @@ export default function Home() {
                 const w = WIDGETS[key];
                 if (!w) return null;
                 const Icon = w.icon;
+                const h = (editing ? draftHeights : heights)[key];
                 return (
                   <div
                     key={key}
@@ -234,16 +260,18 @@ export default function Home() {
                       <h2 className="text-sm font-semibold flex-1">{w.title}</h2>
                       {editing && <button onClick={() => removeWidget(key)} className="p-1 rounded text-muted-foreground hover:text-destructive" title="Remove widget"><Trash2 className="size-4" /></button>}
                     </div>
-                    <div className="p-4">{w.render(ctx)}</div>
+                    <div
+                      className="p-4 overflow-auto"
+                      style={{ height: h ? `${h}px` : undefined, resize: editing ? "vertical" : "none" }}
+                      onMouseUp={(e) => { if (!editing) return; const ht = (e.currentTarget as HTMLElement).clientHeight; setDraftHeights((d) => ({ ...d, [key]: ht })); }}
+                    >
+                      {w.render(ctx)}
+                    </div>
                   </div>
                 );
               })}
 
-              {editing && current.length > 0 && (
-                <button onClick={() => setLibOpen(true)} className="w-full rounded-xl border border-dashed py-4 text-sm text-muted-foreground hover:bg-muted/40 inline-flex items-center justify-center gap-1.5">
-                  <Plus className="size-4" /> Add a widget
-                </button>
-              )}
+            </div>
             </div>
           </div>
 
