@@ -33,6 +33,7 @@ import ListDetail from "@/pages/usip/ListDetail";
 import DataEnrichment from "@/pages/usip/DataEnrichment";
 import SequencesV2 from "@/pages/usip/SequencesV2";
 import SequenceEditor from "@/pages/usip/SequenceEditor";
+import Home from "@/pages/usip/Home";
 import ProspectDetail from "@/pages/usip/ProspectDetail";
 import AccountDetail from "@/pages/usip/AccountDetail";
 import ContactDetail from "@/pages/usip/ContactDetail";
@@ -376,6 +377,7 @@ function Router() {
         (Segments, Data Health, Sequences, Mailbox, Tasks, Calendar, Unified
         Inbox, Pipeline, Workflows, Dashboards, Contacts, Accounts).
       */}
+      <Route path="/v2/home"><AuthGate><Home /></AuthGate></Route>
       <Route path="/v2/ai-assistant"><AuthGate><AIAssistant /></AuthGate></Route>
       <Route path="/v2/people"><AuthGate><People /></AuthGate></Route>
       <Route path="/v2/companies"><AuthGate><Companies /></AuthGate></Route>

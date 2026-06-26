@@ -266,7 +266,7 @@ type NavSection = { label: string; icon: any; items: NavLink[]; color: string; d
 // Top quick-links carry their own accent (brand blue / assistant violet) so the
 // rail reads with colour from the very top.
 const TOP_LINKS: NavLink[] = [
-  { href: "/", label: "Home", icon: Home, color: "#3B82F6", darkColor: "#93C5FD" },
+  { href: "/v2/home", label: "Home", icon: Home, color: "#3B82F6", darkColor: "#93C5FD" },
   { href: "/v2/ai-assistant", label: "AI Assistant", icon: Sparkles, color: "#9333EA", darkColor: "#D8B4FE" },
 ];
 
