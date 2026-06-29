@@ -582,7 +582,7 @@ export default function People() {
         <div className="flex flex-1 min-h-0">
           {/* ── filter rail (the fulcrum) ── */}
           {!hideFilters && (
-            <aside className="w-72 shrink-0 border-r border-border flex flex-col min-h-0 bg-card/30">
+            <aside className="w-64 shrink-0 border-r border-border flex flex-col min-h-0 bg-card/30">
               {/* stats strip */}
               <div className="grid grid-cols-3 gap-px bg-border/60 shrink-0">
                 {[
@@ -636,7 +636,7 @@ export default function People() {
           {/* ── centre column ── */}
           <section className="flex-1 min-w-0 flex flex-col min-h-0">
             {/* toolbar */}
-            <div className="shrink-0 border-b border-border px-3 py-1.5 flex items-center gap-1 flex-wrap bg-card/40 [&_button]:h-7 [&_button]:px-1.5 [&_button]:text-xs [&_button_svg]:size-3.5">
+            <div className="shrink-0 border-b border-border px-3 py-1.5 flex items-center gap-0.5 flex-wrap bg-card/40 [&_button]:h-7 [&_button]:px-1.5 [&_button]:gap-1 [&_button]:text-[11px] [&_button_svg]:size-3">
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="outline" size="sm" className="gap-1.5">Default view <ChevronDown className="size-3.5 opacity-60" /></Button>
@@ -654,7 +654,7 @@ export default function People() {
                 <Filter className="size-4" /> {hideFilters ? "Show" : "Hide"} filters{activeCount ? ` (${activeCount})` : ""}
               </Button>
 
-              <div className="flex items-center gap-2 px-2.5 h-7 rounded-md border bg-background text-xs min-w-[120px] flex-1 max-w-[180px]">
+              <div className="flex items-center gap-1.5 px-2 h-7 rounded-md border bg-background text-[11px] min-w-[104px] flex-1 max-w-[160px]">
                 <Search className="size-4 text-muted-foreground shrink-0" />
                 <input
                   value={search}
