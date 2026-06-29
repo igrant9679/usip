@@ -1,6 +1,6 @@
 # Velocity / usip — Session Handoff (Continue from here)
 
-Refreshed at end of the "stability + invitations" session. Paste the bottom block into a new chat to resume.
+Refreshed at end of the **"Apollo-clone v2 IA build"** session. Paste the bottom block into a new chat to resume.
 
 ---
 
@@ -8,60 +8,81 @@ Refreshed at end of the "stability + invitations" session. Paste the bottom bloc
 
 - **Repo:** `igrant9679/usip` (origin: `https://github.com/igrant9679/usip.git`)
 - **Local path:** `C:\Users\Admin\usip`
-- **Deploy:** Railway → `https://getvelocityai.app/` (auto-deploys on push to `main`; deploys run ~5–12 min — verify live via API probes / DOM, not the first screenshot)
-- **Tip of `main`:** `e056eda`. All work below is deployed; the invite flow + LLM/crash fixes were probed live in Personal Chrome.
-- **Custom domain note:** the app moved from a `*.manus.space` domain to `getvelocityai.app` (Railway). This matters for anything domain-bound (see the OAuth removal below).
+- **Deploy:** Railway → `https://getvelocityai.app/` (auto-deploys on push to `main`). **Deploys are slow this session — often 3–6 min, sometimes more.** Verify in a **fresh tab**, not the first reload. Screenshot capture via the Chrome MCP is flaky (frequent `Page.captureScreenshot` timeouts) — fall back to `get_page_text` to confirm state.
+- **Tip of `main`:** `2a77d06`. Everything below is deployed + verified live on `getvelocityai.app`.
+
+## What this session was
+
+Building out the **redesigned `/v2/*` information architecture page-by-page, cloning Apollo's UI** from screenshots. The light sectioned sidebar (`Shell.tsx`) landed in a prior session; this session filled in the pages.
+
+**Workflow facts (important):**
+- **Reference designs come from screenshots**, not live Apollo. The Claude-in-Chrome MCP can only navigate an allow-listed domain set (`getvelocityai.app` works; `app.apollo.io` and all other third-party domains return **"Navigation to this domain is not allowed"** — a managed allow-list above Chrome's own site-access; the user cannot lift it). So Apollo layouts arrive as screenshots in **`C:\Users\Admin\Downloads\Apollo Screenshots\`**, organized by section (`00_home`, `01_ai-assistant`, `02_prospect-and-enrich`, `03_engage`). Read the PNGs with the Read tool.
+- **Per-page rules the user set:** reproduce **layout/UX only** (NOT Apollo's logo/brand assets); **always ignore notification/warning banners and the bottom-right "?" AI-assistant FAB**. (Also: no floating "?" help button anywhere — the global purple HelpButton was removed from App.tsx earlier.)
+- **Per page:** read screenshots → build a bespoke v2 page wired to real Velocity data where it exists → `npx esbuild` parse-check → commit + push → verify live (navigate + screenshot / `get_page_text`).
 
 ## This session's work (newest first)
 
-### Invitations: overhauled end-to-end
-The team-invite system was broken in several layered ways. All fixed + deployed; the full flow was verified live.
+### Home page + layout editor — `/v2/home`  (`f2adad6`, `2a77d06`)
+`client/src/pages/usip/Home.tsx`. Apollo's home: "Welcome, {name} 👋" + Edit layout / Generate Pipeline, stacked widget cards. **Edit mode**: each widget gets a drag handle (HTML5 drag reorder) + delete; a floating **"+"** pinned to the **canvas top-right** opens the **Widget library** (categorised Execution / Recommended / Summary / Reports + "Already added" chips); widgets are **vertically resizable** (native `resize: vertical` grip on the body, heights captured on mouseUp); **Cancel / Save changes**. Layout order + per-widget heights persist to **localStorage** (`velocity_home_layout_v1`, `velocity_home_heights_v1`). Widgets wired to live data where cheap (Suggested leads→prospects, Top companies→accounts, Your tasks→tasks, Sequence stats→sequences, Email stats/Data health→`dataHealth.getMetrics`); rest are compact scaffolds. **The Home nav top-link now points at `/v2/home`** (Shell.tsx); the old Dashboard stays at `/` and under "More". (localStorage persistence is a v1 — server-side would follow across devices.)
 
-- **`e056eda` — Invite acceptance migrated OFF the removed Manus OAuth portal → native auth (THE big one).** `client/src/pages/InviteAccept.tsx` still redirected to the old Manus/Meta OAuth portal (`<portal>/app-auth` → `/api/oauth/callback`), which now **410s** and whose project rejected the `getvelocityai.app` redirect domain (the "redirect_uri domain not allowed" error the user hit). OAuth was replaced by native email+password (see Auth model below). Fix: a not-signed-in invitee now sets a password on the invite card, which POSTs to **`/api/auth/register`** — that endpoint **upgrades the invite placeholder in place** (sets passwordHash, `loginMethod="password"`, keeps the membership) and issues the session cookie. The page reloads with `?setup=done` so the now-authenticated page skips straight to `finaliseAcceptance` (clears the token). "Already have an account" → `/?returnPath=<invite>` (the native Landing auth form). Removed the dead OAuth redirect helper. **Verified live:** deployed bundle has zero `/app-auth` / `/api/oauth/callback` markers and contains `/api/auth/register` + the "Create account & join" CTA; the invite page renders the native password card, not the OAuth error.
-- **`f2c6456` / `4252ec9` — resend / copy-link / re-invite now handle EXPIRED invites.** `resendInvitation` + `copyInviteLink` guarded on `loginMethod === "invite"`, but the nightly job flips unaccepted invites to `"expired_invite"` — so resending an expired invite (the whole point) failed with the misleading "Member has already accepted their invitation and signed in." Both now treat `invite` + `expired_invite` as pending and revive the user's `loginMethod` back to `"invite"` when re-issuing a token. The Invite-dialog re-issue path does the same.
-- **`63d49bd` — invite mutation re-issues pending invites instead of CONFLICT.** It threw "already a member" on ANY membership row, so anyone who let a first invite lapse was permanently locked out. Now: pending invite (non-null `inviteToken`) → re-issue (fresh token/expiry, apply new role/title/quota, resend email, returns `reInvited:true`); genuinely active → CONFLICT; deactivated → "reactivate instead."
-- **`e8384bd` — Team page shows invitation status.** `team.list` now returns `invitedAt`, `inviteExpiresAt`, and `invitePending` (token-presence boolean; raw token never leaves the server). The Status column shows **active / invited (with sent + expiry dates) / invite expired / deactivated**; a pending invite past its expiry renders as expired immediately (doesn't wait for the nightly job). 7-day expiry already existed (invite mutation default + `expireInvitations` nightly + 48h warning emails in `inviteExpiry.ts`); this makes it visible.
+### Engage / Sequences — `/v2/sequences` + builder `/v2/sequences/:id`  (`72b8e73`, `970c6e4`)
+- `SequencesV2.tsx` — Apollo Sequences index: tabs (All Sequences / Analytics / Diagnostics), left filter rail (Starred, Owned by, **Status**, Tags, Performance, Folders, Shared by — Status + Owned-by-me are functional), table wired to `sequences.list`. "Create sequence" → **choice modal** (AI-assisted / Templates / From scratch) → New Sequence dialog → `sequences.create` → navigates to the editor.
+- `SequenceEditor.tsx` — the **step builder**. Tabs (Editor / Contacts / Activity / Report / Settings). Editor = ordered step list + "Add a step" picker (Automatic/Manual email, Phone call, Action item, LinkedIn invite/message, Wait), inline per-step editors (subject/body, days, notes), reorder + delete, persisting via **`sequences.updateSteps`** (step schema: email/wait/task/linkedin_dm/linkedin_invite). Settings edits name/description via `sequences.update`.
 
-### Stability fixes
-- **`8fdb816` — process-level crash guard.** Node 20 terminates on an unhandled promise rejection / uncaught exception by default, and the server had **zero** process handlers — one stray promise anywhere crashed the whole instance (the hard crash that needed a manual restart). Added `process.on("unhandledRejection")` + `("uncaughtException")` in `server/_core/index.ts` that log `[FATAL-GUARD] …` with full stack and keep the server alive. **If it crashes again, grep Railway logs for `[FATAL-GUARD]` — that's the root-cause pointer (a missing `.catch()`).**
-- **`ca197b7` — LLM 429 "concurrent connections" fix.** ARE engine ticks fan out ~8 simultaneous Anthropic calls (`Promise.allSettled` over enrich+sequence agents), tripping the concurrent-connection rate limit. `invokeLLM` now serializes through a **process-wide semaphore** (default 2, override `LLM_MAX_CONCURRENCY`); the Anthropic client uses `maxRetries: 4` (honors `retry-after`). `runEnrichAgent` now treats 429/5xx/overload as **transient** (new export `isRetryableLLMError` in `server/_core/llm.ts`) → resets the prospect to `pending` for the next tick instead of stamping a hard `failed` with raw 429 JSON.
+### Data enrichment — `/v2/data-enrichment`  (`a42bf33`)
+`DataEnrichment.tsx`. Tabbed (Data health center / CRM / CSV / Job change alerts / Form enrichment). Health center: top stats + 6-card grid; 3 **inline-SVG donuts** (email completeness, phone completeness, enrichment freshness) + stats wired to **`dataHealth.getMetrics`**; CRM/CSV are connect/upsell landings; Job change/Form are coming-soon.
 
-### Features earlier in the session
-- **`64bbaa7` — Personas categories.** New `persona_categories` table (**migration 0089**) + `personas.categoryId`. Page renders one collapsible section per category with create / rename / delete (personas fall back to Uncategorized) / reorder (server `sortOrder`) / per-section collapse (localStorage). Persona editor + each section header gained a category picker / quick-add. Router: workspace-scoped `listCategories`/`createCategory`/`updateCategory`/`deleteCategory`/`reorderCategories`; caller-supplied `categoryId` is ownership-validated.
-- **`9c5d8f0` — Sequence step editor minimize.** `StepEditor` (in `Sequences.tsx`) — each step header is a click-to-collapse toggle; email steps with content start minimized as a subject-line outline. Collapse state remaps correctly on move/remove.
+### Lists — index `/v2/lists` + detail `/v2/lists/:id`  (`d902789`, `ae260f3`)
+- **New static-list backend** (segments are dynamic rule-based over contacts and can't hold explicit membership): **migration 0093** `record_lists` + `record_list_members`; new router **`server/routers/recordLists.ts`** (list/get/create/delete/members/addMembers/removeMember), registered in `server/routers.ts`. People lists hold prospects, Companies lists hold accounts.
+- `Lists.tsx` — Apollo "My lists": People + Companies collapsible groups, create dialog (object picker + name), search/sort.
+- `ListDetail.tsx` — breadcrumb + object badge + record count, Add-records dropdown, toolbar, members table (joined to prospect/account rows) with per-row remove, empty-state cards, and a **mini-lookup modal** (search prospects/accounts → multi-select → `addMembers`). **Full flow verified live** (created "VIP prospects", added 3 prospects).
 
-## 🔑 Auth model (learned this session — durable, read before touching auth/invites)
-- **Auth is native email + password (`server/passwordAuth.ts`). The Manus/Meta OAuth flow was REMOVED.** `/api/oauth/callback` returns **410 Gone**. Do not reintroduce OAuth-portal redirects.
-- **There is NO `/login` route.** The login/signup UI is the `Landing` component **inside `client/src/App.tsx`** (rendered by `AuthGate` when unauthenticated). It posts to `/api/auth/password-login` (signin) or `/api/auth/register` (signup), reads `?returnPath=` from the URL, and has both modes. `client/src/pages/PasswordLogin.tsx` exists but is **not routed** — ignore it.
-- **`/api/auth/register` upgrades an invite placeholder in place** (sets password, `loginMethod="password"`, preserves `workspaceMembers`); 409 only if the email already has a real password.
-- **Invite lifecycle:** placeholder user has `openId = "invite:<email>"`, `loginMethod="invite"` (pending) → nightly `expireInvitations` flips to `"expired_invite"` → acceptance sets a real `loginMethod` and clears `inviteToken`. **`inviteToken` non-null ⇔ outstanding/unaccepted.** `hasPassword` + `loginMethod` distinguish accepted from pending. Invite expiry default **7 days** (per-workspace `workspaceSettings.inviteExpiryDays`, `0` = never; editable in Team → Settings).
-- `finaliseAcceptance` (in `routers/admin.ts`) clears the token and accepts both `invite`/`expired_invite` as pending; a real `loginMethod` takes the "already accepted" branch.
+### People Education filter made real  (`936f61c`)
+**migration 0092** adds `prospects.education` (varchar 200). People page's Education filter moved out of the locked "Advanced" list into a real working text filter (+ shown in the detail panel). NULL until enrichment populates it (no extractor yet).
+
+### Companies — `/v2/companies`  (`7e97f4e`)
+`Companies.tsx`. Apollo "Find companies" — same filter-rail-as-fulcrum pattern as People, on **`trpc.accounts.list`** (already the Accounts data source; deep-links to `/accounts/:id`). All client-side filter/facet/sort/paginate; facets (Industry / # Employees / Revenue / Location) derived from the data with live counts.
+
+### People — `/v2/people`  (`0627c9c`, density `e2d5263`)
+`People.tsx`. Apollo "Find people" — the **filter rail is the fulcrum**. Wired to `trpc.prospects.list` (server filters: emailStatus/verification/promoted/hasEmail; client refinement: search/title/company/location/industry/education/tier/seniority + sort). Toolbar, results table, detail panel, AI empty state, More-filters dialog.
+
+### AI Assistant / Deliverability / Calls / Website Visitors  (`22ffd65`)
+- `/v2/ai-assistant` `AIAssistant.tsx` — working chat on `helpCenter.startConversation`/`askAI` (answers + sources + confidence). Verified live.
+- `/v2/deliverability` `Deliverability.tsx` — hub over `sendingAccounts.list` + `emailSuppressions.summary` + `senderPools.list`. (30 real sending accounts in this workspace.)
+- `/v2/calls` `Calls.tsx` — call queue from `tasks.list` filtered `type==='call'` + `tasks.setStatus`.
+- `/v2/website-visitors` `WebsiteVisitors.tsx` — standalone scaffold (no tracking backend), install-snippet + companies table.
+
+### Sidebar colour system  (`0b5a7f6`, `3bc2796`, `e390153`)
+`Shell.tsx`: per-section colours restored (bright 500-level: Prospect blue `#3B82F6`, Engage violet `#9333EA`, Win deals emerald `#10B981`, Tools amber `#F59E0B`, Inbound teal `#14B8A6`, Saved rose `#F43F5E`); active items are tinted/shaded pills with a colour glow; **`resolveAccent(location)`** publishes a per-route accent on `AccentContext` so every PageHeader/StatCard/SubNav adopts its section hue; "More" section icons coloured by functional area via `LEGACY_COLOR_BY_HREF`.
+
+### Section→existing-page wiring, then REVERTED  (`94d926c`, then `a3628fd`)
+`94d926c` pointed the remaining v2 items at existing pages; `a3628fd` **reverted it** per the user — they want each built fresh, not linked. So those routes are **placeholders again**. Existing pages stay reachable under "More".
+
+## 🟡 v2 route status (what's built vs placeholder)
+
+**Built (bespoke, real data):** `/v2/home`, `/v2/ai-assistant`, `/v2/people`, `/v2/companies`, `/v2/lists` (+`/:id`), `/v2/data-enrichment`, `/v2/sequences` (+`/:id`), `/v2/calls`, `/v2/deliverability`, `/v2/website-visitors`.
+
+**Still `<Placeholder>` (build next, page-by-page from screenshots):** `/v2/emails`, `/v2/tasks`, `/v2/meetings`, `/v2/conversations`, `/v2/deals`, `/v2/workflows`, `/v2/analytics`, `/v2/saved-people`, `/v2/saved-companies`, `/v2/forms`. (No Apollo screenshots captured for these yet — ask the user for the relevant `Apollo Screenshots\` subfolder before building each.)
 
 ## 🪤 Bug classes (do not reintroduce)
-- **DialogContent `sm:max-w-lg`:** `ui/dialog.tsx` default className ends with `sm:max-w-lg`; a bare `max-w-2xl` LOSES at ≥640px (tailwind-merge keeps both). Always override with the same prefix: `sm:max-w-2xl` (+ optional `max-w-[calc(100%-2rem)]`). Repo had a full sweep to zero bare instances — keep it that way.
-- **Flex-collapse:** bare top-level flex rows under the shell need `shrink-0` or they collapse / steal clicks. SubNav/PageHeader are `shrink-0`. `min-h-0` trap on flex children that scroll.
-- **Migration drift:** schema = drizzle journal ∪ `server/_core/rawMigrations.ts`. Schema changes go in BOTH `drizzle/schema.ts` AND rawMigrations. Latest applied: **0089** (persona_categories). **Next is 0090.** rawMigrations are idempotent (tolerated errnos 1050/1060/1061/1091/1146/1826), run 5s post-boot, never block startup.
+- **DialogContent `sm:max-w-lg`:** `ui/dialog.tsx` default ends with `sm:max-w-lg`; a bare `max-w-2xl` LOSES at ≥640px. Always override with the same prefix: `sm:max-w-2xl`.
+- **Flex-collapse:** bare top-level flex rows under the shell need `shrink-0` or they collapse / steal clicks; `min-h-0` on flex children that scroll. The v2 pages use `flex flex-col h-full min-h-0` roots (PageTransition is `height:100%` flex-col, so `h-full` resolves).
+- **Migration drift:** schema = drizzle journal ∪ `server/_core/rawMigrations.ts`. Schema changes go in BOTH `drizzle/schema.ts` AND rawMigrations. **Latest applied: 0093** (record_lists). **Next is 0094.** Idempotent (tolerated errnos 1050/1060/1061/1091/1146/1826), run ~5s post-boot.
+
+## 🔑 Auth model (durable — read before touching auth/invites)
+- **Native email + password (`server/passwordAuth.ts`). Manus/Meta OAuth was REMOVED; `/api/oauth/callback` is 410.** Do not reintroduce OAuth redirects.
+- **No `/login` route.** Login/signup UI is the `Landing` component **inside `client/src/App.tsx`** (rendered by `AuthGate` when unauthenticated; posts to `/api/auth/password-login` or `/api/auth/register`; reads `?returnPath=`). `client/src/pages/PasswordLogin.tsx` is unrouted — ignore it.
+- **`/api/auth/register` upgrades an invite placeholder in place.** Invite lifecycle: `openId "invite:<email>"`, `loginMethod "invite"`→`"expired_invite"` (nightly)→real method on acceptance; `inviteToken` non-null ⇔ unaccepted. 7-day expiry default.
 
 ## How this codebase works (essentials)
-- **Stack:** React + Vite + wouter + tRPC v11 + Drizzle ORM (mysql2) + Express. **Node 20** in prod (`.node-version` = 20). esbuild does NOT typecheck but FAILS on missing exports/unresolved imports — grep repo-wide before deleting an export. TS type errors only surface at runtime.
-- **Build:** Railway runs `vite build && esbuild server/_core/index.ts --platform=node --packages=external --bundle --format=esm`. pnpm frozen lockfile — don't add deps without updating `pnpm-lock.yaml`. Verify locally with `npx esbuild <file> --loader:.tsx=tsx --jsx=automatic --outfile=NUL` (parse check) or the full bundle command to a temp dir.
-- **No local toolchain for running** — verify via static review → commit → push → watch Railway → check live in Chrome.
-- tRPC: `workspaceProcedure` etc.; **every DB query must filter by `ctx.workspace.id`**; treat any caller-controlled id as hostile (validate ownership → 404).
-- Engine crons (`server/_core/index.ts`, all `.catch()`-guarded): `runAreEngine()` ~3min, `processEnrollments()` ~5min (enforces send window/timezone), `runPipelineAlertsCron()` ~15min, nightly batch (incl. `expireInvitations` + invite warning emails). `invokeLLM` (server/_core/llm.ts) default model `claude-haiku-4-5`, global concurrency semaphore, `isRetryableLLMError` export. Email send via `sendWorkspaceEmail` (workspace SMTP / Email Delivery settings; failures non-fatal).
-- **Reuse:** ConfirmButton / TableSkeleton / QueryError / SubNav / EmailClientPreview. Dark mode via theme tokens. New dialogs: `sm:max-w-*` overrides only.
+- **Stack:** React + Vite + wouter + tRPC v11 + Drizzle ORM (mysql2) + Express. **Node 20** in prod. esbuild does NOT typecheck but FAILS on missing exports/unresolved imports — grep before deleting an export. TS errors only surface at runtime.
+- **No local run toolchain.** Verify with `npx esbuild <file>.tsx --loader:.tsx=tsx --jsx=automatic --outfile=/dev/null` (client parse) or `npx esbuild server/_core/index.ts --platform=node --packages=external --bundle --format=esm --outfile=/dev/null` (server bundle incl. schema/migrations). Then commit → push → watch Railway → check live. pnpm frozen lockfile — don't add deps.
+- **tRPC:** `workspaceProcedure`; **every DB query filters by `ctx.workspace.id`**; validate caller-controlled ids (ownership → 404).
+- **Reuse:** Shell / PageHeader / StatCard / `useAccentColor` from `components/usip/Shell`; shadcn `ui/*` (Button sizes incl. `icon-sm`; Dialog, DropdownMenu, Checkbox, Badge…); `cn` from `@/lib/utils`; `useAuth` from `@/_core/hooks/useAuth`; lucide-react (NO brand icons — use generic for LinkedIn). New v2 pages follow the People/Companies template (compact header `h-11` + accent top rule).
 
-## Live data state of LSI Media (workspace id 2)
-- **Team (4 members):** `idris.grant@lsi-media.com` (you, admin), `sabine.grant`, `lucas.grant`, **`bianca.espeso@lsi-media.com`** — pending **admin** invite, fresh link **expires 2026-06-23**, no password yet. Her acceptance flow was verified working live this session.
-- **Pipeline / Customers / Accounts / Contacts / Leads / Prospects:** empty (cleared in an earlier session).
-- **Sequences:** 1 — "AI CONSULT - INITIAL OUTREACH" (id 10, paused), 1 email step linked to template 6.
-- **Email templates:** 7 (ids 2–8), all with clean `{{tags}}` htmlOutput.
-- **ARE:** campaign 7 has 11 rejected prospects (Rejections tab only).
-- **Personas:** no user categories created yet (feature shipped; all personas currently Uncategorized).
-
-## OPEN USER ACTIONS
-- **bianca:** nothing required from the dev side — she can accept via her invite link (set a password on the card) or sign up at `getvelocityai.app` with her email. Optionally confirm she reaches the dashboard.
-- **Unipile webhook auth (from a prior session, still open):** set `UNIPILE_WEBHOOK_SECRET` on Railway, then re-run the three register-webhook admin actions to activate verification.
-- **If the instance crashes again:** grep Railway logs for `[FATAL-GUARD]` to find the offending stray promise (the guard keeps it alive + logs the stack).
+## Live data state — LSI Media (workspace id 2)
+- **Prospects:** ~86 (visible on /v2/people). **Accounts/Contacts:** empty ("No accounts yet"). **Sending accounts:** 30 (Mailpool.ai). **Tasks:** several incl. call-type. **Sequences:** "AI CONSULT - INITIAL OUTREACH" (id 10, paused, 5 steps).
+- **Test artifacts created this session (safe to delete):** record list **"VIP prospects"** (id 1, 3 prospects) on /v2/lists; sequence **"AI outbound sequence"** (id 11, draft, 3 steps) from the AI-assisted create test.
 
 ## Git identity (every commit)
 ```bash
@@ -73,66 +94,64 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
 EOF
 )"
 ```
-Commit + push per change. Stage specific files (parallel sessions leave untracked files at root — `HANDOFF.md` / `UX_AUDIT.md` belong to another session; leave them).
+Commit + push per change. **Stage specific files** (never `git add -A`). Untracked `HANDOFF.md` / `UX_AUDIT.md` at root belong to another session — leave them.
 
-## Verification: Personal Chrome via Claude-in-Chrome MCP
-- `list_connected_browsers` → `select_browser` (deviceId for **"Personal Chrome"**, isLocal). Always confirm which browser.
-- `tabs_context_mcp({createIfEmpty:true})` for a tab. Driving tRPC via `javascript_tool` fetch is the fastest server probe: queries `GET /api/trpc/<proc>?batch=1&input=...` (results under `[0].result.data.json`); mutations `POST /api/trpc/<proc>?batch=1` body `{"0":{json:{...}}}`. The session runs as **idris** (admin) — `team.list`, `team.copyInviteLink`, `team.resendInvitation`, `team.getLoginHistory`, `auth.me` all work.
-- Caveat: loading `/invite/accept` in this browser shows the **signed-in** card (idris's cookie), not the logged-out invitee card — don't submit it (would set the invitee's password). The session cookie is HttpOnly; you can't clear it from JS, and you can't sign idris back in. Verify logged-out paths by scanning the deployed JS bundle instead.
+## Verification: Chrome via Claude-in-Chrome MCP
+- `list_connected_browsers` → `select_browser` (the local browser, named "Browser 1" this session) → `tabs_context_mcp({createIfEmpty:true})`. Session runs as **idris** (super_admin) on getvelocityai.app.
+- **Only getvelocityai.app navigates** (allow-list). Reference designs = screenshots, never live Apollo.
+- Screenshots time out often when the page is busy — `get_page_text` is the reliable fallback to confirm rendered content. After a deploy, a FRESH tab avoids the stuck-renderer state.
 
 ---
 
 ## Resume prompt for the new session
 ```
 You're continuing Velocity / usip (igrant9679/usip → getvelocityai.app on Railway).
-Repo: C:\Users\Admin\usip. Tip of main: e056eda.
+Repo: C:\Users\Admin\usip. Tip of main: 2a77d06.
 
-Read SESSION_HANDOFF.md at the repo root first — especially the "Auth model" and
-"Bug classes" sections.
+Read SESSION_HANDOFF.md at the repo root first — especially "What this session was"
+(the Apollo-clone workflow), the v2 route status, "Auth model", and "Bug classes".
 
-State (all shipped + deployed this session):
-- Invitations overhauled: acceptance migrated OFF the removed Manus OAuth portal to
-  native email+password (InviteAccept.tsx → /api/auth/register, which upgrades the
-  invite placeholder in place); resend/copy-link/re-invite now handle expired invites
-  instead of "already a member"; Team page shows invitation status (active / invited /
-  expired) with sent+expiry dates. 7-day invite expiry is the default.
-- Stability: process-level crash guard ([FATAL-GUARD] logs, keeps Node alive — Node 20
-  was crashing on unhandled rejections); LLM global concurrency semaphore + maxRetries 4
-  + transient-429 handling fixed the ARE "concurrent connections rate limit" enrichment
-  failures (isRetryableLLMError in server/_core/llm.ts, LLM_MAX_CONCURRENCY override).
-- Features: Personas categories (migration 0089, create/rename/delete/reorder/collapse);
-  sequence step-editor per-step minimize.
+This session = cloning Apollo's UI into the redesigned /v2/* IA, page-by-page, from
+SCREENSHOTS in C:\Users\Admin\Downloads\Apollo Screenshots\ (browser control can't reach
+app.apollo.io — managed allow-list; only getvelocityai.app is navigable). Per page:
+read the screenshots, build a bespoke v2 page wired to real Velocity data where it
+exists, parse-check with esbuild, commit+push, verify live. ALWAYS ignore notification
+banners and the bottom-right "?" FAB; layout/UX only (no Apollo brand assets).
 
-KEY ARCHITECTURE (learned this session):
-- Auth is native email+password (passwordAuth.ts). OAuth was REMOVED; /api/oauth/callback
-  is 410. There is NO /login route — the login/signup UI is the Landing component inside
-  App.tsx (AuthGate renders it when unauthenticated; reads ?returnPath=). PasswordLogin.tsx
-  is unrouted, ignore it. /api/auth/register upgrades an invite placeholder in place.
-- Invite lifecycle: openId "invite:<email>", loginMethod "invite"→"expired_invite"
-  (nightly expireInvitations)→real method on acceptance; inviteToken non-null = unaccepted.
+BUILT this session (all deployed + verified): /v2/home (home + layout editor: drag/
+resize/add widgets, localStorage), /v2/ai-assistant (helpCenter chat), /v2/people
+(prospects; Education filter is now real via migration 0092), /v2/companies (accounts),
+/v2/lists + /v2/lists/:id (NEW static-list backend — migration 0093 record_lists/
+record_list_members + server/routers/recordLists.ts; add-records mini-lookup),
+/v2/data-enrichment (dataHealth donuts), /v2/sequences + /v2/sequences/:id (Engage index
++ step builder on sequences.updateSteps), /v2/calls, /v2/deliverability, /v2/website-
+visitors. Sidebar got per-section colours + dynamic per-route accent (resolveAccent in
+Shell.tsx). Home nav now points at /v2/home (Dashboard stays at "/" + under More).
 
-Hard constraints (still apply):
-- Build runs on Railway (Node 20); pnpm frozen lockfile. Verify via static review →
-  commit → push → watch Railway → check live in Chrome. Don't add deps without lockfile.
-- esbuild fails on missing exports; grep repo-wide before deleting an export.
-- Schema changes go in drizzle/schema.ts AND server/_core/rawMigrations.ts (next: 0090).
-- Commit + push per change, igrant9679 identity + Opus 4.8 co-author trailer; stage
-  specific files (HANDOFF.md / UX_AUDIT.md at root belong to another session — leave them).
-- Every DB query filters by ctx.workspace.id; treat caller-controlled ids as hostile.
-- Plan first when non-trivial; user approves before large code lands.
-- Reuse ConfirmButton / TableSkeleton / QueryError / SubNav / EmailClientPreview; theme
-  tokens for dark mode; dialogs need sm:max-w-* overrides (never bare max-w-*).
-- Always ask which Chrome browser before driving it (Personal Chrome, isLocal). The MCP
-  session runs as idris (admin); drive tRPC via javascript_tool fetch.
-- ui-ux-pro-max skill for UI/UX design work.
+STILL PLACEHOLDER (build next, ask user for the screenshot subfolder first):
+/v2/emails, /v2/tasks, /v2/meetings, /v2/conversations, /v2/deals, /v2/workflows,
+/v2/analytics, /v2/saved-people, /v2/saved-companies, /v2/forms. (94d926c had wired these
+to existing pages; a3628fd REVERTED that per the user — build fresh, don't link.)
 
-Live data: LSI Media (ws id 2), 4 members incl. bianca.espeso (pending admin invite,
-link expires 2026-06-23, no password yet — acceptance flow verified live). Pipeline/CRM
-empty. 1 paused sequence (id 10). 7 clean templates. Campaign 7 has 11 rejected prospects.
+Hard constraints:
+- Build runs on Railway (Node 20); pnpm frozen lockfile; deploys are SLOW (3-6 min) —
+  verify in a fresh tab; Chrome screenshots flake, use get_page_text.
+- esbuild fails on missing exports; grep before deleting one. Verify via parse-check →
+  commit+push → live check.
+- Schema changes go in drizzle/schema.ts AND server/_core/rawMigrations.ts (next: 0094).
+- Commit+push per change, igrant9679 identity + "Co-Authored-By: Claude Opus 4.8 (1M
+  context)" trailer; stage specific files (leave HANDOFF.md / UX_AUDIT.md).
+- Every DB query filters by ctx.workspace.id; validate caller ids.
+- Dialogs need sm:max-w-* (never bare max-w-*); flex rows under shell need shrink-0.
+- Auth is native email+password; no /login route (Landing in App.tsx); OAuth removed.
 
-OPEN: (1) bianca can self-accept, optionally confirm she reaches dashboard; (2) set
-UNIPILE_WEBHOOK_SECRET on Railway + re-run 3 register-webhook actions (prior session);
-(3) if it crashes, grep Railway logs for [FATAL-GUARD].
+Live data: LSI Media (ws id 2). ~86 prospects; accounts/contacts empty; 30 sending
+accounts; sequence id 10 paused. Test artifacts (safe to delete): list "VIP prospects"
+(id 1, 3 records), sequence "AI outbound sequence" (id 11, draft).
+
+OPEN: (1) build the remaining v2 placeholder pages from screenshots; (2) optional: delete
+the two test artifacts; (3) prior-session: set UNIPILE_WEBHOOK_SECRET on Railway + re-run
+3 register-webhook actions; (4) if instance crashes, grep Railway logs for [FATAL-GUARD].
 
 After reading, briefly confirm current state, then wait for direction.
 ```
