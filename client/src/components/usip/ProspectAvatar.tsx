@@ -167,7 +167,7 @@ export function ProfileImageSourceBadge({
  * data URL. Keeps the stored payload tiny (a few KB) so it fits inline — and
  * means we only ever store the workspace's own uploaded content.
  */
-function fileToSquareDataUrl(file: File, max = 128): Promise<string> {
+export function fileToSquareDataUrl(file: File, max = 128): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onerror = () => reject(new Error("Could not read file"));

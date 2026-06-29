@@ -186,6 +186,74 @@ export const prospectsRouter = router({
       return { ok: true, profile_image: resolveProspectProfileImage({ ...before, ...patch }) };
     }),
 
+  /**
+   * Batch-assign user-uploaded photos to many prospects in one request.
+   * Each item is { prospect id, resized base64 image data URL }. Validates
+   * ownership up front, applies in a loop, and reports per-row failures
+   * (no silent drops). Capped at 50 per request.
+   */
+  bulkUploadProfileImages: workspaceProcedure
+    .input(
+      z.object({
+        items: z
+          .array(
+            z.object({
+              id: z.number().int(),
+              dataUrl: z
+                .string()
+                .max(60000, "Image is too large — use a smaller photo")
+                .regex(
+                  /^data:image\/(png|jpe?g|webp|gif);base64,[A-Za-z0-9+/=]+$/,
+                  "Must be a base64-encoded image data URL",
+                ),
+            }),
+          )
+          .min(1)
+          .max(50),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const ids = input.items.map((i) => i.id);
+      const owned = await db
+        .select({ id: prospects.id })
+        .from(prospects)
+        .where(and(eq(prospects.workspaceId, ctx.workspace.id), inArray(prospects.id, ids)));
+      const ownedSet = new Set(owned.map((o) => o.id));
+
+      let uploaded = 0;
+      const failed: { id: number; reason: string }[] = [];
+      for (const item of input.items) {
+        if (!ownedSet.has(item.id)) {
+          failed.push({ id: item.id, reason: "not_found" });
+          continue;
+        }
+        await db
+          .update(prospects)
+          .set({
+            profileImageUrl: item.dataUrl,
+            profileImageSource: "user_uploaded",
+            profileImageSourceUrl: null,
+            profileImageStatus: "available",
+            profileImageLastVerifiedAt: new Date(),
+          })
+          .where(and(eq(prospects.id, item.id), eq(prospects.workspaceId, ctx.workspace.id)));
+        uploaded++;
+      }
+      // One aggregate audit entry (avoids dumping N image payloads).
+      await recordAudit({
+        workspaceId: ctx.workspace.id,
+        actorUserId: ctx.user.id,
+        action: "update",
+        entityType: "prospect",
+        entityId: ids[0] ?? 0,
+        before: { batch: "profile_image_bulk" },
+        after: { uploaded, failed: failed.length, source: "user_uploaded" },
+      });
+      return { uploaded, failed };
+    }),
+
   /** Manual edit of any user-facing field. Persists who/when via audit log
    *  but does NOT touch confidence/verification fields — those reflect
    *  pipeline truth and should only change via re-enrichment. */

@@ -21,6 +21,7 @@ import { useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
 import { ProspectAvatar } from "@/components/usip/ProspectAvatar";
+import { BatchPhotoUpload } from "@/components/usip/BatchPhotoUpload";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -79,6 +80,7 @@ import {
   Wand2,
   Layers,
   Bookmark,
+  ImagePlus,
 } from "lucide-react";
 
 /* ───────────────────────── badges / helpers ───────────────────────────── */
@@ -263,6 +265,7 @@ export default function People() {
   // ── view state ──
   const [hideFilters, setHideFilters] = useState(false);
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [photoBatchOpen, setPhotoBatchOpen] = useState(false);
   const [checked, setChecked] = useState<Set<number>>(new Set());
   const [moreOpen, setMoreOpen] = useState(false);
   const [aiPrompt, setAiPrompt] = useState("");
@@ -565,6 +568,9 @@ export default function People() {
           <Users className="size-4" style={{ color: accent }} />
           <h1 className="text-[15px] font-semibold tracking-tight">Find people</h1>
           <div className="flex-1" />
+          <Button variant="outline" size="sm" className="h-7 gap-1.5" onClick={() => setPhotoBatchOpen(true)}>
+            <ImagePlus className="size-3.5" /> Photos
+          </Button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="outline" size="sm" className="h-7 gap-1.5">
@@ -857,6 +863,7 @@ export default function People() {
       </div>
 
       <MoreFiltersDialog open={moreOpen} onClose={() => setMoreOpen(false)} count={total} />
+      <BatchPhotoUpload open={photoBatchOpen} onClose={() => setPhotoBatchOpen(false)} />
     </Shell>
   );
 }
