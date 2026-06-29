@@ -17,7 +17,7 @@ import { useParams, Link, useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { Shell, PageHeader } from "@/components/usip/Shell";
 import { AddToSequenceButton } from "@/components/usip/AddToSequenceButton";
-import { ProspectAvatar, ProfileImageSourceBadge } from "@/components/usip/ProspectAvatar";
+import { ProfileImageUploader, ProfileImageSourceBadge } from "@/components/usip/ProspectAvatar";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -147,7 +147,7 @@ export default function ProspectDetail() {
             ONLY here, on the full profile; never in People Search results. */}
         <Card>
           <CardContent className="p-4 flex items-center gap-4">
-            <ProspectAvatar image={p.profile_image} name={fullName} size="lg" />
+            <ProfileImageUploader image={p.profile_image} name={fullName} prospectId={id} size="lg" />
             <div className="min-w-0">
               <div className="text-lg font-semibold truncate">{fullName}</div>
               <div className="text-sm text-muted-foreground truncate">

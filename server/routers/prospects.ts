@@ -133,6 +133,59 @@ export const prospectsRouter = router({
       return { ok: true, profile_image: resolveProspectProfileImage({ ...before, ...patch }) };
     }),
 
+  /**
+   * Store a USER-UPLOADED profile photo (the workspace's own content — no
+   * third-party source). The client resizes the image to a small square and
+   * sends it as a base64 image data URL, which we store inline (source =
+   * user_uploaded). Capped well under the TEXT column limit.
+   */
+  uploadProfileImage: workspaceProcedure
+    .input(
+      z.object({
+        id: z.number().int(),
+        dataUrl: z
+          .string()
+          .max(60000, "Image is too large — use a smaller photo")
+          .regex(
+            /^data:image\/(png|jpe?g|webp|gif);base64,[A-Za-z0-9+/=]+$/,
+            "Must be a base64-encoded image data URL",
+          ),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [before] = await db
+        .select()
+        .from(prospects)
+        .where(and(eq(prospects.id, input.id), eq(prospects.workspaceId, ctx.workspace.id)))
+        .limit(1);
+      if (!before) throw new TRPCError({ code: "NOT_FOUND" });
+
+      const patch: Partial<typeof prospects.$inferInsert> = {
+        profileImageUrl: input.dataUrl,
+        profileImageSource: "user_uploaded",
+        profileImageSourceUrl: null,
+        profileImageStatus: "available",
+        profileImageLastVerifiedAt: new Date(),
+      };
+      await db
+        .update(prospects)
+        .set(patch)
+        .where(and(eq(prospects.id, input.id), eq(prospects.workspaceId, ctx.workspace.id)));
+      // Audit the change without dumping the (large) image payload.
+      await recordAudit({
+        workspaceId: ctx.workspace.id,
+        actorUserId: ctx.user.id,
+        action: "update",
+        entityType: "prospect",
+        entityId: input.id,
+        before: { profileImageStatus: before.profileImageStatus, profileImageSource: before.profileImageSource },
+        after: { profileImageStatus: "available", profileImageSource: "user_uploaded" },
+      });
+      return { ok: true, profile_image: resolveProspectProfileImage({ ...before, ...patch }) };
+    }),
+
   /** Manual edit of any user-facing field. Persists who/when via audit log
    *  but does NOT touch confidence/verification fields — those reflect
    *  pipeline truth and should only change via re-enrichment. */

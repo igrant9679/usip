@@ -38,6 +38,28 @@ describe("resolveProspectProfileImage", () => {
     expect(r.url).toBeNull();
   });
 
+  it("allows a self-contained image data URL (user-uploaded photo)", () => {
+    const dataUrl = "data:image/jpeg;base64,/9j/4AAQSkZJRg==";
+    const r = resolveProspectProfileImage({
+      ...base,
+      profileImageUrl: dataUrl,
+      profileImageSource: "user_uploaded",
+    });
+    expect(r.url).toBe(dataUrl);
+    expect(r.source_type).toBe("user_uploaded");
+  });
+
+  it("still blocks an uploaded image when the profile is suppressed", () => {
+    const r = resolveProspectProfileImage({
+      ...base,
+      profileImageUrl: "data:image/png;base64,iVBORw0KGgo=",
+      profileImageSource: "user_uploaded",
+      suppressed: true,
+    });
+    expect(r.url).toBeNull();
+    expect(r.status).toBe("blocked_by_policy");
+  });
+
   it("blocks suppressed / deleted (rejected) / privacy-restricted profiles and reports blocked_by_policy", () => {
     expect(resolveProspectProfileImage({ ...base, suppressed: true }).url).toBeNull();
     expect(resolveProspectProfileImage({ ...base, privacyRestricted: true }).status).toBe("blocked_by_policy");

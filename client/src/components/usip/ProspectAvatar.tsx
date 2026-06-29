@@ -9,8 +9,10 @@
  * (server/services/profileImage.ts) — this component trusts `image.url` and
  * only adds the runtime load-failure fallback.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
+import { trpc } from "@/lib/trpc";
+import { toast } from "sonner";
 
 export type ProfileImageStatus =
   | "unknown"
@@ -157,5 +159,130 @@ export function ProfileImageSourceBadge({
     >
       {SOURCE_LABELS[source]}
     </span>
+  );
+}
+
+/**
+ * Read an uploaded image file and return a small, centre-cropped square JPEG
+ * data URL. Keeps the stored payload tiny (a few KB) so it fits inline — and
+ * means we only ever store the workspace's own uploaded content.
+ */
+function fileToSquareDataUrl(file: File, max = 128): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Could not read file"));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error("Not a valid image"));
+      img.onload = () => {
+        const side = Math.min(img.width, img.height);
+        const sx = (img.width - side) / 2;
+        const sy = (img.height - side) / 2;
+        const canvas = document.createElement("canvas");
+        canvas.width = max;
+        canvas.height = max;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return reject(new Error("Canvas unavailable"));
+        ctx.drawImage(img, sx, sy, side, side, 0, 0, max, max);
+        resolve(canvas.toDataURL("image/jpeg", 0.82));
+      };
+      img.src = reader.result as string;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+/**
+ * Avatar + "Change photo" affordance. On select, the image is resized/cropped
+ * client-side and stored as a user-uploaded photo via prospects.uploadProfileImage.
+ * Use this on the full profile; the read-only ProspectAvatar elsewhere.
+ */
+export function ProfileImageUploader({
+  image,
+  name,
+  prospectId,
+  size = "lg",
+}: {
+  image: ProfileImage | null | undefined;
+  name: string;
+  prospectId: number;
+  size?: AvatarSize;
+}) {
+  const utils = trpc.useUtils();
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false);
+
+  const upload = trpc.prospects.uploadProfileImage.useMutation({
+    onSuccess: () => {
+      utils.prospects.get.invalidate({ id: prospectId });
+      toast.success("Profile photo updated");
+      setBusy(false);
+    },
+    onError: (e) => {
+      toast.error(e.message || "Upload failed");
+      setBusy(false);
+    },
+  });
+  const remove = trpc.prospects.updateProfileImage.useMutation({
+    onSuccess: () => {
+      utils.prospects.get.invalidate({ id: prospectId });
+      toast.success("Profile photo removed");
+    },
+    onError: (e) => toast.error(e.message || "Could not remove"),
+  });
+
+  const hasImage = !!(image && image.status === "available" && image.url);
+
+  const onFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (inputRef.current) inputRef.current.value = "";
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      toast.error("Please choose an image file");
+      return;
+    }
+    setBusy(true);
+    try {
+      const dataUrl = await fileToSquareDataUrl(file, 128);
+      if (dataUrl.length > 60000) {
+        toast.error("Image is too large — try a smaller photo");
+        setBusy(false);
+        return;
+      }
+      upload.mutate({ id: prospectId, dataUrl });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not process image");
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-col items-center gap-1">
+      <div className="group relative">
+        <ProspectAvatar image={image} name={name} size={size} />
+        <button
+          type="button"
+          onClick={() => inputRef.current?.click()}
+          disabled={busy}
+          className={cn(
+            "absolute inset-0 flex items-center justify-center rounded-full bg-foreground/45 text-[10px] font-medium text-background transition-opacity",
+            busy ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
+          )}
+          aria-label={`Upload a profile photo for ${name}`}
+        >
+          {busy ? "…" : hasImage ? "Change" : "Add photo"}
+        </button>
+        <input ref={inputRef} type="file" accept="image/*" className="hidden" onChange={onFile} />
+      </div>
+      {hasImage ? (
+        <button
+          type="button"
+          onClick={() => remove.mutate({ id: prospectId, status: "removed" })}
+          className="text-[10px] text-muted-foreground hover:text-destructive"
+        >
+          Remove
+        </button>
+      ) : null}
+    </div>
   );
 }

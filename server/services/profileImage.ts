@@ -99,7 +99,10 @@ export function resolveProspectProfileImage(person: ProfileImagePerson): Resolve
   }
 
   const url = person.profileImageUrl ?? null;
-  if (url && status === "available" && /^https:\/\//i.test(url)) {
+  // Permitted forms: an HTTPS URL (authorized provider / legal URL) or a
+  // self-contained image data URI (a user-uploaded photo we store inline).
+  const allowedUrl = !!url && (/^https:\/\//i.test(url) || /^data:image\//i.test(url));
+  if (url && status === "available" && allowedUrl) {
     return { url, source_type, status, last_verified_at };
   }
 
