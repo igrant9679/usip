@@ -636,7 +636,7 @@ export default function People() {
           {/* ── centre column ── */}
           <section className="flex-1 min-w-0 flex flex-col min-h-0">
             {/* toolbar */}
-            <div className="shrink-0 border-b border-border px-3 py-1.5 flex items-center gap-1.5 flex-wrap bg-card/40 [&_button]:h-7">
+            <div className="shrink-0 border-b border-border px-3 py-1.5 flex items-center gap-1 flex-wrap bg-card/40 [&_button]:h-7 [&_button]:px-2 [&_button]:text-xs [&_button_svg]:size-3.5">
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="outline" size="sm" className="gap-1.5">Default view <ChevronDown className="size-3.5 opacity-60" /></Button>
@@ -654,7 +654,7 @@ export default function People() {
                 <Filter className="size-4" /> {hideFilters ? "Show" : "Hide"} filters{activeCount ? ` (${activeCount})` : ""}
               </Button>
 
-              <div className="flex items-center gap-2 px-2.5 h-7 rounded-md border bg-background text-sm min-w-0 flex-1 max-w-xs">
+              <div className="flex items-center gap-2 px-2.5 h-7 rounded-md border bg-background text-xs min-w-[150px] flex-1 max-w-[220px]">
                 <Search className="size-4 text-muted-foreground shrink-0" />
                 <input
                   value={search}
@@ -760,7 +760,7 @@ export default function People() {
                   <Button variant="outline" size="sm" className="mt-3" onClick={clearAll}>Clear all filters</Button>
                 </div>
               ) : (
-                <table className="w-full text-sm">
+                <table className="w-full text-[13px]">
                   <thead className="sticky top-0 z-10 bg-card border-b border-border">
                     <tr className="text-left text-[11px] uppercase tracking-wide text-muted-foreground">
                       <th className="w-10 px-3 py-1.5"><Checkbox checked={allOnPageChecked} onCheckedChange={toggleAll} className="size-3.5" /></th>
@@ -798,7 +798,7 @@ export default function People() {
                           />
                         </td>
                         <td className="px-2 py-1.5">
-                          <div className="font-medium">{p.firstName} {p.lastName}</div>
+                          <div className="font-medium whitespace-nowrap">{p.firstName} {p.lastName}</div>
                           {p.linkedinUrl && (
                             <a href={p.linkedinUrl} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="text-[11px] text-blue-600 hover:underline inline-flex items-center gap-0.5">
                               <ExternalLink className="size-2.5" /> LinkedIn
