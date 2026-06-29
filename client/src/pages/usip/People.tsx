@@ -692,11 +692,11 @@ export default function People() {
                 </DropdownMenuContent>
               </DropdownMenu>
 
-              <Button variant="ghost" size="sm" className="gap-1.5"><Save className="size-4" /> Save search</Button>
+              <Button variant="outline" size="sm" className="gap-1.5"><Save className="size-4" /> Save as new search</Button>
 
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" size="icon-sm" title="Sort"><ArrowUpDown className="size-4" /></Button>
+                  <Button variant="outline" size="sm" className="gap-1.5"><ArrowUpDown className="size-4" /> Sort <ChevronDown className="size-3.5 opacity-60" /></Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
                   <DropdownMenuLabel>Sort by</DropdownMenuLabel>
@@ -709,7 +709,7 @@ export default function People() {
                 </DropdownMenuContent>
               </DropdownMenu>
 
-              <Button variant="ghost" size="icon-sm" title="Search settings"><Settings2 className="size-4" /></Button>
+              <Button variant="outline" size="sm" className="gap-1.5"><Settings2 className="size-4" /> Search settings</Button>
             </div>
 
             {/* selection action bar */}
