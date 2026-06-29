@@ -1603,6 +1603,24 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0094: Prospect profile image (full-profile avatar) ─────────────
+  // Optional enrichment metadata — a permitted profile image URL plus its
+  // source / status / last-verified timestamp. Populated only from authorized
+  // sources (enrichment provider, CRM import, user upload, legal URL); never
+  // scraped. Surfaced ONLY on the full prospect profile, never in People
+  // Search results or exports. Stored as varchar (app validates the enum
+  // values). errno 1060 (duplicate column) tolerated.
+  {
+    name: "0094_prospect_profile_image.sql",
+    statements: [
+      `ALTER TABLE \`prospects\` ADD COLUMN \`profile_image_url\` text NULL`,
+      `ALTER TABLE \`prospects\` ADD COLUMN \`profile_image_source\` varchar(32) NULL`,
+      `ALTER TABLE \`prospects\` ADD COLUMN \`profile_image_source_url\` text NULL`,
+      `ALTER TABLE \`prospects\` ADD COLUMN \`profile_image_last_verified_at\` timestamp NULL`,
+      `ALTER TABLE \`prospects\` ADD COLUMN \`profile_image_status\` varchar(20) NOT NULL DEFAULT 'unknown'`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

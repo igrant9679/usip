@@ -17,6 +17,7 @@ import { useParams, Link, useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { Shell, PageHeader } from "@/components/usip/Shell";
 import { AddToSequenceButton } from "@/components/usip/AddToSequenceButton";
+import { ProspectAvatar, ProfileImageSourceBadge } from "@/components/usip/ProspectAvatar";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -142,6 +143,23 @@ export default function ProspectDetail() {
       </PageHeader>
 
       <div className="p-4 md:p-6 max-w-5xl mx-auto space-y-5">
+        {/* Profile header — circular avatar + identity. The avatar appears
+            ONLY here, on the full profile; never in People Search results. */}
+        <Card>
+          <CardContent className="p-4 flex items-center gap-4">
+            <ProspectAvatar image={p.profile_image} name={fullName} size="lg" />
+            <div className="min-w-0">
+              <div className="text-lg font-semibold truncate">{fullName}</div>
+              <div className="text-sm text-muted-foreground truncate">
+                {[p.title, p.company].filter(Boolean).join(" · ") || "—"}
+              </div>
+              {p.profile_image?.url ? (
+                <ProfileImageSourceBadge source={p.profile_image.source_type} className="mt-1.5" />
+              ) : null}
+            </div>
+          </CardContent>
+        </Card>
+
         {/* Verification banner */}
         <Card>
           <CardContent className="p-4 flex flex-wrap items-center gap-3">

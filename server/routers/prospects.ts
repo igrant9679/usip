@@ -26,6 +26,7 @@ import { lookupContactInfo, type LookupResult } from "../services/scraper";
 // services/prospectFromSource.ts.
 import { isSyntheticNameProspect } from "../services/prospectFromSource";
 import { reoonCheckBalance, getReoonApiKey } from "../services/reoon";
+import { resolveProspectProfileImage } from "../services/profileImage";
 
 export const prospectsRouter = router({
   /** Fetch a single prospect (powers the /prospects/:id detail page). */
@@ -40,7 +41,96 @@ export const prospectsRouter = router({
         .where(and(eq(prospects.id, input.id), eq(prospects.workspaceId, ctx.workspace.id)))
         .limit(1);
       if (!row) throw new TRPCError({ code: "NOT_FOUND" });
-      return row;
+      // Full profile only: attach resolved profile-image metadata (compliance
+      // gate decides whether the URL is exposed). Search/list never get this.
+      return { ...row, profile_image: resolveProspectProfileImage(row) };
+    }),
+
+  /**
+   * Update a prospect's profile image from a PERMITTED source only.
+   * Backs PATCH /api/people/{id}/profile-image and
+   * POST /api/enrichment/person/{id}/profile-image.
+   *
+   * - `imageUrl` (when given) must be HTTPS and must not be a LinkedIn URL.
+   * - `sourceType` is required whenever an image URL is set.
+   * - Without an `imageUrl`, a `status` may be reported (e.g. failed_to_load
+   *   from the client, or removed/blocked_by_policy for compliance).
+   */
+  updateProfileImage: workspaceProcedure
+    .input(
+      z
+        .object({
+          id: z.number().int(),
+          imageUrl: z.string().max(2048).url().optional(),
+          sourceType: z
+            .enum(["enrichment_provider", "crm_import", "user_uploaded", "public_authorized_url"])
+            .optional(),
+          sourceUrl: z.string().max(2048).url().nullable().optional(),
+          status: z
+            .enum(["available", "unavailable", "failed_to_load", "removed", "blocked_by_policy"])
+            .optional(),
+        })
+        .refine((v) => !v.imageUrl || v.imageUrl.startsWith("https://"), {
+          message: "imageUrl must be HTTPS",
+          path: ["imageUrl"],
+        })
+        .refine((v) => !v.imageUrl || !!v.sourceType, {
+          message: "sourceType is required when imageUrl is set",
+          path: ["sourceType"],
+        })
+        .refine(
+          (v) => {
+            if (!v.imageUrl) return true;
+            try {
+              return !/(^|\.)linkedin\.com$/i.test(new URL(v.imageUrl).hostname);
+            } catch {
+              return false;
+            }
+          },
+          { message: "LinkedIn URLs are not a permitted image source — use an authorized provider", path: ["imageUrl"] },
+        ),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [before] = await db
+        .select()
+        .from(prospects)
+        .where(and(eq(prospects.id, input.id), eq(prospects.workspaceId, ctx.workspace.id)))
+        .limit(1);
+      if (!before) throw new TRPCError({ code: "NOT_FOUND" });
+
+      const patch: Partial<typeof prospects.$inferInsert> = {};
+      if (input.imageUrl) {
+        patch.profileImageUrl = input.imageUrl;
+        patch.profileImageSource = input.sourceType!;
+        patch.profileImageSourceUrl = input.sourceUrl ?? null;
+        patch.profileImageStatus = input.status ?? "available";
+        patch.profileImageLastVerifiedAt = new Date();
+      } else if (input.status) {
+        patch.profileImageStatus = input.status;
+        // Hard removal / policy block: drop the cached URL so it can't resurface.
+        if (input.status === "removed" || input.status === "blocked_by_policy") {
+          patch.profileImageUrl = null;
+        }
+      } else {
+        return { ok: true, profile_image: resolveProspectProfileImage(before) };
+      }
+
+      await db
+        .update(prospects)
+        .set(patch)
+        .where(and(eq(prospects.id, input.id), eq(prospects.workspaceId, ctx.workspace.id)));
+      await recordAudit({
+        workspaceId: ctx.workspace.id,
+        actorUserId: ctx.user.id,
+        action: "update",
+        entityType: "prospect",
+        entityId: input.id,
+        before: { profileImageUrl: before.profileImageUrl, profileImageStatus: before.profileImageStatus, profileImageSource: before.profileImageSource },
+        after: { ...before, ...patch },
+      });
+      return { ok: true, profile_image: resolveProspectProfileImage({ ...before, ...patch }) };
     }),
 
   /** Manual edit of any user-facing field. Persists who/when via audit log
@@ -169,7 +259,21 @@ export const prospectsRouter = router({
         .from(prospects)
         .where(and(...conditions));
 
-      return { data: rows, total: Number(total), page: input.page, perPage: input.perPage };
+      // People Search results must NEVER carry the profile image — it is a
+      // full-profile-only field. Strip the 5 profile-image columns here.
+      const data = rows.map((r) => {
+        const {
+          profileImageUrl: _u,
+          profileImageSource: _s,
+          profileImageSourceUrl: _su,
+          profileImageLastVerifiedAt: _v,
+          profileImageStatus: _st,
+          ...rest
+        } = r;
+        return rest;
+      });
+
+      return { data, total: Number(total), page: input.page, perPage: input.perPage };
     }),
 
   /**

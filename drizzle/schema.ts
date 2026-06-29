@@ -3225,6 +3225,17 @@ export const prospects = mysqlTable(
     linkedinUrlVerified: boolean("linkedinUrlVerified").default(false).notNull(),
     lastEnrichedAt: timestamp("lastEnrichedAt"),
     lastDiscoveryRunId: int("lastDiscoveryRunId"),
+    // ── Profile image (optional enrichment metadata; migration 0094) ───────
+    // Only permitted sources may populate these (authorized enrichment
+    // provider, CRM import, user upload, or a legally accessible URL) — NEVER
+    // scraped from LinkedIn. Surfaced ONLY on the full prospect profile, never
+    // in People Search results, bulk tables, or exports. resolver:
+    // server/services/profileImage.ts.
+    profileImageUrl: text("profile_image_url"),
+    profileImageSource: mysqlEnum("profile_image_source", ["enrichment_provider", "crm_import", "user_uploaded", "public_authorized_url"]),
+    profileImageSourceUrl: text("profile_image_source_url"),
+    profileImageLastVerifiedAt: timestamp("profile_image_last_verified_at"),
+    profileImageStatus: mysqlEnum("profile_image_status", ["unknown", "available", "unavailable", "failed_to_load", "removed", "blocked_by_policy"]).default("unknown").notNull(),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
