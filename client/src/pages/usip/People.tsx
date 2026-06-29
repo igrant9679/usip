@@ -20,6 +20,7 @@
 import { useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
+import { ProspectAvatar } from "@/components/usip/ProspectAvatar";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -863,48 +864,56 @@ export default function People() {
 /* ───────────────────────── detail panel ───────────────────────────────── */
 
 function DetailPanel({ p, onClose, onOpenFull }: { p: Prospect; onClose: () => void; onOpenFull: () => void }) {
-  const loc = [p.city, p.state, p.country].filter(Boolean).join(", ");
+  // The list row (p) renders instantly; the full record carries the resolved
+  // profile_image (stripped from search results) so the avatar can show here.
+  const { data: full } = trpc.prospects.get.useQuery({ id: p.id });
+  const d = full ?? p;
+  const loc = [d.city, d.state, d.country].filter(Boolean).join(", ");
+  const fullName = `${d.firstName} ${d.lastName}`.trim();
+  const titleLine = [d.title, d.company].filter(Boolean).join(" · ");
   return (
     <aside className="w-96 shrink-0 border-l border-border flex flex-col min-h-0 bg-card shadow-sm">
-      <div className="relative shrink-0 flex items-start justify-between px-4 py-3 border-b border-border">
+      {/* header — avatar + identity */}
+      <div className="relative shrink-0 border-b border-border">
         <span aria-hidden className="absolute inset-x-0 top-0 h-0.5" style={{ backgroundColor: "var(--people-accent, hsl(var(--foreground)))" }} />
-        <div className="min-w-0">
-          <div className="text-base font-semibold truncate">{p.firstName} {p.lastName}</div>
-          <div className="text-sm text-muted-foreground truncate">{p.title ?? "—"}</div>
+        <button onClick={onClose} className="absolute right-3 top-3 z-10 p-1 text-muted-foreground hover:text-foreground" aria-label="Close"><X className="size-4" /></button>
+        <div className="px-4 pt-6 pb-4 flex flex-col items-center text-center gap-2">
+          <ProspectAvatar image={full?.profile_image} name={fullName} size="lg" />
+          <div className="min-w-0 w-full px-2">
+            <div className="text-base font-semibold leading-tight">{fullName}</div>
+            <div className="text-sm text-muted-foreground truncate">{titleLine || "—"}</div>
+            {loc ? <div className="text-xs text-muted-foreground truncate mt-0.5">{loc}</div> : null}
+          </div>
         </div>
-        <button onClick={onClose} className="shrink-0 p-1 text-muted-foreground hover:text-foreground" aria-label="Close"><X className="size-4" /></button>
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4 text-sm">
-        {/* fit */}
-        <div className="flex items-center gap-2">
-          {fitBadge(p.confidenceScore)}
-          {p.confidenceTier && <Badge variant="outline" className="text-[10px] capitalize">{p.confidenceTier} fit</Badge>}
-          {p.verificationStatus && <Badge variant="secondary" className="text-[10px] capitalize">{p.verificationStatus.replace(/_/g, " ")}</Badge>}
-        </div>
-
-        {/* contact */}
-        <div className="space-y-2">
-          <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Contact</div>
-          <Field icon={Mail} label="Email" value={p.email} extra={emailStatusBadge(p.emailStatus)} />
-          <Field icon={Phone} label="Phone" value={p.phone} />
+      <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-5 text-sm">
+        <Section title="Contact information">
+          <Field icon={Mail} label="Email" value={d.email} extra={emailStatusBadge(d.emailStatus)} />
+          <Field icon={Phone} label="Phone" value={d.phone} />
           <Field icon={MapPin} label="Location" value={loc || null} />
-          {p.linkedinUrl ? (
-            <a href={p.linkedinUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 text-blue-600 hover:underline">
+          {d.linkedinUrl ? (
+            <a href={d.linkedinUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 text-blue-600 hover:underline">
               <ExternalLink className="size-4 shrink-0" /> <span className="truncate">LinkedIn profile</span>
             </a>
           ) : null}
-        </div>
+        </Section>
 
-        {/* company */}
-        <div className="space-y-2">
-          <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Company</div>
-          <Field icon={Building2} label="Company" value={p.company} />
-          <Field icon={Globe} label="Domain" value={p.companyDomain} />
-          <Field icon={Briefcase} label="Industry" value={p.industry} />
-          <Field icon={GraduationCap} label="Education" value={p.education} />
-          <Field icon={Layers} label="Seniority" value={p.seniority} />
-        </div>
+        <Section title="Fit & signals">
+          <div className="flex flex-wrap items-center gap-2">
+            {fitBadge(d.confidenceScore)}
+            {d.confidenceTier && <Badge variant="outline" className="text-[10px] capitalize">{d.confidenceTier} fit</Badge>}
+            {d.verificationStatus && <Badge variant="secondary" className="text-[10px] capitalize">{d.verificationStatus.replace(/_/g, " ")}</Badge>}
+            {d.seniority && <Badge variant="outline" className="text-[10px] capitalize">{d.seniority}</Badge>}
+          </div>
+        </Section>
+
+        <Section title="Company">
+          <Field icon={Building2} label="Company" value={d.company} />
+          <Field icon={Globe} label="Domain" value={d.companyDomain} />
+          <Field icon={Briefcase} label="Industry" value={d.industry} />
+          <Field icon={GraduationCap} label="Education" value={d.education} />
+        </Section>
       </div>
 
       <div className="shrink-0 border-t border-border p-3 space-y-2">
@@ -915,6 +924,15 @@ function DetailPanel({ p, onClose, onOpenFull }: { p: Prospect; onClose: () => v
         </div>
       </div>
     </aside>
+  );
+}
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="space-y-2">
+      <div className="text-[11px] uppercase tracking-wide text-muted-foreground">{title}</div>
+      {children}
+    </div>
   );
 }
 
