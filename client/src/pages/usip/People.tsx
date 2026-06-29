@@ -636,7 +636,7 @@ export default function People() {
           {/* ── centre column ── */}
           <section className="flex-1 min-w-0 flex flex-col min-h-0">
             {/* toolbar */}
-            <div className="shrink-0 border-b border-border px-3 py-1.5 flex items-center gap-0.5 flex-wrap bg-card/40 [&_button]:h-7 [&_button]:px-1.5 [&_button]:gap-1 [&_button]:text-[11px] [&_button_svg]:size-3">
+            <div className="shrink-0 border-b border-border px-3 py-1.5 flex items-center gap-0.5 flex-nowrap min-w-0 overflow-x-auto bg-card/40 [&_button]:h-7 [&_button]:px-1.5 [&_button]:gap-1 [&_button]:text-[11px] [&_button]:shrink-0 [&_button]:whitespace-nowrap [&_button_svg]:size-3">
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="outline" size="sm" className="gap-1.5">Default view <ChevronDown className="size-3.5 opacity-60" /></Button>
