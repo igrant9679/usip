@@ -636,7 +636,7 @@ export default function People() {
           {/* ── centre column ── */}
           <section className="flex-1 min-w-0 flex flex-col min-h-0">
             {/* toolbar */}
-            <div className="shrink-0 border-b border-border px-3 py-1.5 flex items-center gap-1 flex-wrap bg-card/40 [&_button]:h-7 [&_button]:px-2 [&_button]:text-xs [&_button_svg]:size-3.5">
+            <div className="shrink-0 border-b border-border px-3 py-1.5 flex items-center gap-1 flex-wrap bg-card/40 [&_button]:h-7 [&_button]:px-1.5 [&_button]:text-xs [&_button_svg]:size-3.5">
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="outline" size="sm" className="gap-1.5">Default view <ChevronDown className="size-3.5 opacity-60" /></Button>
@@ -654,7 +654,7 @@ export default function People() {
                 <Filter className="size-4" /> {hideFilters ? "Show" : "Hide"} filters{activeCount ? ` (${activeCount})` : ""}
               </Button>
 
-              <div className="flex items-center gap-2 px-2.5 h-7 rounded-md border bg-background text-xs min-w-[150px] flex-1 max-w-[220px]">
+              <div className="flex items-center gap-2 px-2.5 h-7 rounded-md border bg-background text-xs min-w-[120px] flex-1 max-w-[180px]">
                 <Search className="size-4 text-muted-foreground shrink-0" />
                 <input
                   value={search}
@@ -692,7 +692,7 @@ export default function People() {
                 </DropdownMenuContent>
               </DropdownMenu>
 
-              <Button variant="outline" size="sm" className="gap-1.5"><Save className="size-4" /> Save as new search</Button>
+              <Button variant="outline" size="sm">Save as new search</Button>
 
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
