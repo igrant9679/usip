@@ -33,7 +33,16 @@ import {
 import { retrieveLinkedInProfileByUrl } from "../services/linkedinEnrichment/unipileProfile";
 import { runDailyCheckForWorkspace, getLastDailyCheck } from "../services/linkedinEnrichment/dailyCheck";
 import { runForProspects, runForList, getJob, getJobItems } from "../services/linkedinEnrichment/orchestrator";
-import { prospects, prospectLinkedinEnrichments } from "../../drizzle/schema";
+import {
+  prospects,
+  prospectLinkedinEnrichments,
+  prospectLinkedinFieldSnapshots,
+  prospectLinkedinFieldChanges,
+  linkedinEnrichmentBatches,
+  linkedinEnrichmentBatchRows,
+  linkedinEnrichmentJobs,
+  linkedinEnrichmentJobItems,
+} from "../../drizzle/schema";
 import { and, eq } from "drizzle-orm";
 
 const TRIGGER_TYPES = [
@@ -332,4 +341,59 @@ export const linkedinEnrichmentRouter = router({
 
   /** Last daily-check run for this workspace (status card). */
   dailyCheckStatus: workspaceProcedure.query(async ({ ctx }) => getLastDailyCheck(ctx.workspace.id)),
+
+  /* ─────────────────────────── admin cleanup ──────────────────────────── */
+
+  /** Admin: delete a URL-upload batch and its rows. */
+  deleteBatch: workspaceProcedure
+    .input(z.object({ batchId: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      requireRole(ctx.member.role, "admin");
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const ws = ctx.workspace.id;
+      await db.delete(linkedinEnrichmentBatchRows).where(and(eq(linkedinEnrichmentBatchRows.workspaceId, ws), eq(linkedinEnrichmentBatchRows.batchId, input.batchId)));
+      await db.delete(linkedinEnrichmentBatches).where(and(eq(linkedinEnrichmentBatches.workspaceId, ws), eq(linkedinEnrichmentBatches.id, input.batchId)));
+      await recordAudit({ workspaceId: ws, actorUserId: ctx.user.id, action: "delete", entityType: "linkedin_enrichment_batch", entityId: input.batchId });
+      return { ok: true as const };
+    }),
+
+  /** Admin: delete an Enrich job and its items (does not undo applied enrichment). */
+  deleteJob: workspaceProcedure
+    .input(z.object({ jobId: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      requireRole(ctx.member.role, "admin");
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const ws = ctx.workspace.id;
+      await db.delete(linkedinEnrichmentJobItems).where(and(eq(linkedinEnrichmentJobItems.workspaceId, ws), eq(linkedinEnrichmentJobItems.jobId, input.jobId)));
+      await db.delete(linkedinEnrichmentJobs).where(and(eq(linkedinEnrichmentJobs.workspaceId, ws), eq(linkedinEnrichmentJobs.id, input.jobId)));
+      await recordAudit({ workspaceId: ws, actorUserId: ctx.user.id, action: "delete", entityType: "linkedin_enrichment_job", entityId: input.jobId });
+      return { ok: true as const };
+    }),
+
+  /**
+   * Admin: fully remove a prospect's LinkedIn enrichment — the enrichment row,
+   * its snapshots and field-change history — and clear an enrichment-sourced
+   * profile photo (a user-uploaded photo is preserved). Use to undo a test or a
+   * bad enrichment; the prospect's own fields are untouched.
+   */
+  deleteProspectEnrichment: workspaceProcedure
+    .input(z.object({ prospectId: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      requireRole(ctx.member.role, "admin");
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const ws = ctx.workspace.id;
+      const pid = input.prospectId;
+      await db.delete(prospectLinkedinFieldChanges).where(and(eq(prospectLinkedinFieldChanges.workspaceId, ws), eq(prospectLinkedinFieldChanges.prospectId, pid)));
+      await db.delete(prospectLinkedinFieldSnapshots).where(and(eq(prospectLinkedinFieldSnapshots.workspaceId, ws), eq(prospectLinkedinFieldSnapshots.prospectId, pid)));
+      await db.delete(prospectLinkedinEnrichments).where(and(eq(prospectLinkedinEnrichments.workspaceId, ws), eq(prospectLinkedinEnrichments.prospectId, pid)));
+      // Clear an enrichment-sourced photo; leave a user upload in place.
+      await db.update(prospects)
+        .set({ profileImageUrl: null, profileImageSource: null, profileImageSourceUrl: null, profileImageStatus: "unknown", profileImageLastVerifiedAt: null })
+        .where(and(eq(prospects.workspaceId, ws), eq(prospects.id, pid), eq(prospects.profileImageSource, "enrichment_provider")));
+      await recordAudit({ workspaceId: ws, actorUserId: ctx.user.id, action: "delete", entityType: "prospect_linkedin_enrichment", entityId: pid });
+      return { ok: true as const };
+    }),
 });
