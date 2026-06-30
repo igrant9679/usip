@@ -33,7 +33,6 @@ import {
 } from "lucide-react";
 import { ResearchAiMenu } from "./ResearchAiMenu";
 import { WorkflowSelectionMenu } from "./CreateWorkflowMenu";
-import { useEnrichJob } from "./LinkedInEnrichment";
 
 export function SelectionToolbar({
   selectedIds,
@@ -75,7 +74,7 @@ export function SelectionToolbar({
         <Download className="size-4" /> Export
       </Button>
 
-      <EnrichMenu selectedIds={selectedIds} onPick={(what) => soon(what)} />
+      <EnrichMenu onPick={(what) => soon(what)} />
 
       <ResearchAiMenu compact />
 
@@ -266,19 +265,15 @@ function AddToListMenu({ selectedIds }: { selectedIds: number[] }) {
 
 /* ───────────────────────────── Enrich / More ──────────────────────────── */
 
-function EnrichMenu({ selectedIds, onPick }: { selectedIds: number[]; onPick: (what: string) => void }) {
-  const { enrich, running } = useEnrichJob();
+function EnrichMenu({ onPick }: { onPick: (what: string) => void }) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button variant="ghost" size="sm" className="gap-1.5">
-          {running ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />} Enrich <ChevronDown className="size-3 opacity-60" />
+          <Sparkles className="size-4" /> Enrich <ChevronDown className="size-3 opacity-60" />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-56">
-        <DropdownMenuItem disabled={running} onClick={() => enrich(selectedIds, "people_bulk_action")}>
-          <Sparkles className="size-4 mr-2 text-sky-600" /> Enrich LinkedIn profiles
-        </DropdownMenuItem>
+      <DropdownMenuContent align="start" className="w-48">
         <DropdownMenuItem onClick={() => onPick("Enrich emails")}><Mail className="size-4 mr-2" /> Enrich emails</DropdownMenuItem>
         <DropdownMenuItem onClick={() => onPick("Enrich job change")}><Activity className="size-4 mr-2" /> Enrich job change</DropdownMenuItem>
       </DropdownMenuContent>
