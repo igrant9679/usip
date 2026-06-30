@@ -9,10 +9,12 @@
  * audit log already implemented in linkedinLookup. There is NO direct
  * LinkedIn fetch, browser automation, or HTML parsing anywhere in this path.
  */
-import { lookupProfile } from "../linkedinLookup";
+import { lookupProfile, searchLinkedInProfiles } from "../linkedinLookup";
 import { getLinkedInProfile } from "../../lib/unipile";
 import {
   mapUnipileProfileToVelocitySchema,
+  mapSearchHitToProfile,
+  validateLinkedInUrl,
   type VelocityLinkedInProfile,
 } from "./mapper";
 
@@ -72,6 +74,50 @@ export async function retrieveLinkedInProfileByUrl(opts: {
     viaAccountId: res.viaAccountId,
     identifier: res.identifier,
     message: res.message,
+  };
+}
+
+/**
+ * Authorized name/company lookup — used when a prospect has NO LinkedIn URL.
+ * Runs Unipile's classic people-search over the prospect's available
+ * identifiers (name + title + company + location) and maps the best hit. This
+ * is the vendor's authorized search, NOT scraping.
+ */
+export async function retrieveByNameCompany(opts: {
+  workspaceId: number;
+  userId: number;
+  isAdmin: boolean;
+  prospect: {
+    firstName?: string | null; lastName?: string | null; title?: string | null;
+    company?: string | null; city?: string | null; state?: string | null; country?: string | null;
+  };
+}): Promise<RetrieveOutcome> {
+  const p = opts.prospect;
+  const keywords = [
+    [p.firstName, p.lastName].filter(Boolean).join(" "),
+    p.title, p.company,
+    [p.city, p.state, p.country].filter(Boolean).join(" "),
+  ].map((s) => (s ?? "").trim()).filter(Boolean).join(" ").trim();
+
+  if (keywords.length < 2) {
+    return { ok: false, status: "invalid_url", profile: null, viaAccountId: null, identifier: null, message: "Insufficient identifiers for an authorized lookup" };
+  }
+  const res = await searchLinkedInProfiles({
+    workspaceId: opts.workspaceId, userId: opts.userId, isAdmin: opts.isAdmin, keywords, limit: 3,
+  });
+  if (!res.ok) {
+    return { ok: false, status: classify(res.message, true), profile: null, viaAccountId: res.viaAccountId, identifier: null, message: res.message };
+  }
+  if (res.hits.length === 0) {
+    return { ok: false, status: "no_match", profile: null, viaAccountId: res.viaAccountId, identifier: null, message: "No LinkedIn profile matched these identifiers" };
+  }
+  const best = res.hits[0];
+  return {
+    ok: true, status: "enriched",
+    profile: mapSearchHitToProfile(best),
+    viaAccountId: res.viaAccountId,
+    identifier: validateLinkedInUrl(best.linkedinUrl ?? "").identifier,
+    message: `Matched via name/company lookup — ${res.message}`,
   };
 }
 

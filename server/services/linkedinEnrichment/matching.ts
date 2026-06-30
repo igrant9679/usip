@@ -241,3 +241,87 @@ export function canAutoApply(m: MatchResult): boolean {
   }
   return false;
 }
+
+/* ──────────────────── intended-prospect validation (one-click) ─────────── */
+
+export interface IntendedMatch {
+  status: MatchStatus;
+  score: number;
+  conflict: boolean;
+  reasons: string[];
+  autoApply: boolean;
+}
+
+/**
+ * Validate a retrieved profile against the INTENDED prospect (the one the user
+ * clicked Enrich on) rather than searching the whole DB. Implements the
+ * one-click scoring + auto-apply rules:
+ *   ≥75 (no conflict) → apply · 50–74 → apply only if single-prospect run ·
+ *   <50 → needs_review · strong conflict → conflict (never apply).
+ */
+export function scoreIntendedMatch(
+  prospect: {
+    firstName?: string | null; lastName?: string | null; title?: string | null;
+    company?: string | null; linkedinUrl?: string | null;
+    city?: string | null; state?: string | null; country?: string | null;
+  },
+  profile: VelocityLinkedInProfile,
+  opts: { userInitiatedSingle: boolean },
+): IntendedMatch {
+  const reasons: string[] = [];
+  let score = 0;
+  let conflict = false;
+
+  if (prospect.linkedinUrl && profile.identifier) {
+    const cid = validateLinkedInUrl(prospect.linkedinUrl).identifier;
+    if (cid && cid.toLowerCase() === profile.identifier.toLowerCase()) {
+      score += 100; reasons.push("linkedin_url match (+100)");
+    }
+  }
+  if (opts.userInitiatedSingle) { score += 50; reasons.push("user-initiated from this prospect (+50)"); }
+
+  const candName = `${prospect.firstName ?? ""} ${prospect.lastName ?? ""}`.trim();
+  if (profile.fullName && candName) {
+    if (norm(profile.fullName) === norm(candName)) {
+      score += 40; reasons.push("full name exact (+40)");
+    } else if (profile.firstName && profile.lastName && norm(profile.firstName) === norm(prospect.firstName) && norm(profile.lastName) === norm(prospect.lastName)) {
+      score += 35; reasons.push("first + last exact (+35)");
+    } else if (overlap(profile.fullName, candName) < 0.2) {
+      score -= 60; reasons.push("strong name conflict (-60)"); conflict = true;
+    }
+  }
+
+  let companyConflict = false;
+  if (profile.currentCompanyName && prospect.company) {
+    if (norm(profile.currentCompanyName) === norm(prospect.company)) {
+      score += 30; reasons.push("company exact (+30)");
+    } else {
+      const ov = overlap(profile.currentCompanyName, prospect.company);
+      if (ov >= 0.4) { score += 20; reasons.push("company fuzzy (+20)"); }
+      else if (ov === 0) companyConflict = true;
+    }
+  }
+
+  let titleSim = false;
+  if (profile.currentTitle && prospect.title && overlap(profile.currentTitle, prospect.title) >= 0.4) {
+    score += 15; reasons.push("title similarity (+15)"); titleSim = true;
+  }
+  if (companyConflict && !titleSim && profile.currentTitle && prospect.title) {
+    score -= 35; reasons.push("company + title conflict (-35)"); conflict = true;
+  }
+
+  const profLoc = profile.location;
+  const candLoc = [prospect.city, prospect.state, prospect.country].filter(Boolean).join(" ");
+  if (profLoc && candLoc && overlap(profLoc, candLoc) >= 0.34) {
+    score += 10; reasons.push("location similarity (+10)");
+  }
+
+  const status: MatchStatus = conflict
+    ? "conflict"
+    : score >= 90 ? "exact_match"
+      : score >= 75 ? "high_confidence"
+        : score >= 50 ? "possible_match"
+          : "no_match";
+  const autoApply = conflict ? false : score >= 75 ? true : score >= 50 && opts.userInitiatedSingle;
+  return { status, score, conflict, reasons, autoApply };
+}

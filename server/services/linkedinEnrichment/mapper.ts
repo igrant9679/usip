@@ -107,6 +107,44 @@ const str = (v: unknown): string | null => {
   return t.length ? t : null;
 };
 
+/**
+ * Map a Unipile people-SEARCH hit (name/company lookup path) to the normalized
+ * profile shape. Lower fidelity than a full profile fetch — search hits carry
+ * name/headline/company/location/photo but no structured experience/skills —
+ * but enough to enrich + match when a prospect has no LinkedIn URL.
+ */
+export function mapSearchHitToProfile(hit: {
+  name?: string; firstName?: string; lastName?: string; headline?: string;
+  location?: string; company?: string; linkedinUrl?: string;
+  profilePictureUrl?: string | null; networkDistance?: string;
+}): VelocityLinkedInProfile {
+  const v = validateLinkedInUrl(hit.linkedinUrl ?? "");
+  const fullName = str(hit.name) ?? ([str(hit.firstName), str(hit.lastName)].filter(Boolean).join(" ") || null);
+  return {
+    profileUrl: v.normalizedUrl ?? str(hit.linkedinUrl) ?? "",
+    identifier: v.identifier,
+    publicId: null,
+    fullName,
+    firstName: str(hit.firstName),
+    lastName: str(hit.lastName),
+    headline: str(hit.headline),
+    location: str(hit.location),
+    industry: null,
+    profileImageUrl: str(hit.profilePictureUrl),
+    summaryAbout: null,
+    currentTitle: str(hit.headline),
+    currentCompanyName: str(hit.company),
+    currentCompanyLinkedinUrl: null,
+    currentCompanyDomain: null,
+    currentCompanyStartDate: null,
+    connectionDegree: str(hit.networkDistance),
+    experience: [],
+    education: [],
+    skills: [],
+    languages: [],
+  };
+}
+
 /** Pull a company name/url/domain off the polymorphic current_company field. */
 function currentCompany(p: UnipileUserProfile): { name: string | null; url: string | null; domain: string | null } {
   const c = p.current_company;

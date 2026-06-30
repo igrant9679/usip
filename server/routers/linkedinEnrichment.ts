@@ -32,8 +32,20 @@ import {
 } from "../services/linkedinEnrichment/enrichmentService";
 import { retrieveLinkedInProfileByUrl } from "../services/linkedinEnrichment/unipileProfile";
 import { runDailyCheckForWorkspace, getLastDailyCheck } from "../services/linkedinEnrichment/dailyCheck";
+import { runForProspects, runForList, getJob, getJobItems } from "../services/linkedinEnrichment/orchestrator";
 import { prospects, prospectLinkedinEnrichments } from "../../drizzle/schema";
 import { and, eq } from "drizzle-orm";
+
+const TRIGGER_TYPES = [
+  "people_bulk_action", "people_row_action", "open_profile_action", "full_profile_action",
+  "list_bulk_action", "list_enrich_all", "account_contacts_action", "manual_admin_run",
+] as const;
+const enrichOptions = z.object({
+  forceRefresh: z.boolean().optional(),
+  includeProfileImage: z.boolean().optional(),
+  detectChanges: z.boolean().optional(),
+  scheduleDailyMonitoring: z.boolean().optional(),
+}).optional();
 
 const RANK: Record<string, number> = { super_admin: 4, admin: 3, manager: 2, rep: 1 };
 const isAdminRole = (role: string) => RANK[role] >= RANK.admin;
@@ -83,6 +95,74 @@ export const linkedinEnrichmentRouter = router({
       isAdmin: isAdminRole(ctx.member.role),
     });
   }),
+
+  /**
+   * One-click enrich for selected prospects. Health-gated; returns a job id the
+   * UI polls. No URL upload, no manual matching — the orchestrator resolves the
+   * lookup strategy and auto-applies confident matches.
+   */
+  run: workspaceProcedure
+    .input(z.object({
+      prospectIds: z.array(z.number().int().positive()).min(1).max(500),
+      triggerType: z.enum(TRIGGER_TYPES).default("people_bulk_action"),
+      options: enrichOptions,
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const isAdmin = isAdminRole(ctx.member.role);
+      const health = await checkLinkedInEnrichmentHealth({ workspaceId: ctx.workspace.id, userId: ctx.user.id, isAdmin });
+      if (health.status !== "connected") {
+        throw new TRPCError({ code: "FAILED_PRECONDITION", message: health.missing_requirements[0] ?? "LinkedIn integration not ready." });
+      }
+      const handle = await runForProspects({
+        workspaceId: ctx.workspace.id, userId: ctx.user.id, isAdmin,
+        prospectIds: input.prospectIds, triggerType: input.triggerType, options: input.options,
+      });
+      await emitActivity({
+        workspaceId: ctx.workspace.id, actorUserId: ctx.user.id,
+        prospectId: input.prospectIds.length === 1 ? input.prospectIds[0] : undefined,
+        subject: `LinkedIn enrichment started for ${handle.total} prospect(s)`,
+      });
+      return handle;
+    }),
+
+  /** One-click enrich for a list — selected members or every eligible member. */
+  runForList: workspaceProcedure
+    .input(z.object({
+      listId: z.number().int().positive(),
+      prospectIds: z.array(z.number().int().positive()).max(2000).optional(),
+      enrichAll: z.boolean().default(false),
+      options: enrichOptions,
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const isAdmin = isAdminRole(ctx.member.role);
+      const health = await checkLinkedInEnrichmentHealth({ workspaceId: ctx.workspace.id, userId: ctx.user.id, isAdmin });
+      if (health.status !== "connected") {
+        throw new TRPCError({ code: "FAILED_PRECONDITION", message: health.missing_requirements[0] ?? "LinkedIn integration not ready." });
+      }
+      const handle = await runForList({
+        workspaceId: ctx.workspace.id, userId: ctx.user.id, isAdmin,
+        listId: input.listId, prospectIds: input.prospectIds, enrichAll: input.enrichAll, options: input.options,
+      });
+      await emitActivity({
+        workspaceId: ctx.workspace.id, actorUserId: ctx.user.id,
+        subject: `LinkedIn enrichment started for ${handle.total} list member(s)`,
+      });
+      return handle;
+    }),
+
+  /** Job status + counters (poll this for progress). */
+  getJob: workspaceProcedure
+    .input(z.object({ jobId: z.number().int().positive() }))
+    .query(async ({ ctx, input }) => {
+      const job = await getJob(ctx.workspace.id, input.jobId);
+      if (!job) throw new TRPCError({ code: "NOT_FOUND" });
+      return job;
+    }),
+
+  /** Row-level results for a job. */
+  getJobItems: workspaceProcedure
+    .input(z.object({ jobId: z.number().int().positive() }))
+    .query(async ({ ctx, input }) => getJobItems(ctx.workspace.id, input.jobId)),
 
   /** Create a batch from pasted URLs or CSV rows (validate + normalize). */
   createBatch: workspaceProcedure
