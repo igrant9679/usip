@@ -232,13 +232,58 @@ export async function sendLinkedInInvitation(params: {
 
 // ─── LinkedIn User / Profile ──────────────────────────────────────────────────
 
+/**
+ * LinkedIn profile as returned by Unipile's GET /users/{identifier}.
+ *
+ * Unipile's response shape varies across providers/API versions, so every
+ * field beyond id/provider_id is optional and read defensively by callers
+ * (see server/services/linkedinEnrichment/mapper.ts). Only fields the
+ * authorized account is permitted to see are populated — Velocity never
+ * scrapes; it stores whatever the vendor returns.
+ */
 export interface UnipileUserProfile {
   id: string;
   provider_id: string;
   name?: string;
+  first_name?: string;
+  last_name?: string;
   headline?: string;
+  occupation?: string;
+  summary?: string;
+  location?: string;
+  industry?: string;
   profile_picture_url?: string;
   public_profile_url?: string;
+  public_identifier?: string;
+  member_urn?: string;
+  network_distance?: string | number;
+  connections_count?: number;
+  follower_count?: number;
+  /** Current/last company convenience field (string or object on some versions). */
+  current_company?: string | { name?: string; linkedin_url?: string; domain?: string };
+  /** Structured work history — field names vary; mapper reads defensively. */
+  work_experience?: Array<{
+    company?: string;
+    company_name?: string;
+    title?: string;
+    position?: string;
+    location?: string;
+    description?: string;
+    start?: string;
+    end?: string;
+    current?: boolean;
+    company_linkedin_url?: string;
+    company_domain?: string;
+  }>;
+  education?: Array<{
+    school?: string;
+    degree?: string;
+    field_of_study?: string;
+    start?: string;
+    end?: string;
+  }>;
+  skills?: Array<string | { name?: string }>;
+  languages?: Array<string | { name?: string; proficiency?: string }>;
 }
 
 export async function getLinkedInProfile(

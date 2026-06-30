@@ -44,6 +44,7 @@ import { runDailyVerificationMaintenance, advanceRunningVerificationJobs } from 
 import { processEnrollments } from "../sequenceEngine";
 import { autoSendForAllWorkspaces } from "../routers/sequences";
 import { runNightlyBatch } from "../nightlyBatch";
+import { runDailyCheckAllWorkspaces } from "../services/linkedinEnrichment/dailyCheck";
 import { runAreEngine } from "../areEngine";
 import { runPipelineAlertsCron } from "../routers/pipelineAlerts";
 import { runSegmentEnrollmentForAllWorkspaces } from "../routers/segmentRules"; // eslint-disable-line
@@ -257,6 +258,27 @@ async function startServer() {
     console.log(`[NightlyBatch] Scheduled for midnight (~${Math.round(msUntilMidnight / 60000)} min away)`);
   };
   scheduleNightlyBatch();
+
+  // Daily LinkedIn change check (Unipile). Runs ~1h after midnight to stagger
+  // off the nightly AI batch and keep clear of vendor rate limits. The worker
+  // itself skips workspaces/prospects checked within 24h, suppressed records,
+  // and respects the per-account daily lookup cap.
+  const scheduleLinkedInDailyCheck = () => {
+    const now = new Date();
+    const nextRun = new Date(now);
+    nextRun.setHours(25, 0, 0, 0); // 01:00 next day
+    const msUntil = nextRun.getTime() - now.getTime();
+    setTimeout(() => {
+      const run = () =>
+        runDailyCheckAllWorkspaces().catch((e) =>
+          console.error("[LinkedInDailyCheck] run failed:", e)
+        );
+      run();
+      setInterval(run, 24 * 60 * 60 * 1000);
+    }, msUntil);
+    console.log(`[LinkedInDailyCheck] Scheduled for ~01:00 (~${Math.round(msUntil / 60000)} min away)`);
+  };
+  scheduleLinkedInDailyCheck();
 
   // Inbound reply poller: check IMAP/Gmail inboxes every 60s for new replies
   startInboundReplyPoller();

@@ -49,6 +49,7 @@ import { prospectImportsRouter } from "./routers/prospectImports";
 import { placesSearchRouter } from "./routers/placesSearch";
 import { urlScraperRouter } from "./routers/urlScraper";
 import { linkedinFinderRouter } from "./routers/linkedinFinder";
+import { linkedinEnrichmentRouter } from "./routers/linkedinEnrichment";
 import { personasRouter } from "./routers/personas";
 import { discoveryRouter } from "./routers/discovery";
 
@@ -144,6 +145,7 @@ export const appRouter = router({
   placesSearch: placesSearchRouter,
   urlScraper: urlScraperRouter,
   linkedinFinder: linkedinFinderRouter,
+  linkedinEnrichment: linkedinEnrichmentRouter,
   personas: personasRouter,
   discovery: discoveryRouter,
 });
