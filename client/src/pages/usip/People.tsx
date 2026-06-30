@@ -256,6 +256,8 @@ export default function People() {
   const [locationQ, setLocationQ] = useState("");
   const [industryQ, setIndustryQ] = useState("");
   const [educationQ, setEducationQ] = useState("");
+  const [linkedinQ, setLinkedinQ] = useState("");
+  const [enrolled, setEnrolled] = useState<"all" | "yes" | "no">("all");
   const [hasPhone, setHasPhone] = useState(false);
   const [hasLinkedin, setHasLinkedin] = useState(false);
   const [tiers, setTiers] = useState<Set<string>>(new Set());
@@ -300,6 +302,7 @@ export default function People() {
     hasEmail: hasEmail || undefined,
     verificationStatus: (verification || undefined) as any,
     promoted: promoted === "promoted" ? true : promoted === "not" ? false : undefined,
+    enrolled: enrolled === "all" ? undefined : enrolled,
   });
 
   const total = data?.total ?? 0;
@@ -321,6 +324,7 @@ export default function People() {
       }
       if (industryQ && !(p.industry ?? "").toLowerCase().includes(industryQ.toLowerCase())) return false;
       if (educationQ && !(p.education ?? "").toLowerCase().includes(educationQ.toLowerCase())) return false;
+      if (linkedinQ && !(p.linkedinUrl ?? "").toLowerCase().includes(linkedinQ.toLowerCase())) return false;
       if (hasPhone && !p.phone) return false;
       if (hasLinkedin && !p.linkedinUrl) return false;
       if (tiers.size && !tiers.has((p.confidenceTier ?? "").toLowerCase())) return false;
@@ -337,7 +341,7 @@ export default function People() {
       company_asc: (a, b) => (a.company ?? "").localeCompare(b.company ?? ""),
     };
     return [...out].sort(cmp[sort] ?? cmp.fit_desc);
-  }, [pageRows, search, titleQ, companyQ, locationQ, industryQ, educationQ, hasPhone, hasLinkedin, tiers, seniorities, sort]);
+  }, [pageRows, search, titleQ, companyQ, locationQ, industryQ, educationQ, linkedinQ, hasPhone, hasLinkedin, tiers, seniorities, sort]);
 
   const selected = useMemo(() => rows.find((r) => r.id === selectedId) ?? pageRows.find((r) => r.id === selectedId) ?? null, [rows, pageRows, selectedId]);
 
@@ -348,7 +352,7 @@ export default function People() {
   // whether any *server-backed* filter is set — distinguishes "no results for
   // this query" (show the adjust-filters state) from "empty workspace" (show
   // the AI onboarding empty state).
-  const serverFilterActive = !!(emailStatus || hasEmail || verification || promoted !== "all");
+  const serverFilterActive = !!(emailStatus || hasEmail || verification || promoted !== "all" || enrolled !== "all");
 
   // active filter count for "Clear all" / "Hide filters"
   const activeCount =
@@ -362,6 +366,8 @@ export default function People() {
     (locationQ ? 1 : 0) +
     (industryQ ? 1 : 0) +
     (educationQ ? 1 : 0) +
+    (linkedinQ ? 1 : 0) +
+    (enrolled !== "all" ? 1 : 0) +
     (hasPhone ? 1 : 0) +
     (hasLinkedin ? 1 : 0) +
     tiers.size +
@@ -370,6 +376,7 @@ export default function People() {
   const clearAll = () => {
     setEmailStatus(""); setHasEmail(false); setVerification(""); setPromoted("all");
     setSearch(""); setTitleQ(""); setCompanyQ(""); setLocationQ(""); setIndustryQ(""); setEducationQ("");
+    setLinkedinQ(""); setEnrolled("all");
     setHasPhone(false); setHasLinkedin(false); setTiers(new Set()); setSeniorities(new Set());
     setPage(1);
   };
@@ -392,7 +399,7 @@ export default function People() {
   };
 
   /* ── pinned groups render first ── */
-  const groupOrder = ["quick", "lists", "emailStatus", "verification", "saved", "jobTitles", "seniority", "company", "location", "industry", "education", "fit", "contactInfo"];
+  const groupOrder = ["quick", "lists", "sequence", "emailStatus", "verification", "saved", "jobTitles", "seniority", "company", "location", "industry", "education", "linkedinUrl", "fit", "contactInfo"];
   const orderedGroups = [...groupOrder].sort((a, b) => Number(pinned.has(b)) - Number(pinned.has(a)));
 
   /* ── render a single filter group by id ── */
@@ -537,6 +544,31 @@ export default function People() {
             </div>
           </FilterGroup>
         );
+      case "sequence":
+        return (
+          <FilterGroup key={id} {...common} label="Sequence" icon={Workflow} count={enrolled !== "all" ? 1 : 0}>
+            <div className="space-y-0.5">
+              {[
+                { v: "all", l: "Any" },
+                { v: "yes", l: "In a sequence" },
+                { v: "no", l: "Not in a sequence" },
+              ].map((o) => (
+                <CheckRow
+                  key={o.v}
+                  checked={enrolled === o.v}
+                  onChange={() => { setEnrolled(enrolled === o.v ? "all" : (o.v as "all" | "yes" | "no")); resetPage(); }}
+                  label={o.l}
+                />
+              ))}
+            </div>
+          </FilterGroup>
+        );
+      case "linkedinUrl":
+        return (
+          <FilterGroup key={id} {...common} label="Work URLs" icon={ExternalLink} count={linkedinQ ? 1 : 0}>
+            <Input value={linkedinQ} onChange={(e) => setLinkedinQ(e.target.value)} placeholder="LinkedIn / work URL…" className="h-7 text-[13px]" />
+          </FilterGroup>
+        );
       case "contactInfo":
         return (
           <FilterGroup key={id} {...common} label="Contact info" icon={Phone} count={(hasPhone ? 1 : 0) + (hasLinkedin ? 1 : 0)}>
@@ -548,15 +580,6 @@ export default function People() {
         return null;
     }
   };
-
-  /* ── locked premium filters (visual parity with Apollo) ── */
-  const LOCKED = [
-    { id: "lookalikes", label: "Lookalikes", icon: Users },
-    { id: "technologies", label: "Technologies", icon: Settings2 },
-    { id: "revenue", label: "Revenue", icon: BarChart3 },
-    { id: "funding", label: "Funding", icon: BarChart3 },
-    { id: "intent", label: "Buying intent", icon: Target },
-  ];
 
   return (
     <Shell title="People">
@@ -611,12 +634,6 @@ export default function People() {
               {/* filter groups */}
               <div className="flex-1 min-h-0 overflow-y-auto">
                 {orderedGroups.map((id) => renderGroup(id))}
-
-                {/* locked / premium */}
-                <div className="px-3 pt-2 pb-0.5 text-[11px] uppercase tracking-wide text-muted-foreground">Advanced (upgrade)</div>
-                {LOCKED.map((f) => (
-                  <FilterGroup key={f.id} id={f.id} label={f.label} icon={f.icon} locked open={false} onToggle={() => {}} />
-                ))}
               </div>
 
               {/* footer */}
@@ -1035,22 +1052,20 @@ function MoreFiltersDialog({ open, onClose, count }: { open: boolean; onClose: (
       items: [
         { label: "Name" }, { label: "Job titles" }, { label: "Management level" },
         { label: "Seniority" }, { label: "Contact info" }, { label: "Email status" },
-        { label: "Person location" }, { label: "Education", locked: true },
+        { label: "Person location" }, { label: "Education" }, { label: "Work URLs" },
       ],
     },
     {
       title: "Company info",
       items: [
-        { label: "Company" }, { label: "Industry & keywords" }, { label: "# Employees", locked: true },
-        { label: "Revenue", locked: true }, { label: "Funding", locked: true }, { label: "Technologies", locked: true },
-        { label: "SIC & NAICS", locked: true },
+        { label: "Company" }, { label: "Industry & keywords" },
       ],
     },
     {
-      title: "Engagement & intent",
+      title: "Engagement",
       items: [
         { label: "ICP fit score" }, { label: "Saved status" }, { label: "Stage" },
-        { label: "Buying intent", locked: true }, { label: "Job changes", locked: true }, { label: "Lookalikes", locked: true },
+        { label: "Lists" }, { label: "Sequence" },
       ],
     },
   ];
@@ -1060,7 +1075,7 @@ function MoreFiltersDialog({ open, onClose, count }: { open: boolean; onClose: (
         <DialogHeader>
           <DialogTitle>More filters</DialogTitle>
           <DialogDescription>
-            Pin any filter to keep it in the rail. Locked filters are part of an upgraded plan.
+            Every filter here is functional. Pin any filter to keep it at the top of the rail.
           </DialogDescription>
         </DialogHeader>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-5 py-1">

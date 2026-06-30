@@ -351,6 +351,8 @@ export const prospectsRouter = router({
         verificationStatus: z.enum(["verified", "needs_review", "rejected"]).optional(),
         /** Filter by which discovery run produced/last-touched the row. */
         discoveryRunId: z.number().int().optional(),
+        /** Sequence membership: "yes" = enrolled in any sequence, "no" = not. */
+        enrolled: z.enum(["yes", "no"]).optional(),
       }),
     )
     .query(async ({ ctx, input }) => {
@@ -365,6 +367,16 @@ export const prospectsRouter = router({
       if (input.promoted === false) conditions.push(isNull(prospects.linkedLeadId));
       if (input.verificationStatus) conditions.push(eq(prospects.verificationStatus, input.verificationStatus));
       if (input.discoveryRunId) conditions.push(eq(prospects.lastDiscoveryRunId, input.discoveryRunId));
+      // Sequence membership — join via enrollments.prospectId (migration 0085).
+      if (input.enrolled === "yes") {
+        conditions.push(
+          sql`EXISTS (SELECT 1 FROM \`enrollments\` \`e\` WHERE \`e\`.\`prospectId\` = ${prospects.id} AND \`e\`.\`workspaceId\` = ${ctx.workspace.id})`,
+        );
+      } else if (input.enrolled === "no") {
+        conditions.push(
+          sql`NOT EXISTS (SELECT 1 FROM \`enrollments\` \`e\` WHERE \`e\`.\`prospectId\` = ${prospects.id} AND \`e\`.\`workspaceId\` = ${ctx.workspace.id})`,
+        );
+      }
 
       const offset = (input.page - 1) * input.perPage;
       const rows = await db
