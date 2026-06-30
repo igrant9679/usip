@@ -17,7 +17,7 @@
  *     confidence tier, has-phone, has-linkedin, and the sort order.
  * This keeps the rail responsive while the heavy filters stay correct.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
 import { ProspectAvatar } from "@/components/usip/ProspectAvatar";
@@ -294,6 +294,19 @@ export default function People() {
     setter(next);
   };
 
+  // Debounce the text filters so server queries fire after typing settles
+  // (not per keystroke). Changing any text filter resets to page 1.
+  const [qText, setQText] = useState({
+    search: "", titleQ: "", companyQ: "", locationQ: "", industryQ: "", educationQ: "", linkedinQ: "",
+  });
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setQText({ search, titleQ, companyQ, locationQ, industryQ, educationQ, linkedinQ });
+      setPage(1);
+    }, 300);
+    return () => clearTimeout(t);
+  }, [search, titleQ, companyQ, locationQ, industryQ, educationQ, linkedinQ]);
+
   // ── server query ──
   const { data, isLoading, error, refetch } = trpc.prospects.list.useQuery({
     page,
@@ -303,28 +316,24 @@ export default function People() {
     verificationStatus: (verification || undefined) as any,
     promoted: promoted === "promoted" ? true : promoted === "not" ? false : undefined,
     enrolled: enrolled === "all" ? undefined : enrolled,
+    search: qText.search || undefined,
+    titleQ: qText.titleQ || undefined,
+    companyQ: qText.companyQ || undefined,
+    locationQ: qText.locationQ || undefined,
+    industryQ: qText.industryQ || undefined,
+    educationQ: qText.educationQ || undefined,
+    linkedinQ: qText.linkedinQ || undefined,
   });
 
   const total = data?.total ?? 0;
   const pageRows = (data?.data ?? []) as Prospect[];
 
   // ── client refinement + sort ──
+  // Text filters (search/title/company/location/industry/education/work-URLs)
+  // are applied server-side in prospects.list. What remains here are the
+  // checkbox refinements (contact info, ICP tier, seniority) and the sort.
   const rows = useMemo(() => {
-    const q = search.trim().toLowerCase();
     const out = pageRows.filter((p) => {
-      if (q) {
-        const hay = `${p.firstName} ${p.lastName} ${p.title ?? ""} ${p.company ?? ""} ${p.email ?? ""}`.toLowerCase();
-        if (!hay.includes(q)) return false;
-      }
-      if (titleQ && !(p.title ?? "").toLowerCase().includes(titleQ.toLowerCase())) return false;
-      if (companyQ && !(p.company ?? "").toLowerCase().includes(companyQ.toLowerCase())) return false;
-      if (locationQ) {
-        const loc = [p.city, p.state, p.country].filter(Boolean).join(", ").toLowerCase();
-        if (!loc.includes(locationQ.toLowerCase())) return false;
-      }
-      if (industryQ && !(p.industry ?? "").toLowerCase().includes(industryQ.toLowerCase())) return false;
-      if (educationQ && !(p.education ?? "").toLowerCase().includes(educationQ.toLowerCase())) return false;
-      if (linkedinQ && !(p.linkedinUrl ?? "").toLowerCase().includes(linkedinQ.toLowerCase())) return false;
       if (hasPhone && !p.phone) return false;
       if (hasLinkedin && !p.linkedinUrl) return false;
       if (tiers.size && !tiers.has((p.confidenceTier ?? "").toLowerCase())) return false;
@@ -341,7 +350,7 @@ export default function People() {
       company_asc: (a, b) => (a.company ?? "").localeCompare(b.company ?? ""),
     };
     return [...out].sort(cmp[sort] ?? cmp.fit_desc);
-  }, [pageRows, search, titleQ, companyQ, locationQ, industryQ, educationQ, linkedinQ, hasPhone, hasLinkedin, tiers, seniorities, sort]);
+  }, [pageRows, hasPhone, hasLinkedin, tiers, seniorities, sort]);
 
   const selected = useMemo(() => rows.find((r) => r.id === selectedId) ?? pageRows.find((r) => r.id === selectedId) ?? null, [rows, pageRows, selectedId]);
 
@@ -352,7 +361,10 @@ export default function People() {
   // whether any *server-backed* filter is set — distinguishes "no results for
   // this query" (show the adjust-filters state) from "empty workspace" (show
   // the AI onboarding empty state).
-  const serverFilterActive = !!(emailStatus || hasEmail || verification || promoted !== "all" || enrolled !== "all");
+  const serverFilterActive = !!(
+    emailStatus || hasEmail || verification || promoted !== "all" || enrolled !== "all" ||
+    qText.search || qText.titleQ || qText.companyQ || qText.locationQ || qText.industryQ || qText.educationQ || qText.linkedinQ
+  );
 
   // active filter count for "Clear all" / "Hide filters"
   const activeCount =

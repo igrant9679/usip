@@ -13,7 +13,7 @@
  *   bulkDelete        — remove many prospects at once
  */
 import { z } from "zod";
-import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, like, or, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { router } from "../_core/trpc";
 import { workspaceProcedure } from "../_core/workspace";
@@ -353,6 +353,14 @@ export const prospectsRouter = router({
         discoveryRunId: z.number().int().optional(),
         /** Sequence membership: "yes" = enrolled in any sequence, "no" = not. */
         enrolled: z.enum(["yes", "no"]).optional(),
+        /** Server-side text filters (case-insensitive contains). */
+        search: z.string().trim().max(200).optional(),
+        titleQ: z.string().trim().max(200).optional(),
+        companyQ: z.string().trim().max(200).optional(),
+        locationQ: z.string().trim().max(200).optional(),
+        industryQ: z.string().trim().max(200).optional(),
+        educationQ: z.string().trim().max(200).optional(),
+        linkedinQ: z.string().trim().max(500).optional(),
       }),
     )
     .query(async ({ ctx, input }) => {
@@ -376,6 +384,28 @@ export const prospectsRouter = router({
         conditions.push(
           sql`NOT EXISTS (SELECT 1 FROM \`enrollments\` \`e\` WHERE \`e\`.\`prospectId\` = ${prospects.id} AND \`e\`.\`workspaceId\` = ${ctx.workspace.id})`,
         );
+      }
+      // Text filters — case-insensitive contains (MySQL default _ci collation).
+      if (input.search) {
+        const s = `%${input.search}%`;
+        conditions.push(
+          or(
+            like(prospects.firstName, s),
+            like(prospects.lastName, s),
+            like(prospects.title, s),
+            like(prospects.company, s),
+            like(prospects.email, s),
+          )!,
+        );
+      }
+      if (input.titleQ) conditions.push(like(prospects.title, `%${input.titleQ}%`));
+      if (input.companyQ) conditions.push(like(prospects.company, `%${input.companyQ}%`));
+      if (input.industryQ) conditions.push(like(prospects.industry, `%${input.industryQ}%`));
+      if (input.educationQ) conditions.push(like(prospects.education, `%${input.educationQ}%`));
+      if (input.linkedinQ) conditions.push(like(prospects.linkedinUrl, `%${input.linkedinQ}%`));
+      if (input.locationQ) {
+        const s = `%${input.locationQ}%`;
+        conditions.push(or(like(prospects.city, s), like(prospects.state, s), like(prospects.country, s))!);
       }
 
       const offset = (input.page - 1) * input.perPage;
