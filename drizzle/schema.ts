@@ -3883,3 +3883,208 @@ export const linkedinDailyUsage = mysqlTable(
   }),
 );
 export type LinkedinDailyUsage = typeof linkedinDailyUsage.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   LinkedIn enrichment (Unipile) — migration 0095
+
+   Compliant LinkedIn profile enrichment via the AUTHORIZED Unipile vendor
+   layer ONLY (no scraping). Batch URL import → Unipile retrieval (reuses
+   server/services/linkedinLookup) → match to an existing prospect → store
+   enrichment as OPTIONAL metadata in its own tables (never overloads the
+   prospects row) → daily change check → compact UI indicators.
+
+   Connected accounts are NOT a new table — they reuse `unipile_accounts`
+   (provider='LINKEDIN'); its `metadata` json + `lastSyncAt` cover the
+   capability/health fields the spec called for.
+
+   PK convention: int AUTO_INCREMENT to match the rest of this schema (the
+   source spec's UUIDs are adapted to int — every other table here uses int).
+   ────────────────────────────────────────────────────────────────────────── */
+
+/** One batch of pasted/uploaded LinkedIn URLs to enrich. */
+export const linkedinEnrichmentBatches = mysqlTable(
+  "linkedin_enrichment_batches",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    uploadedByUserId: int("uploaded_by_user_id").notNull(),
+    /** pasted_urls | csv_upload */
+    sourceType: varchar("source_type", { length: 32 }).notNull(),
+    /** created | validating | validated | running | completed | failed */
+    status: varchar("status", { length: 24 }).default("created").notNull(),
+    totalRows: int("total_rows").default(0).notNull(),
+    validRows: int("valid_rows").default(0).notNull(),
+    invalidRows: int("invalid_rows").default(0).notNull(),
+    matchedRows: int("matched_rows").default(0).notNull(),
+    needsReviewRows: int("needs_review_rows").default(0).notNull(),
+    failedRows: int("failed_rows").default(0).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    startedAt: timestamp("started_at"),
+    completedAt: timestamp("completed_at"),
+  },
+  (t) => ({
+    byWs: index("ix_leb_ws").on(t.workspaceId),
+  }),
+);
+export type LinkedinEnrichmentBatch = typeof linkedinEnrichmentBatches.$inferSelect;
+
+/** One URL row inside a batch: validation, matching, and enrichment status. */
+export const linkedinEnrichmentBatchRows = mysqlTable(
+  "linkedin_enrichment_batch_rows",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    batchId: int("batch_id").notNull(),
+    workspaceId: int("workspaceId").notNull(),
+    originalUrl: text("original_url").notNull(),
+    normalizedUrl: varchar("normalized_url", { length: 255 }),
+    providedFullName: varchar("provided_full_name", { length: 200 }),
+    providedFirstName: varchar("provided_first_name", { length: 100 }),
+    providedLastName: varchar("provided_last_name", { length: 100 }),
+    providedCompany: varchar("provided_company", { length: 200 }),
+    providedTitle: varchar("provided_title", { length: 200 }),
+    providedEmail: varchar("provided_email", { length: 320 }),
+    providedProspectId: int("provided_prospect_id"),
+    /** valid | invalid | duplicate */
+    validationStatus: varchar("validation_status", { length: 16 }).default("valid").notNull(),
+    validationError: varchar("validation_error", { length: 300 }),
+    /** exact_match | high_confidence | possible_match | no_match | conflict */
+    matchStatus: varchar("match_status", { length: 24 }),
+    matchedProspectId: int("matched_prospect_id"),
+    matchScore: int("match_score"),
+    matchReasons: json("match_reasons"),
+    /** Resolved prospect_linkedin_enrichments.id once enrichment is applied. */
+    enrichmentId: int("enrichment_id"),
+    /** pending | enriched | partially_enriched | failed | no_match | needs_review | skipped */
+    rowStatus: varchar("row_status", { length: 24 }).default("pending").notNull(),
+    errorMessage: text("error_message"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    byBatch: index("ix_lebr_batch").on(t.batchId),
+    byMatched: index("ix_lebr_ws_matched").on(t.workspaceId, t.matchedProspectId),
+  }),
+);
+export type LinkedinEnrichmentBatchRow = typeof linkedinEnrichmentBatchRows.$inferSelect;
+
+/** Per-prospect LinkedIn enrichment record (optional metadata, one per prospect). */
+export const prospectLinkedinEnrichments = mysqlTable(
+  "prospect_linkedin_enrichments",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    prospectId: int("prospect_id").notNull(),
+    linkedinProfileUrl: text("linkedin_profile_url").notNull(),
+    linkedinProfileIdentifier: varchar("linkedin_profile_identifier", { length: 200 }),
+    linkedinPublicId: varchar("linkedin_public_id", { length: 200 }),
+    linkedinFullName: varchar("linkedin_full_name", { length: 200 }),
+    linkedinFirstName: varchar("linkedin_first_name", { length: 100 }),
+    linkedinLastName: varchar("linkedin_last_name", { length: 100 }),
+    linkedinHeadline: varchar("linkedin_headline", { length: 500 }),
+    linkedinLocation: varchar("linkedin_location", { length: 200 }),
+    linkedinProfileImageUrl: text("linkedin_profile_image_url"),
+    linkedinProfileImageAllowed: boolean("linkedin_profile_image_allowed").default(false).notNull(),
+    currentTitle: varchar("current_title", { length: 200 }),
+    currentCompanyName: varchar("current_company_name", { length: 200 }),
+    currentCompanyLinkedinUrl: text("current_company_linkedin_url"),
+    currentCompanyDomain: varchar("current_company_domain", { length: 200 }),
+    currentCompanyStartDate: date("current_company_start_date"),
+    experienceHistoryJson: json("experience_history_json"),
+    educationHistoryJson: json("education_history_json"),
+    skillsJson: json("skills_json"),
+    summaryAbout: text("summary_about"),
+    industry: varchar("industry", { length: 120 }),
+    languagesJson: json("languages_json"),
+    /** exact_match | high_confidence | possible_match | manual | created_new */
+    linkedinMatchStatus: varchar("linkedin_match_status", { length: 24 }).default("manual").notNull(),
+    linkedinConnectionDegree: varchar("linkedin_connection_degree", { length: 16 }),
+    /** pending | enriched | partially_enriched | failed | no_match | blocked_by_policy | source_unavailable | vendor_error | needs_review */
+    linkedinDataStatus: varchar("linkedin_data_status", { length: 24 }).default("pending").notNull(),
+    /** unipile_linkedin_profile | unipile_sales_navigator | crm_import | user_uploaded_url | manual_user_entry | licensed_enrichment_provider */
+    linkedinSourceType: varchar("linkedin_source_type", { length: 40 }).default("unipile_linkedin_profile").notNull(),
+    linkedinSourceVendor: varchar("linkedin_source_vendor", { length: 32 }).default("unipile").notNull(),
+    linkedinSourceAccountId: varchar("linkedin_source_account_id", { length: 200 }),
+    linkedinLastRetrievedAt: timestamp("linkedin_last_retrieved_at"),
+    linkedinLastCheckedAt: timestamp("linkedin_last_checked_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    byProspect: uniqueIndex("uq_ple_ws_prospect").on(t.workspaceId, t.prospectId),
+    byUrl: index("ix_ple_ws_url").on(t.workspaceId, t.linkedinProfileIdentifier),
+  }),
+);
+export type ProspectLinkedinEnrichment = typeof prospectLinkedinEnrichments.$inferSelect;
+
+/** Point-in-time snapshot of the normalized profile, for daily change diffing. */
+export const prospectLinkedinFieldSnapshots = mysqlTable(
+  "prospect_linkedin_field_snapshots",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    prospectId: int("prospect_id").notNull(),
+    enrichmentId: int("enrichment_id").notNull(),
+    snapshotHash: varchar("snapshot_hash", { length: 64 }).notNull(),
+    snapshotJson: json("snapshot_json").notNull(),
+    capturedAt: timestamp("captured_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    byProspect: index("ix_plfs_ws_prospect").on(t.workspaceId, t.prospectId),
+  }),
+);
+export type ProspectLinkedinFieldSnapshot = typeof prospectLinkedinFieldSnapshots.$inferSelect;
+
+/** A single detected field change (the source of the compact UI indicators). */
+export const prospectLinkedinFieldChanges = mysqlTable(
+  "prospect_linkedin_field_changes",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    prospectId: int("prospect_id").notNull(),
+    enrichmentId: int("enrichment_id").notNull(),
+    fieldName: varchar("field_name", { length: 64 }).notNull(),
+    oldValue: text("old_value"),
+    newValue: text("new_value"),
+    oldValueHash: varchar("old_value_hash", { length: 64 }),
+    newValueHash: varchar("new_value_hash", { length: 64 }),
+    /** title_changed | company_changed | location_changed | headline_changed | new_profile_photo | … */
+    changeType: varchar("change_type", { length: 40 }).notNull(),
+    sourceVendor: varchar("source_vendor", { length: 32 }).default("unipile").notNull(),
+    sourceType: varchar("source_type", { length: 40 }).notNull(),
+    confidence: decimal("confidence", { precision: 5, scale: 2 }),
+    detectedAt: timestamp("detected_at").defaultNow().notNull(),
+    acknowledgedAt: timestamp("acknowledged_at"),
+    acknowledgedByUserId: int("acknowledged_by_user_id"),
+    /** high | medium | low | normal */
+    displayPriority: varchar("display_priority", { length: 12 }).default("normal").notNull(),
+    isVisible: boolean("is_visible").default(true).notNull(),
+  },
+  (t) => ({
+    byProspect: index("ix_plfc_ws_prospect_detected").on(t.workspaceId, t.prospectId, t.detectedAt),
+    byVisible: index("ix_plfc_ws_visible_ack").on(t.workspaceId, t.isVisible, t.acknowledgedAt),
+  }),
+);
+export type ProspectLinkedinFieldChange = typeof prospectLinkedinFieldChanges.$inferSelect;
+
+/** One run of the daily LinkedIn change-check job (per workspace). */
+export const linkedinDailyCheckJobs = mysqlTable(
+  "linkedin_daily_check_jobs",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    /** pending | running | completed | failed */
+    status: varchar("status", { length: 16 }).default("pending").notNull(),
+    checkedCount: int("checked_count").default(0).notNull(),
+    changedCount: int("changed_count").default(0).notNull(),
+    failedCount: int("failed_count").default(0).notNull(),
+    /** manual | scheduled */
+    trigger: varchar("trigger", { length: 16 }).default("scheduled").notNull(),
+    startedAt: timestamp("started_at"),
+    completedAt: timestamp("completed_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    byWs: index("ix_ldcj_ws").on(t.workspaceId),
+  }),
+);
+export type LinkedinDailyCheckJob = typeof linkedinDailyCheckJobs.$inferSelect;
