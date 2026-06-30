@@ -31,6 +31,7 @@ import WebsiteVisitors from "@/pages/usip/WebsiteVisitors";
 import Lists from "@/pages/usip/Lists";
 import ListDetail from "@/pages/usip/ListDetail";
 import DataEnrichment from "@/pages/usip/DataEnrichment";
+import LinkedInEnrichmentImport from "@/pages/usip/LinkedInEnrichmentImport";
 import SequencesV2 from "@/pages/usip/SequencesV2";
 import SequenceEditor from "@/pages/usip/SequenceEditor";
 import Home from "@/pages/usip/Home";
@@ -383,6 +384,7 @@ function Router() {
       <Route path="/v2/companies"><AuthGate><Companies /></AuthGate></Route>
       <Route path="/v2/lists/:id"><AuthGate><ListDetail /></AuthGate></Route>
       <Route path="/v2/lists"><AuthGate><Lists /></AuthGate></Route>
+      <Route path="/v2/data-enrichment/linkedin"><AuthGate><LinkedInEnrichmentImport /></AuthGate></Route>
       <Route path="/v2/data-enrichment"><AuthGate><DataEnrichment /></AuthGate></Route>
       <Route path="/v2/sequences/:id"><AuthGate><SequenceEditor /></AuthGate></Route>
       <Route path="/v2/sequences"><AuthGate><SequencesV2 /></AuthGate></Route>

@@ -644,6 +644,7 @@ export default function People() {
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               <DropdownMenuItem onClick={() => setLocation("/import")}><Upload className="size-4 mr-2" /> Import a CSV</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setLocation("/v2/data-enrichment/linkedin")}><ExternalLink className="size-4 mr-2" /> Enrich from LinkedIn</DropdownMenuItem>
               <DropdownMenuItem onClick={() => setLocation("/find-prospects")}><Search className="size-4 mr-2" /> Find prospects</DropdownMenuItem>
               <DropdownMenuItem onClick={() => setLocation("/are")}><Sparkles className="size-4 mr-2" /> Auto-discover (ARE)</DropdownMenuItem>
             </DropdownMenuContent>
