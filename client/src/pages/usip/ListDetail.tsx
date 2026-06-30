@@ -12,6 +12,7 @@
 import { useMemo, useState } from "react";
 import { useParams, useLocation, Link } from "wouter";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
+import { LinkedInUpdateIndicator } from "@/components/usip/people/LinkedInEnrichment";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -89,6 +90,21 @@ export default function ListDetail() {
   const [sort, setSort] = useState("added");
 
   const members = (membersQ.data ?? []) as { memberId: number; recordType: string; recordId: number; addedAt: string | Date; record: any }[];
+
+  // Compact LinkedIn change indicators for prospect members (batched — returns
+  // only members with unacknowledged updates). Same component as the People tab.
+  const memberProspectIds = useMemo(
+    () => members.filter((m) => m.recordType === "prospect").map((m) => m.recordId),
+    [members],
+  );
+  const { data: liSummaries } = trpc.linkedinEnrichment.getChangeSummaries.useQuery(
+    { prospectIds: memberProspectIds },
+    { enabled: memberProspectIds.length > 0 },
+  );
+  const liSummaryMap = useMemo(
+    () => new Map((liSummaries ?? []).map((s: any) => [s.prospect_id, s])),
+    [liSummaries],
+  );
 
   const rows = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -224,7 +240,12 @@ export default function ListDetail() {
                         </>
                       ) : (
                         <>
-                          <td className="px-3 py-1.5 font-medium">{r.firstName} {r.lastName}</td>
+                          <td className="px-3 py-1.5 font-medium">
+                            <div className="flex items-center gap-1.5">
+                              <span className="truncate">{r.firstName} {r.lastName}</span>
+                              {liSummaryMap.get(m.recordId) ? <LinkedInUpdateIndicator summary={liSummaryMap.get(m.recordId)} /> : null}
+                            </div>
+                          </td>
                           <td className="px-2 py-1.5"><div className="max-w-[160px] truncate" title={r.title ?? undefined}>{r.title ?? "—"}</div></td>
                           <td className="px-2 py-1.5"><div className="max-w-[150px] truncate" title={r.company ?? undefined}>{r.company ?? "—"}</div></td>
                           <td className="px-2 py-1.5">{r.email ? <span className="text-xs inline-flex items-center gap-1"><Mail className="size-3 text-muted-foreground" /> <span className="truncate max-w-[180px]">{r.email}</span></span> : <span className="text-xs text-muted-foreground">—</span>}</td>

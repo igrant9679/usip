@@ -18,6 +18,7 @@ import { trpc } from "@/lib/trpc";
 import { Shell, PageHeader } from "@/components/usip/Shell";
 import { AddToSequenceButton } from "@/components/usip/AddToSequenceButton";
 import { ProfileImageUploader, ProfileImageSourceBadge } from "@/components/usip/ProspectAvatar";
+import { LinkedInEnrichmentFullPanel } from "@/components/usip/people/LinkedInEnrichment";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -214,6 +215,9 @@ export default function ProspectDetail() {
             </ProfileField>
           </CardContent>
         </Card>
+
+        {/* LinkedIn enrichment (Unipile) — optional metadata, daily-checked */}
+        <LinkedInEnrichmentFullPanel prospectId={id} />
 
         {/* Evidence panel */}
         <Card>

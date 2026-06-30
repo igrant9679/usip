@@ -96,6 +96,7 @@ import { CreateWorkflowMenu } from "@/components/usip/people/CreateWorkflowMenu"
 import { SortMenu } from "@/components/usip/people/SortMenu";
 import { SelectionToolbar } from "@/components/usip/people/SelectionToolbar";
 import { SearchSettingsSheet, type AppliedFilter } from "@/components/usip/people/SearchSettingsSheet";
+import { LinkedInEnrichmentSummaryCard } from "@/components/usip/people/LinkedInEnrichment";
 
 /* ─────────────────────────── filter rail ──────────────────────────────── */
 
@@ -314,6 +315,18 @@ export default function People() {
   }, [pageRows, hasPhone, hasLinkedin, tiers, seniorities, sortField, sortDir]);
 
   const selected = useMemo(() => rows.find((r) => r.id === selectedId) ?? pageRows.find((r) => r.id === selectedId) ?? null, [rows, pageRows, selectedId]);
+
+  // Compact LinkedIn change indicators for the visible rows (batched — returns
+  // only prospects that have unacknowledged updates, so the table stays light).
+  const visibleIds = useMemo(() => rows.map((r) => r.id), [rows]);
+  const { data: liSummaries } = trpc.linkedinEnrichment.getChangeSummaries.useQuery(
+    { prospectIds: visibleIds },
+    { enabled: visibleIds.length > 0 },
+  );
+  const liSummaryMap = useMemo(
+    () => new Map((liSummaries ?? []).map((s: any) => [s.prospect_id, s])),
+    [liSummaries],
+  );
 
   // stats (Total = whole dataset; net-new / saved computed on the loaded page)
   const savedOnPage = pageRows.filter((p) => p.linkedLeadId || p.linkedContactId).length;
@@ -806,7 +819,7 @@ export default function People() {
                           />
                         </td>
                         {visibleColumns.map((key) => (
-                          <td key={key} className="px-2 py-1.5 align-middle">{COLUMN_REGISTRY[key].cell(p, { onAction })}</td>
+                          <td key={key} className="px-2 py-1.5 align-middle">{COLUMN_REGISTRY[key].cell(p, { onAction, changeSummary: liSummaryMap.get(p.id) })}</td>
                         ))}
                         <td className="px-2 py-1.5" />
                       </tr>
@@ -887,6 +900,8 @@ function DetailPanel({ p, onClose, onOpenFull }: { p: Prospect; onClose: () => v
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-5 text-sm">
+        <LinkedInEnrichmentSummaryCard prospectId={d.id} />
+
         <Section title="Contact information">
           <Field icon={Mail} label="Email" value={d.email} extra={emailStatusBadge(d.emailStatus)} />
           <Field icon={Phone} label="Phone" value={d.phone} />

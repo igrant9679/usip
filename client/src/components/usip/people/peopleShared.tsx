@@ -11,6 +11,7 @@
  */
 import type { ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
+import { LinkedInUpdateIndicator, type LinkedInChangeSummary } from "./LinkedInEnrichment";
 import {
   User,
   Briefcase,
@@ -120,6 +121,8 @@ export type ColumnDef = {
 export type ColumnCellCtx = {
   /** Row action handlers, wired by the page. */
   onAction?: (action: string, p: Prospect) => void;
+  /** Compact LinkedIn change summary for this row (People table indicator). */
+  changeSummary?: LinkedInChangeSummary | null;
 };
 
 /** The full registry, keyed for quick lookup + ordered render. */
@@ -129,9 +132,12 @@ export const COLUMN_REGISTRY: Record<ColumnKey, ColumnDef> = {
     label: "Name",
     icon: User,
     locked: true,
-    cell: (p) => (
+    cell: (p, ctx) => (
       <div className="min-w-0">
-        <div className="font-medium whitespace-nowrap truncate">{p.firstName} {p.lastName}</div>
+        <div className="font-medium whitespace-nowrap truncate flex items-center gap-1.5">
+          <span className="truncate">{p.firstName} {p.lastName}</span>
+          {ctx.changeSummary ? <LinkedInUpdateIndicator summary={ctx.changeSummary} /> : null}
+        </div>
         {p.linkedinUrl && (
           <a
             href={p.linkedinUrl}
