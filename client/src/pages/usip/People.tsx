@@ -6,16 +6,21 @@
  * strip. A right-hand detail panel opens for the selected person, and an AI
  * empty-state with quick filters shows when there's nothing to display.
  *
+ * The top-action shelf (Default view · Research with AI · Create workflow ·
+ * Save as new search · Sort · Search settings) and the selected-rows toolbar
+ * live in dedicated components under components/usip/people/. The results table
+ * is COLUMN-DRIVEN: `visibleColumns` (a list of ColumnKey) is rendered from the
+ * shared COLUMN_REGISTRY, and the Search-settings → Fields panel mutates it.
+ *
  * Data source: the existing `prospects.list` tRPC query (server-side paginated,
  * with confidence scoring + email/verification status from the ARE engine).
  *
  * Filter split (intentional, see comments at the query):
  *   - SERVER filters change the *whole-dataset* query (and therefore the Total
- *     stat + pagination): emailStatus, verificationStatus, promoted, hasEmail.
+ *     stat + pagination): emailStatus, verificationStatus, promoted, hasEmail,
+ *     enrolled, and the debounced text filters.
  *   - CLIENT refinement filters narrow the *loaded page* without another round
- *     trip: free-text name/title/company/location/industry, seniority,
- *     confidence tier, has-phone, has-linkedin, and the sort order.
- * This keeps the rail responsive while the heavy filters stay correct.
+ *     trip: seniority, confidence tier, has-phone, has-linkedin, and the sort.
  */
 import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "wouter";
@@ -40,25 +45,15 @@ import {
   DropdownMenuTrigger,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
 } from "@/components/ui/dropdown-menu";
 import {
   Search,
   Upload,
   ChevronDown,
-  ChevronRight,
   Filter,
   X,
-  Check,
   Sparkles,
   Plus,
-  Save,
-  ArrowUpDown,
-  SlidersHorizontal,
-  Settings2,
   Mail,
   Phone,
   ExternalLink,
@@ -72,8 +67,6 @@ import {
   Globe,
   Target,
   ListChecks,
-  BarChart3,
-  Loader2,
   CheckCircle2,
   Workflow,
   Lock,
@@ -81,41 +74,28 @@ import {
   Layers,
   Bookmark,
   ImagePlus,
+  Settings2,
+  SlidersHorizontal,
 } from "lucide-react";
-
-/* ───────────────────────── badges / helpers ───────────────────────────── */
-
-/** Email-status pill matching the Prospects page styling. */
-function emailStatusBadge(status?: string | null) {
-  if (!status) return null;
-  const map: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
-    valid: { label: "Valid", variant: "default" },
-    verified: { label: "Verified", variant: "default" },
-    accept_all: { label: "Catch-all", variant: "secondary" },
-    risky: { label: "Risky", variant: "secondary" },
-    invalid: { label: "Invalid", variant: "destructive" },
-    unverified: { label: "Unverified", variant: "secondary" },
-    unavailable: { label: "Unavailable", variant: "outline" },
-  };
-  const s = map[status] ?? { label: status, variant: "outline" as const };
-  return <Badge variant={s.variant} className="text-[10px] px-1.5 py-0">{s.label}</Badge>;
-}
-
-/** ICP-fit pill from a 0–100 confidence score. */
-function fitBadge(score?: number | null) {
-  if (score === null || score === undefined) return <span className="text-xs text-muted-foreground">—</span>;
-  const color = score >= 70 ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300"
-    : score >= 40 ? "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
-    : "bg-rose-100 text-rose-800 dark:bg-rose-900/30 dark:text-rose-300";
-  return <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-xs font-semibold tabular-nums ${color}`} title="ICP-fit confidence score">{score}</span>;
-}
-
-/** Compact human number for the stats strip (1.2k etc.). */
-function fmtNum(n: number) {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(n % 1_000 === 0 ? 0 : 1)}k`;
-  return String(n);
-}
+import {
+  type Prospect,
+  type ColumnKey,
+  type SortField,
+  type SortDir,
+  type SavedView,
+  fitBadge,
+  emailStatusBadge,
+  fmtNum,
+  sortRows,
+  COLUMN_REGISTRY,
+  DEFAULT_COLUMNS,
+} from "@/components/usip/people/peopleShared";
+import { DefaultViewMenu } from "@/components/usip/people/DefaultViewMenu";
+import { ResearchAiMenu } from "@/components/usip/people/ResearchAiMenu";
+import { CreateWorkflowMenu } from "@/components/usip/people/CreateWorkflowMenu";
+import { SortMenu } from "@/components/usip/people/SortMenu";
+import { SelectionToolbar } from "@/components/usip/people/SelectionToolbar";
+import { SearchSettingsSheet, type AppliedFilter } from "@/components/usip/people/SearchSettingsSheet";
 
 /* ─────────────────────────── filter rail ──────────────────────────────── */
 
@@ -207,33 +187,9 @@ function CheckRow({ checked, onChange, label, hint }: { checked: boolean; onChan
   );
 }
 
-/* ─────────────────────────────── types ────────────────────────────────── */
-
-type Prospect = {
-  id: number;
-  firstName: string;
-  lastName: string;
-  title?: string | null;
-  seniority?: string | null;
-  email?: string | null;
-  emailStatus?: string | null;
-  phone?: string | null;
-  linkedinUrl?: string | null;
-  city?: string | null;
-  state?: string | null;
-  country?: string | null;
-  company?: string | null;
-  companyDomain?: string | null;
-  industry?: string | null;
-  education?: string | null;
-  confidenceScore?: number | null;
-  confidenceTier?: string | null;
-  verificationStatus?: string | null;
-  linkedLeadId?: number | null;
-  linkedContactId?: number | null;
-};
-
 const SENIORITY_OPTIONS = ["c-level", "vp", "director", "manager", "senior", "entry", "owner", "partner"];
+
+const cap = (s: string) => s.replace(/[-_]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
 /* ─────────────────────────────── page ─────────────────────────────────── */
 
@@ -262,7 +218,17 @@ export default function People() {
   const [hasLinkedin, setHasLinkedin] = useState(false);
   const [tiers, setTiers] = useState<Set<string>>(new Set());
   const [seniorities, setSeniorities] = useState<Set<string>>(new Set());
-  const [sort, setSort] = useState("fit_desc");
+
+  // ── sort (field + direction, applied by the Sort popover) ──
+  const [sortField, setSortField] = useState<SortField>("relevance");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
+
+  // ── view / column state ──
+  const [visibleColumns, setVisibleColumns] = useState<ColumnKey[]>(DEFAULT_COLUMNS);
+  const [views, setViews] = useState<SavedView[]>([
+    { id: "default", name: "Default view", system: true, scope: "yours", columns: DEFAULT_COLUMNS },
+  ]);
+  const [activeViewId, setActiveViewId] = useState("default");
 
   // ── view state ──
   const [hideFilters, setHideFilters] = useState(false);
@@ -271,6 +237,10 @@ export default function People() {
   const [checked, setChecked] = useState<Set<number>>(new Set());
   const [moreOpen, setMoreOpen] = useState(false);
   const [aiPrompt, setAiPrompt] = useState("");
+  const [settings, setSettings] = useState<{ open: boolean; mode: "settings" | "create"; initialView?: "main" | "fields" | "filters" }>({
+    open: false,
+    mode: "settings",
+  });
   const [pinned, setPinned] = useState<Set<string>>(new Set(["emailStatus", "jobTitles"]));
   const [openGroups, setOpenGroups] = useState<Set<string>>(
     new Set(["quick", "emailStatus", "jobTitles", "fit"]),
@@ -329,9 +299,6 @@ export default function People() {
   const pageRows = (data?.data ?? []) as Prospect[];
 
   // ── client refinement + sort ──
-  // Text filters (search/title/company/location/industry/education/work-URLs)
-  // are applied server-side in prospects.list. What remains here are the
-  // checkbox refinements (contact info, ICP tier, seniority) and the sort.
   const rows = useMemo(() => {
     const out = pageRows.filter((p) => {
       if (hasPhone && !p.phone) return false;
@@ -343,14 +310,8 @@ export default function People() {
       }
       return true;
     });
-    const cmp: Record<string, (a: Prospect, b: Prospect) => number> = {
-      fit_desc: (a, b) => (b.confidenceScore ?? -1) - (a.confidenceScore ?? -1),
-      fit_asc: (a, b) => (a.confidenceScore ?? 999) - (b.confidenceScore ?? 999),
-      name_asc: (a, b) => `${a.firstName} ${a.lastName}`.localeCompare(`${b.firstName} ${b.lastName}`),
-      company_asc: (a, b) => (a.company ?? "").localeCompare(b.company ?? ""),
-    };
-    return [...out].sort(cmp[sort] ?? cmp.fit_desc);
-  }, [pageRows, hasPhone, hasLinkedin, tiers, seniorities, sort]);
+    return sortRows(out, sortField, sortDir);
+  }, [pageRows, hasPhone, hasLinkedin, tiers, seniorities, sortField, sortDir]);
 
   const selected = useMemo(() => rows.find((r) => r.id === selectedId) ?? pageRows.find((r) => r.id === selectedId) ?? null, [rows, pageRows, selectedId]);
 
@@ -359,14 +320,13 @@ export default function People() {
   const netNewOnPage = pageRows.length - savedOnPage;
 
   // whether any *server-backed* filter is set — distinguishes "no results for
-  // this query" (show the adjust-filters state) from "empty workspace" (show
-  // the AI onboarding empty state).
+  // this query" (show the adjust-filters state) from "empty workspace".
   const serverFilterActive = !!(
     emailStatus || hasEmail || verification || promoted !== "all" || enrolled !== "all" ||
     qText.search || qText.titleQ || qText.companyQ || qText.locationQ || qText.industryQ || qText.educationQ || qText.linkedinQ
   );
 
-  // active filter count for "Clear all" / "Hide filters"
+  // active filter count for "Clear all" / "Hide filters" / Search settings
   const activeCount =
     (emailStatus ? 1 : 0) +
     (hasEmail ? 1 : 0) +
@@ -385,6 +345,49 @@ export default function People() {
     tiers.size +
     seniorities.size;
 
+  // applied filters for the Search-settings → Filters panel (removable pills)
+  const appliedFilters = useMemo<AppliedFilter[]>(() => {
+    const f: AppliedFilter[] = [];
+    if (emailStatus) f.push({ id: "emailStatus", group: "Email Status", label: cap(emailStatus) });
+    if (hasEmail) f.push({ id: "hasEmail", group: "Email Status", label: "Has email" });
+    if (verification) f.push({ id: "verification", group: "Stage", label: cap(verification) });
+    if (promoted !== "all") f.push({ id: "promoted", group: "Saved status", label: promoted === "promoted" ? "Saved" : "Net new" });
+    if (enrolled !== "all") f.push({ id: "enrolled", group: "Sequence", label: enrolled === "yes" ? "In a sequence" : "Not in a sequence" });
+    if (qText.search) f.push({ id: "search", group: "Keywords", label: qText.search });
+    if (qText.titleQ) f.push({ id: "titleQ", group: "Job titles", label: qText.titleQ });
+    if (qText.companyQ) f.push({ id: "companyQ", group: "Company", label: qText.companyQ });
+    if (qText.locationQ) f.push({ id: "locationQ", group: "Location", label: qText.locationQ });
+    if (qText.industryQ) f.push({ id: "industryQ", group: "Industry", label: qText.industryQ });
+    if (qText.educationQ) f.push({ id: "educationQ", group: "Education", label: qText.educationQ });
+    if (qText.linkedinQ) f.push({ id: "linkedinQ", group: "Work URLs", label: qText.linkedinQ });
+    if (hasPhone) f.push({ id: "hasPhone", group: "Contact info", label: "Has phone" });
+    if (hasLinkedin) f.push({ id: "hasLinkedin", group: "Contact info", label: "Has LinkedIn" });
+    tiers.forEach((t) => f.push({ id: `tier:${t}`, group: "ICP fit", label: cap(t) }));
+    seniorities.forEach((s) => f.push({ id: `sen:${s}`, group: "Management level", label: cap(s) }));
+    return f;
+  }, [emailStatus, hasEmail, verification, promoted, enrolled, qText, hasPhone, hasLinkedin, tiers, seniorities]);
+
+  const removeFilter = (id: string) => {
+    if (id.startsWith("tier:")) { const v = id.slice(5); setTiers((p) => { const n = new Set(p); n.delete(v); return n; }); return; }
+    if (id.startsWith("sen:")) { const v = id.slice(4); setSeniorities((p) => { const n = new Set(p); n.delete(v); return n; }); return; }
+    switch (id) {
+      case "emailStatus": setEmailStatus(""); resetPage(); break;
+      case "hasEmail": setHasEmail(false); resetPage(); break;
+      case "verification": setVerification(""); resetPage(); break;
+      case "promoted": setPromoted("all"); resetPage(); break;
+      case "enrolled": setEnrolled("all"); resetPage(); break;
+      case "search": setSearch(""); break;
+      case "titleQ": setTitleQ(""); break;
+      case "companyQ": setCompanyQ(""); break;
+      case "locationQ": setLocationQ(""); break;
+      case "industryQ": setIndustryQ(""); break;
+      case "educationQ": setEducationQ(""); break;
+      case "linkedinQ": setLinkedinQ(""); break;
+      case "hasPhone": setHasPhone(false); break;
+      case "hasLinkedin": setHasLinkedin(false); break;
+    }
+  };
+
   const clearAll = () => {
     setEmailStatus(""); setHasEmail(false); setVerification(""); setPromoted("all");
     setSearch(""); setTitleQ(""); setCompanyQ(""); setLocationQ(""); setIndustryQ(""); setEducationQ("");
@@ -395,6 +398,21 @@ export default function People() {
 
   // changing a server filter should reset to page 1
   const resetPage = () => setPage(1);
+
+  // ── saved views ──
+  const applyView = (v: SavedView) => {
+    setActiveViewId(v.id);
+    setVisibleColumns(v.columns);
+  };
+  const createSavedSearch = (name: string) => {
+    if (!name) return;
+    const id = `v_${Date.now()}`;
+    setViews((prev) => [...prev, { id, name, scope: "yours", columns: visibleColumns }]);
+    setActiveViewId(id);
+  };
+
+  // row quick-actions (Actions column) — open the detail panel for now
+  const onAction = (_action: string, p: Prospect) => setSelectedId(p.id);
 
   const totalPages = Math.max(1, Math.ceil(total / perPage));
   const rangeStart = total === 0 ? 0 : (page - 1) * perPage + 1;
@@ -512,7 +530,7 @@ export default function People() {
           <FilterGroup key={id} {...common} label="Management level" icon={Layers} count={seniorities.size}>
             <div className="space-y-0.5">
               {SENIORITY_OPTIONS.map((s) => (
-                <CheckRow key={s} checked={seniorities.has(s)} onChange={() => toggleIn(seniorities, setSeniorities, s)} label={s.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())} />
+                <CheckRow key={s} checked={seniorities.has(s)} onChange={() => toggleIn(seniorities, setSeniorities, s)} label={cap(s)} />
               ))}
             </div>
           </FilterGroup>
@@ -596,8 +614,7 @@ export default function People() {
   return (
     <Shell title="People">
       <div className="flex flex-col h-full min-h-0" style={{ ["--people-accent" as any]: accent }}>
-        {/* Compact title row — kept deliberately thin so the filter rail and
-            results fit the viewport with minimal scrolling (Apollo-style). */}
+        {/* Compact title row */}
         <div className="relative shrink-0 flex items-center gap-2 px-4 h-11 border-b border-border bg-card/40">
           <span aria-hidden className="absolute inset-x-0 top-0 h-0.5" style={{ backgroundColor: accent }} />
           <Users className="size-4" style={{ color: accent }} />
@@ -673,18 +690,12 @@ export default function People() {
           <section className="flex-1 min-w-0 flex flex-col min-h-0">
             {/* toolbar */}
             <div className="shrink-0 border-b border-border px-3 py-1.5 flex items-center gap-0.5 flex-nowrap min-w-0 overflow-x-auto bg-card/40 [&_button]:h-7 [&_button]:px-1.5 [&_button]:gap-1 [&_button]:text-[11px] [&_button]:shrink-0 [&_button]:whitespace-nowrap [&_button_svg]:size-3">
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline" size="sm" className="gap-1.5">Default view <ChevronDown className="size-3.5 opacity-60" /></Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="start">
-                  <DropdownMenuItem>Default view</DropdownMenuItem>
-                  <DropdownMenuItem>Net new this week</DropdownMenuItem>
-                  <DropdownMenuItem>High-fit only</DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem><Plus className="size-4 mr-2" /> Save current as view</DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
+              <DefaultViewMenu
+                views={views}
+                activeViewId={activeViewId}
+                onSelect={applyView}
+                onCreate={() => setSettings({ open: true, mode: "create" })}
+              />
 
               <Button variant="ghost" size="sm" className="gap-1.5" onClick={() => setHideFilters((v) => !v)}>
                 <Filter className="size-4" /> {hideFilters ? "Show" : "Hide"} filters{activeCount ? ` (${activeCount})` : ""}
@@ -703,60 +714,18 @@ export default function People() {
 
               <div className="flex-1" />
 
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline" size="sm" className="gap-1.5"><Wand2 className="size-4" /> Research with AI <ChevronDown className="size-3.5 opacity-60" /></Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                  <DropdownMenuItem>Run custom AI prompt</DropdownMenuItem>
-                  <DropdownMenuItem>Generate AI formula</DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => setLocation("/v2/ai-assistant")}><Sparkles className="size-4 mr-2" /> Use Velocity Assistant</DropdownMenuItem>
-                  <DropdownMenuItem>Start with a template</DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline" size="sm" className="gap-1.5"><Workflow className="size-4" /> Create workflow <ChevronDown className="size-3.5 opacity-60" /></Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                  <DropdownMenuItem onClick={() => setLocation("/sequences")}>Auto-add to sequence</DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => setLocation("/v2/lists")}>Auto-add to lists</DropdownMenuItem>
-                  <DropdownMenuItem>Auto-update records</DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem onClick={() => setLocation("/workflows")}>Create from scratch</DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-
-              <Button variant="outline" size="sm">Save as new search</Button>
-
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline" size="sm" className="gap-1.5"><ArrowUpDown className="size-4" /> Sort <ChevronDown className="size-3.5 opacity-60" /></Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                  <DropdownMenuLabel>Sort by</DropdownMenuLabel>
-                  <DropdownMenuRadioGroup value={sort} onValueChange={setSort}>
-                    <DropdownMenuRadioItem value="fit_desc">ICP fit (high → low)</DropdownMenuRadioItem>
-                    <DropdownMenuRadioItem value="fit_asc">ICP fit (low → high)</DropdownMenuRadioItem>
-                    <DropdownMenuRadioItem value="name_asc">Name (A → Z)</DropdownMenuRadioItem>
-                    <DropdownMenuRadioItem value="company_asc">Company (A → Z)</DropdownMenuRadioItem>
-                  </DropdownMenuRadioGroup>
-                </DropdownMenuContent>
-              </DropdownMenu>
-
-              <Button variant="outline" size="sm" className="gap-1.5"><Settings2 className="size-4" /> Search settings</Button>
+              <ResearchAiMenu />
+              <CreateWorkflowMenu />
+              <Button variant="outline" size="sm" onClick={() => setSettings({ open: true, mode: "create" })}>Save as new search</Button>
+              <SortMenu onApply={(field, dir) => { setSortField(field); setSortDir(dir); }} />
+              <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setSettings({ open: true, mode: "settings" })}>
+                <Settings2 className="size-4" /> Search settings
+              </Button>
             </div>
 
             {/* selection action bar */}
             {checked.size > 0 && (
-              <div className="shrink-0 border-b border-border px-3 py-1.5 flex items-center gap-3 text-white text-[13px]" style={{ backgroundColor: accent }}>
-                <span className="font-medium">{checked.size} selected</span>
-                <Button variant="secondary" size="sm" className="h-7" onClick={() => setLocation("/sequences")}>Add to sequence</Button>
-                <Button variant="secondary" size="sm" className="h-7" onClick={() => setLocation("/v2/lists")}>Add to list</Button>
-                <div className="flex-1" />
-                <button onClick={() => setChecked(new Set())} className="opacity-80 hover:opacity-100 inline-flex items-center gap-1"><X className="size-3.5" /> Clear</button>
-              </div>
+              <SelectionToolbar selectedIds={[...checked]} onClear={() => setChecked(new Set())} />
             )}
 
             {/* results / states */}
@@ -776,7 +745,6 @@ export default function People() {
                 <AiEmptyState
                   prompt={aiPrompt}
                   setPrompt={setAiPrompt}
-                  onQuick={(setter) => setter()}
                   quick={{
                     highFit: () => { setTiers(new Set(["high"])); if (!openGroups.has("fit")) toggleGroup("fit"); },
                     hasEmail: () => { setHasEmail(true); resetPage(); },
@@ -800,14 +768,18 @@ export default function People() {
                   <thead className="sticky top-0 z-10 bg-card border-b border-border">
                     <tr className="text-left text-[11px] uppercase tracking-wide text-muted-foreground">
                       <th className="w-10 px-3 py-1.5"><Checkbox checked={allOnPageChecked} onCheckedChange={toggleAll} className="size-3.5" /></th>
-                      <th className="px-2 py-1.5 font-medium">Name</th>
-                      <th className="px-2 py-1.5 font-medium">Title</th>
-                      <th className="px-2 py-1.5 font-medium">Fit</th>
-                      <th className="px-2 py-1.5 font-medium">Company</th>
-                      <th className="px-2 py-1.5 font-medium">Location</th>
-                      <th className="px-2 py-1.5 font-medium">Email</th>
-                      <th className="px-2 py-1.5 font-medium">Phone</th>
-                      <th className="w-8 px-2 py-1.5" />
+                      {visibleColumns.map((key) => (
+                        <th key={key} className="px-2 py-1.5 font-medium whitespace-nowrap">{COLUMN_REGISTRY[key].label}</th>
+                      ))}
+                      <th className="px-2 py-1.5 w-28">
+                        <button
+                          type="button"
+                          onClick={() => setSettings({ open: true, mode: "settings", initialView: "fields" })}
+                          className="inline-flex items-center gap-1 text-[11px] font-medium normal-case text-muted-foreground hover:text-foreground"
+                        >
+                          <Plus className="size-3.5" /> Add column
+                        </button>
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
@@ -833,30 +805,10 @@ export default function People() {
                             className="size-3.5"
                           />
                         </td>
-                        <td className="px-2 py-1.5">
-                          <div className="font-medium whitespace-nowrap">{p.firstName} {p.lastName}</div>
-                          {p.linkedinUrl && (
-                            <a href={p.linkedinUrl} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="text-[11px] text-blue-600 hover:underline inline-flex items-center gap-0.5">
-                              <ExternalLink className="size-2.5" /> LinkedIn
-                            </a>
-                          )}
-                        </td>
-                        <td className="px-2 py-1.5"><div className="max-w-[160px] truncate" title={p.title ?? undefined}>{p.title ?? "—"}</div></td>
-                        <td className="px-2 py-1.5">{fitBadge(p.confidenceScore)}</td>
-                        <td className="px-2 py-1.5"><div className="max-w-[150px] truncate" title={p.company ?? undefined}>{p.company ?? "—"}</div></td>
-                        <td className="px-2 py-1.5 text-xs text-muted-foreground"><div className="max-w-[140px] truncate">{[p.city, p.state, p.country].filter(Boolean).join(", ") || "—"}</div></td>
-                        <td className="px-2 py-1.5">
-                          {p.email ? (
-                            <div className="flex items-center gap-1 max-w-[200px]">
-                              <span className="text-xs truncate min-w-0" title={p.email}>{p.email}</span>
-                              {emailStatusBadge(p.emailStatus)}
-                            </div>
-                          ) : (
-                            <span className="text-xs text-muted-foreground inline-flex items-center gap-1"><Mail className="size-3" /> —</span>
-                          )}
-                        </td>
-                        <td className="px-2 py-1.5">{p.phone ? <span className="text-xs">{p.phone}</span> : <span className="text-xs text-muted-foreground">—</span>}</td>
-                        <td className="px-2 py-1.5 text-right"><ChevronRight className="size-4 text-muted-foreground" /></td>
+                        {visibleColumns.map((key) => (
+                          <td key={key} className="px-2 py-1.5 align-middle">{COLUMN_REGISTRY[key].cell(p, { onAction })}</td>
+                        ))}
+                        <td className="px-2 py-1.5" />
                       </tr>
                     ))}
                   </tbody>
@@ -893,6 +845,17 @@ export default function People() {
 
       <MoreFiltersDialog open={moreOpen} onClose={() => setMoreOpen(false)} count={total} />
       <BatchPhotoUpload open={photoBatchOpen} onClose={() => setPhotoBatchOpen(false)} />
+      <SearchSettingsSheet
+        open={settings.open}
+        onOpenChange={(o) => setSettings((s) => ({ ...s, open: o }))}
+        mode={settings.mode}
+        initialView={settings.initialView}
+        columns={visibleColumns}
+        onColumnsChange={setVisibleColumns}
+        filters={appliedFilters}
+        onRemoveFilter={removeFilter}
+        onCreateSearch={createSavedSearch}
+      />
     </Shell>
   );
 }
@@ -903,7 +866,7 @@ function DetailPanel({ p, onClose, onOpenFull }: { p: Prospect; onClose: () => v
   // The list row (p) renders instantly; the full record carries the resolved
   // profile_image (stripped from search results) so the avatar can show here.
   const { data: full } = trpc.prospects.get.useQuery({ id: p.id });
-  const d = full ?? p;
+  const d = (full ?? p) as Prospect & { profile_image?: any };
   const loc = [d.city, d.state, d.country].filter(Boolean).join(", ");
   const fullName = `${d.firstName} ${d.lastName}`.trim();
   const titleLine = [d.title, d.company].filter(Boolean).join(" · ");
@@ -914,7 +877,7 @@ function DetailPanel({ p, onClose, onOpenFull }: { p: Prospect; onClose: () => v
         <span aria-hidden className="absolute inset-x-0 top-0 h-0.5" style={{ backgroundColor: "var(--people-accent, hsl(var(--foreground)))" }} />
         <button onClick={onClose} className="absolute right-3 top-3 z-10 p-1 text-muted-foreground hover:text-foreground" aria-label="Close"><X className="size-4" /></button>
         <div className="px-4 pt-6 pb-4 flex flex-col items-center text-center gap-2">
-          <ProspectAvatar image={full?.profile_image} name={fullName} size="lg" />
+          <ProspectAvatar image={(full as any)?.profile_image} name={fullName} size="lg" />
           <div className="min-w-0 w-full px-2">
             <div className="text-base font-semibold leading-tight">{fullName}</div>
             <div className="text-sm text-muted-foreground truncate">{titleLine || "—"}</div>
@@ -998,7 +961,6 @@ function AiEmptyState({
 }: {
   prompt: string;
   setPrompt: (s: string) => void;
-  onQuick?: (fn: () => void) => void;
   quick: { highFit: () => void; hasEmail: () => void; verified: () => void; cLevel: () => void };
   onImport: () => void;
   onDiscover: () => void;
