@@ -15,7 +15,7 @@
  *
  * The table never shows full enrichment detail — only the compact indicator.
  */
-import { useMemo } from "react";
+import { useEffect, useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -31,7 +31,92 @@ import {
   AlertTriangle,
   Loader2,
   ArrowRight,
+  Sparkles,
 } from "lucide-react";
+
+/* ───────────────────── one-click enrich hook + button ─────────────────── */
+
+export type EnrichTrigger =
+  | "people_bulk_action" | "people_row_action" | "open_profile_action"
+  | "full_profile_action" | "list_bulk_action" | "list_enrich_all" | "account_contacts_action";
+
+/**
+ * Runs a one-click enrich job and polls it to completion, surfacing progress as
+ * toasts. Invalidates the change-summary + enrichment caches when done so every
+ * indicator/card/panel refreshes itself. Used by every "Enrich" button.
+ */
+export function useEnrichJob() {
+  const utils = trpc.useUtils();
+  const [jobId, setJobId] = useState<number | null>(null);
+
+  const runMut = trpc.linkedinEnrichment.run.useMutation({
+    onSuccess: (h) => { setJobId(h.jobId); toast.info(`Enriching ${h.total} prospect(s) via LinkedIn…`); },
+    onError: (e) => toast.error(e.message),
+  });
+  const runListMut = trpc.linkedinEnrichment.runForList.useMutation({
+    onSuccess: (h) => { setJobId(h.jobId); toast.info(`Enriching ${h.total} list member(s) via LinkedIn…`); },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const jobQ = trpc.linkedinEnrichment.getJob.useQuery(
+    { jobId: jobId! },
+    { enabled: !!jobId, refetchInterval: 1500 },
+  );
+
+  useEffect(() => {
+    if (jobQ.data?.status === "completed") {
+      const j = jobQ.data;
+      const bits = [
+        `${j.enrichedCount} enriched`,
+        j.needsReviewCount ? `${j.needsReviewCount} need review` : "",
+        j.conflictCount ? `${j.conflictCount} conflict` : "",
+        j.skippedCount ? `${j.skippedCount} skipped` : "",
+        j.failedCount ? `${j.failedCount} failed` : "",
+      ].filter(Boolean);
+      toast.success(`LinkedIn enrichment complete — ${bits.join(" · ")}`);
+      utils.linkedinEnrichment.getChangeSummaries.invalidate();
+      utils.linkedinEnrichment.getProspectEnrichment.invalidate();
+      utils.linkedinEnrichment.getProspectChanges.invalidate();
+      setJobId(null);
+    }
+  }, [jobQ.data?.status]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const running = !!jobId || runMut.isPending || runListMut.isPending;
+  return {
+    running,
+    enrich: (prospectIds: number[], triggerType: EnrichTrigger = "people_bulk_action") =>
+      runMut.mutate({ prospectIds, triggerType }),
+    enrichList: (listId: number, opts: { prospectIds?: number[]; enrichAll?: boolean } = {}) =>
+      runListMut.mutate({ listId, ...opts }),
+  };
+}
+
+export function EnrichButton({
+  prospectIds, triggerType = "people_bulk_action", label = "Enrich", size = "sm", variant = "outline", className, iconOnly,
+}: {
+  prospectIds: number[];
+  triggerType?: EnrichTrigger;
+  label?: string;
+  size?: "sm" | "default";
+  variant?: "outline" | "ghost" | "default" | "secondary";
+  className?: string;
+  iconOnly?: boolean;
+}) {
+  const { enrich, running } = useEnrichJob();
+  return (
+    <Button
+      variant={variant}
+      size={size}
+      className={cn("gap-1.5", className)}
+      disabled={running || prospectIds.length === 0}
+      title={iconOnly ? label : undefined}
+      onClick={(e) => { e.stopPropagation(); enrich(prospectIds, triggerType); }}
+    >
+      {running ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}
+      {!iconOnly && label}
+    </Button>
+  );
+}
 
 /* ───────────────────────────── shared types ───────────────────────────── */
 
@@ -266,7 +351,10 @@ export function LinkedInEnrichmentFullPanel({ prospectId, canRefresh = true }: {
     return (
       <div className="rounded-lg border border-dashed p-4 text-center text-sm text-muted-foreground">
         <Link2 className="size-5 mx-auto mb-1.5 text-muted-foreground/60" />
-        No LinkedIn enrichment yet. Import this prospect's LinkedIn URL to enrich via Unipile.
+        <p>No LinkedIn enrichment yet.</p>
+        <div className="mt-2 flex justify-center">
+          <EnrichButton prospectIds={[prospectId]} triggerType="full_profile_action" label="Enrich via LinkedIn" />
+        </div>
       </div>
     );
   }

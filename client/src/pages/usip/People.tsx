@@ -96,7 +96,7 @@ import { CreateWorkflowMenu } from "@/components/usip/people/CreateWorkflowMenu"
 import { SortMenu } from "@/components/usip/people/SortMenu";
 import { SelectionToolbar } from "@/components/usip/people/SelectionToolbar";
 import { SearchSettingsSheet, type AppliedFilter } from "@/components/usip/people/SearchSettingsSheet";
-import { LinkedInEnrichmentSummaryCard } from "@/components/usip/people/LinkedInEnrichment";
+import { LinkedInEnrichmentSummaryCard, EnrichButton } from "@/components/usip/people/LinkedInEnrichment";
 
 /* ─────────────────────────── filter rail ──────────────────────────────── */
 
@@ -933,6 +933,7 @@ function DetailPanel({ p, onClose, onOpenFull }: { p: Prospect; onClose: () => v
 
       <div className="shrink-0 border-t border-border p-3 space-y-2">
         <Button className="w-full gap-1.5" onClick={onOpenFull}><ExternalLink className="size-4" /> Open full record</Button>
+        <EnrichButton prospectIds={[p.id]} triggerType="open_profile_action" label="Enrich via LinkedIn" className="w-full" />
         <div className="grid grid-cols-2 gap-2">
           <Button variant="outline" size="sm" className="gap-1.5"><Sparkles className="size-4" /> Sequence</Button>
           <Button variant="outline" size="sm" className="gap-1.5"><Bookmark className="size-4" /> Save</Button>

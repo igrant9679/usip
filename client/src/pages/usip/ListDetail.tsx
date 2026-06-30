@@ -12,7 +12,7 @@
 import { useMemo, useState } from "react";
 import { useParams, useLocation, Link } from "wouter";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
-import { LinkedInUpdateIndicator } from "@/components/usip/people/LinkedInEnrichment";
+import { LinkedInUpdateIndicator, useEnrichJob } from "@/components/usip/people/LinkedInEnrichment";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -78,6 +78,7 @@ export default function ListDetail() {
   const membersQ = trpc.recordLists.members.useQuery({ id }, { enabled: Number.isFinite(id) });
   const list = listQ.data as { id: number; name: string; entityType: string; description?: string | null } | null | undefined;
   const isCompanies = list?.entityType === "companies";
+  const { enrichList, running: enriching } = useEnrichJob();
 
   const removeMut = trpc.recordLists.removeMember.useMutation({ onSuccess: () => { utils.recordLists.members.invalidate({ id }); utils.recordLists.list.invalidate(); } });
   const addMut = trpc.recordLists.addMembers.useMutation({
@@ -173,6 +174,18 @@ export default function ListDetail() {
             {search && <button onClick={() => setSearch("")}><X className="size-3.5 text-muted-foreground" /></button>}
           </div>
           <div className="flex-1" />
+          {!isCompanies && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5"
+              disabled={enriching || members.length === 0}
+              onClick={() => enrichList(id, { enrichAll: true })}
+              title="Enrich all eligible people in this list via LinkedIn (Unipile)"
+            >
+              {enriching ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />} Enrich all
+            </Button>
+          )}
           <Button variant="outline" size="sm" className="gap-1.5"><Wand2 className="size-4" /> Research with AI <ChevronDown className="size-3.5 opacity-60" /></Button>
           <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setLocation("/v2/workflows")}><Workflow className="size-4" /> Create workflow <ChevronDown className="size-3.5 opacity-60" /></Button>
           <Button variant="ghost" size="sm" className="gap-1.5"><Save className="size-4" /> Save as new view</Button>
