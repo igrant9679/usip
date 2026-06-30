@@ -1764,6 +1764,53 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0096: One-click LinkedIn enrichment jobs ──────────────────────────────
+  // Prospect-oriented Enrich jobs (the URL-upload batch tables stay for the
+  // admin import utility). Idempotent.
+  {
+    name: "0096_linkedin_enrichment_jobs.sql",
+    statements: [
+      `CREATE TABLE IF NOT EXISTS \`linkedin_enrichment_jobs\` (
+        \`id\` int NOT NULL AUTO_INCREMENT,
+        \`workspaceId\` int NOT NULL,
+        \`triggered_by_user_id\` int NOT NULL,
+        \`trigger_type\` varchar(32) NOT NULL,
+        \`status\` varchar(16) NOT NULL DEFAULT 'queued',
+        \`total_prospects\` int NOT NULL DEFAULT 0,
+        \`eligible_count\` int NOT NULL DEFAULT 0,
+        \`enriched_count\` int NOT NULL DEFAULT 0,
+        \`skipped_count\` int NOT NULL DEFAULT 0,
+        \`failed_count\` int NOT NULL DEFAULT 0,
+        \`needs_review_count\` int NOT NULL DEFAULT 0,
+        \`conflict_count\` int NOT NULL DEFAULT 0,
+        \`started_at\` timestamp NULL,
+        \`completed_at\` timestamp NULL,
+        \`created_at\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (\`id\`),
+        INDEX \`ix_lej_ws\` (\`workspaceId\`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS \`linkedin_enrichment_job_items\` (
+        \`id\` int NOT NULL AUTO_INCREMENT,
+        \`job_id\` int NOT NULL,
+        \`workspaceId\` int NOT NULL,
+        \`prospect_id\` int NOT NULL,
+        \`linkedin_lookup_strategy\` varchar(40) NULL,
+        \`linkedin_url_used\` text NULL,
+        \`match_status\` varchar(24) NULL,
+        \`match_score\` int NULL,
+        \`status\` varchar(20) NOT NULL DEFAULT 'pending',
+        \`error_message\` text NULL,
+        \`started_at\` timestamp NULL,
+        \`completed_at\` timestamp NULL,
+        \`created_at\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        \`updated_at\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (\`id\`),
+        INDEX \`ix_leji_job\` (\`job_id\`),
+        INDEX \`ix_leji_ws_prospect\` (\`workspaceId\`, \`prospect_id\`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

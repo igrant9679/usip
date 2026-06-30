@@ -4088,3 +4088,71 @@ export const linkedinDailyCheckJobs = mysqlTable(
   }),
 );
 export type LinkedinDailyCheckJob = typeof linkedinDailyCheckJobs.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   One-click LinkedIn enrichment jobs (migration 0096)
+
+   Prospect-oriented job (NOT URL-upload). The user selects prospects (or "all
+   in a list") and clicks Enrich; the orchestrator resolves a lookup strategy
+   per prospect (existing URL → name/company lookup → unavailable), retrieves
+   via Unipile, auto-matches against the INTENDED prospect, applies, and
+   schedules daily monitoring. The URL-upload batch tables stay for the
+   advanced/admin import utility.
+   ────────────────────────────────────────────────────────────────────────── */
+
+/** One Enrich action (single, bulk, or whole-list). */
+export const linkedinEnrichmentJobs = mysqlTable(
+  "linkedin_enrichment_jobs",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    triggeredByUserId: int("triggered_by_user_id").notNull(),
+    /** people_bulk_action | people_row_action | open_profile_action | full_profile_action | list_bulk_action | list_enrich_all | account_contacts_action | daily_monitoring | manual_admin_run */
+    triggerType: varchar("trigger_type", { length: 32 }).notNull(),
+    /** queued | running | completed | failed */
+    status: varchar("status", { length: 16 }).default("queued").notNull(),
+    totalProspects: int("total_prospects").default(0).notNull(),
+    eligibleCount: int("eligible_count").default(0).notNull(),
+    enrichedCount: int("enriched_count").default(0).notNull(),
+    skippedCount: int("skipped_count").default(0).notNull(),
+    failedCount: int("failed_count").default(0).notNull(),
+    needsReviewCount: int("needs_review_count").default(0).notNull(),
+    conflictCount: int("conflict_count").default(0).notNull(),
+    startedAt: timestamp("started_at"),
+    completedAt: timestamp("completed_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    byWs: index("ix_lej_ws").on(t.workspaceId),
+  }),
+);
+export type LinkedinEnrichmentJob = typeof linkedinEnrichmentJobs.$inferSelect;
+
+/** Per-prospect result within an Enrich job. */
+export const linkedinEnrichmentJobItems = mysqlTable(
+  "linkedin_enrichment_job_items",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    jobId: int("job_id").notNull(),
+    workspaceId: int("workspaceId").notNull(),
+    prospectId: int("prospect_id").notNull(),
+    /** existing_prospect_linkedin_url | crm_imported_linkedin_url | prior_enrichment_linkedin_url | enrichment_provider_linkedin_url | unipile_name_company_lookup | unavailable */
+    linkedinLookupStrategy: varchar("linkedin_lookup_strategy", { length: 40 }),
+    linkedinUrlUsed: text("linkedin_url_used"),
+    /** exact_match | high_confidence | possible_match | no_match | conflict */
+    matchStatus: varchar("match_status", { length: 24 }),
+    matchScore: int("match_score"),
+    /** pending | skipped | retrieving | matched | enriched | needs_review | conflict | failed | blocked_by_policy | unavailable */
+    status: varchar("status", { length: 20 }).default("pending").notNull(),
+    errorMessage: text("error_message"),
+    startedAt: timestamp("started_at"),
+    completedAt: timestamp("completed_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    byJob: index("ix_leji_job").on(t.jobId),
+    byProspect: index("ix_leji_ws_prospect").on(t.workspaceId, t.prospectId),
+  }),
+);
+export type LinkedinEnrichmentJobItem = typeof linkedinEnrichmentJobItems.$inferSelect;
