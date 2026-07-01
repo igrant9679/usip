@@ -94,6 +94,8 @@ import { DefaultViewMenu } from "@/components/usip/people/DefaultViewMenu";
 import { ResearchAiMenu } from "@/components/usip/people/ResearchAiMenu";
 import { CreateWorkflowMenu } from "@/components/usip/people/CreateWorkflowMenu";
 import { SortMenu } from "@/components/usip/people/SortMenu";
+import { ScoreFilterControl, type MinRating, type ScoreSort } from "@/components/usip/scoring/ScoreFilterControl";
+import { ProspectScoringPanel } from "@/components/usip/scoring/ProspectScoringPanel";
 import { SelectionToolbar } from "@/components/usip/people/SelectionToolbar";
 import { SearchSettingsSheet, type AppliedFilter } from "@/components/usip/people/SearchSettingsSheet";
 import { LinkedInEnrichmentSummaryCard, EnrichButton } from "@/components/usip/people/LinkedInEnrichment";
@@ -224,6 +226,11 @@ export default function People() {
   const [sortField, setSortField] = useState<SortField>("relevance");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
 
+  // ── score filter/sort (server-side, against the primary person Fit model) ──
+  const [scoreMinRating, setScoreMinRating] = useState<MinRating>("");
+  const [hideDisqualified, setHideDisqualified] = useState(false);
+  const [scoreSort, setScoreSort] = useState<ScoreSort>("");
+
   // ── view / column state ──
   const [visibleColumns, setVisibleColumns] = useState<ColumnKey[]>(DEFAULT_COLUMNS);
   const [views, setViews] = useState<SavedView[]>([
@@ -294,6 +301,9 @@ export default function People() {
     industryQ: qText.industryQ || undefined,
     educationQ: qText.educationQ || undefined,
     linkedinQ: qText.linkedinQ || undefined,
+    scoreMinRating: scoreMinRating || undefined,
+    scoreDisqualified: hideDisqualified ? false : undefined,
+    sortByScore: scoreSort || undefined,
   });
 
   const total = data?.total ?? 0;
@@ -311,8 +321,9 @@ export default function People() {
       }
       return true;
     });
-    return sortRows(out, sortField, sortDir);
-  }, [pageRows, hasPhone, hasLinkedin, tiers, seniorities, sortField, sortDir]);
+    // When sorting by score the server already ordered the page — preserve it.
+    return scoreSort ? out : sortRows(out, sortField, sortDir);
+  }, [pageRows, hasPhone, hasLinkedin, tiers, seniorities, sortField, sortDir, scoreSort]);
 
   const selected = useMemo(() => rows.find((r) => r.id === selectedId) ?? pageRows.find((r) => r.id === selectedId) ?? null, [rows, pageRows, selectedId]);
 
@@ -743,6 +754,14 @@ export default function People() {
               <ResearchAiMenu />
               <CreateWorkflowMenu />
               <Button variant="outline" size="sm" onClick={() => setSettings({ open: true, mode: "create" })}>Save as new search</Button>
+              <ScoreFilterControl
+                minRating={scoreMinRating}
+                onMinRating={(r) => { setScoreMinRating(r); resetPage(); }}
+                hideDisqualified={hideDisqualified}
+                onHideDisqualified={(v) => { setHideDisqualified(v); resetPage(); }}
+                sort={scoreSort}
+                onSort={(s) => { setScoreSort(s); resetPage(); }}
+              />
               <SortMenu onApply={(field, dir) => { setSortField(field); setSortDir(dir); }} />
               <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setSettings({ open: true, mode: "settings" })}>
                 <Settings2 className="size-4" /> Search settings
@@ -914,6 +933,10 @@ function DetailPanel({ p, onClose, onOpenFull }: { p: Prospect; onClose: () => v
 
       <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-5 text-sm">
         <LinkedInEnrichmentSummaryCard prospectId={d.id} />
+
+        <div className="rounded-lg border border-border p-3">
+          <ProspectScoringPanel objectType="person" objectId={d.id} />
+        </div>
 
         <Section title="Contact information">
           <Field icon={Mail} label="Email" value={d.email} extra={emailStatusBadge(d.emailStatus)} />

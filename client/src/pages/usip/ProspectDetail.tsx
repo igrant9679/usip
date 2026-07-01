@@ -19,6 +19,7 @@ import { Shell, PageHeader } from "@/components/usip/Shell";
 import { AddToSequenceButton } from "@/components/usip/AddToSequenceButton";
 import { ProfileImageUploader, ProfileImageSourceBadge } from "@/components/usip/ProspectAvatar";
 import { LinkedInEnrichmentFullPanel } from "@/components/usip/people/LinkedInEnrichment";
+import { ProspectScoringPanel } from "@/components/usip/scoring/ProspectScoringPanel";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -218,6 +219,13 @@ export default function ProspectDetail() {
 
         {/* LinkedIn enrichment (Unipile) — optional metadata, daily-checked */}
         <LinkedInEnrichmentFullPanel prospectId={id} />
+
+        {/* Velocity Priority Score — explainable fit + priority breakdown */}
+        <Card>
+          <CardContent className="pt-4">
+            <ProspectScoringPanel objectType="person" objectId={id} />
+          </CardContent>
+        </Card>
 
         {/* Evidence panel */}
         <Card>

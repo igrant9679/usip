@@ -13,12 +13,12 @@
  *   bulkDelete        — remove many prospects at once
  */
 import { z } from "zod";
-import { and, desc, eq, inArray, isNull, like, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, isNull, like, or, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { router } from "../_core/trpc";
 import { workspaceProcedure } from "../_core/workspace";
 import { getDb } from "../db";
-import { contacts, leads, prospects } from "../../drizzle/schema";
+import { contacts, leads, prospects, scoreResults, scoreModels } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
 import { lookupContactInfo, type LookupResult } from "../services/scraper";
 // Shared synthetic-name detector — anchored to the lastName sentinel so it
@@ -361,6 +361,13 @@ export const prospectsRouter = router({
         industryQ: z.string().trim().max(200).optional(),
         educationQ: z.string().trim().max(200).optional(),
         linkedinQ: z.string().trim().max(500).optional(),
+        /** Score filter/sort against the primary person Fit model (scoring). */
+        scoreMinRating: z.enum(["fair", "good", "excellent"]).optional(),
+        scoreDisqualified: z.boolean().optional(),
+        scoreMissing: z.boolean().optional(),
+        scoreMin: z.number().min(0).max(100).optional(),
+        scoreMax: z.number().min(0).max(100).optional(),
+        sortByScore: z.enum(["asc", "desc"]).optional(),
       }),
     )
     .query(async ({ ctx, input }) => {
@@ -409,6 +416,65 @@ export const prospectsRouter = router({
       }
 
       const offset = (input.page - 1) * input.perPage;
+
+      // ── Score filter/sort against the primary person Fit model ───────────
+      // Scores live in score_results, so a LEFT JOIN keeps unscored prospects
+      // visible unless a positive score filter is applied. Only engages when a
+      // score param is present AND a primary person model exists.
+      const wantsScore = !!(input.scoreMinRating || input.scoreDisqualified != null
+        || input.scoreMissing != null || input.scoreMin != null || input.scoreMax != null || input.sortByScore);
+      let primaryModelId: number | null = null;
+      if (wantsScore) {
+        const [m] = await db.select({ id: scoreModels.id }).from(scoreModels)
+          .where(and(eq(scoreModels.workspaceId, ctx.workspace.id), eq(scoreModels.objectType, "person"),
+            eq(scoreModels.isPrimary, true), eq(scoreModels.status, "active"))).limit(1);
+        primaryModelId = m?.id ?? null;
+      }
+
+      const stripImg = (r: typeof prospects.$inferSelect) => {
+        const { profileImageUrl: _u, profileImageSource: _s, profileImageSourceUrl: _su,
+          profileImageLastVerifiedAt: _v, profileImageStatus: _st, ...rest } = r;
+        return rest;
+      };
+
+      if (wantsScore && primaryModelId != null) {
+        const joinCond = and(
+          eq(scoreResults.objectId, prospects.id),
+          eq(scoreResults.objectType, "person"),
+          eq(scoreResults.workspaceId, ctx.workspace.id),
+          eq(scoreResults.scoreModelId, primaryModelId),
+        );
+        const scoreConds = [...conditions];
+        if (input.scoreMinRating) {
+          const set = input.scoreMinRating === "excellent" ? ["excellent"]
+            : input.scoreMinRating === "good" ? ["good", "excellent"]
+              : ["fair", "good", "excellent"];
+          scoreConds.push(inArray(scoreResults.rating, set));
+        }
+        if (input.scoreMissing === true) scoreConds.push(isNull(scoreResults.id));
+        if (input.scoreMissing === false) scoreConds.push(isNotNull(scoreResults.id));
+        if (input.scoreDisqualified === true) scoreConds.push(eq(scoreResults.isDisqualified, true));
+        if (input.scoreDisqualified === false) scoreConds.push(or(eq(scoreResults.isDisqualified, false), isNull(scoreResults.id))!);
+        if (input.scoreMin != null) scoreConds.push(sql`${scoreResults.normalizedScore} >= ${input.scoreMin}`);
+        if (input.scoreMax != null) scoreConds.push(sql`${scoreResults.normalizedScore} <= ${input.scoreMax}`);
+
+        const orderBy = input.sortByScore === "asc" ? asc(scoreResults.normalizedScore)
+          : input.sortByScore === "desc" ? desc(scoreResults.normalizedScore)
+            : desc(prospects.createdAt);
+
+        const joined = await db.select().from(prospects).leftJoin(scoreResults, joinCond)
+          .where(and(...scoreConds)).orderBy(orderBy).limit(input.perPage).offset(offset);
+        const [{ total }] = await db.select({ total: sql<number>`count(*)` })
+          .from(prospects).leftJoin(scoreResults, joinCond).where(and(...scoreConds));
+
+        const data = joined.map((row) => ({
+          ...stripImg(row.prospects),
+          fitScore: row.score_results ? Number(row.score_results.normalizedScore) : null,
+          fitRating: row.score_results?.rating ?? null,
+        }));
+        return { data, total: Number(total), page: input.page, perPage: input.perPage };
+      }
+
       const rows = await db
         .select()
         .from(prospects)
@@ -424,17 +490,7 @@ export const prospectsRouter = router({
 
       // People Search results must NEVER carry the profile image — it is a
       // full-profile-only field. Strip the 5 profile-image columns here.
-      const data = rows.map((r) => {
-        const {
-          profileImageUrl: _u,
-          profileImageSource: _s,
-          profileImageSourceUrl: _su,
-          profileImageLastVerifiedAt: _v,
-          profileImageStatus: _st,
-          ...rest
-        } = r;
-        return rest;
-      });
+      const data = rows.map(stripImg);
 
       return { data, total: Number(total), page: input.page, perPage: input.perPage };
     }),
