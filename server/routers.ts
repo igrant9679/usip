@@ -52,6 +52,7 @@ import { linkedinFinderRouter } from "./routers/linkedinFinder";
 import { linkedinEnrichmentRouter } from "./routers/linkedinEnrichment";
 import { personasRouter } from "./routers/personas";
 import { discoveryRouter } from "./routers/discovery";
+import { scoringRouter } from "./routers/scoring";
 
 export const appRouter = router({
   system: systemRouter,
@@ -65,6 +66,7 @@ export const appRouter = router({
   }),
 
   workspace: workspaceRouter,
+  scoring: scoringRouter,
   accounts: accountsRouter,
   contacts: contactsRouter,
   leads: leadsRouter,

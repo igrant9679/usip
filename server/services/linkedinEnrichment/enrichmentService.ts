@@ -180,6 +180,13 @@ export async function applyEnrichment(opts: {
     }
   }
 
+  // Fire-and-forget: enrichment may have changed title/company/location/photo,
+  // so refresh this person's fit + Velocity Priority Score. Never blocks or
+  // fails enrichment (scoring is optional metadata).
+  void import("../scoring/recalculationService")
+    .then((m) => m.recalcForObject(ws, "person", pid, "enrichment updated"))
+    .catch(() => { /* scoring is best-effort */ });
+
   return { enrichmentId, changes, dataStatus: "enriched" };
 }
 

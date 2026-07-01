@@ -4156,3 +4156,208 @@ export const linkedinEnrichmentJobItems = mysqlTable(
   }),
 );
 export type LinkedinEnrichmentJobItem = typeof linkedinEnrichmentJobItems.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Scoring system — Velocity Priority Score (migration 0097)
+
+   Apollo-style, explainable, configurable fit + priority scoring. Scored
+   objects map to existing tables: object_type "person" → prospects/contacts,
+   "company" → accounts. score_models + criteria define configurable fit models
+   (person / company); the four remaining priority components (intent,
+   engagement, data quality, sequence readiness) are computed by built-in
+   calculators. The Velocity Priority Score blends all six.
+   ────────────────────────────────────────────────────────────────────────── */
+
+export const scoreModels = mysqlTable(
+  "score_models",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    name: varchar("name", { length: 160 }).notNull(),
+    description: text("description"),
+    objectType: mysqlEnum("object_type", ["person", "company"]).notNull(),
+    modelType: mysqlEnum("model_type", ["auto", "custom"]).notNull(),
+    isPrimary: boolean("is_primary").default(false).notNull(),
+    status: mysqlEnum("status", ["draft", "active", "archived"]).default("draft").notNull(),
+    impactMode: mysqlEnum("impact_mode", ["label", "numeric"]).default("label").notNull(),
+    excellentMin: int("excellent_min").default(80).notNull(),
+    goodMin: int("good_min").default(60).notNull(),
+    fairMin: int("fair_min").default(35).notNull(),
+    notFitMax: int("not_fit_max").default(34).notNull(),
+    createdByUserId: int("created_by_user_id").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+    archivedAt: timestamp("archived_at"),
+  },
+  (t) => ({
+    byWs: index("ix_sm_ws").on(t.workspaceId, t.objectType, t.isPrimary),
+  }),
+);
+export type ScoreModel = typeof scoreModels.$inferSelect;
+
+export const scoreCriteriaGroups = mysqlTable(
+  "score_criteria_groups",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    scoreModelId: int("score_model_id").notNull(),
+    name: varchar("name", { length: 160 }).notNull(),
+    description: text("description"),
+    maxPoints: int("max_points").notNull(),
+    weight: decimal("weight", { precision: 6, scale: 2 }),
+    categoryKey: varchar("category_key", { length: 48 }),
+    orderIndex: int("order_index").default(0).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    byModel: index("ix_scg_model").on(t.workspaceId, t.scoreModelId),
+  }),
+);
+export type ScoreCriteriaGroup = typeof scoreCriteriaGroups.$inferSelect;
+
+export const scoreCriteria = mysqlTable(
+  "score_criteria",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    scoreModelId: int("score_model_id").notNull(),
+    groupId: int("group_id").notNull(),
+    fieldName: varchar("field_name", { length: 80 }).notNull(),
+    operator: varchar("operator", { length: 32 }).notNull(),
+    valueJson: json("value_json").notNull(),
+    points: int("points").notNull(),
+    impactLabel: varchar("impact_label", { length: 32 }),
+    criterionType: mysqlEnum("criterion_type", ["stackable", "mutually_exclusive", "negative", "disqualifier"]).notNull(),
+    categoryKey: varchar("category_key", { length: 48 }),
+    isNegative: boolean("is_negative").default(false).notNull(),
+    isDisqualifier: boolean("is_disqualifier").default(false).notNull(),
+    explanationTemplate: varchar("explanation_template", { length: 400 }),
+    orderIndex: int("order_index").default(0).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    byModel: index("ix_sc_model").on(t.workspaceId, t.scoreModelId),
+    byGroup: index("ix_sc_group").on(t.groupId),
+  }),
+);
+export type ScoreCriterion = typeof scoreCriteria.$inferSelect;
+
+export const scoreResults = mysqlTable(
+  "score_results",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    scoreModelId: int("score_model_id").notNull(),
+    objectType: mysqlEnum("object_type", ["person", "company"]).notNull(),
+    objectId: int("object_id").notNull(),
+    rawScore: int("raw_score").notNull(),
+    maxPossibleScore: int("max_possible_score").notNull(),
+    normalizedScore: decimal("normalized_score", { precision: 6, scale: 2 }).notNull(),
+    rating: mysqlEnum("rating", ["excellent", "good", "fair", "not_a_fit"]).notNull(),
+    isDisqualified: boolean("is_disqualified").default(false).notNull(),
+    disqualificationReasons: json("disqualification_reasons"),
+    calculatedAt: timestamp("calculated_at").defaultNow().notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    uniq: uniqueIndex("ix_sr_uniq").on(t.scoreModelId, t.objectType, t.objectId),
+    byObject: index("ix_sr_object").on(t.workspaceId, t.objectType, t.objectId),
+    byModelScore: index("ix_sr_model_score").on(t.workspaceId, t.scoreModelId, t.normalizedScore),
+    byRating: index("ix_sr_rating").on(t.workspaceId, t.rating),
+  }),
+);
+export type ScoreResult = typeof scoreResults.$inferSelect;
+
+export const scoreResultBreakdowns = mysqlTable(
+  "score_result_breakdowns",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    scoreResultId: int("score_result_id").notNull(),
+    criterionId: int("criterion_id"),
+    groupName: varchar("group_name", { length: 160 }).notNull(),
+    fieldName: varchar("field_name", { length: 80 }).notNull(),
+    matched: boolean("matched").notNull(),
+    pointsAwarded: int("points_awarded").notNull(),
+    kind: varchar("kind", { length: 16 }).notNull(),
+    explanation: varchar("explanation", { length: 400 }).notNull(),
+    oldValue: varchar("old_value", { length: 255 }),
+    currentValue: varchar("current_value", { length: 255 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    byResult: index("ix_srb_result").on(t.scoreResultId),
+  }),
+);
+export type ScoreResultBreakdown = typeof scoreResultBreakdowns.$inferSelect;
+
+export const scoreHistory = mysqlTable(
+  "score_history",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    scoreModelId: int("score_model_id").notNull(),
+    objectType: mysqlEnum("object_type", ["person", "company"]).notNull(),
+    objectId: int("object_id").notNull(),
+    previousScore: decimal("previous_score", { precision: 6, scale: 2 }),
+    newScore: decimal("new_score", { precision: 6, scale: 2 }).notNull(),
+    previousRating: varchar("previous_rating", { length: 16 }),
+    newRating: varchar("new_rating", { length: 16 }).notNull(),
+    changeReason: varchar("change_reason", { length: 200 }),
+    changedAt: timestamp("changed_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    byObject: index("ix_sh_object").on(t.workspaceId, t.objectType, t.objectId, t.changedAt),
+  }),
+);
+export type ScoreHistoryRow = typeof scoreHistory.$inferSelect;
+
+export const priorityScoreResults = mysqlTable(
+  "priority_score_results",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    objectType: mysqlEnum("object_type", ["person", "company"]).notNull(),
+    objectId: int("object_id").notNull(),
+    personFitScore: decimal("person_fit_score", { precision: 6, scale: 2 }),
+    companyFitScore: decimal("company_fit_score", { precision: 6, scale: 2 }),
+    intentScore: decimal("intent_score", { precision: 6, scale: 2 }),
+    engagementScore: decimal("engagement_score", { precision: 6, scale: 2 }),
+    dataQualityScore: decimal("data_quality_score", { precision: 6, scale: 2 }),
+    sequenceReadinessScore: decimal("sequence_readiness_score", { precision: 6, scale: 2 }),
+    priorityScore: decimal("priority_score", { precision: 6, scale: 2 }).notNull(),
+    priorityRating: varchar("priority_rating", { length: 16 }).notNull(),
+    calculatedAt: timestamp("calculated_at").defaultNow().notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    uniq: uniqueIndex("ix_psr_uniq").on(t.objectType, t.objectId, t.workspaceId),
+    byPriority: index("ix_psr_priority").on(t.workspaceId, t.priorityScore),
+  }),
+);
+export type PriorityScoreResult = typeof priorityScoreResults.$inferSelect;
+
+export const scoreRecalculationJobs = mysqlTable(
+  "score_recalculation_jobs",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    scoreModelId: int("score_model_id"),
+    jobType: varchar("job_type", { length: 32 }).notNull(),
+    status: varchar("status", { length: 16 }).notNull(),
+    totalRecords: int("total_records").default(0).notNull(),
+    processedRecords: int("processed_records").default(0).notNull(),
+    failedRecords: int("failed_records").default(0).notNull(),
+    startedAt: timestamp("started_at"),
+    completedAt: timestamp("completed_at"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    byStatus: index("ix_srj_status").on(t.workspaceId, t.status),
+  }),
+);
+export type ScoreRecalculationJob = typeof scoreRecalculationJobs.$inferSelect;
