@@ -276,6 +276,12 @@ export const prospectImportsRouter = router({
       // Free the draft now that we've consumed it
       draftCache.delete(input.importToken);
 
+      // Auto-create/link companies for the freshly imported prospects
+      // (best-effort, async — never blocks the import response).
+      void import("../services/company/associationService")
+        .then((m) => m.associateUnlinkedProspects(ctx.workspace.id))
+        .catch((e) => console.error("[company] post-import association failed:", (e as Error).message));
+
       await recordAudit({
         workspaceId: ctx.workspace.id,
         actorUserId: ctx.user.id,

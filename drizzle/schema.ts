@@ -138,12 +138,45 @@ export const accounts = mysqlTable(
     color: varchar("color", { length: 16 }),
     notes: text("notes"),
     customFields: json("customFields"), // admin-defined custom field values
+    // ── Company/account system (migration 0098) — `accounts` is the
+    //    workspace-account layer; global_organizations is the shared layer. ──
+    globalOrganizationId: int("global_organization_id"),
+    normalizedName: varchar("normalized_name", { length: 200 }),
+    normalizedDomain: varchar("normalized_domain", { length: 200 }),
+    websiteUrl: text("website_url"),
+    linkedinCompanyUrl: text("linkedin_company_url"),
+    subIndustry: varchar("sub_industry", { length: 80 }),
+    employeeCount: int("employee_count"),
+    revenue: decimal("revenue", { precision: 16, scale: 2 }),
+    description: text("description"),
+    hqCity: varchar("hq_city", { length: 80 }),
+    hqState: varchar("hq_state", { length: 80 }),
+    hqCountry: varchar("hq_country", { length: 80 }),
+    companyPhone: varchar("company_phone", { length: 40 }),
+    foundedYear: int("founded_year"),
+    logoUrl: text("logo_url"),
+    logoSourceType: varchar("logo_source_type", { length: 32 }),
+    logoSourceUrl: text("logo_source_url"),
+    logoStatus: varchar("logo_status", { length: 24 }).default("unknown").notNull(),
+    logoLastVerifiedAt: timestamp("logo_last_verified_at"),
+    accountStage: varchar("account_stage", { length: 64 }),
+    accountScore: decimal("account_score", { precision: 6, scale: 2 }),
+    accountRating: varchar("account_rating", { length: 16 }),
+    crmSyncStatus: varchar("crm_sync_status", { length: 24 }).default("not_synced").notNull(),
+    crmExternalId: varchar("crm_external_id", { length: 128 }),
+    sourceType: varchar("source_type", { length: 32 }),
+    dataStatus: varchar("data_status", { length: 16 }).default("partial").notNull(),
+    lastEnrichedAt: timestamp("last_enriched_at"),
+    archivedAt: timestamp("archived_at"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
   (t) => ({
     byWs: index("ix_acc_ws").on(t.workspaceId),
     byParent: index("ix_acc_parent").on(t.parentAccountId),
+    byNormDomain: index("ix_acc_norm_domain").on(t.workspaceId, t.normalizedDomain),
+    byNormName: index("ix_acc_norm_name").on(t.workspaceId, t.normalizedName),
+    byGlobalOrg: index("ix_acc_global_org").on(t.globalOrganizationId),
   }),
 );
 export type Account = typeof accounts.$inferSelect;
@@ -173,6 +206,10 @@ export const contacts = mysqlTable(
     relStrengthScore: int("relStrengthScore"),
     relStrengthLabel: varchar("relStrengthLabel", { length: 16 }),
     relStrengthAt: timestamp("relStrengthAt"),
+    // Company system (migration 0098): global-org link (accountId already above).
+    globalOrganizationId: int("global_organization_id"),
+    companyName: varchar("company_name", { length: 200 }),
+    companyDomain: varchar("company_domain", { length: 200 }),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
@@ -3211,6 +3248,11 @@ export const prospects = mysqlTable(
     // Set when a prospect is converted to a Lead (funnel: Prospect → Lead).
     // Migration 0088. Mirrors linkedContactId but for the lead-first funnel.
     linkedLeadId: int("linked_lead_id"),
+    // ── Company association (migration 0098) — auto-linked from company/
+    //    companyDomain by CompanyAssociationService. ──
+    accountId: int("account_id"),
+    globalOrganizationId: int("global_organization_id"),
+    companyMatchStatus: varchar("company_match_status", { length: 16 }), // linked|needs_review|missing|conflict
     // ── Discovery v2 verification fields (migration 0078) ───────────────
     // confidence + verification let a saved prospect carry its provenance
     // forward: confidenceScore (0-100), tier bucket, status (verified /
@@ -4361,3 +4403,205 @@ export const scoreRecalculationJobs = mysqlTable(
   }),
 );
 export type ScoreRecalculationJob = typeof scoreRecalculationJobs.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Company / Account system (migration 0098)
+
+   Two-layer model: `global_organizations` is the shared company-identity layer;
+   the existing `accounts` table is the workspace-account layer (extended above
+   with global_organization_id + firmographic/logo/stage columns). Prospects and
+   contacts auto-link to accounts + global orgs via CompanyAssociationService.
+   ────────────────────────────────────────────────────────────────────────── */
+
+export const globalOrganizations = mysqlTable(
+  "global_organizations",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    name: varchar("name", { length: 200 }).notNull(),
+    normalizedName: varchar("normalized_name", { length: 200 }).notNull(),
+    domain: varchar("domain", { length: 200 }),
+    normalizedDomain: varchar("normalized_domain", { length: 200 }),
+    websiteUrl: text("website_url"),
+    linkedinCompanyUrl: text("linkedin_company_url"),
+    industry: varchar("industry", { length: 80 }),
+    subIndustry: varchar("sub_industry", { length: 80 }),
+    employeeCount: int("employee_count"),
+    employeeCountRange: varchar("employee_count_range", { length: 40 }),
+    revenue: decimal("revenue", { precision: 16, scale: 2 }),
+    revenueRange: varchar("revenue_range", { length: 40 }),
+    description: text("description"),
+    headquartersCity: varchar("headquarters_city", { length: 80 }),
+    headquartersState: varchar("headquarters_state", { length: 80 }),
+    headquartersCountry: varchar("headquarters_country", { length: 80 }),
+    companyPhone: varchar("company_phone", { length: 40 }),
+    foundedYear: int("founded_year"),
+    logoUrl: text("logo_url"),
+    logoSourceType: varchar("logo_source_type", { length: 32 }),
+    logoStatus: varchar("logo_status", { length: 24 }).default("unknown").notNull(),
+    dataStatus: varchar("data_status", { length: 16 }).default("partial").notNull(),
+    lastEnrichedAt: timestamp("last_enriched_at"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    byNormDomain: index("ix_go_norm_domain").on(t.normalizedDomain),
+    byNormName: index("ix_go_norm_name").on(t.normalizedName),
+  }),
+);
+export type GlobalOrganization = typeof globalOrganizations.$inferSelect;
+
+export const contactAccountLinks = mysqlTable(
+  "contact_account_links",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    /** Person side — a prospect OR a contact (personType distinguishes). */
+    personType: varchar("person_type", { length: 12 }).notNull(), // prospect|contact
+    personId: int("person_id").notNull(),
+    accountId: int("account_id").notNull(),
+    globalOrganizationId: int("global_organization_id"),
+    relationshipType: varchar("relationship_type", { length: 24 }).notNull(),
+    titleAtCompany: varchar("title_at_company", { length: 200 }),
+    isCurrent: boolean("is_current").default(true).notNull(),
+    sourceType: varchar("source_type", { length: 32 }).notNull(),
+    confidence: decimal("confidence", { precision: 6, scale: 2 }),
+    linkedAt: timestamp("linked_at").defaultNow().notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    byPerson: index("ix_cal_person").on(t.workspaceId, t.personType, t.personId),
+    byAccount: index("ix_cal_account").on(t.workspaceId, t.accountId),
+  }),
+);
+export type ContactAccountLink = typeof contactAccountLinks.$inferSelect;
+
+export const organizationDomains = mysqlTable(
+  "organization_domains",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    globalOrganizationId: int("global_organization_id").notNull(),
+    domain: varchar("domain", { length: 200 }).notNull(),
+    normalizedDomain: varchar("normalized_domain", { length: 200 }).notNull(),
+    isPrimary: boolean("is_primary").default(false).notNull(),
+    sourceType: varchar("source_type", { length: 32 }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    byNorm: index("ix_od_norm").on(t.normalizedDomain),
+    byOrg: index("ix_od_org").on(t.globalOrganizationId),
+  }),
+);
+export type OrganizationDomain = typeof organizationDomains.$inferSelect;
+
+export const accountDomains = mysqlTable(
+  "account_domains",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    accountId: int("account_id").notNull(),
+    domain: varchar("domain", { length: 200 }).notNull(),
+    normalizedDomain: varchar("normalized_domain", { length: 200 }).notNull(),
+    isPrimary: boolean("is_primary").default(false).notNull(),
+    sourceType: varchar("source_type", { length: 32 }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    byNorm: index("ix_ad_norm").on(t.workspaceId, t.normalizedDomain),
+    byAccount: index("ix_ad_account").on(t.accountId),
+  }),
+);
+export type AccountDomain = typeof accountDomains.$inferSelect;
+
+export const organizationLocations = mysqlTable(
+  "organization_locations",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    globalOrganizationId: int("global_organization_id").notNull(),
+    locationType: varchar("location_type", { length: 24 }),
+    city: varchar("city", { length: 80 }),
+    state: varchar("state", { length: 80 }),
+    country: varchar("country", { length: 80 }),
+    addressRaw: text("address_raw"),
+    isHeadquarters: boolean("is_headquarters").default(false).notNull(),
+    sourceType: varchar("source_type", { length: 32 }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({ byOrg: index("ix_ol_org").on(t.globalOrganizationId) }),
+);
+export type OrganizationLocation = typeof organizationLocations.$inferSelect;
+
+export const organizationTechnologies = mysqlTable(
+  "organization_technologies",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    globalOrganizationId: int("global_organization_id").notNull(),
+    technologyName: varchar("technology_name", { length: 120 }).notNull(),
+    technologyCategory: varchar("technology_category", { length: 80 }),
+    sourceType: varchar("source_type", { length: 32 }).notNull(),
+    detectedAt: timestamp("detected_at"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({ byOrg: index("ix_ot_org").on(t.globalOrganizationId) }),
+);
+export type OrganizationTechnology = typeof organizationTechnologies.$inferSelect;
+
+export const organizationFundingEvents = mysqlTable(
+  "organization_funding_events",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    globalOrganizationId: int("global_organization_id").notNull(),
+    fundingType: varchar("funding_type", { length: 48 }),
+    amount: decimal("amount", { precision: 18, scale: 2 }),
+    currency: varchar("currency", { length: 8 }),
+    announcedAt: date("announced_at"),
+    sourceType: varchar("source_type", { length: 32 }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({ byOrg: index("ix_ofe_org").on(t.globalOrganizationId) }),
+);
+export type OrganizationFundingEvent = typeof organizationFundingEvents.$inferSelect;
+
+export const organizationEnrichmentEvents = mysqlTable(
+  "organization_enrichment_events",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    accountId: int("account_id"),
+    globalOrganizationId: int("global_organization_id"),
+    sourceVendor: varchar("source_vendor", { length: 48 }).notNull(),
+    sourceType: varchar("source_type", { length: 32 }).notNull(),
+    status: varchar("status", { length: 24 }).notNull(),
+    fieldsUpdated: json("fields_updated"),
+    rawSummary: json("raw_summary"),
+    creditsUsed: decimal("credits_used", { precision: 10, scale: 2 }).default("0"),
+    enrichedByUserId: int("enriched_by_user_id"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    byAccount: index("ix_oee_account").on(t.workspaceId, t.accountId),
+  }),
+);
+export type OrganizationEnrichmentEvent = typeof organizationEnrichmentEvents.$inferSelect;
+
+export const companyLogoAssets = mysqlTable(
+  "company_logo_assets",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId"),
+    globalOrganizationId: int("global_organization_id"),
+    accountId: int("account_id"),
+    logoUrl: text("logo_url"),
+    sourceType: varchar("source_type", { length: 32 }).notNull(),
+    sourceUrl: text("source_url"),
+    status: varchar("status", { length: 24 }).notNull(),
+    lastVerifiedAt: timestamp("last_verified_at"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    byAccount: index("ix_cla_account").on(t.accountId),
+    byOrg: index("ix_cla_org").on(t.globalOrganizationId),
+  }),
+);
+export type CompanyLogoAsset = typeof companyLogoAssets.$inferSelect;
