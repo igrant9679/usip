@@ -124,7 +124,7 @@ export function resolveField(ctx: ScoringContext, fieldName: string): unknown {
     // ── person derived ──────────────────────────────────────────────
     case "location": return [o.city, o.state, o.country].filter(Boolean).join(", ");
     case "department": case "functional_area": return o.functionalArea ?? o.functional_area;
-    case "has_verified_email": return o.emailStatus === "verified" || o.emailVerificationStatus === "safe";
+    case "has_verified_email": return ["verified", "valid", "safe"].includes(String(o.emailStatus ?? "")) || ["safe", "valid", "verified"].includes(String(o.emailVerificationStatus ?? ""));
     case "has_email": return !!o.email;
     case "has_phone": return !!o.phone;
     case "has_linkedin": case "has_linkedin_url": return !!(o.linkedinUrl ?? o.linkedin_url);

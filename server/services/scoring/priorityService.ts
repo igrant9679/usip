@@ -94,7 +94,7 @@ function personDataQuality(o: Record<string, unknown>, flags: { bounced: boolean
   if (o.title) raw += 10;
   if (o.company) raw += 10;
   if (o.companyDomain) raw += 10;
-  if (o.emailStatus === "verified" || o.emailVerificationStatus === "safe") raw += 25;
+  if (["verified", "valid", "safe"].includes(String(o.emailStatus ?? "")) || ["safe", "valid", "verified"].includes(String(o.emailVerificationStatus ?? ""))) raw += 25;
   if (o.phone) raw += 15;
   if (o.linkedinUrl ?? o.linkedin_url) raw += 10;
   if (o.city || o.state || o.country) raw += 5;
@@ -127,7 +127,7 @@ async function sequenceReadiness(
   const db = await getDb();
   const reasons: string[] = [];
   const hasEmail = !!o.email;
-  const verified = o.emailStatus === "verified" || o.emailVerificationStatus === "safe";
+  const verified = ["verified", "valid", "safe"].includes(String(o.emailStatus ?? "")) || ["safe", "valid", "verified"].includes(String(o.emailVerificationStatus ?? ""));
   if (!hasEmail) reasons.push("Missing email");
   if (flags.suppressed) reasons.push("Suppressed");
   if (flags.unsubscribed) reasons.push("Unsubscribed");

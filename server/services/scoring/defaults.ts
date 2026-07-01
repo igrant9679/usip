@@ -26,12 +26,19 @@ async function buildModel(
   ws: number, userId: number, name: string, description: string,
   objectType: "person" | "company",
   groups: Array<{ name: string; maxPoints: number; specs: Spec[] }>,
+  force = false,
 ): Promise<number | null> {
   const db = await getDb();
   if (!db) return null;
-  const existing = await db.select({ id: scoreModels.id }).from(scoreModels)
-    .where(and(eq(scoreModels.workspaceId, ws), eq(scoreModels.name, name))).limit(1);
-  if (existing.length) return existing[0].id;
+  const existing = await db.select({ id: scoreModels.id, status: scoreModels.status }).from(scoreModels)
+    .where(and(eq(scoreModels.workspaceId, ws), eq(scoreModels.name, name)));
+  const live = existing.filter((m) => m.status !== "archived");
+  if (live.length && !force) return live[0].id;
+  // force: archive prior same-name models so the fresh one becomes primary.
+  for (const m of live) {
+    await db.update(scoreModels).set({ status: "archived", isPrimary: false, archivedAt: new Date() } as never)
+      .where(eq(scoreModels.id, m.id));
+  }
 
   const modelId = await createScoreModel({ workspaceId: ws, createdByUserId: userId, name, description, objectType, modelType: "custom", impactMode: "label" });
   let order = 0;
@@ -49,41 +56,46 @@ async function buildModel(
   return modelId;
 }
 
-export async function installDefaultModels(ws: number, userId: number): Promise<{ personModelId: number | null; companyModelId: number | null }> {
+export async function installDefaultModels(
+  ws: number, userId: number, force = false,
+): Promise<{ personModelId: number | null; companyModelId: number | null }> {
+  // Role/seniority use word-boundary regex so "IT" doesn't match "digital" and
+  // seniority is derived from the title (the seniority/functional_area columns
+  // are frequently unpopulated). Mutually-exclusive so one seniority tier wins.
   const personModelId = await buildModel(
     ws, userId, "AI Automation Buyer Persona",
-    "Prioritizes operations / IT / transformation leaders who match a strong-fit account.",
+    "Prioritizes senior IT / operations / transformation buyers by title and industry.",
     "person",
     [
-      { name: "Role / title fit", maxPoints: 30, specs: [
-        { field: "title", op: "contains", value: "Operations", points: 15, type: "stackable" },
-        { field: "title", op: "contains", value: "Digital Transformation", points: 20, type: "stackable" },
-        { field: "title", op: "contains", value: "IT", points: 10, type: "stackable" },
-        { field: "title", op: "contains", value: "RevOps", points: 10, type: "stackable" },
+      { name: "Seniority (from title)", maxPoints: 20, specs: [
+        { field: "title", op: "regex_match", value: "\\b(cto|cio|ceo|coo|chief|founder|owner|president)\\b", points: 20, type: "mutually_exclusive" },
+        { field: "title", op: "regex_match", value: "\\b(vp|svp|evp|vice\\s?president)\\b", points: 18, type: "mutually_exclusive" },
+        { field: "title", op: "regex_match", value: "\\bdirector\\b", points: 15, type: "mutually_exclusive" },
+        { field: "title", op: "regex_match", value: "\\b(head|lead|principal)\\b", points: 12, type: "mutually_exclusive" },
+        { field: "title", op: "regex_match", value: "\\bmanager\\b", points: 8, type: "mutually_exclusive" },
       ] },
-      { name: "Seniority fit", maxPoints: 20, specs: [
-        { field: "seniority", op: "contains", value: "Director", points: 15, type: "mutually_exclusive" },
-        { field: "seniority", op: "contains", value: "VP", points: 20, type: "mutually_exclusive" },
-        { field: "seniority", op: "contains", value: "C-Level", points: 20, type: "mutually_exclusive" },
-        { field: "seniority", op: "contains", value: "Manager", points: 8, type: "mutually_exclusive" },
+      { name: "Role / function fit", maxPoints: 30, specs: [
+        { field: "title", op: "regex_match", value: "\\b(it|information technology|infosec|security|cloud|infrastructure|systems|network)\\b", points: 12, type: "stackable" },
+        { field: "title", op: "regex_match", value: "\\b(operations|revops|revenue operations)\\b", points: 12, type: "stackable" },
+        { field: "title", op: "regex_match", value: "\\b(digital|transformation|automation|ai|data)\\b", points: 12, type: "stackable" },
+        { field: "title", op: "regex_match", value: "\\b(engineer|architect)\\b", points: 6, type: "stackable" },
       ] },
-      { name: "Department fit", maxPoints: 15, specs: [
-        { field: "functional_area", op: "contains", value: "Operations", points: 10, type: "mutually_exclusive" },
-        { field: "functional_area", op: "contains", value: "IT", points: 10, type: "mutually_exclusive" },
+      { name: "Industry fit", maxPoints: 20, specs: [
+        { field: "industry", op: "contains", value: "Information Technology", points: 15, type: "stackable" },
+        { field: "industry", op: "contains", value: "Software", points: 12, type: "stackable" },
+        { field: "industry", op: "contains", value: "Security", points: 10, type: "stackable" },
+        { field: "industry", op: "contains", value: "Defense", points: 10, type: "stackable" },
       ] },
-      { name: "Company fit overlay", maxPoints: 20, specs: [
-        { field: "company_fit_rating", op: "equals", value: "excellent", points: 20, type: "mutually_exclusive" },
-        { field: "company_fit_rating", op: "equals", value: "good", points: 12, type: "mutually_exclusive" },
-        { field: "company_fit_rating", op: "equals", value: "fair", points: 5, type: "mutually_exclusive" },
-      ] },
-      { name: "Data / contactability", maxPoints: 15, specs: [
+      { name: "Data / contactability", maxPoints: 20, specs: [
         { field: "has_verified_email", op: "equals", value: true, points: 8, type: "stackable" },
-        { field: "has_linkedin", op: "equals", value: true, points: 3, type: "stackable" },
-        { field: "has_current_title", op: "equals", value: true, points: 3, type: "stackable" },
+        { field: "has_linkedin", op: "equals", value: true, points: 4, type: "stackable" },
+        { field: "has_current_title", op: "equals", value: true, points: 4, type: "stackable" },
+        { field: "has_company_domain", op: "equals", value: true, points: 4, type: "stackable" },
         { field: "is_hard_bounced", op: "equals", value: true, points: -20, type: "negative", neg: true },
         { field: "is_suppressed", op: "equals", value: true, points: 0, type: "disqualifier", disq: true },
       ] },
     ],
+    force,
   );
 
   const companyModelId = await buildModel(
@@ -122,6 +134,7 @@ export async function installDefaultModels(ws: number, userId: number): Promise<
         { field: "is_competitor", op: "exists", value: true, points: 0, type: "disqualifier", disq: true },
       ] },
     ],
+    force,
   );
 
   return { personModelId, companyModelId };

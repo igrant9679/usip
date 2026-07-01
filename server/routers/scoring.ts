@@ -156,12 +156,14 @@ export const scoringRouter = router({
       return { ok: true as const, recalcJobId: jobId };
     }),
 
-  installDefaults: workspaceProcedure.mutation(async ({ ctx }) => {
-    requireRole(ctx.member.role, "admin");
-    const ids = await installDefaultModels(ctx.workspace.id, ctx.user.id);
-    const jobId = await queueRecalculation(ctx.workspace.id, "install_defaults");
-    return { ...ids, recalcJobId: jobId };
-  }),
+  installDefaults: workspaceProcedure
+    .input(z.object({ force: z.boolean().default(false) }).optional())
+    .mutation(async ({ ctx, input }) => {
+      requireRole(ctx.member.role, "admin");
+      const ids = await installDefaultModels(ctx.workspace.id, ctx.user.id, input?.force ?? false);
+      const jobId = await queueRecalculation(ctx.workspace.id, "install_defaults");
+      return { ...ids, recalcJobId: jobId };
+    }),
 
   /* ── criteria groups ── */
   createGroup: workspaceProcedure
