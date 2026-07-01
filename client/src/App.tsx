@@ -24,6 +24,7 @@ import Leads from "@/pages/usip/Leads";
 import Prospects from "@/pages/usip/Prospects";
 import People from "@/pages/usip/People";
 import Companies from "@/pages/usip/Companies";
+import CompanyProfile from "@/pages/usip/CompanyProfile";
 import AIAssistant from "@/pages/usip/AIAssistant";
 import Deliverability from "@/pages/usip/Deliverability";
 import Calls from "@/pages/usip/Calls";
@@ -381,6 +382,7 @@ function Router() {
       <Route path="/v2/home"><AuthGate><Home /></AuthGate></Route>
       <Route path="/v2/ai-assistant"><AuthGate><AIAssistant /></AuthGate></Route>
       <Route path="/v2/people"><AuthGate><People /></AuthGate></Route>
+      <Route path="/v2/companies/:id"><AuthGate><CompanyProfile /></AuthGate></Route>
       <Route path="/v2/companies"><AuthGate><Companies /></AuthGate></Route>
       <Route path="/v2/lists/:id"><AuthGate><ListDetail /></AuthGate></Route>
       <Route path="/v2/lists"><AuthGate><Lists /></AuthGate></Route>
