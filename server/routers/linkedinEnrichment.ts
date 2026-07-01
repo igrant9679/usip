@@ -30,7 +30,9 @@ import {
   applyEnrichment,
   enrichmentBlockReason,
 } from "../services/linkedinEnrichment/enrichmentService";
-import { retrieveLinkedInProfileByUrl } from "../services/linkedinEnrichment/unipileProfile";
+import { retrieveLinkedInProfileByUrl, retrieveByNameCompany } from "../services/linkedinEnrichment/unipileProfile";
+import { determineLookupStrategy } from "../services/linkedinEnrichment/lookupStrategy";
+import { scoreIntendedMatch } from "../services/linkedinEnrichment/matching";
 import { runDailyCheckForWorkspace, getLastDailyCheck } from "../services/linkedinEnrichment/dailyCheck";
 import { runForProspects, runForList, getJob, getJobItems } from "../services/linkedinEnrichment/orchestrator";
 import {
@@ -324,6 +326,72 @@ export const linkedinEnrichmentRouter = router({
         after: { changes: applied.changes.length },
       });
       return { ok: true as const, changes: applied.changes };
+    }),
+
+  /**
+   * Human-confirmed apply for a prospect the matcher flagged (needs_review or
+   * conflict). The reviewer has asserted the retrieved profile is the right
+   * person, so this re-retrieves via the SAME compliant Unipile path and
+   * applies the enrichment regardless of the automatic match score — while
+   * still recording the real score/status for the audit trail. Manager+.
+   *
+   * This is the apply primitive behind the (future) job-results review panel;
+   * it also lets an operator resolve a single flagged record on demand.
+   */
+  confirmEnrich: workspaceProcedure
+    .input(z.object({ prospectId: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      requireRole(ctx.member.role, "manager");
+      const isAdmin = isAdminRole(ctx.member.role);
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+
+      const health = await checkLinkedInEnrichmentHealth({ workspaceId: ctx.workspace.id, userId: ctx.user.id, isAdmin });
+      if (health.status !== "connected") {
+        throw new TRPCError({ code: "FAILED_PRECONDITION", message: health.missing_requirements[0] ?? "LinkedIn integration not ready." });
+      }
+
+      const [p] = await db.select().from(prospects)
+        .where(and(eq(prospects.workspaceId, ctx.workspace.id), eq(prospects.id, input.prospectId)));
+      if (!p) throw new TRPCError({ code: "NOT_FOUND", message: "Prospect not found." });
+      // Compliance — never enrich a suppressed/rejected prospect, even on confirm.
+      const block = enrichmentBlockReason(p);
+      if (block) throw new TRPCError({ code: "FORBIDDEN", message: block });
+
+      const [prior] = await db.select({ url: prospectLinkedinEnrichments.linkedinProfileUrl })
+        .from(prospectLinkedinEnrichments)
+        .where(and(eq(prospectLinkedinEnrichments.workspaceId, ctx.workspace.id), eq(prospectLinkedinEnrichments.prospectId, p.id)));
+
+      const { strategy, url } = determineLookupStrategy(p as never, prior?.url ?? null);
+      if (strategy === "unavailable") {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "No LinkedIn URL or enough profile context to enrich this prospect." });
+      }
+
+      const retrieve = url
+        ? await retrieveLinkedInProfileByUrl({ workspaceId: ctx.workspace.id, userId: ctx.user.id, isAdmin, linkedinUrl: url })
+        : await retrieveByNameCompany({ workspaceId: ctx.workspace.id, userId: ctx.user.id, isAdmin, prospect: p as never });
+      if (!retrieve.ok || !retrieve.profile) {
+        throw new TRPCError({ code: "BAD_GATEWAY", message: retrieve.message });
+      }
+
+      // Score for the audit record, but apply regardless — the reviewer confirmed identity.
+      const match = scoreIntendedMatch(p as never, retrieve.profile, { userInitiatedSingle: true });
+      const applied = await applyEnrichment({
+        workspaceId: ctx.workspace.id, prospectId: p.id, profile: retrieve.profile,
+        matchStatus: match.status, sourceAccountId: retrieve.viaAccountId,
+        imageAllowed: !!retrieve.profile.profileImageUrl,
+      });
+
+      await recordAudit({
+        workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update",
+        entityType: "prospect_linkedin_enrichment", entityId: p.id,
+        after: { confirmedApply: true, matchStatus: match.status, matchScore: match.score, changes: applied.changes.length },
+      });
+      await emitActivity({
+        workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, prospectId: p.id,
+        subject: `LinkedIn enrichment confirmed & applied (${applied.changes.length} change${applied.changes.length === 1 ? "" : "s"})`,
+      });
+      return { ok: true as const, matchStatus: match.status, matchScore: match.score, changes: applied.changes };
     }),
 
   /** Admin-only: force-run the daily LinkedIn change check for this workspace. */

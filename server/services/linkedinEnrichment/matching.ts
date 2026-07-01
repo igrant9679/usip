@@ -258,6 +258,10 @@ export interface IntendedMatch {
  * one-click scoring + auto-apply rules:
  *   ≥75 (no conflict) → apply · 50–74 → apply only if single-prospect run ·
  *   <50 → needs_review · strong conflict → conflict (never apply).
+ * When the prospect's own LinkedIn URL matched exactly, differing
+ * name/title/company is treated as `review` (needs_review, never auto-apply)
+ * rather than a hard conflict — the URL is authoritative, so the mismatch is
+ * almost always a name variant or job change for a human to confirm.
  */
 export function scoreIntendedMatch(
   prospect: {
@@ -271,11 +275,18 @@ export function scoreIntendedMatch(
   const reasons: string[] = [];
   let score = 0;
   let conflict = false;
+  // Authoritative-URL match: the prospect's own LinkedIn URL resolved to this
+  // exact profile. A LinkedIn URL is unique to one person, so differing
+  // name/title/company is far more likely a variant/rename/job-change than the
+  // wrong person — those soften to `review` (never auto-apply) instead of a
+  // hard conflict.
+  let urlExactMatch = false;
+  let review = false;
 
   if (prospect.linkedinUrl && profile.identifier) {
     const cid = validateLinkedInUrl(prospect.linkedinUrl).identifier;
     if (cid && cid.toLowerCase() === profile.identifier.toLowerCase()) {
-      score += 100; reasons.push("linkedin_url match (+100)");
+      score += 100; reasons.push("linkedin_url match (+100)"); urlExactMatch = true;
     }
   }
   if (opts.userInitiatedSingle) { score += 50; reasons.push("user-initiated from this prospect (+50)"); }
@@ -287,7 +298,11 @@ export function scoreIntendedMatch(
     } else if (profile.firstName && profile.lastName && norm(profile.firstName) === norm(prospect.firstName) && norm(profile.lastName) === norm(prospect.lastName)) {
       score += 35; reasons.push("first + last exact (+35)");
     } else if (overlap(profile.fullName, candName) < 0.2) {
-      score -= 60; reasons.push("strong name conflict (-60)"); conflict = true;
+      if (urlExactMatch) {
+        reasons.push("name differs from profile — review (URL authoritative)"); review = true;
+      } else {
+        score -= 60; reasons.push("strong name conflict (-60)"); conflict = true;
+      }
     }
   }
 
@@ -307,7 +322,11 @@ export function scoreIntendedMatch(
     score += 15; reasons.push("title similarity (+15)"); titleSim = true;
   }
   if (companyConflict && !titleSim && profile.currentTitle && prospect.title) {
-    score -= 35; reasons.push("company + title conflict (-35)"); conflict = true;
+    if (urlExactMatch) {
+      reasons.push("title/company differs — review (URL authoritative)"); review = true;
+    } else {
+      score -= 35; reasons.push("company + title conflict (-35)"); conflict = true;
+    }
   }
 
   const profLoc = profile.location;
@@ -318,10 +337,15 @@ export function scoreIntendedMatch(
 
   const status: MatchStatus = conflict
     ? "conflict"
-    : score >= 90 ? "exact_match"
-      : score >= 75 ? "high_confidence"
-        : score >= 50 ? "possible_match"
-          : "no_match";
-  const autoApply = conflict ? false : score >= 75 ? true : score >= 50 && opts.userInitiatedSingle;
+    : review
+      ? "possible_match"
+      : score >= 90 ? "exact_match"
+        : score >= 75 ? "high_confidence"
+          : score >= 50 ? "possible_match"
+            : "no_match";
+  // `review` (authoritative-URL match with attribute variance) never auto-applies
+  // — a human confirms via linkedinEnrichment.confirmEnrich — but is not a hard
+  // conflict, so the orchestrator routes it to needs_review, not conflict.
+  const autoApply = conflict || review ? false : score >= 75 ? true : score >= 50 && opts.userInitiatedSingle;
   return { status, score, conflict, reasons, autoApply };
 }
