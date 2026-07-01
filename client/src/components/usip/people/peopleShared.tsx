@@ -12,7 +12,7 @@
 import type { ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
 import { LinkedInUpdateIndicator, type LinkedInChangeSummary } from "./LinkedInEnrichment";
-import { PriorityScoreCell } from "../scoring/ScoreBadge";
+import { ScoreBadge, ScorePopover } from "../scoring/ScoreBadge";
 import {
   User,
   Gauge,
@@ -125,8 +125,9 @@ export type ColumnCellCtx = {
   onAction?: (action: string, p: Prospect) => void;
   /** Compact LinkedIn change summary for this row (People table indicator). */
   changeSummary?: LinkedInChangeSummary | null;
-  /** Velocity Priority Score for this row (batched via scoring.scoreMap). */
-  scoreCell?: { priority?: number | string | null; priorityRating?: string | null } | null;
+  /** Primary Fit score for this row (batched via scoring.scoreMap). The
+   *  breakdown popover also surfaces the blended Velocity Priority Score. */
+  scoreCell?: { score?: number | string | null; rating?: string | null } | null;
 };
 
 /** The full registry, keyed for quick lookup + ordered render. */
@@ -170,15 +171,12 @@ export const COLUMN_REGISTRY: Record<ColumnKey, ColumnDef> = {
   },
   velocityScore: {
     key: "velocityScore",
-    label: "Velocity Score",
+    label: "Fit Score",
     icon: Gauge,
     cell: (p, ctx) => (
-      <PriorityScoreCell
-        objectType="person"
-        objectId={p.id}
-        priority={ctx.scoreCell?.priority ?? null}
-        rating={(ctx.scoreCell?.priorityRating as any) ?? null}
-      />
+      <ScorePopover objectType="person" objectId={p.id}>
+        <ScoreBadge score={ctx.scoreCell?.score ?? null} rating={(ctx.scoreCell?.rating as any) ?? null} muted />
+      </ScorePopover>
     ),
   },
   company: {

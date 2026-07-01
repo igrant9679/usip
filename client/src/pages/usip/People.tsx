@@ -335,8 +335,8 @@ export default function People() {
     { enabled: visibleIds.length > 0, staleTime: 30_000 },
   );
   const scoreMap = useMemo(
-    () => new Map(Object.entries((scoreData?.priority ?? {}) as Record<string, { priority: number; rating: string }>)
-      .map(([id, v]) => [Number(id), { priority: v.priority, priorityRating: v.rating }])),
+    () => new Map(Object.entries((scoreData?.fit ?? {}) as Record<string, { normalized: number; rating: string }>)
+      .map(([id, v]) => [Number(id), { score: v.normalized, rating: v.rating }])),
     [scoreData],
   );
 
