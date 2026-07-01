@@ -12,8 +12,10 @@
 import type { ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
 import { LinkedInUpdateIndicator, type LinkedInChangeSummary } from "./LinkedInEnrichment";
+import { PriorityScoreCell } from "../scoring/ScoreBadge";
 import {
   User,
+  Gauge,
   Briefcase,
   Building2,
   Mail,
@@ -103,7 +105,7 @@ const muted = <span className="text-xs text-muted-foreground">—</span>;
 /* ─────────────────────────── column registry ──────────────────────────── */
 
 export type ColumnKey =
-  | "name" | "title" | "fit" | "company" | "emails" | "phone"
+  | "name" | "title" | "fit" | "velocityScore" | "company" | "emails" | "phone"
   | "actions" | "links" | "location" | "employees" | "industries" | "keywords";
 
 export type ColumnDef = {
@@ -123,6 +125,8 @@ export type ColumnCellCtx = {
   onAction?: (action: string, p: Prospect) => void;
   /** Compact LinkedIn change summary for this row (People table indicator). */
   changeSummary?: LinkedInChangeSummary | null;
+  /** Velocity Priority Score for this row (batched via scoring.scoreMap). */
+  scoreCell?: { priority?: number | string | null; priorityRating?: string | null } | null;
 };
 
 /** The full registry, keyed for quick lookup + ordered render. */
@@ -163,6 +167,19 @@ export const COLUMN_REGISTRY: Record<ColumnKey, ColumnDef> = {
     label: "Score",
     icon: Target,
     cell: (p) => fitBadge(p.confidenceScore),
+  },
+  velocityScore: {
+    key: "velocityScore",
+    label: "Velocity Score",
+    icon: Gauge,
+    cell: (p, ctx) => (
+      <PriorityScoreCell
+        objectType="person"
+        objectId={p.id}
+        priority={ctx.scoreCell?.priority ?? null}
+        rating={(ctx.scoreCell?.priorityRating as any) ?? null}
+      />
+    ),
   },
   company: {
     key: "company",
@@ -272,7 +289,7 @@ export const COLUMN_REGISTRY: Record<ColumnKey, ColumnDef> = {
 
 /** Default displayed columns, in order (≈ Apollo's default set). */
 export const DEFAULT_COLUMNS: ColumnKey[] = [
-  "name", "title", "fit", "company", "emails", "phone", "actions", "links", "location", "industries", "keywords",
+  "name", "title", "velocityScore", "fit", "company", "emails", "phone", "actions", "links", "location", "industries", "keywords",
 ];
 
 /* ─────────────── "Add fields to table" — available field catalogue ─────── */

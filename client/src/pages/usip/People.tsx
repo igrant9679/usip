@@ -328,6 +328,18 @@ export default function People() {
     [liSummaries],
   );
 
+  // Velocity Priority Scores for the visible rows (batched). Drives the Score
+  // column badge; the popover fetches the full breakdown lazily on open.
+  const { data: scoreData } = trpc.scoring.scoreMap.useQuery(
+    { objectType: "person", ids: visibleIds },
+    { enabled: visibleIds.length > 0, staleTime: 30_000 },
+  );
+  const scoreMap = useMemo(
+    () => new Map(Object.entries((scoreData?.priority ?? {}) as Record<string, { priority: number; rating: string }>)
+      .map(([id, v]) => [Number(id), { priority: v.priority, priorityRating: v.rating }])),
+    [scoreData],
+  );
+
   // stats (Total = whole dataset; net-new / saved computed on the loaded page)
   const savedOnPage = pageRows.filter((p) => p.linkedLeadId || p.linkedContactId).length;
   const netNewOnPage = pageRows.length - savedOnPage;
@@ -820,7 +832,7 @@ export default function People() {
                           />
                         </td>
                         {visibleColumns.map((key) => (
-                          <td key={key} className="px-2 py-1.5 align-middle">{COLUMN_REGISTRY[key].cell(p, { onAction, changeSummary: liSummaryMap.get(p.id) })}</td>
+                          <td key={key} className="px-2 py-1.5 align-middle">{COLUMN_REGISTRY[key].cell(p, { onAction, changeSummary: liSummaryMap.get(p.id), scoreCell: scoreMap.get(p.id) })}</td>
                         ))}
                         <td className="px-2 py-1.5" />
                       </tr>
