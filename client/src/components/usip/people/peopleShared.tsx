@@ -26,7 +26,6 @@ import {
   Users,
   Factory,
   Tag,
-  Target,
   GraduationCap,
   Globe,
   CheckCircle2,
@@ -105,7 +104,7 @@ const muted = <span className="text-xs text-muted-foreground">—</span>;
 /* ─────────────────────────── column registry ──────────────────────────── */
 
 export type ColumnKey =
-  | "name" | "title" | "fit" | "velocityScore" | "company" | "emails" | "phone"
+  | "name" | "title" | "velocityScore" | "company" | "emails" | "phone"
   | "actions" | "links" | "location" | "employees" | "industries" | "keywords";
 
 export type ColumnDef = {
@@ -163,15 +162,9 @@ export const COLUMN_REGISTRY: Record<ColumnKey, ColumnDef> = {
     icon: Briefcase,
     cell: (p) => <div className="max-w-[180px] truncate" title={p.title ?? undefined}>{p.title ?? "—"}</div>,
   },
-  fit: {
-    key: "fit",
-    label: "Score",
-    icon: Target,
-    cell: (p) => fitBadge(p.confidenceScore),
-  },
   velocityScore: {
     key: "velocityScore",
-    label: "Fit Score",
+    label: "Score",
     icon: Gauge,
     cell: (p, ctx) => (
       <ScorePopover objectType="person" objectId={p.id}>
@@ -287,7 +280,7 @@ export const COLUMN_REGISTRY: Record<ColumnKey, ColumnDef> = {
 
 /** Default displayed columns, in order (≈ Apollo's default set). */
 export const DEFAULT_COLUMNS: ColumnKey[] = [
-  "name", "title", "velocityScore", "fit", "company", "emails", "phone", "actions", "links", "location", "industries", "keywords",
+  "name", "title", "velocityScore", "company", "emails", "phone", "actions", "links", "location", "industries", "keywords",
 ];
 
 /* ─────────────── "Add fields to table" — available field catalogue ─────── */
