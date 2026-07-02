@@ -9,7 +9,7 @@ Refreshed at the end of the **"People top-action controls + full compliant Linke
 - **Repo:** `igrant9679/usip` (origin: `https://github.com/igrant9679/usip.git`)
 - **Local path:** `C:\Users\Admin\usip`
 - **Deploy:** Railway → `https://getvelocityai.app/` (auto-deploys on push to `main`). **Deploys are slow — 3–6 min.** Verify in a **fresh tab**. Chrome MCP screenshots flake (`Page.captureScreenshot` timeouts) — fall back to `get_page_text`, or measure with the `javascript_tool` (`getBoundingClientRect`), or call tRPC endpoints directly via `fetch` (see Verification).
-- **Tip of `main`:** `c46c84f`. Everything below is pushed.
+- **Tip of `main`:** `e6292fe`. Everything below is pushed. (Post-session addition at this tip: `applyEnrichment` now fire-and-forget triggers a fit / Velocity-Priority-Score recalculation via `server/services/scoring/recalculationService` — scoring is best-effort and never blocks enrichment.)
 
 ## What this session was
 
@@ -101,7 +101,7 @@ Commit + push per change. **Stage specific files** (never `git add -A`). Untrack
 ## Resume prompt for the new session
 ```
 You're continuing Velocity / usip (igrant9679/usip → getvelocityai.app on Railway).
-Repo: C:\Users\Admin\usip. Tip of main: c46c84f.
+Repo: C:\Users\Admin\usip. Tip of main: e6292fe.
 
 Read SESSION_HANDOFF.md at the repo root first — especially "What this session was",
 the Unipile integration (reuse, don't duplicate), "Bug classes", "How this codebase
