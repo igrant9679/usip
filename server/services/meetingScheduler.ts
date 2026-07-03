@@ -298,16 +298,19 @@ export async function runMeetingAutopilotForWorkspace(
 
   const owner = ownerUserId !== undefined ? ownerUserId : await pickWorkspaceOwner(db, workspaceId);
 
-  // Best-fit prospects (hot), never suppressed/rejected.
+  // Best-AVAILABLE prospects, never suppressed/rejected. We deliberately do NOT
+  // hard-gate on confidenceScore >= 70: on real workspaces most prospects are
+  // unscored, so that gate found nobody and the autopilot never proposed a
+  // meeting. Instead take the highest-scored first (NULLs last via DESC) so the
+  // engine always has candidates; approval mode lets a human vet each proposal.
   const candidates = await db
     .select()
     .from(prospects)
     .where(and(
       eq(prospects.workspaceId, workspaceId),
-      gte(prospects.confidenceScore, 70),
       or(isNull(prospects.verificationStatus), ne(prospects.verificationStatus, "rejected")),
     ))
-    .orderBy(sql`${prospects.confidenceScore} DESC`)
+    .orderBy(sql`${prospects.confidenceScore} DESC`, sql`${prospects.updatedAt} DESC`)
     .limit(limit * 5);
 
   if (!candidates.length) return { proposed: 0, sent: 0, skipped: 0 };
