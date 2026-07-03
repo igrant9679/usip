@@ -563,6 +563,35 @@ export const unipileRouter = router({
     }),
 
   /**
+   * One-time admin action: register Unipile's messaging webhook so inbound
+   * social/chat messages (LinkedIn DMs, etc.) arrive in real time and feed the
+   * Conversation Autopilot (classify → book meeting).
+   */
+  registerMessagingWebhook: adminWsProcedure
+    .input(z.object({ origin: z.string().optional() }).default({}))
+    .mutation(async ({ input }) => {
+      const appBase = (
+        process.env.MANUS_APP_URL ||
+        input.origin ||
+        process.env.VITE_FRONTEND_FORGE_API_URL ||
+        ""
+      ).replace(/\/$/, "");
+      if (!appBase) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "MANUS_APP_URL is not set — Unipile needs a reachable webhook URL.",
+        });
+      }
+      const requestUrl = `${appBase}/api/unipile/messaging-webhook`;
+      const result = await registerWebhook({
+        requestUrl,
+        source: "messaging",
+        secretKey: process.env.UNIPILE_WEBHOOK_SECRET || undefined,
+      });
+      return { webhookId: result.id, requestUrl, raw: result.raw };
+    }),
+
+  /**
    * One-time admin action: register Unipile's calendar_event webhook so
    * calendar_event_created / _updated / _deleted events stream into
    * /api/unipile/calendar-webhook. Same idempotency caveat as mail.

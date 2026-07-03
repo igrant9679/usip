@@ -2308,6 +2308,20 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  {
+    name: "0106_social_message_classification.sql",
+    statements: [
+      `ALTER TABLE \`unipile_messages\` ADD COLUMN \`replyClass\` varchar(48) NULL`,
+      `ALTER TABLE \`unipile_messages\` ADD COLUMN \`sentiment\` varchar(16) NULL`,
+      `ALTER TABLE \`unipile_messages\` ADD COLUMN \`classConfidence\` int NULL`,
+      `ALTER TABLE \`unipile_messages\` ADD COLUMN \`classReasoning\` text NULL`,
+      `ALTER TABLE \`unipile_messages\` ADD COLUMN \`classifiedAt\` timestamp NULL`,
+      `ALTER TABLE \`unipile_messages\` ADD COLUMN \`autoActionTaken\` varchar(48) NULL`,
+      `ALTER TABLE \`unipile_messages\` ADD COLUMN \`meetingId\` int NULL`,
+      `ALTER TABLE \`unipile_messages\` ADD COLUMN \`handledAt\` timestamp NULL`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

@@ -2631,6 +2631,16 @@ export const unipileMessages = mysqlTable(
     linkedOpportunityId: int("linkedOpportunityId"),
     activityId: int("activityId"),
     readAt: timestamp("readAt"),
+    // Inbound social-reply AI classification (Migration 0106) — mirrors
+    // email_replies so the Conversation Autopilot handles social replies too.
+    replyClass: varchar("replyClass", { length: 48 }),
+    sentiment: varchar("sentiment", { length: 16 }),
+    classConfidence: int("classConfidence"),
+    classReasoning: text("classReasoning"),
+    classifiedAt: timestamp("classifiedAt"),
+    autoActionTaken: varchar("autoActionTaken", { length: 48 }),
+    meetingId: int("meetingId"),
+    handledAt: timestamp("handledAt"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
   (t) => ({

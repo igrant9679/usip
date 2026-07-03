@@ -26,7 +26,9 @@ import {
   sendingAccounts,
   unipileAccounts,
   unipileEmailsCache,
+  unipileMessages,
   users,
+  workspaceSettings,
 } from "../drizzle/schema";
 import { processInboundReply } from "./inboundReplyPoller";
 import { processBounceEvent } from "./emailTracking";
@@ -504,6 +506,81 @@ export function registerUnipileWebhookRoutes(app: Express) {
    * The webhook owner is identified by looking up `account_id` in our
    * `unipile_accounts` table — that gives us workspaceId for tenancy.
    */
+  /**
+   * POST /api/unipile/messaging-webhook  (source=messaging)
+   *
+   * Fires on new messages in connected social/chat accounts (LinkedIn, WhatsApp,
+   * etc.). We process INBOUND messages (is_sender falsy), store them in
+   * unipile_messages, and — when the workspace's conversationAutopilotMode != 'off'
+   * — classify + act: a "willing to meet" reply spawns a meeting proposal owned by
+   * the rep whose OWN connected account received it (per-user social identity).
+   */
+  app.post(
+    "/api/unipile/messaging-webhook",
+    async (req: Request, res: Response) => {
+      res.status(200).json({ ok: true });
+      if (!unipileWebhookAuthorized(req)) {
+        console.warn("[UnipileMsgWebhook] bad/missing Unipile-Auth header — dropped");
+        return;
+      }
+      try {
+        const payload: any = req.body ?? {};
+        const m: any = payload.message ?? payload;
+        const accountId: string | undefined = payload.account_id ?? m.account_id;
+        const messageId: string | undefined = m.id ?? m.message_id ?? payload.message_id;
+        const isSender = m.is_sender;
+        const chatId: string = m.chat_id ?? payload.chat_id ?? "";
+        const text: string = m.text ?? m.message ?? m.body ?? "";
+        const subject: string | null = m.subject ?? null;
+        const provider: string = String(m.account_type ?? payload.account_type ?? m.provider ?? "linkedin").toLowerCase();
+        const senderProviderId: string | null = m.sender_id ?? m.sender_attendee_id ?? null;
+        const senderName: string | null = payload.sender?.attendee_name ?? m.sender_attendee_name ?? m.attendee_name ?? null;
+        if (!accountId || !messageId) {
+          console.warn("[UnipileMsgWebhook] missing account_id/message_id:", JSON.stringify(payload).slice(0, 300));
+          return;
+        }
+        // Only inbound (from the other party). is_sender truthy = our own outbound.
+        if (isSender === 1 || isSender === true) return;
+
+        const db = await getDb();
+        if (!db) return;
+        const [acct] = await db
+          .select({ id: unipileAccounts.id, workspaceId: unipileAccounts.workspaceId, userId: unipileAccounts.userId })
+          .from(unipileAccounts)
+          .where(eq(unipileAccounts.unipileAccountId, accountId))
+          .limit(1);
+        if (!acct) { console.warn(`[UnipileMsgWebhook] no local account for ${accountId}`); return; }
+
+        // Dedupe on messageId.
+        const [dup] = await db.select({ id: unipileMessages.id }).from(unipileMessages).where(eq(unipileMessages.messageId, messageId)).limit(1);
+        if (dup) return;
+
+        const ins = await db.insert(unipileMessages).values({
+          workspaceId: acct.workspaceId, unipileAccountId: accountId, provider,
+          chatId: chatId || messageId, messageId, direction: "inbound",
+          senderName: senderName ?? null, senderProviderId: senderProviderId ?? null,
+          text: text || subject || null,
+        } as never);
+        const rowId = Number((ins as any)[0]?.insertId ?? 0) || null;
+        console.log(`[UnipileMsgWebhook] inbound ${provider} msg stored (account ${accountId}, msg ${messageId})`);
+
+        if (rowId) {
+          const [ws] = await db.select({ mode: workspaceSettings.conversationAutopilotMode })
+            .from(workspaceSettings).where(eq(workspaceSettings.workspaceId, acct.workspaceId)).limit(1);
+          if (ws?.mode && ws.mode !== "off") {
+            const [row] = await db.select().from(unipileMessages).where(eq(unipileMessages.id, rowId)).limit(1);
+            if (row) {
+              const { classifyAndHandleSocialMessage } = await import("./services/replyClassifier");
+              await classifyAndHandleSocialMessage(acct.workspaceId, row, acct.userId ?? null);
+            }
+          }
+        }
+      } catch (err) {
+        console.error("[UnipileMsgWebhook] error:", err);
+      }
+    },
+  );
+
   app.post(
     "/api/unipile/mail-webhook",
     async (req: Request, res: Response) => {

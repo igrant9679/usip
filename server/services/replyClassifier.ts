@@ -14,7 +14,7 @@
  *   auto     — AI classifies AND executes the per-class action automatically.
  */
 import { and, desc, eq, gte, isNull, sql } from "drizzle-orm";
-import { emailReplies, emailSuppressions, tasks, workspaceSettings } from "../../drizzle/schema";
+import { emailReplies, emailSuppressions, tasks, unipileMessages, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { invokeLLM } from "../_core/llm";
 import { createMeetingProposal } from "./meetingScheduler";
@@ -225,6 +225,118 @@ export async function applyReplyAction(workspaceId: number, reply: any, byUser: 
       handledAt: new Date(),
       handledBy: byUser ? "user" : "ai",
     } as never).where(eq(emailReplies.id, reply.id));
+  }
+  return action;
+}
+
+async function socialTask(db: any, workspaceId: number, msg: any, ownerUserId: number | null, title: string, priority: string, type: string) {
+  const rel = msg.linkedContactId ? { t: "contact", i: msg.linkedContactId } : msg.linkedLeadId ? { t: "lead", i: msg.linkedLeadId } : { t: null, i: null };
+  await db.insert(tasks).values({
+    workspaceId, title, description: msg.text ? String(msg.text).slice(0, 240) : null,
+    type, priority, status: "open", dueAt: new Date(Date.now() + 86400000),
+    ownerUserId: ownerUserId ?? null, relatedType: rel.t, relatedId: rel.i, source: "ai",
+  } as never);
+}
+
+/**
+ * Classify + act on ONE inbound social (LinkedIn/WhatsApp/…) message — the
+ * Conversation Autopilot's social channel. Mirrors the email-reply flow: a
+ * "willing_to_meet" message spawns a meeting proposal, owned by the rep whose
+ * OWN connected account received it (ownerUserId). Called from the messaging
+ * webhook only when the workspace's conversationAutopilotMode != 'off'.
+ */
+export async function classifyAndHandleSocialMessage(
+  workspaceId: number,
+  msg: any,
+  ownerUserId: number | null,
+): Promise<string> {
+  const db = await getDb();
+  if (!db) return "none";
+  const name = msg.senderName || "the sender";
+  const chan = msg.provider || "social";
+  const body = truncate(msg.text, 2000);
+
+  const prompt = `You are a B2B sales reply analyser. Classify this inbound ${chan} message and draft a suggested response. Return JSON only.
+
+From: ${name}
+Message: ${body || "(empty)"}
+
+Classes (pick exactly one):
+- willing_to_meet: wants to meet / positive interest
+- follow_up_question: asking a question, needs a reply
+- person_referral: points you to someone else
+- out_of_office: auto-reply / away
+- already_left_company_or_not_right_person: wrong person or has left
+- not_interested: explicit no
+- unsubscribe: opt-out request
+- none_of_the_above: unclear`;
+
+  let cls: ReplyClassification = { replyClass: "none_of_the_above", sentiment: "neutral", confidence: 50, reasoning: "", suggestedReply: "" };
+  try {
+    const res = await invokeLLM({
+      messages: [{ role: "user", content: prompt }],
+      outputSchema: {
+        name: "reply_classification",
+        schema: {
+          type: "object",
+          properties: {
+            replyClass: { type: "string", enum: [...REPLY_CLASSES] },
+            sentiment: { type: "string", enum: [...SENTIMENTS] },
+            confidence: { type: "integer" },
+            reasoning: { type: "string" },
+            suggestedReply: { type: "string" },
+          },
+          required: ["replyClass", "sentiment", "confidence", "reasoning", "suggestedReply"],
+        },
+      },
+      max_tokens: 500,
+      workspaceId,
+    });
+    const parsed = JSON.parse(res.choices?.[0]?.message?.content ?? "{}");
+    cls = {
+      replyClass: (REPLY_CLASSES as readonly string[]).includes(parsed.replyClass) ? parsed.replyClass : "none_of_the_above",
+      sentiment: SENTIMENTS.includes(parsed.sentiment) ? parsed.sentiment : "neutral",
+      confidence: Math.max(0, Math.min(100, Math.round(Number(parsed.confidence ?? 50)) || 50)),
+      reasoning: String(parsed.reasoning ?? "").slice(0, 500),
+      suggestedReply: String(parsed.suggestedReply ?? "").slice(0, 2000),
+    };
+  } catch (e) {
+    console.error(`[SocialClassifier] LLM classify failed for message ${msg.id}:`, e);
+  }
+
+  await db.update(unipileMessages).set({
+    replyClass: cls.replyClass, sentiment: cls.sentiment, classConfidence: cls.confidence,
+    classReasoning: cls.reasoning || null, classifiedAt: new Date(),
+  } as never).where(eq(unipileMessages.id, msg.id));
+
+  const relatedType = msg.linkedContactId ? "contact" : msg.linkedLeadId ? "lead" : null;
+  const relatedId = msg.linkedContactId ?? msg.linkedLeadId ?? null;
+  let action = "none";
+  let meetingId: number | null = null;
+  switch (cls.replyClass) {
+    case "willing_to_meet":
+      meetingId = await createMeetingProposal(workspaceId, {
+        ownerUserId, relatedType, relatedId, name,
+        descriptor: `replied on ${chan} with interest: "${truncate(msg.text, 160)}"`, source: "inbound",
+      });
+      await socialTask(db, workspaceId, msg, ownerUserId, `Meeting requested (${chan}) — ${name}`, "high", "meeting_prep");
+      action = "meeting_proposed"; break;
+    case "follow_up_question":
+      await socialTask(db, workspaceId, msg, ownerUserId, `Answer ${name}'s ${chan} question`, "high", "manual_email"); action = "task_created"; break;
+    case "person_referral":
+      await socialTask(db, workspaceId, msg, ownerUserId, `Save referral from ${name} (${chan})`, "normal", "crm_update"); action = "task_created"; break;
+    case "already_left_company_or_not_right_person":
+      await socialTask(db, workspaceId, msg, ownerUserId, `Re-verify contact — ${name} may have left`, "normal", "crm_update"); action = "task_created"; break;
+    case "not_interested":
+      await socialTask(db, workspaceId, msg, ownerUserId, `${name} not interested (${chan}) — review`, "low", "follow_up"); action = "marked"; break;
+    case "out_of_office":
+      action = "ooo_noted"; break;
+    default:
+      action = "none";
+  }
+  if (action !== "none") {
+    await db.update(unipileMessages).set({ autoActionTaken: action, meetingId, handledAt: new Date() } as never)
+      .where(eq(unipileMessages.id, msg.id));
   }
   return action;
 }
