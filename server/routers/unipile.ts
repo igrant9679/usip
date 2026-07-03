@@ -9,6 +9,7 @@ import { z } from "zod";
 import { getDb } from "../db";
 import {
   activities,
+  leads,
   unipileAccounts,
   unipileInvites,
   unipileMessages,
@@ -25,8 +26,11 @@ import {
   listSentInvitations,
   listUnipileAccounts,
   registerWebhook,
+  resolveLinkedInSearchParameter,
+  searchLinkedIn,
   sendLinkedInInvitation,
   sendMessage,
+  type UnipileLinkedInSearchHit,
 } from "../lib/unipile";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
@@ -767,6 +771,103 @@ export const unipileRouter = router({
       if (!acct) return { items: [] as any[] };
       const res = await listRelations({ accountId: acct, limit: input.limit ?? 100 });
       return { items: res.items ?? [], cursor: res.cursor };
+    }),
+
+  // ─── LinkedIn / Sales Navigator search (per-user) ───────────────────────
+  // Widens the top of the autonomous funnel: search → import as leads →
+  // sequences send invites → accepts fire the Social Autopilot opener → meeting.
+  searchLinkedIn: workspaceProcedure
+    .input(z.object({
+      api: z.enum(["classic", "sales_navigator"]).default("classic"),
+      category: z.enum(["people", "companies"]).default("people"),
+      keywords: z.string().optional(),
+      filters: z.record(z.any()).optional(),
+      limit: z.number().int().min(1).max(25).optional(),
+      unipileAccountId: z.string().optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) return { items: [] as UnipileLinkedInSearchHit[] };
+      const acct = await resolveOwnLinkedInAccount(db, ctx.workspace.id, ctx.user.id, input.unipileAccountId);
+      if (!acct) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Connect a LinkedIn account to search." });
+      const res = await searchLinkedIn(acct, {
+        api: input.api, category: input.category, keywords: input.keywords,
+        filters: input.filters, limit: input.limit ?? 10,
+      });
+      return { items: res.items, cursor: res.cursor };
+    }),
+
+  /** Resolve a Sales-Navigator filter term (LOCATION/INDUSTRY/COMPANY/…) → entity IDs. */
+  resolveSearchParam: workspaceProcedure
+    .input(z.object({
+      type: z.string(),
+      keywords: z.string().min(1),
+      unipileAccountId: z.string().optional(),
+    }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) return { items: [] as any[] };
+      const acct = await resolveOwnLinkedInAccount(db, ctx.workspace.id, ctx.user.id, input.unipileAccountId);
+      if (!acct) return { items: [] as any[] };
+      const res = await resolveLinkedInSearchParameter(acct, input.type, input.keywords, 10);
+      return { items: res.items };
+    }),
+
+  /**
+   * Import LinkedIn search hits as leads (autonomous-pipeline entry point).
+   * Dedupes against existing leads by linkedinUrl or first+last name so
+   * re-running a search doesn't create duplicates. Returns the count created.
+   */
+  importSearchHitsAsLeads: workspaceProcedure
+    .input(z.object({
+      hits: z.array(z.object({
+        name: z.string().optional(),
+        first_name: z.string().optional(),
+        last_name: z.string().optional(),
+        title: z.string().optional(),
+        headline: z.string().optional(),
+        occupation: z.string().optional(),
+        company: z.string().optional(),
+        location: z.string().optional(),
+        public_profile_url: z.string().optional(),
+        profile_url: z.string().optional(),
+      })).min(1).max(25),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      let created = 0;
+      let skipped = 0;
+      for (const h of input.hits) {
+        const first = (h.first_name || h.name?.split(/\s+/)[0] || "").slice(0, 80).trim();
+        const last = (h.last_name || h.name?.split(/\s+/).slice(1).join(" ") || "").slice(0, 80).trim();
+        if (!first && !last) { skipped++; continue; }
+        const url = h.public_profile_url || h.profile_url || null;
+        // Dedupe: same name already a lead in this workspace.
+        const existing = await db
+          .select({ id: leads.id })
+          .from(leads)
+          .where(and(
+            eq(leads.workspaceId, ctx.workspace.id),
+            eq(leads.firstName, first || "-"),
+            eq(leads.lastName, last || "-"),
+          ))
+          .limit(1);
+        if (existing.length) { skipped++; continue; }
+        await db.insert(leads).values({
+          workspaceId: ctx.workspace.id,
+          firstName: first || "-",
+          lastName: last || "-",
+          title: (h.title || h.headline || h.occupation || null)?.slice(0, 120) ?? null,
+          company: (typeof h.company === "string" ? h.company : null)?.slice(0, 200) ?? null,
+          source: "linkedin_search",
+          status: "new",
+          ownerUserId: ctx.user.id,
+          customFields: url ? { linkedinUrl: url, location: h.location ?? null } : null,
+        } as never);
+        created++;
+      }
+      return { created, skipped };
     }),
 });
 

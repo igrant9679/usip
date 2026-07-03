@@ -395,29 +395,89 @@ export interface UnipileLinkedInSearchHit {
 }
 
 /**
- * LinkedIn people search via Unipile's classic (non–Sales-Navigator) search
- * API. Filters are folded into the `keywords` string by the caller — classic
- * LinkedIn search is keyword-based; structured location/industry filters with
- * entity-ID resolution would be a Sales-Navigator follow-up.
+ * Generalized LinkedIn search (POST /api/v1/linkedin/search). Supports both
+ * the "classic" (keyword) API and "sales_navigator" (structured B2B filters).
  *
- * POST /api/v1/linkedin/search?account_id=…&limit=…
+ * Sales Navigator filters like location/industry/company are LinkedIn entity
+ * IDs, NOT plain strings — resolve them first via resolveLinkedInSearchParameter
+ * and pass the numeric IDs in `filters` (e.g. { location: [102277331],
+ * tenure: [{ min: 3 }], seniority: ["senior"] }). Classic search folds
+ * everything into `keywords`.
+ */
+export async function searchLinkedIn(
+  accountId: string,
+  params: {
+    api?: "classic" | "sales_navigator";
+    category?: "people" | "companies";
+    keywords?: string;
+    filters?: Record<string, unknown>;
+    limit?: number;
+    cursor?: string;
+  },
+): Promise<{ items: UnipileLinkedInSearchHit[]; cursor?: string }> {
+  const limit = Math.min(Math.max(params.limit ?? 10, 1), 25);
+  const qs = new URLSearchParams({ account_id: accountId, limit: String(limit) });
+  if (params.cursor) qs.set("cursor", params.cursor);
+  const body: Record<string, unknown> = {
+    api: params.api ?? "classic",
+    category: params.category ?? "people",
+    ...(params.keywords ? { keywords: params.keywords } : {}),
+    ...(params.filters ?? {}),
+  };
+  const res = await unipileFetch<{ items?: UnipileLinkedInSearchHit[]; cursor?: string }>(
+    `/linkedin/search?${qs}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  );
+  return { items: Array.isArray(res?.items) ? res.items : [], cursor: res?.cursor };
+}
+
+/**
+ * Classic keyword people search. Thin wrapper over searchLinkedIn kept for the
+ * autonomous prospecting engine + linkedinLookup, which pass folded keywords.
  */
 export async function searchLinkedInPeople(
   accountId: string,
   params: { keywords: string; limit?: number },
 ): Promise<{ items: UnipileLinkedInSearchHit[] }> {
-  const limit = Math.min(Math.max(params.limit ?? 10, 1), 25);
-  const res = await unipileFetch<{ items?: UnipileLinkedInSearchHit[] }>(
-    `/linkedin/search?account_id=${encodeURIComponent(accountId)}&limit=${limit}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        api: "classic",
-        category: "people",
-        keywords: params.keywords,
-      }),
-    },
+  const { items } = await searchLinkedIn(accountId, {
+    api: "classic",
+    category: "people",
+    keywords: params.keywords,
+    limit: params.limit,
+  });
+  return { items };
+}
+
+/** One resolved Sales-Navigator filter value (text → LinkedIn entity ID). */
+export interface UnipileSearchParameter {
+  id: string;
+  title: string;
+  object?: string;
+}
+
+/**
+ * Resolve a Sales-Navigator filter term (a location/industry/company/etc.
+ * name) into the LinkedIn entity ID the search endpoint requires.
+ * GET /api/v1/linkedin/search/parameters?account_id=…&type=…&keywords=…
+ */
+export async function resolveLinkedInSearchParameter(
+  accountId: string,
+  type: string,
+  keywords: string,
+  limit = 10,
+): Promise<{ items: UnipileSearchParameter[] }> {
+  const qs = new URLSearchParams({
+    account_id: accountId,
+    type: type.toUpperCase(),
+    keywords,
+    limit: String(Math.min(Math.max(limit, 1), 100)),
+  });
+  const res = await unipileFetch<{ items?: UnipileSearchParameter[] }>(
+    `/linkedin/search/parameters?${qs}`,
   );
   return { items: Array.isArray(res?.items) ? res.items : [] };
 }

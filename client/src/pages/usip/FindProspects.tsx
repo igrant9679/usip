@@ -245,6 +245,167 @@ function ProspectRow({ p }: { p: any }) {
   );
 }
 
+/* ─── LinkedIn / Sales Navigator search ─────────────────────────────────
+ * Compliant search via the rep's OWN connected LinkedIn account (Unipile).
+ * Hits import as leads — the entry point to the autonomous funnel: leads →
+ * sequences send invites → accepts fire the Social Autopilot opener → meeting.
+ */
+type SearchHit = {
+  provider_id?: string; public_identifier?: string; name?: string;
+  first_name?: string; last_name?: string; title?: string; headline?: string;
+  occupation?: string; company?: string | { name?: string }; location?: string;
+  public_profile_url?: string; profile_url?: string;
+};
+type ParamChip = { id: string; title: string };
+
+function hitName(h: SearchHit): string {
+  return h.name || [h.first_name, h.last_name].filter(Boolean).join(" ") || "(no name)";
+}
+function hitCompany(h: SearchHit): string {
+  return typeof h.company === "string" ? h.company : h.company?.name || "";
+}
+
+function LinkedInSearchCard() {
+  const utils = trpc.useUtils();
+  const [api, setApi] = useState<"classic" | "sales_navigator">("classic");
+  const [keywords, setKeywords] = useState("");
+  const [locTerm, setLocTerm] = useState("");
+  const [indTerm, setIndTerm] = useState("");
+  const [locations, setLocations] = useState<ParamChip[]>([]);
+  const [industries, setIndustries] = useState<ParamChip[]>([]);
+  const [tenureMin, setTenureMin] = useState("");
+  const [hits, setHits] = useState<SearchHit[]>([]);
+  const [selected, setSelected] = useState<Record<number, boolean>>({});
+  const [resolving, setResolving] = useState<"" | "location" | "industry">("");
+
+  const search = trpc.unipile.searchLinkedIn.useMutation({
+    onSuccess: (r: any) => {
+      setHits(r.items ?? []);
+      setSelected(Object.fromEntries((r.items ?? []).map((_: any, i: number) => [i, true])));
+      if (!r.items?.length) toast.info("No results — broaden your filters.");
+    },
+    onError: (e) => toast.error(e.message.includes("PRECONDITION") ? "Connect a LinkedIn account first (Settings → Channels)." : e.message),
+  });
+  const importLeads = trpc.unipile.importSearchHitsAsLeads.useMutation({
+    onSuccess: (r) => { toast.success(`Imported ${r.created} lead${r.created === 1 ? "" : "s"}${r.skipped ? ` · ${r.skipped} skipped` : ""}`); utils.prospects?.list?.invalidate?.(); },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const resolveTerm = async (kind: "location" | "industry") => {
+    const term = kind === "location" ? locTerm : indTerm;
+    if (!term.trim()) return;
+    setResolving(kind);
+    try {
+      const res: any = await utils.unipile.resolveSearchParam.fetch({ type: kind === "location" ? "LOCATION" : "INDUSTRY", keywords: term.trim() });
+      const top = res?.items?.[0];
+      if (!top) { toast.error(`No ${kind} match for "${term}"`); return; }
+      const chip = { id: String(top.id), title: top.title };
+      if (kind === "location") { setLocations((p) => p.some((c) => c.id === chip.id) ? p : [...p, chip]); setLocTerm(""); }
+      else { setIndustries((p) => p.some((c) => c.id === chip.id) ? p : [...p, chip]); setIndTerm(""); }
+    } catch (e: any) { toast.error(e?.message || "Resolve failed"); }
+    finally { setResolving(""); }
+  };
+
+  const runSearch = () => {
+    if (!keywords.trim() && api === "classic") { toast.error("Enter keywords"); return; }
+    const filters: Record<string, unknown> = {};
+    if (api === "sales_navigator") {
+      if (locations.length) filters.location = locations.map((c) => Number(c.id));
+      if (industries.length) filters.industry = industries.map((c) => Number(c.id));
+      if (tenureMin) filters.tenure = [{ min: Number(tenureMin) }];
+    }
+    search.mutate({ api, category: "people", keywords: keywords.trim() || undefined, filters, limit: 10 });
+  };
+
+  const selectedHits = hits.filter((_, i) => selected[i]);
+  const allOn = hits.length > 0 && selectedHits.length === hits.length;
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base flex items-center gap-2"><Linkedin className="size-4 text-[#0A66C2]" /> LinkedIn search</CardTitle>
+        <CardDescription className="text-xs">
+          Search LinkedIn via your connected account and import matches as leads. Sales Navigator adds structured location, industry, and tenure filters. Imported leads feed sequences → invites → the Social Autopilot opener on accept.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <Tabs value={api} onValueChange={(v) => setApi(v as any)}>
+          <TabsList className="grid grid-cols-2 max-w-sm">
+            <TabsTrigger value="classic" className="gap-1.5"><Search className="size-3.5" /> Classic</TabsTrigger>
+            <TabsTrigger value="sales_navigator" className="gap-1.5"><Sparkles className="size-3.5" /> Sales Navigator</TabsTrigger>
+          </TabsList>
+        </Tabs>
+
+        <div className="space-y-1.5">
+          <Label className="text-xs">Keywords</Label>
+          <Input value={keywords} onChange={(e) => setKeywords(e.target.value)} placeholder='e.g. "VP Marketing SaaS" or a name/title' onKeyDown={(e) => { if (e.key === "Enter") runSearch(); }} />
+        </div>
+
+        {api === "sales_navigator" && (
+          <div className="grid md:grid-cols-2 gap-4">
+            <div className="space-y-1.5">
+              <Label className="text-xs">Location</Label>
+              <div className="flex gap-1.5">
+                <Input value={locTerm} onChange={(e) => setLocTerm(e.target.value)} placeholder="e.g. New York" onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); resolveTerm("location"); } }} />
+                <Button type="button" variant="outline" size="sm" disabled={resolving === "location"} onClick={() => resolveTerm("location")}>{resolving === "location" ? <Loader2 className="size-3.5 animate-spin" /> : "Add"}</Button>
+              </div>
+              {locations.length > 0 && <div className="flex flex-wrap gap-1">{locations.map((c) => <Badge key={c.id} variant="secondary" className="gap-1 cursor-pointer" onClick={() => setLocations((p) => p.filter((x) => x.id !== c.id))}>{c.title} ✕</Badge>)}</div>}
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs">Industry</Label>
+              <div className="flex gap-1.5">
+                <Input value={indTerm} onChange={(e) => setIndTerm(e.target.value)} placeholder="e.g. Software" onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); resolveTerm("industry"); } }} />
+                <Button type="button" variant="outline" size="sm" disabled={resolving === "industry"} onClick={() => resolveTerm("industry")}>{resolving === "industry" ? <Loader2 className="size-3.5 animate-spin" /> : "Add"}</Button>
+              </div>
+              {industries.length > 0 && <div className="flex flex-wrap gap-1">{industries.map((c) => <Badge key={c.id} variant="secondary" className="gap-1 cursor-pointer" onClick={() => setIndustries((p) => p.filter((x) => x.id !== c.id))}>{c.title} ✕</Badge>)}</div>}
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs">Min years in role</Label>
+              <Input type="number" min={0} value={tenureMin} onChange={(e) => setTenureMin(e.target.value)} placeholder="Any" className="max-w-[120px]" />
+            </div>
+          </div>
+        )}
+
+        <div className="flex items-center justify-between pt-2 border-t">
+          <div className="text-[11px] text-muted-foreground">Uses your own LinkedIn account · max 10 results/search.</div>
+          <Button onClick={runSearch} disabled={search.isPending} className="gap-1.5">
+            {search.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Search className="size-3.5" />}
+            {search.isPending ? "Searching…" : "Search LinkedIn"}
+          </Button>
+        </div>
+
+        {hits.length > 0 && (
+          <div className="space-y-2 pt-2 border-t">
+            <div className="flex items-center justify-between">
+              <button className="text-xs text-muted-foreground hover:text-foreground" onClick={() => setSelected(allOn ? {} : Object.fromEntries(hits.map((_, i) => [i, true])))}>
+                {allOn ? "Deselect all" : "Select all"} · {selectedHits.length}/{hits.length}
+              </button>
+              <Button size="sm" disabled={!selectedHits.length || importLeads.isPending} onClick={() => importLeads.mutate({ hits: selectedHits as any })} className="gap-1.5">
+                {importLeads.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <CheckCircle2 className="size-3.5" />} Import {selectedHits.length} as leads
+              </Button>
+            </div>
+            <div className="rounded-lg border divide-y">
+              {hits.map((h, i) => {
+                const url = h.public_profile_url || h.profile_url;
+                return (
+                  <label key={i} className="flex items-center gap-3 px-3 py-2 hover:bg-muted/40 cursor-pointer">
+                    <input type="checkbox" checked={!!selected[i]} onChange={(e) => setSelected((p) => ({ ...p, [i]: e.target.checked }))} className="size-4" />
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-medium truncate">{hitName(h)}</div>
+                      <div className="text-[12px] text-muted-foreground truncate">{[h.title || h.headline || h.occupation, hitCompany(h), h.location].filter(Boolean).join(" · ")}</div>
+                    </div>
+                    {url && <a href={url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="shrink-0 text-muted-foreground hover:text-foreground"><ExternalLink className="size-3.5" /></a>}
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 /* ─── Main page ─────────────────────────────────────────────────────── */
 export default function FindProspectsPage() {
   const [mode, setMode] = useState<"person" | "account">("person");
@@ -328,6 +489,9 @@ export default function FindProspectsPage() {
             </div>
           </CardContent>
         </Card>
+
+        {/* ── LinkedIn / Sales Navigator search ── */}
+        <LinkedInSearchCard />
 
         {/* ── Run details (logs + raw finds) ── */}
         {activeRunId !== null && <RunDetail runId={activeRunId} />}
