@@ -23,6 +23,7 @@ import {
 import {
   DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem,
   DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem,
+  DropdownMenuSeparator, DropdownMenuSub, DropdownMenuSubTrigger, DropdownMenuSubContent,
 } from "@/components/ui/dropdown-menu";
 import {
   Send, Plus, Search, Filter, Save, ArrowUpDown, Settings2, ChevronDown,
@@ -139,6 +140,15 @@ export default function SequencesV2() {
   });
   const unpublishMut = trpc.sequences.unpublishTemplate.useMutation({
     onSuccess: () => { utils.sequences.list.invalidate(); utils.sequences.listTemplates.invalidate(); toast.success("Removed from templates"); },
+  });
+  // Assign-to-rep (managers+): team member list + the assign mutation.
+  const isManager = !!current?.role && ["manager", "admin", "super_admin"].includes(current.role);
+  const teamQ = trpc.team.list.useQuery(undefined as any, { retry: false, enabled: isManager });
+  const members = ((teamQ.data ?? []) as any[]).map((m) => ({ userId: m.userId as number, name: (m.name as string) ?? `User ${m.userId}` }));
+  const memberName = (uid?: number | null) => (uid ? members.find((m) => m.userId === uid)?.name ?? `User ${uid}` : null);
+  const assignMut = trpc.sequences.assign.useMutation({
+    onSuccess: () => { utils.sequences.list.invalidate(); toast.success("Assignment updated"); },
+    onError: (e) => toast.error(e.message.includes("FORBIDDEN") ? "Only managers can assign" : e.message),
   });
 
   const [tab, setTab] = useState<Tab>("All Sequences");
@@ -299,7 +309,10 @@ export default function SequencesV2() {
                           <td className="px-3 py-1.5" onClick={(e) => e.stopPropagation()}>
                             <Checkbox checked={checked.has(s.id)} onCheckedChange={() => setChecked((p) => { const n = new Set(p); n.has(s.id) ? n.delete(s.id) : n.add(s.id); return n; })} className="size-3.5" />
                           </td>
-                          <td className="px-2 py-1.5 font-medium"><div className="max-w-[280px] truncate" title={s.name}>{s.name}</div></td>
+                          <td className="px-2 py-1.5 font-medium">
+                            <div className="max-w-[280px] truncate" title={s.name}>{s.name}</div>
+                            {s.assignedToUserId ? <div className="text-[10px] text-muted-foreground flex items-center gap-0.5 mt-0.5"><UserCircle2 className="size-2.5" /> {memberName(s.assignedToUserId)}</div> : null}
+                          </td>
                           <td className="px-2 py-1.5">{statusBadge(s.status)}</td>
                           <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground"><span className="inline-flex items-center gap-1 justify-end"><Layers className="size-3" /> {s.steps?.length ?? 0}</span></td>
                           <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground"><span className="inline-flex items-center gap-1 justify-end"><Users className="size-3" /> {(s.enrolledCount ?? 0).toLocaleString()}</span></td>
@@ -310,6 +323,20 @@ export default function SequencesV2() {
                               <DropdownMenuContent align="end">
                                 <DropdownMenuItem onClick={() => setLocation(`/v2/sequences/${s.id}`)}><ExternalLink className="size-4 mr-2" /> Open in builder</DropdownMenuItem>
                                 {isAdmin && <DropdownMenuItem onClick={() => publishMut.mutate({ id: s.id })}><BookOpen className="size-4 mr-2" /> Publish as team template</DropdownMenuItem>}
+                                {isManager && (
+                                  <>
+                                    <DropdownMenuSeparator />
+                                    <DropdownMenuSub>
+                                      <DropdownMenuSubTrigger><Users className="size-4 mr-2" /> Assign to rep</DropdownMenuSubTrigger>
+                                      <DropdownMenuSubContent className="max-h-64 overflow-auto">
+                                        {members.length === 0 ? <DropdownMenuItem disabled>No team members</DropdownMenuItem> : members.map((m) => (
+                                          <DropdownMenuItem key={m.userId} onClick={() => assignMut.mutate({ id: s.id, userId: m.userId })}>{m.name}{s.assignedToUserId === m.userId ? " ✓" : ""}</DropdownMenuItem>
+                                        ))}
+                                        {s.assignedToUserId ? <><DropdownMenuSeparator /><DropdownMenuItem onClick={() => assignMut.mutate({ id: s.id, userId: null })}>Unassign</DropdownMenuItem></> : null}
+                                      </DropdownMenuSubContent>
+                                    </DropdownMenuSub>
+                                  </>
+                                )}
                               </DropdownMenuContent>
                             </DropdownMenu>
                           </td>
