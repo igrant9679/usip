@@ -27,7 +27,10 @@ They chain into one autonomous revenue loop: prospect → **Tasks** (AI next act
 - **Meetings**: `meetings` table (proposed/invited/scheduled/…); `createMeetingProposal(ws,target)` is the generic proposal creator (prospect OR reply sender); `sendMeetingInvite` sends a real invite via `createCalendarAdapter` when a calendar is connected, else records locally with `inviteSent=false` (never a false "booked").
 - **Conversations**: classifies `email_replies` with the 8-class taxonomy; `willing_to_meet` → auto `createMeetingProposal` + prep task; `unsubscribe` → `email_suppressions`. Did NOT touch the ARE engine or inbound poller (low risk).
 - **Deals**: reuses existing `opportunities`/`crmPipelines`/`pipelineAlerts`/`forecastAi`; autopilot writes nextStep/winProb, auto mode creates a follow-up task.
-- **⚠️ Verified backend-only** (proc-registration probe + esbuild). The **authenticated UI/functional test is still pending** — the connected Browser 1 was not logged into Velocity, so no page was clicked live. Enrichment→scoring hook from the prior session still stands.
+- **✅ Verified LIVE (authenticated, ws 2 / Browser 2).** All 10 v2 pages render with real data, no errors. Autonomous flows verified end-to-end: **Task Autopilot** creates real AI drafts (generateDrafts → 3 drafts w/ reasoning+confidence), **Reply Classifier** classifies replies (8-class), **Forms** public submit auto-creates a lead. Two bugs the live test surfaced were fixed:
+  1. **Critical:** the 4 autopilots used `response_format:{type:"json_object"}` which returns PROSE for Anthropic (invokeLLM only forces JSON via the `json_schema`/`outputSchema` path) → every JSON.parse threw → 0 created. Switched all 4 services to `outputSchema:{name,schema}`. **When adding new AI calls, use `outputSchema`, NOT `response_format` json_object** (the pre-existing leadsAi/csAi/etc. still have this latent bug).
+  2. **Perf:** `conversations.list`/`.stats` loaded all ~49k `email_replies` rows into memory; now SQL `LIMIT 300` + `COUNT`.
+- Autopilots default `off`. Enrichment→scoring hook from the prior session still stands.
 
 ## What this session was
 
