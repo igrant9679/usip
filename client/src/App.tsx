@@ -54,6 +54,7 @@ import Sequences from "@/pages/usip/Sequences";
 import Settings from "@/pages/usip/Settings";
 import Social from "@/pages/usip/Social";
 import Tasks from "@/pages/usip/Tasks";
+import TasksV2 from "@/pages/usip/TasksV2";
 import Team from "@/pages/usip/Team";
 import Territories from "@/pages/usip/Territories";
 import Workflows from "@/pages/usip/Workflows";
@@ -392,7 +393,7 @@ function Router() {
       <Route path="/v2/sequences"><AuthGate><SequencesV2 /></AuthGate></Route>
       <Route path="/v2/emails"><AuthGate><Placeholder title="Emails" /></AuthGate></Route>
       <Route path="/v2/calls"><AuthGate><Calls /></AuthGate></Route>
-      <Route path="/v2/tasks"><AuthGate><Placeholder title="Tasks" /></AuthGate></Route>
+      <Route path="/v2/tasks"><AuthGate><TasksV2 /></AuthGate></Route>
       <Route path="/v2/meetings"><AuthGate><Placeholder title="Meetings" /></AuthGate></Route>
       <Route path="/v2/conversations"><AuthGate><Placeholder title="Conversations" /></AuthGate></Route>
       <Route path="/v2/deals"><AuthGate><Placeholder title="Deals" /></AuthGate></Route>

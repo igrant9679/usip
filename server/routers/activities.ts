@@ -1,12 +1,16 @@
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod";
-import { activities, attachments, notifications, tasks } from "../../drizzle/schema";
+import { activities, attachments, notifications, tasks, workspaceSettings } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
 import { getDb } from "../db";
 import { storagePut } from "../storage";
 import { router } from "../_core/trpc";
-import { repProcedure, workspaceProcedure } from "../_core/workspace";
+import { adminWsProcedure, repProcedure, workspaceProcedure } from "../_core/workspace";
+import { generateTasksForWorkspace } from "../services/taskAutopilot";
+
+const TASK_TYPES = ["call", "email", "meeting", "linkedin", "todo", "follow_up", "social_touch", "manual_email", "meeting_prep", "crm_update", "generic_action"] as const;
+const TASK_STATUSES = ["open", "done", "cancelled", "in_progress", "snoozed", "draft"] as const;
 
 /* ─── Tasks ──────────────────────────────────────────────────────────── */
 
@@ -14,9 +18,15 @@ export const tasksRouter = router({
   list: workspaceProcedure
     .input(z.object({
       ownerOnly: z.boolean().optional(),
-      status: z.enum(["open", "done", "cancelled"]).optional(),
+      status: z.enum(TASK_STATUSES).optional(),
+      type: z.enum(TASK_TYPES).optional(),
+      source: z.enum(["manual", "sequence", "ai", "import", "workflow"]).optional(),
       relatedType: z.string().optional(),
       relatedId: z.number().optional(),
+      // Draft (AI-proposed, unapproved) tasks are hidden by default so they
+      // don't leak into other surfaces (e.g. the Calls queue). The Tasks page
+      // opts in with includeDrafts:true and reviews them separately.
+      includeDrafts: z.boolean().optional(),
     }).optional())
     .query(async ({ ctx, input }) => {
       const db = await getDb();
@@ -24,6 +34,9 @@ export const tasksRouter = router({
       let rows = await db.select().from(tasks).where(eq(tasks.workspaceId, ctx.workspace.id)).orderBy(tasks.dueAt);
       if (input?.ownerOnly) rows = rows.filter((t) => t.ownerUserId === ctx.user.id);
       if (input?.status) rows = rows.filter((t) => t.status === input.status);
+      else if (!input?.includeDrafts) rows = rows.filter((t) => t.status !== "draft");
+      if (input?.type) rows = rows.filter((t) => t.type === input.type);
+      if (input?.source) rows = rows.filter((t) => t.source === input.source);
       if (input?.relatedType && input?.relatedId) rows = rows.filter((t) => t.relatedType === input.relatedType && t.relatedId === input.relatedId);
       return rows;
     }),
@@ -32,7 +45,7 @@ export const tasksRouter = router({
     .input(z.object({
       title: z.string().min(1),
       description: z.string().optional(),
-      type: z.enum(["call", "email", "meeting", "linkedin", "todo", "follow_up"]).default("todo"),
+      type: z.enum(TASK_TYPES).default("todo"),
       priority: z.enum(["low", "normal", "high", "urgent"]).default("normal"),
       dueAt: z.string().optional(),
       relatedType: z.string().optional(),
@@ -86,6 +99,162 @@ export const tasksRouter = router({
     await db.delete(tasks).where(and(eq(tasks.id, input.id), eq(tasks.workspaceId, ctx.workspace.id)));
     return { ok: true };
   }),
+
+  /** Complete a task, optionally recording its outcome (disposition). */
+  complete: repProcedure
+    .input(z.object({ id: z.number(), disposition: z.string().max(48).optional() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      await db.update(tasks)
+        .set({ status: "done", completedAt: new Date(), disposition: input.disposition ?? null, snoozedUntil: null } as never)
+        .where(and(eq(tasks.id, input.id), eq(tasks.workspaceId, ctx.workspace.id)));
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "complete", entityType: "task", entityId: input.id, after: { disposition: input.disposition } });
+      return { ok: true };
+    }),
+
+  /** Snooze a task to a later time (status → snoozed). */
+  snooze: repProcedure
+    .input(z.object({ id: z.number(), snoozedUntil: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const until = new Date(input.snoozedUntil);
+      await db.update(tasks)
+        .set({ status: "snoozed", snoozedUntil: until, dueAt: until } as never)
+        .where(and(eq(tasks.id, input.id), eq(tasks.workspaceId, ctx.workspace.id)));
+      return { ok: true };
+    }),
+
+  /** Bulk create — one task per target (no dedupe). Returns { created }. */
+  bulk: repProcedure
+    .input(z.object({
+      targets: z.array(z.object({ relatedType: z.string(), relatedId: z.number() })).min(1).max(500),
+      template: z.object({
+        title: z.string().min(1),
+        description: z.string().optional(),
+        type: z.enum(TASK_TYPES).default("todo"),
+        priority: z.enum(["low", "normal", "high", "urgent"]).default("normal"),
+        dueAt: z.string().optional(),
+        ownerUserId: z.number().optional(),
+      }),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const due = input.template.dueAt ? new Date(input.template.dueAt) : null;
+      const values = input.targets.map((t) => ({
+        workspaceId: ctx.workspace.id,
+        title: input.template.title,
+        description: input.template.description ?? null,
+        type: input.template.type,
+        priority: input.template.priority,
+        status: "open" as const,
+        dueAt: due,
+        ownerUserId: input.template.ownerUserId ?? ctx.user.id,
+        relatedType: t.relatedType,
+        relatedId: t.relatedId,
+        source: "manual" as const,
+      }));
+      await db.insert(tasks).values(values as never);
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "bulk_create", entityType: "task", entityId: 0, after: { created: values.length } });
+      return { created: values.length };
+    }),
+
+  /** Queue stats for the Tasks page header. */
+  stats: workspaceProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) return { open: 0, dueToday: 0, overdue: 0, completed: 0, draftsPending: 0, snoozed: 0, aiOpen: 0 };
+    const rows = await db.select({ status: tasks.status, dueAt: tasks.dueAt, source: tasks.source }).from(tasks).where(eq(tasks.workspaceId, ctx.workspace.id));
+    const now = Date.now();
+    const endOfToday = new Date(); endOfToday.setHours(23, 59, 59, 999);
+    const s = { open: 0, dueToday: 0, overdue: 0, completed: 0, draftsPending: 0, snoozed: 0, aiOpen: 0 };
+    for (const r of rows) {
+      if (r.status === "done") s.completed++;
+      else if (r.status === "draft") s.draftsPending++;
+      else if (r.status === "snoozed") s.snoozed++;
+      else if (r.status === "open" || r.status === "in_progress") {
+        s.open++;
+        if (r.source === "ai") s.aiOpen++;
+        const t = r.dueAt ? new Date(r.dueAt).getTime() : null;
+        if (t !== null) {
+          if (t < now) s.overdue++;
+          else if (t <= endOfToday.getTime()) s.dueToday++;
+        }
+      }
+    }
+    return s;
+  }),
+
+  /* ── Task Autopilot (AI) ──────────────────────────────────────────────── */
+
+  /** Run the AI autopilot on-demand for this workspace. Default → draft (review). */
+  generateDrafts: repProcedure
+    .input(z.object({ limit: z.number().int().min(1).max(25).optional(), mode: z.enum(["approval", "auto"]).optional() }).optional())
+    .mutation(async ({ ctx, input }) => {
+      const res = await generateTasksForWorkspace(ctx.workspace.id, {
+        mode: input?.mode ?? "approval",
+        limit: input?.limit ?? 10,
+        ownerUserId: ctx.user.id,
+      });
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "ai_generate", entityType: "task", entityId: 0, after: res });
+      return res;
+    }),
+
+  /** Approve a single AI draft → live open task. */
+  approveDraft: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    await db.update(tasks).set({ status: "open" } as never)
+      .where(and(eq(tasks.id, input.id), eq(tasks.workspaceId, ctx.workspace.id), eq(tasks.status, "draft")));
+    return { ok: true };
+  }),
+
+  /** Approve every pending AI draft in the workspace. */
+  approveAllDrafts: repProcedure.mutation(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    const r = await db.update(tasks).set({ status: "open" } as never)
+      .where(and(eq(tasks.workspaceId, ctx.workspace.id), eq(tasks.status, "draft")));
+    const approved = Number((r as any)?.[0]?.affectedRows ?? (r as any)?.affectedRows ?? 0);
+    return { approved };
+  }),
+
+  /** Dismiss an AI draft (→ cancelled, kept for audit). */
+  dismissDraft: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    await db.update(tasks).set({ status: "cancelled" } as never)
+      .where(and(eq(tasks.id, input.id), eq(tasks.workspaceId, ctx.workspace.id), eq(tasks.status, "draft")));
+    return { ok: true };
+  }),
+
+  /** Read the workspace's Task Autopilot config. */
+  getAutopilotSettings: workspaceProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) return { mode: "off" as const, dailyCap: 25, lastRunAt: null as Date | null };
+    const [row] = await db.select({
+      mode: workspaceSettings.taskAutopilotMode,
+      dailyCap: workspaceSettings.taskAutopilotDailyCap,
+      lastRunAt: workspaceSettings.taskAutopilotLastRunAt,
+    }).from(workspaceSettings).where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
+    return row ?? { mode: "off" as const, dailyCap: 25, lastRunAt: null };
+  }),
+
+  /** Set the workspace's Task Autopilot mode / daily cap (admin only). */
+  setAutopilotSettings: adminWsProcedure
+    .input(z.object({ mode: z.enum(["off", "approval", "auto"]), dailyCap: z.number().int().min(1).max(500).optional() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const set: any = { taskAutopilotMode: input.mode };
+      if (input.dailyCap !== undefined) set.taskAutopilotDailyCap = input.dailyCap;
+      await db.insert(workspaceSettings)
+        .values({ workspaceId: ctx.workspace.id, ...set } as never)
+        .onDuplicateKeyUpdate({ set });
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "task_autopilot_settings", entityId: ctx.workspace.id, after: input });
+      return { ok: true };
+    }),
 });
 
 /* ─── Activities (timeline) ──────────────────────────────────────────── */

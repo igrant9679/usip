@@ -2155,6 +2155,29 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  {
+    name: "0099_task_autopilot.sql",
+    statements: [
+      // ── Expand the tasks taxonomy + lifecycle (tasks-calls-deals spec §1). ──
+      //    MODIFY includes ALL prior enum values (superset) so existing rows are
+      //    preserved; re-running just re-sets the same definition (no error).
+      `ALTER TABLE \`tasks\` MODIFY COLUMN \`type\` ENUM('call','email','meeting','linkedin','todo','follow_up','social_touch','manual_email','meeting_prep','crm_update','generic_action') NOT NULL DEFAULT 'todo'`,
+      `ALTER TABLE \`tasks\` MODIFY COLUMN \`status\` ENUM('open','done','cancelled','in_progress','snoozed','draft') NOT NULL DEFAULT 'open'`,
+      // ── New task columns. errno 1060 (dup field) tolerated for re-runs. ──
+      `ALTER TABLE \`tasks\` ADD COLUMN \`sequenceId\` int NULL`,
+      `ALTER TABLE \`tasks\` ADD COLUMN \`disposition\` varchar(48) NULL`,
+      `ALTER TABLE \`tasks\` ADD COLUMN \`snoozedUntil\` timestamp NULL`,
+      `ALTER TABLE \`tasks\` ADD COLUMN \`source\` ENUM('manual','sequence','ai','import','workflow') NOT NULL DEFAULT 'manual'`,
+      `ALTER TABLE \`tasks\` ADD COLUMN \`aiReasoning\` text NULL`,
+      `ALTER TABLE \`tasks\` ADD COLUMN \`aiConfidence\` int NULL`,
+      `ALTER TABLE \`tasks\` ADD INDEX \`ix_task_source\` (\`workspaceId\`, \`status\`, \`source\`)`,
+      // ── Task Autopilot per-workspace config on workspace_settings. ──
+      `ALTER TABLE \`workspace_settings\` ADD COLUMN \`taskAutopilotMode\` ENUM('off','approval','auto') NOT NULL DEFAULT 'off'`,
+      `ALTER TABLE \`workspace_settings\` ADD COLUMN \`taskAutopilotDailyCap\` int NOT NULL DEFAULT 25`,
+      `ALTER TABLE \`workspace_settings\` ADD COLUMN \`taskAutopilotLastRunAt\` timestamp NULL`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

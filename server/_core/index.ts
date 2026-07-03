@@ -46,6 +46,7 @@ import { autoSendForAllWorkspaces } from "../routers/sequences";
 import { runNightlyBatch } from "../nightlyBatch";
 import { runDailyCheckAllWorkspaces } from "../services/linkedinEnrichment/dailyCheck";
 import { runAreEngine } from "../areEngine";
+import { runTaskAutopilotAllWorkspaces } from "../services/taskAutopilot";
 import { runPipelineAlertsCron } from "../routers/pipelineAlerts";
 import { runSegmentEnrollmentForAllWorkspaces } from "../routers/segmentRules"; // eslint-disable-line
 import { registerEmailTrackingRoutes } from "../emailTracking";
@@ -233,6 +234,18 @@ async function startServer() {
   };
   setTimeout(runAlerts, 2 * 60 * 1000); // first run 2 minutes after boot
   setInterval(runAlerts, 15 * 60 * 1000); // every 15 minutes
+
+  // Task Autopilot: for every workspace with taskAutopilotMode != 'off', ask the
+  // AI for the next-best-action per promising prospect and create tasks (drafts
+  // in "approval" mode, live in "auto" mode). Respects the per-workspace daily
+  // cap. Runs every 30 min — task cadence is human-scale, no need to go tighter.
+  const runAutopilot = () => {
+    runTaskAutopilotAllWorkspaces().catch((e) =>
+      console.error("[TaskAutopilot] cron run failed:", e)
+    );
+  };
+  setTimeout(runAutopilot, 3 * 60 * 1000); // first run 3 minutes after boot
+  setInterval(runAutopilot, 30 * 60 * 1000); // every 30 minutes
 
   // Nightly AI pipeline batch: midnight cron for leads above score threshold
   const scheduleNightlyBatch = () => {

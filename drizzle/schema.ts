@@ -425,20 +425,43 @@ export const tasks = mysqlTable(
       "linkedin",
       "todo",
       "follow_up",
+      // ── Migration 0099: expanded task taxonomy (tasks-calls-deals spec §1) ──
+      "social_touch",
+      "manual_email",
+      "meeting_prep",
+      "crm_update",
+      "generic_action",
     ]).default("todo").notNull(),
     priority: mysqlEnum("priority", ["low", "normal", "high", "urgent"]).default("normal").notNull(),
-    status: mysqlEnum("status", ["open", "done", "cancelled"]).default("open").notNull(),
+    status: mysqlEnum("status", [
+      "open",
+      "done",
+      "cancelled",
+      // ── Migration 0099: richer lifecycle + AI-draft state ──
+      "in_progress",
+      "snoozed",
+      "draft", // AI-proposed task awaiting approval (autopilot "approval" mode)
+    ]).default("open").notNull(),
     dueAt: timestamp("dueAt"),
     completedAt: timestamp("completedAt"),
     ownerUserId: int("ownerUserId"),
     relatedType: varchar("relatedType", { length: 30 }),
     relatedId: int("relatedId"),
+    // ── Migration 0099: sequence link, outcome, snooze + AI provenance ──
+    sequenceId: int("sequenceId"),
+    disposition: varchar("disposition", { length: 48 }), // outcome on completion (completed|no_answer|left_voicemail|rescheduled…)
+    snoozedUntil: timestamp("snoozedUntil"),
+    // How this task came to exist. Drives the Tasks page filters + autopilot dedupe.
+    source: mysqlEnum("source", ["manual", "sequence", "ai", "import", "workflow"]).default("manual").notNull(),
+    aiReasoning: text("aiReasoning"), // why the AI proposed this action (autopilot)
+    aiConfidence: int("aiConfidence"), // 0-100 model confidence for AI-sourced tasks
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
   (t) => ({
     byOwner: index("ix_task_owner").on(t.workspaceId, t.ownerUserId, t.status),
     byRel: index("ix_task_rel").on(t.relatedType, t.relatedId),
+    bySource: index("ix_task_source").on(t.workspaceId, t.status, t.source),
   }),
 );
 
@@ -1266,6 +1289,13 @@ export const workspaceSettings = mysqlTable("workspace_settings", {
   openaiModel: varchar("openaiModel", { length: 128 }),
   geminiModel: varchar("geminiModel", { length: 128 }),
   aiDefaultProvider: varchar("aiDefaultProvider", { length: 32 }), // 'anthropic' | 'openai' | 'gemini'
+  // ── Task Autopilot (Migration 0099) — the /v2/tasks autonomy engine ──
+  // off      = AI never generates tasks (fully manual)
+  // approval = AI drafts next-best-action tasks; a human approves before they go live
+  // auto     = AI creates live open tasks with no human step (100% autonomous)
+  taskAutopilotMode: mysqlEnum("taskAutopilotMode", ["off", "approval", "auto"]).default("off").notNull(),
+  taskAutopilotDailyCap: int("taskAutopilotDailyCap").default(25).notNull(),
+  taskAutopilotLastRunAt: timestamp("taskAutopilotLastRunAt"),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
 export type WorkspaceSettings = typeof workspaceSettings.$inferSelect;
