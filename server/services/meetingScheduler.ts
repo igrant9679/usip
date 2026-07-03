@@ -20,7 +20,7 @@
  * explicit authorization for the outward action of sending an invite.
  */
 import { and, eq, gte, inArray, isNull, lte, ne, or, sql } from "drizzle-orm";
-import { calendarAccounts, calendarEvents, meetings, prospects, workspaceMembers, workspaceSettings } from "../../drizzle/schema";
+import { calendarAccounts, calendarEvents, contacts, leads, meetings, prospects, workspaceMembers, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { invokeLLM } from "../_core/llm";
 import { createCalendarAdapter } from "../calendarAdapter";
@@ -296,7 +296,7 @@ export async function runMeetingAutopilotForWorkspace(
   const db = await getDb();
   if (!db) return { proposed: 0, sent: 0, skipped: 0 };
 
-  const owner = ownerUserId !== undefined ? ownerUserId : await pickWorkspaceOwner(db, workspaceId);
+  const fallbackOwner = ownerUserId !== undefined ? ownerUserId : await pickWorkspaceOwner(db, workspaceId);
 
   // Best-AVAILABLE prospects, never suppressed/rejected. We deliberately do NOT
   // hard-gate on confidenceScore >= 70: on real workspaces most prospects are
@@ -326,11 +326,23 @@ export async function runMeetingAutopilotForWorkspace(
     ));
   const busy = new Set(existing.map((r: any) => r.relatedId));
 
+  // Per-prospect owner: assign each meeting to the rep who owns the prospect's
+  // linked contact/lead, so on 'auto' the invite sends from THAT rep's own
+  // Outlook (multi-user). Falls back to the acting user / a workspace admin.
+  const contactIds = [...new Set(candidates.map((p: any) => p.linkedContactId).filter(Boolean))];
+  const leadIds = [...new Set(candidates.map((p: any) => p.linkedLeadId).filter(Boolean))];
+  const cOwners = contactIds.length ? await db.select({ id: contacts.id, owner: contacts.ownerUserId }).from(contacts).where(and(eq(contacts.workspaceId, workspaceId), inArray(contacts.id, contactIds))) : [];
+  const lOwners = leadIds.length ? await db.select({ id: leads.id, owner: leads.ownerUserId }).from(leads).where(and(eq(leads.workspaceId, workspaceId), inArray(leads.id, leadIds))) : [];
+  const cMap = new Map(cOwners.map((r: any) => [r.id, r.owner]));
+  const lMap = new Map(lOwners.map((r: any) => [r.id, r.owner]));
+  const ownerFor = (p: any): number | null =>
+    (p.linkedContactId && cMap.get(p.linkedContactId)) || (p.linkedLeadId && lMap.get(p.linkedLeadId)) || fallbackOwner;
+
   let proposed = 0, sent = 0, skipped = 0;
   for (const p of candidates) {
     if (proposed >= limit) break;
     if (busy.has(p.id)) { skipped++; continue; }
-    const id = await proposeMeetingForProspect(workspaceId, p, owner, "ai");
+    const id = await proposeMeetingForProspect(workspaceId, p, ownerFor(p), "ai");
     if (!id) continue;
     proposed++;
     busy.add(p.id);
