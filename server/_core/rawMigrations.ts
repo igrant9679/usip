@@ -2178,6 +2178,46 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  {
+    name: "0100_meetings.sql",
+    statements: [
+      `CREATE TABLE IF NOT EXISTS \`meetings\` (
+        \`id\` int NOT NULL AUTO_INCREMENT,
+        \`workspaceId\` int NOT NULL,
+        \`ownerUserId\` int NULL,
+        \`relatedType\` varchar(30) NULL,
+        \`relatedId\` int NULL,
+        \`contactName\` varchar(200) NULL,
+        \`contactEmail\` varchar(320) NULL,
+        \`company\` varchar(200) NULL,
+        \`title\` varchar(240) NOT NULL,
+        \`status\` ENUM('proposed','invited','scheduled','completed','no_show','cancelled','rescheduled') NOT NULL DEFAULT 'proposed',
+        \`proposedTimes\` json NULL,
+        \`scheduledAt\` timestamp NULL,
+        \`durationMin\` int NOT NULL DEFAULT 30,
+        \`meetingUrl\` text NULL,
+        \`location\` varchar(240) NULL,
+        \`inviteMessage\` text NULL,
+        \`source\` ENUM('manual','ai','are','inbound') NOT NULL DEFAULT 'manual',
+        \`aiReasoning\` text NULL,
+        \`aiConfidence\` int NULL,
+        \`inviteSent\` boolean NOT NULL DEFAULT false,
+        \`calendarEventId\` int NULL,
+        \`calendarAccountId\` int NULL,
+        \`disposition\` varchar(48) NULL,
+        \`createdAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        \`updatedAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (\`id\`),
+        INDEX \`ix_meeting_status\` (\`workspaceId\`, \`status\`),
+        INDEX \`ix_meeting_owner\` (\`workspaceId\`, \`ownerUserId\`),
+        INDEX \`ix_meeting_rel\` (\`relatedType\`, \`relatedId\`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `ALTER TABLE \`workspace_settings\` ADD COLUMN \`meetingAutopilotMode\` ENUM('off','approval','auto') NOT NULL DEFAULT 'off'`,
+      `ALTER TABLE \`workspace_settings\` ADD COLUMN \`meetingAutopilotDailyCap\` int NOT NULL DEFAULT 10`,
+      `ALTER TABLE \`workspace_settings\` ADD COLUMN \`meetingAutopilotLastRunAt\` timestamp NULL`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

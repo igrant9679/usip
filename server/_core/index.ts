@@ -47,6 +47,7 @@ import { runNightlyBatch } from "../nightlyBatch";
 import { runDailyCheckAllWorkspaces } from "../services/linkedinEnrichment/dailyCheck";
 import { runAreEngine } from "../areEngine";
 import { runTaskAutopilotAllWorkspaces } from "../services/taskAutopilot";
+import { runMeetingAutopilotAllWorkspaces } from "../services/meetingScheduler";
 import { runPipelineAlertsCron } from "../routers/pipelineAlerts";
 import { runSegmentEnrollmentForAllWorkspaces } from "../routers/segmentRules"; // eslint-disable-line
 import { registerEmailTrackingRoutes } from "../emailTracking";
@@ -246,6 +247,18 @@ async function startServer() {
   };
   setTimeout(runAutopilot, 3 * 60 * 1000); // first run 3 minutes after boot
   setInterval(runAutopilot, 30 * 60 * 1000); // every 30 minutes
+
+  // Meeting Autopilot: for every workspace with meetingAutopilotMode != 'off',
+  // propose meetings (AI-drafted times + invite) for the best-fit prospects that
+  // don't have one yet; in 'auto' mode it also sends the calendar invite when a
+  // calendar is connected. Respects the per-workspace daily cap. Every 45 min.
+  const runMeetingAutopilot = () => {
+    runMeetingAutopilotAllWorkspaces().catch((e) =>
+      console.error("[MeetingAutopilot] cron run failed:", e)
+    );
+  };
+  setTimeout(runMeetingAutopilot, 4 * 60 * 1000); // first run 4 minutes after boot
+  setInterval(runMeetingAutopilot, 45 * 60 * 1000); // every 45 minutes
 
   // Nightly AI pipeline batch: midnight cron for leads above score threshold
   const scheduleNightlyBatch = () => {

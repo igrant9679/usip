@@ -465,6 +465,60 @@ export const tasks = mysqlTable(
   }),
 );
 
+/**
+ * meetings — first-class CRM meeting object (Migration 0100), distinct from raw
+ * calendarEvents. Powers /v2/meetings + the autonomous AI meeting scheduler.
+ * A meeting starts life as `proposed` (AI-drafted times + invite), then on
+ * approve/auto-send becomes `scheduled` and (when the owner has a connected
+ * calendar) links a real calendarEvents row via `calendarEventId`.
+ */
+export const meetings = mysqlTable(
+  "meetings",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    ownerUserId: int("ownerUserId"),
+    // polymorphic link to the person/company (matches tasks/activities convention)
+    relatedType: varchar("relatedType", { length: 30 }),
+    relatedId: int("relatedId"),
+    // denormalized attendee info so the list renders without joins
+    contactName: varchar("contactName", { length: 200 }),
+    contactEmail: varchar("contactEmail", { length: 320 }),
+    company: varchar("company", { length: 200 }),
+    title: varchar("title", { length: 240 }).notNull(),
+    status: mysqlEnum("status", [
+      "proposed",   // AI/manual draft with candidate times, not sent
+      "invited",    // invite sent, awaiting confirmation
+      "scheduled",  // confirmed / on the calendar
+      "completed",
+      "no_show",
+      "cancelled",
+      "rescheduled",
+    ]).default("proposed").notNull(),
+    proposedTimes: json("proposedTimes"), // string[] of ISO datetimes the AI/rep suggested
+    scheduledAt: timestamp("scheduledAt"),
+    durationMin: int("durationMin").default(30).notNull(),
+    meetingUrl: text("meetingUrl"),
+    location: varchar("location", { length: 240 }),
+    inviteMessage: text("inviteMessage"), // AI-drafted invite/email body
+    source: mysqlEnum("source", ["manual", "ai", "are", "inbound"]).default("manual").notNull(),
+    aiReasoning: text("aiReasoning"),
+    aiConfidence: int("aiConfidence"),
+    inviteSent: boolean("inviteSent").default(false).notNull(),
+    calendarEventId: int("calendarEventId"), // FK → calendarEvents when pushed to a provider
+    calendarAccountId: int("calendarAccountId"),
+    disposition: varchar("disposition", { length: 48 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    byStatus: index("ix_meeting_status").on(t.workspaceId, t.status),
+    byOwner: index("ix_meeting_owner").on(t.workspaceId, t.ownerUserId),
+    byRel: index("ix_meeting_rel").on(t.relatedType, t.relatedId),
+  }),
+);
+export type Meeting = typeof meetings.$inferSelect;
+
 export const activities = mysqlTable(
   "activities",
   {
@@ -1296,6 +1350,12 @@ export const workspaceSettings = mysqlTable("workspace_settings", {
   taskAutopilotMode: mysqlEnum("taskAutopilotMode", ["off", "approval", "auto"]).default("off").notNull(),
   taskAutopilotDailyCap: int("taskAutopilotDailyCap").default(25).notNull(),
   taskAutopilotLastRunAt: timestamp("taskAutopilotLastRunAt"),
+  // ── Meeting Autopilot (Migration 0100) — the /v2/meetings autonomy engine ──
+  // off = never; approval = AI proposes meetings for review; auto = AI proposes
+  // AND sends the calendar invite automatically (when a calendar is connected).
+  meetingAutopilotMode: mysqlEnum("meetingAutopilotMode", ["off", "approval", "auto"]).default("off").notNull(),
+  meetingAutopilotDailyCap: int("meetingAutopilotDailyCap").default(10).notNull(),
+  meetingAutopilotLastRunAt: timestamp("meetingAutopilotLastRunAt"),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
 export type WorkspaceSettings = typeof workspaceSettings.$inferSelect;
