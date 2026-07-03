@@ -19,17 +19,20 @@
  * Per-user identity: the opener is sent from the REP'S OWN connected account
  * (the one that received the acceptance), never a shared/system identity.
  */
-import { and, eq, gte, like, sql } from "drizzle-orm";
+import { and, desc, eq, gte, like, ne, sql } from "drizzle-orm";
 import {
+  activities,
   contacts,
+  leads,
   tasks,
   unipileAccounts,
+  unipileInvites,
   unipileMessages,
   workspaceSettings,
 } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { invokeLLM } from "../_core/llm";
-import { sendMessage } from "../lib/unipile";
+import { sendLinkedInInvitation, sendMessage } from "../lib/unipile";
 
 interface NewRelationPayload {
   account_id?: string;
@@ -236,4 +239,161 @@ export async function handleNewRelation(payload: NewRelationPayload): Promise<st
     } as never);
     return "send_failed_task";
   }
+}
+
+// ─── Outbound auto-invitations ────────────────────────────────────────────
+// The proactive half of the Social Autopilot: instead of waiting for a rep to
+// enroll leads in a sequence, auto-send connection invitations to un-invited
+// LinkedIn leads (those imported via search carry customFields.linkedinUrl).
+// Every accept then fires handleNewRelation → opener → meeting. Fully hands-off.
+//
+// Compliance/safety: uses the AUTHORIZED Unipile invite endpoint from the
+// lead-owner's OWN account; hard-capped well under LinkedIn's invite ceiling;
+// dedupes against unipile_invites; only active (new/working) leads; off by default.
+
+const INVITE_HARD_CAP = 20; // per workspace/day — LinkedIn throttles invites hard
+
+/** Short, personalized connection-request note (<200 chars, LinkedIn's limit). */
+async function generateInviteNote(
+  workspaceId: number,
+  who: { name: string; title?: string | null; company?: string | null },
+): Promise<string> {
+  const firstName = who.name.split(/\s+/)[0] || who.name;
+  const ctx = [who.title ? `a ${who.title}` : null, who.company ? `at ${who.company}` : null].filter(Boolean).join(" ");
+  const prompt = `Write a LinkedIn connection-request note to ${firstName}${ctx ? ` (${ctx})` : ""}.
+Rules: under 180 characters, warm and specific, no pitch, no "I hope this finds you well", no emojis/links. Return ONLY the note text.`;
+  try {
+    const res = await invokeLLM({ workspaceId, messages: [{ role: "user", content: prompt }], maxTokens: 120 } as never);
+    const txt = (res as any)?.choices?.[0]?.message?.content;
+    if (typeof txt === "string" && txt.trim()) return txt.trim().replace(/^["']|["']$/g, "").slice(0, 195);
+  } catch (err) {
+    console.error("[SocialAutopilot] invite note generation failed:", err);
+  }
+  return `Hi ${firstName}, I come across a lot of teams in your space and would love to connect and trade notes.`.slice(0, 195);
+}
+
+/** Auto-send (or draft) connection invitations for one workspace. */
+export async function runSocialAutopilotInvitesForWorkspace(
+  workspaceId: number,
+): Promise<{ sent: number; tasked: number; skipped: number }> {
+  const out = { sent: 0, tasked: 0, skipped: 0 };
+  const db = await getDb();
+  if (!db) return out;
+
+  const [ws] = await db
+    .select({ mode: workspaceSettings.socialAutopilotMode, cap: workspaceSettings.socialAutopilotDailyCap })
+    .from(workspaceSettings)
+    .where(eq(workspaceSettings.workspaceId, workspaceId))
+    .limit(1);
+  const mode = ws?.mode ?? "off";
+  if (mode === "off") return out;
+
+  const cap = Math.min(ws?.cap ?? INVITE_HARD_CAP, INVITE_HARD_CAP);
+  const since = new Date();
+  since.setHours(0, 0, 0, 0);
+  const [{ n: sentToday }] = await db
+    .select({ n: sql<number>`count(*)` })
+    .from(unipileInvites)
+    .where(and(eq(unipileInvites.workspaceId, workspaceId), gte(unipileInvites.sentAt, since)));
+  let budget = cap - Number(sentToday ?? 0);
+  if (budget <= 0) return out;
+
+  // Workspace LinkedIn accounts, indexed by owning rep.
+  const accts = await db
+    .select({ userId: unipileAccounts.userId, id: unipileAccounts.unipileAccountId })
+    .from(unipileAccounts)
+    .where(and(eq(unipileAccounts.workspaceId, workspaceId), eq(unipileAccounts.provider, "LINKEDIN")));
+  if (!accts.length) return out;
+  const acctByUser = new Map<number, string>();
+  for (const a of accts) if (a.userId != null) acctByUser.set(a.userId, a.id);
+  const fallback = accts[0];
+
+  // Candidate leads: a LinkedIn URL in customFields, still active, not yet invited.
+  const candidates = await db
+    .select({
+      id: leads.id, firstName: leads.firstName, lastName: leads.lastName,
+      title: leads.title, company: leads.company, ownerUserId: leads.ownerUserId,
+      customFields: leads.customFields,
+    })
+    .from(leads)
+    .where(and(
+      eq(leads.workspaceId, workspaceId),
+      sql`JSON_UNQUOTE(JSON_EXTRACT(${leads.customFields}, '$.linkedinUrl')) IS NOT NULL`,
+      sql`${leads.status} in ('new','working')`,
+    ))
+    .orderBy(desc(leads.createdAt))
+    .limit(budget * 4);
+
+  for (const lead of candidates) {
+    if (budget <= 0) break;
+    const url = (lead.customFields as any)?.linkedinUrl as string | undefined;
+    if (!url) { out.skipped++; continue; }
+    const slug = url.replace(/\/+$/, "").split("/").pop() || url;
+
+    const [dup] = await db
+      .select({ id: unipileInvites.id })
+      .from(unipileInvites)
+      .where(and(eq(unipileInvites.workspaceId, workspaceId), eq(unipileInvites.recipientProviderId, slug)))
+      .limit(1);
+    if (dup) { out.skipped++; continue; }
+
+    const name = `${lead.firstName ?? ""} ${lead.lastName ?? ""}`.trim() || "there";
+    const ownerAcct = (lead.ownerUserId != null && acctByUser.get(lead.ownerUserId)) || fallback.id;
+    const ownerUserId = (lead.ownerUserId != null && acctByUser.has(lead.ownerUserId)) ? lead.ownerUserId : fallback.userId;
+
+    if (mode === "approval") {
+      await db.insert(tasks).values({
+        workspaceId, title: `Send LinkedIn invite to ${name}`, description: url,
+        type: "linkedin_invite", priority: "medium", status: "open",
+        dueAt: new Date(Date.now() + 86400000), ownerUserId: lead.ownerUserId ?? null,
+        relatedType: "lead", relatedId: lead.id, source: "ai",
+      } as never);
+      out.tasked++; budget--; continue;
+    }
+
+    // auto
+    const note = await generateInviteNote(workspaceId, { name, title: lead.title, company: lead.company });
+    try {
+      await sendLinkedInInvitation({ accountId: ownerAcct, providerId: slug, message: note });
+      await db.insert(unipileInvites).values({
+        workspaceId, userId: ownerUserId ?? fallback.userId ?? 0, unipileAccountId: ownerAcct,
+        recipientProviderId: slug, recipientName: name, message: note, status: "pending",
+        linkedLeadId: lead.id,
+      } as never);
+      await db.insert(activities).values({
+        workspaceId, type: "linkedin", relatedType: "lead", relatedId: lead.id,
+        subject: "LinkedIn connection request sent (Social Autopilot)", body: note,
+      } as never);
+      out.sent++; budget--;
+    } catch (err) {
+      console.error(`[SocialAutopilot] invite send failed for lead ${lead.id}:`, err);
+      out.skipped++;
+    }
+  }
+
+  await db.update(workspaceSettings)
+    .set({ socialAutopilotLastRunAt: new Date() } as never)
+    .where(eq(workspaceSettings.workspaceId, workspaceId));
+  return out;
+}
+
+/** Cron entry: run auto-invites for every workspace with Social Autopilot on. */
+export async function runSocialAutopilotAllWorkspaces(): Promise<{ workspaces: number; sent: number; tasked: number }> {
+  const db = await getDb();
+  if (!db) return { workspaces: 0, sent: 0, tasked: 0 };
+  const rows = await db
+    .select({ workspaceId: workspaceSettings.workspaceId })
+    .from(workspaceSettings)
+    .where(ne(workspaceSettings.socialAutopilotMode, "off"));
+  let workspaces = 0, sent = 0, tasked = 0;
+  for (const r of rows) {
+    try {
+      const res = await runSocialAutopilotInvitesForWorkspace(r.workspaceId);
+      workspaces++; sent += res.sent; tasked += res.tasked;
+    } catch (err) {
+      console.error(`[SocialAutopilot] workspace ${r.workspaceId} invite run failed:`, err);
+    }
+  }
+  if (sent || tasked) console.log(`[SocialAutopilot] invites — ${sent} sent, ${tasked} tasked across ${workspaces} workspace(s)`);
+  return { workspaces, sent, tasked };
 }

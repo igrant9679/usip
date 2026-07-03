@@ -50,6 +50,7 @@ import { runTaskAutopilotAllWorkspaces } from "../services/taskAutopilot";
 import { runMeetingAutopilotAllWorkspaces } from "../services/meetingScheduler";
 import { runConversationAutopilotAllWorkspaces } from "../services/replyClassifier";
 import { runDealAutopilotAllWorkspaces } from "../services/dealAutopilot";
+import { runSocialAutopilotAllWorkspaces } from "../services/socialAutopilot";
 import { runPipelineAlertsCron } from "../routers/pipelineAlerts";
 import { runSegmentEnrollmentForAllWorkspaces } from "../routers/segmentRules"; // eslint-disable-line
 import { registerEmailTrackingRoutes } from "../emailTracking";
@@ -282,6 +283,18 @@ async function startServer() {
   };
   setTimeout(runDealAutopilot, 6 * 60 * 1000); // first run 6 minutes after boot
   setInterval(runDealAutopilot, 60 * 60 * 1000); // every 60 minutes
+
+  // Social Autopilot (outbound): for every workspace with socialAutopilotMode
+  // != 'off', auto-send connection invitations to un-invited LinkedIn leads
+  // (or draft tasks in 'approval'). Hard-capped per workspace/day. Each accept
+  // then fires the opener → meeting loop. Every 60 min.
+  const runSocialAutopilot = () => {
+    runSocialAutopilotAllWorkspaces().catch((e) =>
+      console.error("[SocialAutopilot] cron run failed:", e)
+    );
+  };
+  setTimeout(runSocialAutopilot, 7 * 60 * 1000); // first run 7 minutes after boot
+  setInterval(runSocialAutopilot, 60 * 60 * 1000); // every 60 minutes
 
   // Nightly AI pipeline batch: midnight cron for leads above score threshold
   const scheduleNightlyBatch = () => {
