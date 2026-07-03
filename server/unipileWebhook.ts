@@ -458,8 +458,8 @@ export function registerUnipileWebhookRoutes(app: Express) {
               ? "a synchronisation error"
               : "being stopped";
 
-        const { sendWorkspaceEmail } = await import("./emailDelivery");
-        await sendWorkspaceEmail(row.workspaceId, {
+        const { sendSystemEmail } = await import("./emailDelivery");
+        await sendSystemEmail(row.workspaceId, {
           to: user.email,
           subject: `Action required: Reconnect your ${providerLabel} account`,
           html: `

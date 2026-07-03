@@ -574,8 +574,8 @@ export const pipelineAlertsRouter = router({
 <p style="font-family:sans-serif;color:#666;font-size:12px;margin-top:16px">Sent by USIP Pipeline Alerts</p>`;
 
     // Send via workspace SMTP (Email Delivery settings — Settings → Email Delivery)
-    const { sendWorkspaceEmail } = await import("../emailDelivery");
-    const emailResult = await sendWorkspaceEmail(wsId, {
+    const { sendSystemEmail } = await import("../emailDelivery");
+    const emailResult = await sendSystemEmail(wsId, {
       to: recipientEmail,
       subject: `Pipeline Digest: ${stuckDeals.length} stuck deal${stuckDeals.length !== 1 ? "s" : ""} — ${new Date().toLocaleDateString()}`,
       html,

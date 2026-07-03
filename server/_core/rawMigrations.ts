@@ -2300,6 +2300,14 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  {
+    name: "0105_template_snippet_sharing.sql",
+    statements: [
+      `ALTER TABLE \`email_templates\` ADD COLUMN \`visibility\` ENUM('private','team') NOT NULL DEFAULT 'team'`,
+      `ALTER TABLE \`email_snippets\` ADD COLUMN \`visibility\` ENUM('private','team') NOT NULL DEFAULT 'team'`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

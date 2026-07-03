@@ -24,6 +24,11 @@ import {
 import { router } from "../_core/trpc";
 import { invokeLLM } from "../_core/llm";
 
+/** manager+ see/edit all shared assets; reps are limited to team-visible + their own. */
+function isManagerPlus(role: string): boolean {
+  return role === "manager" || role === "admin" || role === "super_admin";
+}
+
 /* ─── Merge-tag resolver ─────────────────────────────────────────────────── */
 
 const MERGE_TAGS: Record<string, string> = {
@@ -175,7 +180,8 @@ export const emailTemplatesRouter = router({
               ),
         )
         .orderBy(desc(emailTemplates.updatedAt));
-      return rows;
+      if (isManagerPlus(ctx.member.role)) return rows;
+      return rows.filter((r) => r.visibility === "team" || r.createdByUserId === ctx.user.id);
     }),
 
   get: workspaceProcedure
@@ -257,6 +263,9 @@ export const emailTemplatesRouter = router({
         )
         .limit(1);
       if (!existing) throw new TRPCError({ code: "NOT_FOUND" });
+      if (existing.createdByUserId !== ctx.user.id && !isManagerPlus(ctx.member.role)) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "This is a shared template — duplicate it to make your own editable copy." });
+      }
 
       const designData = (input.designData ?? existing.designData) as Block[];
       const subject = input.subject ?? existing.subject ?? "";
@@ -327,6 +336,20 @@ export const emailTemplatesRouter = router({
             eq(emailTemplates.workspaceId, ctx.workspace.id),
           ),
         );
+      return { ok: true };
+    }),
+
+  setVisibility: repProcedure
+    .input(z.object({ id: z.number(), visibility: z.enum(["private", "team"]) }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [t] = await db.select({ createdByUserId: emailTemplates.createdByUserId }).from(emailTemplates)
+        .where(and(eq(emailTemplates.id, input.id), eq(emailTemplates.workspaceId, ctx.workspace.id))).limit(1);
+      if (!t) throw new TRPCError({ code: "NOT_FOUND" });
+      if (t.createdByUserId !== ctx.user.id && !isManagerPlus(ctx.member.role)) throw new TRPCError({ code: "FORBIDDEN" });
+      await db.update(emailTemplates).set({ visibility: input.visibility } as never)
+        .where(and(eq(emailTemplates.id, input.id), eq(emailTemplates.workspaceId, ctx.workspace.id)));
       return { ok: true };
     }),
 
@@ -514,15 +537,18 @@ export const snippetsRouter = router({
             : eq(emailSnippets.workspaceId, ctx.workspace.id),
         )
         .orderBy(desc(emailSnippets.updatedAt));
+      const visible = isManagerPlus(ctx.member.role)
+        ? rows
+        : rows.filter((r) => r.visibility === "team" || r.createdByUserId === ctx.user.id);
       if (input.search) {
         const q = input.search.toLowerCase();
-        return rows.filter(
+        return visible.filter(
           (r) =>
             r.name.toLowerCase().includes(q) ||
             r.bodyPlain.toLowerCase().includes(q),
         );
       }
-      return rows;
+      return visible;
     }),
 
   create: repProcedure
@@ -565,7 +591,7 @@ export const snippetsRouter = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const [existing] = await db
-        .select({ id: emailSnippets.id })
+        .select({ id: emailSnippets.id, createdByUserId: emailSnippets.createdByUserId })
         .from(emailSnippets)
         .where(
           and(
@@ -575,6 +601,9 @@ export const snippetsRouter = router({
         )
         .limit(1);
       if (!existing) throw new TRPCError({ code: "NOT_FOUND" });
+      if (existing.createdByUserId !== ctx.user.id && !isManagerPlus(ctx.member.role)) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "This is a shared snippet — only its owner or a manager can edit it." });
+      }
       await db
         .update(emailSnippets)
         .set({
@@ -606,6 +635,20 @@ export const snippetsRouter = router({
             eq(emailSnippets.workspaceId, ctx.workspace.id),
           ),
         );
+      return { ok: true };
+    }),
+
+  setVisibility: repProcedure
+    .input(z.object({ id: z.number(), visibility: z.enum(["private", "team"]) }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [s] = await db.select({ createdByUserId: emailSnippets.createdByUserId }).from(emailSnippets)
+        .where(and(eq(emailSnippets.id, input.id), eq(emailSnippets.workspaceId, ctx.workspace.id))).limit(1);
+      if (!s) throw new TRPCError({ code: "NOT_FOUND" });
+      if (s.createdByUserId !== ctx.user.id && !isManagerPlus(ctx.member.role)) throw new TRPCError({ code: "FORBIDDEN" });
+      await db.update(emailSnippets).set({ visibility: input.visibility } as never)
+        .where(and(eq(emailSnippets.id, input.id), eq(emailSnippets.workspaceId, ctx.workspace.id)));
       return { ok: true };
     }),
 

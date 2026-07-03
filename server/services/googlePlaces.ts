@@ -35,7 +35,7 @@ import {
   users,
   workspaces,
 } from "../../drizzle/schema";
-import { sendWorkspaceEmail } from "../emailDelivery";
+import { sendSystemEmail } from "../emailDelivery";
 
 const PLACES_BASE = "https://places.googleapis.com/v1";
 
@@ -417,7 +417,7 @@ async function emitThresholdEmail(workspaceId: number, state: BudgetState): Prom
     `$${dollars} of $${budgetDollars} monthly budget used. ` +
     `New searches will be blocked at 100%. Adjust in Settings → Integrations.`;
 
-  await sendWorkspaceEmail(workspaceId, {
+  await sendSystemEmail(workspaceId, {
     to: recipients,
     subject: `[Velocity] Places API usage at ${pct}% in ${wsName}`,
     html,

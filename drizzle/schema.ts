@@ -1827,6 +1827,8 @@ export const emailTemplates = mysqlTable(
     htmlOutput: text("htmlOutput"),           // compiled inline-CSS HTML
     plainOutput: text("plainOutput"),         // plain-text fallback
     status: mysqlEnum("status", ["draft", "active", "archived"]).default("draft").notNull(),
+    // Sharing (Migration 0105): team = visible/usable by everyone; private = owner + managers only.
+    visibility: mysqlEnum("visibility", ["private", "team"]).default("team").notNull(),
     createdByUserId: int("createdByUserId").notNull(),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
@@ -1848,6 +1850,8 @@ export const emailSnippets = mysqlTable(
     bodyHtml: text("bodyHtml").notNull(),
     bodyPlain: text("bodyPlain").notNull(),
     mergeTagsUsed: json("mergeTagsUsed"), // ["{{firstName}}", "{{company}}"]
+    // Sharing (Migration 0105): team = usable by everyone; private = owner + managers only.
+    visibility: mysqlEnum("visibility", ["private", "team"]).default("team").notNull(),
     createdByUserId: int("createdByUserId").notNull(),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
