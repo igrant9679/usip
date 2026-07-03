@@ -58,6 +58,7 @@ import TasksV2 from "@/pages/usip/TasksV2";
 import MeetingsV2 from "@/pages/usip/MeetingsV2";
 import ConversationsV2 from "@/pages/usip/ConversationsV2";
 import DealsV2 from "@/pages/usip/DealsV2";
+import WorkflowsV2 from "@/pages/usip/WorkflowsV2";
 import Team from "@/pages/usip/Team";
 import Territories from "@/pages/usip/Territories";
 import Workflows from "@/pages/usip/Workflows";
@@ -400,7 +401,7 @@ function Router() {
       <Route path="/v2/meetings"><AuthGate><MeetingsV2 /></AuthGate></Route>
       <Route path="/v2/conversations"><AuthGate><ConversationsV2 /></AuthGate></Route>
       <Route path="/v2/deals"><AuthGate><DealsV2 /></AuthGate></Route>
-      <Route path="/v2/workflows"><AuthGate><Placeholder title="Workflows" /></AuthGate></Route>
+      <Route path="/v2/workflows"><AuthGate><WorkflowsV2 /></AuthGate></Route>
       <Route path="/v2/analytics"><AuthGate><Placeholder title="Analytics" /></AuthGate></Route>
       <Route path="/v2/website-visitors"><AuthGate><WebsiteVisitors /></AuthGate></Route>
       <Route path="/v2/forms"><AuthGate><Placeholder title="Forms" /></AuthGate></Route>
