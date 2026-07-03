@@ -60,9 +60,11 @@ Extracted into `client/src/components/usip/people/`. `peopleShared.tsx` (column 
 
 **Built (bespoke, real data):** `/v2/home`, `/v2/ai-assistant`, `/v2/people` (now with the full top-action controls + LinkedIn indicators), `/v2/companies`, `/v2/lists` (+`/:id`, with "Enrich all" + indicators), `/v2/data-enrichment` (+**`/linkedin`** import page — NEW), `/v2/sequences` (+`/:id`), `/v2/calls`, `/v2/deliverability`, `/v2/website-visitors`.
 
-**Built this session (autonomous):** `/v2/tasks`, `/v2/meetings`, `/v2/conversations`, `/v2/deals` (see the Autonomous pipeline section above).
+**Built this session:** ALL 10 remaining v2 placeholders. The 4 autopilot verticals (`/v2/tasks`, `/v2/meetings`, `/v2/conversations`, `/v2/deals` — see the Autonomous pipeline section above) plus `/v2/workflows` (Autonomy Control Center — toggles all autopilots + ARE campaigns + workflow rules + segment auto-enroll from one screen), `/v2/analytics` (autonomous-funnel dashboard, pure-CSS charts), `/v2/emails` (email activity log + AI auto-send toggle), `/v2/saved-people` + `/v2/saved-companies` (`SavedRecordsV2` over `recordLists`), and `/v2/forms` (greenfield lead-capture: migration 0103, `forms`/`form_submissions`, `forms` router, public `/f/:publicId` page — a submission auto-creates+routes+enrolls a lead).
 
-**Still `<Placeholder>`:** `/v2/emails`, `/v2/workflows`, `/v2/analytics`, `/v2/saved-people`, `/v2/saved-companies`, `/v2/forms`. (Build from `docs/specs/` + the matching `Apollo Screenshots/` subfolder.)
+**Still `<Placeholder>`:** NONE — every v2 route now renders a real page.
+
+**⚠️ Not yet done:** authenticated UI/functional click-through of ALL new pages (the connected browser wasn't logged into Velocity). All verification to date is backend-proc-probe + esbuild + a schema/insert-shape review. Autopilots default `off`.
 
 ## 🔌 Unipile integration (reuse — do NOT duplicate)
 A full Unipile integration already exists and is reused everywhere: `server/lib/unipile.ts` (client), `server/routers/unipile.ts`, `server/unipileWebhook.ts`, the `unipile_accounts` table (LINKEDIN), `ConnectedAccounts.tsx` UI, env `UNIPILE_API_KEY`/`UNIPILE_DSN`/`UNIPILE_WEBHOOK_SECRET`. **`server/services/linkedinLookup.ts`** is the compliant, rate-limited URL→profile retrieval layer (per-account daily cap via `linkedin_daily_usage`, audit via `linkedin_lookup_log`) that ALL enrichment retrieval routes through. Live workspace (LSI Media, ws 2) has one connected LinkedIn account ("Idris Grant", OK).
@@ -70,7 +72,7 @@ A full Unipile integration already exists and is reused everywhere: `server/lib/
 ## 🪤 Bug classes (do not reintroduce)
 - **DialogContent `sm:max-w-*`:** `ui/dialog.tsx` default ends `sm:max-w-lg`; a bare `max-w-2xl` LOSES at ≥640px. Always use the `sm:` prefix.
 - **Flex-collapse:** bare top-level flex rows under the shell need `shrink-0`; `min-h-0` on scrolling flex children.
-- **Migration drift:** schema = drizzle journal ∪ `server/_core/rawMigrations.ts`. Changes go in BOTH `drizzle/schema.ts` AND rawMigrations. **Latest applied: 0102** (deal autopilot settings; 0099 tasks, 0100 meetings, 0101 reply-classification precede it). **Next is 0103.** Idempotent (errnos 1050/1060/1061/1091/1146/1826 tolerated), runs ~5s post-boot. Repo uses **int AUTO_INCREMENT PKs** everywhere — adapt UUID-style specs to int.
+- **Migration drift:** schema = drizzle journal ∪ `server/_core/rawMigrations.ts`. Changes go in BOTH `drizzle/schema.ts` AND rawMigrations. **Latest applied: 0103** (forms + form_submissions; 0099 tasks, 0100 meetings, 0101 reply-classification, 0102 deal-autopilot precede it). **Next is 0104.** Idempotent (errnos 1050/1060/1061/1091/1146/1826 tolerated), runs ~5s post-boot. Repo uses **int AUTO_INCREMENT PKs** everywhere — adapt UUID-style specs to int.
 
 ## 🔑 Auth model (durable)
 - **Native email + password (`server/passwordAuth.ts`). Manus/Meta OAuth REMOVED; `/api/oauth/callback` is 410.** No `/login` route — login/signup is the `Landing` component **inside `client/src/App.tsx`**. `/api/auth/register` upgrades an invite placeholder in place. Roles: `super_admin > admin > manager > rep` (`workspaceMembers.role`; helpers `adminWsProcedure`/`superAdminProcedure` in `server/_core/workspace.ts`).
