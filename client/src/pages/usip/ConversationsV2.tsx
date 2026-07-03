@@ -25,7 +25,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import {
   MessageSquare, Inbox, Sparkles, Bot, Zap, Check, CheckCheck, CalendarClock, Mail,
-  Link2, CircleDot, Send,
+  Link2, CircleDot, Send, Copy,
 } from "lucide-react";
 
 type Reply = {
@@ -239,7 +239,7 @@ export default function ConversationsV2() {
         </div>
       </div>
 
-      <ReplyDialog reply={selected} onClose={() => setSelected(null)} onChanged={invalidateAll} />
+      <ReplyDialog key={selected?.id} reply={selected} onClose={() => setSelected(null)} onChanged={invalidateAll} />
     </Shell>
   );
 }
@@ -268,6 +268,11 @@ function ReplyDialog({ reply, onClose, onChanged }: { reply: Reply | null; onClo
   });
   const markHandled = trpc.conversations.markHandled.useMutation({
     onSuccess: () => { onChanged(); toast.success("Marked handled"); onClose(); },
+  });
+  const [replyText, setReplyText] = useState(reply?.suggestedReply ?? "");
+  const draftReply = trpc.conversations.draftReply.useMutation({
+    onSuccess: (r: any) => setReplyText(r?.body || ""),
+    onError: (e) => toast.error(e.message),
   });
 
   if (!reply) return null;
@@ -301,13 +306,23 @@ function ReplyDialog({ reply, onClose, onChanged }: { reply: Reply | null; onClo
             {reply.bodyText || "(no plain-text body)"}
           </div>
 
-          {/* Suggested reply */}
-          {reply.suggestedReply && (
-            <div className="space-y-1">
-              <div className="text-[11px] font-medium text-muted-foreground flex items-center gap-1"><Sparkles className="size-3" style={{ color: "#7c3aed" }} /> AI-suggested reply</div>
-              <Textarea readOnly value={reply.suggestedReply} rows={4} className="text-[13px]" />
+          {/* AI reply composer */}
+          <div className="space-y-1">
+            <div className="flex items-center justify-between">
+              <div className="text-[11px] font-medium text-muted-foreground flex items-center gap-1"><Sparkles className="size-3" style={{ color: "#7c3aed" }} /> AI reply</div>
+              <div className="flex items-center gap-1">
+                <Button size="sm" variant="ghost" className="h-6 text-[11px] gap-1" disabled={draftReply.isPending} onClick={() => draftReply.mutate({ id: reply.id })}>
+                  <Sparkles className="size-3" /> {draftReply.isPending ? "Drafting…" : "Draft with AI"}
+                </Button>
+                {replyText && (
+                  <Button size="sm" variant="ghost" className="h-6 text-[11px] gap-1" onClick={() => { if (navigator?.clipboard) navigator.clipboard.writeText(replyText).then(() => toast.success("Copied")); }}>
+                    <Copy className="size-3" /> Copy
+                  </Button>
+                )}
+              </div>
             </div>
-          )}
+            <Textarea value={replyText} onChange={(e) => setReplyText(e.target.value)} rows={4} className="text-[13px]" placeholder="Draft a reply with AI, or write your own…" />
+          </div>
         </div>
 
         <DialogFooter className="flex-wrap gap-2">
