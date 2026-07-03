@@ -2322,6 +2322,15 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  {
+    name: "0107_social_autopilot_settings.sql",
+    statements: [
+      `ALTER TABLE \`workspace_settings\` ADD COLUMN \`socialAutopilotMode\` enum('off','approval','auto') NOT NULL DEFAULT 'off'`,
+      `ALTER TABLE \`workspace_settings\` ADD COLUMN \`socialAutopilotDailyCap\` int NOT NULL DEFAULT 50`,
+      `ALTER TABLE \`workspace_settings\` ADD COLUMN \`socialAutopilotLastRunAt\` timestamp NULL`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

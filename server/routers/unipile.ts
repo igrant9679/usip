@@ -12,13 +12,17 @@ import {
   unipileAccounts,
   unipileInvites,
   unipileMessages,
+  workspaceSettings,
 } from "../../drizzle/schema";
 import {
+  cancelSentInvitation,
   deleteUnipileAccount,
   generateHostedAuthLink,
   getChatMessages,
   getLinkedInProfile,
   listChats,
+  listRelations,
+  listSentInvitations,
   listUnipileAccounts,
   registerWebhook,
   sendLinkedInInvitation,
@@ -592,6 +596,35 @@ export const unipileRouter = router({
     }),
 
   /**
+   * One-time admin action: register Unipile's `users` webhook so new_relation
+   * (invitation-accepted) events reach /api/unipile/users-webhook and trigger
+   * the Social Autopilot opener.
+   */
+  registerUsersWebhook: adminWsProcedure
+    .input(z.object({ origin: z.string().optional() }).default({}))
+    .mutation(async ({ input }) => {
+      const appBase = (
+        process.env.MANUS_APP_URL ||
+        input.origin ||
+        process.env.VITE_FRONTEND_FORGE_API_URL ||
+        ""
+      ).replace(/\/$/, "");
+      if (!appBase) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "MANUS_APP_URL is not set — Unipile needs a reachable webhook URL.",
+        });
+      }
+      const requestUrl = `${appBase}/api/unipile/users-webhook`;
+      const result = await registerWebhook({
+        requestUrl,
+        source: "users",
+        secretKey: process.env.UNIPILE_WEBHOOK_SECRET || undefined,
+      });
+      return { webhookId: result.id, requestUrl, raw: result.raw };
+    }),
+
+  /**
    * One-time admin action: register Unipile's calendar_event webhook so
    * calendar_event_created / _updated / _deleted events stream into
    * /api/unipile/calendar-webhook. Same idempotency caveat as mail.
@@ -664,4 +697,108 @@ export const unipileRouter = router({
       });
       return { webhookId: result.id, requestUrl, raw: result.raw };
     }),
+
+  // ─── Social Autopilot settings ──────────────────────────────────────────
+  // Off/Approve/Auto governs autonomous LinkedIn opener DMs on invite-accept.
+  getSocialAutopilotSettings: workspaceProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) return { mode: "off" as const, dailyCap: 50, lastRunAt: null as Date | null };
+    const [row] = await db
+      .select({
+        mode: workspaceSettings.socialAutopilotMode,
+        dailyCap: workspaceSettings.socialAutopilotDailyCap,
+        lastRunAt: workspaceSettings.socialAutopilotLastRunAt,
+      })
+      .from(workspaceSettings)
+      .where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
+    return row ?? { mode: "off" as const, dailyCap: 50, lastRunAt: null };
+  }),
+
+  setSocialAutopilotSettings: adminWsProcedure
+    .input(
+      z.object({
+        mode: z.enum(["off", "approval", "auto"]),
+        dailyCap: z.number().int().min(1).max(500).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const set: any = { socialAutopilotMode: input.mode };
+      if (input.dailyCap !== undefined) set.socialAutopilotDailyCap = input.dailyCap;
+      await db
+        .insert(workspaceSettings)
+        .values({ workspaceId: ctx.workspace.id, ...set } as never)
+        .onDuplicateKeyUpdate({ set });
+      return { ok: true };
+    }),
+
+  // ─── LinkedIn invitations / relations (per-user, compliant reads) ────────
+  // Resolve the caller's OWN LinkedIn account. Optional unipileAccountId picks
+  // a specific one when the rep has connected more than one.
+  listSentInvitations: workspaceProcedure
+    .input(z.object({ unipileAccountId: z.string().optional(), limit: z.number().int().min(1).max(250).optional() }).default({}))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) return { items: [] as any[] };
+      const acct = await resolveOwnLinkedInAccount(db, ctx.workspace.id, ctx.user.id, input.unipileAccountId);
+      if (!acct) return { items: [] as any[] };
+      const res = await listSentInvitations({ accountId: acct, limit: input.limit ?? 100 });
+      return { items: res.items ?? [], cursor: res.cursor };
+    }),
+
+  withdrawInvitation: workspaceProcedure
+    .input(z.object({ invitationId: z.string(), unipileAccountId: z.string().optional() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const acct = await resolveOwnLinkedInAccount(db, ctx.workspace.id, ctx.user.id, input.unipileAccountId);
+      if (!acct) throw new TRPCError({ code: "NOT_FOUND", message: "No connected LinkedIn account." });
+      await cancelSentInvitation({ accountId: acct, invitationId: input.invitationId });
+      return { ok: true };
+    }),
+
+  listRelations: workspaceProcedure
+    .input(z.object({ unipileAccountId: z.string().optional(), limit: z.number().int().min(1).max(250).optional() }).default({}))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) return { items: [] as any[] };
+      const acct = await resolveOwnLinkedInAccount(db, ctx.workspace.id, ctx.user.id, input.unipileAccountId);
+      if (!acct) return { items: [] as any[] };
+      const res = await listRelations({ accountId: acct, limit: input.limit ?? 100 });
+      return { items: res.items ?? [], cursor: res.cursor };
+    }),
 });
+
+/**
+ * Resolve the caller's own connected LinkedIn Unipile accountId. Honors an
+ * explicit unipileAccountId (verifying ownership), else picks their first
+ * LinkedIn account. Returns null if the rep has none connected.
+ */
+async function resolveOwnLinkedInAccount(
+  db: any,
+  workspaceId: number,
+  userId: number,
+  explicitId?: string,
+): Promise<string | null> {
+  if (explicitId) {
+    const [row] = await db
+      .select({ id: unipileAccounts.unipileAccountId })
+      .from(unipileAccounts)
+      .where(and(eq(unipileAccounts.unipileAccountId, explicitId), eq(unipileAccounts.userId, userId)))
+      .limit(1);
+    return row?.id ?? null;
+  }
+  const [row] = await db
+    .select({ id: unipileAccounts.unipileAccountId })
+    .from(unipileAccounts)
+    .where(
+      and(
+        eq(unipileAccounts.workspaceId, workspaceId),
+        eq(unipileAccounts.userId, userId),
+        eq(unipileAccounts.provider, "LINKEDIN"),
+      ),
+    )
+    .limit(1);
+  return row?.id ?? null;
+}

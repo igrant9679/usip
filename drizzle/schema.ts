@@ -1426,6 +1426,16 @@ export const workspaceSettings = mysqlTable("workspace_settings", {
   dealAutopilotMode: mysqlEnum("dealAutopilotMode", ["off", "approval", "auto"]).default("off").notNull(),
   dealAutopilotDailyCap: int("dealAutopilotDailyCap").default(50).notNull(),
   dealAutopilotLastRunAt: timestamp("dealAutopilotLastRunAt"),
+
+  // ─── Social Autopilot ───────────────────────────────────────────────────
+  // Governs autonomous LinkedIn/social outreach: when a sent invite is
+  // accepted (new_relation webhook), auto-send the AI opener DM; withdraw
+  // stale pending invites to free LinkedIn's quota. Per-user identity — each
+  // rep's OWN connected account performs the action. Off/Approve/Auto.
+  socialAutopilotMode: mysqlEnum("socialAutopilotMode", ["off", "approval", "auto"]).default("off").notNull(),
+  socialAutopilotDailyCap: int("socialAutopilotDailyCap").default(50).notNull(),
+  socialAutopilotLastRunAt: timestamp("socialAutopilotLastRunAt"),
+
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
 export type WorkspaceSettings = typeof workspaceSettings.$inferSelect;

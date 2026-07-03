@@ -230,6 +230,80 @@ export async function sendLinkedInInvitation(params: {
   );
 }
 
+/** A pending sent invitation as returned by GET /users/invite/sent. */
+export interface UnipileSentInvitation {
+  id: string; // invitation_id (used to cancel)
+  invited_user?: string; // provider_id of the invitee
+  invited_user_name?: string;
+  invited_user_public_identifier?: string;
+  invited_user_profile_url?: string;
+  message?: string;
+  date?: string; // ISO — when the invite was sent
+}
+
+/**
+ * List pending sent LinkedIn invitations for an account.
+ * Compliant read via the authorized Unipile layer. LinkedIn caps pending
+ * invitations (~a few hundred); Social Autopilot uses this to withdraw stale
+ * ones and to detect which have been accepted (they drop off this list).
+ */
+export async function listSentInvitations(params: {
+  accountId: string;
+  limit?: number;
+  cursor?: string;
+}): Promise<{ items: UnipileSentInvitation[]; cursor?: string }> {
+  const qs = new URLSearchParams();
+  qs.set("account_id", params.accountId);
+  if (params.limit) qs.set("limit", String(params.limit));
+  if (params.cursor) qs.set("cursor", params.cursor);
+  return unipileFetch<{ items: UnipileSentInvitation[]; cursor?: string }>(
+    `/users/invite/sent?${qs}`,
+  );
+}
+
+/**
+ * Withdraw/cancel a previously sent (still-pending) LinkedIn invitation.
+ * Frees a slot against LinkedIn's pending-invite ceiling.
+ */
+export async function cancelSentInvitation(params: {
+  accountId: string;
+  invitationId: string;
+}): Promise<{ object?: string }> {
+  return unipileFetch<{ object?: string }>(
+    `/users/invite/sent/${encodeURIComponent(params.invitationId)}?account_id=${encodeURIComponent(params.accountId)}`,
+    { method: "DELETE" },
+  );
+}
+
+/** A 1st-degree connection as returned by GET /users/relations. */
+export interface UnipileRelation {
+  member_id?: string; // LinkedIn provider_id
+  provider_id?: string;
+  first_name?: string;
+  last_name?: string;
+  name?: string;
+  public_identifier?: string;
+  public_profile_url?: string;
+  headline?: string;
+  connection_degree?: string;
+  created_at?: string;
+}
+
+/** List an account's 1st-degree connections (relations). Compliant read. */
+export async function listRelations(params: {
+  accountId: string;
+  limit?: number;
+  cursor?: string;
+}): Promise<{ items: UnipileRelation[]; cursor?: string }> {
+  const qs = new URLSearchParams();
+  qs.set("account_id", params.accountId);
+  if (params.limit) qs.set("limit", String(params.limit));
+  if (params.cursor) qs.set("cursor", params.cursor);
+  return unipileFetch<{ items: UnipileRelation[]; cursor?: string }>(
+    `/users/relations?${qs}`,
+  );
+}
+
 // ─── LinkedIn User / Profile ──────────────────────────────────────────────────
 
 /**

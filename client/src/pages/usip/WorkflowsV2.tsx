@@ -23,7 +23,7 @@ import {
 } from "@/components/ui/select";
 import {
   Workflow, ListTodo, CalendarClock, MessageSquare, KanbanSquare, Bot, Zap, Sparkles, Rocket,
-  ExternalLink, Play, Pause, Check, X, Activity, GitBranch, Users, Mail,
+  ExternalLink, Play, Pause, Check, X, Activity, GitBranch, Users, Mail, Share2,
 } from "lucide-react";
 
 function fmtWhen(d?: string | Date | null): string {
@@ -44,11 +44,13 @@ export default function WorkflowsV2() {
   const meetAp = trpc.meetings.getAutopilotSettings.useQuery();
   const convAp = trpc.conversations.getAutopilotSettings.useQuery();
   const dealAp = trpc.deals.getAutopilotSettings.useQuery();
+  const socialAp = trpc.unipile.getSocialAutopilotSettings.useQuery(undefined as any, { retry: false });
 
   const setTaskAp = trpc.tasks.setAutopilotSettings.useMutation({ onSuccess: () => utils.tasks.getAutopilotSettings.invalidate() });
   const setMeetAp = trpc.meetings.setAutopilotSettings.useMutation({ onSuccess: () => utils.meetings.getAutopilotSettings.invalidate() });
   const setConvAp = trpc.conversations.setAutopilotSettings.useMutation({ onSuccess: () => utils.conversations.getAutopilotSettings.invalidate() });
   const setDealAp = trpc.deals.setAutopilotSettings.useMutation({ onSuccess: () => utils.deals.getAutopilotSettings.invalidate() });
+  const setSocialAp = trpc.unipile.setSocialAutopilotSettings.useMutation({ onSuccess: () => utils.unipile.getSocialAutopilotSettings.invalidate(), onError: (e) => toast.error(e.message.includes("FORBIDDEN") ? "Only admins can change Social Autopilot" : e.message) });
 
   // Email AI auto-send — a boolean autonomy control, surfaced here too.
   const emailAuto = trpc.emailAutoSend.getAutoSendSettings.useQuery(undefined as any, { retry: false });
@@ -71,6 +73,7 @@ export default function WorkflowsV2() {
     { key: "meetings", label: "Meeting Autopilot", icon: CalendarClock, blurb: "Propose times + book meetings", href: "/v2/meetings", mode: meetAp.data?.mode ?? "off", lastRunAt: meetAp.data?.lastRunAt, set: (m: string) => setMeetAp.mutate({ mode: m as any }) },
     { key: "conversations", label: "Conversation Autopilot", icon: MessageSquare, blurb: "Classify replies + act", href: "/v2/conversations", mode: convAp.data?.mode ?? "off", lastRunAt: convAp.data?.lastRunAt, set: (m: string) => setConvAp.mutate({ mode: m as any }) },
     { key: "deals", label: "Deal Autopilot", icon: KanbanSquare, blurb: "Advance deals toward close", href: "/v2/deals", mode: dealAp.data?.mode ?? "off", lastRunAt: dealAp.data?.lastRunAt, set: (m: string) => setDealAp.mutate({ mode: m as any }) },
+    { key: "social", label: "Social Autopilot", icon: Share2, blurb: "LinkedIn invite-accept → opener DM", href: "/v2/conversations", mode: socialAp.data?.mode ?? "off", lastRunAt: socialAp.data?.lastRunAt, set: (m: string) => setSocialAp.mutate({ mode: m as any }) },
   ];
   const onCount = autopilots.filter((a) => a.mode !== "off").length;
 
@@ -79,6 +82,7 @@ export default function WorkflowsV2() {
     setMeetAp.mutate({ mode: mode as any });
     setConvAp.mutate({ mode: mode as any });
     setDealAp.mutate({ mode: mode as any });
+    setSocialAp.mutate({ mode: mode as any });
     toast.success(mode === "off" ? "All autopilots turned off" : `All autopilots set to ${MODE_LABEL[mode]}`);
   };
 
@@ -88,6 +92,7 @@ export default function WorkflowsV2() {
     setMeetAp.mutate({ mode: "approval" as any });
     setConvAp.mutate({ mode: "approval" as any });
     setDealAp.mutate({ mode: "approval" as any });
+    setSocialAp.mutate({ mode: "approval" as any });
     setEmailAutoEnabled(true);
     toast.success("Full autonomy on (Approve mode) — AI actions will queue for your review");
   };
@@ -133,7 +138,7 @@ export default function WorkflowsV2() {
           <h1 className="text-[15px] font-semibold tracking-tight">Workflows</h1>
           <span className="text-[11px] text-muted-foreground hidden sm:inline">· Autonomy control center</span>
           <div className="flex-1" />
-          <span className="text-[11px] text-muted-foreground mr-1">{onCount}/4 autopilots on</span>
+          <span className="text-[11px] text-muted-foreground mr-1">{onCount}/{autopilots.length} autopilots on</span>
           <Select onValueChange={setAll}>
             <SelectTrigger className="h-7 w-[150px] text-xs"><SelectValue placeholder="Set all autopilots" /></SelectTrigger>
             <SelectContent>

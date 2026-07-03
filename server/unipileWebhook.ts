@@ -581,6 +581,40 @@ export function registerUnipileWebhookRoutes(app: Express) {
     },
   );
 
+  /**
+   * POST /api/unipile/users-webhook  (source=users, event=new_relation)
+   *
+   * Fires (with up to ~8h delay — LinkedIn has no real-time relation events)
+   * when a sent connection invitation is ACCEPTED. This is the warmest moment
+   * in social selling, so we hand it straight to the Social Autopilot, which
+   * sends a personalized opener DM from the rep's OWN account (or drafts a
+   * task, per socialAutopilotMode). The opener's eventual reply re-enters the
+   * messaging webhook → Conversation Autopilot → meeting.
+   */
+  app.post(
+    "/api/unipile/users-webhook",
+    async (req: Request, res: Response) => {
+      res.status(200).json({ ok: true });
+      if (!unipileWebhookAuthorized(req)) {
+        console.warn("[UnipileUsersWebhook] bad/missing Unipile-Auth header — dropped");
+        return;
+      }
+      try {
+        const payload: any = req.body ?? {};
+        const event: string = payload.event ?? payload.type ?? "";
+        if (event && event !== "new_relation") {
+          // Other users-source events (if any) are ignored for now.
+          return;
+        }
+        const { handleNewRelation } = await import("./services/socialAutopilot");
+        const status = await handleNewRelation(payload);
+        console.log(`[UnipileUsersWebhook] new_relation handled → ${status}`);
+      } catch (err) {
+        console.error("[UnipileUsersWebhook] error:", err);
+      }
+    },
+  );
+
   app.post(
     "/api/unipile/mail-webhook",
     async (req: Request, res: Response) => {
