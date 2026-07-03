@@ -14,7 +14,7 @@
  *
  * Best-effort: one deal failing never aborts the batch.
  */
-import { and, asc, eq, gte, inArray, notInArray, sql } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, lt, notInArray, sql } from "drizzle-orm";
 import { opportunities, tasks, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { invokeLLM } from "../_core/llm";
@@ -33,12 +33,19 @@ export async function runDealAutopilotForWorkspace(
   workspaceId: number,
   mode: "approval" | "auto",
   limit: number,
+  staleBefore?: Date | null,
 ): Promise<{ analyzed: number; tasksCreated: number }> {
   const db = await getDb();
   if (!db) return { analyzed: 0, tasksCreated: 0 };
 
+  // When staleBefore is set (cron), skip deals already touched since then so we
+  // don't re-analyze the same stalest deals every tick (analyzing writes updatedAt).
   const opps = await db.select().from(opportunities)
-    .where(and(eq(opportunities.workspaceId, workspaceId), notInArray(opportunities.stage, CLOSED_STAGES)))
+    .where(and(
+      eq(opportunities.workspaceId, workspaceId),
+      notInArray(opportunities.stage, CLOSED_STAGES),
+      staleBefore ? lt(opportunities.updatedAt, staleBefore) : undefined,
+    ))
     .orderBy(asc(opportunities.lastActivityAt))
     .limit(limit);
   if (!opps.length) return { analyzed: 0, tasksCreated: 0 };
@@ -144,7 +151,9 @@ export async function runDealAutopilotAllWorkspaces(): Promise<{ workspaces: num
     const mode = ws.dealAutopilotMode as "approval" | "auto";
     const cap = ws.dealAutopilotDailyCap ?? 50;
     try {
-      let limit = 20;
+      // Both modes respect the cap; the staleBefore=dayStart filter keeps each
+      // deal to at most one analysis per day so we never re-burn LLM budget.
+      let limit = Math.min(cap, 25);
       if (mode === "auto") {
         const [row] = await db.select({ n: sql<number>`count(*)` }).from(tasks)
           .where(and(
@@ -157,7 +166,7 @@ export async function runDealAutopilotAllWorkspaces(): Promise<{ workspaces: num
         if (remaining <= 0) continue;
         limit = Math.min(remaining, 20);
       }
-      const r = await runDealAutopilotForWorkspace(ws.workspaceId, mode, limit);
+      const r = await runDealAutopilotForWorkspace(ws.workspaceId, mode, limit, dayStart);
       analyzed += r.analyzed;
       workspaces++;
       await db.update(workspaceSettings).set({ dealAutopilotLastRunAt: new Date() } as never)

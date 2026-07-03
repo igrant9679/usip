@@ -175,15 +175,25 @@ export async function applyReplyAction(workspaceId: number, reply: any, byUser: 
       action = "marked";
       break;
     case "unsubscribe":
+      // Check-then-insert: email_suppressions' (workspaceId,email,reason) index is
+      // NOT unique, so ON DUPLICATE KEY wouldn't dedupe — avoid duplicate rows.
       try {
-        await db.insert(emailSuppressions).values({
-          workspaceId,
-          email: reply.fromEmail,
-          reason: "unsubscribe",
-          draftId: reply.draftId ?? null,
-          contactId: reply.contactId ?? null,
-          notes: "Auto-suppressed from inbound reply classification",
-        } as never).onDuplicateKeyUpdate({ set: { notes: "Auto-suppressed from inbound reply classification" } });
+        const [existing] = await db.select({ id: emailSuppressions.id }).from(emailSuppressions)
+          .where(and(
+            eq(emailSuppressions.workspaceId, workspaceId),
+            eq(emailSuppressions.email, reply.fromEmail),
+            eq(emailSuppressions.reason, "unsubscribe"),
+          ));
+        if (!existing) {
+          await db.insert(emailSuppressions).values({
+            workspaceId,
+            email: reply.fromEmail,
+            reason: "unsubscribe",
+            draftId: reply.draftId ?? null,
+            contactId: reply.contactId ?? null,
+            notes: "Auto-suppressed from inbound reply classification",
+          } as never);
+        }
       } catch (e) { console.error(`[ReplyClassifier] suppression insert failed:`, e); }
       action = "suppressed";
       break;
