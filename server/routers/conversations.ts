@@ -6,7 +6,7 @@
  * closing the sequence → reply → meeting loop.
  */
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { emailReplies, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
@@ -24,33 +24,37 @@ export const conversationsRouter = router({
     .query(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) return [];
-      let rows = await db.select().from(emailReplies)
-        .where(eq(emailReplies.workspaceId, ctx.workspace.id))
-        .orderBy(desc(emailReplies.receivedAt));
+      // Push filters + the 300-row cap into SQL — this table can have tens of
+      // thousands of replies, so never load them all into memory.
+      const conds = [eq(emailReplies.workspaceId, ctx.workspace.id)];
       const f = input?.filter;
-      if (f === "unhandled") rows = rows.filter((r) => !r.handledAt);
-      else if (f && f !== "all") rows = rows.filter((r) => r.replyClass === f);
-      if (input?.unreadOnly) rows = rows.filter((r) => !r.readAt);
-      return rows.slice(0, 300);
+      if (f === "unhandled") conds.push(isNull(emailReplies.handledAt));
+      else if (f && f !== "all") conds.push(eq(emailReplies.replyClass, f));
+      if (input?.unreadOnly) conds.push(isNull(emailReplies.readAt));
+      return db.select().from(emailReplies)
+        .where(and(...conds))
+        .orderBy(desc(emailReplies.receivedAt))
+        .limit(300);
     }),
 
   stats: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
     if (!db) return { total: 0, unhandled: 0, needsClassify: 0, willingToMeet: 0, meetingsProposed: 0 };
-    const rows = await db.select({
-      classifiedAt: emailReplies.classifiedAt,
-      handledAt: emailReplies.handledAt,
-      replyClass: emailReplies.replyClass,
-      autoActionTaken: emailReplies.autoActionTaken,
+    // Aggregate in SQL — counting tens of thousands of rows in JS is wasteful.
+    const [row] = await db.select({
+      total: sql<number>`count(*)`,
+      unhandled: sql<number>`sum(case when \`handledAt\` is null then 1 else 0 end)`,
+      needsClassify: sql<number>`sum(case when \`classifiedAt\` is null then 1 else 0 end)`,
+      willingToMeet: sql<number>`sum(case when \`replyClass\` = 'willing_to_meet' then 1 else 0 end)`,
+      meetingsProposed: sql<number>`sum(case when \`autoActionTaken\` = 'meeting_proposed' then 1 else 0 end)`,
     }).from(emailReplies).where(eq(emailReplies.workspaceId, ctx.workspace.id));
-    const s = { total: rows.length, unhandled: 0, needsClassify: 0, willingToMeet: 0, meetingsProposed: 0 };
-    for (const r of rows) {
-      if (!r.handledAt) s.unhandled++;
-      if (!r.classifiedAt) s.needsClassify++;
-      if (r.replyClass === "willing_to_meet") s.willingToMeet++;
-      if (r.autoActionTaken === "meeting_proposed") s.meetingsProposed++;
-    }
-    return s;
+    return {
+      total: Number(row?.total ?? 0),
+      unhandled: Number(row?.unhandled ?? 0),
+      needsClassify: Number(row?.needsClassify ?? 0),
+      willingToMeet: Number(row?.willingToMeet ?? 0),
+      meetingsProposed: Number(row?.meetingsProposed ?? 0),
+    };
   }),
 
   get: workspaceProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {
