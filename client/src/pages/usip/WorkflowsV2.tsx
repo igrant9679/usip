@@ -23,7 +23,7 @@ import {
 } from "@/components/ui/select";
 import {
   Workflow, ListTodo, CalendarClock, MessageSquare, KanbanSquare, Bot, Zap, Sparkles, Rocket,
-  ExternalLink, Play, Pause, Check, X, Activity, GitBranch, Users,
+  ExternalLink, Play, Pause, Check, X, Activity, GitBranch, Users, Mail,
 } from "lucide-react";
 
 function fmtWhen(d?: string | Date | null): string {
@@ -50,6 +50,22 @@ export default function WorkflowsV2() {
   const setConvAp = trpc.conversations.setAutopilotSettings.useMutation({ onSuccess: () => utils.conversations.getAutopilotSettings.invalidate() });
   const setDealAp = trpc.deals.setAutopilotSettings.useMutation({ onSuccess: () => utils.deals.getAutopilotSettings.invalidate() });
 
+  // Email AI auto-send — a boolean autonomy control, surfaced here too.
+  const emailAuto = trpc.emailAutoSend.getAutoSendSettings.useQuery(undefined as any, { retry: false });
+  const setEmailAuto = trpc.emailAutoSend.updateAutoSendSettings.useMutation({
+    onSuccess: () => utils.emailAutoSend.getAutoSendSettings.invalidate(),
+    onError: (e) => toast.error(e.message.includes("FORBIDDEN") ? "Only admins can change auto-send" : e.message),
+  });
+  const setEmailAutoEnabled = (enabled: boolean) => {
+    const cur = emailAuto.data as any;
+    setEmailAuto.mutate({
+      aiAutoSendEnabled: enabled,
+      aiAutoSendScoreMin: cur?.aiAutoSendScoreMin ?? 70,
+      aiAutoSendConfidenceMin: cur?.aiAutoSendConfidenceMin ?? 75,
+      aiAutoSendAllowUnscored: cur?.aiAutoSendAllowUnscored ?? false,
+    } as any);
+  };
+
   const autopilots = [
     { key: "tasks", label: "Task Autopilot", icon: ListTodo, blurb: "Next-best-action per prospect", href: "/v2/tasks", mode: taskAp.data?.mode ?? "off", lastRunAt: taskAp.data?.lastRunAt, set: (m: string) => setTaskAp.mutate({ mode: m as any }) },
     { key: "meetings", label: "Meeting Autopilot", icon: CalendarClock, blurb: "Propose times + book meetings", href: "/v2/meetings", mode: meetAp.data?.mode ?? "off", lastRunAt: meetAp.data?.lastRunAt, set: (m: string) => setMeetAp.mutate({ mode: m as any }) },
@@ -64,6 +80,16 @@ export default function WorkflowsV2() {
     setConvAp.mutate({ mode: mode as any });
     setDealAp.mutate({ mode: mode as any });
     toast.success(mode === "off" ? "All autopilots turned off" : `All autopilots set to ${MODE_LABEL[mode]}`);
+  };
+
+  // One click to enable the whole autonomous stack in the safe Approve mode.
+  const turnOnFullAutonomy = () => {
+    setTaskAp.mutate({ mode: "approval" as any });
+    setMeetAp.mutate({ mode: "approval" as any });
+    setConvAp.mutate({ mode: "approval" as any });
+    setDealAp.mutate({ mode: "approval" as any });
+    setEmailAutoEnabled(true);
+    toast.success("Full autonomy on (Approve mode) — AI actions will queue for your review");
   };
 
   // ── ARE campaigns ──
@@ -126,6 +152,7 @@ export default function WorkflowsV2() {
               <div className="text-sm font-medium">Autonomous operation</div>
               <div className="text-[12px] text-muted-foreground">Turn on the autopilots to run the pipeline — prospect → task → reply → meeting → deal — with limited or no manual work. Set each to <b>Approve</b> to review first, or <b>Autonomous</b> to run hands-off.</div>
             </div>
+            <Button size="sm" className="shrink-0 gap-1.5" onClick={turnOnFullAutonomy}><Rocket className="size-3.5" /> Turn on full autonomy</Button>
           </div>
 
           {/* Autopilots */}
@@ -150,6 +177,16 @@ export default function WorkflowsV2() {
                   </Select>
                 </div>
               ))}
+            </div>
+            <div className="rounded-xl border bg-card p-3 shadow-sm flex items-center gap-3 mt-3">
+              <span className="shrink-0 size-9 rounded-full flex items-center justify-center" style={{ backgroundColor: (emailAuto.data as any)?.aiAutoSendEnabled ? "#7c3aed1f" : "hsl(var(--muted))", color: (emailAuto.data as any)?.aiAutoSendEnabled ? "#7c3aed" : undefined }}>
+                {(emailAuto.data as any)?.aiAutoSendEnabled ? <Zap className="size-4" /> : <Mail className="size-4" />}
+              </span>
+              <div className="min-w-0 flex-1">
+                <Link href="/v2/emails" className="text-sm font-medium hover:underline">Email auto-send</Link>
+                <div className="text-[11px] text-muted-foreground">AI drafts send themselves when lead score &amp; confidence are high enough</div>
+              </div>
+              <Switch checked={!!(emailAuto.data as any)?.aiAutoSendEnabled} onCheckedChange={setEmailAutoEnabled} disabled={setEmailAuto.isPending || !emailAuto.data} />
             </div>
           </Section>
 
