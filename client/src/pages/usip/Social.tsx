@@ -42,6 +42,14 @@ export default function Social() {
     onError: (e) => toast.error(e.message),
   });
 
+  // Network tab — real LinkedIn invitations + connections via Unipile (lazy).
+  const invites = trpc.unipile.listSentInvitations.useQuery({ limit: 100 } as any, { enabled: tab === "network", retry: false });
+  const relations = trpc.unipile.listRelations.useQuery({ limit: 100 } as any, { enabled: tab === "network", retry: false });
+  const withdraw = trpc.unipile.withdrawInvitation.useMutation({
+    onSuccess: () => { utils.unipile.listSentInvitations.invalidate(); toast.success("Invitation withdrawn"); },
+    onError: (e) => toast.error(e.message),
+  });
+
   const openRecurrenceDialog = (postId: number) => {
     const post = posts.data?.find((p) => p.id === postId);
     const rec = (post as any)?.recurrence as any;
@@ -103,6 +111,7 @@ export default function Social() {
             <TabsTrigger value="queue">Queue</TabsTrigger>
             <TabsTrigger value="calendar">Calendar</TabsTrigger>
             <TabsTrigger value="accounts">Accounts</TabsTrigger>
+            <TabsTrigger value="network">Network</TabsTrigger>
             <TabsTrigger value="analytics">Analytics</TabsTrigger>
           </TabsList>
           <TabsContent value="queue">
@@ -170,6 +179,62 @@ export default function Social() {
                       {a.connected && <Button size="sm" variant="ghost" onClick={() => disconnect.mutate({ id: a.id })}>Disconnect</Button>}
                     </li>
                   ))}
+                </ul>
+              )}
+            </Section>
+          </TabsContent>
+
+          <TabsContent value="network">
+            <Section title={`Pending LinkedIn invitations (${invites.data?.items?.length ?? 0})`}>
+              {invites.isLoading ? (
+                <div className="p-3 text-sm text-muted-foreground">Loading…</div>
+              ) : invites.error ? (
+                <div className="p-3 text-sm text-muted-foreground">Connect a LinkedIn account (Sending Accounts) to see invitations.</div>
+              ) : (invites.data?.items ?? []).length === 0 ? (
+                <EmptyState icon={Send} title="No pending invitations" />
+              ) : (
+                <ul className="divide-y">
+                  {invites.data!.items.map((inv: any) => {
+                    const name = inv.invited_user_name || inv.invited_user_public_identifier || "LinkedIn member";
+                    const url = inv.invited_user_profile_url || (inv.invited_user_public_identifier ? `https://www.linkedin.com/in/${inv.invited_user_public_identifier}` : null);
+                    return (
+                      <li key={inv.id} className="p-3 flex items-center gap-2 text-sm">
+                        <StatusPill tone="info">linkedin</StatusPill>
+                        <div className="min-w-0">
+                          <div className="font-medium truncate">{name}</div>
+                          {inv.message && <div className="text-xs text-muted-foreground truncate">“{inv.message}”</div>}
+                        </div>
+                        <div className="ml-auto flex items-center gap-1">
+                          {inv.date && <span className="text-xs text-muted-foreground">{fmtDate(inv.date)}</span>}
+                          {url && <a href={url} target="_blank" rel="noopener noreferrer" className="text-muted-foreground hover:text-foreground"><ExternalLink className="size-3.5" /></a>}
+                          <Button size="sm" variant="ghost" disabled={withdraw.isPending} onClick={() => withdraw.mutate({ invitationId: String(inv.id) })}>Withdraw</Button>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </Section>
+            <Section title={`Connections (${relations.data?.items?.length ?? 0})`}>
+              {relations.isLoading ? (
+                <div className="p-3 text-sm text-muted-foreground">Loading…</div>
+              ) : (relations.data?.items ?? []).length === 0 ? (
+                <EmptyState icon={Share2} title="No connections loaded" />
+              ) : (
+                <ul className="divide-y">
+                  {relations.data!.items.map((r: any, i: number) => {
+                    const name = r.name || [r.first_name, r.last_name].filter(Boolean).join(" ") || r.public_identifier || "LinkedIn member";
+                    const url = r.public_profile_url || (r.public_identifier ? `https://www.linkedin.com/in/${r.public_identifier}` : null);
+                    return (
+                      <li key={r.member_id || r.provider_id || i} className="p-3 flex items-center gap-2 text-sm">
+                        <div className="min-w-0">
+                          <div className="font-medium truncate">{name}</div>
+                          {r.headline && <div className="text-xs text-muted-foreground truncate">{r.headline}</div>}
+                        </div>
+                        {url && <a href={url} target="_blank" rel="noopener noreferrer" className="ml-auto text-muted-foreground hover:text-foreground"><ExternalLink className="size-3.5" /></a>}
+                      </li>
+                    );
+                  })}
                 </ul>
               )}
             </Section>
