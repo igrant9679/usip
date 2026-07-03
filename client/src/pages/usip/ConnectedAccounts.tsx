@@ -45,6 +45,8 @@ import {
   Webhook,
   CalendarClock,
   Activity,
+  MessageSquare,
+  UserPlus,
 } from "lucide-react";
 
 
@@ -267,6 +269,29 @@ export default function ConnectedAccounts() {
       toast.error("Failed to register email tracking webhook", { description: err.message });
     },
   });
+  // Social messaging webhook — turns on the inbound social inbox: LinkedIn/etc.
+  // DMs stream to /api/unipile/messaging-webhook and feed the Conversation
+  // Autopilot (classify → book meeting). Admin-only.
+  const registerMessagingWebhook = trpc.unipile.registerMessagingWebhook.useMutation({
+    onSuccess: (data) => {
+      const idHint = data?.webhookId ? `webhook id ${String(data.webhookId).slice(0, 8)}…` : "registration accepted";
+      toast.success("Social messaging webhook registered", {
+        description: `Unipile will now push inbound LinkedIn/social DMs to ${data?.requestUrl ?? "your app"} (${idHint}). They appear in Conversations → Social.`,
+      });
+    },
+    onError: (err) => toast.error("Failed to register messaging webhook", { description: err.message }),
+  });
+  // Users/new_relation webhook — fires the Social Autopilot opener when a
+  // connection invite is accepted. Admin-only.
+  const registerUsersWebhook = trpc.unipile.registerUsersWebhook.useMutation({
+    onSuccess: (data) => {
+      const idHint = data?.webhookId ? `webhook id ${String(data.webhookId).slice(0, 8)}…` : "registration accepted";
+      toast.success("Connection-accepted webhook registered", {
+        description: `When someone accepts a LinkedIn invite, Unipile notifies ${data?.requestUrl ?? "your app"} (${idHint}) and the Social Autopilot sends the opener.`,
+      });
+    },
+    onError: (err) => toast.error("Failed to register connection webhook", { description: err.message }),
+  });
   const [isReconnectingAll, setIsReconnectingAll] = useState(false);
   const handleReconnectAll = async () => {
     const expired = accounts.filter((a) => EXPIRED_STATUSES.has(a.status));
@@ -384,6 +409,34 @@ export default function ConnectedAccounts() {
               <Activity className="h-4 w-4 mr-2" />
             )}
             Register tracking webhook
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => registerMessagingWebhook.mutate({ origin: window.location.origin })}
+            disabled={registerMessagingWebhook.isPending}
+            title="One-time setup: turn on the inbound social inbox. Unipile pushes new LinkedIn/social DMs to this app; they appear in Conversations → Social and feed the Conversation Autopilot. Admin-only."
+          >
+            {registerMessagingWebhook.isPending ? (
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            ) : (
+              <MessageSquare className="h-4 w-4 mr-2" />
+            )}
+            Register social inbox
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => registerUsersWebhook.mutate({ origin: window.location.origin })}
+            disabled={registerUsersWebhook.isPending}
+            title="One-time setup: fire the Social Autopilot opener when a LinkedIn invite is accepted. Admin-only."
+          >
+            {registerUsersWebhook.isPending ? (
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            ) : (
+              <UserPlus className="h-4 w-4 mr-2" />
+            )}
+            Register connection webhook
           </Button>
           <Button
             size="sm"
