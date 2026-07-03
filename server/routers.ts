@@ -37,6 +37,7 @@ import { calendarRouter } from "./routers/calendar";
 import { meetingsRouter } from "./routers/meetings";
 import { conversationsRouter } from "./routers/conversations";
 import { dealsRouter } from "./routers/deals";
+import { formsRouter } from "./routers/forms";
 import { proposalsRouter } from "./routers/proposals";
 import { unipileRouter } from "./routers/unipile";
 import { areRouter } from "./routers/are";
@@ -82,6 +83,7 @@ export const appRouter = router({
   meetings: meetingsRouter,
   conversations: conversationsRouter,
   deals: dealsRouter,
+  forms: formsRouter,
   activities: activitiesRouter,
   attachments: attachmentsRouter,
   crmNotes: crmNotesRouter,

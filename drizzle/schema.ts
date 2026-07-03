@@ -519,6 +519,59 @@ export const meetings = mysqlTable(
 );
 export type Meeting = typeof meetings.$inferSelect;
 
+/**
+ * forms + form_submissions (Migration 0103) — lead-capture forms with
+ * autonomous handling: a submission can auto-create a lead, auto-route it to a
+ * rep, and auto-enroll it in a sequence, feeding the top of the pipeline.
+ */
+export const forms = mysqlTable(
+  "forms",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    publicId: varchar("publicId", { length: 32 }).notNull().unique(), // nanoid — public form URL
+    title: varchar("title", { length: 200 }).notNull(),
+    description: text("description"),
+    // fields: array of { key, label, required } chosen from a standard palette
+    fields: json("fields"),
+    status: mysqlEnum("status", ["active", "inactive"]).default("active").notNull(),
+    // ── Autonomous handling of submissions ──
+    autoCreateLead: boolean("autoCreateLead").default(true).notNull(),
+    autoRoute: boolean("autoRoute").default(true).notNull(),         // assign owner via leadRouting rules
+    autoEnrollSequenceId: int("autoEnrollSequenceId"),               // enroll the new lead into this sequence
+    redirectUrl: text("redirectUrl"),
+    submitCount: int("submitCount").default(0).notNull(),
+    createdByUserId: int("createdByUserId"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    byWs: index("ix_form_ws").on(t.workspaceId),
+    byPublic: index("ix_form_public").on(t.publicId),
+  }),
+);
+export type Form = typeof forms.$inferSelect;
+
+export const formSubmissions = mysqlTable(
+  "form_submissions",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    formId: int("formId").notNull(),
+    data: json("data"),
+    name: varchar("name", { length: 200 }),
+    email: varchar("email", { length: 320 }),
+    company: varchar("company", { length: 200 }),
+    leadId: int("leadId"),                 // lead auto-created from this submission
+    routedToUserId: int("routedToUserId"), // rep it was auto-routed to
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    byForm: index("ix_fsub_form").on(t.workspaceId, t.formId),
+  }),
+);
+export type FormSubmission = typeof formSubmissions.$inferSelect;
+
 export const activities = mysqlTable(
   "activities",
   {

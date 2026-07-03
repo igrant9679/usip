@@ -2249,6 +2249,46 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  {
+    name: "0103_forms.sql",
+    statements: [
+      `CREATE TABLE IF NOT EXISTS \`forms\` (
+        \`id\` int NOT NULL AUTO_INCREMENT,
+        \`workspaceId\` int NOT NULL,
+        \`publicId\` varchar(32) NOT NULL,
+        \`title\` varchar(200) NOT NULL,
+        \`description\` text NULL,
+        \`fields\` json NULL,
+        \`status\` ENUM('active','inactive') NOT NULL DEFAULT 'active',
+        \`autoCreateLead\` boolean NOT NULL DEFAULT true,
+        \`autoRoute\` boolean NOT NULL DEFAULT true,
+        \`autoEnrollSequenceId\` int NULL,
+        \`redirectUrl\` text NULL,
+        \`submitCount\` int NOT NULL DEFAULT 0,
+        \`createdByUserId\` int NULL,
+        \`createdAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        \`updatedAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (\`id\`),
+        UNIQUE KEY \`uq_form_public\` (\`publicId\`),
+        INDEX \`ix_form_ws\` (\`workspaceId\`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS \`form_submissions\` (
+        \`id\` int NOT NULL AUTO_INCREMENT,
+        \`workspaceId\` int NOT NULL,
+        \`formId\` int NOT NULL,
+        \`data\` json NULL,
+        \`name\` varchar(200) NULL,
+        \`email\` varchar(320) NULL,
+        \`company\` varchar(200) NULL,
+        \`leadId\` int NULL,
+        \`routedToUserId\` int NULL,
+        \`createdAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (\`id\`),
+        INDEX \`ix_fsub_form\` (\`workspaceId\`, \`formId\`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------
