@@ -390,6 +390,20 @@ function stepsToCanvas(steps: ListStep[]): { nodes: CanvasNode[]; edges: CanvasE
   return { nodes, edges };
 }
 
+/**
+ * Guard: a published master template can only be edited/deleted by its owner or
+ * a manager+. Everyone else must fork it (sequences.fork) to get an editable
+ * copy. No-op for normal (non-template) sequences, so existing behavior is
+ * unchanged.
+ */
+async function assertTemplateEditable(db: any, ctx: any, id: number): Promise<void> {
+  const [seq] = await db.select({ isTemplate: sequences.isTemplate, ownerUserId: sequences.ownerUserId })
+    .from(sequences).where(and(eq(sequences.id, id), eq(sequences.workspaceId, ctx.workspace.id)));
+  if (seq?.isTemplate && seq.ownerUserId !== ctx.user.id && roleRank(ctx.member.role) < roleRank("manager")) {
+    throw new TRPCError({ code: "FORBIDDEN", message: "This is a shared template — fork it to make your own editable copy." });
+  }
+}
+
 export const sequencesRouter = router({
   list: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
@@ -522,6 +536,7 @@ export const sequencesRouter = router({
   })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    await assertTemplateEditable(db, ctx, input.id);
     if (Object.keys(input.patch).length === 0) return { ok: true };
     await db.update(sequences).set(input.patch).where(and(eq(sequences.id, input.id), eq(sequences.workspaceId, ctx.workspace.id)));
     return { ok: true };
@@ -542,6 +557,7 @@ export const sequencesRouter = router({
   })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    await assertTemplateEditable(db, ctx, input.id);
     const { id, ...patch } = input;
     await db.update(sequences).set(patch).where(and(eq(sequences.id, id), eq(sequences.workspaceId, ctx.workspace.id)));
     return { ok: true };
@@ -554,6 +570,9 @@ export const sequencesRouter = router({
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const [seq] = await db.select().from(sequences).where(and(eq(sequences.id, input.id), eq(sequences.workspaceId, ctx.workspace.id)));
     if (!seq) throw new TRPCError({ code: "NOT_FOUND" });
+    if (seq.isTemplate && seq.ownerUserId !== ctx.user.id && roleRank(ctx.member.role) < roleRank("manager")) {
+      throw new TRPCError({ code: "FORBIDDEN", message: "This is a shared template — fork it to make your own editable copy." });
+    }
     // Steps are editable in draft + paused states. Pausing is precisely
     // the lever a user pulls when they want to make changes safely
     // without new sends going out. Only block while actively running
@@ -595,6 +614,7 @@ export const sequencesRouter = router({
       .where(and(eq(sequences.id, input.id), eq(sequences.workspaceId, ctx.workspace.id)))
       .limit(1);
     if (!seq) throw new TRPCError({ code: "NOT_FOUND" });
+    await assertTemplateEditable(db, ctx, input.id);
 
     // Cascade — without these, child rows became orphans pointing at
     // a tombstone. emailDrafts kept their sequenceId so analytics
@@ -629,6 +649,7 @@ export const sequencesRouter = router({
   setStatus: repProcedure.input(z.object({ id: z.number(), status: z.enum(["draft", "active", "paused", "archived"]) })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    await assertTemplateEditable(db, ctx, input.id);
     await db.update(sequences).set({ status: input.status }).where(and(eq(sequences.id, input.id), eq(sequences.workspaceId, ctx.workspace.id)));
     return { ok: true };
   }),
@@ -696,6 +717,9 @@ export const sequencesRouter = router({
       // Verify sequence belongs to workspace
       const [seq] = await db.select().from(sequences).where(and(eq(sequences.id, input.id), eq(sequences.workspaceId, ctx.workspace.id)));
       if (!seq) throw new TRPCError({ code: "NOT_FOUND" });
+      if (seq.isTemplate && seq.ownerUserId !== ctx.user.id && roleRank(ctx.member.role) < roleRank("manager")) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "This is a shared template — fork it to make your own editable copy." });
+      }
       // Canvas is editable in draft + paused states; paused means the
       // user explicitly stopped sending to make changes. Only running or
       // archived sequences are locked.
