@@ -9,7 +9,25 @@ Refreshed at the end of the **"People top-action controls + full compliant Linke
 - **Repo:** `igrant9679/usip` (origin: `https://github.com/igrant9679/usip.git`)
 - **Local path:** `C:\Users\Admin\usip`
 - **Deploy:** Railway → `https://getvelocityai.app/` (auto-deploys on push to `main`). **Deploys are slow — 3–6 min.** Verify in a **fresh tab**. Chrome MCP screenshots flake (`Page.captureScreenshot` timeouts) — fall back to `get_page_text`, or measure with the `javascript_tool` (`getBoundingClientRect`), or call tRPC endpoints directly via `fetch` (see Verification).
-- **Tip of `main`:** `e6292fe`. Everything below is pushed. (Post-session addition at this tip: `applyEnrichment` now fire-and-forget triggers a fit / Velocity-Priority-Score recalculation via `server/services/scoring/recalculationService` — scoring is best-effort and never blocks enrichment.)
+- **Tip of `main`:** `4ef4e9c` (was `e6292fe`). Everything below is pushed.
+
+## 🤖 Autonomous pipeline build (Apollo→Velocity, current session)
+
+Built **four new v2 autonomous menus**, each following one repeatable **Autopilot** convention: a per-workspace mode **Off / Approve / Autonomous** on `workspace_settings.<x>AutopilotMode`, a service in `server/services/` (`run<X>AutopilotForWorkspace` + `...AllWorkspaces` cron entry, best-effort, excludes `verificationStatus='rejected'`), a cron in `server/_core/index.ts`, router procs incl. `get/setAutopilotSettings` (settings = `adminWsProcedure`), and a `*V2.tsx` page (NEW file, v1 pages untouched) wired in `App.tsx`. All reuse the existing `invokeLLM` (`server/_core/llm.ts`) — no new AI provider. Autopilots **default to `off`** (nothing runs autonomously until enabled).
+
+They chain into one autonomous revenue loop: prospect → **Tasks** (AI next action) → sequence/email → reply → **Conversations** (AI classifies the reply) → willing-to-meet → **Meetings** (AI proposes times + books) → opportunity → **Deals** (AI advances toward close).
+
+| Menu | Page | Migration | Service | Router | Cron |
+|---|---|---|---|---|---|
+| `/v2/tasks` | `TasksV2.tsx` | 0099 | `taskAutopilot.ts` | `tasks.*` (extended `activities.ts`) | 30 min |
+| `/v2/meetings` | `MeetingsV2.tsx` | 0100 (`meetings` table) | `meetingScheduler.ts` | `meetings` | 45 min |
+| `/v2/conversations` | `ConversationsV2.tsx` | 0101 (email_replies class cols) | `replyClassifier.ts` | `conversations` | 5 min |
+| `/v2/deals` | `DealsV2.tsx` | 0102 | `dealAutopilot.ts` | `deals` (board reuses `opportunities.*`) | 60 min |
+
+- **Meetings**: `meetings` table (proposed/invited/scheduled/…); `createMeetingProposal(ws,target)` is the generic proposal creator (prospect OR reply sender); `sendMeetingInvite` sends a real invite via `createCalendarAdapter` when a calendar is connected, else records locally with `inviteSent=false` (never a false "booked").
+- **Conversations**: classifies `email_replies` with the 8-class taxonomy; `willing_to_meet` → auto `createMeetingProposal` + prep task; `unsubscribe` → `email_suppressions`. Did NOT touch the ARE engine or inbound poller (low risk).
+- **Deals**: reuses existing `opportunities`/`crmPipelines`/`pipelineAlerts`/`forecastAi`; autopilot writes nextStep/winProb, auto mode creates a follow-up task.
+- **⚠️ Verified backend-only** (proc-registration probe + esbuild). The **authenticated UI/functional test is still pending** — the connected Browser 1 was not logged into Velocity, so no page was clicked live. Enrichment→scoring hook from the prior session still stands.
 
 ## What this session was
 
@@ -42,7 +60,9 @@ Extracted into `client/src/components/usip/people/`. `peopleShared.tsx` (column 
 
 **Built (bespoke, real data):** `/v2/home`, `/v2/ai-assistant`, `/v2/people` (now with the full top-action controls + LinkedIn indicators), `/v2/companies`, `/v2/lists` (+`/:id`, with "Enrich all" + indicators), `/v2/data-enrichment` (+**`/linkedin`** import page — NEW), `/v2/sequences` (+`/:id`), `/v2/calls`, `/v2/deliverability`, `/v2/website-visitors`.
 
-**Still `<Placeholder>`:** `/v2/emails`, `/v2/tasks`, `/v2/meetings`, `/v2/conversations`, `/v2/deals`, `/v2/workflows`, `/v2/analytics`, `/v2/saved-people`, `/v2/saved-companies`, `/v2/forms`. (Build from `docs/specs/` + the matching `Apollo Screenshots/` subfolder.)
+**Built this session (autonomous):** `/v2/tasks`, `/v2/meetings`, `/v2/conversations`, `/v2/deals` (see the Autonomous pipeline section above).
+
+**Still `<Placeholder>`:** `/v2/emails`, `/v2/workflows`, `/v2/analytics`, `/v2/saved-people`, `/v2/saved-companies`, `/v2/forms`. (Build from `docs/specs/` + the matching `Apollo Screenshots/` subfolder.)
 
 ## 🔌 Unipile integration (reuse — do NOT duplicate)
 A full Unipile integration already exists and is reused everywhere: `server/lib/unipile.ts` (client), `server/routers/unipile.ts`, `server/unipileWebhook.ts`, the `unipile_accounts` table (LINKEDIN), `ConnectedAccounts.tsx` UI, env `UNIPILE_API_KEY`/`UNIPILE_DSN`/`UNIPILE_WEBHOOK_SECRET`. **`server/services/linkedinLookup.ts`** is the compliant, rate-limited URL→profile retrieval layer (per-account daily cap via `linkedin_daily_usage`, audit via `linkedin_lookup_log`) that ALL enrichment retrieval routes through. Live workspace (LSI Media, ws 2) has one connected LinkedIn account ("Idris Grant", OK).
@@ -50,7 +70,7 @@ A full Unipile integration already exists and is reused everywhere: `server/lib/
 ## 🪤 Bug classes (do not reintroduce)
 - **DialogContent `sm:max-w-*`:** `ui/dialog.tsx` default ends `sm:max-w-lg`; a bare `max-w-2xl` LOSES at ≥640px. Always use the `sm:` prefix.
 - **Flex-collapse:** bare top-level flex rows under the shell need `shrink-0`; `min-h-0` on scrolling flex children.
-- **Migration drift:** schema = drizzle journal ∪ `server/_core/rawMigrations.ts`. Changes go in BOTH `drizzle/schema.ts` AND rawMigrations. **Latest applied: 0096** (LinkedIn enrichment jobs). **Next is 0097.** Idempotent (errnos 1050/1060/1061/1091/1146/1826 tolerated), runs ~5s post-boot. Repo uses **int AUTO_INCREMENT PKs** everywhere — adapt UUID-style specs to int.
+- **Migration drift:** schema = drizzle journal ∪ `server/_core/rawMigrations.ts`. Changes go in BOTH `drizzle/schema.ts` AND rawMigrations. **Latest applied: 0102** (deal autopilot settings; 0099 tasks, 0100 meetings, 0101 reply-classification precede it). **Next is 0103.** Idempotent (errnos 1050/1060/1061/1091/1146/1826 tolerated), runs ~5s post-boot. Repo uses **int AUTO_INCREMENT PKs** everywhere — adapt UUID-style specs to int.
 
 ## 🔑 Auth model (durable)
 - **Native email + password (`server/passwordAuth.ts`). Manus/Meta OAuth REMOVED; `/api/oauth/callback` is 410.** No `/login` route — login/signup is the `Landing` component **inside `client/src/App.tsx`**. `/api/auth/register` upgrades an invite placeholder in place. Roles: `super_admin > admin > manager > rep` (`workspaceMembers.role`; helpers `adminWsProcedure`/`superAdminProcedure` in `server/_core/workspace.ts`).
