@@ -1362,6 +1362,12 @@ export const workspaceSettings = mysqlTable("workspace_settings", {
   conversationAutopilotMode: mysqlEnum("conversationAutopilotMode", ["off", "approval", "auto"]).default("off").notNull(),
   conversationAutopilotDailyCap: int("conversationAutopilotDailyCap").default(100).notNull(),
   conversationAutopilotLastRunAt: timestamp("conversationAutopilotLastRunAt"),
+  // ── Deal Autopilot (Migration 0102) — autonomous pipeline manager ──
+  // off = never; approval = AI writes a next-step/win-prob per open deal for review;
+  // auto = AI also creates the follow-up task so deals keep moving toward close.
+  dealAutopilotMode: mysqlEnum("dealAutopilotMode", ["off", "approval", "auto"]).default("off").notNull(),
+  dealAutopilotDailyCap: int("dealAutopilotDailyCap").default(50).notNull(),
+  dealAutopilotLastRunAt: timestamp("dealAutopilotLastRunAt"),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
 export type WorkspaceSettings = typeof workspaceSettings.$inferSelect;

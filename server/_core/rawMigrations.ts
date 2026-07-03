@@ -2240,6 +2240,15 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  {
+    name: "0102_deal_autopilot.sql",
+    statements: [
+      `ALTER TABLE \`workspace_settings\` ADD COLUMN \`dealAutopilotMode\` ENUM('off','approval','auto') NOT NULL DEFAULT 'off'`,
+      `ALTER TABLE \`workspace_settings\` ADD COLUMN \`dealAutopilotDailyCap\` int NOT NULL DEFAULT 50`,
+      `ALTER TABLE \`workspace_settings\` ADD COLUMN \`dealAutopilotLastRunAt\` timestamp NULL`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

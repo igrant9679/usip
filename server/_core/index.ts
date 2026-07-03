@@ -49,6 +49,7 @@ import { runAreEngine } from "../areEngine";
 import { runTaskAutopilotAllWorkspaces } from "../services/taskAutopilot";
 import { runMeetingAutopilotAllWorkspaces } from "../services/meetingScheduler";
 import { runConversationAutopilotAllWorkspaces } from "../services/replyClassifier";
+import { runDealAutopilotAllWorkspaces } from "../services/dealAutopilot";
 import { runPipelineAlertsCron } from "../routers/pipelineAlerts";
 import { runSegmentEnrollmentForAllWorkspaces } from "../routers/segmentRules"; // eslint-disable-line
 import { registerEmailTrackingRoutes } from "../emailTracking";
@@ -271,6 +272,16 @@ async function startServer() {
   };
   setTimeout(runConversationAutopilot, 5 * 60 * 1000); // first run 5 minutes after boot
   setInterval(runConversationAutopilot, 5 * 60 * 1000); // every 5 minutes
+
+  // Deal Autopilot: AI-analyze open opportunities (next step + win prob) and, in
+  // 'auto' mode, create follow-up tasks so deals keep advancing. Every 60 min.
+  const runDealAutopilot = () => {
+    runDealAutopilotAllWorkspaces().catch((e) =>
+      console.error("[DealAutopilot] cron run failed:", e)
+    );
+  };
+  setTimeout(runDealAutopilot, 6 * 60 * 1000); // first run 6 minutes after boot
+  setInterval(runDealAutopilot, 60 * 60 * 1000); // every 60 minutes
 
   // Nightly AI pipeline batch: midnight cron for leads above score threshold
   const scheduleNightlyBatch = () => {
