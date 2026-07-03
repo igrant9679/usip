@@ -32,7 +32,7 @@ import {
 } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { invokeLLM } from "../_core/llm";
-import { sendLinkedInInvitation, sendMessage } from "../lib/unipile";
+import { listUserPosts, reactToPost, sendLinkedInInvitation, sendMessage } from "../lib/unipile";
 
 interface NewRelationPayload {
   account_id?: string;
@@ -272,6 +272,25 @@ Rules: under 180 characters, warm and specific, no pitch, no "I hope this finds 
   return `Hi ${firstName}, I come across a lot of teams in your space and would love to connect and trade notes.`.slice(0, 195);
 }
 
+/**
+ * Best-effort social warming: like the target's most recent post so the invite
+ * lands on a slightly warmer relationship. Never throws — any failure (no
+ * posts, private profile, wrong id) is swallowed so it can't block the invite.
+ */
+async function warmBeforeInvite(accountId: string, identifier: string): Promise<void> {
+  try {
+    const { items } = await listUserPosts(accountId, identifier, { limit: 1 });
+    const socialId = items[0]?.social_id;
+    if (socialId) {
+      await reactToPost(accountId, socialId, "like");
+      console.log(`[SocialAutopilot] warmed ${identifier} (liked latest post)`);
+    }
+  } catch (err) {
+    // Warming is optional — log at debug level and move on.
+    console.debug?.(`[SocialAutopilot] warm skipped for ${identifier}:`, (err as Error)?.message);
+  }
+}
+
 /** Auto-send (or draft) connection invitations for one workspace. */
 export async function runSocialAutopilotInvitesForWorkspace(
   workspaceId: number,
@@ -352,6 +371,9 @@ export async function runSocialAutopilotInvitesForWorkspace(
     }
 
     // auto
+    // Warming touch: like the lead's most recent post just before inviting —
+    // best-effort, never blocks the invite (wrong/absent post just no-ops).
+    await warmBeforeInvite(ownerAcct, slug);
     const note = await generateInviteNote(workspaceId, { name, title: lead.title, company: lead.company });
     try {
       await sendLinkedInInvitation({ accountId: ownerAcct, providerId: slug, message: note });

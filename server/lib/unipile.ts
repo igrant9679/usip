@@ -482,6 +482,86 @@ export async function resolveLinkedInSearchParameter(
   return { items: Array.isArray(res?.items) ? res.items : [] };
 }
 
+// ─── LinkedIn Posts / Engagement ──────────────────────────────────────────────
+// Used for "social warming" — engaging with a prospect's content (a like on
+// their latest post) around an invite lifts acceptance. All via the authorized
+// Unipile layer. IMPORTANT: LinkedIn uses several IDs per post; interactions
+// (react/comment) MUST use the post's `social_id` (e.g. urn:li:activity:…).
+
+export interface UnipilePost {
+  id?: string;
+  social_id?: string; // the id to use for react/comment
+  provider?: string;
+  text?: string;
+  date?: string;
+  author?: { name?: string; provider_id?: string; public_identifier?: string };
+  reaction_counter?: number;
+  comment_counter?: number;
+  repost_counter?: number;
+}
+
+/** List a LinkedIn user's recent posts. identifier = provider_id or public id. */
+export async function listUserPosts(
+  accountId: string,
+  identifier: string,
+  params: { limit?: number; cursor?: string } = {},
+): Promise<{ items: UnipilePost[]; cursor?: string }> {
+  const qs = new URLSearchParams({ account_id: accountId });
+  if (params.limit) qs.set("limit", String(Math.min(Math.max(params.limit, 1), 25)));
+  if (params.cursor) qs.set("cursor", params.cursor);
+  const res = await unipileFetch<{ items?: UnipilePost[]; cursor?: string }>(
+    `/users/${encodeURIComponent(identifier)}/posts?${qs}`,
+  );
+  return { items: Array.isArray(res?.items) ? res.items : [], cursor: res?.cursor };
+}
+
+/** React to a post (default "like"). socialId MUST be the post's social_id. */
+export async function reactToPost(
+  accountId: string,
+  socialId: string,
+  reactionType = "like",
+): Promise<{ object?: string }> {
+  return unipileFetch<{ object?: string }>(
+    `/posts/${encodeURIComponent(socialId)}/reactions`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ account_id: accountId, reaction_type: reactionType }),
+    },
+  );
+}
+
+/** Comment on a post. socialId MUST be the post's social_id. */
+export async function commentOnPost(
+  accountId: string,
+  socialId: string,
+  text: string,
+): Promise<{ id?: string; object?: string }> {
+  return unipileFetch<{ id?: string; object?: string }>(
+    `/posts/${encodeURIComponent(socialId)}/comments`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ account_id: accountId, text }),
+    },
+  );
+}
+
+/** Publish a post from the connected account (thought-leadership / warming). */
+export async function createPost(
+  accountId: string,
+  text: string,
+): Promise<{ id?: string; social_id?: string; object?: string }> {
+  return unipileFetch<{ id?: string; social_id?: string; object?: string }>(
+    `/posts`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ account_id: accountId, text }),
+    },
+  );
+}
+
 // ─── Webhooks ─────────────────────────────────────────────────────────────────
 
 /**

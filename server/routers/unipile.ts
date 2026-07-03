@@ -17,6 +17,8 @@ import {
 } from "../../drizzle/schema";
 import {
   cancelSentInvitation,
+  commentOnPost,
+  createPost,
   deleteUnipileAccount,
   generateHostedAuthLink,
   getChatMessages,
@@ -25,6 +27,8 @@ import {
   listRelations,
   listSentInvitations,
   listUnipileAccounts,
+  listUserPosts,
+  reactToPost,
   registerWebhook,
   resolveLinkedInSearchParameter,
   searchLinkedIn,
@@ -868,6 +872,51 @@ export const unipileRouter = router({
         created++;
       }
       return { created, skipped };
+    }),
+
+  // ─── LinkedIn post engagement (per-user, social warming) ────────────────
+  listUserPosts: workspaceProcedure
+    .input(z.object({ identifier: z.string().min(1), limit: z.number().int().min(1).max(25).optional(), unipileAccountId: z.string().optional() }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) return { items: [] as any[] };
+      const acct = await resolveOwnLinkedInAccount(db, ctx.workspace.id, ctx.user.id, input.unipileAccountId);
+      if (!acct) return { items: [] as any[] };
+      const res = await listUserPosts(acct, input.identifier, { limit: input.limit ?? 5 });
+      return { items: res.items, cursor: res.cursor };
+    }),
+
+  reactToPost: workspaceProcedure
+    .input(z.object({ socialId: z.string().min(1), reactionType: z.string().default("like"), unipileAccountId: z.string().optional() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const acct = await resolveOwnLinkedInAccount(db, ctx.workspace.id, ctx.user.id, input.unipileAccountId);
+      if (!acct) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Connect a LinkedIn account first." });
+      await reactToPost(acct, input.socialId, input.reactionType);
+      return { ok: true };
+    }),
+
+  commentOnPost: workspaceProcedure
+    .input(z.object({ socialId: z.string().min(1), text: z.string().min(1).max(1200), unipileAccountId: z.string().optional() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const acct = await resolveOwnLinkedInAccount(db, ctx.workspace.id, ctx.user.id, input.unipileAccountId);
+      if (!acct) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Connect a LinkedIn account first." });
+      const res = await commentOnPost(acct, input.socialId, input.text);
+      return { ok: true, id: res.id };
+    }),
+
+  createPost: workspaceProcedure
+    .input(z.object({ text: z.string().min(1).max(3000), unipileAccountId: z.string().optional() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const acct = await resolveOwnLinkedInAccount(db, ctx.workspace.id, ctx.user.id, input.unipileAccountId);
+      if (!acct) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Connect a LinkedIn account first." });
+      const res = await createPost(acct, input.text);
+      return { ok: true, id: res.id ?? res.social_id };
     }),
 });
 
