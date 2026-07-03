@@ -31,7 +31,7 @@ function unsubscribeFooterText(unsubscribeUrl: string): string {
   return `\n\n—\nUnsubscribe: ${unsubscribeUrl}`;
 }
 import { router } from "../_core/trpc";
-import { repProcedure, workspaceProcedure } from "../_core/workspace";
+import { adminWsProcedure, managerProcedure, repProcedure, roleRank, workspaceProcedure } from "../_core/workspace";
 
 /** Minimal HTML-escaper (duplicated from crm.ts — separate router). */
 function escapeHtml(s: string): string {
@@ -394,7 +394,26 @@ export const sequencesRouter = router({
   list: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
     if (!db) return [];
-    return db.select().from(sequences).where(eq(sequences.workspaceId, ctx.workspace.id)).orderBy(desc(sequences.updatedAt));
+    // Actual (non-template) sequences. Managers+ see all; reps see team-visible
+    // ones plus their own + ones assigned to them.
+    const rows = await db.select().from(sequences)
+      .where(and(eq(sequences.workspaceId, ctx.workspace.id), eq(sequences.isTemplate, false)))
+      .orderBy(desc(sequences.updatedAt));
+    if (roleRank(ctx.member.role) >= roleRank("manager")) return rows;
+    const me = ctx.user.id;
+    return rows.filter((s) => s.visibility === "team" || s.ownerUserId === me || s.assignedToUserId === me);
+  }),
+
+  /** The shared template library (admin-published master sequences reps fork). */
+  listTemplates: workspaceProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) return [];
+    const rows = await db.select().from(sequences)
+      .where(and(eq(sequences.workspaceId, ctx.workspace.id), eq(sequences.isTemplate, true)))
+      .orderBy(desc(sequences.updatedAt));
+    if (roleRank(ctx.member.role) >= roleRank("manager")) return rows;
+    const me = ctx.user.id;
+    return rows.filter((s) => s.visibility === "team" || s.ownerUserId === me);
   }),
 
   get: workspaceProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {
@@ -409,6 +428,81 @@ export const sequencesRouter = router({
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const r = await db.insert(sequences).values({ ...input, workspaceId: ctx.workspace.id, ownerUserId: ctx.user.id, status: "draft" });
     return { id: Number((r as any)[0]?.insertId ?? 0) };
+  }),
+
+  /** Admin publishes a sequence to the shared template library. */
+  publishAsTemplate: adminWsProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    await db.update(sequences).set({ isTemplate: true, visibility: "team" } as never)
+      .where(and(eq(sequences.id, input.id), eq(sequences.workspaceId, ctx.workspace.id)));
+    await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "publish_template", entityType: "sequence", entityId: input.id });
+    return { ok: true };
+  }),
+
+  /** Admin removes a sequence from the template library (back to a normal sequence). */
+  unpublishTemplate: adminWsProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    await db.update(sequences).set({ isTemplate: false } as never)
+      .where(and(eq(sequences.id, input.id), eq(sequences.workspaceId, ctx.workspace.id)));
+    return { ok: true };
+  }),
+
+  /** A rep forks a template into their OWN editable, private sequence. */
+  fork: repProcedure.input(z.object({ templateId: z.number(), name: z.string().optional() })).mutation(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    const [tpl] = await db.select().from(sequences).where(and(eq(sequences.id, input.templateId), eq(sequences.workspaceId, ctx.workspace.id)));
+    if (!tpl) throw new TRPCError({ code: "NOT_FOUND" });
+    const me = ctx.user.id;
+    const privileged = roleRank(ctx.member.role) >= roleRank("manager");
+    if (!tpl.isTemplate || !(tpl.visibility === "team" || tpl.ownerUserId === me || privileged)) {
+      throw new TRPCError({ code: "FORBIDDEN", message: "Template not available to fork" });
+    }
+    const r = await db.insert(sequences).values({
+      workspaceId: ctx.workspace.id,
+      name: input.name || `${tpl.name} (copy)`,
+      description: tpl.description,
+      status: "draft",
+      steps: tpl.steps,
+      enrollmentTrigger: tpl.enrollmentTrigger,
+      dailyCap: tpl.dailyCap,
+      ownerUserId: me,
+      exitConditions: tpl.exitConditions,
+      settings: tpl.settings,
+      isTemplate: false,
+      visibility: "private",
+      sourceTemplateId: tpl.id,
+    } as never);
+    const id = Number((r as any)[0]?.insertId ?? 0);
+    await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: me, action: "fork_template", entityType: "sequence", entityId: id, after: { sourceTemplateId: tpl.id } });
+    return { id };
+  }),
+
+  /** Manager/admin assigns a sequence or template to a specific rep. */
+  assign: managerProcedure.input(z.object({ id: z.number(), userId: z.number().nullable() })).mutation(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    await db.update(sequences).set({ assignedToUserId: input.userId } as never)
+      .where(and(eq(sequences.id, input.id), eq(sequences.workspaceId, ctx.workspace.id)));
+    await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "assign", entityType: "sequence", entityId: input.id, after: { assignedToUserId: input.userId } });
+    return { ok: true };
+  }),
+
+  /** Owner (or manager+) sets a sequence's visibility (private vs team-shared). */
+  setVisibility: repProcedure.input(z.object({ id: z.number(), visibility: z.enum(["private", "team"]) })).mutation(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    const [seq] = await db.select({ ownerUserId: sequences.ownerUserId }).from(sequences)
+      .where(and(eq(sequences.id, input.id), eq(sequences.workspaceId, ctx.workspace.id)));
+    if (!seq) throw new TRPCError({ code: "NOT_FOUND" });
+    if (seq.ownerUserId !== ctx.user.id && roleRank(ctx.member.role) < roleRank("manager")) {
+      throw new TRPCError({ code: "FORBIDDEN" });
+    }
+    await db.update(sequences).set({ visibility: input.visibility } as never)
+      .where(and(eq(sequences.id, input.id), eq(sequences.workspaceId, ctx.workspace.id)));
+    return { ok: true };
   }),
 
   // Strict allow-list of editable columns. Previously this accepted

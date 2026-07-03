@@ -2289,6 +2289,17 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  {
+    name: "0104_sequence_templates.sql",
+    statements: [
+      `ALTER TABLE \`sequences\` ADD COLUMN \`isTemplate\` boolean NOT NULL DEFAULT false`,
+      `ALTER TABLE \`sequences\` ADD COLUMN \`visibility\` ENUM('private','team') NOT NULL DEFAULT 'team'`,
+      `ALTER TABLE \`sequences\` ADD COLUMN \`sourceTemplateId\` int NULL`,
+      `ALTER TABLE \`sequences\` ADD COLUMN \`assignedToUserId\` int NULL`,
+      `ALTER TABLE \`sequences\` ADD INDEX \`ix_seq_template\` (\`workspaceId\`, \`isTemplate\`)`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

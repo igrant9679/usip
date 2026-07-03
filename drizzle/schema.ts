@@ -654,6 +654,11 @@ export const sequences = mysqlTable(
     enrolledCount: int("enrolledCount").default(0).notNull(),
     exitConditions: json("exitConditions"), // [{type:'reply'|'bounce'|'unsubscribe'|'goal_met'|'manual', enabled:boolean}]
     settings: json("settings"), // {timezone, sendWindowStart, sendWindowEnd, maxSteps, replyDetection, skipWeekends}
+    // ── Multi-user template library + sharing (Migration 0104) ──
+    isTemplate: boolean("isTemplate").default(false).notNull(),   // admin-published master template reps fork from
+    visibility: mysqlEnum("visibility", ["private", "team"]).default("team").notNull(),
+    sourceTemplateId: int("sourceTemplateId"),                    // provenance: forked from this template
+    assignedToUserId: int("assignedToUserId"),                    // the rep this sequence/template is assigned to
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
