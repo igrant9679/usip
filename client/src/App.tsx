@@ -60,6 +60,8 @@ import ConversationsV2 from "@/pages/usip/ConversationsV2";
 import DealsV2 from "@/pages/usip/DealsV2";
 import WorkflowsV2 from "@/pages/usip/WorkflowsV2";
 import AnalyticsV2 from "@/pages/usip/AnalyticsV2";
+import EmailsV2 from "@/pages/usip/EmailsV2";
+import SavedRecordsV2 from "@/pages/usip/SavedRecordsV2";
 import Team from "@/pages/usip/Team";
 import Territories from "@/pages/usip/Territories";
 import Workflows from "@/pages/usip/Workflows";
@@ -396,7 +398,7 @@ function Router() {
       <Route path="/v2/data-enrichment"><AuthGate><DataEnrichment /></AuthGate></Route>
       <Route path="/v2/sequences/:id"><AuthGate><SequenceEditor /></AuthGate></Route>
       <Route path="/v2/sequences"><AuthGate><SequencesV2 /></AuthGate></Route>
-      <Route path="/v2/emails"><AuthGate><Placeholder title="Emails" /></AuthGate></Route>
+      <Route path="/v2/emails"><AuthGate><EmailsV2 /></AuthGate></Route>
       <Route path="/v2/calls"><AuthGate><Calls /></AuthGate></Route>
       <Route path="/v2/tasks"><AuthGate><TasksV2 /></AuthGate></Route>
       <Route path="/v2/meetings"><AuthGate><MeetingsV2 /></AuthGate></Route>
@@ -406,8 +408,8 @@ function Router() {
       <Route path="/v2/analytics"><AuthGate><AnalyticsV2 /></AuthGate></Route>
       <Route path="/v2/website-visitors"><AuthGate><WebsiteVisitors /></AuthGate></Route>
       <Route path="/v2/forms"><AuthGate><Placeholder title="Forms" /></AuthGate></Route>
-      <Route path="/v2/saved-people"><AuthGate><Placeholder title="Saved · People" /></AuthGate></Route>
-      <Route path="/v2/saved-companies"><AuthGate><Placeholder title="Saved · Companies" /></AuthGate></Route>
+      <Route path="/v2/saved-people"><AuthGate><SavedRecordsV2 entityType="people" /></AuthGate></Route>
+      <Route path="/v2/saved-companies"><AuthGate><SavedRecordsV2 entityType="companies" /></AuthGate></Route>
       <Route path="/v2/deliverability"><AuthGate><Deliverability /></AuthGate></Route>
       <Route path="/help"><AuthGate><HelpCenter /></AuthGate></Route>
       <Route path="/tour-builder"><AuthGate><TourBuilder /></AuthGate></Route>
