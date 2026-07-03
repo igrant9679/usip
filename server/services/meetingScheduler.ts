@@ -128,8 +128,21 @@ Return: {
   try {
     const res = await invokeLLM({
       messages: [{ role: "user", content: prompt }],
-      response_format: { type: "json_object" },
-      max_tokens: 260,
+      // outputSchema forces valid JSON for Anthropic (see taskAutopilot note).
+      outputSchema: {
+        name: "meeting_proposal",
+        schema: {
+          type: "object",
+          properties: {
+            title: { type: "string" },
+            inviteMessage: { type: "string" },
+            reasoning: { type: "string" },
+            confidence: { type: "integer" },
+          },
+          required: ["title", "inviteMessage", "reasoning", "confidence"],
+        },
+      },
+      max_tokens: 400,
       workspaceId,
     });
     const parsed = JSON.parse(res.choices?.[0]?.message?.content ?? "{}");

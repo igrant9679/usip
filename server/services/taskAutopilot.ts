@@ -116,8 +116,25 @@ Return: {
     try {
       const res = await invokeLLM({
         messages: [{ role: "user", content: prompt }],
-        response_format: { type: "json_object" },
-        max_tokens: 180,
+        // outputSchema (not response_format) — the invokeLLM layer only forces
+        // valid JSON for Anthropic via the json_schema path; response_format
+        // json_object returns prose for Anthropic and JSON.parse would throw.
+        outputSchema: {
+          name: "next_action",
+          schema: {
+            type: "object",
+            properties: {
+              type: { type: "string", enum: [...ALLOWED_TYPES] },
+              title: { type: "string" },
+              priority: { type: "string", enum: [...ALLOWED_PRIORITIES] },
+              dueInDays: { type: "integer" },
+              reasoning: { type: "string" },
+              confidence: { type: "integer" },
+            },
+            required: ["type", "title", "priority", "dueInDays", "reasoning", "confidence"],
+          },
+        },
+        max_tokens: 300,
         workspaceId,
       });
       const parsed = JSON.parse(res.choices?.[0]?.message?.content ?? "{}");
