@@ -8,7 +8,7 @@
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
-import { emailReplies, workspaceSettings } from "../../drizzle/schema";
+import { emailReplies, unipileMessages, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { recordAudit } from "../audit";
 import { router } from "../_core/trpc";
@@ -127,6 +127,68 @@ export const conversationsRouter = router({
     if (reply.suggestedReply) return { body: reply.suggestedReply };
     const cls = await classifyReply(ctx.workspace.id, reply);
     return { body: cls?.suggestedReply ?? "" };
+  }),
+
+  // ─── Social channel (inbound LinkedIn/WhatsApp/… messages) ──────────────
+  // Same 8-class taxonomy as email, stored on unipile_messages (Migration
+  // 0106). Surfaced as a parallel feed so the Conversations page can show both
+  // Email and Social, and approval-mode social actions stay visible.
+  socialList: workspaceProcedure
+    .input(z.object({
+      filter: z.enum(["all", "unhandled", ...REPLY_CLASSES]).optional(),
+      unreadOnly: z.boolean().optional(),
+    }).optional())
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) return [];
+      const conds = [
+        eq(unipileMessages.workspaceId, ctx.workspace.id),
+        eq(unipileMessages.direction, "inbound"),
+      ];
+      const f = input?.filter;
+      if (f === "unhandled") conds.push(isNull(unipileMessages.handledAt));
+      else if (f && f !== "all") conds.push(eq(unipileMessages.replyClass, f));
+      if (input?.unreadOnly) conds.push(isNull(unipileMessages.readAt));
+      return db.select().from(unipileMessages)
+        .where(and(...conds))
+        .orderBy(desc(unipileMessages.createdAt))
+        .limit(300);
+    }),
+
+  socialStats: workspaceProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) return { total: 0, unhandled: 0, needsClassify: 0, willingToMeet: 0, meetingsProposed: 0 };
+    const [row] = await db.select({
+      total: sql<number>`count(*)`,
+      unhandled: sql<number>`sum(case when \`handledAt\` is null then 1 else 0 end)`,
+      needsClassify: sql<number>`sum(case when \`classifiedAt\` is null then 1 else 0 end)`,
+      willingToMeet: sql<number>`sum(case when \`replyClass\` = 'willing_to_meet' then 1 else 0 end)`,
+      meetingsProposed: sql<number>`sum(case when \`autoActionTaken\` = 'meeting_proposed' then 1 else 0 end)`,
+    }).from(unipileMessages)
+      .where(and(eq(unipileMessages.workspaceId, ctx.workspace.id), eq(unipileMessages.direction, "inbound")));
+    return {
+      total: Number(row?.total ?? 0),
+      unhandled: Number(row?.unhandled ?? 0),
+      needsClassify: Number(row?.needsClassify ?? 0),
+      willingToMeet: Number(row?.willingToMeet ?? 0),
+      meetingsProposed: Number(row?.meetingsProposed ?? 0),
+    };
+  }),
+
+  markSocialHandled: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    await db.update(unipileMessages).set({ handledAt: new Date(), readAt: new Date() } as never)
+      .where(and(eq(unipileMessages.id, input.id), eq(unipileMessages.workspaceId, ctx.workspace.id)));
+    return { ok: true };
+  }),
+
+  markSocialRead: repProcedure.input(z.object({ id: z.number(), read: z.boolean().default(true) })).mutation(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    await db.update(unipileMessages).set({ readAt: input.read ? new Date() : null } as never)
+      .where(and(eq(unipileMessages.id, input.id), eq(unipileMessages.workspaceId, ctx.workspace.id)));
+    return { ok: true };
   }),
 
   getAutopilotSettings: workspaceProcedure.query(async ({ ctx }) => {

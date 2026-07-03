@@ -25,7 +25,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import {
   MessageSquare, Inbox, Sparkles, Bot, Zap, Check, CheckCheck, CalendarClock, Mail,
-  Link2, CircleDot, Send, Copy,
+  Link2, CircleDot, Send, Copy, Share2,
 } from "lucide-react";
 
 type Reply = {
@@ -99,19 +99,50 @@ function ClassChip({ cls }: { cls?: string | null }) {
   return <span className={cn("rounded px-1.5 py-0.5 text-[10px] font-medium", meta.tone)}>{meta.label}</span>;
 }
 
+function normSocial(m: any): Reply {
+  return {
+    id: m.id,
+    fromEmail: m.senderProviderId || "",
+    fromName: m.senderName,
+    subject: (m.provider ? String(m.provider) : "linkedin").replace(/^\w/, (c: string) => c.toUpperCase()),
+    bodyText: m.text,
+    receivedAt: m.createdAt,
+    readAt: m.readAt,
+    contactId: m.linkedContactId,
+    leadId: m.linkedLeadId,
+    replyClass: m.replyClass,
+    sentiment: m.sentiment,
+    classConfidence: m.classConfidence,
+    classReasoning: m.classReasoning,
+    suggestedReply: null,
+    classifiedAt: m.classifiedAt,
+    autoActionTaken: m.autoActionTaken,
+    meetingId: m.meetingId,
+    handledAt: m.handledAt,
+  };
+}
+
 export default function ConversationsV2() {
   const accent = useAccentColor();
   const utils = trpc.useUtils();
+  const [channel, setChannel] = useState<"email" | "social">("email");
   const [filter, setFilter] = useState("all");
   const [selected, setSelected] = useState<Reply | null>(null);
+  const isEmail = channel === "email";
 
-  const list = trpc.conversations.list.useQuery({ filter: filter as any });
-  const stats = trpc.conversations.stats.useQuery();
+  const emailListQ = trpc.conversations.list.useQuery({ filter: filter as any }, { enabled: isEmail });
+  const socialListQ = trpc.conversations.socialList.useQuery({ filter: filter as any }, { enabled: !isEmail });
+  const emailStatsQ = trpc.conversations.stats.useQuery(undefined, { enabled: isEmail });
+  const socialStatsQ = trpc.conversations.socialStats.useQuery(undefined, { enabled: !isEmail });
+  const list = isEmail ? emailListQ : socialListQ;
+  const stats = isEmail ? emailStatsQ : socialStatsQ;
   const autopilot = trpc.conversations.getAutopilotSettings.useQuery();
 
   const invalidateAll = () => {
     utils.conversations.list.invalidate();
     utils.conversations.stats.invalidate();
+    utils.conversations.socialList.invalidate();
+    utils.conversations.socialStats.invalidate();
   };
 
   const setMode = trpc.conversations.setAutopilotSettings.useMutation({
@@ -124,7 +155,7 @@ export default function ConversationsV2() {
   });
 
   const mode = autopilot.data?.mode ?? "off";
-  const replies = (list.data ?? []) as Reply[];
+  const replies = isEmail ? ((list.data ?? []) as Reply[]) : ((list.data ?? []) as any[]).map(normSocial);
   const s = stats.data ?? { total: 0, unhandled: 0, needsClassify: 0, willingToMeet: 0, meetingsProposed: 0 };
 
   const StatCard = ({ label, value, tone }: { label: string; value: number; tone?: "good" | "ai" | "warn" }) => {
@@ -145,6 +176,15 @@ export default function ConversationsV2() {
           <span aria-hidden className="absolute inset-x-0 top-0 h-0.5" style={{ backgroundColor: accent }} />
           <MessageSquare className="size-4" style={{ color: accent }} />
           <h1 className="text-[15px] font-semibold tracking-tight">Conversations</h1>
+          <div className="ml-2 inline-flex rounded-md border bg-card p-0.5">
+            {(["email", "social"] as const).map((c) => (
+              <button key={c} onClick={() => { setChannel(c); setFilter("all"); setSelected(null); }}
+                className={cn("h-6 px-2.5 rounded text-[12px] font-medium capitalize flex items-center gap-1", channel === c ? "text-white" : "text-muted-foreground hover:text-foreground")}
+                style={channel === c ? { backgroundColor: accent } : undefined}>
+                {c === "email" ? <Mail className="size-3" /> : <Share2 className="size-3" />} {c}
+              </button>
+            ))}
+          </div>
           <div className="flex-1" />
           <div className="flex items-center gap-1.5">
             <Bot className="size-3.5 text-muted-foreground" />
@@ -157,9 +197,11 @@ export default function ConversationsV2() {
               </SelectContent>
             </Select>
           </div>
-          <Button variant="outline" size="sm" className="h-7 gap-1.5" disabled={classifyRecent.isPending} onClick={() => classifyRecent.mutate({ limit: 20 })}>
-            <Sparkles className="size-3.5" /> {classifyRecent.isPending ? "Classifying…" : "Classify with AI"}
-          </Button>
+          {isEmail && (
+            <Button variant="outline" size="sm" className="h-7 gap-1.5" disabled={classifyRecent.isPending} onClick={() => classifyRecent.mutate({ limit: 20 })}>
+              <Sparkles className="size-3.5" /> {classifyRecent.isPending ? "Classifying…" : "Classify with AI"}
+            </Button>
+          )}
         </div>
 
         <div className="flex-1 min-h-0 overflow-auto p-4 md:p-6 space-y-5">
@@ -217,7 +259,7 @@ export default function ConversationsV2() {
                     <button key={r.id} onClick={() => setSelected(r)}
                       className="w-full text-left flex items-center gap-3 px-3 py-2.5 border-b border-border/60 last:border-0 hover:bg-muted/40">
                       <span className="shrink-0 size-8 rounded-full flex items-center justify-center" style={{ backgroundColor: `${accent}1f`, color: accent }}>
-                        {unread ? <CircleDot className="size-4" /> : <Mail className="size-4" />}
+                        {unread ? <CircleDot className="size-4" /> : isEmail ? <Mail className="size-4" /> : <Share2 className="size-4" />}
                       </span>
                       <div className="min-w-0 flex-1">
                         <div className={cn("text-sm truncate flex items-center gap-1.5", unread ? "font-semibold" : "font-medium")}>
@@ -239,8 +281,65 @@ export default function ConversationsV2() {
         </div>
       </div>
 
-      <ReplyDialog key={selected?.id} reply={selected} onClose={() => setSelected(null)} onChanged={invalidateAll} />
+      {isEmail
+        ? <ReplyDialog key={selected?.id} reply={selected} onClose={() => setSelected(null)} onChanged={invalidateAll} />
+        : <SocialDialog key={selected?.id} reply={selected} onClose={() => setSelected(null)} onChanged={invalidateAll} />}
     </Shell>
+  );
+}
+
+/**
+ * Read-only-ish dialog for an inbound SOCIAL message. Classification + any
+ * auto-action already happened server-side (webhook → Conversation Autopilot),
+ * so this shows the AI verdict and lets the rep mark it read/handled. When a
+ * meeting was auto-proposed, a shortcut to the Meetings tab is offered.
+ */
+function SocialDialog({ reply, onClose, onChanged }: { reply: Reply | null; onClose: () => void; onChanged: () => void }) {
+  const markHandled = trpc.conversations.markSocialHandled.useMutation({
+    onSuccess: () => { onChanged(); toast.success("Marked handled"); onClose(); },
+    onError: (e) => toast.error(e.message),
+  });
+  if (!reply) return null;
+  return (
+    <Dialog open={!!reply} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="sm:max-w-xl">
+        <DialogHeader>
+          <DialogTitle className="truncate flex items-center gap-2"><Share2 className="size-4" style={{ color: "#0A66C2" }} /> {reply.fromName || "Social message"}</DialogTitle>
+          <DialogDescription>{reply.subject} · {fmtDate(reply.receivedAt)}</DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-3 max-h-[52vh] overflow-auto">
+          <div className="flex items-center gap-2 flex-wrap">
+            <ClassChip cls={reply.replyClass} />
+            {typeof reply.classConfidence === "number" && reply.classifiedAt && (
+              <span className="text-[11px] text-muted-foreground">{reply.classConfidence}% confidence</span>
+            )}
+            {reply.autoActionTaken && reply.autoActionTaken !== "none" && (
+              <span className="text-[11px] rounded px-1.5 py-0.5 bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">✓ {reply.autoActionTaken.replace(/_/g, " ")}</span>
+            )}
+          </div>
+          {reply.classReasoning && <p className="text-[12px] text-muted-foreground italic">{reply.classReasoning}</p>}
+          <div className="rounded-md border bg-muted/30 p-3 text-[13px] whitespace-pre-wrap max-h-52 overflow-auto">
+            {reply.bodyText || "(no message text)"}
+          </div>
+          {reply.meetingId && (
+            <Link href="/v2/meetings" className="inline-flex items-center gap-1.5 text-[12px] font-medium text-emerald-600 hover:underline">
+              <CalendarClock className="size-3.5" /> Meeting auto-proposed — open Meetings
+            </Link>
+          )}
+        </div>
+
+        <DialogFooter className="flex-wrap gap-2">
+          {recordHref(reply) && (
+            <Link href={recordHref(reply)!}><Button variant="outline"><Link2 className="size-3.5 mr-1.5" /> Open record</Button></Link>
+          )}
+          <div className="flex-1" />
+          <Button disabled={markHandled.isPending} onClick={() => markHandled.mutate({ id: reply.id })}>
+            <CheckCheck className="size-3.5 mr-1.5" /> Mark handled
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
