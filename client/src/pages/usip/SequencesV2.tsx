@@ -11,6 +11,7 @@ import { useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
 import { useAuth } from "@/_core/hooks/useAuth";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -111,6 +112,7 @@ export default function SequencesV2() {
   const [, setLocation] = useLocation();
   const accent = useAccentColor();
   const { user } = useAuth();
+  const { current } = useWorkspace();
   const utils = trpc.useUtils();
 
   const { data, isLoading } = trpc.sequences.list.useQuery();
@@ -126,7 +128,7 @@ export default function SequencesV2() {
   // ── Team template library (multi-user): admins publish, reps fork ──
   const templatesQ = trpc.sequences.listTemplates.useQuery();
   const workspaceTemplates = (templatesQ.data ?? []) as Sequence[];
-  const isAdmin = user?.role === "admin" || user?.role === "super_admin";
+  const isAdmin = current?.role === "admin" || current?.role === "super_admin";
   const forkMut = trpc.sequences.fork.useMutation({
     onSuccess: (res: any) => { utils.sequences.list.invalidate(); setChoiceOpen(false); setTplOpen(false); if (res?.id) setLocation(`/v2/sequences/${res.id}`); },
     onError: (e) => toast.error(e.message),
