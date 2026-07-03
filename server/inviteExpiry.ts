@@ -16,7 +16,7 @@
 import { and, eq, gt, isNotNull, lte } from "drizzle-orm";
 import { getDb } from "./db";
 import { loginHistory, users, workspaceMembers, workspaces } from "../drizzle/schema";
-import { sendWorkspaceEmail } from "./emailDelivery";
+import { sendSystemEmail } from "./emailDelivery";
 
 export async function expireInvitations(): Promise<void> {
   const db = await getDb();
@@ -104,7 +104,7 @@ export async function sendExpiryWarningEmails(): Promise<void> {
       : appOrigin;
 
     try {
-      const result = await sendWorkspaceEmail(member.workspaceId, {
+      const result = await sendSystemEmail(member.workspaceId, {
         to: member.userEmail,
         subject: `Your invitation to ${workspaceName} expires in ${hoursLeft} hour${hoursLeft === 1 ? "" : "s"}`,
         html: `

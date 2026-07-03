@@ -365,9 +365,9 @@ export const teamRouter = router({
       // unless the admin opted to only generate a shareable link.
       if (input.sendEmail) {
        try {
-        const { sendWorkspaceEmail } = await import("../emailDelivery");
+        const { sendSystemEmail } = await import("../emailDelivery");
         const recipientName = input.name ?? input.email.split("@")[0];
-        await sendWorkspaceEmail(ctx.workspace.id, {
+        await sendSystemEmail(ctx.workspace.id, {
           to: input.email,
           subject: `You've been invited to join ${ctx.workspace.name}`,
           html: `
@@ -857,11 +857,11 @@ export const teamRouter = router({
       }
       // Resend invitation email via workspace SMTP (Email Delivery settings)
       try {
-        const { sendWorkspaceEmail } = await import("../emailDelivery");
+        const { sendSystemEmail } = await import("../emailDelivery");
         const appOrigin = input.origin ?? process.env.VITE_OAUTH_PORTAL_URL ?? "https://manus.im";
         const resendUrl = `${appOrigin}/invite/accept?token=${newToken}`;
         const recipientName = row.name ?? row.email?.split("@")[0];
-        await sendWorkspaceEmail(ctx.workspace.id, {
+        await sendSystemEmail(ctx.workspace.id, {
           to: row.email!,
           subject: `Reminder: You've been invited to join ${ctx.workspace.name}`,
           html: `
@@ -946,11 +946,11 @@ export const teamRouter = router({
         .where(eq(workspaceMembers.id, input.memberId));
       // Send password-setup email
       try {
-        const { sendWorkspaceEmail } = await import("../emailDelivery");
+        const { sendSystemEmail } = await import("../emailDelivery");
         const appOrigin = input.origin ?? process.env.MANUS_APP_URL ?? process.env.VITE_OAUTH_PORTAL_URL ?? "https://manus.im";
         const setupUrl = `${appOrigin}/invite/accept?token=${newToken}`;
         const recipientName = row.name ?? row.email?.split("@")[0];
-        await sendWorkspaceEmail(ctx.workspace.id, {
+        await sendSystemEmail(ctx.workspace.id, {
           to: row.email!,
           subject: `Action required: Set your password for ${ctx.workspace.name}`,
           html: `

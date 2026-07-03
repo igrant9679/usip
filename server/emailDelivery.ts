@@ -17,8 +17,8 @@
  *   if (!result.ok) console.warn("Email not sent:", result.reason);
  */
 
-import { eq } from "drizzle-orm";
-import { smtpConfigs } from "../drizzle/schema";
+import { and, eq } from "drizzle-orm";
+import { sendingAccounts, smtpConfigs, workspaceSettings } from "../drizzle/schema";
 import { getDb } from "./db";
 import { buildTransporter, decrypt } from "./routers/smtpConfig";
 
@@ -92,5 +92,65 @@ export async function sendWorkspaceEmail(
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     return { ok: false, reason: `SMTP send failed: ${msg}` };
+  }
+}
+
+/**
+ * Send a SYSTEM / notification email (team invitations, invite-expiry warnings,
+ * internal alerts) from the workspace's DEDICATED system sender account
+ * (workspace_settings.systemSenderAccountId) when configured — so these are
+ * never sent from a rep's own Outlook/sending account. Multi-user requirement.
+ *
+ * Falls back to the SMTP Email-Delivery config (sendWorkspaceEmail) when no
+ * system sender is set or the account send fails — preserving prior behavior.
+ * Non-fatal on failure.
+ */
+export async function sendSystemEmail(
+  workspaceId: number,
+  opts: SendEmailOptions,
+): Promise<SendEmailResult> {
+  try {
+    const db = await getDb();
+    if (!db) return { ok: false, reason: "DB unavailable" };
+
+    const [ws] = await db
+      .select({ systemSenderAccountId: workspaceSettings.systemSenderAccountId })
+      .from(workspaceSettings)
+      .where(eq(workspaceSettings.workspaceId, workspaceId));
+
+    if (ws?.systemSenderAccountId) {
+      const [account] = await db
+        .select()
+        .from(sendingAccounts)
+        .where(and(
+          eq(sendingAccounts.id, ws.systemSenderAccountId),
+          eq(sendingAccounts.workspaceId, workspaceId),
+          eq(sendingAccounts.enabled, true),
+        ));
+      if (account) {
+        try {
+          const { createEmailAdapter } = await import("./emailAdapter");
+          const adapter = createEmailAdapter(account as any);
+          await adapter.sendEmail({
+            to: Array.isArray(opts.to) ? opts.to[0] : opts.to,
+            subject: opts.subject,
+            bodyHtml: opts.html,
+            bodyText: opts.text,
+            fromEmail: (account as any).fromEmail,
+            fromName: (account as any).fromName ?? undefined,
+          } as any);
+          return { ok: true };
+        } catch (e) {
+          // System-account send failed — fall through to the SMTP fallback below.
+          console.error(`[sendSystemEmail] system sender account failed (ws ${workspaceId}):`, e instanceof Error ? e.message : String(e));
+        }
+      }
+    }
+
+    // No system sender configured (or it failed) — use the SMTP Email-Delivery config.
+    return await sendWorkspaceEmail(workspaceId, opts);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { ok: false, reason: `System email failed: ${msg}` };
   }
 }
