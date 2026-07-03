@@ -1356,6 +1356,12 @@ export const workspaceSettings = mysqlTable("workspace_settings", {
   meetingAutopilotMode: mysqlEnum("meetingAutopilotMode", ["off", "approval", "auto"]).default("off").notNull(),
   meetingAutopilotDailyCap: int("meetingAutopilotDailyCap").default(10).notNull(),
   meetingAutopilotLastRunAt: timestamp("meetingAutopilotLastRunAt"),
+  // ── Conversation Autopilot (Migration 0101) — autonomous reply handling ──
+  // off = never; approval = AI classifies replies + suggests actions for review;
+  // auto = AI classifies AND executes actions (propose meeting / task / suppress).
+  conversationAutopilotMode: mysqlEnum("conversationAutopilotMode", ["off", "approval", "auto"]).default("off").notNull(),
+  conversationAutopilotDailyCap: int("conversationAutopilotDailyCap").default(100).notNull(),
+  conversationAutopilotLastRunAt: timestamp("conversationAutopilotLastRunAt"),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
 export type WorkspaceSettings = typeof workspaceSettings.$inferSelect;
@@ -2417,6 +2423,18 @@ export const emailReplies = mysqlTable(
     gmailMessageId: varchar("gmailMessageId", { length: 200 }),
     receivedAt: timestamp("receivedAt").notNull(),
     readAt: timestamp("readAt"),
+    // ── AI reply classification + autonomous handling (Migration 0101) ──
+    // replyClass = the 8-class taxonomy from the email-activity spec.
+    replyClass: varchar("replyClass", { length: 48 }), // willing_to_meet|follow_up_question|person_referral|out_of_office|already_left_company_or_not_right_person|not_interested|unsubscribe|none_of_the_above
+    sentiment: varchar("sentiment", { length: 16 }),   // positive|neutral|negative|objection
+    classConfidence: int("classConfidence"),
+    classReasoning: text("classReasoning"),
+    suggestedReply: text("suggestedReply"),            // AI-drafted reply body (approval mode)
+    classifiedAt: timestamp("classifiedAt"),
+    autoActionTaken: varchar("autoActionTaken", { length: 48 }), // meeting_proposed|task_created|suppressed|ooo_noted|marked|none
+    meetingId: int("meetingId"),                       // link to the meetings row a positive reply created
+    handledAt: timestamp("handledAt"),
+    handledBy: varchar("handledBy", { length: 16 }),   // ai|user
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
   (t) => ({

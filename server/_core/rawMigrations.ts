@@ -2218,6 +2218,28 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  {
+    name: "0101_reply_classification.sql",
+    statements: [
+      // ── AI reply classification + autonomous handling on email_replies ──
+      `ALTER TABLE \`email_replies\` ADD COLUMN \`replyClass\` varchar(48) NULL`,
+      `ALTER TABLE \`email_replies\` ADD COLUMN \`sentiment\` varchar(16) NULL`,
+      `ALTER TABLE \`email_replies\` ADD COLUMN \`classConfidence\` int NULL`,
+      `ALTER TABLE \`email_replies\` ADD COLUMN \`classReasoning\` text NULL`,
+      `ALTER TABLE \`email_replies\` ADD COLUMN \`suggestedReply\` text NULL`,
+      `ALTER TABLE \`email_replies\` ADD COLUMN \`classifiedAt\` timestamp NULL`,
+      `ALTER TABLE \`email_replies\` ADD COLUMN \`autoActionTaken\` varchar(48) NULL`,
+      `ALTER TABLE \`email_replies\` ADD COLUMN \`meetingId\` int NULL`,
+      `ALTER TABLE \`email_replies\` ADD COLUMN \`handledAt\` timestamp NULL`,
+      `ALTER TABLE \`email_replies\` ADD COLUMN \`handledBy\` varchar(16) NULL`,
+      `ALTER TABLE \`email_replies\` ADD INDEX \`ix_er_class\` (\`workspaceId\`, \`replyClass\`)`,
+      // ── Conversation Autopilot config ──
+      `ALTER TABLE \`workspace_settings\` ADD COLUMN \`conversationAutopilotMode\` ENUM('off','approval','auto') NOT NULL DEFAULT 'off'`,
+      `ALTER TABLE \`workspace_settings\` ADD COLUMN \`conversationAutopilotDailyCap\` int NOT NULL DEFAULT 100`,
+      `ALTER TABLE \`workspace_settings\` ADD COLUMN \`conversationAutopilotLastRunAt\` timestamp NULL`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

@@ -67,17 +67,29 @@ interface ProspectLike {
   email?: string | null;
 }
 
-/** Draft + persist a proposed meeting for one prospect. Returns the new meeting id (or null). */
-export async function proposeMeetingForProspect(
-  workspaceId: number,
-  prospect: ProspectLike,
-  ownerUserId: number | null,
-  source: "manual" | "ai" | "are" | "inbound" = "ai",
-): Promise<number | null> {
+export interface MeetingTarget {
+  ownerUserId: number | null;
+  relatedType?: string | null;   // "prospect" | "contact" | "lead" | ...
+  relatedId?: number | null;
+  name: string;                  // attendee name
+  firstName?: string;
+  email?: string | null;
+  company?: string | null;
+  descriptor?: string;           // extra context for the LLM (title/industry/reply gist)
+  source?: "manual" | "ai" | "are" | "inbound";
+}
+
+/**
+ * Draft + persist a proposed meeting for any target (prospect, contact, or an
+ * inbound reply's sender). Computes real open slots from the owner's calendar,
+ * asks the LLM to draft a title + invite, inserts a `meetings` row. Returns id.
+ */
+export async function createMeetingProposal(workspaceId: number, target: MeetingTarget): Promise<number | null> {
   const db = await getDb();
   if (!db) return null;
 
   const durationMin = 30;
+  const ownerUserId = target.ownerUserId ?? null;
   let busy: { startAt: Date | string | null; endAt: Date | string | null }[] = [];
   if (ownerUserId) {
     const from = new Date();
@@ -93,12 +105,12 @@ export async function proposeMeetingForProspect(
       ));
   }
   const slots = computeSlots(busy, 3, durationMin);
-  const name = `${prospect.firstName} ${prospect.lastName}`.trim();
+  const name = target.name || "there";
+  const firstName = target.firstName || name.split(" ")[0] || "there";
 
   const prompt = `You are an autonomous SDR booking an intro sales meeting. Draft a concise, friendly meeting proposal. Return JSON only.
 
-Prospect: ${name}, ${prospect.title ?? "unknown title"} at ${prospect.company ?? "their company"}
-Industry: ${prospect.industry ?? "unknown"}
+Attendee: ${name}${target.descriptor ? ` — ${target.descriptor}` : ""}${target.company ? ` at ${target.company}` : ""}
 Duration: ${durationMin} minutes
 Candidate times (already chosen — reference them, do not invent new ones): ${slots.map((s) => new Date(s).toLocaleString()).join("; ") || "to be proposed"}
 
@@ -110,7 +122,7 @@ Return: {
 }`;
 
   let title = `Intro meeting — ${name}`;
-  let inviteMessage = `Hi ${prospect.firstName}, I'd love to set up a quick ${durationMin}-minute intro. Would any of these times work?`;
+  let inviteMessage = `Hi ${firstName}, I'd love to set up a quick ${durationMin}-minute intro. Would any of these times work?`;
   let reasoning = "";
   let confidence = 60;
   try {
@@ -126,32 +138,52 @@ Return: {
     reasoning = String(parsed.reasoning ?? "").slice(0, 500);
     confidence = Math.max(0, Math.min(100, Math.round(Number(parsed.confidence ?? 60)) || 60));
   } catch (e) {
-    console.error(`[MeetingScheduler] LLM draft failed for prospect ${prospect.id}:`, e);
+    console.error(`[MeetingScheduler] LLM draft failed for ${target.relatedType ?? "target"} ${target.relatedId ?? "?"}:`, e);
   }
 
   try {
     const ins = await db.insert(meetings).values({
       workspaceId,
-      ownerUserId: ownerUserId ?? null,
-      relatedType: "prospect",
-      relatedId: prospect.id,
+      ownerUserId,
+      relatedType: target.relatedType ?? null,
+      relatedId: target.relatedId ?? null,
       contactName: name,
-      contactEmail: prospect.email ?? null,
-      company: prospect.company ?? null,
+      contactEmail: target.email ?? null,
+      company: target.company ?? null,
       title,
       status: "proposed",
       proposedTimes: slots,
       durationMin,
       inviteMessage,
-      source,
+      source: target.source ?? "ai",
       aiReasoning: reasoning || null,
       aiConfidence: confidence,
     } as never);
     return Number((ins as any)[0]?.insertId ?? 0) || null;
   } catch (e) {
-    console.error(`[MeetingScheduler] insert failed for prospect ${prospect.id}:`, e);
+    console.error(`[MeetingScheduler] insert failed:`, e);
     return null;
   }
+}
+
+/** Draft + persist a proposed meeting for one prospect. Returns the new meeting id (or null). */
+export async function proposeMeetingForProspect(
+  workspaceId: number,
+  prospect: ProspectLike,
+  ownerUserId: number | null,
+  source: "manual" | "ai" | "are" | "inbound" = "ai",
+): Promise<number | null> {
+  return createMeetingProposal(workspaceId, {
+    ownerUserId,
+    relatedType: "prospect",
+    relatedId: prospect.id,
+    name: `${prospect.firstName} ${prospect.lastName}`.trim(),
+    firstName: prospect.firstName,
+    email: prospect.email,
+    company: prospect.company,
+    descriptor: `${prospect.title ?? "unknown title"}${prospect.industry ? `, industry ${prospect.industry}` : ""}`,
+    source,
+  });
 }
 
 export interface SendInviteResult { sent: boolean; scheduledAt: string | null; reason?: string }

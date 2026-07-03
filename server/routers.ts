@@ -35,6 +35,7 @@ import { sendingAccountsRouter, senderPoolsRouter } from "./routers/sendingAccou
 import { mailboxRouter } from "./routers/mailbox";
 import { calendarRouter } from "./routers/calendar";
 import { meetingsRouter } from "./routers/meetings";
+import { conversationsRouter } from "./routers/conversations";
 import { proposalsRouter } from "./routers/proposals";
 import { unipileRouter } from "./routers/unipile";
 import { areRouter } from "./routers/are";
@@ -78,6 +79,7 @@ export const appRouter = router({
   products: productsRouter,
   tasks: tasksRouter,
   meetings: meetingsRouter,
+  conversations: conversationsRouter,
   activities: activitiesRouter,
   attachments: attachmentsRouter,
   crmNotes: crmNotesRouter,
