@@ -28,6 +28,7 @@ import {
   Star, UserCircle2, Tag, Activity, BarChart3, Folder, Share2, X,
   MoreHorizontal, ExternalLink, Layers, Users, Sparkles, BookOpen, PenLine,
 } from "lucide-react";
+import { toast } from "sonner";
 
 const AI_STEPS = [
   { type: "email", subject: "Quick question, {{first_name}}", body: "Hi {{first_name}},\n\nNoticed {{company}} is scaling — wanted to share how teams like yours speed up pipeline. Worth a quick chat?\n\nBest," },
@@ -59,6 +60,11 @@ type Sequence = {
   ownerUserId?: number | null;
   updatedAt?: string | Date | null;
   createdAt?: string | Date | null;
+  description?: string | null;
+  isTemplate?: boolean | null;
+  visibility?: string | null;
+  sourceTemplateId?: number | null;
+  assignedToUserId?: number | null;
 };
 
 function fmtWhen(d?: string | Date | null): string {
@@ -115,6 +121,22 @@ export default function SequencesV2() {
       setChoiceOpen(false); setTplOpen(false); setCreateOpen(false); setNewName(""); setNewDesc("");
       if (res?.id) setLocation(`/v2/sequences/${res.id}`);
     },
+  });
+
+  // ── Team template library (multi-user): admins publish, reps fork ──
+  const templatesQ = trpc.sequences.listTemplates.useQuery();
+  const workspaceTemplates = (templatesQ.data ?? []) as Sequence[];
+  const isAdmin = user?.role === "admin" || user?.role === "super_admin";
+  const forkMut = trpc.sequences.fork.useMutation({
+    onSuccess: (res: any) => { utils.sequences.list.invalidate(); setChoiceOpen(false); setTplOpen(false); if (res?.id) setLocation(`/v2/sequences/${res.id}`); },
+    onError: (e) => toast.error(e.message),
+  });
+  const publishMut = trpc.sequences.publishAsTemplate.useMutation({
+    onSuccess: () => { utils.sequences.list.invalidate(); utils.sequences.listTemplates.invalidate(); toast.success("Published to the team template library"); },
+    onError: (e) => toast.error(e.message.includes("FORBIDDEN") ? "Only admins can publish templates" : e.message),
+  });
+  const unpublishMut = trpc.sequences.unpublishTemplate.useMutation({
+    onSuccess: () => { utils.sequences.list.invalidate(); utils.sequences.listTemplates.invalidate(); toast.success("Removed from templates"); },
   });
 
   const [tab, setTab] = useState<Tab>("All Sequences");
@@ -283,7 +305,10 @@ export default function SequencesV2() {
                           <td className="px-2 py-1.5 text-right" onClick={(e) => e.stopPropagation()}>
                             <DropdownMenu>
                               <DropdownMenuTrigger asChild><Button variant="ghost" size="icon-sm"><MoreHorizontal className="size-4" /></Button></DropdownMenuTrigger>
-                              <DropdownMenuContent align="end"><DropdownMenuItem onClick={() => setLocation(`/v2/sequences/${s.id}`)}><ExternalLink className="size-4 mr-2" /> Open in builder</DropdownMenuItem></DropdownMenuContent>
+                              <DropdownMenuContent align="end">
+                                <DropdownMenuItem onClick={() => setLocation(`/v2/sequences/${s.id}`)}><ExternalLink className="size-4 mr-2" /> Open in builder</DropdownMenuItem>
+                                {isAdmin && <DropdownMenuItem onClick={() => publishMut.mutate({ id: s.id })}><BookOpen className="size-4 mr-2" /> Publish as team template</DropdownMenuItem>}
+                              </DropdownMenuContent>
                             </DropdownMenu>
                           </td>
                         </tr>
@@ -358,6 +383,26 @@ export default function SequencesV2() {
         <DialogContent className="sm:max-w-2xl">
           <DialogHeader><DialogTitle>Sequence templates</DialogTitle></DialogHeader>
           <p className="text-sm text-muted-foreground -mt-1">Leverage automation in your outreach so you can focus on building relationships.</p>
+
+          {/* Team template library — admin-published, reps fork into their own copy */}
+          {workspaceTemplates.length > 0 && (
+            <div className="space-y-2">
+              <div className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-1.5"><Share2 className="size-3" /> Your team's templates</div>
+              <div className="grid sm:grid-cols-3 gap-3">
+                {workspaceTemplates.map((t) => (
+                  <div key={t.id} className="rounded-xl border p-3 flex flex-col" style={{ borderColor: `${accent}55` }}>
+                    <div className="text-[13px] font-semibold truncate" title={t.name}>{t.name}</div>
+                    <p className="text-[11px] text-muted-foreground mt-1 flex-1 line-clamp-2">{t.description || "Shared team template"}</p>
+                    <div className="text-[10px] text-muted-foreground mt-2">{t.steps?.length ?? 0} steps · shared</div>
+                    <Button size="sm" className="mt-2 h-7" style={{ backgroundColor: accent }} disabled={forkMut.isPending} onClick={() => forkMut.mutate({ templateId: t.id })}>Use template</Button>
+                    {isAdmin && <button className="text-[10px] text-muted-foreground hover:text-foreground mt-1.5" onClick={() => unpublishMut.mutate({ id: t.id })}>Remove from templates</button>}
+                  </div>
+                ))}
+              </div>
+              <div className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide pt-1">Starter templates</div>
+            </div>
+          )}
+
           <div className="grid sm:grid-cols-3 gap-3 py-2">
             {TEMPLATES.map((t) => (
               <div key={t.name} className="rounded-xl border p-3 flex flex-col">
