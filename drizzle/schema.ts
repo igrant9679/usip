@@ -4801,3 +4801,37 @@ export const companyLogoAssets = mysqlTable(
   }),
 );
 export type CompanyLogoAsset = typeof companyLogoAssets.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Website visitor tracking (Migration 0108)
+
+   First-party page-view tracking. A tiny script (served at /v/track.js) posts
+   page views to /api/track with the workspace slug as the public key. Visits
+   carrying a `vid` param (a lead/contact id embedded in tracked outbound links)
+   are attributed to a KNOWN prospect — the honest, provider-free half of the
+   "website visitors" surface. High-intent known visits (pricing/demo pages)
+   fire an autonomous follow-up task. (Anonymous IP→company de-anonymization
+   would require a paid IP-intelligence provider and is intentionally NOT faked.)
+   ────────────────────────────────────────────────────────────────────────── */
+export const websiteVisits = mysqlTable(
+  "website_visits",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    visitorId: varchar("visitorId", { length: 64 }).notNull(),
+    path: varchar("path", { length: 1000 }).notNull(),
+    referrer: varchar("referrer", { length: 1000 }),
+    contactId: int("contactId"),
+    leadId: int("leadId"),
+    intent: varchar("intent", { length: 16 }), // low | medium | high
+    userAgent: varchar("userAgent", { length: 500 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    byWs: index("ix_wv_ws").on(t.workspaceId, t.createdAt),
+    byVisitor: index("ix_wv_visitor").on(t.visitorId),
+    byContact: index("ix_wv_contact").on(t.contactId),
+    byLead: index("ix_wv_lead").on(t.leadId),
+  }),
+);
+export type WebsiteVisit = typeof websiteVisits.$inferSelect;

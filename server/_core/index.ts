@@ -57,6 +57,7 @@ import { registerEmailTrackingRoutes } from "../emailTracking";
 import { startInboundReplyPoller } from "../inboundReplyPoller";
 import { expireInvitations, sendExpiryWarningEmails } from "../inviteExpiry";
 import { registerUnipileWebhookRoutes } from "../unipileWebhook";
+import { registerWebsiteTrackingRoutes } from "../websiteTracking";
 import { registerUnsubscribeRoute } from "../unsubscribe";
 import { registerPasswordAuthRoutes } from "../passwordAuth";
 import { registerLLMStreamRoutes } from "../llmStreamRoute";
@@ -98,6 +99,7 @@ async function startServer() {
   registerOAuthRoutes(app);
   registerScimRoutes(app);
   registerEmailTrackingRoutes(app);
+  registerWebsiteTrackingRoutes(app);
   registerUnipileWebhookRoutes(app);
   registerUnsubscribeRoute(app);
   registerPasswordAuthRoutes(app);

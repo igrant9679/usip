@@ -174,7 +174,7 @@ export async function handleNewRelation(payload: NewRelationPayload): Promise<st
       workspaceId,
       title: `Send LinkedIn opener to ${name} (connection accepted)`,
       description: opener,
-      type: "linkedin_dm",
+      type: "social_touch",
       priority: "high",
       status: "open",
       dueAt: new Date(Date.now() + 86400000),
@@ -207,8 +207,8 @@ export async function handleNewRelation(payload: NewRelationPayload): Promise<st
       workspaceId,
       title: `Send LinkedIn opener to ${name} (daily auto-cap reached)`,
       description: opener,
-      type: "linkedin_dm",
-      priority: "medium",
+      type: "social_touch",
+      priority: "normal",
       status: "open",
       dueAt: new Date(Date.now() + 86400000),
       ownerUserId,
@@ -242,7 +242,7 @@ export async function handleNewRelation(payload: NewRelationPayload): Promise<st
       workspaceId,
       title: `Send LinkedIn opener to ${name} (auto-send failed)`,
       description: opener,
-      type: "linkedin_dm",
+      type: "social_touch",
       priority: "high",
       status: "open",
       dueAt: new Date(Date.now() + 86400000),
@@ -377,7 +377,7 @@ export async function runSocialAutopilotInvitesForWorkspace(
     if (mode === "approval") {
       await db.insert(tasks).values({
         workspaceId, title: `Send LinkedIn invite to ${name}`, description: url,
-        type: "linkedin_invite", priority: "medium", status: "open",
+        type: "social_touch", priority: "normal", status: "open",
         dueAt: new Date(Date.now() + 86400000), ownerUserId: lead.ownerUserId ?? null,
         relatedType: "lead", relatedId: lead.id, source: "ai",
       } as never);

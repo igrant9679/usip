@@ -2331,6 +2331,29 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  {
+    name: "0108_website_visits.sql",
+    statements: [
+      `CREATE TABLE IF NOT EXISTS \`website_visits\` (
+        \`id\` int NOT NULL AUTO_INCREMENT,
+        \`workspaceId\` int NOT NULL,
+        \`visitorId\` varchar(64) NOT NULL,
+        \`path\` varchar(1000) NOT NULL,
+        \`referrer\` varchar(1000) NULL,
+        \`contactId\` int NULL,
+        \`leadId\` int NULL,
+        \`intent\` varchar(16) NULL,
+        \`userAgent\` varchar(500) NULL,
+        \`createdAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (\`id\`),
+        KEY \`ix_wv_ws\` (\`workspaceId\`, \`createdAt\`),
+        KEY \`ix_wv_visitor\` (\`visitorId\`),
+        KEY \`ix_wv_contact\` (\`contactId\`),
+        KEY \`ix_wv_lead\` (\`leadId\`)
+      )`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------
