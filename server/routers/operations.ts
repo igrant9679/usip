@@ -39,6 +39,11 @@ import { router } from "../_core/trpc";
 import { adminWsProcedure, managerProcedure, repProcedure, workspaceProcedure } from "../_core/workspace";
 import { storagePut } from "../storage";
 import { buildTransporter, decrypt } from "./smtpConfig";
+import { evalConditions, executeRuleActions } from "../services/workflowEngine";
+
+// Re-exported for backward-compatible importers (leadScoring, tests) — the
+// canonical definition now lives in services/workflowEngine (no import cycle).
+export { evalConditions };
 
 /* ----- Standalone async helpers (exported for nightly batch) ----- */
 
@@ -140,27 +145,6 @@ export function computeQuoteTotals(
   return { subtotal, discount, total };
 }
 
-export function evalConditions(
-  spec: { all?: Array<{ field: string; op: string; value: any }>; any?: Array<{ field: string; op: string; value: any }> },
-  payload: Record<string, any>,
-): boolean {
-  const cmp = (op: string, a: any, b: any) => {
-    switch (op) {
-      case "eq": return a === b;
-      case "neq": return a !== b;
-      case "gt": return Number(a) > Number(b);
-      case "gte": return Number(a) >= Number(b);
-      case "lt": return Number(a) < Number(b);
-      case "lte": return Number(a) <= Number(b);
-      case "contains": return String(a ?? "").toLowerCase().includes(String(b).toLowerCase());
-      default: return false;
-    }
-  };
-  if (spec.all && !spec.all.every((c) => cmp(c.op, payload[c.field], c.value))) return false;
-  if (spec.any && !spec.any.some((c) => cmp(c.op, payload[c.field], c.value))) return false;
-  return true;
-}
-
 export function canLaunchCampaign(checklist: Array<{ done: boolean; label: string }>): boolean {
   return checklist.every((x) => x.done);
 }
@@ -230,71 +214,18 @@ export const workflowsRouter = router({
     return rows;
   }),
 
-  /** Manually fire a rule for demo / testing — executes real webhook actions. */
+  /** Manually fire a rule for demo / testing — executes ALL real actions. */
   testFire: workspaceProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const [rule] = await db.select().from(workflowRules).where(and(eq(workflowRules.id, input.id), eq(workflowRules.workspaceId, ctx.workspace.id)));
     if (!rule) throw new TRPCError({ code: "NOT_FOUND" });
-    const actions = Array.isArray(rule.actions) ? rule.actions as Array<{ type: string; params: Record<string, any> }> : [];
-    const errors: string[] = [];
-    // Load workspace settings once for Slack/Teams webhook URLs
-    const [wsSettings] = await db.select({ slackWebhookUrl: workspaceSettings.slackWebhookUrl, teamsWebhookUrl: workspaceSettings.teamsWebhookUrl }).from(workspaceSettings).where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
-    for (const action of actions) {
-      if (action.type === "webhook") {
-        const url = action.params?.url;
-        if (url) {
-          try {
-            const body = action.params?.body ? JSON.stringify(action.params.body) : JSON.stringify({ event: "workflow_fired", ruleId: rule.id, ruleName: rule.name, firedAt: new Date().toISOString() });
-            const resp = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", ...(action.params?.headers ?? {}) }, body, signal: AbortSignal.timeout(10_000) });
-            if (!resp.ok) errors.push(`Webhook ${url} returned ${resp.status}`);
-          } catch (e: any) {
-            errors.push(`Webhook ${url} failed: ${e?.message ?? "unknown error"}`);
-          }
-        }
-      } else if (action.type === "post_slack") {
-        const webhookUrl = wsSettings?.slackWebhookUrl;
-        if (!webhookUrl) {
-          errors.push("post_slack: No Slack webhook URL configured in workspace settings");
-        } else {
-          const message = action.params?.message ?? `Workflow rule fired: ${rule.name}`;
-          const channel = action.params?.channel;
-          const payload: Record<string, any> = { text: message };
-          if (channel) payload.channel = channel;
-          try {
-            const resp = await fetch(webhookUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), signal: AbortSignal.timeout(10_000) });
-            if (!resp.ok) errors.push(`Slack webhook returned ${resp.status}`);
-          } catch (e: any) {
-            errors.push(`Slack webhook failed: ${e?.message ?? "unknown error"}`);
-          }
-        }
-      } else if (action.type === "notify_teams") {
-        const webhookUrl = wsSettings?.teamsWebhookUrl;
-        if (!webhookUrl) {
-          errors.push("notify_teams: No Teams webhook URL configured in workspace settings");
-        } else {
-          const message = action.params?.message ?? `Workflow rule fired: ${rule.name}`;
-          const payload = {
-            type: "message",
-            attachments: [{
-              contentType: "application/vnd.microsoft.card.adaptive",
-              content: {
-                type: "AdaptiveCard",
-                body: [{ type: "TextBlock", text: message, wrap: true }],
-                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-                version: "1.4",
-              },
-            }],
-          };
-          try {
-            const resp = await fetch(webhookUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), signal: AbortSignal.timeout(10_000) });
-            if (!resp.ok) errors.push(`Teams webhook returned ${resp.status}`);
-          } catch (e: any) {
-            errors.push(`Teams webhook failed: ${e?.message ?? "unknown error"}`);
-          }
-        }
-      }
-    }
+    // Shared executor — runs the same actions the runtime dispatcher does
+    // (webhook/slack/teams + create_task/notify), so a Test reflects reality.
+    // notify targets the tester; no CRM record is linked on a manual test.
+    const errors = await executeRuleActions(ctx.workspace.id, rule, {
+      payload: {}, relatedType: undefined, relatedId: null, ownerUserId: ctx.user.id,
+    });
     await db.insert(workflowRuns).values({
       workspaceId: ctx.workspace.id, ruleId: rule.id, triggeredBy: "manual_test",
       // workflowRuns.status enum is success|failed|skipped — "error" fails the INSERT.

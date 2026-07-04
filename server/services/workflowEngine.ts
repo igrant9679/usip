@@ -21,7 +21,34 @@
 import { and, eq } from "drizzle-orm";
 import { getDb } from "../db";
 import { notifications, tasks, workflowRules, workflowRuns, workspaceSettings } from "../../drizzle/schema";
-import { evalConditions } from "../routers/operations";
+
+/**
+ * Evaluate a rule's condition spec against a flat payload. Supports `{all:[…]}`
+ * (AND) and `{any:[…]}` (OR) groups of `{field, op, value}` comparators. Lives
+ * here (the engine) so both the runtime dispatcher and operations' testFire
+ * share one predicate with no import cycle; re-exported from routers/operations
+ * for backward-compatible importers (leadScoring, tests).
+ */
+export function evalConditions(
+  spec: { all?: Array<{ field: string; op: string; value: any }>; any?: Array<{ field: string; op: string; value: any }> },
+  payload: Record<string, any>,
+): boolean {
+  const cmp = (op: string, a: any, b: any) => {
+    switch (op) {
+      case "eq": return a === b;
+      case "neq": return a !== b;
+      case "gt": return Number(a) > Number(b);
+      case "gte": return Number(a) >= Number(b);
+      case "lt": return Number(a) < Number(b);
+      case "lte": return Number(a) <= Number(b);
+      case "contains": return String(a ?? "").toLowerCase().includes(String(b).toLowerCase());
+      default: return false;
+    }
+  };
+  if (spec.all && !spec.all.every((c) => cmp(c.op, payload[c.field], c.value))) return false;
+  if (spec.any && !spec.any.some((c) => cmp(c.op, payload[c.field], c.value))) return false;
+  return true;
+}
 
 export type WorkflowTrigger =
   | "record_created" | "record_updated" | "stage_changed" | "task_overdue"
@@ -113,6 +140,32 @@ async function runAction(
   } catch (e) {
     return `${action.type}: ${(e as Error).message}`;
   }
+}
+
+/**
+ * Run every action on a rule, returning the list of per-action error strings
+ * (empty = all succeeded). Fetches the workspace's Slack/Teams webhook config
+ * once. Shared by the runtime dispatcher and operations' manual testFire so both
+ * execute the SAME action set (webhook/slack/teams + create_task/notify).
+ */
+export async function executeRuleActions(
+  workspaceId: number,
+  rule: { id?: number; name?: string; description?: string | null; actions?: unknown },
+  ctx: FireContext,
+): Promise<string[]> {
+  const db = await getDb();
+  if (!db) return ["database unavailable"];
+  const [wsSettings] = await db
+    .select({ slackWebhookUrl: workspaceSettings.slackWebhookUrl, teamsWebhookUrl: workspaceSettings.teamsWebhookUrl })
+    .from(workspaceSettings)
+    .where(eq(workspaceSettings.workspaceId, workspaceId));
+  const actions = Array.isArray(rule.actions) ? (rule.actions as Action[]) : [];
+  const errors: string[] = [];
+  for (const a of actions) {
+    const err = await runAction(db, workspaceId, rule, a, wsSettings, ctx);
+    if (err) errors.push(err);
+  }
+  return errors;
 }
 
 /**
