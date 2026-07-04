@@ -456,18 +456,30 @@ async function invokeViaAnthropic(
     output_schema,
   });
   const STRUCTURED_TOOL_NAME = "respond_with_structured_output";
+  // Both json_schema (typed) and json_object (free-form) callers need forcing on
+  // Anthropic — json_object has no OpenAI-style equivalent, so without this the
+  // model returns prose and the caller's JSON.parse throws. Synthesize a forced
+  // tool: json_schema uses the caller's schema; json_object uses a permissive
+  // object so the tool_use input IS the requested JSON.
+  const wantsStructured =
+    structuredFormat?.type === "json_schema" || structuredFormat?.type === "json_object";
   const useStructuredTool =
-    structuredFormat?.type === "json_schema" &&
-    (!anthropicTools || anthropicTools.length === 0);
+    wantsStructured && (!anthropicTools || anthropicTools.length === 0);
+
+  const structuredInputSchema: Anthropic.Tool["input_schema"] =
+    structuredFormat?.type === "json_schema"
+      ? ((structuredFormat as { json_schema: JsonSchema }).json_schema.schema as Anthropic.Tool["input_schema"])
+      : ({ type: "object", additionalProperties: true } as Anthropic.Tool["input_schema"]);
 
   const effectiveTools: Anthropic.Tool[] | undefined = useStructuredTool
     ? [
         {
           name: STRUCTURED_TOOL_NAME,
           description:
-            "Return the response strictly as JSON matching the provided schema.",
-          input_schema: (structuredFormat as { json_schema: JsonSchema })
-            .json_schema.schema as Anthropic.Tool["input_schema"],
+            structuredFormat?.type === "json_schema"
+              ? "Return the response strictly as JSON matching the provided schema."
+              : "Return the response strictly as a single JSON object.",
+          input_schema: structuredInputSchema,
         },
       ]
     : anthropicTools;

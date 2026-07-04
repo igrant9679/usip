@@ -399,22 +399,17 @@ export const workflowsAiRouter = router({
       .where(eq(opportunities.workspaceId, ctx.workspace.id))
       .groupBy(opportunities.stage);
 
-    const prompt = `You are a sales automation AI. Suggest 3 useful workflow automation rules for this sales team. Return JSON only.
+    const prompt = `You are a sales automation AI. Suggest 3 useful workflow automation rules for this sales team that will help book more sales meetings with limited manual work.
 
 Existing workflow rules: ${existingRules.map((r) => `"${r.name}" (trigger: ${r.triggerType}, fired ${r.fireCount}x)`).join("; ") || "none"}
 Pipeline stage counts: ${oppCounts.map((o) => `${o.stage}: ${o.count}`).join(", ")}
 
-Return a JSON array of exactly 3 suggestions:
-[{
-  "title": "<short rule name>",
-  "description": "<one sentence explaining the value>",
-  "triggerType": "record_created|record_updated|stage_changed|task_overdue|deal_stuck|schedule",
-  "triggerConfig": {},
-  "conditions": [],
-  "actions": [{ "type": "notify_slack|send_email|create_task|update_field", "params": {} }]
-}]
+Rules are trigger → conditions → actions. Only use these VALID values (anything else is ignored by the engine):
+- triggerType: "record_created" (a new lead — payload has entity:"lead" + lead fields like company/title/source), "stage_changed" (an opportunity moved — payload has stage/fromStage/value/isWon/isLost), "signal_received" (an intent signal — for a job change set triggerConfig.signal:"job_change"; payload has name/oldCompany/newCompany), "deal_stuck", "schedule".
+- conditions: array of { "field": <a payload field>, "op": "eq|neq|gt|gte|lt|lte|contains", "value": <value> }. Empty array = always.
+- actions[].type: "create_task" (params: title, priority:"low|normal|high|urgent", dueInDays, type:"follow_up|call|manual_email"), "notify" (params: title, message), "post_slack" (params: message), "notify_teams" (params: message), "webhook" (params: url).
 
-Make suggestions that are different from existing rules and address real sales pain points.`;
+Make the 3 suggestions distinct from existing rules and target real meeting-booking pain points (e.g. re-engage on a job change, alert an owner when a deal reaches negotiation, task a rep on a new inbound lead).`;
 
     let suggestions: Array<{
       title: string; description: string; triggerType: string;
@@ -422,17 +417,46 @@ Make suggestions that are different from existing rules and address real sales p
     }> = [];
 
     try {
+      // outputSchema (NOT response_format) — response_format json_object returns
+      // PROSE for Anthropic, so JSON.parse threw and this silently produced 0
+      // suggestions. Force a real JSON schema and parse the content.
       const res = await invokeLLM({
         messages: [{ role: "user", content: prompt }],
-        response_format: { type: "json_object" },
-        max_tokens: 800,
+        outputSchema: {
+          name: "workflow_suggestions",
+          schema: {
+            type: "object",
+            properties: {
+              suggestions: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    title: { type: "string" },
+                    description: { type: "string" },
+                    triggerType: { type: "string", enum: ["record_created", "stage_changed", "signal_received", "deal_stuck", "schedule"] },
+                    triggerConfig: { type: "object", additionalProperties: true },
+                    conditions: { type: "array", items: { type: "object", additionalProperties: true } },
+                    actions: { type: "array", items: { type: "object", additionalProperties: true } },
+                  },
+                  required: ["title", "description", "triggerType", "actions"],
+                },
+              },
+            },
+            required: ["suggestions"],
+          },
+        },
+        max_tokens: 900,
+        workspaceId: ctx.workspace.id,
       });
       const content = res.choices?.[0]?.message?.content ?? "{}";
       // Handle both array and {suggestions: [...]} shapes
       const parsed = JSON.parse(content);
       const arr = Array.isArray(parsed) ? parsed : (Array.isArray(parsed.suggestions) ? parsed.suggestions : []);
       suggestions = arr.slice(0, 3);
-    } catch { /* return empty */ }
+    } catch (e) {
+      console.error("[workflowsAi] suggestion generation failed:", (e as Error).message);
+    }
 
     if (suggestions.length === 0) return { created: 0 };
 
