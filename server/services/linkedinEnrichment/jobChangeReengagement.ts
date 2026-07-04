@@ -39,6 +39,59 @@ function startOfUtcDay(): Date {
 }
 
 /**
+ * Entry point called when enrichment detects a company change for a prospect.
+ * Does TWO independent things:
+ *   1. Fires any user-defined `signal_received` workflow rules for the job-change
+ *      signal (Apollo "Plays" style — arbitrary actions, independent of the
+ *      built-in autopilot mode).
+ *   2. Runs the built-in Job Change Autopilot re-engagement (mode-gated).
+ * Best-effort — never throws into the enrichment path.
+ */
+export async function onJobChangeDetected(
+  workspaceId: number,
+  prospectId: number,
+  changes: DetectedChange[],
+): Promise<void> {
+  const companyChange =
+    changes.find((c) => c.changeType === "company_changed" && c.fieldName === "current_company_name") ??
+    changes.find((c) => c.changeType === "company_changed");
+
+  // 1) User-defined workflow rules on the job-change signal.
+  if (companyChange) {
+    try {
+      const db = await getDb();
+      const { fireWorkflowRules } = await import("../workflowEngine");
+      let name = "A prospect";
+      let title: string | null = null;
+      if (db) {
+        const [p] = await db
+          .select({ firstName: prospects.firstName, lastName: prospects.lastName, title: prospects.title })
+          .from(prospects)
+          .where(and(eq(prospects.workspaceId, workspaceId), eq(prospects.id, prospectId)));
+        if (p) { name = `${p.firstName ?? ""} ${p.lastName ?? ""}`.trim() || name; title = p.title ?? null; }
+      }
+      await fireWorkflowRules(workspaceId, "signal_received", {
+        payload: {
+          signal: "job_change",
+          entity: "prospect",
+          name,
+          title,
+          oldCompany: companyChange.oldValue ?? null,
+          newCompany: companyChange.newValue ?? null,
+        },
+        relatedType: "prospect",
+        relatedId: prospectId,
+      });
+    } catch (e) {
+      console.error(`[JobChangeReengage] ws ${workspaceId} workflow-rule fire failed:`, (e as Error).message);
+    }
+  }
+
+  // 2) Built-in autopilot re-engagement (respects Off/Approve/Auto).
+  await maybeCreateJobChangeReengagement(workspaceId, prospectId, changes).catch(() => { /* best-effort */ });
+}
+
+/**
  * Given the changes just detected for a prospect, create a re-engagement task
  * if a company change is present and the workspace's Job Change Autopilot is on.
  */

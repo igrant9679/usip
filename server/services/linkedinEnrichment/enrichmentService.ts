@@ -192,7 +192,7 @@ export async function applyEnrichment(opts: {
   // Gated by workspace mode; never blocks or fails enrichment.
   if (changes.some((c) => c.changeType === "company_changed")) {
     void import("./jobChangeReengagement")
-      .then((m) => m.maybeCreateJobChangeReengagement(ws, pid, changes))
+      .then((m) => m.onJobChangeDetected(ws, pid, changes))
       .catch(() => { /* re-engagement is best-effort */ });
   }
 

@@ -297,7 +297,8 @@ export const workflowsRouter = router({
     }
     await db.insert(workflowRuns).values({
       workspaceId: ctx.workspace.id, ruleId: rule.id, triggeredBy: "manual_test",
-      status: errors.length === 0 ? "success" : "error",
+      // workflowRuns.status enum is success|failed|skipped — "error" fails the INSERT.
+      status: errors.length === 0 ? "success" : "failed",
       actionsRun: rule.actions,
       errorMessage: errors.length > 0 ? errors.join("; ") : null,
     });
