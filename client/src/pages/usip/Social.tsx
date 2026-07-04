@@ -50,6 +50,34 @@ export default function Social() {
     onError: (e) => toast.error(e.message),
   });
 
+  // Post engagement (real LinkedIn via Unipile).
+  const [postBody, setPostBody] = useState("");
+  const [engageId, setEngageId] = useState("");
+  const [engagePosts, setEngagePosts] = useState<any[]>([]);
+  const [engaging, setEngaging] = useState(false);
+  const [commentFor, setCommentFor] = useState<string | null>(null);
+  const [commentText, setCommentText] = useState("");
+  const createLinkedInPost = trpc.unipile.createPost.useMutation({
+    onSuccess: () => { setPostBody(""); toast.success("Posted to LinkedIn"); },
+    onError: (e) => toast.error(e.message.includes("PRECONDITION") ? "Connect a LinkedIn account first." : e.message),
+  });
+  const reactPost = trpc.unipile.reactToPost.useMutation({ onSuccess: () => toast.success("Liked"), onError: (e) => toast.error(e.message) });
+  const commentPost = trpc.unipile.commentOnPost.useMutation({
+    onSuccess: () => { setCommentFor(null); setCommentText(""); toast.success("Comment posted"); },
+    onError: (e) => toast.error(e.message),
+  });
+  const lookupPosts = async () => {
+    if (!engageId.trim()) return;
+    setEngaging(true);
+    try {
+      const id = engageId.trim().replace(/\/+$/, "").split("/").pop() || engageId.trim();
+      const res: any = await utils.unipile.listUserPosts.fetch({ identifier: id, limit: 5 } as any);
+      setEngagePosts(res?.items ?? []);
+      if (!res?.items?.length) toast.info("No posts found for that profile.");
+    } catch (e: any) { toast.error(e?.message || "Lookup failed"); }
+    finally { setEngaging(false); }
+  };
+
   const openRecurrenceDialog = (postId: number) => {
     const post = posts.data?.find((p) => p.id === postId);
     const rec = (post as any)?.recurrence as any;
@@ -237,6 +265,66 @@ export default function Social() {
                   })}
                 </ul>
               )}
+            </Section>
+
+            <Section title="Publish a LinkedIn post">
+              <div className="p-3 space-y-2">
+                <textarea
+                  value={postBody}
+                  onChange={(e) => setPostBody(e.target.value)}
+                  rows={4}
+                  maxLength={3000}
+                  placeholder="Share an update, insight, or a bit of thought leadership… (posts from your connected LinkedIn account)"
+                  className="w-full rounded-md border bg-background p-2 text-sm resize-y"
+                />
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] text-muted-foreground">{postBody.length}/3000 · posts to your own account</span>
+                  <Button size="sm" disabled={!postBody.trim() || createLinkedInPost.isPending} onClick={() => createLinkedInPost.mutate({ text: postBody.trim() })}>
+                    <Send className="size-3.5 mr-1.5" /> {createLinkedInPost.isPending ? "Posting…" : "Publish"}
+                  </Button>
+                </div>
+              </div>
+            </Section>
+
+            <Section title="Engage a prospect's posts">
+              <div className="p-3 space-y-3">
+                <div className="flex gap-1.5">
+                  <input
+                    value={engageId}
+                    onChange={(e) => setEngageId(e.target.value)}
+                    placeholder="LinkedIn profile URL or public id (e.g. john-doe)"
+                    className="flex-1 rounded-md border bg-background px-2 h-9 text-sm"
+                    onKeyDown={(e) => { if (e.key === "Enter") lookupPosts(); }}
+                  />
+                  <Button size="sm" variant="outline" disabled={engaging} onClick={lookupPosts}>{engaging ? "Loading…" : "Find posts"}</Button>
+                </div>
+                {engagePosts.length > 0 && (
+                  <ul className="divide-y rounded-md border">
+                    {engagePosts.map((p: any, i: number) => {
+                      const sid = p.social_id || p.id;
+                      return (
+                        <li key={sid || i} className="p-2.5 text-sm space-y-1.5">
+                          <div className="whitespace-pre-wrap line-clamp-3 text-[13px]">{p.text || "(no text)"}</div>
+                          <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                            {p.date && <span>{fmtDate(p.date)}</span>}
+                            {typeof p.reaction_counter === "number" && <span>· {p.reaction_counter} reactions</span>}
+                            <div className="ml-auto flex items-center gap-1">
+                              <Button size="sm" variant="ghost" className="h-7" disabled={!sid || reactPost.isPending} onClick={() => sid && reactPost.mutate({ socialId: String(sid) })}>👍 Like</Button>
+                              <Button size="sm" variant="ghost" className="h-7" disabled={!sid} onClick={() => { setCommentFor(String(sid)); setCommentText(""); }}>💬 Comment</Button>
+                            </div>
+                          </div>
+                          {commentFor === String(sid) && (
+                            <div className="flex gap-1.5 pt-1">
+                              <input value={commentText} onChange={(e) => setCommentText(e.target.value)} placeholder="Write a comment…" className="flex-1 rounded-md border bg-background px-2 h-8 text-sm" onKeyDown={(e) => { if (e.key === "Enter" && commentText.trim()) commentPost.mutate({ socialId: String(sid), text: commentText.trim() }); }} />
+                              <Button size="sm" className="h-8" disabled={!commentText.trim() || commentPost.isPending} onClick={() => commentPost.mutate({ socialId: String(sid), text: commentText.trim() })}>Post</Button>
+                            </div>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </div>
             </Section>
           </TabsContent>
 
