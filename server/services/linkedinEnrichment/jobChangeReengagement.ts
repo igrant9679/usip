@@ -19,7 +19,7 @@
  */
 import { and, desc, eq, gte, inArray, like, sql } from "drizzle-orm";
 import { getDb } from "../../db";
-import { prospects, prospectLinkedinFieldChanges, tasks, workspaceSettings } from "../../../drizzle/schema";
+import { activities, prospects, prospectLinkedinFieldChanges, tasks, workspaceSettings } from "../../../drizzle/schema";
 import type { DetectedChange } from "./snapshot";
 
 /** All job-change tasks share this title prefix — used as the dedupe key. */
@@ -135,6 +135,23 @@ export async function maybeCreateJobChangeReengagement(
       aiReasoning: reasoning,
       aiConfidence: 85,
     } as never);
+
+    // Timeline entry so the re-engagement is visible on the prospect + in feeds.
+    // Emitted here (the single task-creation path) so the autonomous cron path
+    // is observable, not just the manual one. Best-effort — never fail the task.
+    try {
+      await db.insert(activities).values({
+        workspaceId,
+        type: "linkedin",
+        relatedType: "prospect",
+        relatedId: prospectId,
+        subject: `Job change detected: ${name} moved to ${newCompany}`.slice(0, 240),
+        body: `${reasoning}\n\nA ${targetStatus === "open" ? "live" : "draft"} re-engagement task was created ${opts.force ? "manually" : "automatically"}.`,
+        actorUserId: null,
+      } as never);
+    } catch (e) {
+      console.error(`[JobChangeReengage] ws ${workspaceId} activity emit failed:`, (e as Error).message);
+    }
 
     await db
       .update(workspaceSettings)

@@ -601,10 +601,8 @@ export const linkedinEnrichmentRouter = router({
         }
         throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Could not create the re-engagement task." });
       }
-      await emitActivity({
-        workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, prospectId: input.prospectId,
-        subject: "Re-engagement task created from a detected job change",
-      });
+      // The re-engagement service emits the timeline activity itself (one source
+      // of truth for both the autonomous and manual paths) — no duplicate here.
       return { ok: true as const, taskStatus: res.taskStatus };
     }),
 });

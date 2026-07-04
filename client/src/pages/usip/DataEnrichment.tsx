@@ -96,7 +96,7 @@ export default function DataEnrichment() {
   const jcSettings = trpc.linkedinEnrichment.getJobChangeSettings.useQuery(undefined as any, { retry: false });
   const jobChangesQ = trpc.linkedinEnrichment.jobChanges.useQuery(
     { limit: 60 } as any,
-    { retry: false, enabled: tab === "Job change alerts" },
+    { retry: false },
   );
   const setJc = trpc.linkedinEnrichment.setJobChangeSettings.useMutation({
     onSuccess: () => { utils.linkedinEnrichment.getJobChangeSettings.invalidate(); toast.success("Job change autopilot updated"); },
@@ -108,6 +108,8 @@ export default function DataEnrichment() {
   });
   const jcMode = (jcSettings.data as any)?.mode ?? "off";
   const jobChanges = (jobChangesQ.data as any[]) ?? [];
+  // Un-actioned company moves — the count worth surfacing on the tab.
+  const pendingMoves = jobChanges.filter((j) => j.changeType === "company_changed" && !j.hasReengagementTask).length;
   const MODE_OPTS: Array<{ v: "off" | "approval" | "auto"; label: string }> = [
     { v: "off", label: "Off" }, { v: "approval", label: "Approve" }, { v: "auto", label: "Auto" },
   ];
@@ -160,7 +162,7 @@ export default function DataEnrichment() {
               className={cn("relative px-3 py-2 text-[13px] whitespace-nowrap transition-colors", tab === t ? "font-semibold" : "text-muted-foreground hover:text-foreground")}
               style={tab === t ? { color: accent } : undefined}
             >
-              <span className="inline-flex items-center gap-1.5">{t}{t === "CRM" && <span className="text-[9px] font-medium px-1 py-0.5 rounded bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">New</span>}</span>
+              <span className="inline-flex items-center gap-1.5">{t}{t === "CRM" && <span className="text-[9px] font-medium px-1 py-0.5 rounded bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">New</span>}{t === "Job change alerts" && pendingMoves > 0 && <span className="text-[9px] font-semibold px-1 py-0.5 rounded-full text-white tabular-nums" style={{ backgroundColor: accent }}>{pendingMoves}</span>}</span>
               {tab === t && <span className="absolute inset-x-2 bottom-0 h-0.5 rounded-full" style={{ backgroundColor: accent }} />}
             </button>
           ))}
