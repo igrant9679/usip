@@ -918,6 +918,38 @@ export const unipileRouter = router({
       const res = await createPost(acct, input.text);
       return { ok: true, id: res.id ?? res.social_id };
     }),
+
+  // ─── Social funnel metrics (for Analytics) ──────────────────────────────
+  socialFunnelStats: workspaceProcedure.query(async ({ ctx }) => {
+    const empty = { invitesSent: 0, invitesAccepted: 0, openersSent: 0, inboundReplies: 0, willingToMeet: 0, meetingsFromSocial: 0 };
+    const db = await getDb();
+    if (!db) return empty;
+    const ws = ctx.workspace.id;
+    const [inv] = await db
+      .select({
+        sent: sql<number>`count(*)`,
+        accepted: sql<number>`sum(case when \`acceptedAt\` is not null or \`status\` = 'accepted' then 1 else 0 end)`,
+      })
+      .from(unipileInvites)
+      .where(eq(unipileInvites.workspaceId, ws));
+    const [msg] = await db
+      .select({
+        openers: sql<number>`sum(case when \`direction\` = 'outbound' then 1 else 0 end)`,
+        inbound: sql<number>`sum(case when \`direction\` = 'inbound' then 1 else 0 end)`,
+        willing: sql<number>`sum(case when \`direction\` = 'inbound' and \`replyClass\` = 'willing_to_meet' then 1 else 0 end)`,
+        meetings: sql<number>`sum(case when \`autoActionTaken\` = 'meeting_proposed' then 1 else 0 end)`,
+      })
+      .from(unipileMessages)
+      .where(eq(unipileMessages.workspaceId, ws));
+    return {
+      invitesSent: Number(inv?.sent ?? 0),
+      invitesAccepted: Number(inv?.accepted ?? 0),
+      openersSent: Number(msg?.openers ?? 0),
+      inboundReplies: Number(msg?.inbound ?? 0),
+      willingToMeet: Number(msg?.willing ?? 0),
+      meetingsFromSocial: Number(msg?.meetings ?? 0),
+    };
+  }),
 });
 
 /**

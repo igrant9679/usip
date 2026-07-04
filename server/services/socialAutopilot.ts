@@ -110,6 +110,20 @@ export async function handleNewRelation(payload: NewRelationPayload): Promise<st
   const workspaceId = acct.workspaceId;
   const ownerUserId = acct.userId ?? null;
 
+  // Record the acceptance against the original sent invite (best-effort) so the
+  // social funnel can report accept rates — independent of autopilot mode.
+  try {
+    await db.update(unipileInvites)
+      .set({ status: "accepted", acceptedAt: new Date() } as never)
+      .where(and(
+        eq(unipileInvites.workspaceId, workspaceId),
+        eq(unipileInvites.recipientProviderId, providerId),
+        ne(unipileInvites.status, "accepted"),
+      ));
+  } catch (err) {
+    console.debug?.("[SocialAutopilot] invite accept-mark skipped:", (err as Error)?.message);
+  }
+
   const [ws] = await db
     .select({
       mode: workspaceSettings.socialAutopilotMode,

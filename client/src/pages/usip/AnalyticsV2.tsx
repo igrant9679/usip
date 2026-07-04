@@ -12,7 +12,7 @@ import { Shell, useAccentColor } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import {
-  BarChart3, TrendingUp, Users, Mail, MessageSquare, CalendarCheck, Trophy, ArrowDown,
+  BarChart3, TrendingUp, Users, Mail, MessageSquare, CalendarCheck, Trophy, ArrowDown, Share2,
 } from "lucide-react";
 
 function money(v: number | string | null | undefined): string {
@@ -34,6 +34,7 @@ export default function AnalyticsV2() {
   const taskStats = trpc.tasks.stats.useQuery();
   const meetStats = trpc.meetings.stats.useQuery();
   const convStats = trpc.conversations.stats.useQuery();
+  const socialFunnel = trpc.unipile.socialFunnelStats.useQuery(undefined as any, { retry: false });
 
   // Aggregate outreach performance across sequences.
   const outreach = useMemo(() => {
@@ -59,6 +60,19 @@ export default function AnalyticsV2() {
     { key: "won", label: "Deals won", value: wl.won ?? 0, icon: Trophy, color: "#d97706" },
   ];
   const funnelMax = Math.max(1, ...funnel.map((f) => f.value));
+
+  // LinkedIn / Social channel funnel: invite → accept → opener → reply → interested → meeting.
+  const sf = socialFunnel.data ?? { invitesSent: 0, invitesAccepted: 0, openersSent: 0, inboundReplies: 0, willingToMeet: 0, meetingsFromSocial: 0 } as any;
+  const socialSteps = [
+    { key: "invited", label: "Invites sent", value: sf.invitesSent ?? 0, icon: Share2, color: "#0A66C2" },
+    { key: "accepted", label: "Invites accepted", value: sf.invitesAccepted ?? 0, icon: Users, color: "#3B82F6" },
+    { key: "openers", label: "Openers sent", value: sf.openersSent ?? 0, icon: MessageSquare, color: "#8B5CF6" },
+    { key: "replies", label: "Replies", value: sf.inboundReplies ?? 0, icon: MessageSquare, color: "#6366F1" },
+    { key: "interested", label: "Interested (willing to meet)", value: sf.willingToMeet ?? 0, icon: Users, color: "#a855f7" },
+    { key: "meetings", label: "Meetings from social", value: sf.meetingsFromSocial ?? 0, icon: CalendarCheck, color: "#059669" },
+  ];
+  const socialMax = Math.max(1, ...socialSteps.map((f) => f.value));
+  const socialActive = socialSteps.some((s) => s.value > 0);
 
   const stages = (stageFunnel.data as any[]) ?? [];
   const stageMax = Math.max(1, ...stages.map((s) => Number(s.value ?? 0)));
@@ -125,6 +139,40 @@ export default function AnalyticsV2() {
               })}
             </div>
           </section>
+
+          {/* LinkedIn / Social funnel — only shown once there's social activity */}
+          {socialActive && (
+            <section>
+              <h2 className="text-sm font-semibold mb-2 flex items-center gap-2"><Share2 className="size-4" style={{ color: "#0A66C2" }} /> LinkedIn / Social funnel</h2>
+              <div className="rounded-xl border bg-card p-4 shadow-sm space-y-3">
+                {socialSteps.map((f, i) => {
+                  const pct = Math.round((f.value / socialMax) * 100);
+                  const prev = i > 0 ? socialSteps[i - 1].value : null;
+                  const stepConv = prev && prev > 0 ? Math.round((f.value / prev) * 100) : null;
+                  return (
+                    <div key={f.key}>
+                      {i > 0 && (
+                        <div className="flex items-center gap-1 text-[10px] text-muted-foreground pl-1 mb-1">
+                          <ArrowDown className="size-3" /> {stepConv !== null ? `${stepConv}% conversion` : ""}
+                        </div>
+                      )}
+                      <div className="flex items-center gap-3">
+                        <div className="w-40 shrink-0 flex items-center gap-2 text-[12px]">
+                          <f.icon className="size-3.5 shrink-0" style={{ color: f.color }} />
+                          <span className="truncate">{f.label}</span>
+                        </div>
+                        <div className="flex-1 h-6 rounded bg-muted/40 overflow-hidden">
+                          <div className="h-full rounded flex items-center justify-end px-2 transition-all" style={{ width: `${Math.max(pct, 6)}%`, backgroundColor: f.color }}>
+                            <span className="text-[11px] font-semibold text-white tabular-nums">{f.value}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          )}
 
           {/* Pipeline by stage + Win/loss */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
