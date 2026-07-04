@@ -430,7 +430,7 @@ export const emailTemplatesRouter = router({
         includeCta: z.boolean().default(true),
       }),
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ ctx, input }) => {
       const systemPrompt = `You are an expert B2B email copywriter. The user will describe an email they want to write.
 Return a JSON object with this exact shape:
 {
@@ -454,6 +454,21 @@ Rules:
           { role: "system", content: systemPrompt },
           { role: "user", content: input.prompt },
         ],
+        // outputSchema forces valid JSON on Anthropic (the primary provider);
+        // without it the model returns prose and JSON.parse falls back to empty.
+        outputSchema: {
+          name: "email_template",
+          schema: {
+            type: "object",
+            properties: {
+              subject: { type: "string" },
+              blocks: { type: "array", items: { type: "object", additionalProperties: true } },
+            },
+            required: ["subject", "blocks"],
+          },
+        },
+        max_tokens: 1500,
+        workspaceId: ctx.workspace.id,
       });
       const raw = (res as any).choices?.[0]?.message?.content ?? "{}";
       let parsed: { subject?: string; blocks?: any[] };
@@ -481,14 +496,13 @@ Rules:
         count: z.number().min(1).max(8).default(5),
       }),
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ ctx, input }) => {
       const res = await invokeLLM({
         messages: [
           {
             role: "system",
             content: `You are an expert email subject line writer. Given the email body, generate ${input.count} compelling subject line variants.
-Return a JSON object: {"suggestions":[{"subject":"string","rationale":"string (max 15 words)","spamRisk":"low"|"medium"|"high"}]}
-Return ONLY valid JSON, no markdown fences.`,
+Each suggestion: {"subject":"string","rationale":"string (max 15 words)","spamRisk":"low"|"medium"|"high"}.`,
           },
           {
             role: "user",
@@ -498,6 +512,30 @@ Email body:
 ${input.bodyText.slice(0, 3000)}`,
           },
         ],
+        // outputSchema forces valid JSON on Anthropic (was prose → empty fallback).
+        outputSchema: {
+          name: "subject_suggestions",
+          schema: {
+            type: "object",
+            properties: {
+              suggestions: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    subject: { type: "string" },
+                    rationale: { type: "string" },
+                    spamRisk: { type: "string", enum: ["low", "medium", "high"] },
+                  },
+                  required: ["subject"],
+                },
+              },
+            },
+            required: ["suggestions"],
+          },
+        },
+        max_tokens: 600,
+        workspaceId: ctx.workspace.id,
       });
       const raw = (res as any).choices?.[0]?.message?.content ?? "{}";
       let parsed: { suggestions?: any[] };
