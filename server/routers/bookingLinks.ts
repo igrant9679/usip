@@ -21,7 +21,7 @@ import { and, eq, gte, lte } from "drizzle-orm";
 import { router, publicProcedure } from "../_core/trpc";
 import { workspaceProcedure } from "../_core/workspace";
 import { getDb } from "../db";
-import { bookingLinks, calendarEvents, leads, meetings, users } from "../../drizzle/schema";
+import { activities, bookingLinks, calendarEvents, leads, meetings, notifications, users } from "../../drizzle/schema";
 import { sendMeetingInvite } from "../services/meetingScheduler";
 
 /** Business-hours window (UTC) used to generate candidate slots. */
@@ -254,6 +254,36 @@ export const bookingLinksRouter = router({
       await db.update(bookingLinks)
         .set({ bookingCount: (link.bookingCount ?? 0) + 1 } as never)
         .where(eq(bookingLinks.id, link.id));
+
+      // Notify the rep + log a timeline activity so a self-booked meeting never
+      // goes unseen — critical when no calendar is connected (no provider invite).
+      const whenLabel = `${start.toISOString().slice(0, 16).replace("T", " ")} UTC`;
+      try {
+        await db.insert(notifications).values({
+          workspaceId: link.workspaceId,
+          userId: link.userId,
+          kind: "system",
+          title: `New meeting booked: ${input.name}`,
+          body: `${input.name} booked "${link.title}" for ${whenLabel}.${result.sent ? "" : " No calendar connected — add it to their calendar."}`,
+        } as never);
+      } catch (e) {
+        console.error("[bookingLinks] rep notification failed:", (e as Error).message);
+      }
+      if (leadId) {
+        try {
+          await db.insert(activities).values({
+            workspaceId: link.workspaceId,
+            type: "meeting",
+            relatedType: "lead",
+            relatedId: leadId,
+            subject: `Meeting booked via link: ${input.name}`.slice(0, 240),
+            body: `${input.name} <${input.email}> booked "${link.title}" for ${whenLabel}. ${result.sent ? "Calendar invite sent." : "No calendar connected — confirm manually."}`,
+            actorUserId: null,
+          } as never);
+        } catch (e) {
+          console.error("[bookingLinks] activity emit failed:", (e as Error).message);
+        }
+      }
 
       return {
         ok: true as const,
