@@ -2363,6 +2363,28 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  {
+    name: "0110_booking_links.sql",
+    statements: [
+      `CREATE TABLE IF NOT EXISTS \`booking_links\` (
+        \`id\` int NOT NULL AUTO_INCREMENT,
+        \`workspaceId\` int NOT NULL,
+        \`userId\` int NOT NULL,
+        \`slug\` varchar(80) NOT NULL,
+        \`title\` varchar(160) NOT NULL DEFAULT 'Book a meeting',
+        \`description\` varchar(500) NULL,
+        \`durationMin\` int NOT NULL DEFAULT 30,
+        \`active\` boolean NOT NULL DEFAULT true,
+        \`bookingCount\` int NOT NULL DEFAULT 0,
+        \`createdAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        \`updatedAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (\`id\`),
+        UNIQUE KEY \`ux_booking_slug\` (\`slug\`),
+        UNIQUE KEY \`ux_booking_user\` (\`workspaceId\`, \`userId\`)
+      )`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

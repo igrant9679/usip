@@ -1453,6 +1453,34 @@ export const workspaceSettings = mysqlTable("workspace_settings", {
 export type WorkspaceSettings = typeof workspaceSettings.$inferSelect;
 
 /* ──────────────────────────────────────────────────────────────────────────
+   Booking Links (Migration 0110) — public self-serve meeting scheduling.
+   A prospect opens /b/:slug, picks an open slot from the rep's real calendar
+   availability, and books — creating an inbound lead + a real calendar event
+   via the existing sendMeetingInvite path. 100% hands-off for the rep.
+   ────────────────────────────────────────────────────────────────────────── */
+export const bookingLinks = mysqlTable(
+  "booking_links",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    userId: int("userId").notNull(), // the rep whose calendar is booked
+    slug: varchar("slug", { length: 80 }).notNull(),
+    title: varchar("title", { length: 160 }).default("Book a meeting").notNull(),
+    description: varchar("description", { length: 500 }),
+    durationMin: int("durationMin").default(30).notNull(),
+    active: boolean("active").default(true).notNull(),
+    bookingCount: int("bookingCount").default(0).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    bySlug: uniqueIndex("ux_booking_slug").on(t.slug),
+    byUser: uniqueIndex("ux_booking_user").on(t.workspaceId, t.userId),
+  }),
+);
+export type BookingLink = typeof bookingLinks.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
    Login History
    ────────────────────────────────────────────────────────────────────────── */
 export const loginHistory = mysqlTable(

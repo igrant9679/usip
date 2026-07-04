@@ -33,7 +33,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import {
   CalendarClock, CalendarCheck, CalendarX, Sparkles, Bot, Zap, Check, X, Clock, Video, Send,
-  MoreHorizontal, Plus, AlertTriangle, Link2, Building2, MailWarning,
+  MoreHorizontal, Plus, AlertTriangle, Link2, Building2, MailWarning, Copy, ExternalLink,
 } from "lucide-react";
 
 type Meeting = {
@@ -93,6 +93,9 @@ export default function MeetingsV2() {
   const all = trpc.meetings.list.useQuery({});
   const stats = trpc.meetings.stats.useQuery();
   const autopilot = trpc.meetings.getAutopilotSettings.useQuery();
+  const bookingLink = trpc.bookingLinks.mine.useQuery(undefined as any, { retry: false });
+  const bookingUrl = bookingLink.data?.slug ? `${window.location.origin}/b/${bookingLink.data.slug}` : "";
+  const [copied, setCopied] = useState(false);
   const [newOpen, setNewOpen] = useState(false);
 
   const invalidateAll = () => {
@@ -206,6 +209,29 @@ export default function MeetingsV2() {
               <div className="shrink-0 text-[11px] text-muted-foreground hidden sm:block">Last run {fmtDateTime(autopilot.data.lastRunAt)}</div>
             )}
           </div>
+
+          {/* Self-serve booking link — prospects book straight onto your calendar */}
+          {bookingUrl && (
+            <div className="rounded-lg border bg-card px-4 py-2.5 flex items-center gap-3 shadow-sm">
+              <span className="shrink-0 size-8 rounded-full flex items-center justify-center" style={{ backgroundColor: `${accent}1f`, color: accent }}>
+                <Link2 className="size-4" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-medium">Your booking link</div>
+                <div className="text-[12px] text-muted-foreground truncate">Share it — prospects self-book an open slot straight onto your calendar.</div>
+              </div>
+              <code className="shrink-0 hidden md:block text-[11px] bg-muted rounded px-2 py-1 max-w-[280px] truncate">{bookingUrl}</code>
+              <Button
+                variant="outline" size="sm" className="h-7 gap-1.5 shrink-0"
+                onClick={() => { navigator.clipboard?.writeText(bookingUrl); setCopied(true); setTimeout(() => setCopied(false), 1500); }}
+              >
+                {copied ? <><Check className="size-3.5" /> Copied</> : <><Copy className="size-3.5" /> Copy</>}
+              </Button>
+              <Button variant="ghost" size="sm" className="h-7 gap-1.5 shrink-0" onClick={() => window.open(bookingUrl, "_blank")}>
+                <ExternalLink className="size-3.5" /> Preview
+              </Button>
+            </div>
+          )}
 
           {/* Stats */}
           <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
