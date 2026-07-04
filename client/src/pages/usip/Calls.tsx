@@ -46,9 +46,11 @@ function fmtDue(d?: string | Date | null): string {
   return date.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + " " + date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 }
 
+// Matches the tasks.priority enum: low | normal | high | urgent.
 const PRIORITY_TONE: Record<string, string> = {
-  high: "bg-rose-100 text-rose-800 dark:bg-rose-900/30 dark:text-rose-300",
-  medium: "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300",
+  urgent: "bg-rose-100 text-rose-800 dark:bg-rose-900/30 dark:text-rose-300",
+  high: "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300",
+  normal: "bg-secondary text-muted-foreground",
   low: "bg-secondary text-muted-foreground",
 };
 
