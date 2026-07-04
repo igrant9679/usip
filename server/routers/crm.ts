@@ -973,6 +973,15 @@ export const leadsRouter = router({
       const r = await db.insert(leads).values({ ...input, workspaceId: ctx.workspace.id, ownerUserId, status: "new" });
       const id = Number((r as any)[0]?.insertId ?? 0);
       await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "create", entityType: "lead", entityId: id, after: { ...input, ownerUserId, routed: routedOwner != null } });
+      // Fire user-defined `record_created` workflow rules (best-effort, non-blocking).
+      if (id) {
+        void import("../services/workflowEngine")
+          .then((m) => m.fireWorkflowRules(ctx.workspace.id, "record_created", {
+            payload: { ...input, entity: "lead", status: "new" },
+            relatedType: "lead", relatedId: id, ownerUserId,
+          }))
+          .catch(() => { /* workflow firing is best-effort */ });
+      }
       return { id, ownerUserId, routed: routedOwner != null };
     }),
 
@@ -1445,6 +1454,20 @@ export const opportunitiesRouter = router({
       }
     }
     await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "opportunity", entityId: input.id, before: { stage: before.stage }, after: { stage: input.stage, customerCreated } });
+    // Fire user-defined `stage_changed` workflow rules (best-effort, non-blocking).
+    void import("../services/workflowEngine")
+      .then((m) => m.fireWorkflowRules(ctx.workspace.id, "stage_changed", {
+        payload: {
+          entity: "opportunity",
+          stage: input.stage,
+          fromStage: before.stage,
+          value: Number(before.value ?? 0),
+          winProb, isWon, isLost,
+          name: (before as any).name ?? null,
+        },
+        relatedType: "opportunity", relatedId: input.id, ownerUserId: before.ownerUserId ?? null,
+      }))
+      .catch(() => { /* workflow firing is best-effort */ });
     return { ok: true, customerCreated };
   }),
 
