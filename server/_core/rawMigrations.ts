@@ -2354,6 +2354,15 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  {
+    name: "0109_job_change_autopilot.sql",
+    statements: [
+      `ALTER TABLE \`workspace_settings\` ADD COLUMN \`jobChangeAutopilotMode\` enum('off','approval','auto') NOT NULL DEFAULT 'off'`,
+      `ALTER TABLE \`workspace_settings\` ADD COLUMN \`jobChangeAutopilotDailyCap\` int NOT NULL DEFAULT 25`,
+      `ALTER TABLE \`workspace_settings\` ADD COLUMN \`jobChangeAutopilotLastRunAt\` timestamp NULL`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

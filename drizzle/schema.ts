@@ -1436,6 +1436,18 @@ export const workspaceSettings = mysqlTable("workspace_settings", {
   socialAutopilotDailyCap: int("socialAutopilotDailyCap").default(50).notNull(),
   socialAutopilotLastRunAt: timestamp("socialAutopilotLastRunAt"),
 
+  // ─── Job Change Autopilot (Migration 0109) — re-engage on job moves ───────
+  // A saved prospect changing companies is a top sales trigger (champion moves
+  // → warm intro at the new company + backfill at the old). LinkedIn enrichment
+  // already DETECTS company_changed; this governs the autonomous re-engagement:
+  //   off      = the change is surfaced on Data enrichment › Job change alerts
+  //              only (no task created)
+  //   approval = AI drafts a re-engagement follow-up task (status='draft')
+  //   auto     = AI creates a live re-engagement task (status='open')
+  jobChangeAutopilotMode: mysqlEnum("jobChangeAutopilotMode", ["off", "approval", "auto"]).default("off").notNull(),
+  jobChangeAutopilotDailyCap: int("jobChangeAutopilotDailyCap").default(25).notNull(),
+  jobChangeAutopilotLastRunAt: timestamp("jobChangeAutopilotLastRunAt"),
+
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
 export type WorkspaceSettings = typeof workspaceSettings.$inferSelect;

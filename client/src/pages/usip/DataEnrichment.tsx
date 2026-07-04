@@ -9,6 +9,7 @@
  */
 import { useState } from "react";
 import { useLocation } from "wouter";
+import { toast } from "sonner";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
@@ -34,6 +35,10 @@ import {
   Clock,
   Sparkles,
   CheckCircle2,
+  Building2,
+  Briefcase,
+  ArrowRight,
+  ExternalLink,
 } from "lucide-react";
 
 /* ── inline donut chart ── */
@@ -85,6 +90,32 @@ export default function DataEnrichment() {
   const metrics = m as
     | { total: number; withEmail: number; withPhone: number; pctWithEmail: number; pctWithPhone: number; pctEnriched: number; pctVerified: number; enrichedLast90Days: number }
     | undefined;
+
+  // ── Job change alerts ──
+  const utils = trpc.useUtils();
+  const jcSettings = trpc.linkedinEnrichment.getJobChangeSettings.useQuery(undefined as any, { retry: false });
+  const jobChangesQ = trpc.linkedinEnrichment.jobChanges.useQuery(
+    { limit: 60 } as any,
+    { retry: false, enabled: tab === "Job change alerts" },
+  );
+  const setJc = trpc.linkedinEnrichment.setJobChangeSettings.useMutation({
+    onSuccess: () => { utils.linkedinEnrichment.getJobChangeSettings.invalidate(); toast.success("Job change autopilot updated"); },
+    onError: (e: any) => toast.error(String(e?.message ?? "").includes("FORBIDDEN") ? "Only admins can change this" : e?.message ?? "Failed"),
+  });
+  const reengage = trpc.linkedinEnrichment.reengage.useMutation({
+    onSuccess: () => { utils.linkedinEnrichment.jobChanges.invalidate(); toast.success("Re-engagement task created"); },
+    onError: (e: any) => toast.error(e?.message ?? "Could not create task"),
+  });
+  const jcMode = (jcSettings.data as any)?.mode ?? "off";
+  const jobChanges = (jobChangesQ.data as any[]) ?? [];
+  const MODE_OPTS: Array<{ v: "off" | "approval" | "auto"; label: string }> = [
+    { v: "off", label: "Off" }, { v: "approval", label: "Approve" }, { v: "auto", label: "Auto" },
+  ];
+  const fmtWhen = (d: any) => {
+    if (!d) return "";
+    const dt = new Date(d);
+    return Number.isNaN(dt.getTime()) ? "" : dt.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  };
 
   const stat = (icon: any, label: string, value: string, hint?: string) => {
     const Icon = icon;
@@ -266,16 +297,112 @@ export default function DataEnrichment() {
             </div>
           )}
 
-          {(tab === "Job change alerts" || tab === "Form enrichment") && (
+          {tab === "Job change alerts" && (
+            <div className="max-w-4xl mx-auto space-y-4">
+              {/* autonomy control */}
+              <div className="rounded-xl border bg-card shadow-sm p-4 flex flex-col sm:flex-row sm:items-center gap-3">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <RefreshCw className="size-4" style={{ color: accent }} />
+                    <h3 className="text-sm font-semibold">Auto re-engage on job changes</h3>
+                  </div>
+                  <p className="text-[12px] text-muted-foreground mt-1">
+                    When a saved prospect changes companies, Velocity turns it into a booked-meeting opportunity.
+                    <b> Off</b> = alerts only · <b>Approve</b> = draft a re-engagement task · <b>Auto</b> = create it live.
+                  </p>
+                </div>
+                <div className="flex gap-1 shrink-0">
+                  {MODE_OPTS.map((o) => (
+                    <Button
+                      key={o.v}
+                      size="sm"
+                      variant={jcMode === o.v ? "default" : "outline"}
+                      className="h-7"
+                      style={jcMode === o.v ? { backgroundColor: accent } : undefined}
+                      disabled={setJc.isPending}
+                      onClick={() => setJc.mutate({ mode: o.v } as any)}
+                    >
+                      {o.label}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+
+              {/* feed */}
+              {jobChangesQ.isLoading ? (
+                <div className="text-center text-sm text-muted-foreground py-16">Loading job changes…</div>
+              ) : jobChanges.length === 0 ? (
+                <div className="max-w-md mx-auto text-center py-16">
+                  <div className="mx-auto size-12 rounded-full bg-secondary flex items-center justify-center mb-3">
+                    <Briefcase className="size-5 text-muted-foreground" />
+                  </div>
+                  <h2 className="text-sm font-semibold">No job changes detected yet</h2>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    Velocity monitors your enriched prospects' LinkedIn profiles daily. When a saved prospect changes
+                    company or title, it appears here so you can re-engage at the perfect moment.
+                  </p>
+                  <Button size="sm" className="mt-4" style={{ backgroundColor: accent }} onClick={() => setLocation("/find-prospects")}>Enrich prospects</Button>
+                </div>
+              ) : (
+                <div className="rounded-xl border bg-card shadow-sm divide-y divide-border/60">
+                  {jobChanges.map((jc) => {
+                    const isCompany = jc.changeType === "company_changed";
+                    return (
+                      <div key={jc.id} className="flex items-center gap-3 p-3">
+                        <span className="shrink-0 size-9 rounded-full flex items-center justify-center" style={{ backgroundColor: `${accent}1f`, color: accent }}>
+                          {isCompany ? <Building2 className="size-4" /> : <Briefcase className="size-4" />}
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <span className="text-[13px] font-semibold truncate">{jc.name}</span>
+                            {jc.title && <span className="text-[11px] text-muted-foreground truncate">· {jc.title}</span>}
+                            <span className="text-[9px] font-medium px-1 py-0.5 rounded" style={{ backgroundColor: `${accent}1f`, color: accent }}>
+                              {isCompany ? "Company" : "Title"} change
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1.5 text-[12px] text-muted-foreground mt-0.5 min-w-0">
+                            <span className="truncate line-through decoration-muted-foreground/50">{jc.oldValue || "—"}</span>
+                            <ArrowRight className="size-3 shrink-0" />
+                            <span className="truncate font-medium text-foreground">{jc.newValue || "—"}</span>
+                          </div>
+                        </div>
+                        {jc.detectedAt && <span className="text-[11px] text-muted-foreground shrink-0 hidden sm:block">{fmtWhen(jc.detectedAt)}</span>}
+                        {jc.linkedinUrl && (
+                          <a href={jc.linkedinUrl} target="_blank" rel="noreferrer" className="shrink-0 text-muted-foreground hover:text-foreground" title="Open LinkedIn">
+                            <ExternalLink className="size-3.5" />
+                          </a>
+                        )}
+                        {isCompany && (
+                          jc.hasReengagementTask ? (
+                            <span className="shrink-0 inline-flex items-center gap-1 text-[11px] text-emerald-600 dark:text-emerald-400"><CheckCircle2 className="size-3.5" /> Queued</span>
+                          ) : (
+                            <Button
+                              size="sm"
+                              className="h-7 shrink-0"
+                              style={{ backgroundColor: accent }}
+                              disabled={reengage.isPending}
+                              onClick={() => reengage.mutate({ prospectId: jc.prospectId } as any)}
+                            >
+                              Re-engage
+                            </Button>
+                          )
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
+          {tab === "Form enrichment" && (
             <div className="max-w-md mx-auto text-center py-20">
               <div className="mx-auto size-12 rounded-full bg-secondary flex items-center justify-center mb-3">
-                {tab === "Job change alerts" ? <RefreshCw className="size-5 text-muted-foreground" /> : <Database className="size-5 text-muted-foreground" />}
+                <Database className="size-5 text-muted-foreground" />
               </div>
-              <h2 className="text-sm font-semibold">{tab}</h2>
+              <h2 className="text-sm font-semibold">Form enrichment</h2>
               <p className="text-sm text-muted-foreground mt-1">
-                {tab === "Job change alerts"
-                  ? "Get notified when your saved contacts change jobs so you can re-engage. Coming soon."
-                  : "Automatically enrich records captured from your web forms. Coming soon."}
+                Automatically enrich records captured from your web forms. Coming soon.
               </p>
             </div>
           )}

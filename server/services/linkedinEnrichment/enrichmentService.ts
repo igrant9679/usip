@@ -187,6 +187,15 @@ export async function applyEnrichment(opts: {
     .then((m) => m.recalcForObject(ws, "person", pid, "enrichment updated"))
     .catch(() => { /* scoring is best-effort */ });
 
+  // Fire-and-forget: if this person changed companies, the Job Change Autopilot
+  // may autonomously create a re-engagement task (a top meeting-booking trigger).
+  // Gated by workspace mode; never blocks or fails enrichment.
+  if (changes.some((c) => c.changeType === "company_changed")) {
+    void import("./jobChangeReengagement")
+      .then((m) => m.maybeCreateJobChangeReengagement(ws, pid, changes))
+      .catch(() => { /* re-engagement is best-effort */ });
+  }
+
   return { enrichmentId, changes, dataStatus: "enriched" };
 }
 

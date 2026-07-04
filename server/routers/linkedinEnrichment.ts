@@ -14,9 +14,10 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router } from "../_core/trpc";
-import { workspaceProcedure } from "../_core/workspace";
+import { workspaceProcedure, adminWsProcedure } from "../_core/workspace";
 import { getDb } from "../db";
-import { activities } from "../../drizzle/schema";
+import { activities, tasks, workspaceSettings } from "../../drizzle/schema";
+import { reengageProspectManually } from "../services/linkedinEnrichment/jobChangeReengagement";
 import { recordAudit } from "../audit";
 import { checkLinkedInEnrichmentHealth } from "../services/linkedinEnrichment/health";
 import {
@@ -45,7 +46,7 @@ import {
   linkedinEnrichmentJobs,
   linkedinEnrichmentJobItems,
 } from "../../drizzle/schema";
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq, inArray, like } from "drizzle-orm";
 
 const TRIGGER_TYPES = [
   "people_bulk_action", "people_row_action", "open_profile_action", "full_profile_action",
@@ -463,5 +464,147 @@ export const linkedinEnrichmentRouter = router({
         .where(and(eq(prospects.workspaceId, ws), eq(prospects.id, pid), eq(prospects.profileImageSource, "enrichment_provider")));
       await recordAudit({ workspaceId: ws, actorUserId: ctx.user.id, action: "delete", entityType: "prospect_linkedin_enrichment", entityId: pid });
       return { ok: true as const };
+    }),
+
+  /* ─────────────────────── Job change alerts ──────────────────────────── */
+
+  /**
+   * Workspace-wide feed of detected job changes (company/title moves) for the
+   * Data enrichment › "Job change alerts" tab. A company move is the strongest
+   * re-engagement trigger; each row shows the before/after and whether a
+   * re-engagement task is already open for that prospect.
+   */
+  jobChanges: workspaceProcedure
+    .input(z.object({ limit: z.number().int().min(1).max(200).default(60) }).optional())
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) return [];
+      const ws = ctx.workspace.id;
+      const limit = input?.limit ?? 60;
+
+      // One meaningful row per change: company by name, or a title move.
+      const rows = await db
+        .select({
+          id: prospectLinkedinFieldChanges.id,
+          prospectId: prospectLinkedinFieldChanges.prospectId,
+          changeType: prospectLinkedinFieldChanges.changeType,
+          fieldName: prospectLinkedinFieldChanges.fieldName,
+          oldValue: prospectLinkedinFieldChanges.oldValue,
+          newValue: prospectLinkedinFieldChanges.newValue,
+          detectedAt: prospectLinkedinFieldChanges.detectedAt,
+          acknowledgedAt: prospectLinkedinFieldChanges.acknowledgedAt,
+          firstName: prospects.firstName,
+          lastName: prospects.lastName,
+          title: prospects.title,
+          company: prospects.company,
+          linkedinUrl: prospects.linkedinUrl,
+        })
+        .from(prospectLinkedinFieldChanges)
+        .innerJoin(prospects, and(
+          eq(prospects.workspaceId, prospectLinkedinFieldChanges.workspaceId),
+          eq(prospects.id, prospectLinkedinFieldChanges.prospectId),
+        ))
+        .where(and(
+          eq(prospectLinkedinFieldChanges.workspaceId, ws),
+          inArray(prospectLinkedinFieldChanges.fieldName, ["current_company_name", "current_title"]),
+          inArray(prospectLinkedinFieldChanges.changeType, ["company_changed", "title_changed"]),
+        ))
+        .orderBy(desc(prospectLinkedinFieldChanges.detectedAt))
+        .limit(limit);
+
+      // Which of these prospects already have an open re-engagement task?
+      const pids = [...new Set(rows.map((r) => r.prospectId))];
+      const active = pids.length
+        ? await db
+            .select({ relatedId: tasks.relatedId })
+            .from(tasks)
+            .where(and(
+              eq(tasks.workspaceId, ws),
+              eq(tasks.relatedType, "prospect"),
+              inArray(tasks.relatedId, pids),
+              like(tasks.title, "Re-engage:%"),
+              inArray(tasks.status, ["open", "draft", "in_progress", "snoozed"]),
+            ))
+        : [];
+      const reengaged = new Set(active.map((t) => t.relatedId));
+
+      return rows.map((r) => ({
+        id: r.id,
+        prospectId: r.prospectId,
+        name: `${r.firstName ?? ""} ${r.lastName ?? ""}`.trim() || "Unknown",
+        title: r.title,
+        company: r.company,
+        linkedinUrl: r.linkedinUrl,
+        changeType: r.changeType,
+        oldValue: r.oldValue,
+        newValue: r.newValue,
+        detectedAt: r.detectedAt,
+        acknowledged: !!r.acknowledgedAt,
+        hasReengagementTask: reengaged.has(r.prospectId),
+      }));
+    }),
+
+  /** Read the workspace's Job Change Autopilot config (any member). */
+  getJobChangeSettings: workspaceProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) return { mode: "off" as const, dailyCap: 25, lastRunAt: null as Date | null };
+    const [row] = await db
+      .select({
+        mode: workspaceSettings.jobChangeAutopilotMode,
+        dailyCap: workspaceSettings.jobChangeAutopilotDailyCap,
+        lastRunAt: workspaceSettings.jobChangeAutopilotLastRunAt,
+      })
+      .from(workspaceSettings)
+      .where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
+    return {
+      mode: (row?.mode ?? "off") as "off" | "approval" | "auto",
+      dailyCap: row?.dailyCap ?? 25,
+      lastRunAt: (row?.lastRunAt ?? null) as Date | null,
+    };
+  }),
+
+  /** Set the Job Change Autopilot mode / daily cap (admin only). */
+  setJobChangeSettings: adminWsProcedure
+    .input(z.object({
+      mode: z.enum(["off", "approval", "auto"]).optional(),
+      dailyCap: z.number().int().min(1).max(500).optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const set: Record<string, unknown> = {};
+      if (input.mode !== undefined) set.jobChangeAutopilotMode = input.mode;
+      if (input.dailyCap !== undefined) set.jobChangeAutopilotDailyCap = input.dailyCap;
+      if (Object.keys(set).length === 0) return { ok: true as const };
+      // Upsert: workspace_settings row may not exist yet.
+      await db
+        .insert(workspaceSettings)
+        .values({ workspaceId: ctx.workspace.id, ...set } as never)
+        .onDuplicateKeyUpdate({ set: set as never });
+      return { ok: true as const };
+    }),
+
+  /** Manually create a re-engagement task for a prospect who changed jobs. */
+  reengage: workspaceProcedure
+    .input(z.object({ prospectId: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      const res = await reengageProspectManually(ctx.workspace.id, input.prospectId);
+      if (!res.created) {
+        if (res.reason === "already_active") {
+          throw new TRPCError({ code: "CONFLICT", message: "A re-engagement task is already open for this prospect." });
+        }
+        if (res.reason === "no_company_change") {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "No detected company change for this prospect." });
+        }
+        if (res.reason === "cap_reached") {
+          throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: "Daily re-engagement cap reached." });
+        }
+        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Could not create the re-engagement task." });
+      }
+      await emitActivity({
+        workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, prospectId: input.prospectId,
+        subject: "Re-engagement task created from a detected job change",
+      });
+      return { ok: true as const, taskStatus: res.taskStatus };
     }),
 });

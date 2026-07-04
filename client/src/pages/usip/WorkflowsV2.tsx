@@ -23,7 +23,7 @@ import {
 } from "@/components/ui/select";
 import {
   Workflow, ListTodo, CalendarClock, MessageSquare, KanbanSquare, Bot, Zap, Sparkles, Rocket,
-  ExternalLink, Play, Pause, Check, X, Activity, GitBranch, Users, Mail, Share2,
+  ExternalLink, Play, Pause, Check, X, Activity, GitBranch, Users, Mail, Share2, UserRoundCog,
 } from "lucide-react";
 
 function fmtWhen(d?: string | Date | null): string {
@@ -45,12 +45,14 @@ export default function WorkflowsV2() {
   const convAp = trpc.conversations.getAutopilotSettings.useQuery();
   const dealAp = trpc.deals.getAutopilotSettings.useQuery();
   const socialAp = trpc.unipile.getSocialAutopilotSettings.useQuery(undefined as any, { retry: false });
+  const jobChangeAp = trpc.linkedinEnrichment.getJobChangeSettings.useQuery(undefined as any, { retry: false });
 
   const setTaskAp = trpc.tasks.setAutopilotSettings.useMutation({ onSuccess: () => utils.tasks.getAutopilotSettings.invalidate() });
   const setMeetAp = trpc.meetings.setAutopilotSettings.useMutation({ onSuccess: () => utils.meetings.getAutopilotSettings.invalidate() });
   const setConvAp = trpc.conversations.setAutopilotSettings.useMutation({ onSuccess: () => utils.conversations.getAutopilotSettings.invalidate() });
   const setDealAp = trpc.deals.setAutopilotSettings.useMutation({ onSuccess: () => utils.deals.getAutopilotSettings.invalidate() });
   const setSocialAp = trpc.unipile.setSocialAutopilotSettings.useMutation({ onSuccess: () => utils.unipile.getSocialAutopilotSettings.invalidate(), onError: (e) => toast.error(e.message.includes("FORBIDDEN") ? "Only admins can change Social Autopilot" : e.message) });
+  const setJobChangeAp = trpc.linkedinEnrichment.setJobChangeSettings.useMutation({ onSuccess: () => utils.linkedinEnrichment.getJobChangeSettings.invalidate(), onError: (e) => toast.error(e.message.includes("FORBIDDEN") ? "Only admins can change Job Change Autopilot" : e.message) });
 
   // Email AI auto-send — a boolean autonomy control, surfaced here too.
   const emailAuto = trpc.emailAutoSend.getAutoSendSettings.useQuery(undefined as any, { retry: false });
@@ -74,6 +76,7 @@ export default function WorkflowsV2() {
     { key: "conversations", label: "Conversation Autopilot", icon: MessageSquare, blurb: "Classify replies + act", href: "/v2/conversations", mode: convAp.data?.mode ?? "off", lastRunAt: convAp.data?.lastRunAt, set: (m: string) => setConvAp.mutate({ mode: m as any }) },
     { key: "deals", label: "Deal Autopilot", icon: KanbanSquare, blurb: "Advance deals toward close", href: "/v2/deals", mode: dealAp.data?.mode ?? "off", lastRunAt: dealAp.data?.lastRunAt, set: (m: string) => setDealAp.mutate({ mode: m as any }) },
     { key: "social", label: "Social Autopilot", icon: Share2, blurb: "Auto-invite leads → opener on accept", href: "/v2/conversations", mode: socialAp.data?.mode ?? "off", lastRunAt: socialAp.data?.lastRunAt, set: (m: string) => setSocialAp.mutate({ mode: m as any }) },
+    { key: "jobChange", label: "Job Change Autopilot", icon: UserRoundCog, blurb: "Re-engage when a prospect changes jobs", href: "/v2/data-enrichment", mode: jobChangeAp.data?.mode ?? "off", lastRunAt: jobChangeAp.data?.lastRunAt, set: (m: string) => setJobChangeAp.mutate({ mode: m as any }) },
   ];
   const onCount = autopilots.filter((a) => a.mode !== "off").length;
 
@@ -83,6 +86,7 @@ export default function WorkflowsV2() {
     setConvAp.mutate({ mode: mode as any });
     setDealAp.mutate({ mode: mode as any });
     setSocialAp.mutate({ mode: mode as any });
+    setJobChangeAp.mutate({ mode: mode as any });
     toast.success(mode === "off" ? "All autopilots turned off" : `All autopilots set to ${MODE_LABEL[mode]}`);
   };
 
@@ -93,6 +97,7 @@ export default function WorkflowsV2() {
     setConvAp.mutate({ mode: "approval" as any });
     setDealAp.mutate({ mode: "approval" as any });
     setSocialAp.mutate({ mode: "approval" as any });
+    setJobChangeAp.mutate({ mode: "approval" as any });
     setEmailAutoEnabled(true);
     toast.success("Full autonomy on (Approve mode) — AI actions will queue for your review");
   };
