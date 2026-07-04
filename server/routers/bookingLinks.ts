@@ -64,21 +64,48 @@ export function generateSlots(
   return slots;
 }
 
+/**
+ * Busy intervals for a rep over the horizon — the union of synced external
+ * calendar_events AND already-scheduled `meetings`. Including meetings is what
+ * closes the double-booking window: a just-booked slot is written to the
+ * provider by sendMeetingInvite but doesn't appear in calendar_events until the
+ * next sync, whereas its `meetings` row (with scheduledAt) is immediately
+ * consistent — so back-to-back bookings of the same slot are correctly blocked.
+ */
+const BUSY_MEETING_STATUSES = ["proposed", "invited", "scheduled", "rescheduled"];
+
 async function busyEventsFor(workspaceId: number, userId: number, nowMs: number) {
   const db = await getDb();
   if (!db) return [];
   const from = new Date(nowMs);
   const to = new Date(nowMs + HORIZON_DAYS * 86400000);
-  const rows = await db
-    .select({ startAt: calendarEvents.startAt, endAt: calendarEvents.endAt })
-    .from(calendarEvents)
-    .where(and(
-      eq(calendarEvents.workspaceId, workspaceId),
-      eq(calendarEvents.userId, userId),
-      gte(calendarEvents.startAt, from),
-      lte(calendarEvents.startAt, to),
-    ));
-  return rows.map((r) => ({ startAt: r.startAt as Date, endAt: r.endAt as Date }));
+  const [events, mtgs] = await Promise.all([
+    db.select({ startAt: calendarEvents.startAt, endAt: calendarEvents.endAt })
+      .from(calendarEvents)
+      .where(and(
+        eq(calendarEvents.workspaceId, workspaceId),
+        eq(calendarEvents.userId, userId),
+        gte(calendarEvents.startAt, from),
+        lte(calendarEvents.startAt, to),
+      )),
+    // scheduledAt IS NULL naturally excluded (NULL comparisons are false), so
+    // this only catches meetings with a concrete booked time.
+    db.select({ startAt: meetings.scheduledAt, durationMin: meetings.durationMin, status: meetings.status })
+      .from(meetings)
+      .where(and(
+        eq(meetings.workspaceId, workspaceId),
+        eq(meetings.ownerUserId, userId),
+        gte(meetings.scheduledAt, from),
+        lte(meetings.scheduledAt, to),
+      )),
+  ]);
+  const busy = events.map((r) => ({ startAt: r.startAt as Date, endAt: r.endAt as Date }));
+  for (const m of mtgs) {
+    if (!m.startAt || !BUSY_MEETING_STATUSES.includes(m.status as string)) continue;
+    const s = m.startAt as Date;
+    busy.push({ startAt: s, endAt: new Date(s.getTime() + (m.durationMin ?? 30) * 60000) });
+  }
+  return busy;
 }
 
 export const bookingLinksRouter = router({

@@ -27,6 +27,7 @@ export default function BookingPage() {
   const [email, setEmail] = useState("");
   const [notes, setNotes] = useState("");
   const [done, setDone] = useState(false);
+  const [calendarBooked, setCalendarBooked] = useState(false);
 
   const tz = useMemo(() => {
     try { return Intl.DateTimeFormat().resolvedOptions().timeZone; } catch { return "your local time"; }
@@ -53,7 +54,7 @@ export default function BookingPage() {
     e.preventDefault();
     if (!selected) return;
     book.mutate({ slug, startAt: selected, name, email, notes: notes || undefined }, {
-      onSuccess: () => setDone(true),
+      onSuccess: (r: any) => { setCalendarBooked(!!r?.calendarBooked); setDone(true); },
     });
   };
 
@@ -75,7 +76,9 @@ export default function BookingPage() {
               Your meeting with {link.data.ownerName} is set for<br />
               <span className="font-medium text-foreground">{selected ? fmtFull(selected) : ""}</span>.
             </p>
-            <p className="text-xs text-muted-foreground mt-3">A calendar invite is on its way to {email}.</p>
+            <p className="text-xs text-muted-foreground mt-3">
+              {calendarBooked ? <>A calendar invite is on its way to {email}.</> : <>We've noted your details — {link.data.ownerName} will confirm shortly.</>}
+            </p>
           </div>
         ) : (
           <div className="space-y-5">
