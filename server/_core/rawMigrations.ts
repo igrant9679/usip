@@ -2392,6 +2392,40 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  {
+    name: "0112_landing_pages.sql",
+    statements: [
+      `CREATE TABLE IF NOT EXISTS \`landing_pages\` (
+        \`id\` int NOT NULL AUTO_INCREMENT,
+        \`workspaceId\` int NOT NULL,
+        \`slug\` varchar(80) NOT NULL,
+        \`name\` varchar(160) NOT NULL,
+        \`status\` enum('draft','published') NOT NULL DEFAULT 'draft',
+        \`headline\` varchar(240) NOT NULL,
+        \`subheadline\` varchar(500) NULL,
+        \`heroImageUrl\` text NULL,
+        \`themeColor\` varchar(16) NOT NULL DEFAULT '#14B89A',
+        \`sections\` json NULL,
+        \`seoDescription\` varchar(300) NULL,
+        \`formHeading\` varchar(200) NOT NULL DEFAULT 'Get in touch',
+        \`ctaButtonLabel\` varchar(80) NOT NULL DEFAULT 'Submit',
+        \`formFields\` json NULL,
+        \`autoCreateLead\` boolean NOT NULL DEFAULT true,
+        \`autoRoute\` boolean NOT NULL DEFAULT true,
+        \`autoEnrollSequenceId\` int NULL,
+        \`redirectUrl\` text NULL,
+        \`viewCount\` int NOT NULL DEFAULT 0,
+        \`submitCount\` int NOT NULL DEFAULT 0,
+        \`createdByUserId\` int NULL,
+        \`createdAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        \`updatedAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (\`id\`),
+        UNIQUE KEY \`ux_lp_slug\` (\`slug\`),
+        KEY \`ix_lp_ws\` (\`workspaceId\`, \`status\`)
+      )`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

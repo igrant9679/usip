@@ -260,7 +260,7 @@ const _LEGACY_NAV: NavGroup[] = [
 // Light, sectioned rail. Top quick-links, collapsible sections, then a "More"
 // section that preserves every pre-redesign page. New section items point at
 // /v2/* placeholder pages we build out one at a time.
-type NavLink = { href: string; label: string; icon: any; badge?: string; trailingChevron?: boolean; color?: string; darkColor?: string };
+type NavLink = { href: string; label: string; icon: any; badge?: string; trailingChevron?: boolean; color?: string; darkColor?: string; adminOnly?: boolean };
 type NavSection = { label: string; icon: any; items: NavLink[]; color: string; darkColor: string };
 
 // Top quick-links carry their own accent (brand blue / assistant violet) so the
@@ -324,6 +324,7 @@ const SECTIONS: NavSection[] = [
     items: [
       { href: "/v2/website-visitors", label: "Website visitors", icon: Globe, badge: "New" },
       { href: "/v2/forms", label: "Forms", icon: FileText },
+      { href: "/v2/landing-pages", label: "Landing Pages", icon: LayoutTemplate, adminOnly: true },
     ],
   },
   {
@@ -560,7 +561,7 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
         </button>
         {!collapsed && (
           <div className="mt-0.5 ml-3 space-y-0.5 border-l-2 pl-1.5" style={{ borderColor: `${color}66` }}>
-            {s.items.map((it) => renderNavLink(it, { color: s.color, darkColor: s.darkColor }))}
+            {s.items.filter((it) => !it.adminOnly || current?.role === "admin" || current?.role === "super_admin").map((it) => renderNavLink(it, { color: s.color, darkColor: s.darkColor }))}
           </div>
         )}
       </div>

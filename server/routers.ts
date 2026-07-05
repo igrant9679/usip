@@ -39,6 +39,7 @@ import { conversationsRouter } from "./routers/conversations";
 import { dealsRouter } from "./routers/deals";
 import { formsRouter } from "./routers/forms";
 import { bookingLinksRouter } from "./routers/bookingLinks";
+import { landingPagesRouter } from "./routers/landingPages";
 import { websiteVisitorsRouter } from "./routers/websiteVisitors";
 import { proposalsRouter } from "./routers/proposals";
 import { unipileRouter } from "./routers/unipile";
@@ -87,6 +88,7 @@ export const appRouter = router({
   deals: dealsRouter,
   forms: formsRouter,
   bookingLinks: bookingLinksRouter,
+  landingPages: landingPagesRouter,
   websiteVisitors: websiteVisitorsRouter,
   activities: activitiesRouter,
   attachments: attachmentsRouter,

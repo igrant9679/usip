@@ -65,6 +65,8 @@ import SavedRecordsV2 from "@/pages/usip/SavedRecordsV2";
 import FormsV2 from "@/pages/usip/FormsV2";
 import PublicForm from "@/pages/PublicForm";
 import BookingPage from "@/pages/BookingPage";
+import LandingPage from "@/pages/LandingPage";
+import LandingPages from "@/pages/usip/LandingPages";
 import Team from "@/pages/usip/Team";
 import Territories from "@/pages/usip/Territories";
 import Workflows from "@/pages/usip/Workflows";
@@ -413,6 +415,8 @@ function Router() {
       <Route path="/v2/forms"><AuthGate><FormsV2 /></AuthGate></Route>
       <Route path="/f/:publicId"><PublicForm /></Route>
       <Route path="/b/:slug"><BookingPage /></Route>
+      <Route path="/l/:slug"><LandingPage /></Route>
+      <Route path="/v2/landing-pages"><AuthGate><LandingPages /></AuthGate></Route>
       <Route path="/v2/saved-people"><AuthGate><SavedRecordsV2 entityType="people" /></AuthGate></Route>
       <Route path="/v2/saved-companies"><AuthGate><SavedRecordsV2 entityType="companies" /></AuthGate></Route>
       <Route path="/v2/deliverability"><AuthGate><Deliverability /></AuthGate></Route>

@@ -1483,6 +1483,51 @@ export const bookingLinks = mysqlTable(
 export type BookingLink = typeof bookingLinks.$inferSelect;
 
 /* ──────────────────────────────────────────────────────────────────────────
+   Landing Pages (Migration 0112) — Admin-authored, publicly-hosted marketing
+   pages with lead capture. Hosted at /l/:slug; a submission autonomously
+   creates + routes + (optionally) enrolls a lead, exactly like public forms.
+   Admin-only management (enforced in the router via adminWsProcedure).
+   ────────────────────────────────────────────────────────────────────────── */
+export const landingPages = mysqlTable(
+  "landing_pages",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    slug: varchar("slug", { length: 80 }).notNull(), // public URL: /l/:slug
+    name: varchar("name", { length: 160 }).notNull(), // internal name
+    status: mysqlEnum("status", ["draft", "published"]).default("draft").notNull(),
+    // ── Content ──
+    headline: varchar("headline", { length: 240 }).notNull(),
+    subheadline: varchar("subheadline", { length: 500 }),
+    heroImageUrl: text("heroImageUrl"),
+    themeColor: varchar("themeColor", { length: 16 }).default("#14B89A").notNull(),
+    // sections: [{ heading, body }] rendered as text blocks (XSS-safe)
+    sections: json("sections"),
+    seoDescription: varchar("seoDescription", { length: 300 }),
+    // ── Lead-capture form ──
+    formHeading: varchar("formHeading", { length: 200 }).default("Get in touch").notNull(),
+    ctaButtonLabel: varchar("ctaButtonLabel", { length: 80 }).default("Submit").notNull(),
+    // formFields: array of { key, label, required } (name/email/company/phone/message)
+    formFields: json("formFields"),
+    autoCreateLead: boolean("autoCreateLead").default(true).notNull(),
+    autoRoute: boolean("autoRoute").default(true).notNull(),
+    autoEnrollSequenceId: int("autoEnrollSequenceId"),
+    redirectUrl: text("redirectUrl"),
+    // ── Metrics ──
+    viewCount: int("viewCount").default(0).notNull(),
+    submitCount: int("submitCount").default(0).notNull(),
+    createdByUserId: int("createdByUserId"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    bySlug: uniqueIndex("ux_lp_slug").on(t.slug),
+    byWs: index("ix_lp_ws").on(t.workspaceId, t.status),
+  }),
+);
+export type LandingPage = typeof landingPages.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
    Login History
    ────────────────────────────────────────────────────────────────────────── */
 export const loginHistory = mysqlTable(
