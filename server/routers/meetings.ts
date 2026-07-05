@@ -9,9 +9,9 @@
  * workspace_settings and governs autonomous proposing + sending.
  */
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray, like } from "drizzle-orm";
 import { z } from "zod";
-import { meetings, prospects, workspaceSettings } from "../../drizzle/schema";
+import { meetings, prospects, tasks, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { recordAudit } from "../audit";
 import { router } from "../_core/trpc";
@@ -147,9 +147,53 @@ export const meetingsRouter = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const status = input.disposition === "no_show" ? "no_show" : "completed";
+      const [m] = await db.select().from(meetings)
+        .where(and(eq(meetings.id, input.id), eq(meetings.workspaceId, ctx.workspace.id)));
+      if (!m) throw new TRPCError({ code: "NOT_FOUND" });
       await db.update(meetings).set({ status, disposition: input.disposition ?? null } as never)
         .where(and(eq(meetings.id, input.id), eq(meetings.workspaceId, ctx.workspace.id)));
-      return { ok: true };
+
+      // No-show rebound: autonomously create a high-priority re-engagement task so
+      // a missed meeting is recovered (reach out + share the booking link to
+      // self-rebook) rather than silently lost. Deduped per linked record.
+      let reboundTaskId: number | null = null;
+      if (status === "no_show") {
+        try {
+          const name = m.contactName?.trim() || "the prospect";
+          let already = false;
+          if (m.relatedType && m.relatedId) {
+            const existing = await db.select({ id: tasks.id }).from(tasks).where(and(
+              eq(tasks.workspaceId, ctx.workspace.id),
+              eq(tasks.relatedType, m.relatedType),
+              eq(tasks.relatedId, m.relatedId),
+              like(tasks.title, "Re-book no-show:%"),
+              inArray(tasks.status, ["open", "draft", "in_progress", "snoozed"]),
+            )).limit(1);
+            already = existing.length > 0;
+          }
+          if (!already) {
+            const ins = await db.insert(tasks).values({
+              workspaceId: ctx.workspace.id,
+              title: `Re-book no-show: ${name}`.slice(0, 240),
+              description: `${name} didn't attend "${m.title}". Reach out to reschedule — share your booking link so they can self-book a new time.`,
+              type: "follow_up",
+              priority: "high",
+              status: "open",
+              dueAt: new Date(Date.now() + 86400000),
+              ownerUserId: m.ownerUserId ?? null,
+              relatedType: m.relatedType ?? null,
+              relatedId: m.relatedId ?? null,
+              source: "ai",
+              aiReasoning: "Auto-created after a no-show to recover the meeting.",
+              aiConfidence: 90,
+            } as never);
+            reboundTaskId = Number((ins as any)[0]?.insertId ?? 0) || null;
+          }
+        } catch (e) {
+          console.error("[meetings.complete] no-show rebound task failed:", (e as Error).message);
+        }
+      }
+      return { ok: true, reboundTaskId };
     }),
 
   cancel: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
