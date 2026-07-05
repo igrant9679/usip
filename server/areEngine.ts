@@ -52,6 +52,7 @@ import {
 import { searchLinkedInPeople, type UnipileLinkedInSearchHit } from "./lib/unipile";
 import { listUsableAccounts } from "./services/linkedinLookup";
 import { sendWorkspaceEmail } from "./emailDelivery";
+import { resolveBookingUrl } from "./mergeVars";
 
 /* ─── Per-tick bounds (keep LLM cost + wall-time predictable) ───────────── */
 /** Max prospects enriched per engine cycle. Enrichment runs ONE AT A TIME
@@ -84,12 +85,13 @@ export interface AreEngineResult {
 /* ─── Helpers ───────────────────────────────────────────────────────────── */
 
 /** Resolve {{merge tags}} in an outreach body against the real prospect. */
-function applyMerge(text: string, p: Prospect): string {
+function applyMerge(text: string, p: Prospect, bookingUrl = ""): string {
   return String(text ?? "")
     .replace(/\{\{\s*firstName\s*\}\}/gi, p.firstName ?? "there")
     .replace(/\{\{\s*lastName\s*\}\}/gi, p.lastName ?? "")
     .replace(/\{\{\s*(company|companyName)\s*\}\}/gi, p.companyName ?? "your company")
     .replace(/\{\{\s*title\s*\}\}/gi, p.title ?? "")
+    .replace(/\{\{\s*bookingLink\s*\}\}/gi, bookingUrl)
     .replace(/\{\{[^}]+\}\}/g, ""); // strip any unresolved tags
 }
 
@@ -99,7 +101,14 @@ function textToHtml(text: string): string {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
-  return esc
+  // Render Markdown links [label](url) AND bare URLs in one pass (no double-wrap),
+  // so a {{bookingLink}} CTA — or any link — is actually clickable.
+  const linked = esc.replace(
+    /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<>"]+)/g,
+    (_m, label: string, mdUrl: string, bareUrl: string) =>
+      mdUrl ? `<a href="${mdUrl}">${label}</a>` : `<a href="${bareUrl}">${bareUrl}</a>`,
+  );
+  return linked
     .split(/\n{2,}/)
     .map((para) => `<p>${para.replace(/\n/g, "<br>")}</p>`)
     .join("\n");
@@ -550,6 +559,8 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
         .orderBy(areExecutionQueue.scheduledAt)
         .limit(remaining);
 
+      // Resolved lazily on the first email step, then reused for the batch.
+      let bookingUrl: string | undefined;
       for (const step of due) {
         // Non-email channels are not wired in v1 — skip cleanly so they
         // never block the queue.
@@ -626,8 +637,11 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
         }
 
         const mc = (step.messageContent ?? {}) as { subject?: string; body?: string };
+        // The owner's booking link, so a {{bookingLink}} CTA lets the prospect
+        // self-book from fully-autonomous ARE outreach. Resolved once per campaign.
+        if (bookingUrl === undefined) bookingUrl = await resolveBookingUrl(wsId, campaign.ownerUserId);
         const subject = applyMerge(mc.subject || `A quick note for ${p.firstName ?? "you"}`, p);
-        const body = applyMerge(mc.body ?? "", p);
+        const body = applyMerge(mc.body ?? "", p, bookingUrl);
         const sendRes = await sendWorkspaceEmail(wsId, {
           to: p.email,
           subject,

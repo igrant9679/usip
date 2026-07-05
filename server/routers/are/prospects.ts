@@ -513,7 +513,7 @@ async function personalizeForProspect(
     `## Prospect\n- Name: ${prospect.firstName} ${prospect.lastName}\n- Title: ${prospect.title ?? "Unknown"}\n- Company: ${prospect.companyName ?? "Unknown"}\n- Industry: ${prospect.industry ?? "Unknown"}\n- Company one-liner: ${intel.companyOneLiner ?? ""}\n- LinkedIn summary: ${intel.linkedinSummary ?? ""}\n\n` +
     `## Primary hook\n${primaryHook}\n\n` +
     `## Pain signals\n${painSignals.slice(0, 2).map((p) => `- ${p.signal}: ${p.evidence}`).join("\n") || "(none)"}\n\n` +
-    `Return one filled step per template step (same stepIndex, day, channel). Keep emails under 120 words. Use {{firstName}} / {{company}} merge tags where natural.`;
+    `Return one filled step per template step (same stepIndex, day, channel). Keep emails under 120 words. Use {{firstName}} / {{company}} merge tags where natural. When a step's CTA is to book a meeting, make the ask a Markdown link to the sender's scheduling page — [grab 15 minutes]({{bookingLink}}) — instead of proposing specific times; {{bookingLink}} is substituted at send time. Never paste {{bookingLink}} as a raw token.`;
 
   const result = await invokeLLM({
     workspaceId: campaign.workspaceId,
