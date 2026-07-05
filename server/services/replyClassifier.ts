@@ -18,6 +18,8 @@ import { emailReplies, emailSuppressions, tasks, unipileMessages, workspaceSetti
 import { getDb } from "../db";
 import { invokeLLM } from "../_core/llm";
 import { createMeetingProposal } from "./meetingScheduler";
+import { sendWorkspaceEmail } from "../emailDelivery";
+import { resolveBookingUrl } from "../mergeVars";
 
 export const REPLY_CLASSES = [
   "willing_to_meet",
@@ -42,6 +44,10 @@ export interface ReplyClassification {
 function truncate(s: string | null | undefined, n: number): string {
   const t = (s ?? "").replace(/\s+/g, " ").trim();
   return t.length > n ? t.slice(0, n) + "…" : t;
+}
+
+function escHtml(s: string): string {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
 /** Classify a single reply and persist the classification. Returns it (or null). */
@@ -168,8 +174,36 @@ export async function applyReplyAction(workspaceId: number, reply: any, byUser: 
         descriptor: `replied with interest: "${truncate(reply.bodyText || reply.bodyHtml, 200)}"`,
         source: "inbound",
       });
-      await createReplyTask(db, workspaceId, reply, `Meeting requested — ${name}`, "high", "meeting_prep");
       action = "meeting_proposed";
+      // AUTO mode only (byUser=false): reply to the interested prospect with the
+      // rep's booking link so they self-book immediately — converting the
+      // highest-intent moment into a booked meeting with no human step. In
+      // approval mode a rep sends it. Best-effort: falls back to proposal + task.
+      let bookingLinkSent = false;
+      if (!byUser && reply.fromEmail) {
+        try {
+          const bookingUrl = await resolveBookingUrl(workspaceId, reply.userId ?? null);
+          if (bookingUrl) {
+            const first = String(reply.fromName || "").trim().split(/\s+/)[0] || "there";
+            const subject = reply.subject ? `Re: ${reply.subject}`.slice(0, 255) : "Great — let's find a time";
+            const html =
+              `<p>Hi ${escHtml(first)},</p>` +
+              `<p>Glad to hear it! Pick whatever time works best for you and it'll drop straight onto my calendar:</p>` +
+              `<p><a href="${escHtml(bookingUrl)}">Book a time</a></p>` +
+              `<p>Looking forward to it.</p>`;
+            const res = await sendWorkspaceEmail(workspaceId, { to: reply.fromEmail, subject, html });
+            bookingLinkSent = res.ok;
+          }
+        } catch (e) {
+          console.error(`[ReplyClassifier] booking-link auto-reply failed for reply ${reply.id}:`, e);
+        }
+      }
+      if (bookingLinkSent) action = "booking_link_sent";
+      await createReplyTask(
+        db, workspaceId, reply,
+        bookingLinkSent ? `Booking link sent — ${name} (awaiting self-book)` : `Meeting requested — ${name}`,
+        "high", "meeting_prep",
+      );
       break;
     }
     case "follow_up_question":
