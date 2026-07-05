@@ -1843,11 +1843,12 @@ STRUCTURE
 
 MERGE FIELDS
 You may use these placeholders and the send pipeline will substitute them per recipient:
-  {{firstName}}, {{lastName}}, {{fullName}}, {{title}}, {{company}}
+  {{firstName}}, {{lastName}}, {{fullName}}, {{title}}, {{company}}, {{bookingLink}}
 Use {{firstName}} for the greeting when one is appropriate. Skip a greeting entirely if the opening line works without one. Never invent placeholder names — leave the merge field as-is.
+{{bookingLink}} resolves to the sender's self-serve scheduling page — use it ONLY when the ask is to book a meeting, e.g. as a Markdown link [grab a time]({{bookingLink}}). Never paste it as a raw token.
 
 LINKS
-If you include a hyperlink (case study, calendar, demo video, etc.), use Markdown syntax: [readable label](https://full-url). Both Markdown links and bare URLs are click-tracked, but Markdown produces a cleaner label. Only include a link if it materially helps the ask.
+If you include a hyperlink (case study, calendar, demo video, etc.), use Markdown syntax: [readable label](https://full-url). Both Markdown links and bare URLs are click-tracked, but Markdown produces a cleaner label. Only include a link if it materially helps the ask. To let the prospect self-book, link the meeting ask to {{bookingLink}} rather than proposing specific times.
 
 DO NOT
 - Don't fabricate facts, metrics, customer names, or quotes.

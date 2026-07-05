@@ -25,7 +25,7 @@ import {
 import { getDb } from "../db";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { router } from "../_core/trpc";
-import { buildMergeContextFromDb, resolveMergeVars, textToHtml, injectTracking } from "../mergeVars";
+import { buildMergeContextFromDb, resolveMergeVars, textToHtml, injectTracking, resolveBookingUrl } from "../mergeVars";
 import { isEmailSuppressed } from "./emailSuppressions";
 
 /* ─── AES-256-GCM helpers ─────────────────────────────────────────────── */
@@ -246,7 +246,10 @@ export const smtpConfigRouter = router({
         leadId: draft.toLeadId,
         prospectId: draft.toProspectId,
       });
-      mergeCtx.sender = { name: cfg.fromName, email: cfg.fromEmail };
+      mergeCtx.sender = {
+        name: cfg.fromName, email: cfg.fromEmail,
+        bookingUrl: await resolveBookingUrl(ctx.workspace.id, draft.createdByUserId),
+      };
       const resolvedSubject = resolveMergeVars(draft.subject, mergeCtx);
       const resolvedBody = resolveMergeVars(draft.body, mergeCtx);
 
@@ -340,7 +343,10 @@ export const smtpConfigRouter = router({
             leadId: draft.toLeadId,
             prospectId: draft.toProspectId,
           });
-          mergeCtx.sender = { name: cfg.fromName, email: cfg.fromEmail };
+          mergeCtx.sender = {
+            name: cfg.fromName, email: cfg.fromEmail,
+            bookingUrl: await resolveBookingUrl(ctx.workspace.id, draft.createdByUserId),
+          };
           const resolvedSubject = resolveMergeVars(draft.subject, mergeCtx);
           const resolvedBody = resolveMergeVars(draft.body, mergeCtx);
           // Pre-send: tracking token + pixel injection
@@ -462,7 +468,10 @@ export const smtpConfigRouter = router({
       // Inject sender info into context. (Was assigned as top-level
       // senderName/senderEmail keys, which buildVarMap never reads — so
       // {{senderName}}/{{senderEmail}} stayed unresolved in previews.)
-      mergeCtx.sender = { name: ctx.user.name ?? "", email: ctx.user.email ?? "" };
+      mergeCtx.sender = {
+        name: ctx.user.name ?? "", email: ctx.user.email ?? "",
+        bookingUrl: await resolveBookingUrl(ctx.workspace.id, ctx.user.id),
+      };
 
       const resolvedSubject = resolveMergeVars(draft.subject ?? "", mergeCtx);
       const resolvedBody = resolveMergeVars(draft.body ?? "", mergeCtx);

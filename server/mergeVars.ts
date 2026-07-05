@@ -11,14 +11,15 @@
  *             {{revenueBand}}, {{region}}
  *   Custom:   {{customField.anyKey}} — reads from contact.customFields JSON
  *   Sender:   {{senderName}}, {{senderEmail}} — from SMTP config
+ *             {{bookingLink}} — the sending rep's self-serve booking URL (/b/:slug)
  *   Fallback: {{firstName|Friend}} — use "Friend" if firstName is empty
  *
  * Unknown variables are left as-is so reviewers can spot unresolved tokens.
  */
 
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { getDb } from "./db";
-import { contacts, accounts, leads, prospects } from "../drizzle/schema";
+import { contacts, accounts, leads, prospects, bookingLinks, users } from "../drizzle/schema";
 
 export type MergeContext = {
   contact?: {
@@ -43,8 +44,58 @@ export type MergeContext = {
   sender?: {
     name?: string | null;
     email?: string | null;
+    /** The sending rep's public booking URL (…/b/:slug), for {{bookingLink}}. */
+    bookingUrl?: string | null;
   };
 };
+
+/** App base URL for building public links (booking, tracking). */
+export function appBaseUrl(): string {
+  try {
+    return process.env.VITE_OAUTH_PORTAL_URL
+      ? new URL(process.env.VITE_OAUTH_PORTAL_URL).origin
+      : "http://localhost:3000";
+  } catch {
+    return "http://localhost:3000";
+  }
+}
+
+/**
+ * Resolve a rep's self-serve booking URL for {{bookingLink}}, lazily
+ * provisioning a link if the rep doesn't have one yet (same get-or-create as the
+ * bookingLinks.mine endpoint) so a meeting-ask draft never renders a broken CTA.
+ * Returns "" only when the link is explicitly deactivated or on any failure.
+ */
+export async function resolveBookingUrl(
+  workspaceId: number,
+  userId: number | null | undefined,
+  baseUrl: string = appBaseUrl(),
+): Promise<string> {
+  if (!userId || !baseUrl) return "";
+  try {
+    const db = await getDb();
+    if (!db) return "";
+    let [link] = await db
+      .select({ slug: bookingLinks.slug, active: bookingLinks.active })
+      .from(bookingLinks)
+      .where(and(eq(bookingLinks.workspaceId, workspaceId), eq(bookingLinks.userId, userId)));
+    if (!link) {
+      const [u] = await db.select({ name: users.name }).from(users).where(eq(users.id, userId));
+      const base = (u?.name ?? `rep-${userId}`).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || `rep-${userId}`;
+      const slug = `${base}-${userId}`.slice(0, 80);
+      await db.insert(bookingLinks).values({ workspaceId, userId, slug, title: "Book a meeting" } as never);
+      [link] = await db
+        .select({ slug: bookingLinks.slug, active: bookingLinks.active })
+        .from(bookingLinks)
+        .where(and(eq(bookingLinks.workspaceId, workspaceId), eq(bookingLinks.userId, userId)));
+    }
+    if (!link || !link.active) return "";
+    return `${baseUrl.replace(/\/+$/, "")}/b/${link.slug}`;
+  } catch (e) {
+    console.error("[mergeVars] resolveBookingUrl failed:", (e as Error).message);
+    return "";
+  }
+}
 
 /**
  * Build a flat key→value map from the merge context.
@@ -79,6 +130,7 @@ function buildVarMap(ctx: MergeContext): Map<string, string> {
   // Sender fields
   m.set("senderName", s.name ?? "");
   m.set("senderEmail", s.email ?? "");
+  m.set("bookingLink", s.bookingUrl ?? "");
 
   // Custom fields: {{customField.key}}
   const custom = c.customFields as Record<string, unknown> | null | undefined;
@@ -157,10 +209,13 @@ export function textToHtml(text: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
 
-  // Linkify URLs
+  // Render Markdown links [label](url) AND bare URLs in a single pass so a URL
+  // inside a Markdown link isn't double-wrapped. The Markdown alternative is
+  // tried first and consumes the whole token, so its url can't re-match as bare.
   const linked = escaped.replace(
-    /(https?:\/\/[^\s<>"]+)/g,
-    '<a href="$1">$1</a>',
+    /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<>"]+)/g,
+    (_m, label: string, mdUrl: string, bareUrl: string) =>
+      mdUrl ? `<a href="${mdUrl}">${label}</a>` : `<a href="${bareUrl}">${bareUrl}</a>`,
   );
 
   // Wrap in minimal HTML
