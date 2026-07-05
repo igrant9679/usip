@@ -20,6 +20,7 @@ import { invokeLLM } from "../_core/llm";
 import { createMeetingProposal } from "./meetingScheduler";
 import { sendWorkspaceEmail } from "../emailDelivery";
 import { resolveBookingUrl } from "../mergeVars";
+import { sendMessage } from "../lib/unipile";
 
 export const REPLY_CLASSES = [
   "willing_to_meet",
@@ -283,6 +284,7 @@ export async function classifyAndHandleSocialMessage(
   workspaceId: number,
   msg: any,
   ownerUserId: number | null,
+  mode: "approval" | "auto" = "auto",
 ): Promise<string> {
   const db = await getDb();
   if (!db) return "none";
@@ -348,13 +350,31 @@ Classes (pick exactly one):
   let action = "none";
   let meetingId: number | null = null;
   switch (cls.replyClass) {
-    case "willing_to_meet":
+    case "willing_to_meet": {
       meetingId = await createMeetingProposal(workspaceId, {
         ownerUserId, relatedType, relatedId, name,
         descriptor: `replied on ${chan} with interest: "${truncate(msg.text, 160)}"`, source: "inbound",
       });
-      await socialTask(db, workspaceId, msg, ownerUserId, `Meeting requested (${chan}) — ${name}`, "high", "meeting_prep");
-      action = "meeting_proposed"; break;
+      action = "meeting_proposed";
+      // AUTO mode: reply IN-THREAD with the rep's booking link so the prospect
+      // self-books from the same DM — mirrors the email path. Best-effort.
+      let bookingLinkSent = false;
+      if (mode === "auto" && msg.chatId) {
+        try {
+          const bookingUrl = await resolveBookingUrl(workspaceId, ownerUserId ?? null);
+          if (bookingUrl) {
+            const first = String(name).trim().split(/\s+/)[0] || "there";
+            await sendMessage({ chatId: msg.chatId, text: `Great to hear, ${first}! Grab whatever time works best for you here and it'll go straight on my calendar: ${bookingUrl}` });
+            bookingLinkSent = true;
+          }
+        } catch (e) {
+          console.error(`[SocialClassifier] booking-link DM failed for message ${msg.id}:`, e);
+        }
+      }
+      if (bookingLinkSent) action = "booking_link_sent";
+      await socialTask(db, workspaceId, msg, ownerUserId, bookingLinkSent ? `Booking link sent (${chan}) — ${name}` : `Meeting requested (${chan}) — ${name}`, "high", "meeting_prep");
+      break;
+    }
     case "follow_up_question":
       await socialTask(db, workspaceId, msg, ownerUserId, `Answer ${name}'s ${chan} question`, "high", "manual_email"); action = "task_created"; break;
     case "person_referral":

@@ -571,7 +571,7 @@ export function registerUnipileWebhookRoutes(app: Express) {
             const [row] = await db.select().from(unipileMessages).where(eq(unipileMessages.id, rowId)).limit(1);
             if (row) {
               const { classifyAndHandleSocialMessage } = await import("./services/replyClassifier");
-              await classifyAndHandleSocialMessage(acct.workspaceId, row, acct.userId ?? null);
+              await classifyAndHandleSocialMessage(acct.workspaceId, row, acct.userId ?? null, ws.mode as "approval" | "auto");
             }
           }
         }
