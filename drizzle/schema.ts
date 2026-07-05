@@ -1513,6 +1513,9 @@ export const landingPages = mysqlTable(
     autoRoute: boolean("autoRoute").default(true).notNull(),
     autoEnrollSequenceId: int("autoEnrollSequenceId"),
     redirectUrl: text("redirectUrl"),
+    // Show a "Book a meeting" CTA that links to the page creator's self-serve
+    // booking page (/b/:slug), so a visitor can book directly (Migration 0113).
+    showBookingCta: boolean("showBookingCta").default(false).notNull(),
     // ── Metrics ──
     viewCount: int("viewCount").default(0).notNull(),
     submitCount: int("submitCount").default(0).notNull(),

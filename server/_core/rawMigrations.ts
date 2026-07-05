@@ -2426,6 +2426,13 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  {
+    name: "0113_landing_page_booking_cta.sql",
+    statements: [
+      `ALTER TABLE \`landing_pages\` ADD COLUMN \`showBookingCta\` boolean NOT NULL DEFAULT false`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

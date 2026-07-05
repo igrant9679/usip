@@ -12,7 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { CheckCircle2, Loader2 } from "lucide-react";
+import { CheckCircle2, Loader2, CalendarCheck } from "lucide-react";
 
 type Field = { key: string; label: string; required?: boolean };
 
@@ -69,6 +69,13 @@ export default function LandingPage() {
         <div className="max-w-3xl mx-auto px-6 pt-16 pb-10 text-center">
           <h1 className="text-3xl sm:text-4xl font-bold tracking-tight">{page.data.headline}</h1>
           {page.data.subheadline && <p className="text-lg text-slate-600 mt-4">{page.data.subheadline}</p>}
+          {page.data.bookingUrl && (
+            <div className="mt-6">
+              <a href={page.data.bookingUrl} className="inline-flex items-center gap-2 rounded-lg px-5 py-2.5 text-white text-sm font-semibold shadow-sm" style={{ backgroundColor: accent }}>
+                <CalendarCheck className="size-4" /> Book a meeting
+              </a>
+            </div>
+          )}
         </div>
         {page.data.heroImageUrl && (
           <div className="max-w-3xl mx-auto px-6 pb-4">

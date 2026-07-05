@@ -15,6 +15,7 @@ import { router, publicProcedure } from "../_core/trpc";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { getDb } from "../db";
 import { landingPages, leads, enrollments } from "../../drizzle/schema";
+import { resolveBookingUrl } from "../mergeVars";
 
 type FormField = { key: string; label: string; required?: boolean };
 const DEFAULT_FIELDS: FormField[] = [
@@ -52,6 +53,7 @@ const contentInput = z.object({
   autoRoute: z.boolean().optional(),
   autoEnrollSequenceId: z.number().int().positive().nullable().optional(),
   redirectUrl: z.string().max(2048).nullable().optional(),
+  showBookingCta: z.boolean().optional(),
 });
 
 export const landingPagesRouter = router({
@@ -97,6 +99,7 @@ export const landingPagesRouter = router({
       autoRoute: input.autoRoute ?? true,
       autoEnrollSequenceId: input.autoEnrollSequenceId ?? null,
       redirectUrl: input.redirectUrl ?? null,
+      showBookingCta: input.showBookingCta ?? false,
       createdByUserId: ctx.user.id,
     } as never);
     const id = Number((r as any)[0]?.insertId ?? 0) || 0;
@@ -156,6 +159,11 @@ export const landingPagesRouter = router({
     // Best-effort view count — never block rendering.
     db.update(landingPages).set({ viewCount: sql`${landingPages.viewCount} + 1` } as never)
       .where(eq(landingPages.id, p.id)).catch(() => {});
+    // Optional "Book a meeting" CTA → the page creator's self-serve booking page.
+    let bookingUrl = "";
+    if (p.showBookingCta) {
+      try { bookingUrl = await resolveBookingUrl(p.workspaceId, p.createdByUserId); } catch { /* best-effort */ }
+    }
     return {
       headline: p.headline,
       subheadline: p.subheadline,
@@ -165,6 +173,7 @@ export const landingPagesRouter = router({
       formHeading: p.formHeading,
       ctaButtonLabel: p.ctaButtonLabel,
       formFields: (Array.isArray(p.formFields) ? p.formFields : DEFAULT_FIELDS) as FormField[],
+      bookingUrl: bookingUrl || null,
       name: p.name,
     };
   }),

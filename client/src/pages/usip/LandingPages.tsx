@@ -77,7 +77,7 @@ export default function LandingPages() {
       seoDescription: form.seoDescription, formHeading: form.formHeading,
       ctaButtonLabel: form.ctaButtonLabel, formFields: form.formFields,
       autoCreateLead: form.autoCreateLead, autoRoute: form.autoRoute,
-      redirectUrl: form.redirectUrl,
+      redirectUrl: form.redirectUrl, showBookingCta: form.showBookingCta,
     } as any);
   };
 
@@ -214,6 +214,13 @@ export default function LandingPages() {
                 <div className="flex items-center justify-between">
                   <Label className="text-sm">Auto-route to an owner</Label>
                   <Switch checked={!!form.autoRoute} onCheckedChange={(v) => patch("autoRoute", v)} />
+                </div>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <Label className="text-sm">Show "Book a meeting" button</Label>
+                    <p className="text-[11px] text-muted-foreground">Adds a CTA linking to your self-serve booking page.</p>
+                  </div>
+                  <Switch checked={!!form.showBookingCta} onCheckedChange={(v) => patch("showBookingCta", v)} />
                 </div>
                 <Field label="Redirect URL after submit (optional)"><Input value={form.redirectUrl ?? ""} onChange={(e) => patch("redirectUrl", e.target.value)} placeholder="https://… (leave blank for a thank-you message)" /></Field>
               </Section>
