@@ -508,6 +508,8 @@ export const meetings = mysqlTable(
     calendarEventId: int("calendarEventId"), // FK → calendarEvents when pushed to a provider
     calendarAccountId: int("calendarAccountId"),
     disposition: varchar("disposition", { length: 48 }),
+    // When the pre-meeting reminder email was sent to the attendee (Migration 0111).
+    reminderSentAt: timestamp("reminderSentAt"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },

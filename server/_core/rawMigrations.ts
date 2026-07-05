@@ -2385,6 +2385,13 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  {
+    name: "0111_meeting_reminder.sql",
+    statements: [
+      `ALTER TABLE \`meetings\` ADD COLUMN \`reminderSentAt\` timestamp NULL`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

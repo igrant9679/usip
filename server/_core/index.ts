@@ -48,6 +48,7 @@ import { runDailyCheckAllWorkspaces } from "../services/linkedinEnrichment/daily
 import { runAreEngine } from "../areEngine";
 import { runTaskAutopilotAllWorkspaces } from "../services/taskAutopilot";
 import { runMeetingAutopilotAllWorkspaces } from "../services/meetingScheduler";
+import { sendDueMeetingReminders } from "../services/meetingReminders";
 import { runConversationAutopilotAllWorkspaces } from "../services/replyClassifier";
 import { runDealAutopilotAllWorkspaces } from "../services/dealAutopilot";
 import { runSocialAutopilotAllWorkspaces } from "../services/socialAutopilot";
@@ -264,6 +265,17 @@ async function startServer() {
   };
   setTimeout(runMeetingAutopilot, 4 * 60 * 1000); // first run 4 minutes after boot
   setInterval(runMeetingAutopilot, 45 * 60 * 1000); // every 45 minutes
+
+  // Meeting reminders: email each upcoming booked meeting's attendee a single
+  // reminder in the 1–24h-before window (join + reschedule link) to cut no-shows
+  // so booked meetings actually happen. Hourly is plenty for a daily-lead window.
+  const runMeetingReminders = () => {
+    sendDueMeetingReminders().catch((e) =>
+      console.error("[MeetingReminders] cron run failed:", e)
+    );
+  };
+  setTimeout(runMeetingReminders, 5 * 60 * 1000); // first run 5 minutes after boot
+  setInterval(runMeetingReminders, 60 * 60 * 1000); // hourly
 
   // Conversation Autopilot: classify inbound replies (email_replies) with the
   // 8-class taxonomy; in 'auto' mode also apply the per-class action (a positive
