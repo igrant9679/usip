@@ -94,6 +94,8 @@ export function SelectionToolbar({
 
       <SequenceMenu selectedIds={selectedIds} />
 
+      <CreateTasksMenu selectedIds={selectedIds} />
+
       <WorkflowSelectionMenu
         trigger={
           <Button variant="ghost" size="sm" className="gap-1.5">
@@ -174,6 +176,60 @@ function SequenceMenu({ selectedIds }: { selectedIds: number[] }) {
             ))
           )}
         </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/* ───────────────────────── Create tasks (functional) ──────────────────── */
+
+function CreateTasksMenu({ selectedIds }: { selectedIds: number[] }) {
+  const n = selectedIds.length;
+  const [open, setOpen] = useState(false);
+  const [title, setTitle] = useState("Follow up");
+  const [type, setType] = useState("follow_up");
+  const [priority, setPriority] = useState("normal");
+  const [dueInDays, setDueInDays] = useState(2);
+  const bulk = trpc.tasks.bulkCreateForProspects.useMutation({
+    onSuccess: (r: any) => { toast.success(`Created ${r?.created ?? n} task${(r?.created ?? n) === 1 ? "" : "s"}`); setOpen(false); },
+    onError: (e: any) => toast.error(e?.message ?? "Could not create tasks"),
+  });
+  const sel = "h-8 w-full rounded-md border bg-background px-2 text-[13px]";
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button variant="ghost" size="sm" className="gap-1.5">
+          <CheckSquare className="size-4" /> Create tasks <ChevronDown className="size-3 opacity-60" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-72 p-3 space-y-2.5">
+        <div className="text-[13px] font-medium">New task for {n} {n === 1 ? "person" : "people"}</div>
+        <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Task title" className="h-8 w-full rounded-md border bg-background px-2 text-[13px] outline-none" />
+        <div className="grid grid-cols-2 gap-2">
+          <select value={type} onChange={(e) => setType(e.target.value)} className={sel}>
+            <option value="follow_up">Follow up</option>
+            <option value="call">Call</option>
+            <option value="manual_email">Email</option>
+            <option value="social_touch">Social touch</option>
+            <option value="meeting_prep">Meeting prep</option>
+            <option value="todo">To-do</option>
+          </select>
+          <select value={priority} onChange={(e) => setPriority(e.target.value)} className={sel}>
+            <option value="low">Low</option>
+            <option value="normal">Normal</option>
+            <option value="high">High</option>
+            <option value="urgent">Urgent</option>
+          </select>
+        </div>
+        <label className="flex items-center justify-between text-[13px] text-muted-foreground">
+          Due in
+          <span className="flex items-center gap-1">
+            <input type="number" min={0} max={60} value={dueInDays} onChange={(e) => setDueInDays(Math.max(0, Math.min(60, Number(e.target.value) || 0)))} className="h-8 w-16 rounded-md border bg-background px-2 text-[13px] text-foreground outline-none" /> days
+          </span>
+        </label>
+        <Button size="sm" className="w-full" disabled={!title.trim() || bulk.isPending} onClick={() => bulk.mutate({ prospectIds: selectedIds, title: title.trim(), type, priority, dueInDays } as any)}>
+          {bulk.isPending ? <Loader2 className="size-3.5 animate-spin mr-1" /> : null} Create {n} task{n === 1 ? "" : "s"}
+        </Button>
       </PopoverContent>
     </Popover>
   );
@@ -344,7 +400,6 @@ function MoreMenu({ selectedIds, onClear, onPick }: { selectedIds: number[]; onC
   const items = [
     { label: "View Companies", icon: Building2 },
     { label: "Merge duplicates", icon: Copy },
-    { label: "Create Tasks", icon: CheckSquare },
     { label: "Change Stage", icon: ListChecks },
     { label: "Remove from lists", icon: ListX },
     { label: "Set Custom Field", icon: Tag },

@@ -77,6 +77,35 @@ export const tasksRouter = router({
       return { id };
     }),
 
+  /** Bulk-create one task per selected prospect (People toolbar "Create Tasks"). */
+  bulkCreateForProspects: repProcedure
+    .input(z.object({
+      prospectIds: z.array(z.number().int().positive()).min(1).max(500),
+      title: z.string().min(1).max(240),
+      type: z.enum(TASK_TYPES).default("follow_up"),
+      priority: z.enum(["low", "normal", "high", "urgent"]).default("normal"),
+      dueInDays: z.number().int().min(0).max(60).default(2),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const dueAt = new Date(Date.now() + input.dueInDays * 86400000);
+      const values = input.prospectIds.map((pid) => ({
+        workspaceId: ctx.workspace.id,
+        title: input.title,
+        type: input.type,
+        priority: input.priority,
+        status: "open" as const,
+        dueAt,
+        ownerUserId: ctx.user.id,
+        relatedType: "prospect",
+        relatedId: pid,
+        source: "manual" as const,
+      }));
+      await db.insert(tasks).values(values as never);
+      return { created: values.length };
+    }),
+
   setStatus: repProcedure.input(z.object({ id: z.number(), status: z.enum(["open", "done", "cancelled"]) })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
