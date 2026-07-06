@@ -74,7 +74,7 @@ export function SelectionToolbar({
         <Download className="size-4" /> Export
       </Button>
 
-      <EnrichMenu onPick={(what) => soon(what)} />
+      <EnrichMenu selectedIds={selectedIds} />
 
       <ResearchAiMenu compact />
 
@@ -265,17 +265,25 @@ function AddToListMenu({ selectedIds }: { selectedIds: number[] }) {
 
 /* ───────────────────────────── Enrich / More ──────────────────────────── */
 
-function EnrichMenu({ onPick }: { onPick: (what: string) => void }) {
+function EnrichMenu({ selectedIds }: { selectedIds: number[] }) {
+  // Real backend: the compliant LinkedIn enrichment orchestrator refreshes each
+  // selected person's profile (title/company/location/photo) — which also feeds
+  // job-change detection → the Job Change Autopilot. Health-gated server-side.
+  const run = trpc.linkedinEnrichment.run.useMutation({
+    onSuccess: (r: any) => toast.success(`Enrichment started for ${r?.total ?? selectedIds.length} ${selectedIds.length === 1 ? "person" : "people"}`),
+    onError: (e: any) => toast.error(e?.message ?? "Could not start enrichment"),
+  });
+  const start = () => run.mutate({ prospectIds: selectedIds, triggerType: "people_bulk_action" } as any);
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button variant="ghost" size="sm" className="gap-1.5">
-          <Sparkles className="size-4" /> Enrich <ChevronDown className="size-3 opacity-60" />
+          {run.isPending ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />} Enrich <ChevronDown className="size-3 opacity-60" />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-48">
-        <DropdownMenuItem onClick={() => onPick("Enrich emails")}><Mail className="size-4 mr-2" /> Enrich emails</DropdownMenuItem>
-        <DropdownMenuItem onClick={() => onPick("Enrich job change")}><Activity className="size-4 mr-2" /> Enrich job change</DropdownMenuItem>
+      <DropdownMenuContent align="start" className="w-56">
+        <DropdownMenuItem disabled={run.isPending} onClick={start}><Activity className="size-4 mr-2" /> Refresh LinkedIn data</DropdownMenuItem>
+        <DropdownMenuItem disabled={run.isPending} onClick={start}><Mail className="size-4 mr-2" /> Detect job changes</DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );
