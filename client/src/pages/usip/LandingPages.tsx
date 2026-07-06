@@ -40,6 +40,8 @@ export default function LandingPages() {
   const detail = trpc.landingPages.get.useQuery({ id: selectedId! }, { enabled: isAdmin && !!selectedId, retry: false });
   const seqQ = trpc.sequences.list.useQuery(undefined as any, { enabled: isAdmin, retry: false });
   const sequences = ((seqQ.data as any[]) ?? []).filter((s) => s.status !== "archived");
+  const subsQ = trpc.landingPages.submissions.useQuery({ id: selectedId! }, { enabled: isAdmin && !!selectedId, retry: false });
+  const submissions = (subsQ.data as any[]) ?? [];
 
   const create = trpc.landingPages.create.useMutation({
     onSuccess: (r: any) => { utils.landingPages.list.invalidate(); setSelectedId(r.id); toast.success("Landing page created"); },
@@ -244,6 +246,27 @@ export default function LandingPages() {
               {/* SEO + danger */}
               <Section title="SEO & metadata">
                 <Field label="Meta description"><Textarea rows={2} value={form.seoDescription ?? ""} onChange={(e) => patch("seoDescription", e.target.value)} /></Field>
+              </Section>
+
+              {/* Captured leads */}
+              <Section title={`Submissions${submissions.length ? ` (${submissions.length})` : ""}`}>
+                {subsQ.isLoading ? (
+                  <p className="text-xs text-muted-foreground">Loading…</p>
+                ) : submissions.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">No submissions yet. Share the public URL to start capturing leads.</p>
+                ) : (
+                  <div className="rounded-lg border divide-y divide-border/60 max-h-64 overflow-auto">
+                    {submissions.map((l) => (
+                      <div key={l.id} className="flex items-center gap-2 px-3 py-2 text-[13px]">
+                        <span className="font-medium truncate">{`${l.firstName ?? ""} ${l.lastName ?? ""}`.trim() || "Unknown"}</span>
+                        {l.email && <span className="text-muted-foreground truncate">· {l.email}</span>}
+                        {l.company && <span className="text-muted-foreground truncate hidden sm:inline">· {l.company}</span>}
+                        <span className="flex-1" />
+                        <span className="text-[11px] text-muted-foreground shrink-0">{l.createdAt ? new Date(l.createdAt).toLocaleDateString() : ""}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </Section>
 
               <div className="flex items-center justify-between pt-2 border-t">
