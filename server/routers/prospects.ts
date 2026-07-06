@@ -534,6 +534,31 @@ export const prospectsRouter = router({
       return { ok: true, hadLinkedContact: Boolean(before.linkedContactId) };
     }),
 
+  /** Selected people → flat rows for CSV export (CSV built client-side). */
+  exportSelected: workspaceProcedure
+    .input(z.object({ prospectIds: z.array(z.number().int().positive()).min(1).max(5000) }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) return [];
+      return db
+        .select({
+          firstName: prospects.firstName,
+          lastName: prospects.lastName,
+          title: prospects.title,
+          company: prospects.company,
+          email: prospects.email,
+          phone: prospects.phone,
+          linkedinUrl: prospects.linkedinUrl,
+          city: prospects.city,
+          state: prospects.state,
+          country: prospects.country,
+          industry: prospects.industry,
+          seniority: prospects.seniority,
+        })
+        .from(prospects)
+        .where(and(eq(prospects.workspaceId, ctx.workspace.id), inArray(prospects.id, input.prospectIds)));
+    }),
+
   bulkDelete: workspaceProcedure
     .input(z.object({ prospectIds: z.array(z.number().int()).min(1).max(500) }))
     .mutation(async ({ ctx, input }) => {

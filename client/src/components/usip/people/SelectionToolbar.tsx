@@ -34,6 +34,19 @@ import {
 import { ResearchAiMenu } from "./ResearchAiMenu";
 import { WorkflowSelectionMenu } from "./CreateWorkflowMenu";
 
+const CSV_COLS: Array<{ key: string; label: string }> = [
+  { key: "firstName", label: "First name" }, { key: "lastName", label: "Last name" },
+  { key: "title", label: "Title" }, { key: "company", label: "Company" },
+  { key: "email", label: "Email" }, { key: "phone", label: "Phone" },
+  { key: "linkedinUrl", label: "LinkedIn" }, { key: "city", label: "City" },
+  { key: "state", label: "State" }, { key: "country", label: "Country" },
+  { key: "industry", label: "Industry" }, { key: "seniority", label: "Seniority" },
+];
+function toCsv(rows: any[]): string {
+  const esc = (v: any) => { const s = v == null ? "" : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+  return [CSV_COLS.map((c) => c.label).join(","), ...rows.map((r) => CSV_COLS.map((c) => esc(r[c.key])).join(","))].join("\n");
+}
+
 export function SelectionToolbar({
   selectedIds,
   onClear,
@@ -42,7 +55,28 @@ export function SelectionToolbar({
   onClear: () => void;
 }) {
   const n = selectedIds.length;
+  const utils = trpc.useUtils();
+  const [exporting, setExporting] = useState(false);
   const soon = (what: string) => toast.info(`${what} — coming soon for ${n} selected ${n === 1 ? "person" : "people"}`);
+
+  const exportCsv = async () => {
+    setExporting(true);
+    try {
+      const rows = (await utils.prospects.exportSelected.fetch({ prospectIds: selectedIds } as any)) as any[];
+      const blob = new Blob([toCsv(rows ?? [])], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `people-export-${n}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success(`Exported ${rows?.length ?? 0} ${(rows?.length ?? 0) === 1 ? "person" : "people"}`);
+    } catch (e: any) {
+      toast.error(e?.message ?? "Export failed");
+    } finally {
+      setExporting(false);
+    }
+  };
 
   return (
     <div className="shrink-0 border-b border-border bg-card px-3 py-1.5 flex items-center gap-0.5 flex-nowrap overflow-x-auto min-w-0 [&_button]:h-8 [&_button]:shrink-0 [&_button]:whitespace-nowrap [&_button]:text-[13px]">
@@ -70,8 +104,8 @@ export function SelectionToolbar({
 
       <AddToListMenu selectedIds={selectedIds} />
 
-      <Button variant="ghost" size="sm" className="gap-1.5" onClick={() => soon("Export")}>
-        <Download className="size-4" /> Export
+      <Button variant="ghost" size="sm" className="gap-1.5" disabled={exporting} onClick={exportCsv}>
+        {exporting ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />} Export
       </Button>
 
       <EnrichMenu selectedIds={selectedIds} />
