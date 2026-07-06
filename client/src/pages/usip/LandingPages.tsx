@@ -38,6 +38,8 @@ export default function LandingPages() {
   const list = trpc.landingPages.list.useQuery(undefined as any, { retry: false, enabled: isAdmin });
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const detail = trpc.landingPages.get.useQuery({ id: selectedId! }, { enabled: isAdmin && !!selectedId, retry: false });
+  const seqQ = trpc.sequences.list.useQuery(undefined as any, { enabled: isAdmin, retry: false });
+  const sequences = ((seqQ.data as any[]) ?? []).filter((s) => s.status !== "archived");
 
   const create = trpc.landingPages.create.useMutation({
     onSuccess: (r: any) => { utils.landingPages.list.invalidate(); setSelectedId(r.id); toast.success("Landing page created"); },
@@ -77,6 +79,7 @@ export default function LandingPages() {
       seoDescription: form.seoDescription, formHeading: form.formHeading,
       ctaButtonLabel: form.ctaButtonLabel, formFields: form.formFields,
       autoCreateLead: form.autoCreateLead, autoRoute: form.autoRoute,
+      autoEnrollSequenceId: form.autoEnrollSequenceId ?? null,
       redirectUrl: form.redirectUrl, showBookingCta: form.showBookingCta,
     } as any);
   };
@@ -215,6 +218,19 @@ export default function LandingPages() {
                   <Label className="text-sm">Auto-route to an owner</Label>
                   <Switch checked={!!form.autoRoute} onCheckedChange={(v) => patch("autoRoute", v)} />
                 </div>
+                <Field label="Auto-enroll new leads into a sequence">
+                  <select
+                    className="h-9 w-full rounded-md border bg-background px-2 text-sm"
+                    value={form.autoEnrollSequenceId ?? ""}
+                    onChange={(e) => patch("autoEnrollSequenceId", e.target.value ? Number(e.target.value) : null)}
+                  >
+                    <option value="">None — capture only</option>
+                    {sequences.map((s) => (
+                      <option key={s.id} value={s.id}>{s.name}</option>
+                    ))}
+                  </select>
+                  <p className="text-[11px] text-muted-foreground">Captured leads are enrolled automatically → autonomous outreach → booked meeting.</p>
+                </Field>
                 <div className="flex items-center justify-between">
                   <div>
                     <Label className="text-sm">Show "Book a meeting" button</Label>
