@@ -82,7 +82,7 @@ export function SelectionToolbar({
         <Upload className="size-4" /> Push to CRM/ATS
       </Button>
 
-      <MoreMenu onPick={soon} />
+      <MoreMenu selectedIds={selectedIds} onClear={onClear} onPick={soon} />
     </div>
   );
 }
@@ -289,7 +289,18 @@ function EnrichMenu({ selectedIds }: { selectedIds: number[] }) {
   );
 }
 
-function MoreMenu({ onPick }: { onPick: (what: string) => void }) {
+function MoreMenu({ selectedIds, onClear, onPick }: { selectedIds: number[]; onClear: () => void; onPick: (what: string) => void }) {
+  const n = selectedIds.length;
+  const utils = trpc.useUtils();
+  // Real backend: prospects.bulkDelete hard-removes the selected people.
+  const bulkDelete = trpc.prospects.bulkDelete.useMutation({
+    onSuccess: (r: any) => {
+      toast.success(`Deleted ${r?.deleted ?? n} ${n === 1 ? "person" : "people"}`);
+      utils.prospects.invalidate();
+      onClear();
+    },
+    onError: (e: any) => toast.error(e?.message ?? "Delete failed"),
+  });
   const items = [
     { label: "View Companies", icon: Building2 },
     { label: "Merge duplicates", icon: Copy },
@@ -313,7 +324,11 @@ function MoreMenu({ onPick }: { onPick: (what: string) => void }) {
           </DropdownMenuItem>
         ))}
         <DropdownMenuSeparator />
-        <DropdownMenuItem className="text-rose-600 focus:text-rose-600" onClick={() => onPick("Delete")}>
+        <DropdownMenuItem
+          className="text-rose-600 focus:text-rose-600"
+          disabled={bulkDelete.isPending}
+          onClick={() => { if (confirm(`Delete ${n} selected ${n === 1 ? "person" : "people"}? This cannot be undone.`)) bulkDelete.mutate({ prospectIds: selectedIds } as any); }}
+        >
           <Trash2 className="size-4 mr-2" /> Delete
         </DropdownMenuItem>
       </DropdownMenuContent>
