@@ -9,7 +9,7 @@
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, inArray, or } from "drizzle-orm";
 import { z } from "zod";
-import { emailSuppressions, contacts } from "../../drizzle/schema";
+import { emailSuppressions, contacts, prospects } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 
@@ -138,6 +138,36 @@ export const emailSuppressionsRouter = {
           )
         );
       return { ok: true, email: input.email.toLowerCase() };
+    }),
+
+  /**
+   * Bulk opt-out: suppress every selected prospect's email (do-not-contact), so
+   * the autopilots + sequences stop reaching them. Resolves emails server-side
+   * from prospectIds; idempotent (.ignore() on the suppression insert).
+   */
+  addByProspects: workspaceProcedure
+    .input(z.object({ prospectIds: z.array(z.number().int().positive()).min(1).max(500) }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const rows = await db
+        .select({ email: prospects.email })
+        .from(prospects)
+        .where(and(eq(prospects.workspaceId, ctx.workspace.id), inArray(prospects.id, input.prospectIds)));
+      const emails = [...new Set(rows.map((r) => r.email?.toLowerCase()).filter((e): e is string => !!e))];
+      let suppressed = 0;
+      for (const email of emails) {
+        try {
+          await db.insert(emailSuppressions).ignore().values({
+            workspaceId: ctx.workspace.id,
+            email,
+            reason: "manual",
+            notes: "Bulk opt-out from People",
+          });
+          suppressed++;
+        } catch { /* dupe or bad row — skip */ }
+      }
+      return { ok: true as const, suppressed, selected: input.prospectIds.length };
     }),
 };
 

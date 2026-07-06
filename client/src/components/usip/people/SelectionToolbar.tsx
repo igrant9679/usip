@@ -301,6 +301,12 @@ function MoreMenu({ selectedIds, onClear, onPick }: { selectedIds: number[]; onC
     },
     onError: (e: any) => toast.error(e?.message ?? "Delete failed"),
   });
+  // Real backend: bulk opt-out suppresses the selected people's emails so the
+  // autopilots + sequences stop contacting them (compliant autonomy).
+  const optOut = trpc.emailSuppressions.addByProspects.useMutation({
+    onSuccess: (r: any) => toast.success(`Opted out ${r?.suppressed ?? 0} email${r?.suppressed === 1 ? "" : "s"} — they won't be contacted`),
+    onError: (e: any) => toast.error(e?.message ?? "Opt-out failed"),
+  });
   const items = [
     { label: "View Companies", icon: Building2 },
     { label: "Merge duplicates", icon: Copy },
@@ -308,7 +314,6 @@ function MoreMenu({ selectedIds, onClear, onPick }: { selectedIds: number[]; onC
     { label: "Change Stage", icon: ListChecks },
     { label: "Remove from lists", icon: ListX },
     { label: "Set Custom Field", icon: Tag },
-    { label: "Opt Out", icon: UserX },
   ];
   return (
     <DropdownMenu>
@@ -323,6 +328,9 @@ function MoreMenu({ selectedIds, onClear, onPick }: { selectedIds: number[]; onC
             <it.icon className="size-4 mr-2" /> {it.label}
           </DropdownMenuItem>
         ))}
+        <DropdownMenuItem disabled={optOut.isPending} onClick={() => { if (confirm(`Opt out ${n} selected ${n === 1 ? "person" : "people"} from all outreach?`)) optOut.mutate({ prospectIds: selectedIds } as any); }}>
+          <UserX className="size-4 mr-2" /> Opt Out
+        </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem
           className="text-rose-600 focus:text-rose-600"
