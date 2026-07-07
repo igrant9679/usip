@@ -91,8 +91,9 @@ export function useEnrichJob() {
   };
 }
 
-/** Compact icon-only enrich action for a People/list table row. */
-export function RowEnrichAction({ prospectId, className }: { prospectId: number; className?: string }) {
+/** Compact enrich action for a People/list table row. Icon-only by default;
+ *  pass `label` for the stacked icon-over-label style of the Actions column. */
+export function RowEnrichAction({ prospectId, className, label }: { prospectId: number; className?: string; label?: string }) {
   const { enrich, running } = useEnrichJob();
   return (
     <button
@@ -100,9 +101,15 @@ export function RowEnrichAction({ prospectId, className }: { prospectId: number;
       title="Enrich via LinkedIn"
       disabled={running}
       onClick={(e) => { e.stopPropagation(); enrich([prospectId], "people_row_action"); }}
-      className={cn("p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted disabled:opacity-50", className)}
+      className={cn(
+        label
+          ? "flex flex-col items-center gap-0.5 rounded-md px-1.5 py-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
+          : "p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted disabled:opacity-50",
+        className,
+      )}
     >
       {running ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}
+      {label ? <span className="text-[9px] font-medium leading-none whitespace-nowrap">{label}</span> : null}
     </button>
   );
 }

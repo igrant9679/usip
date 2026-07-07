@@ -50,6 +50,8 @@ import {
   Search,
   Upload,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Filter,
   X,
   Sparkles,
@@ -445,8 +447,13 @@ export default function People() {
     setActiveViewId(id);
   };
 
-  // row quick-actions (Actions column) — open the detail panel for now
-  const onAction = (_action: string, p: Prospect) => setSelectedId(p.id);
+  // row quick-actions (Actions/Links columns): "open" navigates to the full
+  // record; everything else opens the Quick Preview panel. Add-to-list,
+  // sequence, enrich and mailto are real controls rendered inside the cell.
+  const onAction = (action: string, p: Prospect) => {
+    if (action === "open") { setLocation(`/prospects/${p.id}`); return; }
+    setSelectedId(p.id);
+  };
 
   const totalPages = Math.max(1, Math.ceil(total / perPage));
   const rangeStart = total === 0 ? 0 : (page - 1) * perPage + 1;
@@ -799,14 +806,29 @@ export default function People() {
                   <Button variant="outline" size="sm" className="mt-3" onClick={clearAll}>Clear all filters</Button>
                 </div>
               ) : (
-                <table className="w-full text-[13px]">
-                  <thead className="sticky top-0 z-10 bg-card border-b border-border">
+                <table className="w-full border-separate border-spacing-0 text-[13px]">
+                  {/* Sticky axes live on the CELLS (not thead/tr): every th is
+                      sticky-top; the checkbox + name cells are also sticky-left
+                      so identity stays visible under horizontal scroll. Body
+                      sticky cells use bg-inherit — row bg tokens are solid so
+                      scrolled content never bleeds through. */}
+                  <thead>
                     <tr className="text-left text-[11px] uppercase tracking-wide text-muted-foreground">
-                      <th className="w-10 px-3 py-1.5"><Checkbox checked={allOnPageChecked} onCheckedChange={toggleAll} className="size-3.5" /></th>
+                      <th className="sticky left-0 top-0 z-30 w-10 min-w-10 border-b border-border bg-card px-3 py-2">
+                        <Checkbox checked={allOnPageChecked} onCheckedChange={toggleAll} className="size-3.5" />
+                      </th>
                       {visibleColumns.map((key) => (
-                        <th key={key} className="px-2 py-1.5 font-medium whitespace-nowrap">{COLUMN_REGISTRY[key].label}</th>
+                        <th
+                          key={key}
+                          className={cn(
+                            "sticky top-0 z-20 border-b border-border bg-card px-2 py-2 font-semibold whitespace-nowrap",
+                            key === "name" && "left-10 z-30 min-w-[200px]",
+                          )}
+                        >
+                          {COLUMN_REGISTRY[key].label}
+                        </th>
                       ))}
-                      <th className="px-2 py-1.5 w-28">
+                      <th className="sticky top-0 z-20 w-28 border-b border-border bg-card px-2 py-2">
                         <button
                           type="button"
                           onClick={() => setSettings({ open: true, mode: "settings", initialView: "fields" })}
@@ -823,11 +845,14 @@ export default function People() {
                         key={p.id}
                         onClick={() => setSelectedId(p.id)}
                         className={cn(
-                          "border-b border-border/60 cursor-pointer hover:bg-muted/50",
+                          "cursor-pointer bg-background transition-colors hover:bg-muted",
                           selectedId === p.id && "bg-muted",
                         )}
                       >
-                        <td className="px-3 py-1.5" onClick={(e) => e.stopPropagation()}>
+                        <td className="sticky left-0 z-10 w-10 min-w-10 border-b border-border/60 bg-inherit px-3 py-1.5" onClick={(e) => e.stopPropagation()}>
+                          {selectedId === p.id && (
+                            <span aria-hidden className="absolute inset-y-0 left-0 w-[3px]" style={{ backgroundColor: "var(--people-accent, hsl(var(--foreground)))" }} />
+                          )}
                           <Checkbox
                             checked={checked.has(p.id)}
                             onCheckedChange={() =>
@@ -841,9 +866,17 @@ export default function People() {
                           />
                         </td>
                         {visibleColumns.map((key) => (
-                          <td key={key} className="px-2 py-1.5 align-middle">{COLUMN_REGISTRY[key].cell(p, { onAction, changeSummary: liSummaryMap.get(p.id), scoreCell: scoreMap.get(p.id) })}</td>
+                          <td
+                            key={key}
+                            className={cn(
+                              "border-b border-border/60 px-2 py-1.5 align-middle",
+                              key === "name" && "sticky left-10 z-10 bg-inherit",
+                            )}
+                          >
+                            {COLUMN_REGISTRY[key].cell(p, { onAction, changeSummary: liSummaryMap.get(p.id), scoreCell: scoreMap.get(p.id) })}
+                          </td>
                         ))}
-                        <td className="px-2 py-1.5" />
+                        <td className="border-b border-border/60 px-2 py-1.5" />
                       </tr>
                     ))}
                   </tbody>
@@ -851,17 +884,21 @@ export default function People() {
               )}
             </div>
 
-            {/* pagination */}
+            {/* pagination — count left, compact pager right, stuck under the table */}
             {total > 0 && (
-              <div className="shrink-0 border-t border-border px-3 py-2 flex items-center justify-between text-[13px] bg-card/40">
+              <div className="shrink-0 flex h-10 items-center justify-between border-t border-border bg-card/40 px-3 text-[12px]">
                 <span className="text-muted-foreground tabular-nums">
-                  {rangeStart}–{rangeEnd} of {fmtNum(total)}
+                  {rangeStart} - {rangeEnd} of {fmtNum(total)}
                   {rows.length !== pageRows.length && <span className="ml-1">· {rows.length} shown</span>}
                 </span>
                 <div className="flex items-center gap-1">
-                  <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => { setPage((p) => Math.max(1, p - 1)); setChecked(new Set()); }}>Prev</Button>
-                  <span className="px-2 text-muted-foreground tabular-nums">{page} / {totalPages}</span>
-                  <Button variant="outline" size="sm" disabled={page >= totalPages} onClick={() => { setPage((p) => Math.min(totalPages, p + 1)); setChecked(new Set()); }}>Next</Button>
+                  <Button variant="outline" size="sm" className="h-7 gap-1 px-2 text-[12px]" disabled={page <= 1} onClick={() => { setPage((p) => Math.max(1, p - 1)); setChecked(new Set()); }}>
+                    <ChevronLeft className="size-3.5" /> Prev
+                  </Button>
+                  <span className="min-w-12 text-center text-muted-foreground tabular-nums">{page} / {totalPages}</span>
+                  <Button variant="outline" size="sm" className="h-7 gap-1 px-2 text-[12px]" disabled={page >= totalPages} onClick={() => { setPage((p) => Math.min(totalPages, p + 1)); setChecked(new Set()); }}>
+                    Next <ChevronRight className="size-3.5" />
+                  </Button>
                 </div>
               </div>
             )}
@@ -895,65 +932,146 @@ export default function People() {
   );
 }
 
-/* ───────────────────────── detail panel ───────────────────────────────── */
+/* ─────────────────── Quick Preview panel (detail panel) ───────────────── */
+
+const fmtShortDate = (d: string | Date | null | undefined) => {
+  if (!d) return null;
+  const dt = typeof d === "string" ? new Date(d) : d;
+  if (Number.isNaN(dt.getTime())) return null;
+  return dt.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+};
 
 function DetailPanel({ p, onClose, onOpenFull }: { p: Prospect; onClose: () => void; onOpenFull: () => void }) {
   // The list row (p) renders instantly; the full record carries the resolved
   // profile_image (stripped from search results) so the avatar can show here.
   const { data: full } = trpc.prospects.get.useQuery({ id: p.id });
+  // Enrichment record powers Recent activity (field-change history + current
+  // company) and the Professional summary (LinkedIn About / headline).
+  const { data: enr } = trpc.linkedinEnrichment.getProspectEnrichment.useQuery({ prospectId: p.id });
   const d = (full ?? p) as Prospect & { profile_image?: any };
+  const e = (enr as any)?.enrichment;
+  const history = ((enr as any)?.history ?? []) as any[];
   const loc = [d.city, d.state, d.country].filter(Boolean).join(", ");
   const fullName = `${d.firstName} ${d.lastName}`.trim();
-  const titleLine = [d.title, d.company].filter(Boolean).join(" · ");
+
+  const activity: { label: string; sub?: string | null }[] = [];
+  if (e?.currentCompanyName || d.company) {
+    activity.push({
+      label: `Current company — ${e?.currentCompanyName ?? d.company}`,
+      sub: e?.currentCompanyStartDate ? `Since ${fmtShortDate(e.currentCompanyStartDate)}` : null,
+    });
+  }
+  for (const h of history.slice(0, 4)) {
+    activity.push({
+      label: `${cap(String(h.fieldName ?? h.changeType ?? "profile"))} updated${h.newValue ? ` → ${h.newValue}` : ""}`,
+      sub: fmtShortDate(h.detectedAt),
+    });
+  }
+  const summary: string | null = e?.summaryAbout || e?.linkedinHeadline || null;
+
   return (
-    <aside className="w-96 shrink-0 border-l border-border flex flex-col min-h-0 bg-card shadow-sm">
-      {/* header — avatar + identity */}
-      <div className="relative shrink-0 border-b border-border">
+    <aside className="w-96 shrink-0 border-l border-border flex flex-col min-h-0 bg-card shadow-lg">
+      {/* panel header */}
+      <div className="relative shrink-0 flex h-11 items-center justify-between border-b border-border px-4">
         <span aria-hidden className="absolute inset-x-0 top-0 h-0.5" style={{ backgroundColor: "var(--people-accent, hsl(var(--foreground)))" }} />
-        <button onClick={onClose} className="absolute right-3 top-3 z-10 p-1 text-muted-foreground hover:text-foreground" aria-label="Close"><X className="size-4" /></button>
-        <div className="px-4 pt-6 pb-4 flex flex-col items-center text-center gap-2">
-          <ProspectAvatar image={(full as any)?.profile_image} name={fullName} size="lg" />
-          <div className="min-w-0 w-full px-2">
-            <div className="text-base font-semibold leading-tight">{fullName}</div>
-            <div className="text-sm text-muted-foreground truncate">{titleLine || "—"}</div>
-            {loc ? <div className="text-xs text-muted-foreground truncate mt-0.5">{loc}</div> : null}
-          </div>
-        </div>
+        <span className="text-sm font-semibold">Quick Preview</span>
+        <button onClick={onClose} className="rounded p-1 text-muted-foreground hover:text-foreground" aria-label="Close preview">
+          <X className="size-4" />
+        </button>
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-5 text-sm">
-        <LinkedInEnrichmentSummaryCard prospectId={d.id} />
-
-        <div className="rounded-lg border border-border p-3">
-          <ProspectScoringPanel objectType="person" objectId={d.id} />
+      <div className="flex-1 min-h-0 overflow-y-auto">
+        {/* identity */}
+        <div className="flex flex-col items-center gap-2 border-b border-border/60 bg-muted/30 px-4 pb-4 pt-5 text-center">
+          <ProspectAvatar image={(full as any)?.profile_image} name={fullName} size="lg" />
+          <div className="min-w-0 w-full px-2">
+            <div className="flex items-center justify-center gap-1.5 min-w-0">
+              <span className="truncate text-base font-semibold leading-tight">{fullName}</span>
+              {d.linkedinUrl ? (
+                <a
+                  href={d.linkedinUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title="Open LinkedIn profile"
+                  className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-[3px] bg-[#0A66C2] text-[9px] font-bold leading-none text-white hover:opacity-80"
+                >
+                  in
+                </a>
+              ) : null}
+            </div>
+            <div className="truncate text-sm text-muted-foreground">{d.title || "—"}</div>
+            {d.company ? <div className="mt-0.5 truncate text-xs text-muted-foreground">{d.company}</div> : null}
+          </div>
         </div>
 
-        <Section title="Contact information">
-          <Field icon={Mail} label="Email" value={d.email} extra={emailStatusBadge(d.emailStatus)} />
-          <Field icon={Phone} label="Phone" value={d.phone} />
-          <Field icon={MapPin} label="Location" value={loc || null} />
-          {d.linkedinUrl ? (
-            <a href={d.linkedinUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 text-blue-600 hover:underline">
-              <ExternalLink className="size-4 shrink-0" /> <span className="truncate">LinkedIn profile</span>
-            </a>
-          ) : null}
-        </Section>
+        <div className="p-4 space-y-5 text-sm">
+          <Section title="Recent activity">
+            {activity.length === 0 ? (
+              <p className="text-[12px] text-muted-foreground">
+                No activity captured yet — run Enrich via LinkedIn to pull the latest profile.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {activity.map((a, i) => (
+                  <div key={i} className="flex gap-2">
+                    <span
+                      aria-hidden
+                      className={cn("mt-1.5 size-1.5 shrink-0 rounded-full", i > 0 && "bg-border")}
+                      style={i === 0 ? { backgroundColor: "var(--people-accent, hsl(var(--foreground)))" } : undefined}
+                    />
+                    <div className="min-w-0">
+                      <div className="truncate text-[12px] leading-snug" title={a.label}>{a.label}</div>
+                      {a.sub ? <div className="text-[11px] text-muted-foreground">{a.sub}</div> : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Section>
 
-        <Section title="Fit & signals">
-          <div className="flex flex-wrap items-center gap-2">
-            {fitBadge(d.confidenceScore)}
-            {d.confidenceTier && <Badge variant="outline" className="text-[10px] capitalize">{d.confidenceTier} fit</Badge>}
-            {d.verificationStatus && <Badge variant="secondary" className="text-[10px] capitalize">{d.verificationStatus.replace(/_/g, " ")}</Badge>}
-            {d.seniority && <Badge variant="outline" className="text-[10px] capitalize">{d.seniority}</Badge>}
+          <Section title="Contact info">
+            <Field icon={Mail} label="Email" value={d.email} extra={emailStatusBadge(d.emailStatus)} />
+            <Field icon={Phone} label="Phone" value={d.phone} />
+            <Field icon={MapPin} label="Location" value={loc || null} />
+            {d.linkedinUrl ? (
+              <a href={d.linkedinUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 text-blue-600 hover:underline">
+                <ExternalLink className="size-4 shrink-0" /> <span className="truncate">LinkedIn profile</span>
+              </a>
+            ) : null}
+          </Section>
+
+          <Section title="Professional summary">
+            {summary ? (
+              <p className="whitespace-pre-line text-[12px] leading-relaxed text-foreground/90">{summary}</p>
+            ) : (
+              <p className="text-[12px] text-muted-foreground">
+                No summary yet — enrich this prospect to pull their LinkedIn About section.
+              </p>
+            )}
+          </Section>
+
+          <Section title="Fit & signals">
+            <div className="flex flex-wrap items-center gap-2">
+              {fitBadge(d.confidenceScore)}
+              {d.confidenceTier && <Badge variant="outline" className="text-[10px] capitalize">{d.confidenceTier} fit</Badge>}
+              {d.verificationStatus && <Badge variant="secondary" className="text-[10px] capitalize">{d.verificationStatus.replace(/_/g, " ")}</Badge>}
+              {d.seniority && <Badge variant="outline" className="text-[10px] capitalize">{d.seniority}</Badge>}
+            </div>
+          </Section>
+
+          <Section title="Company">
+            <Field icon={Building2} label="Company" value={d.company} />
+            <Field icon={Globe} label="Domain" value={d.companyDomain} />
+            <Field icon={Briefcase} label="Industry" value={d.industry} />
+            <Field icon={GraduationCap} label="Education" value={d.education} />
+          </Section>
+
+          <div className="rounded-lg border border-border p-3">
+            <ProspectScoringPanel objectType="person" objectId={d.id} />
           </div>
-        </Section>
 
-        <Section title="Company">
-          <Field icon={Building2} label="Company" value={d.company} />
-          <Field icon={Globe} label="Domain" value={d.companyDomain} />
-          <Field icon={Briefcase} label="Industry" value={d.industry} />
-          <Field icon={GraduationCap} label="Education" value={d.education} />
-        </Section>
+          <LinkedInEnrichmentSummaryCard prospectId={d.id} />
+        </div>
       </div>
 
       <div className="shrink-0 border-t border-border p-3 space-y-2">

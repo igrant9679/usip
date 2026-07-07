@@ -12,7 +12,7 @@
  * placeholders that toast — no backend exists for them yet. Horizontally
  * scrollable so it never wraps at desktop widths.
  */
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Button } from "@/components/ui/button";
@@ -125,7 +125,9 @@ export function SelectionToolbar({
 
 /* ───────────────────────── Sequence (functional) ──────────────────────── */
 
-function SequenceMenu({ selectedIds }: { selectedIds: number[] }) {
+/** Exported so the People table's row Actions can reuse it with a compact
+ *  trigger (single-prospect enroll) — same backend, same popover. */
+export function SequenceMenu({ selectedIds, trigger }: { selectedIds: number[]; trigger?: ReactNode }) {
   const [open, setOpen] = useState(false);
   const seqQ = trpc.sequences.list.useQuery(undefined, { enabled: open });
   const utils = trpc.useUtils();
@@ -149,9 +151,11 @@ function SequenceMenu({ selectedIds }: { selectedIds: number[] }) {
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button variant="ghost" size="sm" className="gap-1.5">
-          <Send className="size-4" /> Sequence <ChevronDown className="size-3 opacity-60" />
-        </Button>
+        {trigger ?? (
+          <Button variant="ghost" size="sm" className="gap-1.5">
+            <Send className="size-4" /> Sequence <ChevronDown className="size-3 opacity-60" />
+          </Button>
+        )}
       </PopoverTrigger>
       <PopoverContent align="start" className="w-72 p-0">
         <div className="px-3 py-2 border-b text-[13px] font-medium">Add to sequence</div>
@@ -243,7 +247,9 @@ const LIST_TABS = [
   { id: "team", label: "Team lists" },
 ] as const;
 
-function AddToListMenu({ selectedIds }: { selectedIds: number[] }) {
+/** Exported so the People table's row Actions can reuse it with a compact
+ *  trigger (single-prospect add) — same backend, same popover. */
+export function AddToListMenu({ selectedIds, trigger }: { selectedIds: number[]; trigger?: ReactNode }) {
   const { user } = useAuth();
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
@@ -292,9 +298,11 @@ function AddToListMenu({ selectedIds }: { selectedIds: number[] }) {
   return (
     <Popover open={open} onOpenChange={(o) => { setOpen(o); if (!o) { setPicked(null); setQ(""); } }}>
       <PopoverTrigger asChild>
-        <Button variant="ghost" size="sm" className="gap-1.5">
-          <ListPlus className="size-4" /> Add to list <ChevronDown className="size-3 opacity-60" />
-        </Button>
+        {trigger ?? (
+          <Button variant="ghost" size="sm" className="gap-1.5">
+            <ListPlus className="size-4" /> Add to list <ChevronDown className="size-3 opacity-60" />
+          </Button>
+        )}
       </PopoverTrigger>
       <PopoverContent align="start" className="w-80 p-0">
         <div className="p-2.5 border-b">
