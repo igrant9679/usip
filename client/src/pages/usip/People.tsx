@@ -983,7 +983,7 @@ function DetailPanel({ p, onClose, onOpenFull }: { p: Prospect; onClose: () => v
       <div className="flex-1 min-h-0 overflow-y-auto">
         {/* identity */}
         <div className="flex flex-col items-center gap-2 border-b border-border/60 bg-muted/30 px-4 pb-4 pt-5 text-center">
-          <ProspectAvatar image={(full as any)?.profile_image} name={fullName} size="lg" />
+          <ProspectAvatar image={(full as any)?.profile_image ?? p.profile_image} name={fullName} size="lg" />
           <div className="min-w-0 w-full px-2">
             <div className="flex items-center justify-center gap-1.5 min-w-0">
               <span className="truncate text-base font-semibold leading-tight">{fullName}</span>

@@ -8,8 +8,8 @@
  *
  * This module is the single place that decides whether a stored image may be
  * displayed. It is pure (no DB / no IO) so it can be unit-tested and reused by
- * the full-profile serializer. Search/list responses must NOT call it with the
- * intent to expose a URL — they strip the image fields entirely.
+ * every serializer that exposes an image: the full profile AND the People
+ * list rows (which strip the raw columns and carry only this resolved form).
  */
 
 export type ProfileImageSource =

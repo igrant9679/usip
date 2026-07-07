@@ -1,9 +1,10 @@
 /**
- * Prospect profile avatar — shown ONLY inside the full prospect profile.
+ * Prospect profile avatar — the full prospect profile, the People table's
+ * Name cell, and the Quick Preview panel.
  *
  * Renders a permitted profile image when one is available, and gracefully
  * falls back to an initials avatar when there is no image OR the image fails
- * to load. Never used in the People Search table, bulk modals, or exports.
+ * to load. Never used in bulk modals or exports.
  *
  * The image URL is decided server-side by resolveProspectProfileImage
  * (server/services/profileImage.ts) — this component trusts `image.url` and

@@ -13,7 +13,7 @@ import { useState, type ReactNode, type MouseEvent } from "react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
-import { InitialsAvatar } from "../ProspectAvatar";
+import { ProspectAvatar, type ProfileImage } from "../ProspectAvatar";
 import { LinkedInUpdateIndicator, RowEnrichAction, type LinkedInChangeSummary } from "./LinkedInEnrichment";
 import { AddToListMenu, SequenceMenu } from "./SelectionToolbar";
 import { ScoreBadge, ScorePopover } from "../scoring/ScoreBadge";
@@ -77,6 +77,8 @@ export type Prospect = {
   verificationStatus?: string | null;
   linkedLeadId?: number | null;
   linkedContactId?: number | null;
+  /** Resolved, policy-gated image from prospects.list (null url → initials). */
+  profile_image?: ProfileImage | null;
 };
 
 /* ───────────────────────── badges / helpers ───────────────────────────── */
@@ -265,9 +267,9 @@ export const COLUMN_REGISTRY: Record<ColumnKey, ColumnDef> = {
       const fullName = `${p.firstName} ${p.lastName}`.trim();
       return (
         <div className="flex min-w-0 items-center gap-2.5">
-          {/* Initials only — profile images are policy-restricted to the full
-              record / preview panel (see ProspectAvatar), never the table. */}
-          <InitialsAvatar name={fullName} size="sm" className="!size-7 !text-[10px]" />
+          {/* Policy-gated image from the list row (server resolves it); the
+              component falls back to initials when there is no permitted URL. */}
+          <ProspectAvatar image={p.profile_image} name={fullName} size="sm" className="!size-7 !text-[10px]" />
           <div className="min-w-0 leading-tight">
             <div className="flex min-w-0 items-center gap-1.5">
               <span className="truncate text-[13px] font-semibold text-foreground">{fullName}</span>

@@ -454,10 +454,13 @@ export const prospectsRouter = router({
         primaryModelId = m?.id ?? null;
       }
 
-      const stripImg = (r: typeof prospects.$inferSelect) => {
+      // List rows never expose the raw image columns; they carry only the
+      // resolved, policy-gated profile_image (same gate as prospects.get) so
+      // the People table can render permitted avatars with initials fallback.
+      const withResolvedImg = (r: typeof prospects.$inferSelect) => {
         const { profileImageUrl: _u, profileImageSource: _s, profileImageSourceUrl: _su,
           profileImageLastVerifiedAt: _v, profileImageStatus: _st, ...rest } = r;
-        return rest;
+        return { ...rest, profile_image: resolveProspectProfileImage(r) };
       };
 
       if (wantsScore && primaryModelId != null) {
@@ -491,7 +494,7 @@ export const prospectsRouter = router({
           .from(prospects).leftJoin(scoreResults, joinCond).where(and(...scoreConds));
 
         const data = joined.map((row) => ({
-          ...stripImg(row.prospects),
+          ...withResolvedImg(row.prospects),
           fitScore: row.score_results ? Number(row.score_results.normalizedScore) : null,
           fitRating: row.score_results?.rating ?? null,
         }));
@@ -511,9 +514,8 @@ export const prospectsRouter = router({
         .from(prospects)
         .where(and(...conditions));
 
-      // People Search results must NEVER carry the profile image — it is a
-      // full-profile-only field. Strip the 5 profile-image columns here.
-      const data = rows.map(stripImg);
+      // Raw image columns stay server-side; rows carry the resolved image only.
+      const data = rows.map(withResolvedImg);
 
       return { data, total: Number(total), page: input.page, perPage: input.perPage };
     }),
