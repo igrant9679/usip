@@ -1475,6 +1475,13 @@ export const bookingLinks = mysqlTable(
     durationMin: int("durationMin").default(30).notNull(),
     active: boolean("active").default(true).notNull(),
     bookingCount: int("bookingCount").default(0).notNull(),
+    /** IANA timezone the working-hours window is defined in (null = UTC). Migration 0115. */
+    timezone: varchar("timezone", { length: 64 }),
+    /** Working-hours window in the link's timezone (whole hours). */
+    startHour: int("startHour").default(9).notNull(),
+    endHour: int("endHour").default(17).notNull(),
+    /** Bookable days as comma-separated JS weekday numbers (0=Sun … 6=Sat). */
+    workDays: varchar("workDays", { length: 20 }).default("1,2,3,4,5").notNull(),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },

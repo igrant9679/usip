@@ -230,6 +230,7 @@ export default function MeetingsV2() {
               <Button variant="ghost" size="sm" className="h-7 gap-1.5 shrink-0" onClick={() => window.open(bookingUrl, "_blank")}>
                 <ExternalLink className="size-3.5" /> Preview
               </Button>
+              <AvailabilityDialog link={bookingLink.data} />
             </div>
           )}
 
@@ -444,6 +445,130 @@ function NewMeetingDialog({
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
           <Button disabled={pending || !title.trim()} onClick={submit}>{pending ? "Creating…" : "Create meeting"}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/* ─────────────────── booking-link availability editor ─────────────────── */
+
+const COMMON_TIMEZONES = [
+  "UTC",
+  "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles",
+  "America/Phoenix", "America/Toronto", "America/Sao_Paulo",
+  "Europe/London", "Europe/Paris", "Europe/Berlin", "Europe/Madrid", "Europe/Amsterdam",
+  "Africa/Lagos", "Africa/Johannesburg",
+  "Asia/Dubai", "Asia/Kolkata", "Asia/Singapore", "Asia/Tokyo", "Asia/Shanghai",
+  "Australia/Sydney", "Pacific/Auckland",
+];
+
+const WEEKDAYS = [
+  { n: 1, label: "Mon" }, { n: 2, label: "Tue" }, { n: 3, label: "Wed" },
+  { n: 4, label: "Thu" }, { n: 5, label: "Fri" }, { n: 6, label: "Sat" }, { n: 0, label: "Sun" },
+];
+
+const fmtHour = (h: number) => `${((h + 11) % 12) + 1}:00 ${h < 12 ? "AM" : "PM"}`;
+
+/**
+ * Working-hours / timezone editor for the rep's booking link. The public page
+ * only ever offers slots inside this window (server-enforced on book too).
+ */
+function AvailabilityDialog({ link }: { link: any }) {
+  const utils = trpc.useUtils();
+  const [open, setOpen] = useState(false);
+  const browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const [tz, setTz] = useState<string>(link?.timezone ?? "UTC");
+  const [startHour, setStartHour] = useState<number>(link?.startHour ?? 9);
+  const [endHour, setEndHour] = useState<number>(link?.endHour ?? 17);
+  const [days, setDays] = useState<number[]>(
+    String(link?.workDays ?? "1,2,3,4,5").split(",").map(Number).filter((n) => Number.isInteger(n)),
+  );
+  const save = trpc.bookingLinks.update.useMutation({
+    onSuccess: () => { toast.success("Availability updated"); utils.bookingLinks.mine.invalidate(); setOpen(false); },
+    onError: (e) => toast.error(e.message),
+  });
+  const tzOptions = [...new Set([tz, browserTz, ...COMMON_TIMEZONES])];
+  const toggleDay = (n: number) =>
+    setDays((prev) => (prev.includes(n) ? prev.filter((d) => d !== n) : [...prev, n]));
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <Button variant="outline" size="sm" className="h-7 gap-1.5 shrink-0" onClick={() => setOpen(true)}>
+        <Clock className="size-3.5" /> Availability
+      </Button>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Booking availability</DialogTitle>
+          <DialogDescription>
+            Visitors only see open slots inside this window (shown to them in their own local time).
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <Label>Timezone</Label>
+            <Select value={tz} onValueChange={setTz}>
+              <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+              <SelectContent className="max-h-64">
+                {tzOptions.map((t) => (
+                  <SelectItem key={t} value={t}>{t.replace(/_/g, " ")}{t === browserTz ? " (your timezone)" : ""}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label>From</Label>
+              <Select value={String(startHour)} onValueChange={(v) => setStartHour(Number(v))}>
+                <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+                <SelectContent className="max-h-64">
+                  {Array.from({ length: 24 }, (_, h) => (
+                    <SelectItem key={h} value={String(h)}>{fmtHour(h)}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label>To</Label>
+              <Select value={String(endHour)} onValueChange={(v) => setEndHour(Number(v))}>
+                <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+                <SelectContent className="max-h-64">
+                  {Array.from({ length: 24 }, (_, i) => i + 1).map((h) => (
+                    <SelectItem key={h} value={String(h)}>{h === 24 ? "12:00 AM (midnight)" : fmtHour(h)}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label>Bookable days</Label>
+            <div className="flex flex-wrap gap-1.5">
+              {WEEKDAYS.map((d) => (
+                <button
+                  key={d.n}
+                  type="button"
+                  onClick={() => toggleDay(d.n)}
+                  className={cn(
+                    "rounded-md border px-2.5 py-1 text-[12px] transition-colors",
+                    days.includes(d.n) ? "bg-primary text-primary-foreground border-primary" : "hover:bg-muted text-muted-foreground",
+                  )}
+                >
+                  {d.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          {startHour >= endHour && <p className="text-[12px] text-rose-600">Working hours must end after they start.</p>}
+          {days.length === 0 && <p className="text-[12px] text-rose-600">Pick at least one bookable day.</p>}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
+          <Button
+            disabled={save.isPending || startHour >= endHour || days.length === 0}
+            onClick={() => save.mutate({ timezone: tz === "UTC" ? null : tz, startHour, endHour, workDays: days })}
+          >
+            {save.isPending ? "Saving…" : "Save availability"}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

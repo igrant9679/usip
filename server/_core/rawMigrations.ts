@@ -2441,6 +2441,17 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0115: booking-link working hours + timezone ───────────────────────────
+  {
+    name: "0115_booking_link_hours.sql",
+    statements: [
+      `ALTER TABLE \`booking_links\` ADD COLUMN \`timezone\` varchar(64) NULL`,
+      `ALTER TABLE \`booking_links\` ADD COLUMN \`startHour\` int NOT NULL DEFAULT 9`,
+      `ALTER TABLE \`booking_links\` ADD COLUMN \`endHour\` int NOT NULL DEFAULT 17`,
+      `ALTER TABLE \`booking_links\` ADD COLUMN \`workDays\` varchar(20) NOT NULL DEFAULT '1,2,3,4,5'`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------
