@@ -11,7 +11,7 @@
  */
 import type { ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
-import { LinkedInUpdateIndicator, type LinkedInChangeSummary } from "./LinkedInEnrichment";
+import { LinkedInUpdateIndicator, RowEnrichAction, type LinkedInChangeSummary } from "./LinkedInEnrichment";
 import { ScoreBadge, ScorePopover } from "../scoring/ScoreBadge";
 import {
   User,
@@ -225,6 +225,7 @@ export const COLUMN_REGISTRY: Record<ColumnKey, ColumnDef> = {
             <Icon className="size-3.5" />
           </button>
         ))}
+        <RowEnrichAction prospectId={p.id} />
       </div>
     ),
   },

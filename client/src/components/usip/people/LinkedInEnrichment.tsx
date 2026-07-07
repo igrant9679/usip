@@ -91,6 +91,22 @@ export function useEnrichJob() {
   };
 }
 
+/** Compact icon-only enrich action for a People/list table row. */
+export function RowEnrichAction({ prospectId, className }: { prospectId: number; className?: string }) {
+  const { enrich, running } = useEnrichJob();
+  return (
+    <button
+      type="button"
+      title="Enrich via LinkedIn"
+      disabled={running}
+      onClick={(e) => { e.stopPropagation(); enrich([prospectId], "people_row_action"); }}
+      className={cn("p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted disabled:opacity-50", className)}
+    >
+      {running ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}
+    </button>
+  );
+}
+
 export function EnrichButton({
   prospectIds, triggerType = "people_bulk_action", label = "Enrich", size = "sm", variant = "outline", className, iconOnly,
 }: {
