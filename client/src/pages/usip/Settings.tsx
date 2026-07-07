@@ -10,6 +10,8 @@ import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { trpc } from "@/lib/trpc";
 import { AlertTriangle, Bell, Building2, CheckCircle2, CreditCard, Download, ExternalLink, Loader2, Mail, Palette, Plug, ShieldCheck, TestTube2, Trash2, User, XCircle, Zap, Settings as SettingsIcon } from "lucide-react";
 import { useReduceMotion } from "@/components/PageTransition";
+import { useTheme, PALETTES } from "@/contexts/ThemeContext";
+import { cn } from "@/lib/utils";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
@@ -396,6 +398,8 @@ function MyProfileTab({ workspaceSignature }: { workspaceSignature: string }) {
   });
   const hasOverride = sig.trim().length > 0;
   return (
+    <>
+    <AppearanceSection />
     <Section
       title="My email signature"
       description="Overrides the workspace default for emails you send. Leave blank to use the workspace default."
@@ -440,6 +444,62 @@ function MyProfileTab({ workspaceSignature }: { workspaceSignature: string }) {
             </pre>
           </div>
         ) : null}
+      </div>
+    </Section>
+    </>
+  );
+}
+
+/** Per-user appearance: light/dark mode + colour theme (persists locally). */
+function AppearanceSection() {
+  const { theme, toggleTheme, palette, setPalette } = useTheme();
+  return (
+    <Section
+      title="Appearance"
+      description="Your personal display preferences — saved on this device."
+    >
+      <div className="p-4 space-y-4">
+        <div className="space-y-1.5">
+          <Label>Mode</Label>
+          <div className="flex items-center gap-2">
+            {(["light", "dark"] as const).map((m) => (
+              <Button
+                key={m}
+                type="button"
+                size="sm"
+                variant={theme === m ? "default" : "outline"}
+                className="capitalize"
+                onClick={() => { if (theme !== m) toggleTheme?.(); }}
+              >
+                {m}
+              </Button>
+            ))}
+          </div>
+        </div>
+        <div className="space-y-1.5">
+          <Label>Colour theme</Label>
+          <div className="flex flex-wrap gap-2">
+            {PALETTES.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => setPalette(p.id)}
+                title={p.label}
+                className={cn(
+                  "flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-[13px] transition-colors hover:bg-muted",
+                  palette === p.id && "border-foreground/50 bg-muted font-medium",
+                )}
+              >
+                <span className="size-4 rounded-full border shadow-sm" style={{ backgroundColor: p.swatch }} />
+                {p.label}
+                {palette === p.id && <CheckCircle2 className="size-3.5 text-muted-foreground" />}
+              </button>
+            ))}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Changes the app's primary colour, sidebar tint, and chart palette. Section accents in the sidebar stay per-area.
+          </p>
+        </div>
       </div>
     </Section>
   );

@@ -67,8 +67,9 @@ import {
 import { ReactNode, useEffect, useLayoutEffect, useState, useRef, createContext, useContext } from "react";
 import { Link, useLocation } from "wouter";
 import { PageTransition } from "@/components/PageTransition";
-import { useTheme } from "@/contexts/ThemeContext";
-import { Moon, Sun, Pencil, Check as CheckIcon, X as XIcon } from "lucide-react";
+import { useTheme, PALETTES } from "@/contexts/ThemeContext";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Moon, Sun, Pencil, Check as CheckIcon, X as XIcon, Palette } from "lucide-react";
 // ── Accent colour context ────────────────────────────────────────────────────
 const AccentContext = createContext<string>("#1D4ED8");
 export function useAccentColor() { return useContext(AccentContext); }
@@ -698,6 +699,9 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
 
           {actions}
 
+          {/* Colour palette picker */}
+          <PalettePicker />
+
           {/* Dark / light mode toggle */}
           {toggleTheme && (
             <button
@@ -723,6 +727,43 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
       </div>
     </div>
     </AccentContext.Provider>
+  );
+}
+
+/** Topbar colour-palette picker — swatch grid backed by ThemeContext (persisted). */
+function PalettePicker() {
+  const { palette, setPalette } = useTheme();
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          className="p-2 rounded-md hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
+          title="Colour theme"
+        >
+          <Palette className="size-4" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-56 p-2">
+        <div className="text-[11px] uppercase tracking-wide text-muted-foreground px-1 pb-1.5">Colour theme</div>
+        <div className="grid grid-cols-1 gap-0.5">
+          {PALETTES.map((p) => (
+            <button
+              key={p.id}
+              type="button"
+              onClick={() => setPalette(p.id)}
+              className={cn(
+                "flex items-center gap-2.5 rounded-md px-2 py-1.5 text-[13px] hover:bg-muted text-left",
+                palette === p.id && "bg-muted",
+              )}
+            >
+              <span className="size-4 rounded-full border shadow-sm shrink-0" style={{ backgroundColor: p.swatch }} />
+              <span className="flex-1">{p.label}</span>
+              {palette === p.id && <CheckIcon className="size-3.5 text-muted-foreground" />}
+            </button>
+          ))}
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -767,7 +808,11 @@ export function PageHeader({ title, description: defaultDescription, pageKey, ic
   return (
     <div
       className={`relative shrink-0 px-4 md:px-6 py-5 border-b border-border bg-card/40 flex flex-col sm:flex-row sm:items-center sm:flex-wrap gap-3 sm:gap-4${className ? ` ${className}` : ""}`}
-      style={style}
+      style={{
+        // Subtle section-accent wash — colourful wayfinding without shouting.
+        backgroundImage: `linear-gradient(105deg, ${accent}14 0%, ${accent}05 38%, transparent 65%)`,
+        ...style,
+      }}
     >
       {/* Thin accent rule along the top — section wayfinding without the old heavy box */}
       <span aria-hidden className="absolute inset-x-0 top-0 h-0.5" style={{ backgroundColor: accent }} />
@@ -827,9 +872,9 @@ export function PageHeader({ title, description: defaultDescription, pageKey, ic
 
 export function StatCard({ label, value, hint, tone }: { label: string; value: ReactNode; hint?: string; tone?: "default" | "success" | "warning" | "danger" }) {
   const accent = useAccentColor();
-  const toneCls = tone === "success" ? "text-emerald-700 bg-emerald-50 border-emerald-200"
-    : tone === "warning" ? "text-amber-800 bg-amber-50 border-amber-200"
-    : tone === "danger" ? "text-rose-800 bg-rose-50 border-rose-200"
+  const toneCls = tone === "success" ? "text-emerald-700 bg-emerald-50 border-emerald-200 dark:text-emerald-300 dark:bg-emerald-950/40 dark:border-emerald-900"
+    : tone === "warning" ? "text-amber-800 bg-amber-50 border-amber-200 dark:text-amber-300 dark:bg-amber-950/40 dark:border-amber-900"
+    : tone === "danger" ? "text-rose-800 bg-rose-50 border-rose-200 dark:text-rose-300 dark:bg-rose-950/40 dark:border-rose-900"
     : "";
   const titleStr = typeof value === "string" || typeof value === "number" ? String(value) : undefined;
   return (
