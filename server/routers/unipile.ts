@@ -28,6 +28,7 @@ import {
   listSentInvitations,
   listUnipileAccounts,
   listUserPosts,
+  patchChat,
   reactToPost,
   registerWebhook,
   resolveLinkedInSearchParameter,
@@ -238,6 +239,46 @@ export const unipileRouter = router({
         limit: input.limit,
       });
       return result;
+    }),
+
+  /**
+   * Mark a chat read/unread via the vendor (PATCH setReadStatus — supported
+   * for LinkedIn + WhatsApp per Unipile's reference; other providers may
+   * reject, surfaced as a friendly error). The chat's account must be one of
+   * the caller's own connected accounts.
+   *
+   * NOTE: archive was deliberately NOT built — Unipile's setArchiveStatus is
+   * WhatsApp-only, and this inbox is primarily LinkedIn.
+   */
+  setChatRead: workspaceProcedure
+    .input(z.object({
+      unipileAccountId: z.string().min(1).max(200),
+      chatId: z.string().min(1).max(500),
+      read: z.boolean().default(true),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      const [own] = await db
+        .select({ id: unipileAccounts.id })
+        .from(unipileAccounts)
+        .where(and(
+          eq(unipileAccounts.workspaceId, ctx.workspace.id),
+          eq(unipileAccounts.userId, ctx.user.id),
+          eq(unipileAccounts.unipileAccountId, input.unipileAccountId),
+        ));
+      if (!own) throw new TRPCError({ code: "FORBIDDEN", message: "That chat isn't on one of your connected accounts." });
+      try {
+        await patchChat(input.chatId, { action: "setReadStatus", value: input.read });
+      } catch (e) {
+        const msg = (e as Error).message ?? "";
+        throw new TRPCError({
+          code: "BAD_GATEWAY",
+          message: /not.?supported|invalid/i.test(msg)
+            ? "Read status isn't supported for this provider."
+            : "Couldn't update the chat — try again.",
+        });
+      }
+      return { ok: true as const };
     }),
 
   /**

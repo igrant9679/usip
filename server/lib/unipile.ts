@@ -212,6 +212,23 @@ export async function sendMessage(params: {
 
 // ─── LinkedIn Invitations ─────────────────────────────────────────────────────
 
+/**
+ * PATCH /api/v1/chats/{chat_id} — chat state updates.
+ * Verified against Unipile's reference (2026-07-07): setReadStatus (boolean)
+ * is supported for LinkedIn + WhatsApp; setArchiveStatus / setPinnedStatus /
+ * setLabel are WhatsApp-only. Returns 200 with no meaningful body.
+ */
+export async function patchChat(
+  chatId: string,
+  body: { action: "setReadStatus" | "setMuteStatus" | "setArchiveStatus" | "setPinnedStatus"; value: boolean },
+): Promise<void> {
+  await unipileFetch(`/chats/${encodeURIComponent(chatId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
 export async function sendLinkedInInvitation(params: {
   accountId: string;
   providerId: string; // LinkedIn member URN or profile ID

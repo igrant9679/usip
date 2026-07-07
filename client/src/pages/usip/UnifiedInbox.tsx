@@ -220,6 +220,19 @@ export default function UnifiedInbox() {
     onError: (err) => toast.error("Failed to send", { description: err.message }),
   });
 
+  // Opening an unread chat marks it read at the VENDOR (LinkedIn/WhatsApp),
+  // so the unread state stays consistent with the native app. Best-effort —
+  // unsupported providers just keep their badge until read natively.
+  const markRead = trpc.unipile.setChatRead.useMutation({
+    onSuccess: () => refetchInbox(),
+  });
+  const openChat = (chat: ChatItem) => {
+    setSelectedChat(chat);
+    if (chat.unread_count && chat.account_id) {
+      markRead.mutate({ unipileAccountId: chat.account_id, chatId: chat.id, read: true });
+    }
+  };
+
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messagesData]);
@@ -357,7 +370,7 @@ export default function UnifiedInbox() {
                       key={chat.id}
                       chat={chat}
                       selected={selectedChat?.id === chat.id}
-                      onClick={() => setSelectedChat(chat)}
+                      onClick={() => openChat(chat)}
                     />
                   ))
                 )}
