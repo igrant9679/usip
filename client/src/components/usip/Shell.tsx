@@ -488,7 +488,7 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
     }
   }, []);
   const { data: unread } = trpc.notifications.unreadCount.useQuery(undefined, { enabled: !!current, refetchInterval: 30_000 });
-  const { theme, toggleTheme } = useTheme();
+  const { theme, toggleTheme, palette } = useTheme();
 
   // Respect the user's "Set as Home" preference for the Dashboard nav link
   const homeDashboardHref = (typeof window !== "undefined" ? localStorage.getItem(HOME_DASHBOARD_KEY) : null) ?? "/";
@@ -501,6 +501,12 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
   // so PageHeader / StatCard / SubNav across the whole app pick up the hue of
   // whatever section the current route belongs to.
   const accentColor = resolveAccent(location, isDark);
+  // When the user picks a non-default colour theme, the PAGE accent follows the
+  // chosen palette (headers, stat cards, title rows) so switching themes is
+  // unmistakable. The sidebar nav keeps its per-section colours for wayfinding;
+  // the default Teal palette preserves the original per-section page accents.
+  const paletteSwatch = PALETTES.find((p) => p.id === palette)?.swatch;
+  const effectiveAccent = palette !== "teal" && paletteSwatch ? paletteSwatch : accentColor;
 
   // ── Sidebar renderers (light, sectioned, colour-per-section rail) ───────
   const renderNavLink = (l: NavLink, opts?: { indented?: boolean; color?: string; darkColor?: string }) => {
@@ -575,7 +581,7 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
     setMobileOpen(false);
   }, [location]);
   return (
-    <AccentContext.Provider value={accentColor}>
+    <AccentContext.Provider value={effectiveAccent}>
     <div className="h-full flex bg-background text-foreground">
       {/* Mobile backdrop */}
       {mobileOpen && (
@@ -590,10 +596,13 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
         "w-60 shrink-0 bg-background text-foreground flex flex-col border-r border-border",
         "fixed inset-y-0 left-0 z-50 transform transition-transform duration-200 md:translate-x-0 md:static md:transform-none",
         mobileOpen ? "translate-x-0" : "-translate-x-full",
-      )}>
-        {/* Logo header — existing Velocity mark kept */}
+      )}
+        // Palette-aware rail wash — the chosen theme visibly re-hues the nav.
+        style={{ backgroundImage: "linear-gradient(180deg, color-mix(in oklch, var(--primary) 9%, transparent), color-mix(in oklch, var(--primary) 3%, transparent) 40%, transparent 75%)" }}
+      >
+        {/* Logo header — bolt follows the selected colour theme */}
         <div className="px-4 pt-4 pb-3 flex items-center gap-2.5">
-          <svg className="size-7 text-[#1D4ED8] shrink-0" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2L4.09 12.97 12 12l-1 9 8.91-10.97L12 11l1-9z"/></svg>
+          <svg className="size-7 shrink-0" style={{ color: "var(--primary)" }} viewBox="0 0 24 24" fill="currentColor"><path d="M13 2L4.09 12.97 12 12l-1 9 8.91-10.97L12 11l1-9z"/></svg>
           <span className="text-[20px] font-bold tracking-tight">Velocity</span>
           <button
             type="button"
@@ -648,8 +657,14 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
       <div className="flex-1 flex flex-col min-w-0">
         {/* Topbar */}
         <header
-          className="h-14 border-b bg-card/60 backdrop-blur px-3 md:px-4 flex items-center gap-2 md:gap-3 sticky top-0 z-30"
+          className="relative h-14 border-b bg-card/60 backdrop-blur px-3 md:px-4 flex items-center gap-2 md:gap-3 sticky top-0 z-30"
         >
+          {/* Palette-aware underline — instant feedback when switching themes */}
+          <span
+            aria-hidden
+            className="absolute inset-x-0 bottom-0 h-0.5"
+            style={{ background: "linear-gradient(90deg, var(--primary), color-mix(in oklch, var(--primary) 25%, transparent) 60%, transparent)" }}
+          />
           {/* Mobile hamburger */}
           <button
             className="md:hidden p-2 rounded-md hover:bg-secondary"
@@ -737,8 +752,9 @@ function PalettePicker() {
     <Popover>
       <PopoverTrigger asChild>
         <button
-          className="p-2 rounded-md hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
+          className="p-2 rounded-md hover:bg-secondary transition-colors"
           title="Colour theme"
+          style={{ color: "var(--primary)" }}
         >
           <Palette className="size-4" />
         </button>
