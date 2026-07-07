@@ -397,19 +397,84 @@ export default function DataEnrichment() {
             </div>
           )}
 
-          {tab === "Form enrichment" && (
-            <div className="max-w-md mx-auto text-center py-20">
-              <div className="mx-auto size-12 rounded-full bg-secondary flex items-center justify-center mb-3">
-                <Database className="size-5 text-muted-foreground" />
-              </div>
-              <h2 className="text-sm font-semibold">Form enrichment</h2>
-              <p className="text-sm text-muted-foreground mt-1">
-                Automatically enrich records captured from your web forms. Coming soon.
-              </p>
-            </div>
-          )}
+          {tab === "Form enrichment" && <FormEnrichmentTab />}
         </div>
       </div>
     </Shell>
+  );
+}
+
+/* ───────────────────────── Form enrichment tab ────────────────────────── */
+
+/**
+ * Webform leads + their bridge state. Every form submission auto-bridges to an
+ * account + prospect (server-side, best-effort); this tab shows the recent
+ * ones, lets an operator bridge stragglers manually, and jumps to the prospect
+ * (where LinkedIn enrichment + scoring apply).
+ */
+function FormEnrichmentTab() {
+  const utils = trpc.useUtils();
+  const q = trpc.forms.webformBridgeStatus.useQuery();
+  const bridge = trpc.forms.bridgeLead.useMutation({
+    onSuccess: (r: any) => {
+      toast.success(r.prospectId ? "Bridged — prospect ready for enrichment" : "Bridged what was possible");
+      utils.forms.webformBridgeStatus.invalidate();
+    },
+    onError: (e: any) => toast.error(e?.message ?? "Bridge failed"),
+  });
+  const rows = q.data ?? [];
+  const unbridged = rows.filter((r: any) => !r.bridged);
+
+  if (q.isLoading) return <div className="p-6 space-y-2">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-10 rounded bg-muted/50 animate-pulse" />)}</div>;
+
+  if (rows.length === 0) {
+    return (
+      <div className="max-w-md mx-auto text-center py-20">
+        <h2 className="text-sm font-semibold">Form enrichment</h2>
+        <p className="text-sm text-muted-foreground mt-1">
+          No web-form leads yet. When a form is submitted, Velocity automatically creates the lead,
+          links it to an account, and creates a prospect so enrichment and scoring can run.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-3xl mx-auto py-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-sm font-semibold">Form enrichment</h2>
+          <p className="text-[12px] text-muted-foreground">
+            Web-form leads are auto-bridged to an account + prospect on submission — enrichment and scoring pick them up from there.
+          </p>
+        </div>
+        {unbridged.length > 0 && (
+          <span className="text-[12px] text-muted-foreground">{unbridged.length} not bridged</span>
+        )}
+      </div>
+      <div className="rounded-lg border bg-card divide-y">
+        {rows.map((r: any) => (
+          <div key={r.leadId} className="px-4 py-2 flex items-center gap-3 text-[13px]">
+            <div className="min-w-0 flex-1">
+              <div className="font-medium truncate">{r.name || r.email || `Lead #${r.leadId}`}</div>
+              <div className="text-[12px] text-muted-foreground truncate">{[r.email, r.company].filter(Boolean).join(" · ") || "—"}</div>
+            </div>
+            {r.bridged ? (
+              <a href={`/prospects/${r.prospectId}`} className="text-[12px] text-sky-600 hover:underline shrink-0">
+                Prospect #{r.prospectId}
+              </a>
+            ) : (
+              <Button
+                size="sm" variant="outline" className="h-7 shrink-0"
+                disabled={bridge.isPending}
+                onClick={() => bridge.mutate({ leadId: r.leadId })}
+              >
+                Bridge now
+              </Button>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }

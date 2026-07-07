@@ -102,6 +102,20 @@ export const formsRouter = router({
     return { ok: true };
   }),
 
+  /** Recent webform leads + whether each is bridged to a prospect (Form-enrichment tab). */
+  webformBridgeStatus: workspaceProcedure.query(async ({ ctx }) => {
+    const { webformBridgeStatus } = await import("../services/leadBridge");
+    return webformBridgeStatus(ctx.workspace.id);
+  }),
+
+  /** Manually bridge one webform lead to an account + prospect. */
+  bridgeLead: workspaceProcedure
+    .input(z.object({ leadId: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      const { bridgeLeadToRecords } = await import("../services/leadBridge");
+      return bridgeLeadToRecords(ctx.workspace.id, input.leadId);
+    }),
+
   submissions: workspaceProcedure.input(z.object({ formId: z.number() })).query(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) return [];
@@ -160,6 +174,15 @@ export const formsRouter = router({
           } as never);
           leadId = Number((r as any)[0]?.insertId ?? 0) || null;
         } catch (e) { console.error("[FormSubmit] lead insert failed:", e); }
+
+        // Form-enrichment bridge: link the lead to an account + prospect so
+        // enrichment/scoring can run on it. Best-effort, never blocks submit.
+        if (leadId) {
+          const lid = leadId;
+          void import("../services/leadBridge")
+            .then((m) => m.bridgeLeadToRecords(form.workspaceId, lid))
+            .catch((e) => console.error("[FormSubmit] lead bridge failed:", (e as Error).message));
+        }
 
         if (leadId && form.autoEnrollSequenceId) {
           try {
