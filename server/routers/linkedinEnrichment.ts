@@ -176,6 +176,86 @@ export const linkedinEnrichmentRouter = router({
     .input(z.object({ jobId: z.number().int().positive() }))
     .query(async ({ ctx, input }) => getJobItems(ctx.workspace.id, input.jobId)),
 
+  /** Recent Enrich jobs (newest first) — backs the job-results review panel. */
+  listJobs: workspaceProcedure
+    .input(z.object({ limit: z.number().int().min(1).max(50).default(10) }).optional())
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) return [];
+      return db
+        .select()
+        .from(linkedinEnrichmentJobs)
+        .where(eq(linkedinEnrichmentJobs.workspaceId, ctx.workspace.id))
+        .orderBy(desc(linkedinEnrichmentJobs.id))
+        .limit(input?.limit ?? 10);
+    }),
+
+  /**
+   * Unresolved needs_review / conflict items across all Enrich jobs, joined to
+   * the prospect — the review panel's worklist. Items leave this list when the
+   * reviewer confirms (confirmEnrich + resolveJobItem) or skips them.
+   */
+  listReviewItems: workspaceProcedure
+    .input(z.object({ limit: z.number().int().min(1).max(200).default(50) }).optional())
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) return [];
+      const rows = await db
+        .select({
+          item: linkedinEnrichmentJobItems,
+          firstName: prospects.firstName,
+          lastName: prospects.lastName,
+          company: prospects.company,
+          title: prospects.title,
+        })
+        .from(linkedinEnrichmentJobItems)
+        .leftJoin(prospects, and(
+          eq(prospects.id, linkedinEnrichmentJobItems.prospectId),
+          eq(prospects.workspaceId, ctx.workspace.id),
+        ))
+        .where(and(
+          eq(linkedinEnrichmentJobItems.workspaceId, ctx.workspace.id),
+          inArray(linkedinEnrichmentJobItems.status, ["needs_review", "conflict"]),
+        ))
+        .orderBy(desc(linkedinEnrichmentJobItems.id))
+        .limit(input?.limit ?? 50);
+      return rows.map((r) => ({
+        id: r.item.id,
+        jobId: r.item.jobId,
+        prospectId: r.item.prospectId,
+        prospectName: `${r.firstName ?? ""} ${r.lastName ?? ""}`.trim() || `#${r.item.prospectId}`,
+        prospectCompany: r.company,
+        prospectTitle: r.title,
+        status: r.item.status,
+        matchStatus: r.item.matchStatus,
+        matchScore: r.item.matchScore,
+        linkedinUrlUsed: r.item.linkedinUrlUsed,
+        errorMessage: r.item.errorMessage,
+        createdAt: r.item.createdAt,
+      }));
+    }),
+
+  /** Mark a review item resolved (used with confirmEnrich, or standalone for Skip). Manager+. */
+  resolveJobItem: workspaceProcedure
+    .input(z.object({
+      itemId: z.number().int().positive(),
+      resolution: z.enum(["enriched", "skipped"]),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      requireRole(ctx.member.role, "manager");
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      await db
+        .update(linkedinEnrichmentJobItems)
+        .set({ status: input.resolution, completedAt: new Date() })
+        .where(and(
+          eq(linkedinEnrichmentJobItems.workspaceId, ctx.workspace.id),
+          eq(linkedinEnrichmentJobItems.id, input.itemId),
+          inArray(linkedinEnrichmentJobItems.status, ["needs_review", "conflict"]),
+        ));
+      return { ok: true as const };
+    }),
+
   /** Create a batch from pasted URLs or CSV rows (validate + normalize). */
   createBatch: workspaceProcedure
     .input(z.object({

@@ -2433,6 +2433,14 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0114: per-user colour theme (synced across devices) ──────────────────
+  {
+    name: "0114_user_theme_palette.sql",
+    statements: [
+      `ALTER TABLE \`users\` ADD COLUMN \`theme_palette\` varchar(16) NULL`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

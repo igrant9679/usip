@@ -450,13 +450,18 @@ function MyProfileTab({ workspaceSignature }: { workspaceSignature: string }) {
   );
 }
 
-/** Per-user appearance: light/dark mode + colour theme (persists locally). */
+/** Per-user appearance: light/dark mode + colour theme (synced to the account). */
 function AppearanceSection() {
   const { theme, toggleTheme, palette, setPalette } = useTheme();
+  const saveAppearance = trpc.profile.updateMyAppearance.useMutation();
+  const pick = (id: typeof palette) => {
+    setPalette(id);
+    saveAppearance.mutate({ themePalette: id }); // best-effort account sync
+  };
   return (
     <Section
       title="Appearance"
-      description="Your personal display preferences — saved on this device."
+      description="Your personal display preferences. The colour theme is saved to your account and follows you across devices."
     >
       <div className="p-4 space-y-4">
         <div className="space-y-1.5">
@@ -483,7 +488,7 @@ function AppearanceSection() {
               <button
                 key={p.id}
                 type="button"
-                onClick={() => setPalette(p.id)}
+                onClick={() => pick(p.id)}
                 title={p.label}
                 className={cn(
                   "flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-[13px] transition-colors hover:bg-muted",

@@ -34,6 +34,9 @@ export const users = mysqlTable("users", {
   passwordHash: text("passwordHash"),
   /** Per-user override for outbound email signature. Overrides workspaceSettings.emailSignature when set. */
   emailSignature: text("emailSignature"),
+  /** Selected colour theme (PALETTES id, e.g. "rose"). Null = default teal.
+   *  Synced so the choice follows the user across devices (migration 0114). */
+  themePalette: varchar("theme_palette", { length: 16 }),
 });
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;

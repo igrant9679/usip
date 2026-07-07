@@ -86,7 +86,7 @@ import {
   fitBadge,
   emailStatusBadge,
   fmtNum,
-  sortRows,
+
   COLUMN_REGISTRY,
   DEFAULT_COLUMNS,
 } from "@/components/usip/people/peopleShared";
@@ -280,6 +280,14 @@ export default function People() {
   }, [search, titleQ, companyQ, locationQ, industryQ, educationQ, linkedinQ]);
 
   // ── server query ──
+  // Client SortField → prospects.list sort enum ("relevance" = fit score).
+  const SERVER_SORT: Record<SortField, "fit" | "name" | "title" | "company" | "email" | "phone" | "industry"> = {
+    relevance: "fit", name: "name", title: "title", emails: "email",
+    company: "company", phone: "phone", employees: "company", industries: "industry",
+  };
+  // Tier / seniority / sort are whole-dataset (server) filters — reset paging
+  // whenever they change so Total + page 1 reflect the new query.
+  useEffect(() => { setPage(1); }, [tiers, seniorities, sortField, sortDir]);
   const { data, isLoading, error, refetch } = trpc.prospects.list.useQuery({
     page,
     perPage,
@@ -295,25 +303,25 @@ export default function People() {
     industryQ: qText.industryQ || undefined,
     educationQ: qText.educationQ || undefined,
     linkedinQ: qText.linkedinQ || undefined,
+    tiers: tiers.size ? ([...tiers] as ("high" | "medium" | "low")[]) : undefined,
+    seniorities: seniorities.size ? [...seniorities] : undefined,
+    sortField: SERVER_SORT[sortField],
+    sortDir,
   });
 
   const total = data?.total ?? 0;
   const pageRows = (data?.data ?? []) as Prospect[];
 
-  // ── client refinement + sort ──
+  // ── client refinement ──
+  // Tier / seniority / sort moved SERVER-side (whole-dataset; see the query).
+  // Only the contact-info checkboxes remain page-local refinements.
   const rows = useMemo(() => {
-    const out = pageRows.filter((p) => {
+    return pageRows.filter((p) => {
       if (hasPhone && !p.phone) return false;
       if (hasLinkedin && !p.linkedinUrl) return false;
-      if (tiers.size && !tiers.has((p.confidenceTier ?? "").toLowerCase())) return false;
-      if (seniorities.size) {
-        const s = (p.seniority ?? "").toLowerCase();
-        if (![...seniorities].some((x) => s.includes(x))) return false;
-      }
       return true;
     });
-    return sortRows(out, sortField, sortDir);
-  }, [pageRows, hasPhone, hasLinkedin, tiers, seniorities, sortField, sortDir]);
+  }, [pageRows, hasPhone, hasLinkedin]);
 
   const selected = useMemo(() => rows.find((r) => r.id === selectedId) ?? pageRows.find((r) => r.id === selectedId) ?? null, [rows, pageRows, selectedId]);
 

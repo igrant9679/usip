@@ -155,6 +155,91 @@ function DailyCheckCard({ isAdmin }: { isAdmin: boolean }) {
   );
 }
 
+/* ───────────────────── needs-review / conflict worklist ───────────────── */
+
+/**
+ * Unresolved needs_review / conflict items from one-click Enrich jobs.
+ * Confirm = the reviewer asserts identity → confirmEnrich (re-retrieves via
+ * Unipile + applies) then the item is marked resolved. Skip just resolves it.
+ * Renders nothing when the worklist is empty.
+ */
+function ReviewPanel() {
+  const utils = trpc.useUtils();
+  const itemsQ = trpc.linkedinEnrichment.listReviewItems.useQuery(undefined);
+  const confirm = trpc.linkedinEnrichment.confirmEnrich.useMutation();
+  const resolve = trpc.linkedinEnrichment.resolveJobItem.useMutation({
+    onSuccess: () => utils.linkedinEnrichment.listReviewItems.invalidate(),
+  });
+  const [busyId, setBusyId] = useState<number | null>(null);
+
+  const items = itemsQ.data ?? [];
+  if (items.length === 0) return null;
+
+  const onConfirm = async (item: (typeof items)[number]) => {
+    setBusyId(item.id);
+    try {
+      const r = await confirm.mutateAsync({ prospectId: item.prospectId });
+      await resolve.mutateAsync({ itemId: item.id, resolution: "enriched" });
+      toast.success(`Applied — ${r.changes.length} change${r.changes.length === 1 ? "" : "s"} detected`);
+      utils.linkedinEnrichment.getChangeSummaries.invalidate();
+    } catch (e: any) {
+      toast.error(e?.message ?? "Could not apply enrichment");
+    } finally {
+      setBusyId(null);
+    }
+  };
+  const onSkip = async (item: (typeof items)[number]) => {
+    setBusyId(item.id);
+    try {
+      await resolve.mutateAsync({ itemId: item.id, resolution: "skipped" });
+      toast.info("Skipped");
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  return (
+    <div className="rounded-lg border bg-card">
+      <div className="flex items-center justify-between border-b px-4 py-2.5">
+        <div className="text-[13px] font-semibold inline-flex items-center gap-1.5">
+          <AlertTriangle className="size-3.5 text-amber-500" /> Needs review
+          <Badge variant="secondary" className="text-[10px]">{items.length}</Badge>
+        </div>
+        <span className="text-[11px] text-muted-foreground">Uncertain or conflicting matches from Enrich runs</span>
+      </div>
+      <div className="max-h-72 overflow-y-auto divide-y">
+        {items.map((it) => (
+          <div key={it.id} className="px-4 py-2 text-[12px]">
+            <div className="flex items-center gap-2">
+              <span className="font-medium truncate">{it.prospectName}</span>
+              {it.prospectCompany && <span className="text-muted-foreground truncate">· {it.prospectCompany}</span>}
+              <span className="flex-1" />
+              {it.matchScore != null && <span className="text-muted-foreground tabular-nums">score {it.matchScore}</span>}
+              <Badge variant={it.status === "conflict" ? "destructive" : "secondary"} className="text-[10px]">
+                {it.status === "conflict" ? "Conflict" : "Needs review"}
+              </Badge>
+            </div>
+            {it.linkedinUrlUsed && <div className="text-muted-foreground truncate">{it.linkedinUrlUsed}</div>}
+            {it.errorMessage && <div className="text-muted-foreground truncate">{it.errorMessage}</div>}
+            <div className="mt-1.5 flex items-center gap-2">
+              <Button size="sm" variant="outline" className="h-6 gap-1" disabled={busyId != null} onClick={() => onConfirm(it)}>
+                {busyId === it.id ? <Loader2 className="size-3 animate-spin" /> : <CheckCircle2 className="size-3" />} Confirm & apply
+              </Button>
+              <Button size="sm" variant="ghost" className="h-6" disabled={busyId != null} onClick={() => onSkip(it)}>Skip</Button>
+              <a
+                href={`/prospects/${it.prospectId}`}
+                className="text-[11px] text-sky-600 hover:underline ml-auto"
+              >
+                Open prospect
+              </a>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /* ─────────────────────────────── page ─────────────────────────────────── */
 
 export default function LinkedInEnrichmentImport() {
@@ -224,6 +309,7 @@ export default function LinkedInEnrichmentImport() {
 
         <HealthBanner onConnect={() => setLocation("/connected-accounts")} />
         <DailyCheckCard isAdmin={isAdmin} />
+        <ReviewPanel />
 
         {/* ── input ── */}
         {!batchId && (

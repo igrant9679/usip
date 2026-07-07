@@ -500,7 +500,19 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
     }
   }, []);
   const { data: unread } = trpc.notifications.unreadCount.useQuery(undefined, { enabled: !!current, refetchInterval: 30_000 });
-  const { theme, toggleTheme } = useTheme();
+  const { theme, toggleTheme, palette, setPalette } = useTheme();
+
+  // Colour theme follows the ACCOUNT: adopt the server-stored palette once per
+  // mount (server wins across devices; localStorage is the instant-boot cache).
+  // The pickers write both localStorage (via setPalette) and the server.
+  const appearanceQ = trpc.profile.getMyAppearance.useQuery(undefined, { staleTime: 60_000 });
+  const adoptedServerPalette = useRef(false);
+  useEffect(() => {
+    if (adoptedServerPalette.current || !appearanceQ.data) return;
+    adoptedServerPalette.current = true;
+    const server = (appearanceQ.data.themePalette ?? "teal") as typeof palette;
+    if (PALETTES.some((p) => p.id === server) && server !== palette) setPalette(server);
+  }, [appearanceQ.data]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Respect the user's "Set as Home" preference for the Dashboard nav link
   const homeDashboardHref = (typeof window !== "undefined" ? localStorage.getItem(HOME_DASHBOARD_KEY) : null) ?? "/";
@@ -754,6 +766,11 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
 /** Topbar colour-palette picker — swatch grid backed by ThemeContext (persisted). */
 function PalettePicker() {
   const { palette, setPalette } = useTheme();
+  const saveAppearance = trpc.profile.updateMyAppearance.useMutation();
+  const pick = (id: typeof palette) => {
+    setPalette(id);
+    saveAppearance.mutate({ themePalette: id }); // best-effort account sync
+  };
   return (
     <Popover>
       <PopoverTrigger asChild>
@@ -772,7 +789,7 @@ function PalettePicker() {
             <button
               key={p.id}
               type="button"
-              onClick={() => setPalette(p.id)}
+              onClick={() => pick(p.id)}
               className={cn(
                 "flex items-center gap-2.5 rounded-md px-2 py-1.5 text-[13px] hover:bg-muted text-left",
                 palette === p.id && "bg-muted",

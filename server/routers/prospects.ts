@@ -361,6 +361,13 @@ export const prospectsRouter = router({
         industryQ: z.string().trim().max(200).optional(),
         educationQ: z.string().trim().max(200).optional(),
         linkedinQ: z.string().trim().max(500).optional(),
+        /** ICP confidence tier(s) — server-side (was a client-side page refinement). */
+        tiers: z.array(z.enum(["high", "medium", "low"])).optional(),
+        /** Seniority contains-match against ANY of these tokens (e.g. "vp"). */
+        seniorities: z.array(z.string().trim().min(1).max(40)).max(12).optional(),
+        /** Whole-dataset sort (replaces the client-side loaded-page sort). */
+        sortField: z.enum(["created", "fit", "name", "title", "company", "email", "phone", "industry"]).optional(),
+        sortDir: z.enum(["asc", "desc"]).optional(),
         /** Score filter/sort against the primary person Fit model (scoring). */
         scoreMinRating: z.enum(["fair", "good", "excellent"]).optional(),
         scoreDisqualified: z.boolean().optional(),
@@ -414,8 +421,24 @@ export const prospectsRouter = router({
         const s = `%${input.locationQ}%`;
         conditions.push(or(like(prospects.city, s), like(prospects.state, s), like(prospects.country, s))!);
       }
+      if (input.tiers?.length) conditions.push(inArray(prospects.confidenceTier, input.tiers));
+      if (input.seniorities?.length) {
+        conditions.push(or(...input.seniorities.map((s) => like(prospects.seniority, `%${s}%`)))!);
+      }
 
       const offset = (input.page - 1) * input.perPage;
+
+      // Whole-dataset sort (Total + pagination follow it). Default: newest first.
+      const sdir = input.sortDir === "asc" ? asc : desc;
+      const sortExprs =
+        input.sortField === "fit" ? [sdir(prospects.confidenceScore)]
+          : input.sortField === "name" ? [sdir(prospects.firstName), sdir(prospects.lastName)]
+            : input.sortField === "title" ? [sdir(prospects.title)]
+              : input.sortField === "company" ? [sdir(prospects.company)]
+                : input.sortField === "email" ? [sdir(prospects.email)]
+                  : input.sortField === "phone" ? [sdir(prospects.phone)]
+                    : input.sortField === "industry" ? [sdir(prospects.industry)]
+                      : [desc(prospects.createdAt)];
 
       // ── Score filter/sort against the primary person Fit model ───────────
       // Scores live in score_results, so a LEFT JOIN keeps unscored prospects
@@ -458,12 +481,12 @@ export const prospectsRouter = router({
         if (input.scoreMin != null) scoreConds.push(sql`${scoreResults.normalizedScore} >= ${input.scoreMin}`);
         if (input.scoreMax != null) scoreConds.push(sql`${scoreResults.normalizedScore} <= ${input.scoreMax}`);
 
-        const orderBy = input.sortByScore === "asc" ? asc(scoreResults.normalizedScore)
-          : input.sortByScore === "desc" ? desc(scoreResults.normalizedScore)
-            : desc(prospects.createdAt);
+        const orderBy = input.sortByScore === "asc" ? [asc(scoreResults.normalizedScore)]
+          : input.sortByScore === "desc" ? [desc(scoreResults.normalizedScore)]
+            : sortExprs;
 
         const joined = await db.select().from(prospects).leftJoin(scoreResults, joinCond)
-          .where(and(...scoreConds)).orderBy(orderBy).limit(input.perPage).offset(offset);
+          .where(and(...scoreConds)).orderBy(...orderBy).limit(input.perPage).offset(offset);
         const [{ total }] = await db.select({ total: sql<number>`count(*)` })
           .from(prospects).leftJoin(scoreResults, joinCond).where(and(...scoreConds));
 
@@ -479,7 +502,7 @@ export const prospectsRouter = router({
         .select()
         .from(prospects)
         .where(and(...conditions))
-        .orderBy(desc(prospects.createdAt))
+        .orderBy(...sortExprs)
         .limit(input.perPage)
         .offset(offset);
 

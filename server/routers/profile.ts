@@ -46,4 +46,30 @@ export const profileRouter = router({
         .where(eq(users.id, ctx.user.id));
       return { emailSignature: value ?? "" };
     }),
+
+  /** The signed-in user's appearance preferences (colour theme). Null = default teal. */
+  getMyAppearance: workspaceProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    const [row] = await db
+      .select({ themePalette: users.themePalette })
+      .from(users)
+      .where(eq(users.id, ctx.user.id))
+      .limit(1);
+    return { themePalette: row?.themePalette ?? null };
+  }),
+
+  /** Persist the colour theme so it follows the user across devices. */
+  updateMyAppearance: workspaceProcedure
+    .input(z.object({
+      themePalette: z.enum(["teal", "indigo", "violet", "rose", "amber", "ocean", "graphite"]).nullable(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // "teal" is the default — store null so future default changes apply.
+      const value = input.themePalette && input.themePalette !== "teal" ? input.themePalette : null;
+      await db.update(users).set({ themePalette: value }).where(eq(users.id, ctx.user.id));
+      return { themePalette: value };
+    }),
 });
