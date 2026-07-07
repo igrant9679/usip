@@ -72,7 +72,19 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Moon, Sun, Pencil, Check as CheckIcon, X as XIcon, Palette } from "lucide-react";
 // ── Accent colour context ────────────────────────────────────────────────────
 const AccentContext = createContext<string>("#1D4ED8");
-export function useAccentColor() { return useContext(AccentContext); }
+/**
+ * The page accent. Defaults to the active section's colour (published by
+ * Shell's provider) — but when the user picks a non-default colour theme, the
+ * palette swatch wins. The override lives HERE (not on the provider) because
+ * several pages call this hook in the component that RENDERS <Shell>, i.e.
+ * above the provider, where they'd otherwise only ever see the context default.
+ */
+export function useAccentColor() {
+  const sectionAccent = useContext(AccentContext);
+  const { palette } = useTheme();
+  const swatch = PALETTES.find((p) => p.id === palette)?.swatch;
+  return palette !== "teal" && swatch ? swatch : sectionAccent;
+}
 
 // Entry kinds that can appear in a NavGroup's `items` array:
 //   - default link (no `kind` field): renders as a clickable nav row
@@ -488,7 +500,7 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
     }
   }, []);
   const { data: unread } = trpc.notifications.unreadCount.useQuery(undefined, { enabled: !!current, refetchInterval: 30_000 });
-  const { theme, toggleTheme, palette } = useTheme();
+  const { theme, toggleTheme } = useTheme();
 
   // Respect the user's "Set as Home" preference for the Dashboard nav link
   const homeDashboardHref = (typeof window !== "undefined" ? localStorage.getItem(HOME_DASHBOARD_KEY) : null) ?? "/";
@@ -501,12 +513,6 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
   // so PageHeader / StatCard / SubNav across the whole app pick up the hue of
   // whatever section the current route belongs to.
   const accentColor = resolveAccent(location, isDark);
-  // When the user picks a non-default colour theme, the PAGE accent follows the
-  // chosen palette (headers, stat cards, title rows) so switching themes is
-  // unmistakable. The sidebar nav keeps its per-section colours for wayfinding;
-  // the default Teal palette preserves the original per-section page accents.
-  const paletteSwatch = PALETTES.find((p) => p.id === palette)?.swatch;
-  const effectiveAccent = palette !== "teal" && paletteSwatch ? paletteSwatch : accentColor;
 
   // ── Sidebar renderers (light, sectioned, colour-per-section rail) ───────
   const renderNavLink = (l: NavLink, opts?: { indented?: boolean; color?: string; darkColor?: string }) => {
@@ -581,7 +587,7 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
     setMobileOpen(false);
   }, [location]);
   return (
-    <AccentContext.Provider value={effectiveAccent}>
+    <AccentContext.Provider value={accentColor}>
     <div className="h-full flex bg-background text-foreground">
       {/* Mobile backdrop */}
       {mobileOpen && (
