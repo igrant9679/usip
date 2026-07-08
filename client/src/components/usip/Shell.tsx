@@ -461,6 +461,15 @@ function AdminSettingsMenu({ color }: { color: string }) {
             {it.label}
           </button>
         ))}
+        <div className="my-1.5 border-t border-border" />
+        <button
+          type="button"
+          onClick={() => { setOpen(false); navigate("/settings"); }}
+          className="w-full flex items-center gap-3 rounded-lg px-3 py-2.5 text-left text-[13px] font-medium text-foreground transition-colors hover:bg-muted"
+        >
+          <Settings className="size-4 shrink-0 text-muted-foreground" />
+          All settings
+        </button>
       </PopoverContent>
     </Popover>
   );
