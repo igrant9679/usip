@@ -41,17 +41,19 @@ function roleTone(r: Role) {
 type InviteState = "active" | "pending" | "expired" | "deactivated";
 
 /**
- * Derive a member's invitation lifecycle state for display. An accepted
- * member has a real loginMethod and no outstanding invite token; a pending
- * invite still carries one. We also treat a pending invite whose
- * inviteExpiresAt has passed as expired even before the nightly
- * expireInvitations job flips loginMethod to "expired_invite", so the badge
- * never lags reality.
+ * Derive a member's invitation lifecycle state for display. A member with a
+ * real loginMethod (or a password) has accepted and is ACTIVE — even if an
+ * invite token is still outstanding (a stale token from an acceptance path
+ * that bypassed finaliseAcceptance, or an admin-issued password-setup link).
+ * Only invite/expired_invite loginMethods are genuinely pending. We also
+ * treat a pending invite whose inviteExpiresAt has passed as expired even
+ * before the nightly expireInvitations job flips loginMethod to
+ * "expired_invite", so the badge never lags reality.
  */
 function inviteStateOf(m: any): InviteState {
   if (m.deactivatedAt) return "deactivated";
   const pendingMethod = m.loginMethod === "invite" || m.loginMethod === "expired_invite";
-  if (!pendingMethod && !m.invitePending) return "active";
+  if (!pendingMethod || m.hasPassword) return "active";
   const expiredByDate = m.inviteExpiresAt && new Date(m.inviteExpiresAt).getTime() <= Date.now();
   if (m.loginMethod === "expired_invite" || expiredByDate) return "expired";
   return "pending";

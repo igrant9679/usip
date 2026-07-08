@@ -890,6 +890,50 @@ export const teamRouter = router({
     }),
 
   /**
+   * Clear a stale invite token for a member whose account is already real
+   * (has a password or a non-invite loginMethod). Heals rows left "Pending"
+   * by acceptance paths that bypassed finaliseAcceptance — e.g. registering
+   * directly with the invited email. Guarded: refuses genuinely pending
+   * members so an admin can't fake an acceptance.
+   */
+  markInviteAccepted: adminWsProcedure
+    .input(z.object({ memberId: z.number().int() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [row] = await db
+        .select({
+          userId: workspaceMembers.userId,
+          inviteToken: workspaceMembers.inviteToken,
+          email: users.email,
+          loginMethod: users.loginMethod,
+          passwordHash: users.passwordHash,
+        })
+        .from(workspaceMembers)
+        .innerJoin(users, eq(workspaceMembers.userId, users.id))
+        .where(and(eq(workspaceMembers.id, input.memberId), eq(workspaceMembers.workspaceId, ctx.workspace.id)));
+      if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Member not found" });
+      const genuinelyPending =
+        ["invite", "expired_invite"].includes(row.loginMethod ?? "") && !row.passwordHash;
+      if (genuinelyPending) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Member has not accepted yet — resend the invitation instead." });
+      }
+      if (!row.inviteToken) return { ok: true, alreadyClear: true };
+      await db.update(workspaceMembers)
+        .set({ inviteToken: null, inviteExpiresAt: null })
+        .where(eq(workspaceMembers.id, input.memberId));
+      await recordAudit({
+        workspaceId: ctx.workspace.id,
+        actorUserId: ctx.user.id,
+        action: "update",
+        entityType: "workspace_member",
+        entityId: row.userId,
+        after: { action: "stale_invite_token_cleared", email: row.email },
+      });
+      return { ok: true };
+    }),
+
+  /**
    * Send a "set your password" email to a member who completed OAuth
    * but skipped the password-creation step (loginMethod = "oauth", passwordHash = null).
    *

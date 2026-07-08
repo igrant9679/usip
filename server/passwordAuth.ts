@@ -132,6 +132,20 @@ export function registerPasswordAuthRoutes(app: Express) {
         await db.update(users).set({ lastSignedIn: new Date() }).where(eq(users.id, user.id));
       } catch (_) { /* non-fatal */ }
 
+      // A successful password login proves the account is accepted — clear any
+      // stale invite tokens (heals members who registered or set a password
+      // without completing finaliseAcceptance) and normalise a leftover
+      // "invite"/"expired_invite" loginMethod.
+      try {
+        await db
+          .update(workspaceMembers)
+          .set({ inviteToken: null, inviteExpiresAt: null })
+          .where(eq(workspaceMembers.userId, user.id));
+        if (user.loginMethod === "invite" || user.loginMethod === "expired_invite") {
+          await db.update(users).set({ loginMethod: "password" }).where(eq(users.id, user.id));
+        }
+      } catch (_) { /* non-fatal */ }
+
       try {
         const [member] = await db
           .select({ workspaceId: workspaceMembers.workspaceId })
@@ -260,6 +274,13 @@ export function registerPasswordAuthRoutes(app: Express) {
             lastSignedIn: now,
           })
           .where(eq(users.id, existing.id));
+        // Registering fulfils any outstanding email invite: clear the member
+        // rows' invite tokens, or the Team tab keeps showing "Pending" for an
+        // account that is fully active (register bypasses finaliseAcceptance).
+        await db
+          .update(workspaceMembers)
+          .set({ inviteToken: null, inviteExpiresAt: null })
+          .where(eq(workspaceMembers.userId, existing.id));
       } else {
         openId = `local:${nanoid(24)}`;
         const [insertResult] = await db.insert(users).values({
