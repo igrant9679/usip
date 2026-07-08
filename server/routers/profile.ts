@@ -120,6 +120,98 @@ export const profileRouter = router({
       return { ok: true, email };
     }),
 
+  /* ── Multi-factor authentication (TOTP) ─────────────────────────────────
+     Real state, real enforcement: once confirmed, password logins require a
+     valid authenticator code (see server/passwordAuth.ts). SMS is reported
+     as unavailable — no SMS gateway is configured in Velocity. */
+
+  /** Connection state for the Settings → Profile → MFA tab. */
+  getMfaStatus: workspaceProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    const [u] = await db
+      .select({ enabledAt: users.mfaTotpEnabledAt })
+      .from(users)
+      .where(eq(users.id, ctx.user.id))
+      .limit(1);
+    return {
+      totp: { connected: !!u?.enabledAt, enabledAt: u?.enabledAt ?? null },
+      sms: { connected: false, available: false },
+    };
+  }),
+
+  /**
+   * Begin authenticator-app enrollment: mint a secret (stored unconfirmed)
+   * and return it with the otpauth:// URL. Re-starting replaces any prior
+   * unconfirmed secret; an ACTIVE enrollment must be disconnected first.
+   */
+  startTotpEnrollment: workspaceProcedure.mutation(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    const [u] = await db
+      .select({ enabledAt: users.mfaTotpEnabledAt, email: users.email })
+      .from(users)
+      .where(eq(users.id, ctx.user.id))
+      .limit(1);
+    if (u?.enabledAt) {
+      throw new TRPCError({ code: "BAD_REQUEST", message: "Authenticator app is already connected — disconnect it first." });
+    }
+    const { generateTotpSecret, totpAuthUrl } = await import("../services/totp");
+    const secret = generateTotpSecret();
+    await db.update(users).set({ mfaTotpSecret: secret, mfaTotpEnabledAt: null }).where(eq(users.id, ctx.user.id));
+    return { secret, otpauthUrl: totpAuthUrl(secret, u?.email ?? "account") };
+  }),
+
+  /** Confirm enrollment with a live code from the authenticator app. */
+  confirmTotpEnrollment: workspaceProcedure
+    .input(z.object({ code: z.string().min(6).max(10) }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [u] = await db
+        .select({ secret: users.mfaTotpSecret, enabledAt: users.mfaTotpEnabledAt })
+        .from(users)
+        .where(eq(users.id, ctx.user.id))
+        .limit(1);
+      if (!u?.secret) throw new TRPCError({ code: "BAD_REQUEST", message: "Start enrollment first." });
+      if (u.enabledAt) return { ok: true, alreadyConnected: true };
+      const { verifyTotp } = await import("../services/totp");
+      if (!verifyTotp(u.secret, input.code)) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "That code didn't match — check the app and try again." });
+      }
+      await db.update(users).set({ mfaTotpEnabledAt: new Date() }).where(eq(users.id, ctx.user.id));
+      return { ok: true };
+    }),
+
+  /** Disconnect TOTP. Requires a live code OR the account password. */
+  disableTotp: workspaceProcedure
+    .input(z.object({
+      code: z.string().optional(),
+      currentPassword: z.string().optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [u] = await db
+        .select({ secret: users.mfaTotpSecret, enabledAt: users.mfaTotpEnabledAt, passwordHash: users.passwordHash })
+        .from(users)
+        .where(eq(users.id, ctx.user.id))
+        .limit(1);
+      if (!u?.enabledAt || !u.secret) {
+        // Nothing active — also clear any dangling unconfirmed secret.
+        await db.update(users).set({ mfaTotpSecret: null, mfaTotpEnabledAt: null }).where(eq(users.id, ctx.user.id));
+        return { ok: true };
+      }
+      const { verifyTotp } = await import("../services/totp");
+      const codeOk = !!input.code && verifyTotp(u.secret, input.code);
+      const pwOk = !!input.currentPassword && !!u.passwordHash && (await bcrypt.compare(input.currentPassword, u.passwordHash));
+      if (!codeOk && !pwOk) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Confirm with a current authenticator code or your password." });
+      }
+      await db.update(users).set({ mfaTotpSecret: null, mfaTotpEnabledAt: null }).where(eq(users.id, ctx.user.id));
+      return { ok: true };
+    }),
+
   /**
    * Self-service password change. Users who already have a password must
    * supply the current one; OAuth-only users may set their first password

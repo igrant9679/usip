@@ -95,6 +95,8 @@ export function registerPasswordAuthRoutes(app: Express) {
           email: users.email,
           passwordHash: users.passwordHash,
           loginMethod: users.loginMethod,
+          mfaTotpSecret: users.mfaTotpSecret,
+          mfaTotpEnabledAt: users.mfaTotpEnabledAt,
         })
         .from(users)
         .where(eq(users.email, normalizedEmail));
@@ -126,6 +128,37 @@ export function registerPasswordAuthRoutes(app: Express) {
         } catch (_) { /* non-fatal */ }
         res.status(401).json({ error: GENERIC_ERROR });
         return;
+      }
+
+      // ── MFA enforcement: an enabled authenticator app makes the code a
+      //    second factor for every password login. The password has already
+      //    been verified above, so telling the client MFA is required leaks
+      //    nothing an attacker could use without the password.
+      if (user.mfaTotpEnabledAt && user.mfaTotpSecret) {
+        const totpCode = typeof (req.body ?? {}).totpCode === "string" ? (req.body.totpCode as string) : "";
+        if (!totpCode) {
+          res.status(401).json({ error: "Enter the 6-digit code from your authenticator app.", mfaRequired: true });
+          return;
+        }
+        const { verifyTotp } = await import("./services/totp");
+        if (!verifyTotp(user.mfaTotpSecret, totpCode)) {
+          try {
+            const [member] = await db
+              .select({ workspaceId: workspaceMembers.workspaceId })
+              .from(workspaceMembers)
+              .where(eq(workspaceMembers.userId, user.id))
+              .limit(1);
+            await db.insert(loginHistory).values({
+              userId: user.id,
+              workspaceId: member?.workspaceId ?? null,
+              ipAddress: ipKey(req).slice(0, 64),
+              userAgent: (req.headers["user-agent"] ?? "").slice(0, 500),
+              outcome: "failed",
+            });
+          } catch (_) { /* non-fatal */ }
+          res.status(401).json({ error: "That authentication code didn't match — try again.", mfaRequired: true });
+          return;
+        }
       }
 
       try {

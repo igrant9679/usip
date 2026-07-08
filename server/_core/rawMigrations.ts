@@ -2452,6 +2452,15 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0116: per-user TOTP multi-factor authentication ──────────────────────
+  {
+    name: "0116_user_mfa_totp.sql",
+    statements: [
+      `ALTER TABLE \`users\` ADD COLUMN \`mfa_totp_secret\` varchar(64) NULL`,
+      `ALTER TABLE \`users\` ADD COLUMN \`mfa_totp_enabled_at\` timestamp NULL`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

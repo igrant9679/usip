@@ -22,6 +22,10 @@ export default function PasswordLogin() {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  // MFA step: shown after the server confirms the password but requires the
+  // authenticator code (mfaRequired in the 401 response).
+  const [mfaStep, setMfaStep] = useState(false);
+  const [totpCode, setTotpCode] = useState("");
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -30,16 +34,33 @@ export default function PasswordLogin() {
       setError("Please enter your email and password.");
       return;
     }
+    if (mfaStep && !totpCode.trim()) {
+      setError("Enter the 6-digit code from your authenticator app.");
+      return;
+    }
     setLoading(true);
     try {
       const res = await fetch("/api/auth/password-login", {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({ email: email.trim().toLowerCase(), password, returnPath }),
+        body: JSON.stringify({
+          email: email.trim().toLowerCase(),
+          password,
+          returnPath,
+          ...(mfaStep && totpCode.trim() ? { totpCode: totpCode.trim() } : {}),
+        }),
         credentials: "include",
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
+        if (data.mfaRequired) {
+          if (!mfaStep) {
+            setMfaStep(true); // password accepted — now ask for the code
+          } else {
+            setError(data.error ?? "That authentication code didn't match — try again.");
+          }
+          return;
+        }
         setError(data.error ?? "Login failed. Please try again.");
         return;
       }
@@ -108,6 +129,23 @@ export default function PasswordLogin() {
                   </button>
                 </div>
               </div>
+              {mfaStep && (
+                <div className="space-y-2">
+                  <Label htmlFor="login-totp" className="text-white/80">Authentication code</Label>
+                  <Input
+                    id="login-totp"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    placeholder="6-digit code"
+                    value={totpCode}
+                    onChange={(e) => { setTotpCode(e.target.value.replace(/[^\d\s]/g, "")); setError(null); }}
+                    className="bg-white/10 border-white/20 text-white placeholder:text-white/30 focus:border-[#14B89A] tracking-widest"
+                    disabled={loading}
+                    autoFocus
+                  />
+                  <p className="text-xs text-white/40">Open your authenticator app and enter the current code.</p>
+                </div>
+              )}
               {error && (
                 <p className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-md px-3 py-2">
                   {error}

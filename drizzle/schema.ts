@@ -37,6 +37,10 @@ export const users = mysqlTable("users", {
   /** Selected colour theme (PALETTES id, e.g. "rose"). Null = default teal.
    *  Synced so the choice follows the user across devices (migration 0114). */
   themePalette: varchar("theme_palette", { length: 16 }),
+  /** TOTP MFA (migration 0116): base32 secret + activation time. A secret
+   *  with NULL enabled-at = enrollment started but not yet confirmed. */
+  mfaTotpSecret: varchar("mfa_totp_secret", { length: 64 }),
+  mfaTotpEnabledAt: timestamp("mfa_totp_enabled_at"),
 });
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;

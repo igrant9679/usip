@@ -61,6 +61,10 @@ import {
   Database,
   Share2,
   ExternalLink,
+  KeyRound,
+  Smartphone,
+  Phone,
+  Copy,
 } from "lucide-react";
 
 /* ───────────────────────── section registry ───────────────────────────── */
@@ -81,8 +85,9 @@ const GROUPS: HubGroup[] = [
     label: "Personal settings",
     items: [
       { id: "profile", label: "Profile", icon: User, internal: true },
+      { id: "mailboxes", label: "Mailboxes", icon: Mail, href: "/connected-accounts" },
+      { id: "phone-numbers", label: "Phone numbers", icon: Phone, href: "/v2/calls" },
       { id: "notifications", label: "Notifications", icon: Bell, href: "/notification-prefs" },
-      { id: "mailboxes", label: "Mailboxes & accounts", icon: Mail, href: "/connected-accounts" },
       { id: "my-linkedin", label: "My LinkedIn", icon: Link2, href: "/my-linkedin" },
     ],
   },
@@ -172,11 +177,11 @@ export default function SettingsHub() {
                       className={cn(
                         "w-full flex items-center gap-2.5 rounded-md px-3 py-1.5 text-left text-[13px] transition-colors",
                         active
-                          ? "bg-foreground text-background font-medium"
+                          ? "bg-primary/15 font-medium text-foreground"
                           : "text-foreground/85 hover:bg-muted hover:text-foreground",
                       )}
                     >
-                      <it.icon className={cn("size-3.5 shrink-0", active ? "text-background" : "text-muted-foreground")} />
+                      <it.icon className={cn("size-3.5 shrink-0", active ? "text-primary" : "text-muted-foreground")} />
                       <span className="truncate">{it.label}</span>
                     </button>
                   );
@@ -502,39 +507,256 @@ function GeneralTab(props: {
 
 /* ─────────────────────────── other tabs ───────────────────────────────── */
 
-function MfaTab({ me, onEditPassword }: { me: any; onEditPassword: () => void }) {
+function StatusBadge({ connected }: { connected: boolean }) {
   return (
-    <SettingsCard title="Multi-factor authentication">
-      <p className="text-[13px] text-muted-foreground -mt-1">
-        How your sign-in is protected depends on the method you use.
-      </p>
-      <div className="space-y-3">
-        <div className="flex items-start gap-3 rounded-lg border border-border/70 px-4 py-3">
-          <ShieldCheck className="size-4 mt-0.5 shrink-0 text-emerald-600" />
-          <div className="text-[13px]">
-            <div className="font-medium">OAuth sign-in</div>
-            <p className="text-muted-foreground">
-              When you sign in with an identity provider, multi-factor authentication is enforced by that
-              provider's own security settings — manage it there.
-            </p>
-          </div>
+    <span
+      className={cn(
+        "inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium",
+        connected
+          ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300"
+          : "bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-300",
+      )}
+    >
+      {connected ? "Connected" : "Not connected"}
+    </span>
+  );
+}
+
+function MfaMethodRow({
+  icon: Icon,
+  name,
+  connected,
+  actionLabel,
+  onAction,
+}: {
+  icon: any;
+  name: string;
+  connected: boolean;
+  actionLabel: string;
+  onAction: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-3 rounded-xl border border-border/70 bg-card px-4 py-3.5 shadow-sm">
+      <Icon className="size-4 shrink-0 text-foreground/70" />
+      <span className="text-[14px] font-medium">{name}</span>
+      <StatusBadge connected={connected} />
+      <div className="flex-1" />
+      <Button variant="outline" size="sm" onClick={onAction}>{actionLabel}</Button>
+    </div>
+  );
+}
+
+function MfaTab({ me, onEditPassword: _onEditPassword }: { me: any; onEditPassword: () => void }) {
+  const status = trpc.profile.getMfaStatus.useQuery();
+  const totpConnected = !!status.data?.totp.connected;
+  const [totpOpen, setTotpOpen] = useState(false);
+  const [disconnectOpen, setDisconnectOpen] = useState(false);
+  const [smsOpen, setSmsOpen] = useState(false);
+
+  return (
+    <>
+      <section className="rounded-xl border border-border/70 bg-card shadow-sm">
+        <div className="border-b border-border/60 px-5 py-3.5 text-[13px] font-medium">Multi-factor authentication</div>
+        <div className="space-y-3 p-4">
+          {status.isLoading ? (
+            <div className="h-24 rounded-xl bg-muted/50 animate-pulse" />
+          ) : (
+            <>
+              <MfaMethodRow
+                icon={KeyRound}
+                name="Authenticator App"
+                connected={totpConnected}
+                actionLabel={totpConnected ? "Disconnect" : "Set up"}
+                onAction={() => (totpConnected ? setDisconnectOpen(true) : setTotpOpen(true))}
+              />
+              <MfaMethodRow
+                icon={Smartphone}
+                name="SMS authentication"
+                connected={false}
+                actionLabel="Set up"
+                onAction={() => setSmsOpen(true)}
+              />
+            </>
+          )}
         </div>
-        <div className="flex items-start gap-3 rounded-lg border border-border/70 px-4 py-3">
-          <Pencil className="size-4 mt-0.5 shrink-0 text-muted-foreground" />
-          <div className="text-[13px] flex-1">
-            <div className="font-medium">Password sign-in</div>
-            <p className="text-muted-foreground">
-              {me?.hasPassword
-                ? "You have a password set. Use a strong, unique password — app-level MFA for password sign-ins is not available yet."
-                : "You don't have a password set — your account signs in via OAuth only."}
-            </p>
-            <Button variant="outline" size="sm" className="mt-2 gap-1.5" onClick={onEditPassword}>
-              <Pencil className="size-3.5" /> {me?.hasPassword ? "Change password" : "Set a password"}
-            </Button>
+      </section>
+
+      <TotpSetupDialog open={totpOpen} onClose={() => setTotpOpen(false)} />
+      <TotpDisconnectDialog open={disconnectOpen} onClose={() => setDisconnectOpen(false)} hasPassword={!!me?.hasPassword} />
+
+      {/* SMS — honest unavailability, no fake flow */}
+      <Dialog open={smsOpen} onOpenChange={(o) => !o && setSmsOpen(false)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>SMS authentication</DialogTitle>
+            <DialogDescription>
+              SMS codes need an SMS gateway, which isn't configured for this workspace yet. Use the
+              Authenticator App method instead — it's more secure and works offline.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end gap-2 pt-1">
+            <Button variant="outline" size="sm" onClick={() => setSmsOpen(false)}>Close</Button>
+            <Button size="sm" onClick={() => { setSmsOpen(false); setTotpOpen(true); }}>Set up authenticator app</Button>
           </div>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+/** Two-step authenticator enrollment: show the minted secret, then confirm a live code. */
+function TotpSetupDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const utils = trpc.useUtils();
+  const [enroll, setEnroll] = useState<{ secret: string; otpauthUrl: string } | null>(null);
+  const [code, setCode] = useState("");
+  const start = trpc.profile.startTotpEnrollment.useMutation({
+    onSuccess: (r: any) => setEnroll(r),
+    onError: (e: any) => { toast.error(e?.message ?? "Could not start enrollment"); onClose(); },
+  });
+  const confirm = trpc.profile.confirmTotpEnrollment.useMutation({
+    onSuccess: () => {
+      toast.success("Authenticator app connected — codes are now required at password sign-in");
+      utils.profile.getMfaStatus.invalidate();
+      setEnroll(null); setCode("");
+      onClose();
+    },
+    onError: (e: any) => toast.error(e?.message ?? "Could not confirm the code"),
+  });
+
+  // Mint a fresh secret each time the dialog opens.
+  useEffect(() => {
+    if (open && !enroll && !start.isPending) start.mutate();
+    if (!open) { setEnroll(null); setCode(""); }
+  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const groupedSecret = enroll ? (enroll.secret.match(/.{1,4}/g) ?? []).join(" ") : "";
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Set up authenticator app</DialogTitle>
+          <DialogDescription>
+            Add Velocity to Google Authenticator, Microsoft Authenticator, 1Password or any TOTP app,
+            then confirm with the 6-digit code it shows.
+          </DialogDescription>
+        </DialogHeader>
+        {!enroll ? (
+          <div className="flex items-center justify-center py-8 text-muted-foreground">
+            <Loader2 className="size-5 animate-spin" />
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <Label>Setup key (enter manually in your app)</Label>
+              <div className="flex items-center gap-2">
+                <code className="flex-1 rounded-md border border-border bg-muted/40 px-3 py-2 text-[13px] tracking-wider break-all">
+                  {groupedSecret}
+                </code>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="shrink-0"
+                  title="Copy setup key"
+                  onClick={() => {
+                    const w = navigator.clipboard?.writeText(enroll.secret);
+                    if (w) w.then(() => toast.success("Setup key copied"), () => toast.error("Could not copy"));
+                  }}
+                >
+                  <Copy className="size-3.5" />
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                On this device? <a href={enroll.otpauthUrl} className="font-medium text-foreground underline underline-offset-2">Open in authenticator app</a>
+              </p>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Verification code</Label>
+              <Input
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                placeholder="6-digit code"
+                value={code}
+                onChange={(e) => setCode(e.target.value.replace(/[^\d\s]/g, ""))}
+                className="tracking-widest"
+              />
+            </div>
+            <div className="flex justify-end gap-2 pt-1">
+              <Button variant="outline" size="sm" onClick={onClose}>Cancel</Button>
+              <Button
+                size="sm"
+                disabled={code.replace(/\s+/g, "").length !== 6 || confirm.isPending}
+                onClick={() => confirm.mutate({ code: code.replace(/\s+/g, "") })}
+                className="gap-1.5"
+              >
+                {confirm.isPending ? <Loader2 className="size-3.5 animate-spin" /> : null} Verify & connect
+              </Button>
+            </div>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function TotpDisconnectDialog({ open, onClose, hasPassword }: { open: boolean; onClose: () => void; hasPassword: boolean }) {
+  const utils = trpc.useUtils();
+  const [code, setCode] = useState("");
+  const [password, setPassword] = useState("");
+  const disable = trpc.profile.disableTotp.useMutation({
+    onSuccess: () => {
+      toast.success("Authenticator app disconnected");
+      utils.profile.getMfaStatus.invalidate();
+      setCode(""); setPassword("");
+      onClose();
+    },
+    onError: (e: any) => toast.error(e?.message ?? "Could not disconnect"),
+  });
+  const valid = code.replace(/\s+/g, "").length === 6 || (hasPassword && password.length > 0);
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Disconnect authenticator app</DialogTitle>
+          <DialogDescription>
+            Password sign-ins will stop asking for a code. Confirm with a current authenticator code{hasPassword ? " or your password" : ""}.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div className="space-y-1.5">
+            <Label>Authenticator code</Label>
+            <Input
+              inputMode="numeric"
+              placeholder="6-digit code"
+              value={code}
+              onChange={(e) => setCode(e.target.value.replace(/[^\d\s]/g, ""))}
+              className="tracking-widest"
+            />
+          </div>
+          {hasPassword && (
+            <div className="space-y-1.5">
+              <Label>… or your password</Label>
+              <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" />
+            </div>
+          )}
         </div>
-      </div>
-    </SettingsCard>
+        <div className="flex justify-end gap-2 pt-1">
+          <Button variant="outline" size="sm" onClick={onClose}>Cancel</Button>
+          <Button
+            variant="destructive"
+            size="sm"
+            disabled={!valid || disable.isPending}
+            onClick={() => disable.mutate({
+              code: code.replace(/\s+/g, "") || undefined,
+              currentPassword: password || undefined,
+            })}
+            className="gap-1.5"
+          >
+            {disable.isPending ? <Loader2 className="size-3.5 animate-spin" /> : null} Disconnect
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
