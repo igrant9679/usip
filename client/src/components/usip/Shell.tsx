@@ -417,10 +417,9 @@ const ADMIN_MENU_ITEMS = [
 
 function AdminSettingsMenu({ color }: { color: string }) {
   const [open, setOpen] = useState(false);
-  const [location, navigate] = useLocation();
-  const active = ["/team", "/audit", "/settings"].some(
-    (p) => location === p || location.startsWith(p + "/"),
-  );
+  const [, navigate] = useLocation();
+  // The row highlights only while the panel is OPEN — at rest it matches the
+  // other rail rows (no route-based active state, unlike renderNavLink).
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -428,9 +427,9 @@ function AdminSettingsMenu({ color }: { color: string }) {
           type="button"
           className={cn(
             "w-full flex items-center gap-2.5 rounded-md px-3 py-2 text-[13px] transition-colors",
-            active ? "font-semibold" : "text-muted-foreground hover:text-foreground hover:bg-muted",
+            open ? "font-semibold" : "text-muted-foreground hover:text-foreground hover:bg-muted",
           )}
-          style={active ? {
+          style={open ? {
             background: `linear-gradient(135deg, ${color}3d, ${color}1a)`,
             color,
             boxShadow: `0 2px 8px -2px ${color}80, inset 0 0 0 1px ${color}59`,
@@ -438,7 +437,7 @@ function AdminSettingsMenu({ color }: { color: string }) {
           aria-haspopup="menu"
           aria-expanded={open}
         >
-          <Settings className="size-4 shrink-0" style={{ color, opacity: active ? 1 : 0.95 }} />
+          <Settings className="size-4 shrink-0" style={{ color, opacity: open ? 1 : 0.95 }} />
           <span className="flex-1 truncate text-left">Admin Settings</span>
           <ChevronRight className={cn("size-4 shrink-0 opacity-60 transition-transform", open && "rotate-90")} />
         </button>
