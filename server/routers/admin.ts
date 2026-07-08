@@ -99,6 +99,9 @@ export const settingsRouter = router({
         systemSenderAccountId: z.number().int().nullable().optional(),
         autoExtendOnOpen: z.boolean().optional(),
         autoExtendDays: z.number().int().min(1).max(365).optional(),
+        emailOpenTracking: z.boolean().optional(),
+        emailClickTracking: z.boolean().optional(),
+        emailUnsubscribeHeader: z.boolean().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {

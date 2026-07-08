@@ -175,20 +175,32 @@ export function resolveMergeVars(text: string, ctx: MergeContext): string {
  * @param token     The draft's trackingToken
  * @param baseUrl   The public base URL of the app (e.g. https://app.example.com)
  */
-export function injectTracking(html: string, token: string, baseUrl: string): string {
-  const pixelUrl = `${baseUrl}/api/track/open/${encodeURIComponent(token)}`;
-  const pixel = `<img src="${pixelUrl}" width="1" height="1" style="display:none;border:0;" alt="" />`;
+export function injectTracking(
+  html: string,
+  token: string,
+  baseUrl: string,
+  opts?: { open?: boolean; click?: boolean },
+): string {
+  const doOpen = opts?.open !== false;
+  const doClick = opts?.click !== false;
+  if (!doOpen && !doClick) return html;
 
   // Wrap all <a href="..."> links (skip mailto: and already-tracked links)
-  const wrapped = html.replace(
-    /<a\s+([^>]*?)href="(https?:\/\/[^"]+)"([^>]*?)>/gi,
-    (_match, before: string, url: string, after: string) => {
-      // Don't double-wrap already-tracked links
-      if (url.includes("/api/track/click/")) return _match;
-      const trackUrl = `${baseUrl}/api/track/click/${encodeURIComponent(token)}?url=${encodeURIComponent(url)}`;
-      return `<a ${before}href="${trackUrl}"${after}>`;
-    },
-  );
+  const wrapped = doClick
+    ? html.replace(
+        /<a\s+([^>]*?)href="(https?:\/\/[^"]+)"([^>]*?)>/gi,
+        (_match, before: string, url: string, after: string) => {
+          // Don't double-wrap already-tracked links
+          if (url.includes("/api/track/click/")) return _match;
+          const trackUrl = `${baseUrl}/api/track/click/${encodeURIComponent(token)}?url=${encodeURIComponent(url)}`;
+          return `<a ${before}href="${trackUrl}"${after}>`;
+        },
+      )
+    : html;
+
+  if (!doOpen) return wrapped;
+  const pixelUrl = `${baseUrl}/api/track/open/${encodeURIComponent(token)}`;
+  const pixel = `<img src="${pixelUrl}" width="1" height="1" style="display:none;border:0;" alt="" />`;
 
   // Inject pixel just before </body> or at the end
   if (wrapped.includes("</body>")) {

@@ -35,6 +35,7 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   ArrowLeft,
   Search,
@@ -231,6 +232,7 @@ function ProfileSection() {
 
   const me = trpc.profile.getMe.useQuery();
   const sig = trpc.profile.getMySignature.useQuery();
+  const wsSettings = trpc.settings.get.useQuery();
   const isAdmin = me.data?.role === "admin" || me.data?.role === "super_admin";
 
   // form state, seeded from the server once loaded
@@ -239,31 +241,45 @@ function ProfileSection() {
   const [title, setTitle] = useState("");
   const [signature, setSignature] = useState("");
   const [quotaStr, setQuotaStr] = useState("");
+  // workspace email sending prefs (migration 0117) — admin-editable
+  const [emailPrefs, setEmailPrefs] = useState({ unsubHeader: false, openTracking: true, clickTracking: true });
   const [seeded, setSeeded] = useState(false);
   useEffect(() => {
-    if (!seeded && me.data && sig.data) {
+    if (!seeded && me.data && sig.data && wsSettings.data) {
       const parts = (me.data.name ?? "").trim().split(/\s+/);
       setFirstName(parts[0] ?? "");
       setLastName(parts.slice(1).join(" "));
       setTitle(me.data.title ?? "");
       setSignature(sig.data.emailSignature ?? "");
       setQuotaStr(me.data.quota == null ? "" : String(me.data.quota));
+      setEmailPrefs({
+        unsubHeader: (wsSettings.data as any).emailUnsubscribeHeader === true,
+        openTracking: (wsSettings.data as any).emailOpenTracking !== false,
+        clickTracking: (wsSettings.data as any).emailClickTracking !== false,
+      });
       setSeeded(true);
     }
-  }, [me.data, sig.data, seeded]);
+  }, [me.data, sig.data, wsSettings.data, seeded]);
 
   const savedName = (me.data?.name ?? "").trim();
   const formName = `${firstName.trim()} ${lastName.trim()}`.trim();
   const savedQuotaStr = me.data?.quota == null ? "" : String(me.data.quota);
+  const emailPrefsDirty =
+    seeded && !!wsSettings.data &&
+    (emailPrefs.unsubHeader !== ((wsSettings.data as any).emailUnsubscribeHeader === true) ||
+      emailPrefs.openTracking !== ((wsSettings.data as any).emailOpenTracking !== false) ||
+      emailPrefs.clickTracking !== ((wsSettings.data as any).emailClickTracking !== false));
   const dirty =
     seeded &&
     (formName !== savedName ||
       title.trim() !== (me.data?.title ?? "").trim() ||
       signature.trim() !== (sig.data?.emailSignature ?? "").trim() ||
-      (isAdmin && quotaStr.trim() !== savedQuotaStr));
+      (isAdmin && quotaStr.trim() !== savedQuotaStr) ||
+      (isAdmin && emailPrefsDirty));
 
   const updateMe = trpc.profile.updateMe.useMutation();
   const updateSig = trpc.profile.updateMySignature.useMutation();
+  const saveSettings = trpc.settings.save.useMutation();
   const [saving, setSaving] = useState(false);
   const saveAll = async () => {
     if (!formName) { toast.error("Name is required"); return; }
@@ -281,6 +297,14 @@ function ProfileSection() {
       });
       if (signature.trim() !== (sig.data?.emailSignature ?? "").trim()) {
         await updateSig.mutateAsync({ emailSignature: signature.trim() || null });
+      }
+      if (isAdmin && emailPrefsDirty) {
+        await saveSettings.mutateAsync({
+          emailUnsubscribeHeader: emailPrefs.unsubHeader,
+          emailOpenTracking: emailPrefs.openTracking,
+          emailClickTracking: emailPrefs.clickTracking,
+        } as any);
+        utils.settings.get.invalidate();
       }
       utils.profile.getMe.invalidate();
       utils.profile.getMySignature.invalidate();
@@ -349,7 +373,14 @@ function ProfileSection() {
           ) : tab === "custom-fields" ? (
             <CustomFieldsTab />
           ) : tab === "email-settings" ? (
-            <EmailSettingsTab signature={signature} setSignature={setSignature} isAdmin={isAdmin} />
+            <EmailSettingsTab
+              signature={signature}
+              setSignature={setSignature}
+              isAdmin={isAdmin}
+              emailPrefs={emailPrefs}
+              setEmailPrefs={setEmailPrefs}
+              sendCap={(wsSettings.data as any)?.areDefaultDailySendCap ?? 50}
+            />
           ) : (
             <ConversationsTab />
           )}
@@ -801,37 +832,143 @@ function CustomFieldsTab() {
   );
 }
 
-function EmailSettingsTab({ signature, setSignature, isAdmin }: { signature: string; setSignature: (v: string) => void; isAdmin: boolean }) {
+type EmailPrefs = { unsubHeader: boolean; openTracking: boolean; clickTracking: boolean };
+
+function EmailSettingsTab({
+  signature,
+  setSignature,
+  isAdmin,
+  emailPrefs,
+  setEmailPrefs,
+  sendCap,
+}: {
+  signature: string;
+  setSignature: (v: string) => void;
+  isAdmin: boolean;
+  emailPrefs: EmailPrefs;
+  setEmailPrefs: (p: EmailPrefs) => void;
+  sendCap: number;
+}) {
   const [, navigate] = useLocation();
+  const adminHint = isAdmin ? undefined : "Only workspace admins can change sending preferences";
+
+  const CheckRow = ({
+    checked,
+    onChange,
+    label,
+    helper,
+  }: {
+    checked: boolean;
+    onChange: (v: boolean) => void;
+    label: string;
+    helper?: string;
+  }) => (
+    <div title={adminHint}>
+      <label className={cn("flex items-center gap-2.5 text-[13px]", isAdmin ? "cursor-pointer" : "opacity-70")}>
+        <Checkbox checked={checked} disabled={!isAdmin} onCheckedChange={(v) => onChange(v === true)} />
+        {label}
+      </label>
+      {helper && <p className="mt-1 pl-[26px] text-xs text-muted-foreground">{helper}</p>}
+    </div>
+  );
+
   return (
     <>
+      <SettingsCard title="Email Settings">
+        {/* wide bordered mailboxes button */}
+        <Button
+          variant="outline"
+          className="w-full justify-center text-[13px] font-medium"
+          onClick={() => navigate("/connected-accounts")}
+        >
+          Manage Mailboxes
+        </Button>
+
+        <p className="text-[13px]">
+          <span className="text-foreground">Email sending limits: </span>
+          <span className="font-medium">{sendCap}/day</span>{" "}
+          <span className="text-muted-foreground">
+            (Increase your limits by upgrading to a{" "}
+            <button
+              type="button"
+              onClick={() => navigate("/settings?tab=billing")}
+              className="font-medium text-foreground underline underline-offset-2 hover:opacity-80"
+            >
+              paid plan
+            </button>
+            )
+          </span>
+        </p>
+
+        <p className="text-[13px]">
+          <span className="text-foreground">Set up email signature: </span>
+          <button
+            type="button"
+            onClick={() => document.getElementById("personal-signature")?.scrollIntoView({ behavior: "smooth", block: "center" })}
+            className="font-medium text-foreground underline underline-offset-2 hover:opacity-80"
+          >
+            manage your personal signature below!
+          </button>
+        </p>
+
+        <div className="space-y-3 pt-1">
+          <CheckRow
+            checked={emailPrefs.unsubHeader}
+            onChange={(v) => setEmailPrefs({ ...emailPrefs, unsubHeader: v })}
+            label="Include one-click unsubscribe headers"
+            helper="Recommended for organizations that send 5,000 emails or more within a 24-hour period."
+          />
+          <CheckRow
+            checked={emailPrefs.openTracking}
+            onChange={(v) => setEmailPrefs({ ...emailPrefs, openTracking: v })}
+            label="Enable open tracking"
+          />
+          <CheckRow
+            checked={emailPrefs.clickTracking}
+            onChange={(v) => setEmailPrefs({ ...emailPrefs, clickTracking: v })}
+            label="Enable click tracking"
+          />
+        </div>
+
+        {/* opt-out message — no backing setting yet, honestly disabled */}
+        <div className="space-y-2 pt-1" title="Sequence opt-out footers aren't available yet">
+          <label className="flex items-center gap-2.5 text-[13px] text-muted-foreground/70">
+            <Switch checked={false} disabled />
+            Append a sequences opt-out message after my signature
+          </label>
+          <textarea
+            disabled
+            rows={4}
+            value={"If you don't want to hear from me again, please <%let me know%>."}
+            readOnly
+            className="w-full rounded-md border border-border bg-muted/50 px-3 py-2 text-[13px] text-muted-foreground/70 outline-none"
+          />
+          <p className="text-xs text-muted-foreground">
+            {"Surround your opt-out link with brackets '<%' and '%>'."}
+          </p>
+        </div>
+      </SettingsCard>
+
       <SettingsCard title="Email signature">
         <p className="text-[13px] text-muted-foreground -mt-1">
           Used in emails sent from your mailbox. Leave empty to use the workspace default signature.
           Click <span className="font-medium text-foreground">Save</span> above to apply changes.
         </p>
         <textarea
+          id="personal-signature"
           value={signature}
           onChange={(e) => setSignature(e.target.value)}
           rows={5}
           placeholder={"Best regards,\nYour name"}
           className="w-full rounded-md border border-border bg-background px-3 py-2 text-[13px] outline-none focus:ring-2 focus:ring-ring"
         />
-      </SettingsCard>
-      <SettingsCard title="Mailboxes">
-        <p className="text-[13px] text-muted-foreground -mt-1">
-          Your connected Outlook mailbox powers calendar invites and sequenced email. Each teammate connects their own.
-        </p>
-        <div className="flex flex-wrap gap-2">
-          <Button variant="outline" size="sm" className="gap-1.5" onClick={() => navigate("/connected-accounts")}>
-            <Mail className="size-3.5" /> Manage mailboxes
-          </Button>
-          {isAdmin && (
+        {isAdmin && (
+          <div>
             <Button variant="outline" size="sm" className="gap-1.5" onClick={() => navigate("/settings?tab=smtp")}>
               <Send className="size-3.5" /> Workspace email delivery
             </Button>
-          )}
-        </div>
+          </div>
+        )}
       </SettingsCard>
     </>
   );

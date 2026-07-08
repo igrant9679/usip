@@ -141,6 +141,24 @@ export function registerEmailTrackingRoutes(app: Express) {
   });
 
   /**
+   * RFC 8058 one-click unsubscribe — mail clients POST here (no UI) when the
+   * List-Unsubscribe / List-Unsubscribe-Post headers are present. Same
+   * suppression path as the human-facing GET below.
+   */
+  app.post("/api/track/unsubscribe/:token", async (req: Request, res: Response) => {
+    const { token } = req.params;
+    if (!token) { res.status(400).send("Invalid token"); return; }
+    try {
+      const { recordUnsubscribeByToken } = await import("./routers/emailSuppressions");
+      const result = await recordUnsubscribeByToken(token, req.headers["user-agent"]);
+      res.status(result.ok ? 200 : 404).send(result.ok ? "Unsubscribed" : "Unknown token");
+    } catch (e) {
+      console.error("[EmailTracking] one-click unsubscribe failed:", e);
+      res.status(500).send("Error");
+    }
+  });
+
+  /**
    * Unsubscribe — one-click opt-out via tracking token
    * GET /api/track/unsubscribe/:token
    */

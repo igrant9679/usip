@@ -21,6 +21,7 @@ import {
   emailTrackingEvents,
   leads,
   smtpConfigs,
+  workspaceSettings,
 } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
@@ -324,6 +325,20 @@ export const smtpConfigRouter = router({
       const transporter = buildTransporter({ host: cfg.host, port: cfg.port, secure: cfg.secure, username: cfg.username, password });
       let sent = 0, failed = 0, skipped = 0;
 
+      // Workspace email sending preferences (migration 0117) — gate tracking
+      // injection and the RFC 8058 one-click unsubscribe headers.
+      const [sendPrefs] = await db
+        .select({
+          openTracking: workspaceSettings.emailOpenTracking,
+          clickTracking: workspaceSettings.emailClickTracking,
+          unsubHeader: workspaceSettings.emailUnsubscribeHeader,
+        })
+        .from(workspaceSettings)
+        .where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
+      const openTracking = sendPrefs?.openTracking !== false;
+      const clickTracking = sendPrefs?.clickTracking !== false;
+      const unsubHeader = sendPrefs?.unsubHeader === true;
+
       for (const draft of drafts) {
         const toEmail =
           draft.toEmail ??
@@ -357,7 +372,10 @@ export const smtpConfigRouter = router({
           const appBaseUrl = process.env.VITE_OAUTH_PORTAL_URL
             ? new URL(process.env.VITE_OAUTH_PORTAL_URL).origin
             : "http://localhost:3000";
-          const htmlBody = injectTracking(textToHtml(resolvedBody), token, appBaseUrl);
+          const htmlBody = injectTracking(textToHtml(resolvedBody), token, appBaseUrl, {
+            open: openTracking,
+            click: clickTracking,
+          });
           await transporter.sendMail({
             from: cfg.fromName ? `"${cfg.fromName}" <${cfg.fromEmail}>` : cfg.fromEmail,
             to: toEmail,
@@ -365,6 +383,14 @@ export const smtpConfigRouter = router({
             subject: resolvedSubject,
             text: resolvedBody,
             html: htmlBody,
+            // RFC 8058 one-click unsubscribe — the POST endpoint suppresses the
+            // recipient via the existing email_suppressions system.
+            headers: unsubHeader
+              ? {
+                  "List-Unsubscribe": `<${appBaseUrl}/api/track/unsubscribe/${encodeURIComponent(token)}>, <mailto:${cfg.fromEmail}?subject=unsubscribe>`,
+                  "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+                }
+              : undefined,
           });
           await db.update(emailDrafts).set({ status: "sent", sentAt: new Date() }).where(eq(emailDrafts.id, draft.id));
           if (draft.toContactId || draft.toLeadId) {

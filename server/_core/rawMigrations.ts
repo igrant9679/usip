@@ -2461,6 +2461,16 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0117: workspace email sending preferences ─────────────────────────────
+  {
+    name: "0117_email_sending_prefs.sql",
+    statements: [
+      `ALTER TABLE \`workspace_settings\` ADD COLUMN \`emailOpenTracking\` boolean NOT NULL DEFAULT true`,
+      `ALTER TABLE \`workspace_settings\` ADD COLUMN \`emailClickTracking\` boolean NOT NULL DEFAULT true`,
+      `ALTER TABLE \`workspace_settings\` ADD COLUMN \`emailUnsubscribeHeader\` boolean NOT NULL DEFAULT false`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

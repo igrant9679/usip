@@ -1360,6 +1360,11 @@ export const workspaceSettings = mysqlTable("workspace_settings", {
   enforce2fa: boolean("enforce2fa").default(false).notNull(),
   notifyPolicy: json("notifyPolicy"),
   blockInvalidEmailsFromSequences: boolean("blockInvalidEmailsFromSequences").default(false).notNull(),
+  /** Email sending preferences (migration 0117) — gate injectTracking and the
+   *  RFC 8058 List-Unsubscribe headers in the SMTP send path. */
+  emailOpenTracking: boolean("emailOpenTracking").default(true).notNull(),
+  emailClickTracking: boolean("emailClickTracking").default(true).notNull(),
+  emailUnsubscribeHeader: boolean("emailUnsubscribeHeader").default(false).notNull(),
   reverifyIntervalDays: int("reverifyIntervalDays"), // null = disabled; 30 | 60 | 90
   reverifyStatuses: json("reverifyStatuses"), // string[] e.g. ["risky","accept_all"]
   nightlyPipelineEnabled: boolean("nightlyPipelineEnabled").default(false).notNull(),
