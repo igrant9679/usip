@@ -35,7 +35,7 @@ export const profileRouter = router({
       .where(eq(users.id, ctx.user.id))
       .limit(1);
     const [m] = await db
-      .select({ title: workspaceMembers.title, role: workspaceMembers.role })
+      .select({ title: workspaceMembers.title, role: workspaceMembers.role, quota: workspaceMembers.quota })
       .from(workspaceMembers)
       .where(and(eq(workspaceMembers.workspaceId, ctx.workspace.id), eq(workspaceMembers.userId, ctx.user.id)))
       .limit(1);
@@ -46,26 +46,78 @@ export const profileRouter = router({
       hasPassword: !!u?.passwordHash,
       title: m?.title ?? "",
       role: m?.role ?? null,
+      quota: m?.quota == null ? null : Number(m.quota),
     };
   }),
 
-  /** Update the signed-in user's display name and their member title in this workspace. */
+  /** Update the signed-in user's display name, member title, and (admins
+   *  only) their own credit limit / quota in this workspace. */
   updateMe: workspaceProcedure
     .input(z.object({
       name: z.string().trim().min(1, "Name is required").max(120),
       title: z.string().trim().max(120).nullable().optional(),
+      quota: z.number().nonnegative().max(999_999_999_999).nullable().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       await db.update(users).set({ name: input.name }).where(eq(users.id, ctx.user.id));
+      const memberPatch: Record<string, unknown> = {};
       if (input.title !== undefined) {
+        memberPatch.title = input.title?.trim() ? input.title.trim() : null;
+      }
+      if (input.quota !== undefined) {
+        const [m] = await db
+          .select({ role: workspaceMembers.role })
+          .from(workspaceMembers)
+          .where(and(eq(workspaceMembers.workspaceId, ctx.workspace.id), eq(workspaceMembers.userId, ctx.user.id)))
+          .limit(1);
+        if (m?.role !== "admin" && m?.role !== "super_admin") {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Only admins can change credit limits." });
+        }
+        memberPatch.quota = input.quota == null ? null : String(input.quota);
+      }
+      if (Object.keys(memberPatch).length > 0) {
         await db
           .update(workspaceMembers)
-          .set({ title: input.title?.trim() ? input.title.trim() : null })
+          .set(memberPatch)
           .where(and(eq(workspaceMembers.workspaceId, ctx.workspace.id), eq(workspaceMembers.userId, ctx.user.id)));
       }
       return { ok: true };
+    }),
+
+  /**
+   * Change the signed-in user's login email. Password-verified; OAuth-only
+   * accounts are refused (their email identity lives at the provider).
+   */
+  changeMyEmail: workspaceProcedure
+    .input(z.object({
+      newEmail: z.string().email("Enter a valid email").max(320),
+      currentPassword: z.string().min(1, "Enter your current password"),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const email = input.newEmail.trim().toLowerCase();
+      const [u] = await db
+        .select({ passwordHash: users.passwordHash })
+        .from(users)
+        .where(eq(users.id, ctx.user.id))
+        .limit(1);
+      if (!u?.passwordHash) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Your sign-in is managed by your identity provider — the login email can't be changed here.",
+        });
+      }
+      const ok = await bcrypt.compare(input.currentPassword, u.passwordHash);
+      if (!ok) throw new TRPCError({ code: "FORBIDDEN", message: "Current password is incorrect." });
+      const [taken] = await db.select({ id: users.id }).from(users).where(eq(users.email, email)).limit(1);
+      if (taken && taken.id !== ctx.user.id) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "That email is already in use." });
+      }
+      await db.update(users).set({ email }).where(eq(users.id, ctx.user.id));
+      return { ok: true, email };
     }),
 
   /**
