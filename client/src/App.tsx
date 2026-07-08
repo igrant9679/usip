@@ -52,6 +52,7 @@ import Renewals from "@/pages/usip/Renewals";
 import SCIM from "@/pages/usip/SCIM";
 import Sequences from "@/pages/usip/Sequences";
 import Settings from "@/pages/usip/Settings";
+import SettingsHub from "@/pages/usip/SettingsHub";
 import Social from "@/pages/usip/Social";
 import Tasks from "@/pages/usip/Tasks";
 import TasksV2 from "@/pages/usip/TasksV2";
@@ -369,6 +370,7 @@ function Router() {
       <Route path="/segments/:id"><AuthGate><Segments /></AuthGate></Route>
       <Route path="/segment-rules"><AuthGate><SegmentRules /></AuthGate></Route>
       <Route path="/settings"><AuthGate><Settings /></AuthGate></Route>
+      <Route path="/v2/settings/:section?"><AuthGate><SettingsHub /></AuthGate></Route>
       <Route path="/notification-prefs"><AuthGate><NotificationPrefs /></AuthGate></Route>
       <Route path="/proposals"><AuthGate><Proposals /></AuthGate></Route>
       <Route path="/proposals/:id"><AuthGate><ProposalDetail /></AuthGate></Route>
