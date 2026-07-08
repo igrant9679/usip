@@ -37,6 +37,15 @@ const DEFAULT_SOURCE_TYPE = "unipile_linkedin_profile";
 const valHash = (v: string | null): string | null =>
   v == null ? null : createHash("sha256").update(v).digest("hex");
 
+/** Clamp a vendor string to its column width — an oversized value must never
+ *  fail the whole enrichment insert (MySQL strict mode rejects, not truncates). */
+const clip = (s: string | null | undefined, n: number): string | null =>
+  s == null ? null : s.length > n ? s.slice(0, n) : s;
+
+/** Final gate for the DATE column: only a fully valid YYYY-MM-DD goes through. */
+const dateOnlyOrNull = (s: string | null | undefined): string | null =>
+  s && /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(s) ? s : null;
+
 export interface ApplyEnrichmentResult {
   enrichmentId: number;
   changes: DetectedChange[];
@@ -72,30 +81,32 @@ export async function applyEnrichment(opts: {
   const p = opts.profile;
   const sourceType = opts.sourceType ?? DEFAULT_SOURCE_TYPE;
 
-  // Mutable profile fields shared by insert + update.
+  // Mutable profile fields shared by insert + update. Strings are clipped to
+  // their column widths and the date is re-validated so no vendor payload can
+  // fail the upsert at the DB layer.
   const fields = {
     linkedinProfileUrl: p.profileUrl,
-    linkedinProfileIdentifier: p.identifier,
-    linkedinPublicId: p.publicId,
-    linkedinFullName: p.fullName,
-    linkedinFirstName: p.firstName,
-    linkedinLastName: p.lastName,
-    linkedinHeadline: p.headline,
-    linkedinLocation: p.location,
+    linkedinProfileIdentifier: clip(p.identifier, 200),
+    linkedinPublicId: clip(p.publicId, 200),
+    linkedinFullName: clip(p.fullName, 200),
+    linkedinFirstName: clip(p.firstName, 100),
+    linkedinLastName: clip(p.lastName, 100),
+    linkedinHeadline: clip(p.headline, 500),
+    linkedinLocation: clip(p.location, 200),
     linkedinProfileImageUrl: p.profileImageUrl,
     linkedinProfileImageAllowed: opts.imageAllowed,
-    currentTitle: p.currentTitle,
-    currentCompanyName: p.currentCompanyName,
+    currentTitle: clip(p.currentTitle, 200),
+    currentCompanyName: clip(p.currentCompanyName, 200),
     currentCompanyLinkedinUrl: p.currentCompanyLinkedinUrl,
-    currentCompanyDomain: p.currentCompanyDomain,
-    currentCompanyStartDate: p.currentCompanyStartDate as never, // 'YYYY-MM-DD' accepted by mysql
+    currentCompanyDomain: clip(p.currentCompanyDomain, 200),
+    currentCompanyStartDate: dateOnlyOrNull(p.currentCompanyStartDate) as never, // 'YYYY-MM-DD' accepted by mysql
     experienceHistoryJson: p.experience,
     educationHistoryJson: p.education,
     skillsJson: p.skills,
     summaryAbout: p.summaryAbout,
-    industry: p.industry,
+    industry: clip(p.industry, 120),
     languagesJson: p.languages,
-    linkedinConnectionDegree: p.connectionDegree,
+    linkedinConnectionDegree: clip(p.connectionDegree, 16),
     linkedinMatchStatus: opts.matchStatus,
     linkedinDataStatus: "enriched",
     linkedinSourceType: sourceType,

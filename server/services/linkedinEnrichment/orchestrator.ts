@@ -22,7 +22,7 @@ import {
   linkedinEnrichmentJobItems,
   recordListMembers,
 } from "../../../drizzle/schema";
-import { determineLookupStrategy } from "./lookupStrategy";
+import { determineLookupStrategy, canUseNameCompanyLookup } from "./lookupStrategy";
 import { retrieveLinkedInProfileByUrl, retrieveByNameCompany } from "./unipileProfile";
 import { scoreIntendedMatch } from "./matching";
 import { applyEnrichment, markUnavailable, enrichmentBlockReason } from "./enrichmentService";
@@ -164,9 +164,23 @@ async function processJob(ctx: {
         continue;
       }
 
-      const retrieve = url
+      let usedStrategy = strategy;
+      let retrieve = url
         ? await retrieveLinkedInProfileByUrl({ workspaceId: ws, userId: ctx.userId, isAdmin: ctx.isAdmin, linkedinUrl: url })
         : await retrieveByNameCompany({ workspaceId: ws, userId: ctx.userId, isAdmin: ctx.isAdmin, prospect: p as any });
+
+      // Dead/renamed slug (profile URL no longer resolves at the vendor):
+      // fall back to the same compliant name+company search used for URL-less
+      // prospects. Match scoring below still gates weak matches into
+      // needs_review, so the fallback can't silently mis-enrich. Never
+      // triggered on rate limits — that would burn a second lookup for nothing.
+      if ((!retrieve.ok || !retrieve.profile) && url && retrieve.status === "source_unavailable" && canUseNameCompanyLookup(p as any)) {
+        const fallback = await retrieveByNameCompany({ workspaceId: ws, userId: ctx.userId, isAdmin: ctx.isAdmin, prospect: p as any });
+        if (fallback.ok && fallback.profile) {
+          retrieve = fallback;
+          usedStrategy = "unipile_name_company_lookup";
+        }
+      }
 
       if (!retrieve.ok || !retrieve.profile) {
         // If a prior enrichment exists, record "unavailable" as a change.
@@ -184,8 +198,8 @@ async function processJob(ctx: {
       const match = scoreIntendedMatch(p as any, retrieve.profile, { userInitiatedSingle: ctx.single });
 
       const base = {
-        linkedinLookupStrategy: strategy,
-        linkedinUrlUsed: url ?? retrieve.profile.profileUrl,
+        linkedinLookupStrategy: usedStrategy,
+        linkedinUrlUsed: retrieve.profile.profileUrl ?? url,
         matchStatus: match.status,
         matchScore: match.score,
         completedAt: new Date(),
@@ -207,7 +221,10 @@ async function processJob(ctx: {
       // 50–74 not single, or <50 → needs review (never overwrite fields).
       await setItem(ws, item.id, { ...base, status: "needs_review" });
     } catch (e) {
-      await setItem(ws, item.id, { status: "failed", errorMessage: (e as Error).message.slice(0, 1000), completedAt: new Date() });
+      // Drizzle query errors put the whole SQL in .message and the actual DB
+      // reason in .cause — lead with the cause so it survives the 1000-char cap.
+      const msg = [(e as any)?.cause?.message, (e as Error).message].filter(Boolean).join(" ⇐ ");
+      await setItem(ws, item.id, { status: "failed", errorMessage: msg.slice(0, 1000), completedAt: new Date() });
     }
   }
 

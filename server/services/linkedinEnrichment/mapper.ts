@@ -155,17 +155,26 @@ function currentCompany(p: UnipileUserProfile): { name: string | null; url: stri
   return { name: null, url: null, domain: null };
 }
 
-/** Normalize a date-ish string to YYYY-MM-DD, or null if it can't be parsed safely. */
+/** Normalize a date-ish string to YYYY-MM-DD, or null if it can't be parsed safely.
+ *  LinkedIn sends "00" month/day segments for partial dates (e.g. "2013-00" for a
+ *  year-only start date) — those must clamp to 01, or MySQL's strict mode rejects
+ *  the DATE and the whole enrichment insert fails. */
 function toDateOnly(v: unknown): string | null {
   const s = str(v);
   if (!s) return null;
   // Accept "2021", "2021-03", "2021-03-01", ISO datetimes.
-  const m = s.match(/^(\d{4})(?:-(\d{2}))?(?:-(\d{2}))?/);
+  const m = s.match(/^(\d{4})(?:-(\d{1,2}))?(?:-(\d{1,2}))?/);
   if (!m) return null;
-  const y = m[1];
-  const mo = m[2] ?? "01";
-  const d = m[3] ?? "01";
-  return `${y}-${mo}-${d}`;
+  const y = Number(m[1]);
+  if (y < 1900 || y > 2100) return null; // vendor noise like "0000"
+  let mo = Number(m[2] ?? "1");
+  if (!(mo >= 1 && mo <= 12)) mo = 1;
+  let d = Number(m[3] ?? "1");
+  if (!(d >= 1 && d <= 31)) d = 1;
+  // Day overflowing the month (e.g. Apr 31) would still be rejected — clamp to 01.
+  if (new Date(Date.UTC(y, mo - 1, d)).getUTCMonth() !== mo - 1) d = 1;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${y}-${pad(mo)}-${pad(d)}`;
 }
 
 /**
