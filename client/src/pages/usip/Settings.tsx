@@ -5,7 +5,7 @@ import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Section, StatusPill, fmt$ } from "@/components/usip/Common";
 import { PageHeader, Shell, StatCard, SubNav } from "@/components/usip/Shell";
-import { Link } from "wouter";
+import { Link, useSearch } from "wouter";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { trpc } from "@/lib/trpc";
 import { AlertTriangle, Bell, Building2, CheckCircle2, CreditCard, Download, ExternalLink, Loader2, Mail, Palette, Plug, ShieldCheck, TestTube2, Trash2, User, XCircle, Zap, Settings as SettingsIcon } from "lucide-react";
@@ -43,7 +43,19 @@ const NOTIFY_EVENTS = [
 export default function Settings() {
   const { current } = useWorkspace();
   const isAdmin = current?.role === "admin" || current?.role === "super_admin";
-  const [tab, setTab] = useState<TabId>("general");
+  // Deep-linkable: /settings?tab=security etc. (used by the sidebar's
+  // Admin Settings panel). Unknown values fall back to "general". The search
+  // subscription keeps this working when the panel is used while ALREADY on
+  // /settings (same route — no remount).
+  const search = useSearch();
+  const [tab, setTab] = useState<TabId>(() => {
+    const t = new URLSearchParams(window.location.search).get("tab");
+    return TABS.some((x) => x.id === t) ? (t as TabId) : "general";
+  });
+  useEffect(() => {
+    const t = new URLSearchParams(search).get("tab");
+    if (t && TABS.some((x) => x.id === t)) setTab(t as TabId);
+  }, [search]);
 
   const summary = trpc.workspace.summary.useQuery();
   const settings = trpc.settings.get.useQuery();

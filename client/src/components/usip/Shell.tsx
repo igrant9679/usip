@@ -63,7 +63,9 @@ import {
   MoreHorizontal,
   Phone,
   Globe,
+  ShieldCheck,
 } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ReactNode, useEffect, useLayoutEffect, useState, useRef, createContext, useContext } from "react";
 import { Link, useLocation } from "wouter";
 import { PageTransition } from "@/components/PageTransition";
@@ -401,6 +403,69 @@ const MORE_SECTION: NavSection = {
   ],
 };
 
+/* ── Admin Settings popover (bottom-left) ─────────────────────────────────
+ * Apollo-style settings panel anchored to the "Admin Settings" nav row.
+ * Four deep links into the real admin surfaces; the row itself no longer
+ * navigates — the panel is the navigation. Styled to match renderNavLink so
+ * it reads as one of the rail's rows. */
+const ADMIN_MENU_ITEMS = [
+  { label: "Users and Teams", icon: Users, href: "/team" },
+  { label: "System Activity", icon: Activity, href: "/audit" },
+  { label: "Security", icon: ShieldCheck, href: "/settings?tab=security" },
+  { label: "Integrations", icon: Plug, href: "/settings?tab=integrations" },
+];
+
+function AdminSettingsMenu({ color }: { color: string }) {
+  const [open, setOpen] = useState(false);
+  const [location, navigate] = useLocation();
+  const active = ["/team", "/audit", "/settings"].some(
+    (p) => location === p || location.startsWith(p + "/"),
+  );
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className={cn(
+            "w-full flex items-center gap-2.5 rounded-md px-3 py-2 text-[13px] transition-colors",
+            active ? "font-semibold" : "text-muted-foreground hover:text-foreground hover:bg-muted",
+          )}
+          style={active ? {
+            background: `linear-gradient(135deg, ${color}3d, ${color}1a)`,
+            color,
+            boxShadow: `0 2px 8px -2px ${color}80, inset 0 0 0 1px ${color}59`,
+          } : undefined}
+          aria-haspopup="menu"
+          aria-expanded={open}
+        >
+          <Settings className="size-4 shrink-0" style={{ color, opacity: active ? 1 : 0.95 }} />
+          <span className="flex-1 truncate text-left">Admin Settings</span>
+          <ChevronRight className={cn("size-4 shrink-0 opacity-60 transition-transform", open && "rotate-90")} />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        side="right"
+        align="end"
+        sideOffset={12}
+        collisionPadding={12}
+        className="w-60 rounded-xl border border-border bg-popover p-1.5 shadow-xl"
+      >
+        {ADMIN_MENU_ITEMS.map((it) => (
+          <button
+            key={it.href}
+            type="button"
+            onClick={() => { setOpen(false); navigate(it.href); }}
+            className="w-full flex items-center gap-3 rounded-lg px-3 py-2.5 text-left text-[13px] font-medium text-foreground transition-colors hover:bg-muted"
+          >
+            <it.icon className="size-4 shrink-0 text-muted-foreground" />
+            {it.label}
+          </button>
+        ))}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 const BOTTOM_LINKS: NavLink[] = [
   { href: "/v2/deliverability", label: "Deliverability suite", icon: Network, color: "#06B6D4", darkColor: "#22D3EE" },
   { href: "/settings", label: "Admin Settings", icon: Settings, trailingChevron: true, color: "#64748B", darkColor: "#94A3B8" },
@@ -654,7 +719,16 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
 
         {/* Pinned bottom: deliverability + admin settings, then the user row */}
         <div className="border-t border-border px-2 py-2 space-y-0.5">
-          {BOTTOM_LINKS.map((l) => renderNavLink(l))}
+          {BOTTOM_LINKS.map((l) =>
+            l.label === "Admin Settings" ? (
+              <AdminSettingsMenu
+                key="admin-settings"
+                color={(isDark ? l.darkColor : l.color) ?? accentColor}
+              />
+            ) : (
+              renderNavLink(l)
+            ),
+          )}
           <div className="flex items-center gap-2 px-2 pt-2 mt-1 border-t border-border text-[12px] text-muted-foreground">
             <div className="size-7 rounded-full bg-muted flex items-center justify-center text-foreground">{(user?.name ?? "?").slice(0, 1).toUpperCase()}</div>
             <div className="flex-1 min-w-0">
