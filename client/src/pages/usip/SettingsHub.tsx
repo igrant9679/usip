@@ -61,7 +61,6 @@ import {
   Cloud,
   Database,
   Share2,
-  ExternalLink,
   KeyRound,
   Smartphone,
   Phone,
@@ -220,9 +219,7 @@ export default function SettingsHub() {
 const PROFILE_TABS = [
   { id: "general", label: "General" },
   { id: "mfa", label: "Multi-factor authentication" },
-  { id: "custom-fields", label: "Custom fields" },
   { id: "email-settings", label: "Email settings" },
-  { id: "conversations", label: "Conversations" },
 ] as const;
 type ProfileTab = (typeof PROFILE_TABS)[number]["id"];
 
@@ -370,9 +367,7 @@ function ProfileSection() {
             />
           ) : tab === "mfa" ? (
             <MfaTab me={me.data} onEditPassword={() => setPwOpen(true)} />
-          ) : tab === "custom-fields" ? (
-            <CustomFieldsTab />
-          ) : tab === "email-settings" ? (
+          ) : (
             <EmailSettingsTab
               signature={signature}
               setSignature={setSignature}
@@ -381,8 +376,6 @@ function ProfileSection() {
               setEmailPrefs={setEmailPrefs}
               sendCap={(wsSettings.data as any)?.areDefaultDailySendCap ?? 50}
             />
-          ) : (
-            <ConversationsTab />
           )}
         </div>
       </div>
@@ -791,47 +784,6 @@ function TotpDisconnectDialog({ open, onClose, hasPassword }: { open: boolean; o
   );
 }
 
-function CustomFieldsTab() {
-  const [, navigate] = useLocation();
-  const defs = trpc.customFields.listDefs.useQuery(undefined);
-  const rows = (defs.data ?? []) as any[];
-  return (
-    <SettingsCard title="Custom fields">
-      <p className="text-[13px] text-muted-foreground -mt-1">
-        Workspace-wide custom fields on leads, contacts, accounts and opportunities.
-      </p>
-      {defs.isLoading ? (
-        <div className="h-20 rounded-lg bg-muted/50 animate-pulse" />
-      ) : rows.length === 0 ? (
-        <p className="rounded-lg border border-dashed border-border px-4 py-6 text-center text-[13px] text-muted-foreground">
-          No custom fields defined yet.
-        </p>
-      ) : (
-        <div className="divide-y divide-border/70 rounded-lg border border-border/70">
-          {rows.slice(0, 8).map((d) => (
-            <div key={d.id} className="flex items-center gap-3 px-4 py-2.5 text-[13px]">
-              <Tag className="size-3.5 shrink-0 text-muted-foreground" />
-              <span className="font-medium truncate">{d.label ?? d.fieldKey}</span>
-              <span className="text-muted-foreground truncate">{d.fieldKey}</span>
-              <span className="ml-auto shrink-0 rounded-full bg-secondary px-2 py-0.5 text-[11px] capitalize text-muted-foreground">
-                {d.entityType} · {d.fieldType}
-              </span>
-            </div>
-          ))}
-          {rows.length > 8 && (
-            <div className="px-4 py-2 text-[12px] text-muted-foreground">+ {rows.length - 8} more</div>
-          )}
-        </div>
-      )}
-      <div>
-        <Button variant="outline" size="sm" className="gap-1.5" onClick={() => navigate("/custom-fields")}>
-          <ExternalLink className="size-3.5" /> Manage custom fields
-        </Button>
-      </div>
-    </SettingsCard>
-  );
-}
-
 type EmailPrefs = { unsubHeader: boolean; openTracking: boolean; clickTracking: boolean };
 
 function EmailSettingsTab({
@@ -971,69 +923,6 @@ function EmailSettingsTab({
         )}
       </SettingsCard>
     </>
-  );
-}
-
-const NOTIF_ROWS: { key: string; label: string; hint: string }[] = [
-  { key: "sequence_reply", label: "Sequence replies", hint: "A prospect replies to one of your sequenced emails" },
-  { key: "social_response", label: "Social responses", hint: "A prospect replies or reacts on LinkedIn" },
-  { key: "workflow_alert", label: "Workflow alerts", hint: "A workflow rule you own fires an alert" },
-  { key: "system", label: "System notifications", hint: "Bookings, autopilot activity and account events" },
-];
-
-function ConversationsTab() {
-  const utils = trpc.useUtils();
-  const q = trpc.team.getNotifPrefs.useQuery();
-  const save = trpc.team.updateNotifPrefs.useMutation({
-    onSuccess: () => utils.team.getNotifPrefs.invalidate(),
-    onError: (e: any) => toast.error(e?.message ?? "Could not save preference"),
-  });
-  const prefs = (q.data?.notifPrefs ?? {}) as Record<string, boolean>;
-  const [email, setEmail] = useState<string | null>(null);
-  const emailValue = email ?? q.data?.notifEmail ?? "";
-
-  const commitEmail = () => {
-    const v = emailValue.trim();
-    if (v === (q.data?.notifEmail ?? "")) return;
-    if (v && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) { toast.error("Enter a valid email"); return; }
-    save.mutate({ notifEmail: v || null }, { onSuccess: () => toast.success("Notification email saved") });
-  };
-
-  return (
-    <SettingsCard title="Conversation notifications">
-      <p className="text-[13px] text-muted-foreground -mt-1">
-        Choose which conversation events reach you. Toggles save immediately.
-      </p>
-      {q.isLoading ? (
-        <div className="h-32 rounded-lg bg-muted/50 animate-pulse" />
-      ) : (
-        <div className="divide-y divide-border/70 rounded-lg border border-border/70">
-          {NOTIF_ROWS.map((r) => (
-            <div key={r.key} className="flex items-center gap-3 px-4 py-3">
-              <div className="min-w-0 flex-1">
-                <div className="text-[13px] font-medium">{r.label}</div>
-                <div className="text-[11px] text-muted-foreground">{r.hint}</div>
-              </div>
-              <Switch
-                checked={prefs[r.key] !== false}
-                disabled={save.isPending}
-                onCheckedChange={() => save.mutate({ notifPrefs: { ...prefs, [r.key]: prefs[r.key] === false } as any })}
-              />
-            </div>
-          ))}
-        </div>
-      )}
-      <div className="space-y-1.5 max-w-sm">
-        <Label>Notification email</Label>
-        <Input
-          value={emailValue}
-          onChange={(e) => setEmail(e.target.value)}
-          onBlur={commitEmail}
-          placeholder="Defaults to your login email"
-        />
-        <p className="text-xs text-muted-foreground">Where conversation notifications are sent. Saved when you click away.</p>
-      </div>
-    </SettingsCard>
   );
 }
 
