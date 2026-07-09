@@ -40,9 +40,10 @@ import {
   Mail,
   Check,
   ChevronLeft,
+  ChevronDown,
   Server,
   FileSpreadsheet,
-  Upload,
+  UploadCloud,
   Trash2,
   Download,
   Eye,
@@ -55,6 +56,14 @@ import {
   Sparkles,
   Plug,
   Network,
+  Link2,
+  Lock,
+  Lightbulb,
+  Settings2,
+  Wrench,
+  CheckCheck,
+  TriangleAlert,
+  Send,
 } from "lucide-react";
 
 /* ─────────────────────────── shared helpers ───────────────────────────── */
@@ -80,7 +89,30 @@ export const PROVIDER_META: Record<string, { label: string; tile: string; letter
   amazon_ses: { label: "Amazon SES", tile: "bg-amber-600", letter: "A" },
 };
 
+/** Hand-rolled brand glyphs (lucide has no brand icons — house rule). */
+export function GoogleGlyph({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 48 48" className={cn("size-6 shrink-0", className)} aria-label="Google">
+      <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z" />
+      <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z" />
+      <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z" />
+      <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z" />
+    </svg>
+  );
+}
+
+export function OutlookGlyph({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={cn("size-6 shrink-0", className)} aria-label="Outlook">
+      <rect x="1.5" y="3.5" width="21" height="17" rx="3" fill="#0F6CBD" />
+      <circle cx="12" cy="12" r="5" fill="none" stroke="#fff" strokeWidth="2.6" />
+    </svg>
+  );
+}
+
 export function ProviderTile({ provider, className }: { provider: string; className?: string }) {
+  if (provider === "google_oauth") return <GoogleGlyph className={className} />;
+  if (provider === "outlook_oauth") return <OutlookGlyph className={className} />;
   const m = PROVIDER_META[provider] ?? PROVIDER_META.generic_smtp;
   return (
     <span
@@ -97,7 +129,7 @@ export function ProviderTile({ provider, className }: { provider: string; classN
 }
 
 /** Lime primary button used across the guided setup (matches the reference). */
-const limeBtn =
+export const limeBtn =
   "inline-flex items-center gap-1.5 rounded-md bg-lime-300 px-4 py-2 text-[13px] font-semibold text-slate-900 transition-colors hover:bg-lime-400 disabled:opacity-50 disabled:pointer-events-none";
 const ghostBtn =
   "inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-4 py-2 text-[13px] font-medium transition-colors hover:bg-muted disabled:opacity-50";
@@ -176,20 +208,24 @@ export function GuidedMailboxSetup({
           </div>
           <nav className="flex-1 space-y-1 px-4">
             <SidebarStep label="Link mailbox" state={acct ? "done" : "active"} />
-            <SidebarStep label="Configure mailbox" state={configuring ? "active" : step === "complete" ? "done" : "todo"} />
+            <SidebarStep
+              label="Configure mailbox"
+              state={configuring ? "active" : step === "complete" ? "done" : "todo"}
+              chevron={configuring || step === "complete"}
+            />
             {(configuring || step === "complete") && (
-              <div className="ml-5 space-y-1 border-l border-slate-700 pl-4">
-                <SidebarStep small label="Signature" state={acct?.signatureCompleted ? "done" : step === "signature" ? "active" : "todo"} />
-                <SidebarStep small label="Sending limits" state={acct?.sendingLimitsCompleted ? "done" : step === "limits" ? "active" : "todo"} />
-                <SidebarStep small label="Opt out link" state={acct?.optOutCompleted ? "done" : step === "optout" ? "active" : "todo"} />
+              <div className="ml-[17px] space-y-0.5 border-l border-slate-700 pl-3">
+                <SidebarSubstep label="Signature" done={!!acct?.signatureCompleted} active={step === "signature"} />
+                <SidebarSubstep label="Sending limits" done={!!acct?.sendingLimitsCompleted} active={step === "limits"} />
+                <SidebarSubstep label="Opt out link" done={!!acct?.optOutCompleted} active={step === "optout"} />
               </div>
             )}
             <SidebarStep label="Finish setup" state={step === "complete" ? "active" : "todo"} />
           </nav>
           <div className="px-5 pb-6 space-y-3">
-            <div className="rounded-lg bg-slate-800/80 p-3.5 text-[12px] leading-relaxed text-slate-300">
-              While Gmail is a popular Email Service Provider (ESP), Velocity supports many different email
-              providers and custom email servers.
+            <div className="relative rounded-lg rounded-bl-none bg-slate-800/80 p-3.5 text-[12px] leading-relaxed text-slate-300">
+              <Sparkles className="absolute -top-2 right-2 size-4 text-slate-400" />
+              {STEP_TIPS[step] ?? STEP_TIPS.provider}
             </div>
             <a href="/help" className="block text-[12px] font-medium text-slate-300 underline underline-offset-2 hover:text-white">
               Learn more about linking mailboxes
@@ -201,21 +237,19 @@ export function GuidedMailboxSetup({
         <div className="flex min-w-0 flex-1 flex-col">
           {/* top bar */}
           <div className="flex h-12 shrink-0 items-center gap-2.5 border-b border-border px-4 sm:px-6">
-            {acct ? (
+            {acct && (
               <>
                 <Mail className="size-4 text-muted-foreground" />
                 <span className="truncate text-[13px] font-medium">{acct.fromEmail}</span>
                 <span className={cn(
-                  "rounded-full px-2 py-0.5 text-[11px] font-medium",
+                  "rounded-full px-2.5 py-0.5 text-[11px] font-medium",
                   setupComplete(acct)
                     ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300"
-                    : "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300",
+                    : "bg-indigo-100 text-indigo-900 dark:bg-indigo-900/40 dark:text-indigo-200",
                 )}>
                   {setupComplete(acct) ? "Setup complete" : "Setup in progress"}
                 </span>
               </>
-            ) : (
-              <span className="text-[13px] font-medium text-muted-foreground">Guided mailbox setup</span>
             )}
             <div className="flex-1" />
             <button type="button" onClick={onClose} aria-label="Close setup" className="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground">
@@ -226,7 +260,13 @@ export function GuidedMailboxSetup({
           {/* step body */}
           <div className="min-h-0 flex-1 overflow-y-auto">
             {step === "provider" && (
-              <ProviderStep provider={provider} setProvider={setProvider} tos={tos} setTos={setTos} />
+              <ProviderStep
+                provider={provider}
+                setProvider={setProvider}
+                tos={tos}
+                setTos={setTos}
+                onLink={() => setModal(provider === "imap" ? "choice" : "oauth")}
+              />
             )}
             {step === "linked" && acct && <LinkedStep acct={acct} onCloseWizard={onClose} />}
             {step === "signature" && acct && (
@@ -248,13 +288,9 @@ export function GuidedMailboxSetup({
               <>
                 <div className="flex-1" />
                 <button type="button" className={ghostBtn} onClick={onClose}>Back</button>
-                <button
-                  type="button"
-                  className={limeBtn}
-                  disabled={!provider || !tos}
-                  onClick={() => setModal(provider === "imap" ? "choice" : "oauth")}
-                >
-                  Next: Link mailbox
+                {/* Enabled once a mailbox is linked — linking auto-advances, so it stays disabled here. */}
+                <button type="button" className={ghostBtn} disabled>
+                  Next: Configure mailbox
                 </button>
               </>
             )}
@@ -340,21 +376,56 @@ export function GuidedMailboxSetup({
   );
 }
 
-function SidebarStep({ label, state, small }: { label: string; state: "done" | "active" | "todo"; small?: boolean }) {
+/** Contextual assistant tip shown in the sidebar speech bubble, per step. */
+const STEP_TIPS: Record<string, string> = {
+  provider:
+    "While Gmail is a popular Email Service Provider (ESP), Velocity supports many different email providers and custom email servers.",
+  linked: "Check your mailbox configuration to ensure your outbound is set up for success.",
+  signature:
+    "Keep it simple and professional to avoid spam flags. Include your name, position, company and contact info, but avoid heavy images, fancy text formatting, or heavy HTML.",
+  limits: "Use Velocity's default sending limits to maintain deliverability and a good sender reputation.",
+  optout:
+    "Recipients can opt out of emails sent by you, maintaining their choice. This also ensures you are adhering to best practices per Google and Microsoft.",
+  overview:
+    "Uh-oh! If your mailbox needs a few tweaks, making updates is simple: just hit \"Fix Configuration Issues\" to start.",
+  complete: "Check your mailbox configuration to ensure your outbound is set up for success.",
+};
+
+function SidebarStep({
+  label, state, chevron,
+}: {
+  label: string;
+  state: "done" | "active" | "todo";
+  chevron?: boolean;
+}) {
   return (
-    <div className={cn("flex items-center gap-2.5 rounded-md px-2 py-1.5", state === "active" && "bg-slate-800")}>
-      <span
-        className={cn(
-          "flex shrink-0 items-center justify-center rounded-full",
-          small ? "size-4" : "size-5",
-          state === "done" && "bg-emerald-500 text-slate-900",
-          state === "active" && "border-2 border-emerald-400",
-          state === "todo" && "border-2 border-slate-600",
-        )}
-      >
-        {state === "done" && <Check className={small ? "size-2.5" : "size-3"} strokeWidth={3} />}
+    <div className={cn("flex items-center gap-2.5 rounded-md px-2.5 py-2", state === "active" && "bg-slate-800")}>
+      {state === "done" ? (
+        <span className="flex size-[18px] shrink-0 items-center justify-center rounded-full border-[1.5px] border-emerald-400 text-emerald-400">
+          <Check className="size-2.5" strokeWidth={3} />
+        </span>
+      ) : state === "active" ? (
+        <span className="flex size-[18px] shrink-0 items-center justify-center">
+          <span className="size-2.5 rounded-full bg-emerald-400" />
+        </span>
+      ) : (
+        <span className="size-[18px] shrink-0 rounded-full border-[1.5px] border-slate-600" />
+      )}
+      <span className={cn("text-[13px]", state === "todo" ? "text-slate-400" : "font-medium text-slate-100")}>
+        {label}
       </span>
-      <span className={cn(small ? "text-[12px]" : "text-[13px]", state === "todo" ? "text-slate-400" : "text-slate-100 font-medium")}>
+      {chevron && <ChevronDown className="ml-auto size-3.5 rotate-180 text-slate-400" />}
+    </div>
+  );
+}
+
+function SidebarSubstep({ label, done, active }: { label: string; done: boolean; active: boolean }) {
+  return (
+    <div className={cn("flex items-center gap-2 rounded-md px-2.5 py-1.5", active && "bg-slate-800")}>
+      <span className="flex size-3.5 shrink-0 items-center justify-center">
+        {done && <Check className="size-3 text-emerald-400" strokeWidth={3} />}
+      </span>
+      <span className={cn("text-[12.5px]", active || done ? "text-slate-100" : "text-slate-400", active && "font-medium")}>
         {label}
       </span>
     </div>
@@ -395,27 +466,30 @@ function StepBar({
 /* ─────────────────────── step 1: provider selection ───────────────────── */
 
 function ProviderStep({
-  provider, setProvider, tos, setTos,
+  provider, setProvider, tos, setTos, onLink,
 }: {
   provider: "google" | "outlook" | "imap" | null;
   setProvider: (p: "google" | "outlook" | "imap") => void;
   tos: boolean;
   setTos: (v: boolean) => void;
+  onLink: () => void;
 }) {
+  const kw = "font-medium text-sky-700 dark:text-sky-400";
   const cards = [
-    { id: "google" as const, title: "Google", sub: "Gmail / GSuite", tile: "bg-red-500", letter: "G" },
-    { id: "outlook" as const, title: "Outlook", sub: "Hotmail, Live, MSN", tile: "bg-sky-600", letter: "O" },
-    { id: "imap" as const, title: "Other", sub: "Any provider, IMAP", tile: "bg-slate-600", letter: "@" },
+    { id: "google" as const, title: "Google", sub: "Gmail / GSuite", icon: <GoogleGlyph className="size-9" /> },
+    { id: "outlook" as const, title: "Outlook", sub: "Hotmail, Live, MSN", icon: <OutlookGlyph className="size-9" /> },
+    { id: "imap" as const, title: "Other", sub: "Any provider, IMAP", icon: <Mail className="size-9 text-foreground/80" strokeWidth={1.25} />, lock: true },
   ];
   return (
-    <div className="mx-auto w-full max-w-2xl px-6 py-10">
-      <h1 className="text-2xl font-semibold tracking-tight">Let's link your mailbox</h1>
-      <p className="mt-2 text-[13.5px] leading-relaxed text-muted-foreground">
-        Link your mailboxes with Velocity to gain full functionality of core engagement tools, like emails,
-        sequences, conversations, meetings and more.
+    <div className="mx-auto w-full max-w-3xl px-6 py-10">
+      <h1 className="text-[26px] font-bold tracking-tight">Let's link your mailbox</h1>
+      <p className="mt-3 text-[13.5px] leading-relaxed text-muted-foreground">
+        Link your mailboxes with Velocity to gain full functionality of core engagement tools, like{" "}
+        <span className={kw}>emails</span>, <span className={kw}>sequences</span>,{" "}
+        <span className={kw}>conversations</span>, <span className={kw}>meetings</span> and more.
       </p>
 
-      <h2 className="mt-8 text-[15px] font-semibold">Choose your email provider</h2>
+      <h2 className="mt-8 text-[14px] font-semibold">Choose your email provider</h2>
       <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
         {cards.map((c) => (
           <button
@@ -424,24 +498,36 @@ function ProviderStep({
             onClick={() => setProvider(c.id)}
             aria-pressed={provider === c.id}
             className={cn(
-              "flex flex-col items-center gap-2 rounded-xl border-2 bg-card px-4 py-6 text-center transition-colors",
+              "relative flex flex-col items-center gap-1.5 rounded-lg border bg-card px-4 py-7 text-center transition-colors",
               provider === c.id ? "border-sky-500 shadow-sm" : "border-border hover:border-foreground/30",
             )}
           >
-            <span className={cn("flex size-10 items-center justify-center rounded-lg text-lg font-bold text-white", c.tile)}>{c.letter}</span>
+            {c.lock && <Lock className="absolute right-3 top-3 size-3.5 text-muted-foreground" />}
+            <span className="flex h-11 items-center">{c.icon}</span>
             <span className="text-[14px] font-semibold">{c.title}</span>
-            <span className="text-[12px] text-muted-foreground">{c.sub}</span>
+            <span className="text-[12.5px] text-muted-foreground">{c.sub}</span>
           </button>
         ))}
       </div>
 
-      <label className="mt-6 flex cursor-pointer items-start gap-2.5 rounded-lg border border-border bg-card px-4 py-3 text-[13px]">
-        <Checkbox checked={tos} onCheckedChange={(v) => setTos(v === true)} className="mt-0.5" />
+      <h2 className="mt-9 text-[14px] font-semibold">Velocity Terms of Service</h2>
+      <label className="mt-3 flex cursor-pointer items-start gap-3 rounded-lg bg-muted/70 px-4 py-4 text-[12.5px] leading-relaxed">
+        <Checkbox checked={tos} onCheckedChange={(v) => setTos(v === true)} className="mt-0.5 bg-background" />
         <span className="text-muted-foreground">
-          I agree that this mailbox will be used through Velocity for outreach I'm authorized to send, and I
-          accept the <a href="/help" className="font-medium text-foreground underline underline-offset-2">terms of service</a>.
+          I agree to Velocity's{" "}
+          <a href="/help" className="font-medium text-sky-700 underline-offset-2 hover:underline dark:text-sky-400">Terms of Service</a>{" "}
+          and will not use Velocity to send any spam or harassing emails (commercial or otherwise) in violation
+          of any applicable laws. By clicking "Link mailbox" below, I acknowledge that Velocity will send email
+          on my behalf from this account and store the connection credentials securely to provide me with the
+          Services.
         </span>
       </label>
+
+      <div className="mt-8 flex justify-end border-t border-border pt-5">
+        <button type="button" className={limeBtn} disabled={!provider || !tos} onClick={onLink}>
+          <Link2 className="size-4" /> Link mailbox
+        </button>
+      </div>
     </div>
   );
 }
@@ -528,24 +614,24 @@ function SmtpImapChoiceDialog({
             Choose an option to connect email accounts either in bulk or individually.
           </DialogDescription>
         </DialogHeader>
-        <div className="grid grid-cols-1 gap-3 pt-1 sm:grid-cols-2">
+        <div className="grid grid-cols-1 gap-4 pt-1 sm:grid-cols-2">
           <button
             type="button"
             onClick={onSingle}
-            className="flex flex-col items-center gap-2.5 rounded-xl border-2 border-border bg-card px-4 py-7 text-center transition-colors hover:border-sky-500"
+            className="flex flex-col items-center gap-2.5 rounded-lg bg-muted/70 px-4 py-8 text-center transition-shadow hover:ring-2 hover:ring-sky-400"
           >
-            <Server className="size-8 text-muted-foreground" />
-            <span className="text-[14px] font-semibold">Connect Single account</span>
-            <span className="text-[12px] text-muted-foreground">Connect single email account via SMTP</span>
+            <Server className="size-9 text-slate-500 dark:text-slate-400" strokeWidth={1.5} />
+            <span className="text-[15px] font-semibold">Connect Single account</span>
+            <span className="max-w-[200px] text-[12.5px] text-muted-foreground">Connect single email account via SMTP</span>
           </button>
           <button
             type="button"
             onClick={onBulk}
-            className="flex flex-col items-center gap-2.5 rounded-xl border-2 border-border bg-card px-4 py-7 text-center transition-colors hover:border-sky-500"
+            className="flex flex-col items-center gap-2.5 rounded-lg bg-muted/70 px-4 py-8 text-center transition-shadow hover:ring-2 hover:ring-sky-400"
           >
-            <FileSpreadsheet className="size-8 text-muted-foreground" />
-            <span className="text-[14px] font-semibold">Bulk Import Via CSV</span>
-            <span className="text-[12px] text-muted-foreground">Import &amp; connect multiple email accounts at once via CSV</span>
+            <FileSpreadsheet className="size-9 text-emerald-600" strokeWidth={1.5} />
+            <span className="text-[15px] font-semibold">Bulk Import Via CSV</span>
+            <span className="max-w-[200px] text-[12.5px] text-muted-foreground">Import &amp; connect multiple email accounts at once via CSV</span>
           </button>
         </div>
       </DialogContent>
@@ -711,7 +797,7 @@ function SmtpImapFormDialog({
           <DialogDescription>Enter the sending (SMTP) and reading (IMAP) details for the mailbox.</DialogDescription>
         </DialogHeader>
 
-        <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-5">
+        <div className="min-h-0 flex-1 space-y-5 overflow-y-auto bg-muted/40 px-6 py-5">
           {/* SMTP */}
           <Sect
             title="SMTP Details"
@@ -797,7 +883,7 @@ function SmtpImapFormDialog({
                   <Label>Encryption</Label>
                   <div><EncryptionPicker value={f.smtpEnc} onChange={(v) => set("smtpEnc", v)} /></div>
                 </div>
-                <Button variant="outline" size="sm" disabled={!smtpReady || testConfig.isPending} onClick={runSmtpTest} className="gap-1.5">
+                <Button variant="outline" size="sm" disabled={!smtpReady || testConfig.isPending} onClick={runSmtpTest} className="gap-1.5 border-sky-300 text-sky-700 hover:bg-sky-50 hover:text-sky-800 dark:border-sky-800 dark:text-sky-300 dark:hover:bg-sky-950/40">
                   {testConfig.isPending ? <Loader2 className="size-3.5 animate-spin" /> : smtpTest === "ok" ? <CheckCircle2 className="size-3.5 text-emerald-600" /> : smtpTest === "fail" ? <XCircle className="size-3.5 text-rose-600" /> : null}
                   Test SMTP Connection
                 </Button>
@@ -851,7 +937,7 @@ function SmtpImapFormDialog({
                   <Label>Encryption</Label>
                   <div><EncryptionPicker value={f.imapEnc} onChange={(v) => set("imapEnc", v)} /></div>
                 </div>
-                <Button variant="outline" size="sm" disabled={!imapReady} onClick={runImapTest} className="gap-1.5">
+                <Button variant="outline" size="sm" disabled={!imapReady} onClick={runImapTest} className="gap-1.5 border-sky-300 text-sky-700 hover:bg-sky-50 hover:text-sky-800 dark:border-sky-800 dark:text-sky-300 dark:hover:bg-sky-950/40">
                   {imapTest === "ok" ? <CheckCircle2 className="size-3.5 text-emerald-600" /> : imapTest === "fail" ? <XCircle className="size-3.5 text-rose-600" /> : null}
                   Test IMAP Connection
                 </Button>
@@ -862,7 +948,7 @@ function SmtpImapFormDialog({
 
         <div className="flex shrink-0 items-center justify-end gap-2 border-t border-border px-6 py-3.5">
           <Button variant="outline" size="sm" onClick={onCancel}>Cancel</Button>
-          <Button size="sm" disabled={!smtpReady || create.isPending} onClick={connectSave} className="gap-1.5">
+          <Button size="sm" disabled={!smtpReady || create.isPending} onClick={connectSave} className="gap-1.5 bg-indigo-600 text-white hover:bg-indigo-700">
             {create.isPending ? <Loader2 className="size-3.5 animate-spin" /> : null} Connect &amp; Save
           </Button>
         </div>
@@ -984,15 +1070,16 @@ function CsvImportDialog({
           <DialogDescription>Connect multiple SMTP/IMAP mailboxes at once from a CSV file.</DialogDescription>
         </DialogHeader>
 
-        <div className="rounded-lg border border-sky-200 bg-sky-50 p-3.5 text-[12px] leading-relaxed text-sky-900 dark:border-sky-900 dark:bg-sky-950/40 dark:text-sky-200">
-          <div className="mb-1 font-semibold">Steps to import email accounts:</div>
-          <ol className="list-decimal space-y-0.5 pl-4">
-            <li>Download <a href="/mailbox-import-sample.csv" download className="font-medium underline underline-offset-2">Sample CSV file</a></li>
+        <div className="rounded-lg bg-muted/70 p-4 text-[12.5px] leading-relaxed text-foreground/80">
+          <div className="mb-1.5 flex items-center gap-1.5 font-semibold text-foreground">
+            <Lightbulb className="size-3.5 text-amber-500" /> Steps to import email accounts:
+          </div>
+          <ol className="list-decimal space-y-0.5 pl-5">
+            <li>Download <a href="/mailbox-import-sample.csv" download className="font-medium text-sky-700 hover:underline dark:text-sky-400">Sample CSV</a> file</li>
             <li>Fill details for all connection fields. (Email account, SMTP host, etc.)</li>
             <li>Fill details for email account settings. (Sending interval, daily limit, etc.)</li>
             <li>Email account field should be valid and not left blank.</li>
             <li>Import your CSV file and click on Connect.</li>
-            <li>Still have questions? Read the <a href="https://docs.saleshandy.com/en/articles/7881940-how-to-import-your-email-account-in-bulk-via-smtp-imap" target="_blank" rel="noopener noreferrer" className="font-medium underline underline-offset-2">step-by-step guide</a>.</li>
           </ol>
         </div>
 
@@ -1007,41 +1094,43 @@ function CsvImportDialog({
             onDragLeave={() => setDragOver(false)}
             onDrop={(e) => { e.preventDefault(); setDragOver(false); onFile(e.dataTransfer.files?.[0]); }}
             className={cn(
-              "flex cursor-pointer flex-col items-center gap-2 rounded-xl border-2 border-dashed px-6 py-9 text-center transition-colors",
+              "flex cursor-pointer flex-col items-center gap-2 rounded-xl border-2 border-dashed bg-muted/30 px-6 py-10 text-center transition-colors",
               error ? "border-rose-300 bg-rose-50/60 dark:border-rose-900 dark:bg-rose-950/20"
                 : dragOver ? "border-sky-400 bg-sky-50/60" : "border-border hover:border-foreground/40",
             )}
           >
-            <Upload className="size-7 text-muted-foreground" />
-            <div className="text-[13px]">
-              Drag &amp; Drop CSV file or <span className="font-semibold underline underline-offset-2">Choose a file</span>
+            <UploadCloud className="size-8 text-muted-foreground" strokeWidth={1.5} />
+            <div className="text-[14px]">
+              Drag &amp; Drop CSV file or <span className="font-semibold text-sky-700 dark:text-sky-400">Choose a file</span>
             </div>
-            <div className="text-[11px] text-muted-foreground">Maximum allowed accounts per CSV: 100</div>
+            <div className="text-[12px] text-muted-foreground">Maximum allowed accounts per CSV: 100</div>
             {error && <div className="mt-1 text-[12px] font-medium text-rose-600">{fileName ? `${fileName}: ` : ""}{error}</div>}
           </div>
         ) : (
-          <div className="rounded-xl border-2 border-dashed border-emerald-400 bg-emerald-50 p-4 dark:border-emerald-800 dark:bg-emerald-950/30">
-            <div className="flex items-center gap-3">
-              <FileSpreadsheet className="size-7 shrink-0 text-emerald-700 dark:text-emerald-400" />
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-[13px] font-semibold">{fileName}</div>
-                <div className="text-[12px] text-emerald-800 dark:text-emerald-300">Successfully imported: {parsed.rows.length}</div>
-                <div className="text-[12px] text-muted-foreground">Skipped: {parsed.skipped}</div>
-              </div>
-              <a href="/mailbox-import-sample.csv" download title="Download sample CSV" className="rounded p-1.5 text-muted-foreground hover:bg-emerald-100 hover:text-foreground dark:hover:bg-emerald-900/40">
+          <div className="flex flex-col items-center gap-1.5 rounded-xl border-2 border-dashed border-emerald-400 bg-emerald-50 px-6 py-8 text-center dark:border-emerald-800 dark:bg-emerald-950/30">
+            <FileSpreadsheet className="size-9 text-emerald-600 dark:text-emerald-400" strokeWidth={1.5} />
+            <div className="mt-1 max-w-full truncate text-[15px] font-semibold">{fileName}</div>
+            <div className="mt-1 flex flex-wrap items-center justify-center gap-x-5 gap-y-1 text-[13px]">
+              <span className="inline-flex items-center gap-1.5 font-medium text-emerald-700 dark:text-emerald-300">
+                <CheckCheck className="size-4" /> Successfully imported: <span className="font-bold">{parsed.rows.length}</span>
+              </span>
+              <span className="inline-flex items-center gap-1.5 font-medium text-rose-600 dark:text-rose-400">
+                <TriangleAlert className="size-4 text-amber-500" /> Skipped: <span className="font-bold">{parsed.skipped}</span>
+              </span>
+              <a href="/mailbox-import-sample.csv" download title="Download sample CSV" className="text-muted-foreground hover:text-foreground">
                 <Download className="size-4" />
               </a>
-              <button type="button" onClick={reset} title="Remove file" className="rounded p-1.5 text-muted-foreground hover:bg-emerald-100 hover:text-rose-600 dark:hover:bg-emerald-900/40">
-                <Trash2 className="size-4" />
-              </button>
             </div>
+            <button type="button" onClick={reset} className="mt-1.5 inline-flex items-center gap-1.5 text-[13px] text-foreground/80 hover:text-rose-600">
+              <Trash2 className="size-3.5" /> Remove file
+            </button>
           </div>
         )}
         <input ref={fileRef} type="file" accept=".csv,text/csv" className="hidden" onChange={(e) => onFile(e.target.files?.[0])} />
 
         <div className="flex justify-end gap-2 pt-1">
           <Button variant="outline" size="sm" onClick={() => { reset(); onCancel(); }}>Cancel</Button>
-          <Button size="sm" disabled={!parsed || bulkCreate.isPending} onClick={connect} className="gap-1.5 bg-sky-600 text-white hover:bg-sky-700">
+          <Button size="sm" disabled={!parsed || bulkCreate.isPending} onClick={connect} className="gap-1.5 bg-indigo-600 text-white hover:bg-indigo-700">
             {bulkCreate.isPending ? <Loader2 className="size-3.5 animate-spin" /> : null} Connect
           </Button>
         </div>
@@ -1056,31 +1145,36 @@ function LinkedStep({ acct, onCloseWizard }: { acct: MailboxAccount; onCloseWiza
   const [, navigate] = useLocation();
   const aliases = Array.isArray(acct.aliases) ? acct.aliases : [];
   return (
-    <div className="mx-auto w-full max-w-2xl px-6 py-10">
-      <h1 className="text-2xl font-semibold tracking-tight">Great job! Your mailbox has been linked</h1>
-      <p className="mt-2 text-[13.5px] leading-relaxed text-muted-foreground">
-        Next, configure the mailbox — signature, sending limits and an opt-out link keep your deliverability
-        healthy and protect your sender reputation.
+    <div className="mx-auto w-full max-w-3xl px-6 py-10">
+      <h1 className="text-[26px] font-bold tracking-tight">Great job! Your mailbox has been linked</h1>
+      <p className="mt-3 text-[13.5px] leading-relaxed text-muted-foreground">
+        Up next: Configure your mailbox to ensure everything is properly set up to maintain deliverability and
+        a good sender reputation.
       </p>
-      <div className="mt-5 rounded-lg border border-sky-200 bg-sky-50 px-4 py-3 text-[13px] text-sky-900 dark:border-sky-900 dark:bg-sky-950/40 dark:text-sky-200">
-        Don't want to configure the mailbox now? No worries! You can access this flow anytime from the mailbox
-        listing page in{" "}
-        <button
-          type="button"
-          onClick={() => { onCloseWizard(); navigate("/v2/settings/mailboxes"); }}
-          className="font-semibold underline underline-offset-2"
-        >
-          Settings
-        </button>.
+      <div className="mt-6 flex items-start gap-2.5 rounded-lg bg-slate-100 px-4 py-3.5 text-[13px] text-slate-800 dark:bg-slate-800/60 dark:text-slate-200">
+        <Info className="mt-0.5 size-4 shrink-0" />
+        <span>
+          Don't want to configure the mailbox now? No worries! You can access this flow anytime from the
+          mailbox listing page in{" "}
+          <button
+            type="button"
+            onClick={() => { onCloseWizard(); navigate("/v2/settings/mailboxes"); }}
+            className="font-semibold underline underline-offset-2"
+          >
+            Settings
+          </button>.
+        </span>
       </div>
-      <div className="mt-5 flex items-center gap-3 rounded-xl border border-border bg-card px-4 py-3.5">
+      <div className="mt-5 flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3.5">
         <ProviderTile provider={acct.provider} className="size-8 text-[13px]" />
         <div className="min-w-0 flex-1">
-          <div className="truncate text-[14px] font-semibold">{acct.fromEmail}</div>
-          <div className="text-[12px] text-muted-foreground">{aliases.length} email alias{aliases.length === 1 ? "" : "es"}</div>
+          <div className="truncate text-[13.5px] font-semibold">{acct.fromEmail}</div>
+          <span className="inline-flex items-center gap-0.5 text-[12.5px] font-medium text-sky-700 dark:text-sky-400">
+            {aliases.length} email alias{aliases.length === 1 ? "" : "es"} <ChevronDown className="size-3.5" />
+          </span>
         </div>
         {acct.isDefault && (
-          <span className="rounded-full bg-secondary px-2 py-0.5 text-[11px] font-medium text-muted-foreground">Default</span>
+          <span className="rounded-full bg-indigo-100 px-2.5 py-0.5 text-[11px] font-medium text-indigo-900 dark:bg-indigo-900/40 dark:text-indigo-200">Default</span>
         )}
       </div>
     </div>
@@ -1101,8 +1195,8 @@ function SignatureStep({ acct, save }: { acct: MailboxAccount; save: (p: Record<
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   return (
-    <div className="mx-auto w-full max-w-2xl px-6 py-10">
-      <h1 className="text-2xl font-semibold tracking-tight">Signature</h1>
+    <div className="mx-auto w-full max-w-3xl px-6 py-10">
+      <h1 className="text-[26px] font-bold tracking-tight">Signature</h1>
       <p className="mt-2 text-[13.5px] text-muted-foreground">
         Email signatures add credibility and professionalism to your messages.
       </p>
@@ -1135,10 +1229,34 @@ function InfoTip({ text }: { text: string }) {
   );
 }
 
+/** 3-column read-only limits summary (wizard limits step + configuration overview). */
+function LimitsSummary({
+  daily, hourly, delay, className,
+}: {
+  daily: string | number; hourly: string | number; delay: string | number; className?: string;
+}) {
+  const n = (v: string | number) => (Number(v) > 0 ? Number(v) : 0);
+  return (
+    <div className={cn("overflow-hidden rounded-lg border border-border bg-card", className)}>
+      <div className="grid grid-cols-3 border-b border-border/70 text-center text-[12px] text-muted-foreground">
+        {["Emails sent per day", "Emails sent per hour", "Delay between emails"].map((h) => (
+          <div key={h} className="px-3 py-2.5">{h}</div>
+        ))}
+      </div>
+      <div className="grid grid-cols-3 text-center text-[13.5px] font-medium tabular-nums">
+        <div className="px-3 py-4">{n(daily)}</div>
+        <div className="px-3 py-4">{n(hourly)}</div>
+        <div className="px-3 py-4">{n(delay)} secs</div>
+      </div>
+    </div>
+  );
+}
+
 function LimitsStep({ acct, save }: { acct: MailboxAccount; save: (p: Record<string, unknown>) => Promise<void> }) {
   const [daily, setDaily] = useState(String(acct.dailySendLimit ?? 50));
   const [hourly, setHourly] = useState(String(acct.hourlySendLimit ?? 6));
   const [delay, setDelay] = useState(String(acct.delaySeconds ?? 600));
+  const [editorOpen, setEditorOpen] = useState(false);
 
   // The Complete button (in the wizard's bottom bar) fires this event so the
   // current input values persist together with sendingLimitsCompleted.
@@ -1154,40 +1272,28 @@ function LimitsStep({ acct, save }: { acct: MailboxAccount; save: (p: Record<str
     return () => window.removeEventListener("mailbox-limits-complete", handler);
   }, [daily, hourly, delay]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const numRow = (v: string) => (Number(v) > 0 ? Number(v) : 0);
   return (
-    <div className="mx-auto w-full max-w-2xl px-6 py-10">
-      <h1 className="text-2xl font-semibold tracking-tight">Sending Limits</h1>
+    <div className="mx-auto w-full max-w-3xl px-6 py-10">
+      <h1 className="text-[26px] font-bold tracking-tight">Sending limits</h1>
       <p className="mt-2 text-[13.5px] leading-relaxed text-muted-foreground">
         Sending limits are essential to maintaining a healthy deliverability rate and domain safety. We
         recommend utilizing the Velocity default limits to minimize risk.
       </p>
 
-      <div className="mt-5 overflow-hidden rounded-xl border border-border">
-        {[
-          ["Emails sent per day", `${numRow(daily)}`],
-          ["Emails sent per hour", `${numRow(hourly)}`],
-          ["Delay between emails", `${numRow(delay)} secs`],
-        ].map(([l, v]) => (
-          <div key={l} className="flex items-center justify-between border-b border-border/70 bg-card px-4 py-2.5 text-[13px] last:border-0">
-            <span className="text-muted-foreground">{l}</span>
-            <span className="font-semibold tabular-nums">{v}</span>
-          </div>
-        ))}
-      </div>
+      <LimitsSummary daily={daily} hourly={hourly} delay={delay} className="mt-6" />
 
-      <div className="mt-5 rounded-xl border border-border bg-card p-4 sm:p-5">
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-[14px] font-semibold">Sending limits</h2>
-          <button
-            type="button"
-            onClick={() => { setDaily("50"); setHourly("6"); setDelay("600"); }}
-            className="inline-flex items-center gap-1.5 text-[12px] font-medium text-muted-foreground hover:text-foreground"
-          >
-            <RotateCcw className="size-3.5" /> Reset to default
-          </button>
-        </div>
-        <div className="space-y-4">
+      <div className="mt-5 rounded-lg border border-border bg-card">
+        <button
+          type="button"
+          onClick={() => setEditorOpen((o) => !o)}
+          aria-expanded={editorOpen}
+          className="flex w-full items-center gap-2.5 px-4 py-3.5 text-left sm:px-5"
+        >
+          <Settings2 className="size-4 text-muted-foreground" />
+          <span className="text-[14px] font-semibold">Sending limits</span>
+          <ChevronDown className={cn("ml-auto size-4 text-muted-foreground transition-transform", editorOpen && "rotate-180")} />
+        </button>
+        <div className={cn("space-y-5 px-4 pb-5 sm:px-5", !editorOpen && "hidden")}>
           <div className="space-y-1.5">
             <Label className="flex items-center gap-1.5">
               Emails sent per day (24-hour-period)
@@ -1216,6 +1322,13 @@ function LimitsStep({ acct, save }: { acct: MailboxAccount; save: (p: Record<str
               Recommended delay: 600 sec. The current delay will allow you to send at most {Number(delay) > 0 ? Math.max(1, Math.floor(3600 / Number(delay))) : "—"} emails/hour.
             </p>
           </div>
+          <button
+            type="button"
+            onClick={() => { setDaily("50"); setHourly("6"); setDelay("600"); }}
+            className="inline-flex items-center gap-1.5 text-[13px] font-medium text-sky-700 hover:underline dark:text-sky-400"
+          >
+            <RotateCcw className="size-3.5" /> Reset to default
+          </button>
         </div>
       </div>
     </div>
@@ -1228,13 +1341,13 @@ function OptOutStep({ acct, save }: { acct: MailboxAccount; save: (p: Record<str
   const commit = (nextEnabled: boolean, nextMsg: string) =>
     void save({ optOutEnabled: nextEnabled, optOutMessage: nextMsg.trim() || null });
   return (
-    <div className="mx-auto w-full max-w-2xl px-6 py-10">
-      <h1 className="text-2xl font-semibold tracking-tight">Opt-out link</h1>
+    <div className="mx-auto w-full max-w-3xl px-6 py-10">
+      <h1 className="text-[26px] font-bold tracking-tight">Opt-out link</h1>
       <p className="mt-2 text-[13.5px] leading-relaxed text-muted-foreground">
         Opt-out links are necessary for compliance and provide recipients with an easy way to unsubscribe —
-        better than being marked as spam.
+        and better than being marked as spam.
       </p>
-      <label className="mt-6 flex cursor-pointer items-center gap-2.5 text-[13px] font-medium">
+      <label className="mt-6 flex cursor-pointer items-center gap-2.5 text-[13px]">
         <Switch checked={enabled} onCheckedChange={(v) => { setEnabled(v); commit(v, msg); }} />
         Append the following opt-out message after my signature in sequences
       </label>
@@ -1266,74 +1379,78 @@ function OptOutStep({ acct, save }: { acct: MailboxAccount; save: (p: Record<str
 
 function ModuleBadge({ done }: { done: boolean }) {
   return done ? (
-    <span className="flex size-5 items-center justify-center rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300"><Check className="size-3" strokeWidth={3} /></span>
+    <Check className="size-[18px] shrink-0 text-emerald-600 dark:text-emerald-400" strokeWidth={2.5} />
   ) : (
-    <span className="flex size-5 items-center justify-center rounded-full bg-rose-100 text-rose-600 dark:bg-rose-900/40 dark:text-rose-300"><X className="size-3" strokeWidth={3} /></span>
+    <X className="size-[18px] shrink-0 text-rose-600 dark:text-rose-400" strokeWidth={2.5} />
+  );
+}
+
+function OverviewModule({
+  done, title, eta, desc, action, children,
+}: {
+  done: boolean;
+  title: string;
+  eta: string;
+  desc: string;
+  action: () => void;
+  children?: ReactNode;
+}) {
+  return (
+    <div className="rounded-lg border border-border bg-card p-4 sm:p-5">
+      <div className="flex items-start gap-3">
+        <ModuleBadge done={done} />
+        <div className="min-w-0 flex-1">
+          <h3 className="text-[14px] font-semibold leading-[18px]">{title}</h3>
+          {!done && <div className="mt-0.5 text-[12px] text-muted-foreground">{eta}</div>}
+          <p className="mt-2 text-[12.5px] leading-relaxed text-muted-foreground">{desc}</p>
+          {children}
+        </div>
+        <Button variant="outline" size="sm" className="gap-1.5" onClick={action}>
+          {done ? <Settings2 className="size-3.5" /> : <Wrench className="size-3.5" />}
+          {done ? "Configure" : "Fix"}
+        </Button>
+      </div>
+    </div>
   );
 }
 
 function OverviewStep({ acct, goTo }: { acct: MailboxAccount; goTo: (s: WizardStep) => void }) {
   return (
-    <div className="mx-auto w-full max-w-2xl px-6 py-10">
-      <h1 className="text-2xl font-semibold tracking-tight">Mailbox configuration</h1>
+    <div className="mx-auto w-full max-w-3xl px-6 py-10">
+      <h1 className="text-[26px] font-bold tracking-tight">Mailbox configuration</h1>
       <p className="mt-2 text-[13.5px] leading-relaxed text-muted-foreground">
         This includes essential elements such as authentication, sending limits, opt-out links, and more that
         help ensure secure and efficient email management.
       </p>
       <div className="mt-6 space-y-3">
-        <div className="rounded-xl border border-border bg-card p-4">
-          <div className="flex items-center gap-2.5">
-            <ModuleBadge done={!!acct.signatureCompleted} />
-            <h3 className="text-[14px] font-semibold">Signature</h3>
-            <div className="flex-1" />
-            <Button variant="outline" size="sm" onClick={() => goTo("signature")}>
-              {acct.signatureCompleted ? "Configure" : "Fix"}
-            </Button>
-          </div>
-          <p className="mt-2 pl-8 text-[12.5px] text-muted-foreground">
-            Email signatures improve deliverability by adding credibility and professionalism to your messages.
-          </p>
-        </div>
-
-        <div className="rounded-xl border border-border bg-card p-4">
-          <div className="flex items-center gap-2.5">
-            <ModuleBadge done={!!acct.sendingLimitsCompleted} />
-            <h3 className="text-[14px] font-semibold">Sending limits</h3>
-            <div className="flex-1" />
-            <Button variant="outline" size="sm" onClick={() => goTo("limits")}>
-              {acct.sendingLimitsCompleted ? "Configure" : "Fix"}
-            </Button>
-          </div>
-          <p className="mt-2 pl-8 text-[12.5px] text-muted-foreground">
-            Limits keep deliverability healthy and protect domain reputation.
-          </p>
-          <div className="mt-3 ml-8 overflow-hidden rounded-lg border border-border/70">
-            {[
-              ["Emails sent per day", acct.dailySendLimit ?? 50],
-              ["Emails sent per hour", acct.hourlySendLimit ?? 6],
-              ["Delay between emails", `${acct.delaySeconds ?? 600} secs`],
-            ].map(([l, v]) => (
-              <div key={String(l)} className="flex items-center justify-between border-b border-border/60 px-3 py-1.5 text-[12px] last:border-0">
-                <span className="text-muted-foreground">{l}</span>
-                <span className="font-semibold tabular-nums">{v}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="rounded-xl border border-border bg-card p-4">
-          <div className="flex items-center gap-2.5">
-            <ModuleBadge done={!!acct.optOutCompleted} />
-            <h3 className="text-[14px] font-semibold">Opt out link</h3>
-            <div className="flex-1" />
-            <Button variant="outline" size="sm" onClick={() => goTo("optout")}>
-              {acct.optOutCompleted ? "Configure" : "Fix"}
-            </Button>
-          </div>
-          <p className="mt-2 pl-8 text-[12.5px] text-muted-foreground">
-            Ensure compliance and reduce spam risk by adding an opt-out link for easy unsubscribing.
-          </p>
-        </div>
+        <OverviewModule
+          done={!!acct.signatureCompleted}
+          title="Signature"
+          eta="About 1 min"
+          desc="Email signatures improve deliverability by adding credibility and professionalism to your messages."
+          action={() => goTo("signature")}
+        />
+        <OverviewModule
+          done={!!acct.sendingLimitsCompleted}
+          title="Sending limits"
+          eta="About 1 min"
+          desc="Sending limits are essential to maintaining a healthy deliverability rate and domain safety. Maintain the Velocity default to minimize risk."
+          action={() => goTo("limits")}
+        >
+          <LimitsSummary
+            daily={acct.dailySendLimit ?? 50}
+            hourly={acct.hourlySendLimit ?? 6}
+            delay={acct.delaySeconds ?? 600}
+            className="mt-3"
+          />
+        </OverviewModule>
+        <OverviewModule
+          done={!!acct.optOutCompleted}
+          title="Opt out link"
+          eta="About 1 min"
+          desc="Ensure compliance and reduce spam risk by adding an opt-out link for easy unsubscribing."
+          action={() => goTo("optout")}
+        />
       </div>
     </div>
   );
@@ -1351,44 +1468,39 @@ function CompleteStep({
 }) {
   const [, navigate] = useLocation();
   const options = [
-    { icon: Network, label: "Explore the Deliverability suite", act: () => { onClose(); navigate("/v2/deliverability"); } },
-    { icon: Mail, label: "Link another mailbox", act: onLinkAnother },
-    { icon: Sparkles, label: "Create sequence", act: () => { onClose(); navigate("/sequences"); } },
-    { icon: Plug, label: "Connect your CRM", act: () => { onClose(); navigate("/settings?tab=integrations"); } },
+    { icon: Network, tint: "text-sky-600", label: "Explore the Deliverability suite", act: () => { onClose(); navigate("/v2/deliverability"); } },
+    { icon: Mail, tint: "text-muted-foreground", label: "Link another mailbox", act: onLinkAnother },
+    { icon: Send, tint: "text-pink-500", label: "Create sequence", act: () => { onClose(); navigate("/sequences"); } },
+    { icon: Plug, tint: "text-indigo-500", label: "Connect your CRM", act: () => { onClose(); navigate("/settings?tab=integrations"); } },
   ];
+  const cardCls =
+    "flex w-full items-center gap-3 rounded-lg border border-border bg-card px-4 py-4 text-left text-[13.5px] font-semibold transition-colors hover:border-foreground/30";
   return (
-    <div className="mx-auto w-full max-w-2xl px-6 py-10 text-center">
-      <div className="mx-auto flex size-14 items-center justify-center rounded-full bg-emerald-100 dark:bg-emerald-900/40">
-        <CheckCircle2 className="size-8 text-emerald-600 dark:text-emerald-400" />
-      </div>
-      <h1 className="mt-4 text-2xl font-semibold tracking-tight">Your mailbox has been linked</h1>
-      <p className="mx-auto mt-2 max-w-lg text-[13.5px] leading-relaxed text-muted-foreground">
-        {acct.fromEmail} is ready. Keeping its configuration healthy — signature, sending limits, opt-out —
-        protects deliverability and your domain's reputation.
+    <div className="mx-auto w-full max-w-3xl px-6 py-10">
+      <span className="relative inline-flex">
+        <CheckCircle2 className="size-12 text-emerald-500" strokeWidth={1.5} />
+        <Sparkles className="absolute -right-3 -top-1.5 size-4 text-emerald-500" />
+      </span>
+      <h1 className="mt-5 text-[26px] font-bold tracking-tight">Your mailbox has been linked</h1>
+
+      <h2 className="mt-7 text-[13.5px] font-semibold">Up next: Configure your mailbox</h2>
+      <p className="mt-1.5 text-[13px] leading-relaxed text-muted-foreground">
+        Completing mailbox configuration is essential to maintaining deliverability and domain health. Take
+        these steps to safeguard your messages from being marked as spam or phishing attempts.
       </p>
-      <button
-        type="button"
-        onClick={onConfigure}
-        className="mx-auto mt-6 flex w-full max-w-md items-center gap-3 rounded-xl border-2 border-sky-500 bg-card px-4 py-3.5 text-left transition-colors hover:bg-sky-50 dark:hover:bg-sky-950/30"
-      >
-        <Server className="size-5 text-sky-600" />
-        <span className="text-[14px] font-semibold">Configure mailbox</span>
+      <button type="button" onClick={onConfigure} className={cn(cardCls, "mt-4")}>
+        <Settings2 className="size-5 shrink-0 text-emerald-600" />
+        Configure mailbox
       </button>
-      <div className="mt-8 text-left">
-        <h2 className="text-[13px] font-semibold uppercase tracking-wide text-muted-foreground">More options to explore</h2>
-        <div className="mt-3 grid grid-cols-1 gap-2.5 sm:grid-cols-2">
-          {options.map((o) => (
-            <button
-              key={o.label}
-              type="button"
-              onClick={o.act}
-              className="flex items-center gap-2.5 rounded-xl border border-border bg-card px-4 py-3 text-left text-[13px] font-medium transition-colors hover:bg-muted"
-            >
-              <o.icon className="size-4 shrink-0 text-muted-foreground" />
-              {o.label}
-            </button>
-          ))}
-        </div>
+
+      <h2 className="mt-8 text-[13px] font-semibold text-muted-foreground">More options to explore</h2>
+      <div className="mt-3 space-y-2.5">
+        {options.map((o) => (
+          <button key={o.label} type="button" onClick={o.act} className={cardCls}>
+            <o.icon className={cn("size-5 shrink-0", o.tint)} />
+            {o.label}
+          </button>
+        ))}
       </div>
     </div>
   );

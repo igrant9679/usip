@@ -43,6 +43,7 @@ import {
   ProviderTile,
   setupProgress,
   setupComplete,
+  limeBtn,
   type MailboxAccount,
 } from "./GuidedMailboxSetup";
 
@@ -97,43 +98,43 @@ export function MailboxesSection() {
             <div className="h-64 rounded-xl bg-card/70 animate-pulse" />
           ) : accounts.length === 0 ? (
             /* ── empty state ── */
-            <div className="rounded-xl border border-border/70 bg-card px-6 py-16 text-center shadow-sm">
-              <div className="mx-auto flex size-14 items-center justify-center rounded-full bg-secondary">
-                <span className="relative">
-                  <Mail className="size-6 text-muted-foreground" />
-                  <Link2 className="absolute -bottom-1.5 -right-2 size-3.5 rounded-full bg-card p-0.5 text-muted-foreground" />
+            <div className="rounded-xl border border-border/70 bg-card px-6 py-20 text-center shadow-sm">
+              <span className="relative inline-flex">
+                <Mail className="size-14 text-foreground" strokeWidth={1} />
+                <span className="absolute -right-4 -top-2.5 flex size-7 items-center justify-center rounded-full bg-foreground text-background">
+                  <Link2 className="size-3.5" />
                 </span>
-              </div>
-              <h2 className="mt-4 text-lg font-semibold">Add your mailbox to get started</h2>
-              <p className="mx-auto mt-1.5 max-w-md text-[13.5px] text-muted-foreground">
+              </span>
+              <h2 className="mt-8 text-[17px] font-semibold">Add your mailbox to get started</h2>
+              <p className="mx-auto mt-2 max-w-lg text-[13.5px] leading-relaxed text-muted-foreground">
                 Connect your mailbox to scale outreach, improve deliverability, and unlock features like
                 sequences, meetings, and more.
               </p>
-              <Button className="mt-5 gap-1.5" onClick={openSetup}>
-                <Link2 className="size-4" /> Link mailbox
-              </Button>
+              <button type="button" className={cn(limeBtn, "mt-6")} onClick={openSetup}>
+                Link mailbox
+              </button>
             </div>
           ) : (
             /* ── populated table ── */
             <div className="rounded-xl border border-border/70 bg-card shadow-sm">
-              <div className="flex flex-wrap items-center gap-3 border-b border-border/70 px-4 py-3.5">
-                <h2 className="text-[15px] font-semibold">My mailboxes</h2>
-                <span className="rounded-full bg-secondary px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+              <div className="flex flex-wrap items-center gap-3 px-4 py-4">
+                <h2 className="text-[16px] font-semibold">My mailboxes</h2>
+                <span className="rounded-full bg-stone-200/70 px-2.5 py-1 text-[11.5px] font-medium text-stone-700 dark:bg-stone-700/50 dark:text-stone-300">
                   {accounts.length} {accounts.length === 1 ? "mailbox" : "mailboxes"} linked
                 </span>
                 <div className="flex-1" />
-                <div className="flex h-8 w-52 items-center gap-2 rounded-md border border-border bg-background px-2">
-                  <Search className="size-3.5 shrink-0 text-muted-foreground" />
+                <div className="flex h-9 w-56 items-center gap-2 rounded-md border border-border bg-background px-2.5">
+                  <Search className="size-4 shrink-0 text-muted-foreground" />
                   <input
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
-                    placeholder="Search mailboxes"
+                    placeholder="Search"
                     className="min-w-0 flex-1 bg-transparent text-[13px] outline-none"
                   />
                 </div>
-                <Button size="sm" className="gap-1.5" onClick={openSetup}>
-                  <Link2 className="size-3.5" /> Link mailbox
-                </Button>
+                <button type="button" className={limeBtn} onClick={openSetup}>
+                  Link mailbox
+                </button>
               </div>
 
               <div className="overflow-x-auto">
@@ -251,7 +252,7 @@ function MailboxRow({ a, onConfigure }: { a: MailboxAccount; onConfigure: () => 
             <div className="flex items-center gap-1.5">
               <span className="truncate text-[13px] font-medium">{a.fromEmail}</span>
               {a.isDefault && (
-                <span className="rounded-full bg-secondary px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">Default</span>
+                <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[10.5px] font-medium text-indigo-900 dark:bg-indigo-900/40 dark:text-indigo-200">Default</span>
               )}
             </div>
             <AliasesPopover a={a} aliases={aliases} refreshing={refreshAliases.isPending} onRefresh={() => refreshAliases.mutate({ id: a.id })} />
@@ -269,15 +270,15 @@ function MailboxRow({ a, onConfigure }: { a: MailboxAccount; onConfigure: () => 
       </td>
       {/* Setup */}
       <td className={cell}>
-        <div className="w-36">
+        <div className="w-44">
           <div className="h-1.5 overflow-hidden rounded-full bg-muted">
             <div
-              className={cn("h-full rounded-full", progress === 100 ? "bg-emerald-500" : "bg-amber-500")}
+              className={cn("h-full rounded-full", progress === 100 ? "bg-emerald-500" : "bg-foreground")}
               style={{ width: `${progress}%` }}
             />
           </div>
-          <div className="mt-1 flex items-center justify-between text-[11px]">
-            <button type="button" onClick={onConfigure} className="font-medium text-sky-700 hover:underline dark:text-sky-400">
+          <div className="mt-1.5 flex items-center justify-between gap-3 text-[12px]">
+            <button type="button" onClick={onConfigure} className="font-medium text-foreground hover:underline">
               See details
             </button>
             <span className="text-muted-foreground">{progress}% Completed</span>
@@ -292,7 +293,7 @@ function MailboxRow({ a, onConfigure }: { a: MailboxAccount; onConfigure: () => 
             disabled={update.isPending}
             onCheckedChange={(v) => update.mutate({ id: a.id, warmupStatus: v ? "in_progress" : "not_started" } as any)}
           />
-          <span className="text-[12px] text-muted-foreground">{warmupOn ? "Warming up" : "Start warm up"}</span>
+          <span className="text-[13px] text-foreground">{warmupOn ? "Warming up" : "Start warm up"}</span>
         </label>
       </td>
       {/* Daily limit */}
@@ -310,7 +311,7 @@ function MailboxRow({ a, onConfigure }: { a: MailboxAccount; onConfigure: () => 
         {a.lastTestedAt ? new Date(a.lastTestedAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "—"}
       </td>
       {/* Hourly limit */}
-      <td className={cn(cell, "tabular-nums")}>{a.hourlySendLimit ?? 6}/hr</td>
+      <td className={cn(cell, "tabular-nums")}>{a.hourlySendLimit ?? 6}</td>
       {/* Forwarding email */}
       <td className={cn(cell, "text-muted-foreground")}>{a.forwardingEmail ?? "—"}</td>
       {/* Warmup billing */}
@@ -367,9 +368,9 @@ function AliasesPopover({
       <Tooltip>
         <TooltipTrigger asChild>
           <PopoverTrigger asChild>
-            <button type="button" className="inline-flex items-center gap-0.5 text-[11px] text-muted-foreground hover:text-foreground">
+            <button type="button" className="inline-flex items-center gap-0.5 text-[12px] font-medium text-sky-700 hover:underline dark:text-sky-400">
               {aliases.length} email alias{aliases.length === 1 ? "" : "es"}
-              <ChevronDown className="size-3" />
+              <ChevronDown className="size-3.5" />
             </button>
           </PopoverTrigger>
         </TooltipTrigger>
@@ -378,12 +379,17 @@ function AliasesPopover({
       <PopoverContent align="start" className="w-80 p-0">
         {aliases.length === 0 ? (
           <div className="flex flex-col items-center px-5 py-7 text-center">
-            <SearchX className="size-8 text-muted-foreground/60" />
-            <div className="mt-2 text-[13px] font-semibold">No email aliases found.</div>
-            <p className="mt-1 text-[12px] leading-relaxed text-muted-foreground">{ALIAS_HELP}</p>
-            <Button variant="outline" size="sm" className="mt-3 gap-1.5" disabled={refreshing} onClick={onRefresh}>
+            <SearchX className="size-9 text-orange-500" strokeWidth={1.75} />
+            <div className="mt-3 text-[13.5px] font-semibold">No email aliases found.</div>
+            <p className="mt-1.5 text-[12px] leading-relaxed text-muted-foreground">{ALIAS_HELP}</p>
+            <button
+              type="button"
+              disabled={refreshing}
+              onClick={onRefresh}
+              className="mt-4 inline-flex items-center gap-1.5 text-[13px] font-medium text-sky-700 hover:underline disabled:opacity-60 dark:text-sky-400"
+            >
               {refreshing ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />} Refresh aliases
-            </Button>
+            </button>
           </div>
         ) : (
           <div className="p-2">
