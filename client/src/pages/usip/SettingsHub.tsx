@@ -36,6 +36,7 @@ import {
 } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import { Checkbox } from "@/components/ui/checkbox";
+import { MailboxesSection } from "@/components/usip/settings/MailboxesSection";
 import {
   ArrowLeft,
   Search,
@@ -85,7 +86,7 @@ const GROUPS: HubGroup[] = [
     label: "Personal settings",
     items: [
       { id: "profile", label: "Profile", icon: User, internal: true },
-      { id: "mailboxes", label: "Mailboxes", icon: Mail, href: "/connected-accounts" },
+      { id: "mailboxes", label: "Mailboxes", icon: Mail, internal: true },
       { id: "phone-numbers", label: "Phone numbers", icon: Phone, href: "/v2/calls" },
       { id: "notifications", label: "Notifications", icon: Bell, href: "/notification-prefs" },
       { id: "my-linkedin", label: "My LinkedIn", icon: Link2, href: "/my-linkedin" },
@@ -209,6 +210,7 @@ export default function SettingsHub() {
           </button>
         </div>
         {section === "profile" && <ProfileSection />}
+        {section === "mailboxes" && <MailboxesSection />}
       </main>
     </div>
   );

@@ -63,9 +63,9 @@ export async function testSmtpConnection(params: {
 }): Promise<{ ok: boolean; error?: string }> {
   const { provider } = params;
 
-  if (provider === "outlook_oauth") {
+  if (provider === "outlook_oauth" || provider === "google_oauth") {
     if (!params.oauthAccessToken) {
-      return { ok: false, error: "OAuth access token is required" };
+      return { ok: false, error: "This mailbox is linked without OAuth credentials yet — reconnect it or use SMTP/IMAP." };
     }
     return { ok: true };
   }
@@ -169,7 +169,7 @@ export function pickAccountFromPool(
 
 const AccountCreateInput = z.object({
   name: z.string().min(1).max(120),
-  provider: z.enum(["outlook_oauth", "amazon_ses", "generic_smtp"]),
+  provider: z.enum(["outlook_oauth", "amazon_ses", "generic_smtp", "google_oauth"]),
   fromEmail: z.string().email(),
   fromName: z.string().max(120).optional(),
   replyTo: z.string().email().optional(),
@@ -190,6 +190,17 @@ const AccountCreateInput = z.object({
   imapPassword: z.string().optional(),
   dailySendLimit: z.number().int().min(1).max(10000).default(500),
   warmupStatus: z.enum(["not_started", "in_progress", "complete"]).default("not_started"),
+  /* Mailbox setup flow (migration 0118) */
+  isDefault: z.boolean().optional(),
+  hourlySendLimit: z.number().int().min(1).max(1000).optional(),
+  delaySeconds: z.number().int().min(0).max(86_400).optional(),
+  signature: z.string().max(8000).nullable().optional(),
+  signatureCompleted: z.boolean().optional(),
+  sendingLimitsCompleted: z.boolean().optional(),
+  optOutCompleted: z.boolean().optional(),
+  optOutEnabled: z.boolean().optional(),
+  optOutMessage: z.string().max(2000).nullable().optional(),
+  forwardingEmail: z.string().email().nullable().optional(),
 });
 
 const PoolMemberInput = z.object({
@@ -356,11 +367,106 @@ export const sendingAccountsRouter = router({
    * supplied and smtpPassword is blank, falls back to the saved password so
    * users can re-test an existing account without re-typing the password.
    */
+  /**
+   * Make one account the workspace default sender (exclusive — clears the
+   * flag on every other account). Used by the Mailboxes settings table.
+   */
+  setDefault: adminWsProcedure
+    .input(z.object({ id: z.number().int() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      await db
+        .update(sendingAccounts)
+        .set({ isDefault: false })
+        .where(eq(sendingAccounts.workspaceId, ctx.workspace.id));
+      await db
+        .update(sendingAccounts)
+        .set({ isDefault: true })
+        .where(and(eq(sendingAccounts.id, input.id), eq(sendingAccounts.workspaceId, ctx.workspace.id)));
+      return { ok: true };
+    }),
+
+  /**
+   * Bulk-create SMTP/IMAP mailboxes from a parsed CSV (Settings → Mailboxes
+   * → Bulk Import). The client parses/validates; this caps at 100 rows and
+   * skips duplicates of already-linked fromEmails.
+   */
+  bulkCreateSmtp: adminWsProcedure
+    .input(z.object({
+      rows: z.array(z.object({
+        fromEmail: z.string().email(),
+        fromName: z.string().max(120).optional(),
+        smtpHost: z.string().max(255).optional(),
+        smtpPort: z.number().int().min(1).max(65535).optional(),
+        smtpUsername: z.string().max(255).optional(),
+        smtpPassword: z.string().optional(),
+        imapHost: z.string().max(255).optional(),
+        imapPort: z.number().int().min(1).max(65535).optional(),
+        dailySendLimit: z.number().int().min(1).max(10000).optional(),
+        hourlySendLimit: z.number().int().min(1).max(1000).optional(),
+        delaySeconds: z.number().int().min(0).max(86_400).optional(),
+      })).min(1).max(100),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const existing = await db
+        .select({ fromEmail: sendingAccounts.fromEmail })
+        .from(sendingAccounts)
+        .where(eq(sendingAccounts.workspaceId, ctx.workspace.id));
+      const taken = new Set(existing.map((e) => e.fromEmail.toLowerCase()));
+      let created = 0, skipped = 0;
+      for (const row of input.rows) {
+        const email = row.fromEmail.toLowerCase();
+        if (taken.has(email)) { skipped++; continue; }
+        taken.add(email);
+        await db.insert(sendingAccounts).values({
+          workspaceId: ctx.workspace.id,
+          name: row.fromName || row.fromEmail,
+          provider: "generic_smtp",
+          fromEmail: row.fromEmail,
+          fromName: row.fromName ?? null,
+          smtpHost: row.smtpHost ?? null,
+          smtpPort: row.smtpPort ?? 587,
+          smtpUsername: row.smtpUsername ?? row.fromEmail,
+          smtpPassword: row.smtpPassword ?? null,
+          imapHost: row.imapHost ?? null,
+          imapPort: row.imapPort ?? 993,
+          dailySendLimit: row.dailySendLimit ?? 50,
+          hourlySendLimit: row.hourlySendLimit ?? 6,
+          delaySeconds: row.delaySeconds ?? 600,
+          connectionStatus: "untested",
+        } as never);
+        created++;
+      }
+      return { created, skipped };
+    }),
+
+  /**
+   * Refresh a mailbox's send-as aliases. TODO(provider-api): real alias
+   * discovery needs the Gmail sendAs / Graph API — until an OAuth backend
+   * exists this re-reads what's stored and reports that no provider sync ran.
+   */
+  refreshAliases: workspaceProcedure
+    .input(z.object({ id: z.number().int() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [account] = await db
+        .select({ aliases: sendingAccounts.aliases })
+        .from(sendingAccounts)
+        .where(and(eq(sendingAccounts.id, input.id), eq(sendingAccounts.workspaceId, ctx.workspace.id)));
+      if (!account) throw new TRPCError({ code: "NOT_FOUND" });
+      const aliases = Array.isArray(account.aliases) ? (account.aliases as string[]) : [];
+      return { aliases, providerSynced: false };
+    }),
+
   testConfig: workspaceProcedure
     .input(
       z.object({
         editId: z.number().int().optional(),
-        provider: z.enum(["outlook_oauth", "amazon_ses", "generic_smtp"]),
+        provider: z.enum(["outlook_oauth", "amazon_ses", "generic_smtp", "google_oauth"]),
         smtpHost: z.string().optional(),
         smtpPort: z.number().int().optional(),
         smtpUsername: z.string().optional(),

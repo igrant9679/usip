@@ -2461,6 +2461,7 @@ export const sendingAccounts = mysqlTable(
       "outlook_oauth",
       "amazon_ses",
       "generic_smtp",
+      "google_oauth",
     ]).notNull(),
     fromEmail: varchar("fromEmail", { length: 320 }).notNull(),
     fromName: varchar("fromName", { length: 120 }),
@@ -2490,6 +2491,18 @@ export const sendingAccounts = mysqlTable(
       "in_progress",
       "complete",
     ]).default("not_started").notNull(),
+    /* ── Mailbox setup flow (migration 0118, Settings → Mailboxes) ── */
+    isDefault: boolean("isDefault").default(false).notNull(),
+    aliases: json("aliases"), // string[] of alternate send-as addresses
+    hourlySendLimit: int("hourlySendLimit").default(6).notNull(),
+    delaySeconds: int("delaySeconds").default(600).notNull(),
+    signature: text("signature"),
+    signatureCompleted: boolean("signatureCompleted").default(false).notNull(),
+    sendingLimitsCompleted: boolean("sendingLimitsCompleted").default(false).notNull(),
+    optOutCompleted: boolean("optOutCompleted").default(false).notNull(),
+    optOutEnabled: boolean("optOutEnabled").default(false).notNull(),
+    optOutMessage: text("optOutMessage"),
+    forwardingEmail: varchar("forwardingEmail", { length: 320 }),
     /* Health */
     bounceRate: varchar("bounceRate", { length: 10 }).default("0").notNull(),
     spamRate: varchar("spamRate", { length: 10 }).default("0").notNull(),

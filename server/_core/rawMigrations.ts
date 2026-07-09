@@ -2471,6 +2471,25 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0118: sending_accounts mailbox setup flow (Settings → Mailboxes) ──────
+  {
+    name: "0118_sending_account_mailbox_setup.sql",
+    statements: [
+      `ALTER TABLE \`sending_accounts\` MODIFY COLUMN \`provider\` ENUM('outlook_oauth','amazon_ses','generic_smtp','google_oauth') NOT NULL`,
+      `ALTER TABLE \`sending_accounts\` ADD COLUMN \`isDefault\` boolean NOT NULL DEFAULT false`,
+      `ALTER TABLE \`sending_accounts\` ADD COLUMN \`aliases\` json NULL`,
+      `ALTER TABLE \`sending_accounts\` ADD COLUMN \`hourlySendLimit\` int NOT NULL DEFAULT 6`,
+      `ALTER TABLE \`sending_accounts\` ADD COLUMN \`delaySeconds\` int NOT NULL DEFAULT 600`,
+      `ALTER TABLE \`sending_accounts\` ADD COLUMN \`signature\` text NULL`,
+      `ALTER TABLE \`sending_accounts\` ADD COLUMN \`signatureCompleted\` boolean NOT NULL DEFAULT false`,
+      `ALTER TABLE \`sending_accounts\` ADD COLUMN \`sendingLimitsCompleted\` boolean NOT NULL DEFAULT false`,
+      `ALTER TABLE \`sending_accounts\` ADD COLUMN \`optOutCompleted\` boolean NOT NULL DEFAULT false`,
+      `ALTER TABLE \`sending_accounts\` ADD COLUMN \`optOutEnabled\` boolean NOT NULL DEFAULT false`,
+      `ALTER TABLE \`sending_accounts\` ADD COLUMN \`optOutMessage\` text NULL`,
+      `ALTER TABLE \`sending_accounts\` ADD COLUMN \`forwardingEmail\` varchar(320) NULL`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

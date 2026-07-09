@@ -1,0 +1,3 @@
+Email Address,First Name,Last Name,SMTP Host,SMTP Port,SMTP Username,SMTP Password,IMAP Host,IMAP Port,Daily Limit,Hourly Limit,Delay Seconds
+rep1@yourcompany.com,Alex,Rivera,smtp.yourcompany.com,587,rep1@yourcompany.com,app-password-here,imap.yourcompany.com,993,50,6,600
+rep2@yourcompany.com,Sam,Chen,smtp.yourcompany.com,587,rep2@yourcompany.com,app-password-here,imap.yourcompany.com,993,50,6,600
