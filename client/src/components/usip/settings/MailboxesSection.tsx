@@ -142,7 +142,15 @@ export function MailboxesSection() {
                   <thead>
                     <tr className="text-left text-[11px] uppercase tracking-wide text-muted-foreground">
                       {["Mailbox", "Type", "Setup", "Warmup", "Daily Limit", "Deliverability", "Last Synced", "Hourly Limit", "Forwarding Email", "Warmup Billing", ""].map((h) => (
-                        <th key={h || "actions"} className={cn("whitespace-nowrap border-b border-border bg-card px-3 py-2 font-semibold", h === "Mailbox" && "min-w-[260px]")}>
+                        <th
+                          key={h || "actions"}
+                          className={cn(
+                            "whitespace-nowrap border-b border-border bg-card px-3 py-2 font-semibold",
+                            h === "Mailbox" && "min-w-[260px]",
+                            // actions column stays pinned to the right edge under horizontal scroll
+                            h === "" && "sticky right-0 z-20 w-10 border-l border-border",
+                          )}
+                        >
                           <span className="inline-flex items-center gap-1">
                             {h}
                             {HEADER_TIPS[h] && (
@@ -242,8 +250,10 @@ function MailboxRow({ a, onConfigure }: { a: MailboxAccount; onConfigure: () => 
         : { label: `${String(a.reputationTier ?? "good")[0].toUpperCase()}${String(a.reputationTier ?? "good").slice(1)}`, cls: a.reputationTier === "poor" ? "text-rose-600" : a.reputationTier === "fair" ? "text-amber-600" : "text-emerald-600" };
 
   const cell = "border-b border-border/60 px-3 py-2.5 align-middle whitespace-nowrap";
+  // Solid row bg (incl. hover) so the sticky-right actions cell's bg-inherit
+  // never lets scrolled content bleed through — see People.tsx sticky note.
   return (
-    <tr className="bg-background transition-colors hover:bg-muted/50">
+    <tr className="bg-background transition-colors hover:bg-muted">
       {/* Mailbox */}
       <td className={cell}>
         <div className="flex items-center gap-2.5">
@@ -316,8 +326,8 @@ function MailboxRow({ a, onConfigure }: { a: MailboxAccount; onConfigure: () => 
       <td className={cn(cell, "text-muted-foreground")}>{a.forwardingEmail ?? "—"}</td>
       {/* Warmup billing */}
       <td className={cn(cell, "text-muted-foreground")}>—</td>
-      {/* actions */}
-      <td className={cn(cell, "w-10")}>
+      {/* actions — pinned to the right edge */}
+      <td className={cn(cell, "w-10 sticky right-0 z-10 bg-inherit border-l border-border/60")}>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button type="button" aria-label={`Actions for ${a.fromEmail}`} className="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground">
