@@ -26,7 +26,7 @@ import {
 import { getDb } from "../db";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { router } from "../_core/trpc";
-import { buildMergeContextFromDb, resolveMergeVars, textToHtml, injectTracking, resolveBookingUrl } from "../mergeVars";
+import { buildMergeContextFromDb, resolveMergeVars, textToHtml, injectTracking, resolveBookingUrl, renderSequenceOptOut } from "../mergeVars";
 import { isEmailSuppressed } from "./emailSuppressions";
 
 /* ─── AES-256-GCM helpers ─────────────────────────────────────────────── */
@@ -332,12 +332,16 @@ export const smtpConfigRouter = router({
           openTracking: workspaceSettings.emailOpenTracking,
           clickTracking: workspaceSettings.emailClickTracking,
           unsubHeader: workspaceSettings.emailUnsubscribeHeader,
+          optOutEnabled: workspaceSettings.emailSequenceOptOutEnabled,
+          optOutMessage: workspaceSettings.emailSequenceOptOutMessage,
         })
         .from(workspaceSettings)
         .where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
       const openTracking = sendPrefs?.openTracking !== false;
       const clickTracking = sendPrefs?.clickTracking !== false;
       const unsubHeader = sendPrefs?.unsubHeader === true;
+      const optOutEnabled = sendPrefs?.optOutEnabled === true;
+      const optOutMessage = sendPrefs?.optOutMessage ?? "";
 
       for (const draft of drafts) {
         const toEmail =
@@ -372,16 +376,30 @@ export const smtpConfigRouter = router({
           const appBaseUrl = process.env.VITE_OAUTH_PORTAL_URL
             ? new URL(process.env.VITE_OAUTH_PORTAL_URL).origin
             : "http://localhost:3000";
-          const htmlBody = injectTracking(textToHtml(resolvedBody), token, appBaseUrl, {
+          let htmlBody = injectTracking(textToHtml(resolvedBody), token, appBaseUrl, {
             open: openTracking,
             click: clickTracking,
           });
+          let textBody = resolvedBody;
+          // Sequence opt-out footer (workspace_settings): appended AFTER tracking
+          // injection so its one-click unsubscribe link isn't click-wrapped.
+          if (optOutEnabled) {
+            const optOut = renderSequenceOptOut(optOutMessage, {
+              unsubscribeUrl: `${appBaseUrl}/api/track/unsubscribe/${encodeURIComponent(token)}`,
+            });
+            if (optOut) {
+              textBody = `${resolvedBody}\n\n${optOut.text}`;
+              htmlBody = htmlBody.includes("</body>")
+                ? htmlBody.replace("</body>", `${optOut.html}</body>`)
+                : htmlBody + optOut.html;
+            }
+          }
           await transporter.sendMail({
             from: cfg.fromName ? `"${cfg.fromName}" <${cfg.fromEmail}>` : cfg.fromEmail,
             to: toEmail,
             replyTo: cfg.replyTo ?? undefined,
             subject: resolvedSubject,
-            text: resolvedBody,
+            text: textBody,
             html: htmlBody,
             // RFC 8058 one-click unsubscribe — the POST endpoint suppresses the
             // recipient via the existing email_suppressions system.

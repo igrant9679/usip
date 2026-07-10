@@ -16,7 +16,7 @@
  *   General        — account info, CRM connection, credit limit, LinkedIn
  *   MFA            — honest sign-in security state + password controls
  *   Custom fields  — live customFields.listDefs summary + manage link
- *   Email settings — personal signature + mailbox links
+ *   Email settings — sending prefs, sequence opt-out, mailbox links
  *   Conversations  — per-user notification routing (team.getNotifPrefs)
  */
 import { useEffect, useMemo, useState, type ReactNode } from "react";
@@ -230,7 +230,6 @@ function ProfileSection() {
   const utils = trpc.useUtils();
 
   const me = trpc.profile.getMe.useQuery();
-  const sig = trpc.profile.getMySignature.useQuery();
   const wsSettings = trpc.settings.get.useQuery();
   const isAdmin = me.data?.role === "admin" || me.data?.role === "super_admin";
 
@@ -238,27 +237,30 @@ function ProfileSection() {
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [title, setTitle] = useState("");
-  const [signature, setSignature] = useState("");
   const [quotaStr, setQuotaStr] = useState("");
-  // workspace email sending prefs (migration 0117) — admin-editable
+  // workspace email sending prefs (migration 0117/0119) — admin-editable
   const [emailPrefs, setEmailPrefs] = useState({ unsubHeader: false, openTracking: true, clickTracking: true });
+  const [optOut, setOptOut] = useState({ enabled: false, message: "" });
   const [seeded, setSeeded] = useState(false);
   useEffect(() => {
-    if (!seeded && me.data && sig.data && wsSettings.data) {
+    if (!seeded && me.data && wsSettings.data) {
       const parts = (me.data.name ?? "").trim().split(/\s+/);
       setFirstName(parts[0] ?? "");
       setLastName(parts.slice(1).join(" "));
       setTitle(me.data.title ?? "");
-      setSignature(sig.data.emailSignature ?? "");
       setQuotaStr(me.data.quota == null ? "" : String(me.data.quota));
       setEmailPrefs({
         unsubHeader: (wsSettings.data as any).emailUnsubscribeHeader === true,
         openTracking: (wsSettings.data as any).emailOpenTracking !== false,
         clickTracking: (wsSettings.data as any).emailClickTracking !== false,
       });
+      setOptOut({
+        enabled: (wsSettings.data as any).emailSequenceOptOutEnabled === true,
+        message: (wsSettings.data as any).emailSequenceOptOutMessage ?? "",
+      });
       setSeeded(true);
     }
-  }, [me.data, sig.data, wsSettings.data, seeded]);
+  }, [me.data, wsSettings.data, seeded]);
 
   const savedName = (me.data?.name ?? "").trim();
   const formName = `${firstName.trim()} ${lastName.trim()}`.trim();
@@ -268,16 +270,18 @@ function ProfileSection() {
     (emailPrefs.unsubHeader !== ((wsSettings.data as any).emailUnsubscribeHeader === true) ||
       emailPrefs.openTracking !== ((wsSettings.data as any).emailOpenTracking !== false) ||
       emailPrefs.clickTracking !== ((wsSettings.data as any).emailClickTracking !== false));
+  const optOutDirty =
+    seeded && !!wsSettings.data &&
+    (optOut.enabled !== ((wsSettings.data as any).emailSequenceOptOutEnabled === true) ||
+      optOut.message.trim() !== ((wsSettings.data as any).emailSequenceOptOutMessage ?? "").trim());
   const dirty =
     seeded &&
     (formName !== savedName ||
       title.trim() !== (me.data?.title ?? "").trim() ||
-      signature.trim() !== (sig.data?.emailSignature ?? "").trim() ||
       (isAdmin && quotaStr.trim() !== savedQuotaStr) ||
-      (isAdmin && emailPrefsDirty));
+      (isAdmin && (emailPrefsDirty || optOutDirty)));
 
   const updateMe = trpc.profile.updateMe.useMutation();
-  const updateSig = trpc.profile.updateMySignature.useMutation();
   const saveSettings = trpc.settings.save.useMutation();
   const [saving, setSaving] = useState(false);
   const saveAll = async () => {
@@ -294,19 +298,17 @@ function ProfileSection() {
         title: title.trim() || null,
         ...(isAdmin && quotaStr.trim() !== savedQuotaStr ? { quota: quotaNum } : {}),
       });
-      if (signature.trim() !== (sig.data?.emailSignature ?? "").trim()) {
-        await updateSig.mutateAsync({ emailSignature: signature.trim() || null });
-      }
-      if (isAdmin && emailPrefsDirty) {
+      if (isAdmin && (emailPrefsDirty || optOutDirty)) {
         await saveSettings.mutateAsync({
           emailUnsubscribeHeader: emailPrefs.unsubHeader,
           emailOpenTracking: emailPrefs.openTracking,
           emailClickTracking: emailPrefs.clickTracking,
+          emailSequenceOptOutEnabled: optOut.enabled,
+          emailSequenceOptOutMessage: optOut.message.trim() || null,
         } as any);
         utils.settings.get.invalidate();
       }
       utils.profile.getMe.invalidate();
-      utils.profile.getMySignature.invalidate();
       toast.success("Profile saved");
     } catch (e: any) {
       toast.error(e?.message ?? "Could not save profile");
@@ -371,12 +373,11 @@ function ProfileSection() {
             <MfaTab me={me.data} onEditPassword={() => setPwOpen(true)} />
           ) : (
             <EmailSettingsTab
-              signature={signature}
-              setSignature={setSignature}
               isAdmin={isAdmin}
               emailPrefs={emailPrefs}
               setEmailPrefs={setEmailPrefs}
-              sendCap={(wsSettings.data as any)?.areDefaultDailySendCap ?? 50}
+              optOut={optOut}
+              setOptOut={setOptOut}
             />
           )}
         </div>
@@ -787,21 +788,20 @@ function TotpDisconnectDialog({ open, onClose, hasPassword }: { open: boolean; o
 }
 
 type EmailPrefs = { unsubHeader: boolean; openTracking: boolean; clickTracking: boolean };
+type OptOut = { enabled: boolean; message: string };
 
 function EmailSettingsTab({
-  signature,
-  setSignature,
   isAdmin,
   emailPrefs,
   setEmailPrefs,
-  sendCap,
+  optOut,
+  setOptOut,
 }: {
-  signature: string;
-  setSignature: (v: string) => void;
   isAdmin: boolean;
   emailPrefs: EmailPrefs;
   setEmailPrefs: (p: EmailPrefs) => void;
-  sendCap: number;
+  optOut: OptOut;
+  setOptOut: (p: OptOut) => void;
 }) {
   const [, navigate] = useLocation();
   const adminHint = isAdmin ? undefined : "Only workspace admins can change sending preferences";
@@ -838,31 +838,16 @@ function EmailSettingsTab({
           Manage Mailboxes
         </Button>
 
-        <p className="text-[13px]">
-          <span className="text-foreground">Email sending limits: </span>
-          <span className="font-medium">{sendCap}/day</span>{" "}
-          <span className="text-muted-foreground">
-            (Increase your limits by upgrading to a{" "}
-            <button
-              type="button"
-              onClick={() => navigate("/settings?tab=billing")}
-              className="font-medium text-foreground underline underline-offset-2 hover:opacity-80"
-            >
-              paid plan
-            </button>
-            )
-          </span>
-        </p>
-
-        <p className="text-[13px]">
-          <span className="text-foreground">Set up email signature: </span>
+        <p className="text-[13px] text-muted-foreground">
+          Your signature is set per mailbox — open a mailbox from{" "}
           <button
             type="button"
-            onClick={() => document.getElementById("personal-signature")?.scrollIntoView({ behavior: "smooth", block: "center" })}
+            onClick={() => navigate("/v2/settings/mailboxes")}
             className="font-medium text-foreground underline underline-offset-2 hover:opacity-80"
           >
-            manage your personal signature below!
-          </button>
+            Mailboxes
+          </button>{" "}
+          to edit its signature.
         </p>
 
         <div className="space-y-3 pt-1">
@@ -884,40 +869,38 @@ function EmailSettingsTab({
           />
         </div>
 
-        {/* opt-out message — no backing setting yet, honestly disabled */}
-        <div className="space-y-2 pt-1" title="Sequence opt-out footers aren't available yet">
-          <label className="flex items-center gap-2.5 text-[13px] text-muted-foreground/70">
-            <Switch checked={false} disabled />
+        {/* sequence opt-out footer (migration 0119) — appended after the body
+            in sequence sends; the <%...%> bracket becomes a one-click
+            unsubscribe link. Admin-gated like the other sending prefs. */}
+        <div className="space-y-2 pt-1" title={adminHint}>
+          <label className={cn("flex items-center gap-2.5 text-[13px]", isAdmin ? "cursor-pointer" : "opacity-70")}>
+            <Switch
+              checked={optOut.enabled}
+              disabled={!isAdmin}
+              onCheckedChange={(v) => setOptOut({ ...optOut, enabled: v })}
+            />
             Append a sequences opt-out message after my signature
           </label>
           <textarea
-            disabled
             rows={4}
-            value={"If you don't want to hear from me again, please <%let me know%>."}
-            readOnly
-            className="w-full rounded-md border border-border bg-muted/50 px-3 py-2 text-[13px] text-muted-foreground/70 outline-none"
+            disabled={!isAdmin || !optOut.enabled}
+            value={optOut.message}
+            onChange={(e) => setOptOut({ ...optOut, message: e.target.value })}
+            placeholder={"If you don't want to hear from me again, please <%let me know%>."}
+            className={cn(
+              "w-full rounded-md border px-3 py-2 text-[13px] outline-none transition-colors",
+              isAdmin && optOut.enabled
+                ? "border-border bg-background focus:ring-2 focus:ring-ring"
+                : "border-border/60 bg-muted/50 text-muted-foreground/70",
+            )}
           />
           <p className="text-xs text-muted-foreground">
-            {"Surround your opt-out link with brackets '<%' and '%>'."}
+            {"Surround your opt-out link with brackets '<%' and '%>'. E.g. If you don't want to hear from me, you can <%unsubscribe here%>."}
           </p>
         </div>
-      </SettingsCard>
 
-      <SettingsCard title="Email signature">
-        <p className="text-[13px] text-muted-foreground -mt-1">
-          Used in emails sent from your mailbox. Leave empty to use the workspace default signature.
-          Click <span className="font-medium text-foreground">Save</span> above to apply changes.
-        </p>
-        <textarea
-          id="personal-signature"
-          value={signature}
-          onChange={(e) => setSignature(e.target.value)}
-          rows={5}
-          placeholder={"Best regards,\nYour name"}
-          className="w-full rounded-md border border-border bg-background px-3 py-2 text-[13px] outline-none focus:ring-2 focus:ring-ring"
-        />
         {isAdmin && (
-          <div>
+          <div className="pt-1">
             <Button variant="outline" size="sm" className="gap-1.5" onClick={() => navigate("/settings?tab=smtp")}>
               <Send className="size-3.5" /> Workspace email delivery
             </Button>

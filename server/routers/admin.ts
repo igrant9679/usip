@@ -102,6 +102,8 @@ export const settingsRouter = router({
         emailOpenTracking: z.boolean().optional(),
         emailClickTracking: z.boolean().optional(),
         emailUnsubscribeHeader: z.boolean().optional(),
+        emailSequenceOptOutEnabled: z.boolean().optional(),
+        emailSequenceOptOutMessage: z.string().max(2000).nullable().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {

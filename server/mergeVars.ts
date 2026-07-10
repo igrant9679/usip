@@ -235,6 +235,50 @@ export function textToHtml(text: string): string {
 }
 
 /**
+ * Render a sequence opt-out footer (workspace_settings.emailSequenceOptOut*).
+ *
+ * The message marks its clickable unsubscribe text with `<%link text%>`; the
+ * rest is literal. Returns null for a blank message. When `unsubscribeUrl` is
+ * given (SMTP send path — a tracking token exists) the bracket becomes a real
+ * one-click unsubscribe link; otherwise it falls back to a `mailto:` to
+ * `senderEmail`. Produces both a plain-text and an HTML footer.
+ */
+export function renderSequenceOptOut(
+  message: string | null | undefined,
+  opts: { unsubscribeUrl?: string; senderEmail?: string },
+): { text: string; html: string } | null {
+  const raw = (message ?? "").trim();
+  if (!raw) return null;
+  const href = opts.unsubscribeUrl
+    ? opts.unsubscribeUrl
+    : opts.senderEmail
+      ? `mailto:${opts.senderEmail}?subject=Unsubscribe`
+      : null;
+
+  const esc = (s: string) =>
+    s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  const marker = /<%\s*([\s\S]*?)\s*%>/;
+
+  // Plain text: drop the <% %> markers, keep the label; append the URL when it
+  // is an http(s) link (a mailto reads fine inline without repeating it).
+  const stripped = raw.replace(new RegExp(marker, "g"), (_m, l: string) => (l ?? "").trim());
+  const text = href && href.startsWith("http") ? `${stripped} ( ${href} )` : stripped;
+
+  // HTML: escape the literal parts and inject a real <a> for the bracket.
+  let htmlInner: string;
+  const m = raw.match(/^([\s\S]*?)<%\s*([\s\S]*?)\s*%>([\s\S]*)$/);
+  if (href && m) {
+    htmlInner = `${esc(m[1])}<a href="${href}">${esc(m[2].trim())}</a>${esc(m[3])}`;
+  } else if (href) {
+    htmlInner = `${esc(stripped)} <a href="${href}">unsubscribe</a>`;
+  } else {
+    htmlInner = esc(stripped);
+  }
+  const html = `<p style="margin-top:16px;font-size:12px;color:#888">${htmlInner.replace(/\n/g, "<br>")}</p>`;
+  return { text, html };
+}
+
+/**
  * Load recipient data from DB and build a MergeContext.
  *
  * Accepts either a bare contactId (legacy signature) or an object with any

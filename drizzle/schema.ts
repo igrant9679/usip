@@ -1365,6 +1365,11 @@ export const workspaceSettings = mysqlTable("workspace_settings", {
   emailOpenTracking: boolean("emailOpenTracking").default(true).notNull(),
   emailClickTracking: boolean("emailClickTracking").default(true).notNull(),
   emailUnsubscribeHeader: boolean("emailUnsubscribeHeader").default(false).notNull(),
+  /** Sequence opt-out footer (migration 0119) — when enabled, the message is
+   *  appended after the body in sequence sends; its `<%link text%>` becomes a
+   *  one-click unsubscribe link (SMTP path) or a mailto unsubscribe (ARE path). */
+  emailSequenceOptOutEnabled: boolean("emailSequenceOptOutEnabled").default(false).notNull(),
+  emailSequenceOptOutMessage: text("emailSequenceOptOutMessage"),
   reverifyIntervalDays: int("reverifyIntervalDays"), // null = disabled; 30 | 60 | 90
   reverifyStatuses: json("reverifyStatuses"), // string[] e.g. ["risky","accept_all"]
   nightlyPipelineEnabled: boolean("nightlyPipelineEnabled").default(false).notNull(),

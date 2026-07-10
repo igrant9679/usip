@@ -2490,6 +2490,15 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0119: workspace sequence opt-out footer (Settings → Email settings) ────
+  {
+    name: "0119_email_sequence_optout.sql",
+    statements: [
+      `ALTER TABLE \`workspace_settings\` ADD COLUMN \`emailSequenceOptOutEnabled\` boolean NOT NULL DEFAULT false`,
+      `ALTER TABLE \`workspace_settings\` ADD COLUMN \`emailSequenceOptOutMessage\` text NULL`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------
