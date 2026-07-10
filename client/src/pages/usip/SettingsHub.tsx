@@ -833,7 +833,7 @@ function EmailSettingsTab({
         <Button
           variant="outline"
           className="w-full justify-center text-[13px] font-medium"
-          onClick={() => navigate("/connected-accounts")}
+          onClick={() => navigate("/v2/settings/mailboxes")}
         >
           Manage Mailboxes
         </Button>
