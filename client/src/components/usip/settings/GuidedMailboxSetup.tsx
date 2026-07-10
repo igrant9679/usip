@@ -17,7 +17,7 @@
  * app registration. TODO(imap-verify): IMAP test validates fields only; no
  * IMAP client library is installed server-side.
  */
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
@@ -110,15 +110,33 @@ export function OutlookGlyph({ className }: { className?: string }) {
   );
 }
 
-/** Mailpool app-icon glyph — black squircle with a white toggle mark. Used as
- *  the neutral mailbox brand to the left of the address in the listing. */
+/** Mailpool app-icon glyph — dark gradient squircle with the white two-loop
+ *  toggle mark (from the brand logo). Used as the neutral mailbox brand to the
+ *  left of the address in the listing. Figma drop/inner-shadow filters are
+ *  dropped — they don't read at ~24px. useId keeps gradient ids unique across
+ *  the many rows that render this glyph. */
+const MAILPOOL_MARK =
+  "M81.4609 65H93.3245H135.648C155.725 65 172 81.1177 172 101C172 120.882 155.725 137 135.648 137H93.4703H81.4609H67.3516C47.2751 137 31 120.882 31 101C31 81.1177 47.2751 65 67.3516 65H81.4609ZM105.451 125H135.648C149.208 125 160 114.145 160 101C160 87.8548 149.208 77 135.648 77H105.289C110.377 84.3136 113.012 92.6593 113.012 101.157C113.012 109.563 110.434 117.795 105.451 125ZM89.2116 77C97.2605 83.9056 101.012 92.7183 101.012 101.157C101.012 109.538 97.3129 118.229 89.3802 125H81.4609H67.3516C53.7924 125 43 114.145 43 101C43 87.8548 53.7924 77 67.3516 77H81.4609H89.2116Z";
+
 export function MailpoolGlyph({ className }: { className?: string }) {
+  const uid = useId().replace(/:/g, "");
+  const bg = `mpbg-${uid}`;
+  const ov = `mpov-${uid}`;
   return (
-    <svg viewBox="0 0 48 48" className={cn("size-6 shrink-0", className)} aria-label="Mailbox">
-      <rect x="1" y="1" width="46" height="46" rx="13" fill="#0b0b0f" />
-      {/* toggle: outlined stadium + filled knob */}
-      <rect x="9.5" y="17" width="29" height="14" rx="7" fill="none" stroke="#ffffff" strokeWidth="2.6" />
-      <circle cx="31" cy="24" r="4.4" fill="#ffffff" />
+    <svg viewBox="0 0 204 205" className={cn("size-6 shrink-0", className)} aria-label="Mailbox" fill="none">
+      <defs>
+        <linearGradient id={bg} x1="17" y1="11" x2="197" y2="201" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#425057" />
+          <stop offset="1" stopColor="#0F1128" />
+        </linearGradient>
+        <linearGradient id={ov} x1="280.433" y1="-10.1556" x2="188.615" y2="202.565" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#425057" />
+          <stop offset="1" stopColor="#425057" stopOpacity="0" />
+        </linearGradient>
+      </defs>
+      <rect x="2" y="1" width="200" height="200" rx="53.3333" fill={`url(#${bg})`} />
+      <path fillRule="evenodd" clipRule="evenodd" d={MAILPOOL_MARK} fill="white" />
+      <path fillRule="evenodd" clipRule="evenodd" d={MAILPOOL_MARK} fill={`url(#${ov})`} fillOpacity="0.32" />
     </svg>
   );
 }
