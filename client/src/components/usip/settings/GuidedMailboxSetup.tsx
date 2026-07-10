@@ -123,9 +123,19 @@ export function GmailGlyph({ className }: { className?: string }) {
   );
 }
 
-export function ProviderTile({ provider, className }: { provider: string; className?: string }) {
+export function ProviderTile({ provider, email, className }: { provider: string; email?: string; className?: string }) {
   if (provider === "google_oauth") return <GmailGlyph className={className} />;
   if (provider === "outlook_oauth") return <OutlookGlyph className={className} />;
+  // SMTP/IMAP mailboxes carry no provider brand — infer it from the address so
+  // the listing shows a real logo instead of a bare "S". Outlook-family domains
+  // get the Outlook mark; everything else defaults to the Gmail mark.
+  if (provider === "generic_smtp") {
+    const domain = (email ?? "").split("@")[1]?.toLowerCase() ?? "";
+    if (/(outlook|hotmail|live|msn|office365|microsoft)\./.test(domain + ".")) {
+      return <OutlookGlyph className={className} />;
+    }
+    return <GmailGlyph className={className} />;
+  }
   const m = PROVIDER_META[provider] ?? PROVIDER_META.generic_smtp;
   return (
     <span
@@ -1179,7 +1189,7 @@ function LinkedStep({ acct, onCloseWizard }: { acct: MailboxAccount; onCloseWiza
         </span>
       </div>
       <div className="mt-5 flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3.5">
-        <ProviderTile provider={acct.provider} className="size-8 text-[13px]" />
+        <ProviderTile provider={acct.provider} email={acct.fromEmail} className="size-8 text-[13px]" />
         <div className="min-w-0 flex-1">
           <div className="truncate text-[13.5px] font-semibold">{acct.fromEmail}</div>
           <span className="inline-flex items-center gap-0.5 text-[12.5px] font-medium text-sky-700 dark:text-sky-400">

@@ -257,7 +257,7 @@ function MailboxRow({ a, onConfigure }: { a: MailboxAccount; onConfigure: () => 
       {/* Mailbox */}
       <td className={cell}>
         <div className="flex items-center gap-2.5">
-          <ProviderTile provider={a.provider} />
+          <ProviderTile provider={a.provider} email={a.fromEmail} />
           <div className="min-w-0">
             <div className="flex items-center gap-1.5">
               <span className="truncate text-[13px] font-medium">{a.fromEmail}</span>
