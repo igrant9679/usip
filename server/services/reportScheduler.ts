@@ -18,6 +18,56 @@ function esc(s: unknown): string {
   return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+const CHART_PALETTE = ["#0EA5E9", "#8B5CF6", "#F59E0B", "#10B981", "#EC4899", "#06B6D4", "#F43F5E", "#84CC16", "#6366F1"];
+
+/** Email-safe horizontal bar chart (pure tables + inline styles — SVG is
+ *  stripped by Gmail and unsupported in desktop Outlook). */
+function renderBarsHtml(title: string, series: Array<{ label: string; value: number }>, valueFmt?: (n: number) => string): string {
+  const max = Math.max(...series.map((s) => s.value), 1);
+  const fmt = valueFmt ?? ((n: number) => n.toLocaleString());
+  const rows = series.map((s, i) => {
+    const pct = Math.max(2, Math.round((s.value / max) * 100));
+    return `<tr>
+      <td style="padding:3px 10px 3px 0;font-size:12px;color:#334155;white-space:nowrap;max-width:180px;overflow:hidden;text-overflow:ellipsis">${esc(s.label)}</td>
+      <td style="width:60%;padding:3px 0">
+        <div style="background:#f1f5f9;border-radius:4px"><div style="width:${pct}%;height:14px;border-radius:4px;background:${CHART_PALETTE[i % CHART_PALETTE.length]}"></div></div>
+      </td>
+      <td style="padding:3px 0 3px 10px;font-size:12px;color:#0f172a;font-weight:600;white-space:nowrap;text-align:right">${esc(fmt(s.value))}</td>
+    </tr>`;
+  }).join("");
+  return `<div style="margin:14px 0">
+    <div style="font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:#64748b;margin-bottom:6px">${esc(title)}</div>
+    <table style="border-collapse:collapse;width:100%">${rows}</table>
+  </div>`;
+}
+
+/** Chart block for the email — mirrors the in-app ReportInsights. */
+function renderChartHtml(result: Awaited<ReturnType<typeof runSpec>>): string {
+  if (result.rows.length === 0) return "";
+  if (result.grouped) {
+    const series = result.rows.slice(0, 12).map((r) => ({ label: String(r.group ?? "(empty)"), value: Number(r.agg) || 0 }));
+    const total = result.rows.reduce((s, r) => s + (Number(r.agg) || 0), 0);
+    const aggLabel = result.columns[1]?.label ?? "Value";
+    const summary = `<p style="font-size:12px;color:#334155;margin:0 0 4px"><b>${result.rows.length}</b> groups · total ${esc(aggLabel.toLowerCase())} <b>${total.toLocaleString()}</b>${result.rows.length > 12 ? " · chart shows top 12" : ""}</p>`;
+    return summary + renderBarsHtml(aggLabel, series);
+  }
+  const dateCol = result.columns.find((c) => c.kind === "date");
+  if (!dateCol) return "";
+  const byDay = new Map<string, number>();
+  for (const r of result.rows) {
+    const v = r[dateCol.key];
+    if (!v) continue;
+    const d = new Date(v as string);
+    if (Number.isNaN(d.getTime())) continue;
+    const k = d.toISOString().slice(0, 10);
+    byDay.set(k, (byDay.get(k) ?? 0) + 1);
+  }
+  if (byDay.size < 2) return "";
+  const series = [...byDay.entries()].sort((a, b) => a[0].localeCompare(b[0])).slice(-14)
+    .map(([k, n]) => ({ label: k, value: n }));
+  return renderBarsHtml(`Rows per day · ${dateCol.label}`, series);
+}
+
 export function renderReportHtml(name: string, result: Awaited<ReturnType<typeof runSpec>>): string {
   const rows = result.rows.slice(0, 100);
   const head = result.columns.map((c) => `<th style="text-align:left;padding:6px 10px;border-bottom:2px solid #e2e8f0;font-size:12px;color:#64748b;text-transform:uppercase">${esc(c.label)}</th>`).join("");
@@ -32,6 +82,7 @@ export function renderReportHtml(name: string, result: Awaited<ReturnType<typeof
   return `<div style="font-family:system-ui,Segoe UI,Arial,sans-serif;max-width:720px">
     <h2 style="font-size:16px;margin:0 0 2px">${esc(name)}</h2>
     <p style="color:#64748b;font-size:12px;margin:0 0 12px">Scheduled report from Velocity · ${result.rows.length} row${result.rows.length === 1 ? "" : "s"}</p>
+    ${renderChartHtml(result)}
     <table style="border-collapse:collapse;width:100%"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>
     ${more}
     <p style="margin-top:16px;font-size:12px"><a href="https://getvelocityai.app/reports" style="color:#4f46e5">Open Reports in Velocity →</a></p>
