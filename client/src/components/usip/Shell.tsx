@@ -482,6 +482,7 @@ function AdminSettingsMenu({ color }: { color: string }) {
 
 const BOTTOM_LINKS: NavLink[] = [
   { href: "/v2/deliverability", label: "Deliverability suite", icon: Network, color: "#06B6D4", darkColor: "#22D3EE" },
+  { href: "/help", label: "Help Center", icon: HelpCircle, color: "#8B5CF6", darkColor: "#C4B5FD" },
   { href: "/settings", label: "Admin Settings", icon: Settings, trailingChevron: true, color: "#64748B", darkColor: "#94A3B8" },
 ];
 
