@@ -37,6 +37,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Checkbox } from "@/components/ui/checkbox";
 import { MailboxesSection } from "@/components/usip/settings/MailboxesSection";
+import { VoiceAgentsSection } from "@/components/usip/settings/VoiceAgentsSection";
 import {
   ArrowLeft,
   Search,
@@ -66,6 +67,7 @@ import {
   Smartphone,
   Phone,
   Copy,
+  AudioLines,
 } from "lucide-react";
 
 /* ───────────────────────── section registry ───────────────────────────── */
@@ -99,6 +101,7 @@ const GROUPS: HubGroup[] = [
       { id: "users-teams", label: "Users and teams", icon: Users, href: "/team" },
       { id: "security", label: "Security", icon: ShieldCheck, href: "/settings?tab=security" },
       { id: "integrations", label: "Integrations", icon: Plug, href: "/settings?tab=integrations" },
+      { id: "voice-agents", label: "Voice agents", icon: AudioLines, internal: true },
       { id: "email-delivery", label: "Email delivery", icon: Send, href: "/settings?tab=smtp" },
       { id: "branding", label: "Branding", icon: Palette, href: "/settings?tab=branding" },
       { id: "billing", label: "Billing and credits", icon: CreditCard, href: "/settings?tab=billing" },
@@ -211,6 +214,7 @@ export default function SettingsHub() {
         </div>
         {section === "profile" && <ProfileSection />}
         {section === "mailboxes" && <MailboxesSection />}
+        {section === "voice-agents" && <VoiceAgentsSection />}
       </main>
     </div>
   );

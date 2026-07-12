@@ -173,6 +173,9 @@ export const voiceAgentsRouter = router({
       sipWebhookSecretEnc: undefined,
       hasWebhookSecret: !!a.sipWebhookSecretEnc,
       owner: a.ownerUserId != null ? (ownerById.get(a.ownerUserId) ?? null) : null,
+      canManage:
+        isAdmin(ctx.member.role) ||
+        (a.purpose === "callback_receptionist" && a.ownerUserId === ctx.user.id),
     }));
   }),
 
@@ -217,7 +220,15 @@ export const voiceAgentsRouter = router({
       const patch: Record<string, unknown> = {};
       if (input.name !== undefined) patch.name = input.name.trim();
       if (input.purpose !== undefined) patch.purpose = input.purpose;
-      if (input.ownerUserId !== undefined) patch.ownerUserId = isAdmin(ctx.member.role) ? input.ownerUserId : agent.ownerUserId;
+      if (input.ownerUserId !== undefined) {
+        const effectivePurpose = input.purpose ?? agent.purpose;
+        // A callback agent always has an owner — null from the picker means "me".
+        patch.ownerUserId = !isAdmin(ctx.member.role)
+          ? agent.ownerUserId
+          : effectivePurpose === "callback_receptionist"
+            ? (input.ownerUserId ?? ctx.user.id)
+            : input.ownerUserId;
+      }
       if (input.voice !== undefined) patch.voice = input.voice.trim();
       if (input.model !== undefined) patch.model = input.model.trim();
       if (input.instructions !== undefined) patch.instructions = input.instructions?.trim() || null;
