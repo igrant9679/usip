@@ -3,7 +3,7 @@
  *
  * Seeds (idempotently, per workspace):
  *   - 9 help categories  (deduped by (workspaceId, name) — no slug column on help_categories)
- *   - 38 help articles   (deduped by (workspaceId, slug), all status:'published')
+ *   - 39 help articles   (deduped by (workspaceId, slug), all status:'published')
  *   - 10 guided tours    (deduped by (workspaceId, name); steps delete+reinsert each run)
  *
  * Also retires the 5 legacy demo tours that the 10 SDR tours supersede
@@ -46,7 +46,7 @@ const CATEGORIES: CatSeed[] = [
   { slug: "settings-account", name: "Settings & Account", icon: "⚙️", sortOrder: 9 },
 ];
 
-/* ─── Articles (38) ──────────────────────────────────────────────────────── */
+/* ─── Articles (39) ──────────────────────────────────────────────────────── */
 
 type ArticleSeed = {
   slug: string;
@@ -410,6 +410,16 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     bodyMarkdown: `Velocity's automation follows one convention everywhere: each feature has an **Autopilot** with three modes — **Off** (fully manual), **Approve** (AI drafts, you confirm), **Auto** (hands-off). All the switches live in the **Autonomy Center** (sidebar → Automation and analytics), and each surface also shows its own toggle.\n\nThe autopilots:\n- **Task** — drafts next-best-action tasks from record signals.\n- **Meeting** — proposes and (in Auto) books meetings from positive replies.\n- **Conversation** — classifies every inbound reply and acts per class; in Auto, a "willing to meet" reply gets your booking link instantly.\n- **Deal** — nudges stalled opportunities with suggested actions.\n- **Social** — sends LinkedIn invites, warms prospects, and opens conversations on accept.\n- **Job change** — creates re-engagement tasks when enrichment detects a company move.\n\nEverything defaults to **Off** — turn things on one at a time, run Approve mode until you trust the output, then go Auto. The goal: the machine works the funnel while you talk to humans.`,
   },
   {
+    slug: "autonomy-map",
+    categorySlug: "autopilots",
+    title: "What runs autonomously (and what doesn't)",
+    summary: "The honest map: what the machine does end-to-end, what stays human by design, and what's blocked.",
+    readingTimeMinutes: 4,
+    tags: ["autopilot", "autonomy", "overview", "ai"],
+    pageKey: "workflows",
+    bodyMarkdown: `With the autopilots on, everything between *"a name exists"* and *"a meeting is on the calendar"* can run itself.\n\n**Fully autonomous (flip to Auto and walk away):**\n- **ARE engine** — discovers prospects against your ICP, enriches, generates sequences, enrolls, and (in Full mode) sends.\n- **Sequence engine + AI auto-send** — cadence sends through your mailbox rotation pools, with caps, suppression, and auto-pause on reply; high-scoring AI drafts can send themselves.\n- **Conversation Autopilot** — classifies every reply (email + LinkedIn) and acts; a "willing to meet" reply automatically receives your booking link.\n- **Meetings** — the Meeting Autopilot proposes and books real calendar events; reminders go out on their own; a no-show creates the re-book task; booking links let prospects self-schedule.\n- **Social Autopilot** — LinkedIn invites (capped), pre-invite warming, opener DM on accept.\n- **Task, Deal, and Job-change Autopilots** — next-step tasks, deal nudges, re-engagement on detected company moves.\n- **Voice agents** — inbound call-backs answered by AI on the rep's behalf, transcribed, and logged to the record.\n- **Plumbing** — workflow rules, form-lead routing + funnel bridging, high-intent visitor tasks, enrichment re-checks, segment auto-enrollment, pipeline alerts, mailbox warmup, scheduled report emails.\n\nEvery autopilot defaults to **Off** with an **Approve** middle mode — autonomy is a dial you set in the Autonomy Center, not a switch someone else flipped.\n\n**Human by design:** the enrichment review queue and data conflicts, draft approval in Approve mode, and meeting dispositions.\n\n**Not autonomous (and why):** outbound AI voice calls (the vendor hasn't released the API yet), accepting inbound LinkedIn invites (no compliant API exists), one-time credentialed setup (mailboxes, LinkedIn, calendars, keys, phone numbers), billing, anonymous website-visitor identification (needs a paid data provider), and — most importantly — your **targeting and strategy**: the machine executes your ICP and sequences; defining them well is still your judgment.`,
+  },
+  {
     slug: "workflow-rules",
     categorySlug: "autopilots",
     title: "Workflow rules",
@@ -439,7 +449,7 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     summary: "Build, save, and export custom reports on deals, leads, prospects, contacts, and activities.",
     readingTimeMinutes: 3,
     tags: ["reports", "analytics", "export", "csv"],
-    bodyMarkdown: `**Reports** (sidebar → Automation and analytics) is the custom report builder.\n\n1. **Pick an object** — Deals, Leads, Prospects, Contacts, or Activities.\n2. **Choose columns** — check the fields you want; owners resolve to real names.\n3. **Stack filters** — equals / contains / greater-less / empty checks, combined with AND.\n4. **Group (optional)** — group by any column with a row **count**, or a **sum**/**average** of a numeric field (e.g. *deals by stage, sum of value* = your pipeline by stage in one click).\n5. **Sort & cap**, then **Run**.\n\n**Save** keeps the whole spec per workspace (everyone can reuse it; "Save as new" forks a loaded report). **Export CSV** downloads up to 1,000 rows of the current result.\n\n**Preset reports** — ten ready-made reports (pipeline by stage, deal value by owner, upcoming closes, won/lost deals, lead funnel, lead quality by source, prospects by email status, sendable prospects, activity volume) sit at the top of the rail: one click loads and runs, then customize and save your own variant.\n\n**Email schedules** — the clock icon on any saved report sets a **daily, weekly (Monday), or monthly** email to any recipients. Reports arrive as an inline table from your workspace's **system sender** (the same address as team invites and notifications); **Send now** fires one immediately.\n\nHow it fits with the rest of reporting: **Analytics** is the fixed autonomous-funnel overview, **Dashboards** is widget/chart canvases you arrange — **Reports** is where you answer ad-hoc questions in table form and hand the CSV to whoever asked.`,
+    bodyMarkdown: `**Reports** (sidebar → Automation and analytics) is the custom report builder.\n\n1. **Pick an object** — Deals, Leads, Prospects, Contacts, or Activities.\n2. **Choose columns** — check the fields you want; owners resolve to real names.\n3. **Stack filters** — equals / contains / greater-less / empty checks, combined with AND.\n4. **Group (optional)** — group by any column with a row **count**, or a **sum**/**average** of a numeric field (e.g. *deals by stage, sum of value* = your pipeline by stage in one click).\n5. **Sort & cap**, then **Run**.\n\n**Save** keeps the whole spec per workspace (everyone can reuse it; "Save as new" forks a loaded report). **Export CSV** downloads up to 1,000 rows of the current result.\n\n**Preset reports** — ten ready-made reports (pipeline by stage, deal value by owner, upcoming closes, won/lost deals, lead funnel, lead quality by source, prospects by email status, sendable prospects, activity volume) sit at the top of the rail: one click loads and runs, then customize and save your own variant.\n\n**Charts** — grouped reports render stat tiles (groups, total, top group + share) and a chart above the table: switch between **Bar, Line, Area, Donut, Pie, and Funnel**; your chart choice saves with the report. Flat reports show row/sum tiles and an automatic **rows-per-day trend** whenever a date column is included.\n\n**Email schedules** — the clock icon on any saved report sets a **daily, weekly (Monday), or monthly** email to any recipients. Reports arrive from your workspace's **system sender** (the same address as team invites and notifications) with a chart and the data table inline; **Send now** fires one immediately.\n\nHow it fits with the rest of reporting: **Analytics** is the fixed autonomous-funnel overview, **Dashboards** is widget/chart canvases you arrange — **Reports** is where you answer ad-hoc questions in table form and hand the CSV to whoever asked.`,
   },
 
   /* ── Settings & Account ──────────────────────────────────────────────────── */
