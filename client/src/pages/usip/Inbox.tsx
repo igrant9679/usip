@@ -8,7 +8,7 @@ import { Link } from "wouter";
 import { cn } from "@/lib/utils";
 import {
   CheckCheck, Inbox as InboxIcon, Mail, Bell, AlertTriangle,
-  CheckCircle2, XCircle, CalendarClock, Zap, AtSign, ClipboardList, MailOpen, Bot, Sparkles
+  CheckCircle2, XCircle, CalendarClock, Zap, AtSign, ClipboardList, MailOpen, Bot, Sparkles, Phone
 } from "lucide-react";
 
 const KIND_META: Record<string, { label: string; icon: any; color: string }> = {
@@ -102,7 +102,12 @@ export default function Inbox() {
         ) : (
           <ul className="rounded-lg border bg-card divide-y">
             {filtered.map((n) => {
-              const kindMeta = KIND_META[n.kind] ?? KIND_META.system;
+              // Voice-agent call-backs arrive as kind "system" with a voice_call
+              // relation — give them their own icon/label + Calls deep link.
+              const isVoiceCall = n.relatedType === "voice_call";
+              const kindMeta = isVoiceCall
+                ? { label: "Call-back", icon: Phone, color: "text-sky-500" }
+                : (KIND_META[n.kind] ?? KIND_META.system);
               const Icon = kindMeta.icon;
               const isEmailReply = n.kind === "email_reply";
               const isMention = n.kind === "mention";
@@ -153,6 +158,11 @@ export default function Inbox() {
                       {isAreEvent && areDeepLink && (
                         <Link href={areDeepLink} className="text-[11px] text-violet-600 hover:underline flex items-center gap-1">
                           <Sparkles className="size-3" /> View Campaign
+                        </Link>
+                      )}
+                      {isVoiceCall && (
+                        <Link href="/v2/calls" className="text-[11px] text-sky-600 hover:underline flex items-center gap-1">
+                          <Phone className="size-3" /> View call
                         </Link>
                       )}
                     </div>

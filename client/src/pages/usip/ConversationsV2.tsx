@@ -25,7 +25,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import {
   MessageSquare, Inbox, Sparkles, Bot, Zap, Check, CheckCheck, CalendarClock, Mail,
-  Link2, CircleDot, Send, Copy, Share2,
+  Link2, CircleDot, Send, Copy, Share2, Phone, PhoneIncoming, PhoneOutgoing, ChevronDown, Settings2,
 } from "lucide-react";
 
 type Reply = {
@@ -125,10 +125,11 @@ function normSocial(m: any): Reply {
 export default function ConversationsV2() {
   const accent = useAccentColor();
   const utils = trpc.useUtils();
-  const [channel, setChannel] = useState<"email" | "social">("email");
+  const [channel, setChannel] = useState<"email" | "social" | "calls">("email");
   const [filter, setFilter] = useState("all");
   const [selected, setSelected] = useState<Reply | null>(null);
   const isEmail = channel === "email";
+  const isCalls = channel === "calls";
 
   const emailListQ = trpc.conversations.list.useQuery({ filter: filter as any }, { enabled: isEmail });
   const socialListQ = trpc.conversations.socialList.useQuery({ filter: filter as any }, { enabled: !isEmail });
@@ -177,16 +178,16 @@ export default function ConversationsV2() {
           <MessageSquare className="size-4" style={{ color: accent }} />
           <h1 className="text-[15px] font-semibold tracking-tight">Conversations</h1>
           <div className="ml-2 inline-flex rounded-md border bg-card p-0.5">
-            {(["email", "social"] as const).map((c) => (
+            {(["email", "social", "calls"] as const).map((c) => (
               <button key={c} onClick={() => { setChannel(c); setFilter("all"); setSelected(null); }}
                 className={cn("h-6 px-2.5 rounded text-[12px] font-medium capitalize flex items-center gap-1", channel === c ? "text-white" : "text-muted-foreground hover:text-foreground")}
                 style={channel === c ? { backgroundColor: accent } : undefined}>
-                {c === "email" ? <Mail className="size-3" /> : <Share2 className="size-3" />} {c}
+                {c === "email" ? <Mail className="size-3" /> : c === "social" ? <Share2 className="size-3" /> : <Phone className="size-3" />} {c}
               </button>
             ))}
           </div>
           <div className="flex-1" />
-          <div className="flex items-center gap-1.5">
+          {!isCalls && <div className="flex items-center gap-1.5">
             <Bot className="size-3.5 text-muted-foreground" />
             <Select value={mode} onValueChange={(v) => setMode.mutate({ mode: v as "off" | "approval" | "auto" })}>
               <SelectTrigger className="h-7 w-[168px] text-xs"><SelectValue /></SelectTrigger>
@@ -196,7 +197,7 @@ export default function ConversationsV2() {
                 <SelectItem value="auto">Autopilot: Autonomous</SelectItem>
               </SelectContent>
             </Select>
-          </div>
+          </div>}
           {isEmail && (
             <Button variant="outline" size="sm" className="h-7 gap-1.5" disabled={classifyRecent.isPending} onClick={() => classifyRecent.mutate({ limit: 20 })}>
               <Sparkles className="size-3.5" /> {classifyRecent.isPending ? "Classifying…" : "Classify with AI"}
@@ -205,6 +206,8 @@ export default function ConversationsV2() {
         </div>
 
         <div className="flex-1 min-h-0 overflow-auto p-4 md:p-6 space-y-5">
+          {isCalls && <VoiceCallsChannel accent={accent} />}
+          {!isCalls && (<>
           {/* Autopilot status strip */}
           <div className="rounded-lg border bg-card px-4 py-2.5 flex items-center gap-3 shadow-sm">
             <span className="shrink-0 size-8 rounded-full flex items-center justify-center" style={{ backgroundColor: mode === "off" ? "hsl(var(--muted))" : "#7c3aed1f", color: mode === "off" ? undefined : "#7c3aed" }}>
@@ -278,13 +281,115 @@ export default function ConversationsV2() {
               )}
             </div>
           </section>
+          </>)}
         </div>
       </div>
 
-      {isEmail
+      {!isCalls && (isEmail
         ? <ReplyDialog key={selected?.id} reply={selected} onClose={() => setSelected(null)} onChanged={invalidateAll} />
-        : <SocialDialog key={selected?.id} reply={selected} onClose={() => setSelected(null)} onChanged={invalidateAll} />}
+        : <SocialDialog key={selected?.id} reply={selected} onClose={() => setSelected(null)} onChanged={invalidateAll} />)}
     </Shell>
+  );
+}
+
+/**
+ * "Calls" channel — Grok voice-agent phone conversations (voice_calls).
+ * Inbound call-backs are answered autonomously by the member's agent; the
+ * transcript digest recorded by the answer bridge expands inline. Configure
+ * agents in Settings → Voice agents; the operational view lives on /v2/calls.
+ */
+function VoiceCallsChannel({ accent }: { accent: string }) {
+  const calls = trpc.voiceAgents.listCalls.useQuery({ limit: 100 });
+  const agents = trpc.voiceAgents.list.useQuery();
+  const [expandedId, setExpandedId] = useState<number | null>(null);
+
+  const rows = (calls.data ?? []) as Record<string, any>[];
+  const inbound = rows.filter((r) => r.direction === "inbound").length;
+  const completed = rows.filter((r) => r.status === "completed").length;
+  const activeAgents = ((agents.data ?? []) as Record<string, any>[]).filter((a) => a.status === "active").length;
+
+  const tone: Record<string, string> = {
+    completed: "text-emerald-600 dark:text-emerald-400",
+    in_progress: "text-sky-600 dark:text-sky-400",
+    ringing: "text-sky-600 dark:text-sky-400",
+    failed: "text-rose-600 dark:text-rose-400",
+    no_answer: "text-amber-600 dark:text-amber-400",
+    queued: "text-muted-foreground",
+  };
+  const Stat = ({ label, value }: { label: string; value: number }) => (
+    <div className="rounded-lg border bg-card p-3 shadow-sm" style={{ borderLeft: `3px solid ${accent}` }}>
+      <div className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className="text-xl font-semibold tabular-nums mt-0.5" style={{ color: accent }}>{value}</div>
+    </div>
+  );
+
+  return (
+    <>
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <Stat label="Agent calls" value={rows.length} />
+        <Stat label="Inbound call-backs" value={inbound} />
+        <Stat label="Completed" value={completed} />
+        <Stat label="Active agents" value={activeAgents} />
+      </div>
+
+      <section>
+        <div className="flex items-center justify-between mb-2">
+          <h2 className="text-sm font-semibold flex items-center gap-2"><Phone className="size-4" style={{ color: accent }} /> Agent calls</h2>
+          <Link href="/v2/settings/voice-agents" className="inline-flex items-center gap-1.5 text-[12px] font-medium text-muted-foreground hover:text-foreground">
+            <Settings2 className="size-3.5" /> Manage voice agents
+          </Link>
+        </div>
+        <div className="rounded-xl border bg-card overflow-hidden shadow-sm">
+          {calls.isLoading ? (
+            <div className="p-3 space-y-2">{Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-11 rounded bg-muted/50 animate-pulse" />)}</div>
+          ) : rows.length === 0 ? (
+            <div className="text-center py-14 px-4">
+              <Phone className="size-8 mx-auto text-muted-foreground opacity-50 mb-2" />
+              <div className="text-sm font-medium">No voice-agent calls yet</div>
+              <p className="text-xs text-muted-foreground mt-1 max-w-sm mx-auto">
+                When a prospect calls back a registered agent number, the conversation and its transcript
+                land here automatically.
+              </p>
+            </div>
+          ) : (
+            rows.map((c) => (
+              <div key={c.id} className="border-b border-border/60 last:border-0">
+                <button
+                  type="button"
+                  onClick={() => setExpandedId((cur) => (cur === c.id ? null : c.id))}
+                  className="flex w-full items-center gap-3 px-3 py-2.5 text-left hover:bg-muted/40"
+                >
+                  <span className="shrink-0 size-8 rounded-full flex items-center justify-center" style={{ backgroundColor: `${accent}1f`, color: accent }}>
+                    {c.direction === "inbound" ? <PhoneIncoming className="size-4" /> : <PhoneOutgoing className="size-4" />}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm font-medium truncate">{c.fromNumber ?? "Unknown caller"}</div>
+                    <div className="text-[12px] text-muted-foreground truncate">
+                      {c.agentName} · {c.direction === "inbound" ? "inbound call-back" : "outbound"}
+                      {c.durationSec != null ? ` · ${Math.floor(c.durationSec / 60)}:${String(c.durationSec % 60).padStart(2, "0")}` : ""}
+                    </div>
+                  </div>
+                  <span className={cn("shrink-0 text-[12px] font-medium capitalize", tone[c.status] ?? "text-muted-foreground")}>
+                    {String(c.status).replace("_", " ")}
+                  </span>
+                  <div className="shrink-0 text-[11px] w-24 text-right tabular-nums text-muted-foreground">{fmtDate(c.createdAt)}</div>
+                  <ChevronDown className={cn("size-3.5 shrink-0 text-muted-foreground transition-transform", expandedId === c.id && "rotate-180")} />
+                </button>
+                {expandedId === c.id && (
+                  <div className="border-t border-border/40 bg-muted/30 px-4 py-3">
+                    {c.outcome ? (
+                      <pre className="max-h-64 overflow-y-auto whitespace-pre-wrap text-[12px] leading-relaxed text-foreground/90">{c.outcome}</pre>
+                    ) : (
+                      <p className="text-[12px] text-muted-foreground">No transcript recorded for this call.</p>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))
+          )}
+        </div>
+      </section>
+    </>
   );
 }
 

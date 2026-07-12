@@ -37,8 +37,31 @@ import {
   Mail, MailOpen, RefreshCw, Trash2, Reply, Send, Pencil,
   ChevronLeft, Inbox, AlertCircle, Loader2, Users,
   Forward, FolderInput, Archive, ChevronDown, Sparkles,
-  Clock, Search, FileText, Download, Paperclip, X,
+  Clock, Search, FileText, Download, Paperclip, X, Phone,
 } from "lucide-react";
+import { Link } from "wouter";
+
+/** Compact "Agent call-backs" rail link — only renders when Grok voice agents
+ *  have actually logged inbound calls, so mailboxes without voice stay clean. */
+function VoiceCallbacksLink() {
+  const calls = trpc.voiceAgents.listCalls.useQuery({ limit: 50 });
+  const inbound = ((calls.data ?? []) as Record<string, any>[]).filter((c) => c.direction === "inbound");
+  if (inbound.length === 0) return null;
+  const recent = inbound.filter((c) => c.createdAt && Date.now() - new Date(c.createdAt).getTime() < 7 * 86400000).length;
+  return (
+    <Link
+      href="/v2/calls"
+      className="flex items-center gap-2 border-b px-3 py-2 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
+    >
+      <Phone className="size-3.5 text-sky-600" /> Agent call-backs
+      {recent > 0 && (
+        <span className="ml-auto rounded-full bg-sky-100 px-1.5 py-0.5 text-[10px] font-semibold text-sky-700 dark:bg-sky-900/40 dark:text-sky-300">
+          {recent}
+        </span>
+      )}
+    </Link>
+  );
+}
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -995,6 +1018,7 @@ export default function MailboxPage() {
               </Select>
             )}
           </div>
+          <VoiceCallbacksLink />
           {/* min-h-0 is required for flex children inside an
               overflow-hidden parent — without it the intrinsic height of
               the folder list prevents flex-1 from clipping, so the
