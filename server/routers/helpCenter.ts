@@ -281,13 +281,41 @@ export const helpCenterRouter = router({
         .limit(1);
       if (!conv) throw new TRPCError({ code: "NOT_FOUND", message: "Conversation not found" });
 
-      // Fetch recent articles for context
+      // Full-catalog retrieval: EVERY published article is visible to the
+      // model (title + summary), and the 8 most relevant to the question get
+      // a large body slice. Replaces the old top-20-by-viewCount/600-char
+      // approach that hid new articles entirely.
       const articles = await db
-        .select({ id: helpArticles.id, title: helpArticles.title, summary: helpArticles.summary, bodyMarkdown: helpArticles.bodyMarkdown })
+        .select({ id: helpArticles.id, title: helpArticles.title, summary: helpArticles.summary, bodyMarkdown: helpArticles.bodyMarkdown, tags: helpArticles.tags, pageKey: helpArticles.pageKey })
         .from(helpArticles)
         .where(and(eq(helpArticles.workspaceId, ctx.workspace.id), eq(helpArticles.status, "published")))
-        .orderBy(desc(helpArticles.viewCount))
-        .limit(20);
+        .limit(80);
+
+      const tokens = [...new Set(input.message.toLowerCase().match(/[a-z][a-z0-9-]{2,}/g) ?? [])]
+        .filter((t) => !["the", "and", "for", "how", "what", "can", "you", "with", "does", "are", "this", "that"].includes(t));
+      const scored = articles.map((a) => {
+        const title = (a.title ?? "").toLowerCase();
+        const summary = (a.summary ?? "").toLowerCase();
+        const body = (a.bodyMarkdown ?? "").toLowerCase();
+        const tags = (Array.isArray(a.tags) ? (a.tags as string[]) : []).join(" ").toLowerCase();
+        let score = 0;
+        for (const t of tokens) {
+          if (title.includes(t)) score += 4;
+          if (tags.includes(t)) score += 3;
+          if (summary.includes(t)) score += 2;
+          if (body.includes(t)) score += 1;
+        }
+        if (input.pageKey && a.pageKey === input.pageKey) score += 2;
+        return { a, score };
+      }).sort((x, y) => y.score - x.score);
+
+      const deep = scored.slice(0, 8);
+      const deepIds = new Set(deep.map((d) => d.a.id));
+      const articleContext =
+        "MOST RELEVANT ARTICLES (full detail):\n\n" +
+        deep.map(({ a }) => `[Article ID ${a.id}] "${a.title}"\n${a.summary ?? ""}\n${(a.bodyMarkdown ?? "").slice(0, 1500)}`).join("\n\n---\n\n") +
+        "\n\nFULL CATALOG (every other published article — cite these too if they answer the question better):\n" +
+        scored.filter(({ a }) => !deepIds.has(a.id)).map(({ a }) => `[Article ID ${a.id}] "${a.title}" — ${a.summary ?? ""}`).join("\n");
 
       // Fetch prior messages in conversation
       const priorMessages = await db
@@ -296,11 +324,6 @@ export const helpCenterRouter = router({
         .where(eq(aiHelpMessages.conversationId, input.conversationId))
         .orderBy(aiHelpMessages.createdAt)
         .limit(10);
-
-      // Build context
-      const articleContext = articles
-        .map((a) => `[Article ID ${a.id}] "${a.title}"\n${a.summary ?? ""}\n${(a.bodyMarkdown ?? "").slice(0, 600)}`)
-        .join("\n\n---\n\n");
 
       const systemPrompt = `You are the in-app enablement coach for Velocity, a B2B revenue platform whose primary users are SDRs who live in prospecting and CRM all day.
 
