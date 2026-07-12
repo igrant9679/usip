@@ -35,6 +35,35 @@ export const workspaceRouter = router({
     return getWorkspaceCounts(ctx.workspace.id);
   }),
 
+  /**
+   * Honest 7-day daily series for the Home hero sparklines: activities
+   * logged, meetings scheduled, and inbound replies received per UTC day.
+   */
+  trend7d: workspaceProcedure.query(async ({ ctx }) => {
+    const { getDb } = await import("../db");
+    const { sql } = await import("drizzle-orm");
+    const db = await getDb();
+    const empty = Array.from({ length: 7 }, () => 0);
+    if (!db) return { activities: empty, meetings: empty, replies: empty };
+    const since = new Date(Date.now() - 6 * 86_400_000);
+    since.setUTCHours(0, 0, 0, 0);
+    const dayKey = (d: Date) => d.toISOString().slice(0, 10);
+    const days = Array.from({ length: 7 }, (_, i) => dayKey(new Date(since.getTime() + i * 86_400_000)));
+    const bucket = async (table: string, dateCol: string): Promise<number[]> => {
+      const rows = (await db.execute(
+        sql.raw(`SELECT DATE(${dateCol}) d, COUNT(*) n FROM \`${table}\` WHERE workspaceId = ${Number(ctx.workspace.id)} AND ${dateCol} >= '${since.toISOString().slice(0, 19).replace("T", " ")}' GROUP BY DATE(${dateCol})`),
+      )) as unknown as [Array<{ d: string | Date; n: number }>];
+      const byDay = new Map((rows[0] ?? []).map((r) => [dayKey(new Date(r.d)), Number(r.n)]));
+      return days.map((d) => byDay.get(d) ?? 0);
+    };
+    const [activities, meetings, replies] = await Promise.all([
+      bucket("activities", "occurredAt"),
+      bucket("meetings", "scheduledAt"),
+      bucket("email_replies", "receivedAt"),
+    ]);
+    return { activities, meetings, replies };
+  }),
+
   switch: protectedProcedure
     .input(z.object({ workspaceId: z.number().int() }))
     .mutation(async ({ input, ctx }) => {

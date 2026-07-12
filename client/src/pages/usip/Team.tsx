@@ -2,6 +2,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Field, SelectField, Section, StatusPill, fmtDate } from "@/components/usip/Common";
 import { EmptyState, PageHeader, Shell, SubNav } from "@/components/usip/Shell";
+import { ColorAvatar } from "@/components/usip/ColorAvatar";
 import { Link } from "wouter";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { trpc } from "@/lib/trpc";
@@ -565,13 +566,13 @@ export default function Team() {
                           )}
                           <td className="px-3 py-2">
                             <div className="flex items-center gap-2 min-w-0">
-                              <div className="size-8 rounded-full bg-secondary flex items-center justify-center text-xs font-medium shrink-0 overflow-hidden">
-                                {m.avatarUrl ? (
+                              {m.avatarUrl ? (
+                                <div className="size-8 rounded-full flex items-center justify-center shrink-0 overflow-hidden">
                                   <img src={m.avatarUrl} alt="" className="size-8 object-cover" />
-                                ) : (
-                                  (m.name ?? m.email ?? "?").slice(0, 1).toUpperCase()
-                                )}
-                              </div>
+                                </div>
+                              ) : (
+                                <ColorAvatar name={m.name ?? m.email} size="size-8" />
+                              )}
                               <div className="min-w-0">
                                 <div className="font-medium truncate flex items-center gap-1.5">
                                   {m.name ?? m.email}

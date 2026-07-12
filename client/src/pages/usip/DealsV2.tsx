@@ -11,6 +11,7 @@ import { useMemo, useState } from "react";
 import { Link } from "wouter";
 import { toast } from "sonner";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
+import { ColorAvatar } from "@/components/usip/ColorAvatar";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -169,7 +170,7 @@ export default function DealsV2() {
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
           <Link href={`/opportunities/${o.id}`} className="text-[13px] font-medium truncate block hover:underline">{o.name}</Link>
-          {o.accountName && <div className="text-[11px] text-muted-foreground truncate flex items-center gap-1"><Building2 className="size-3" /> {o.accountName}</div>}
+          {o.accountName && <div className="text-[11px] text-muted-foreground truncate flex items-center gap-1"><ColorAvatar name={o.accountName} size="size-3.5" className="text-[7px]" /> {o.accountName}</div>}
         </div>
         <DropdownMenu>
           <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="size-6 shrink-0"><MoreHorizontal className="size-3.5" /></Button></DropdownMenuTrigger>

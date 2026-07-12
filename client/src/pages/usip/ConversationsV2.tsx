@@ -13,6 +13,7 @@ import { useMemo, useState } from "react";
 import { Link } from "wouter";
 import { toast } from "sonner";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
+import { ColorAvatar } from "@/components/usip/ColorAvatar";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -261,8 +262,9 @@ export default function ConversationsV2() {
                   return (
                     <button key={r.id} onClick={() => setSelected(r)}
                       className="w-full text-left flex items-center gap-3 px-3 py-2.5 border-b border-border/60 last:border-0 hover:bg-muted/40">
-                      <span className="shrink-0 size-8 rounded-full flex items-center justify-center" style={{ backgroundColor: `${accent}1f`, color: accent }}>
-                        {unread ? <CircleDot className="size-4" /> : isEmail ? <Mail className="size-4" /> : <Share2 className="size-4" />}
+                      <span className="relative shrink-0">
+                        <ColorAvatar name={r.fromName || r.fromEmail} size="size-8" />
+                        {unread && <span className="absolute -top-0.5 -right-0.5 size-2.5 rounded-full border-2 border-background" style={{ backgroundColor: accent }} />}
                       </span>
                       <div className="min-w-0 flex-1">
                         <div className={cn("text-sm truncate flex items-center gap-1.5", unread ? "font-semibold" : "font-medium")}>

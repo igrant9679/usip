@@ -179,6 +179,9 @@ export default function Home() {
   const tasks = (trpc.tasks.list.useQuery({}).data ?? []) as any[];
   const sequences = (trpc.sequences.list.useQuery().data ?? []) as any[];
   const metrics = trpc.dataHealth.getMetrics.useQuery().data as any;
+  const trend = trpc.workspace.trend7d.useQuery().data;
+  const convStats = trpc.conversations.stats.useQuery().data as any;
+  const notifs = (trpc.notifications.list.useQuery().data ?? []) as any[];
   const ctx: Ctx = { accent, nav: setLocation, people, companies, tasks, sequences, metrics };
 
   const current = editing ? draft : layout;
@@ -218,6 +221,23 @@ export default function Home() {
             </>
           )}
         </div>
+
+        {/* hero strip — today at a glance + honest 7-day sparklines + autopilot ticker */}
+        {!editing && (
+          <div className="shrink-0 flex flex-wrap items-center gap-2.5 px-4 md:px-6 py-2.5 border-b border-border/70"
+            style={{ background: `linear-gradient(90deg, ${accent}14, transparent 65%)` }}>
+            <HeroChip label="Meetings today" value={trend?.meetings?.[6] ?? 0} series={trend?.meetings} color="#10B981" onClick={() => setLocation("/v2/meetings")} />
+            <HeroChip label="Tasks due today" value={tasks.filter((t: any) => t.status === "open" && t.dueAt && new Date(t.dueAt) <= new Date(new Date().setHours(23, 59, 59, 999))).length} series={trend?.activities} color="#F59E0B" onClick={() => setLocation("/v2/tasks")} />
+            <HeroChip label="Unhandled replies" value={convStats?.unhandled ?? 0} series={trend?.replies} color="#8B5CF6" onClick={() => setLocation("/v2/conversations")} />
+            <div className="flex-1" />
+            <button type="button" onClick={() => setLocation("/inbox")} className="hidden lg:flex min-w-0 max-w-md items-center gap-2 text-left">
+              <span className="shrink-0 size-1.5 rounded-full animate-pulse" style={{ backgroundColor: accent }} />
+              <span className="truncate text-[12px] text-muted-foreground hover:text-foreground">
+                {(() => { const n = notifs.find((x: any) => ["are_event", "workflow_fired", "system"].includes(x.kind)); return n ? `${n.title}${n.body ? ` — ${String(n.body).slice(0, 80)}` : ""}` : "Autopilots are quiet right now"; })()}
+              </span>
+            </button>
+          </div>
+        )}
 
         <div className="flex flex-1 min-h-0">
           {/* canvas */}
@@ -324,5 +344,33 @@ export default function Home() {
         </div>
       </div>
     </Shell>
+  );
+}
+
+/* ── Home hero strip pieces (vibrance batch) ─────────────────────────────── */
+
+function Sparkline({ series, color }: { series?: number[]; color: string }) {
+  const data = series && series.length >= 2 ? series : [0, 0, 0, 0, 0, 0, 0];
+  const max = Math.max(...data, 1);
+  const pts = data.map((v, i) => `${(i / (data.length - 1)) * 56},${16 - (v / max) * 14}`).join(" ");
+  return (
+    <svg viewBox="0 0 56 18" className="h-[18px] w-[56px] shrink-0" aria-hidden>
+      <polyline points={pts} fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" opacity="0.9" />
+    </svg>
+  );
+}
+
+function HeroChip({ label, value, series, color, onClick }: { label: string; value: number; series?: number[]; color: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex items-center gap-2.5 rounded-lg border bg-card px-3 py-1.5 shadow-sm transition-colors hover:bg-muted/60"
+      style={{ borderColor: `${color}55` }}
+    >
+      <span className="text-lg font-semibold tabular-nums" style={{ color }}>{value}</span>
+      <span className="text-[11.5px] leading-tight text-muted-foreground text-left">{label}<br /><span className="opacity-70">7-day trend</span></span>
+      <Sparkline series={series} color={color} />
+    </button>
   );
 }
