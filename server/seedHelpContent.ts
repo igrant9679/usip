@@ -71,7 +71,7 @@ const ARTICLES: ArticleSeed[] = [
     tags: ["getting-started", "overview", "sdr"],
     pageKey: "dashboard",
     tourName: "Getting Started",
-    bodyMarkdown: `Velocity is your unified revenue workspace — prospecting, CRM, sequences, meetings, calls, and inbox in one place, so you never tab-hop between tools. As an SDR you'll spend most of your day in three areas: **Prospects/Find Prospects** (build your list), **Sequences & Conversations** (run outreach and handle replies), and **Pipeline/Contacts** (track what's working). The left sidebar starts with your personal quick links (Home, AI Assistant, Inbox, My Mailbox, My Calendar), then groups the work: *Prospect and enrich* (People, Companies, Find Prospects), *Engage* (Sequences, Emails, Calls, Tasks, Social), *Win deals* (Leads, Deals, Meetings, Conversations), *Customer success*, *Revenue Engine* (ARE), *Automation and analytics*, and *Inbound*. Much of the busywork can run on **Autopilot** — see "The Autonomy Control Center" for the Off / Approve / Auto switches. Start each day on the **Dashboard** for your numbers, then move into prospecting. New here? Run the **Getting Started** guided tour (Help Center → Tours) for a 3-minute walkthrough.`,
+    bodyMarkdown: `Velocity is your unified revenue workspace — prospecting, CRM, sequences, meetings, calls, and inbox in one place, so you never tab-hop between tools. As an SDR you'll spend most of your day in three areas: **Prospects/Find Prospects** (build your list), **Sequences & Conversations** (run outreach and handle replies), and **Pipeline/Contacts** (track what's working). The left sidebar starts with your personal quick links (Home, AI Assistant, Inbox, My Mailbox, My Calendar), then groups the work: *Prospect and enrich* (People, Companies, Find Prospects), *Engage* (Sequences, Emails, Calls, Tasks, Social), *Win deals* (Leads, Deals, Meetings, Conversations), *Customer success*, *Revenue Engine* (ARE), *Automation and analytics*, and *Inbound*. Much of the busywork can run on **Autopilot** — see "The Autonomy Control Center" for the Off / Approve / Auto switches. Start each day on **Home** for your numbers, then move into prospecting. New here? Run the **Getting Started** guided tour (Help Center → Tours) for a 3-minute walkthrough.`,
   },
   {
     slug: "navigating-the-app",
@@ -122,7 +122,7 @@ const ARTICLES: ArticleSeed[] = [
     readingTimeMinutes: 2,
     tags: ["prospecting", "import", "csv"],
     pageKey: "prospects",
-    bodyMarkdown: `Have a list already? On **Prospects**, click **Import CSV**. Map your columns (name, title, company, email, LinkedIn URL) and import. Imported rows appear in the Prospects library with an **email status** badge. CSV-imported prospects start without an ICP-fit score (that's only set by Discovery), so use the email-status filter to find the deliverable ones. From there, select and enroll into a sequence, or run **Find contact info** to verify emails before sending.`,
+    bodyMarkdown: `Have a list already? On **People**, open **Import → Import a CSV** (or use *Prospect and enrich → Import contacts*). Map your columns (name, title, company, email, LinkedIn URL) and import. Imported rows appear in your People list with an **email status** badge. CSV-imported prospects start without an ICP-fit score (that's only set by Discovery), so use the email-status filter to find the deliverable ones. From there, select and enroll into a sequence, or run **Find contact info** to verify emails before sending.`,
   },
   {
     slug: "understanding-scores-badges",
@@ -297,7 +297,7 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     readingTimeMinutes: 4,
     tags: ["playbook", "routine", "sdr"],
     pageKey: "dashboard",
-    bodyMarkdown: `A repeatable morning beats heroics. **1) Dashboard (5 min):** scan your numbers and overdue tasks. **2) Inbox & replies (15 min):** clear the **Unified Inbox** — every reply gets a response or a logged next step; sequences auto-pause on reply so focus on movers. **3) Needs Review (15 min):** triage the **Find Prospects → Needs Review** queue — fix emails, verify, archive junk (see "The Needs Review queue"). **4) Build list (20 min):** run **Find Prospects** against today's ICP slice; enroll high-Fit + Valid-email prospects into the right sequence. **5) Approve drafts (10 min):** clear **Email Drafts** / **AI Pipeline** so the engine keeps sending. Then spend the rest of the day on live conversations and pipeline.`,
+    bodyMarkdown: `A repeatable morning beats heroics. **1) Home (5 min):** scan your numbers and overdue tasks. **2) Inbox & replies (15 min):** clear **Conversations** and the **Unified Inbox** — every reply gets a response or a logged next step; sequences auto-pause on reply so focus on movers. **3) Needs Review (15 min):** triage the **Find Prospects → Needs Review** queue — fix emails, verify, archive junk (see "The Needs Review queue"). **4) Build list (20 min):** run **Find Prospects** against today's ICP slice; enroll high-Fit + Valid-email prospects into the right sequence. **5) Approve drafts (10 min):** clear **Email Drafts** / **AI Pipeline** so the engine keeps sending. Then spend the rest of the day on live conversations and pipeline.`,
   },
   {
     slug: "crm-hygiene-eod",
@@ -316,7 +316,7 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     readingTimeMinutes: 3,
     tags: ["playbook", "pipeline", "review"],
     pageKey: "pipeline",
-    bodyMarkdown: `Once a week, step back. Open **Pipeline** (Forecast view) and **Email Analytics**: Which sequences/steps get opens and replies? Which stages are stalling (check **Pipeline Alerts**)? Re-rank your prospecting: double down on the ICP slices and sequences that produce meetings, and retire the ones that don't. Update your ARE campaign's fit gate/targeting based on what actually converted. Archive dead prospects so your lists stay clean. A 20-minute weekly review compounds.`,
+    bodyMarkdown: `Once a week, step back. Open **Deals** (Win deals — use the Forecast view) and **Email Analytics**: Which sequences/steps get opens and replies? Which stages are stalling (check **Pipeline Alerts**)? Re-rank your prospecting: double down on the ICP slices and sequences that produce meetings, and retire the ones that don't. Update your ARE campaign's fit gate/targeting based on what actually converted. Archive dead prospects so your lists stay clean. A 20-minute weekly review compounds.`,
   },
 
   /* ── Prospecting: LinkedIn enrichment + social outreach ─────────────────── */
@@ -407,7 +407,7 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     readingTimeMinutes: 3,
     tags: ["autopilot", "automation", "ai", "autonomy"],
     pageKey: "workflows",
-    bodyMarkdown: `Velocity's automation follows one convention everywhere: each feature has an **Autopilot** with three modes — **Off** (fully manual), **Approve** (AI drafts, you confirm), **Auto** (hands-off). All the switches live in the **Autonomy Control Center** (Revenue Engine → Workflows), and each surface also shows its own toggle.\n\nThe autopilots:\n- **Task** — drafts next-best-action tasks from record signals.\n- **Meeting** — proposes and (in Auto) books meetings from positive replies.\n- **Conversation** — classifies every inbound reply and acts per class; in Auto, a "willing to meet" reply gets your booking link instantly.\n- **Deal** — nudges stalled opportunities with suggested actions.\n- **Social** — sends LinkedIn invites, warms prospects, and opens conversations on accept.\n- **Job change** — creates re-engagement tasks when enrichment detects a company move.\n\nEverything defaults to **Off** — turn things on one at a time, run Approve mode until you trust the output, then go Auto. The goal: the machine works the funnel while you talk to humans.`,
+    bodyMarkdown: `Velocity's automation follows one convention everywhere: each feature has an **Autopilot** with three modes — **Off** (fully manual), **Approve** (AI drafts, you confirm), **Auto** (hands-off). All the switches live in the **Autonomy Center** (sidebar → Automation and analytics), and each surface also shows its own toggle.\n\nThe autopilots:\n- **Task** — drafts next-best-action tasks from record signals.\n- **Meeting** — proposes and (in Auto) books meetings from positive replies.\n- **Conversation** — classifies every inbound reply and acts per class; in Auto, a "willing to meet" reply gets your booking link instantly.\n- **Deal** — nudges stalled opportunities with suggested actions.\n- **Social** — sends LinkedIn invites, warms prospects, and opens conversations on accept.\n- **Job change** — creates re-engagement tasks when enrichment detects a company move.\n\nEverything defaults to **Off** — turn things on one at a time, run Approve mode until you trust the output, then go Auto. The goal: the machine works the funnel while you talk to humans.`,
   },
   {
     slug: "workflow-rules",
@@ -417,7 +417,7 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     readingTimeMinutes: 2,
     tags: ["workflows", "automation", "rules"],
     pageKey: "workflows",
-    bodyMarkdown: `**Workflow rules** (Workflows page) are event-triggered if-this-then-that automations, separate from the AI autopilots. A rule pairs a **trigger** with one or more **actions**.\n\n**Live triggers:** *record created* (a lead is created), *stage changed* (an opportunity moves), *signal received* (a job change is detected on a prospect), and *deal stuck* (no movement past your threshold, checked on a schedule).\n\n**Actions:** call a **webhook**, post to **Slack** or **Teams**, **create a task**, or send an in-app **notification**. Conditions let you scope a rule (e.g. only deals over a value, only stage = negotiation).\n\nUse **Test fire** on any rule to run its actions immediately with sample context — it exercises the exact same code path as the real trigger, so if the test posts to Slack, the real event will too. Every run is recorded in the rule's history with success/failure.`,
+    bodyMarkdown: `**Workflow rules** (sidebar → Automation and analytics → Workflow rules) are event-triggered if-this-then-that automations, separate from the AI autopilots (those live in the Autonomy Center). A rule pairs a **trigger** with one or more **actions**.\n\n**Live triggers:** *record created* (a lead is created), *stage changed* (an opportunity moves), *signal received* (a job change is detected on a prospect), and *deal stuck* (no movement past your threshold, checked on a schedule).\n\n**Actions:** call a **webhook**, post to **Slack** or **Teams**, **create a task**, or send an in-app **notification**. Conditions let you scope a rule (e.g. only deals over a value, only stage = negotiation).\n\nUse **Test fire** on any rule to run its actions immediately with sample context — it exercises the exact same code path as the real trigger, so if the test posts to Slack, the real event will too. Every run is recorded in the rule's history with success/failure.`,
   },
 
   /* ── CRM: landing pages & web forms ──────────────────────────────────────── */
@@ -497,9 +497,9 @@ const TOURS: TourSeed[] = [
     roleTags: ["sdr"],
     steps: [
       { title: "Welcome to Velocity", bodyMarkdown: "Quick 3-min tour of where you'll work each day.", routeTo: "/dashboard", visualTreatment: "coach", advanceCondition: "next_button" },
-      { title: "Your sidebar", bodyMarkdown: "Everything's grouped here: Overview, Funnel, Engage, Revenue Engine.", targetDataTourId: "sidebar-nav", visualTreatment: "spotlight", advanceCondition: "next_button" },
+      { title: "Your sidebar", bodyMarkdown: "Quick links up top (Home, AI Assistant, Inbox, Mailbox, Calendar), then the work: Prospect and enrich, Engage, Win deals, Revenue Engine, and more.", targetDataTourId: "sidebar-nav", visualTreatment: "spotlight", advanceCondition: "next_button" },
       { title: "Your daily numbers", bodyMarkdown: "The Dashboard is your morning home — pipeline, leads, customers.", targetDataTourId: "dashboard-kpi-grid", visualTreatment: "spotlight", advanceCondition: "next_button" },
-      { title: "Help anytime", bodyMarkdown: "Click ? for articles, Ask AI, and these tours.", targetDataTourId: "help-button", visualTreatment: "pulse", advanceCondition: "next_button" },
+      { title: "Help anytime", bodyMarkdown: "Open the Help Center (the ? icon in the sidebar footer, or /help) for articles, Ask AI, and these tours.", visualTreatment: "coach", advanceCondition: "next_button" },
     ],
   },
   {
