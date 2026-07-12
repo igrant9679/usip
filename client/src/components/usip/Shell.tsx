@@ -279,120 +279,37 @@ const _LEGACY_NAV: NavGroup[] = [
 type NavLink = { href: string; label: string; icon: any; badge?: string; trailingChevron?: boolean; color?: string; darkColor?: string; adminOnly?: boolean };
 type NavSection = { label: string; icon: any; items: NavLink[]; color: string; darkColor: string };
 
-// Top quick-links: home + assistant + the three personal surfaces (inbox,
-// mailbox, calendar). Uncoloured links inherit their legacy section hue.
+// Main rail (user-directed 2026-07-12): the Apollo-style flat list of core
+// pages, visible at all times. Every link carries an explicit colour = its old
+// section hue, so rail rows AND page accents (SECTION_COLOR_BY_HREF) keep the
+// exact colours they had under the old sectioned rail.
 const TOP_LINKS: NavLink[] = [
   { href: "/v2/home", label: "Home", icon: Home, color: "#3B82F6", darkColor: "#93C5FD" },
   { href: "/v2/ai-assistant", label: "AI Assistant", icon: Sparkles, color: "#9333EA", darkColor: "#D8B4FE" },
-  { href: "/inbox", label: "Inbox", icon: Inbox },
-  { href: "/mailbox", label: "My Mailbox", icon: MailOpen },
-  { href: "/calendar", label: "My Calendar", icon: CalendarDays },
+  { href: "/v2/people", label: "People", icon: Users, color: "#3B82F6", darkColor: "#60A5FA" },
+  { href: "/v2/companies", label: "Companies", icon: Building2, color: "#3B82F6", darkColor: "#60A5FA" },
+  { href: "/v2/lists", label: "Lists", icon: ListChecks, color: "#3B82F6", darkColor: "#60A5FA" },
+  { href: "/v2/data-enrichment", label: "Data enrichment", icon: Database, color: "#3B82F6", darkColor: "#60A5FA" },
+  { href: "/v2/sequences", label: "Sequences", icon: Activity, color: "#9333EA", darkColor: "#D8B4FE" },
+  { href: "/v2/emails", label: "Emails", icon: Mail, color: "#9333EA", darkColor: "#D8B4FE" },
+  { href: "/v2/calls", label: "Calls", icon: Phone, color: "#9333EA", darkColor: "#D8B4FE" },
+  { href: "/v2/tasks", label: "Tasks", icon: ListChecks, color: "#9333EA", darkColor: "#D8B4FE" },
+  { href: "/v2/meetings", label: "Meetings", icon: CalendarDays, color: "#10B981", darkColor: "#34D399" },
+  { href: "/v2/conversations", label: "Conversations", icon: MessageSquare, color: "#10B981", darkColor: "#34D399" },
+  { href: "/v2/deals", label: "Deals", icon: KanbanSquare, color: "#10B981", darkColor: "#34D399" },
+  // The Autonomy Center IS the app's Workflows surface — labelled to match.
+  { href: "/v2/workflows", label: "Workflows", icon: Workflow, color: "#F59E0B", darkColor: "#FBBF24" },
+  { href: "/v2/analytics", label: "Analytics", icon: BarChart3, color: "#F59E0B", darkColor: "#FBBF24" },
+  { href: "/v2/website-visitors", label: "Website visitors", icon: Globe, color: "#14B8A6", darkColor: "#2DD4BF" },
+  { href: "/v2/forms", label: "Forms", icon: FileText, color: "#14B8A6", darkColor: "#2DD4BF" },
 ];
 
-// ONE rail, each capability exactly once. The v2 surface is primary; legacy
-// pages that a v2 page supersedes (/prospects, /contacts, /accounts,
-// /sequences, /tasks, /pipeline, "/" dashboard) left the rail but their
-// routes stay alive for deep links, tours, and muscle memory. Admin-ish
-// config (Team, Settings, Custom fields, Sending accounts) lives in the
-// Admin Settings panel + Settings hub, not here.
+// Two collapsible groups below the main list: Saved records (unchanged) and
+// "More" — every page displaced from the main rail, NOTHING deleted. Each More
+// item keeps an explicit colour = its old section hue (ordering groups them by
+// former section: personal / prospect / engage / win deals / CS / revenue
+// engine / automation / inbound).
 const SECTIONS: NavSection[] = [
-  {
-    label: "Prospect and enrich",
-    icon: Search,
-    color: "#3B82F6",
-    darkColor: "#60A5FA",
-    items: [
-      { href: "/v2/people", label: "People", icon: Users },
-      { href: "/v2/companies", label: "Companies", icon: Building2 },
-      { href: "/v2/lists", label: "Lists", icon: ListChecks },
-      { href: "/find-prospects", label: "Find Prospects", icon: Radar },
-      { href: "/v2/data-enrichment", label: "Data enrichment", icon: Database },
-      { href: "/data-health", label: "Data health", icon: BarChart3 },
-      { href: "/import", label: "Import contacts", icon: Upload },
-    ],
-  },
-  {
-    label: "Engage",
-    icon: Send,
-    color: "#9333EA",
-    darkColor: "#D8B4FE",
-    items: [
-      { href: "/v2/sequences", label: "Sequences", icon: Activity },
-      { href: "/v2/emails", label: "Emails", icon: Mail },
-      { href: "/v2/calls", label: "Calls", icon: Phone },
-      { href: "/v2/tasks", label: "Tasks", icon: ListChecks },
-      { href: "/unified-inbox", label: "Unified Inbox", icon: MessageSquare },
-      { href: "/social", label: "Social", icon: Share2 },
-      { href: "/email-builder", label: "Email Builder", icon: LayoutTemplate },
-      { href: "/campaigns", label: "Campaigns", icon: Megaphone },
-      { href: "/segments", label: "Segments", icon: Filter },
-    ],
-  },
-  {
-    label: "Win deals",
-    icon: DollarSign,
-    color: "#10B981",
-    darkColor: "#34D399",
-    items: [
-      { href: "/leads", label: "Leads", icon: Target },
-      { href: "/v2/deals", label: "Deals", icon: KanbanSquare },
-      { href: "/v2/meetings", label: "Meetings", icon: CalendarDays },
-      { href: "/v2/conversations", label: "Conversations", icon: MessageSquare },
-      { href: "/pipeline-alerts", label: "Pipeline alerts", icon: AlertTriangle },
-      { href: "/proposals", label: "Proposals", icon: ClipboardList },
-      { href: "/products", label: "Products", icon: Package },
-    ],
-  },
-  {
-    label: "Customer success",
-    icon: Heart,
-    color: "#DB2777",
-    darkColor: "#F472B6",
-    items: [
-      { href: "/customers", label: "Customers", icon: Heart },
-      { href: "/renewals", label: "Renewals", icon: CalendarClock },
-      { href: "/qbrs", label: "QBRs", icon: ClipboardCheck },
-    ],
-  },
-  {
-    label: "Revenue Engine",
-    icon: Bot,
-    color: "#7C3AED",
-    darkColor: "#A78BFA",
-    items: [
-      { href: "/are", label: "ARE Hub", icon: Bot },
-      { href: "/ai-pipeline", label: "AI Pipeline", icon: Sparkles },
-      { href: "/brand-voice", label: "Brand Voice", icon: Mic2 },
-      { href: "/personas", label: "Personas", icon: Users },
-    ],
-  },
-  {
-    label: "Automation and analytics",
-    icon: Wrench,
-    color: "#F59E0B",
-    darkColor: "#FBBF24",
-    items: [
-      { href: "/v2/workflows", label: "Autonomy Center", icon: Workflow },
-      { href: "/workflows", label: "Workflow rules", icon: GitFork },
-      { href: "/lead-scoring", label: "Lead scoring", icon: Target },
-      { href: "/lead-routing", label: "Lead routing", icon: Sparkles },
-      { href: "/v2/analytics", label: "Analytics", icon: BarChart3 },
-      { href: "/reports", label: "Reports", icon: FileText },
-      { href: "/dashboards", label: "Dashboards", icon: PieChart },
-      { href: "/mindmaps", label: "Mindmaps", icon: GitFork },
-    ],
-  },
-  {
-    label: "Inbound",
-    icon: ArrowRightCircle,
-    color: "#14B8A6",
-    darkColor: "#2DD4BF",
-    items: [
-      { href: "/v2/website-visitors", label: "Website visitors", icon: Globe },
-      { href: "/v2/forms", label: "Forms", icon: FileText },
-      { href: "/v2/landing-pages", label: "Landing Pages", icon: LayoutTemplate, adminOnly: true },
-    ],
-  },
   {
     label: "Saved records",
     icon: Users,
@@ -403,11 +320,44 @@ const SECTIONS: NavSection[] = [
       { href: "/v2/saved-companies", label: "Companies", icon: Building2 },
     ],
   },
+  {
+    label: "More",
+    icon: MoreHorizontal,
+    color: "#64748B",
+    darkColor: "#94A3B8",
+    items: [
+      { href: "/inbox", label: "Inbox", icon: Inbox, color: "#1D4ED8", darkColor: "#93C5FD" },
+      { href: "/mailbox", label: "My Mailbox", icon: MailOpen, color: "#1D4ED8", darkColor: "#93C5FD" },
+      { href: "/calendar", label: "My Calendar", icon: CalendarDays, color: "#1D4ED8", darkColor: "#93C5FD" },
+      { href: "/find-prospects", label: "Find Prospects", icon: Radar, color: "#3B82F6", darkColor: "#60A5FA" },
+      { href: "/data-health", label: "Data health", icon: BarChart3, color: "#3B82F6", darkColor: "#60A5FA" },
+      { href: "/import", label: "Import contacts", icon: Upload, color: "#3B82F6", darkColor: "#60A5FA" },
+      { href: "/unified-inbox", label: "Unified Inbox", icon: MessageSquare, color: "#9333EA", darkColor: "#D8B4FE" },
+      { href: "/social", label: "Social", icon: Share2, color: "#9333EA", darkColor: "#D8B4FE" },
+      { href: "/email-builder", label: "Email Builder", icon: LayoutTemplate, color: "#9333EA", darkColor: "#D8B4FE" },
+      { href: "/campaigns", label: "Campaigns", icon: Megaphone, color: "#9333EA", darkColor: "#D8B4FE" },
+      { href: "/segments", label: "Segments", icon: Filter, color: "#9333EA", darkColor: "#D8B4FE" },
+      { href: "/leads", label: "Leads", icon: Target, color: "#10B981", darkColor: "#34D399" },
+      { href: "/pipeline-alerts", label: "Pipeline alerts", icon: AlertTriangle, color: "#10B981", darkColor: "#34D399" },
+      { href: "/proposals", label: "Proposals", icon: ClipboardList, color: "#10B981", darkColor: "#34D399" },
+      { href: "/products", label: "Products", icon: Package, color: "#10B981", darkColor: "#34D399" },
+      { href: "/customers", label: "Customers", icon: Heart, color: "#DB2777", darkColor: "#F472B6" },
+      { href: "/renewals", label: "Renewals", icon: CalendarClock, color: "#DB2777", darkColor: "#F472B6" },
+      { href: "/qbrs", label: "QBRs", icon: ClipboardCheck, color: "#DB2777", darkColor: "#F472B6" },
+      { href: "/are", label: "ARE Hub", icon: Bot, color: "#7C3AED", darkColor: "#A78BFA" },
+      { href: "/ai-pipeline", label: "AI Pipeline", icon: Sparkles, color: "#7C3AED", darkColor: "#A78BFA" },
+      { href: "/brand-voice", label: "Brand Voice", icon: Mic2, color: "#7C3AED", darkColor: "#A78BFA" },
+      { href: "/personas", label: "Personas", icon: Users, color: "#7C3AED", darkColor: "#A78BFA" },
+      { href: "/workflows", label: "Workflow rules", icon: GitFork, color: "#F59E0B", darkColor: "#FBBF24" },
+      { href: "/lead-scoring", label: "Lead scoring", icon: Target, color: "#F59E0B", darkColor: "#FBBF24" },
+      { href: "/lead-routing", label: "Lead routing", icon: Sparkles, color: "#F59E0B", darkColor: "#FBBF24" },
+      { href: "/reports", label: "Reports", icon: FileText, color: "#F59E0B", darkColor: "#FBBF24" },
+      { href: "/dashboards", label: "Dashboards", icon: PieChart, color: "#F59E0B", darkColor: "#FBBF24" },
+      { href: "/mindmaps", label: "Mindmaps", icon: GitFork, color: "#F59E0B", darkColor: "#FBBF24" },
+      { href: "/v2/landing-pages", label: "Landing Pages", icon: LayoutTemplate, adminOnly: true, color: "#14B8A6", darkColor: "#2DD4BF" },
+    ],
+  },
 ];
-
-// (The old "More" catch-all section is gone — every page either has one slot
-// in a section above, moved to the Settings hub / Admin Settings panel, or is
-// a superseded legacy page whose route still works via deep link.)
 
 /* ── Admin Settings popover (bottom-left) ─────────────────────────────────
  * Apollo-style settings panel anchored to the "Admin Settings" nav row.
@@ -493,7 +443,9 @@ const BOTTOM_LINKS: NavLink[] = [
 // the legacy pages reached via "More".
 const SECTION_COLOR_BY_HREF: Record<string, { c: string; d: string }> = (() => {
   const m: Record<string, { c: string; d: string }> = {};
-  for (const s of SECTIONS) for (const it of s.items) m[it.href] = { c: s.color, d: s.darkColor };
+  // Item colour beats section colour: pages inside "More" keep the hue of the
+  // functional area they came from, not More's neutral slate.
+  for (const s of SECTIONS) for (const it of s.items) m[it.href] = { c: it.color ?? s.color, d: it.darkColor ?? s.darkColor };
   for (const l of [...TOP_LINKS, ...BOTTOM_LINKS]) if (l.color) m[l.href] = { c: l.color, d: l.darkColor ?? l.color };
   return m;
 })();
@@ -541,14 +493,16 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
   const navRef = useRef<HTMLElement>(null);
   // Collapsible nav groups — persisted to localStorage so the choice survives
   // Shell's per-navigation remount (each page renders its own <Shell>).
-  const NAV_COLLAPSED_KEY = "velocity_nav_collapsed";
+  // Key versioned (v2) when the "More" group arrived: older saved sets predate
+  // it, so they'd render More expanded forever — defeating the decluttering.
+  const NAV_COLLAPSED_KEY = "velocity_nav_collapsed_v2";
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => {
     try {
       const raw = localStorage.getItem(NAV_COLLAPSED_KEY);
       if (raw) return new Set<string>(JSON.parse(raw));
     } catch { /* ignore */ }
-    // Post-sale + admin-ish groups start collapsed to keep the rail short.
-    return new Set<string>(["Customer success", "Saved records"]);
+    // Both groups start collapsed to keep the rail short.
+    return new Set<string>(["Saved records", "More"]);
   });
   const toggleGroup = (label: string) => {
     setCollapsedGroups((prev) => {
