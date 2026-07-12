@@ -17,7 +17,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
 } from "@/components/ui/dialog";
 import {
-  BarChart3, Download, FolderOpen, Loader2, Play, Plus, Save, Trash2, X,
+  BarChart3, Clock, Download, FolderOpen, Loader2, Play, Plus, Save, Sparkles, Trash2, X,
 } from "lucide-react";
 
 type Filter = { field: string; op: string; value?: string };
@@ -71,6 +71,8 @@ export default function Reports() {
   const accent = useAccentColor();
   const schema = trpc.reports.schema.useQuery();
   const saved = trpc.reports.list.useQuery();
+  const presets = trpc.reports.presets.useQuery();
+  const [schedFor, setSchedFor] = useState<Record<string, any> | null>(null);
 
   const [spec, setSpec] = useState<Spec>({ object: "deals", columns: [], filters: [], limit: 200 });
   const [loadedId, setLoadedId] = useState<number | null>(null);
@@ -155,6 +157,25 @@ export default function Reports() {
         <div className="flex-1 min-h-0 flex">
           {/* ── builder panel ── */}
           <aside className="w-72 shrink-0 border-r border-border overflow-y-auto p-3 space-y-4 bg-card/30">
+            {/* preset reports */}
+            <section>
+              <h2 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Preset reports</h2>
+              <div className="space-y-0.5">
+                {(presets.data ?? []).map((p: any) => (
+                  <button
+                    key={p.key}
+                    type="button"
+                    title={p.description}
+                    className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-[12.5px] hover:bg-muted"
+                    onClick={() => { setSpec(p.spec as Spec); setLoadedId(null); setLoadedName(p.name); setArmed(true); }}
+                  >
+                    <Sparkles className="size-3.5 shrink-0" style={{ color: accent }} />
+                    <span className="truncate">{p.name}</span>
+                  </button>
+                ))}
+              </div>
+            </section>
+
             {/* saved reports */}
             {(saved.data ?? []).length > 0 && (
               <section>
@@ -166,6 +187,15 @@ export default function Reports() {
                         <FolderOpen className="size-3.5 shrink-0 text-muted-foreground" />
                         <span className="truncate">{r.name}</span>
                         <span className="ml-auto shrink-0 text-[10.5px] text-muted-foreground">{OBJECT_LABELS[r.object] ?? r.object}</span>
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`Schedule ${r.name}`}
+                        title={r.scheduleFreq && r.scheduleFreq !== "none" ? `Emailed ${r.scheduleFreq}` : "Schedule email"}
+                        className={cn("shrink-0 rounded p-0.5", r.scheduleFreq && r.scheduleFreq !== "none" ? "text-sky-600" : "text-muted-foreground opacity-0 group-hover:opacity-100")}
+                        onClick={() => setSchedFor(r)}
+                      >
+                        <Clock className="size-3" />
                       </button>
                       <button
                         type="button"
@@ -363,6 +393,8 @@ export default function Reports() {
         </div>
       </div>
 
+      <ScheduleDialog key={schedFor?.id ?? "none"} report={schedFor} onClose={() => { setSchedFor(null); utils.reports.list.invalidate(); }} />
+
       {/* save dialog */}
       <Dialog open={saveOpen} onOpenChange={(o) => !o && setSaveOpen(false)}>
         <DialogContent className="sm:max-w-md">
@@ -405,5 +437,66 @@ function SaveForm({
         </Button>
       </div>
     </div>
+  );
+}
+
+/** Email-scheduling dialog — delivery via the workspace SYSTEM sender. */
+function ScheduleDialog({ report, onClose }: { report: Record<string, any> | null; onClose: () => void }) {
+  const [freq, setFreq] = useState<string>(report?.scheduleFreq ?? "none");
+  const [recipients, setRecipients] = useState<string>(report?.scheduleRecipients ?? "");
+  const setSchedule = trpc.reports.setSchedule.useMutation({
+    onSuccess: () => { toast.success("Schedule saved"); onClose(); },
+    onError: (e) => toast.error(e.message),
+  });
+  const sendNow = trpc.reports.sendNow.useMutation({
+    onSuccess: (r) => toast.success(`Sent to ${r.sentTo} recipient${r.sentTo === 1 ? "" : "s"}`),
+    onError: (e) => toast.error(e.message),
+  });
+  if (!report) return null;
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Email "{report.name}"</DialogTitle>
+          <DialogDescription>
+            Sent from your workspace's system sender (the same address as team invites and notifications),
+            as an inline table with a link to the full report.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div className="space-y-1.5">
+            <div className="text-[12px] font-medium">Frequency</div>
+            <select value={freq} onChange={(e) => setFreq(e.target.value)} className="h-9 w-full rounded-md border border-border bg-background px-2.5 text-[13px]">
+              <option value="none">Not scheduled</option>
+              <option value="daily">Daily (mornings, UTC)</option>
+              <option value="weekly">Weekly (Monday mornings)</option>
+              <option value="monthly">Monthly (the 1st)</option>
+            </select>
+          </div>
+          <div className="space-y-1.5">
+            <div className="text-[12px] font-medium">Recipients</div>
+            <Input value={recipients} onChange={(e) => setRecipients(e.target.value)} placeholder="alice@company.com, bob@company.com" />
+          </div>
+          <div className="flex items-center justify-between gap-2 pt-1">
+            <Button
+              variant="outline" size="sm" className="gap-1.5"
+              disabled={sendNow.isPending || !recipients.trim()}
+              onClick={async () => {
+                await setSchedule.mutateAsync({ id: report.id, freq: freq as never, recipients });
+                sendNow.mutate({ id: report.id });
+              }}
+            >
+              {sendNow.isPending ? <Loader2 className="size-3.5 animate-spin" /> : null} Send now
+            </Button>
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" onClick={onClose}>Cancel</Button>
+              <Button size="sm" disabled={setSchedule.isPending} onClick={() => setSchedule.mutate({ id: report.id, freq: freq as never, recipients })}>
+                Save schedule
+              </Button>
+            </div>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }

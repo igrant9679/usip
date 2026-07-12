@@ -181,7 +181,7 @@ function filterToSql(def: ObjectDef, f: z.infer<typeof filterSchema>): SQL {
   }
 }
 
-async function runSpec(workspaceId: number, spec: ReportSpec): Promise<{ columns: { key: string; label: string; kind: ColKind }[]; rows: Record<string, unknown>[]; grouped: boolean }> {
+export async function runSpec(workspaceId: number, spec: ReportSpec): Promise<{ columns: { key: string; label: string; kind: ColKind }[]; rows: Record<string, unknown>[]; grouped: boolean }> {
   const db = await getDb();
   if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
   const def = OBJECTS[spec.object];
@@ -257,6 +257,21 @@ function toCsv(columns: { key: string; label: string }[], rows: Record<string, u
   return [columns.map((c) => esc(c.label)).join(","), ...rows.map((r) => columns.map((c) => esc(r[c.key])).join(","))].join("\n");
 }
 
+/* ─── Preset reports (10) — code-defined, available to every workspace ───── */
+
+export const PRESET_REPORTS: Array<{ key: string; name: string; description: string; spec: ReportSpec }> = [
+  { key: "pipeline-by-stage", name: "Pipeline by stage", description: "Deal value and count per stage.", spec: { object: "deals", columns: ["stage", "value"], filters: [], groupBy: "stage", aggregate: "sum_value", aggregateField: "value", limit: 200 } },
+  { key: "deals-by-owner", name: "Deal value by owner", description: "Who owns the pipeline.", spec: { object: "deals", columns: ["owner", "value"], filters: [], groupBy: "owner", aggregate: "sum_value", aggregateField: "value", limit: 200 } },
+  { key: "upcoming-closes", name: "Upcoming close dates", description: "Open deals ordered by close date.", spec: { object: "deals", columns: ["name", "stage", "value", "winProb", "closeDate", "owner"], filters: [{ field: "closeDate", op: "not_empty" }, { field: "stage", op: "neq", value: "won" }, { field: "stage", op: "neq", value: "lost" }], sort: { field: "closeDate", dir: "asc" }, limit: 200 } },
+  { key: "won-deals", name: "Won deals", description: "Closed-won, biggest first.", spec: { object: "deals", columns: ["name", "value", "winReason", "owner", "closeDate"], filters: [{ field: "stage", op: "eq", value: "won" }], sort: { field: "value", dir: "desc" }, limit: 200 } },
+  { key: "lost-deals", name: "Lost deals & reasons", description: "What we lost and why.", spec: { object: "deals", columns: ["name", "value", "lostReason", "owner", "closeDate"], filters: [{ field: "stage", op: "eq", value: "lost" }], sort: { field: "value", dir: "desc" }, limit: 200 } },
+  { key: "leads-by-status", name: "Lead funnel by status", description: "Lead counts per status.", spec: { object: "leads", columns: ["status"], filters: [], groupBy: "status", aggregate: "count", limit: 200 } },
+  { key: "lead-quality-by-source", name: "Lead quality by source", description: "Average lead score per source.", spec: { object: "leads", columns: ["source", "score"], filters: [], groupBy: "source", aggregate: "avg_value", aggregateField: "score", limit: 200 } },
+  { key: "prospects-by-email-status", name: "Prospects by email status", description: "Deliverability shape of your list.", spec: { object: "prospects", columns: ["emailStatus"], filters: [], groupBy: "emailStatus", aggregate: "count", limit: 200 } },
+  { key: "sendable-prospects", name: "Sendable prospects", description: "Valid-email prospects ready to enroll.", spec: { object: "prospects", columns: ["firstName", "lastName", "title", "company", "email", "createdAt"], filters: [{ field: "emailStatus", op: "eq", value: "valid" }], sort: { field: "createdAt", dir: "desc" }, limit: 500 } },
+  { key: "activity-by-type", name: "Activity volume by type", description: "Logged touches per activity type.", spec: { object: "activities", columns: ["type"], filters: [], groupBy: "type", aggregate: "count", limit: 200 } },
+];
+
 /* ─── Router ─────────────────────────────────────────────────────────────── */
 
 export const reportsRouter = router({
@@ -315,4 +330,35 @@ export const reportsRouter = router({
     await db.delete(savedReports).where(and(eq(savedReports.id, input.id), eq(savedReports.workspaceId, ctx.workspace.id)));
     return { ok: true };
   }),
+
+  /** The 10 built-in preset reports (code-defined, same for every workspace). */
+  presets: workspaceProcedure.query(() => PRESET_REPORTS),
+
+  /** Configure email scheduling on a saved report (system-sender delivery). */
+  setSchedule: workspaceProcedure
+    .input(z.object({
+      id: z.number().int(),
+      freq: z.enum(["none", "daily", "weekly", "monthly"]),
+      recipients: z.string().max(2000),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      const [r] = await db.select({ id: savedReports.id }).from(savedReports)
+        .where(and(eq(savedReports.id, input.id), eq(savedReports.workspaceId, ctx.workspace.id))).limit(1);
+      if (!r) throw new TRPCError({ code: "NOT_FOUND" });
+      await db.update(savedReports)
+        .set({ scheduleFreq: input.freq, scheduleRecipients: input.recipients.trim() || null })
+        .where(eq(savedReports.id, input.id));
+      return { ok: true };
+    }),
+
+  /** Email a saved report right now (uses its configured recipients). */
+  sendNow: workspaceProcedure
+    .input(z.object({ id: z.number().int() }))
+    .mutation(async ({ ctx, input }) => {
+      const { emailSavedReport } = await import("../services/reportScheduler");
+      const res = await emailSavedReport(input.id, ctx.workspace.id);
+      if (!res.ok) throw new TRPCError({ code: "BAD_REQUEST", message: res.reason ?? "Send failed" });
+      return res;
+    }),
 });

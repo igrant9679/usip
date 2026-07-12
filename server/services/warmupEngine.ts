@@ -69,12 +69,19 @@ export async function runWarmupEngine(): Promise<void> {
     .where(and(eq(sendingAccounts.warmupStatus, "in_progress"), eq(sendingAccounts.enabled, true)));
   if (candidates.length === 0) return;
 
-  // Peer pools per workspace: warmup mail goes to OTHER real mailboxes we own.
+  // Peer pools per workspace: warmup mail goes to OTHER mailboxes we own —
+  // but ONLY connection-VERIFIED ones. CSV-imported accounts can carry fake
+  // addresses; bouncing warmup mail at those would hurt reputation, the exact
+  // opposite of warming. Unverified-peer workspaces fall back to self-send.
   const wsIds = [...new Set(candidates.map((a) => a.workspaceId))];
   const pools = await db
     .select({ id: sendingAccounts.id, workspaceId: sendingAccounts.workspaceId, fromEmail: sendingAccounts.fromEmail })
     .from(sendingAccounts)
-    .where(and(inArray(sendingAccounts.workspaceId, wsIds), eq(sendingAccounts.enabled, true)));
+    .where(and(
+      inArray(sendingAccounts.workspaceId, wsIds),
+      eq(sendingAccounts.enabled, true),
+      eq(sendingAccounts.connectionStatus, "connected"),
+    ));
 
   for (const acct of candidates) {
     try {

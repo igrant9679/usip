@@ -5066,6 +5066,10 @@ export const savedReports = mysqlTable(
     name: varchar("name", { length: 160 }).notNull(),
     object: varchar("object", { length: 32 }).notNull(), // deals|leads|prospects|contacts|activities
     config: json("config").notNull(),
+    /* Scheduling (migration 0122) — emailed via the SYSTEM sender. */
+    scheduleFreq: mysqlEnum("scheduleFreq", ["none", "daily", "weekly", "monthly"]).default("none").notNull(),
+    scheduleRecipients: text("scheduleRecipients"), // comma-separated emails
+    scheduleLastSentAt: timestamp("scheduleLastSentAt"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },

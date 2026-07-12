@@ -55,6 +55,7 @@ import { runSocialAutopilotAllWorkspaces } from "../services/socialAutopilot";
 import { runPipelineAlertsCron } from "../routers/pipelineAlerts";
 import { runSegmentEnrollmentForAllWorkspaces } from "../routers/segmentRules"; // eslint-disable-line
 import { runWarmupEngine } from "../services/warmupEngine";
+import { runReportScheduler } from "../services/reportScheduler";
 import { registerEmailTrackingRoutes } from "../emailTracking";
 import { startInboundReplyPoller } from "../inboundReplyPoller";
 import { expireInvitations, sendExpiryWarningEmails } from "../inviteExpiry";
@@ -231,6 +232,13 @@ async function startServer() {
   };
   setTimeout(runWarmup, 120_000); // first tick 2 min after boot
   setInterval(runWarmup, 30 * 60 * 1000); // every 30 minutes
+
+  // Scheduled report emails (daily/weekly/monthly via the system sender).
+  const runReports = () => {
+    runReportScheduler().catch((e: unknown) => console.error("[ReportScheduler] tick failed:", e));
+  };
+  setTimeout(runReports, 150_000);
+  setInterval(runReports, 60 * 60 * 1000); // hourly
 
 
   // ARE engine: drive every active Autonomous Revenue Engine campaign through

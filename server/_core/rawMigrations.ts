@@ -2573,6 +2573,16 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0122: scheduled report emailing ────────────────────────────────────────
+  {
+    name: "0122_report_scheduling.sql",
+    statements: [
+      `ALTER TABLE \`saved_reports\` ADD COLUMN \`scheduleFreq\` enum('none','daily','weekly','monthly') NOT NULL DEFAULT 'none'`,
+      `ALTER TABLE \`saved_reports\` ADD COLUMN \`scheduleRecipients\` text NULL`,
+      `ALTER TABLE \`saved_reports\` ADD COLUMN \`scheduleLastSentAt\` timestamp NULL`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------
