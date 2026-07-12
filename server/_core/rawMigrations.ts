@@ -2549,6 +2549,30 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0121: saved reports (/reports builder) + mailbox warmup engine ─────────
+  {
+    name: "0121_reports_and_warmup.sql",
+    statements: [
+      `CREATE TABLE IF NOT EXISTS \`saved_reports\` (
+        \`id\` int AUTO_INCREMENT NOT NULL,
+        \`workspaceId\` int NOT NULL,
+        \`ownerUserId\` int NOT NULL,
+        \`name\` varchar(160) NOT NULL,
+        \`object\` varchar(32) NOT NULL,
+        \`config\` json NOT NULL,
+        \`createdAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        \`updatedAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        CONSTRAINT \`saved_reports_id\` PRIMARY KEY(\`id\`),
+        INDEX \`ix_sr_ws\` (\`workspaceId\`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `ALTER TABLE \`sending_accounts\` ADD COLUMN \`warmupStartedAt\` timestamp NULL`,
+      `ALTER TABLE \`sending_accounts\` ADD COLUMN \`warmupSentToday\` int NOT NULL DEFAULT 0`,
+      `ALTER TABLE \`sending_accounts\` ADD COLUMN \`warmupTodayDate\` varchar(10) NULL`,
+      `ALTER TABLE \`sending_accounts\` ADD COLUMN \`warmupTotalSent\` int NOT NULL DEFAULT 0`,
+      `ALTER TABLE \`sending_accounts\` ADD COLUMN \`warmupLastSentAt\` timestamp NULL`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

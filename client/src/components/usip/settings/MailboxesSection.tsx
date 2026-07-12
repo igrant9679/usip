@@ -295,7 +295,7 @@ function MailboxRow({ a, onConfigure }: { a: MailboxAccount; onConfigure: () => 
           </div>
         </div>
       </td>
-      {/* Warmup */}
+      {/* Warmup — engine sends ramped peer-to-peer volume (services/warmupEngine.ts) */}
       <td className={cell}>
         <label className="flex cursor-pointer items-center gap-2">
           <Switch
@@ -303,7 +303,20 @@ function MailboxRow({ a, onConfigure }: { a: MailboxAccount; onConfigure: () => 
             disabled={update.isPending}
             onCheckedChange={(v) => update.mutate({ id: a.id, warmupStatus: v ? "in_progress" : "not_started" } as any)}
           />
-          <span className="text-[13px] text-foreground">{warmupOn ? "Warming up" : "Start warm up"}</span>
+          <span className="text-[13px] text-foreground">
+            {a.warmupStatus === "complete" ? (
+              <span className="font-medium text-emerald-600 dark:text-emerald-400">Warmed up</span>
+            ) : warmupOn && a.warmupStartedAt ? (
+              <>
+                Day {Math.max(1, Math.floor((Date.now() - new Date(a.warmupStartedAt).getTime()) / 86400000) + 1)}
+                <span className="text-muted-foreground"> · {a.warmupSentToday ?? 0} sent today</span>
+              </>
+            ) : warmupOn ? (
+              "Starting…"
+            ) : (
+              "Start warm up"
+            )}
+          </span>
         </label>
       </td>
       {/* Daily limit */}

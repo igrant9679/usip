@@ -12,6 +12,7 @@ import Customers from "@/pages/usip/Customers";
 import Dashboard from "@/pages/usip/Dashboard";
 import DashboardHome2 from "@/pages/usip/DashboardHome2";
 import Dashboards from "@/pages/usip/Dashboards";
+import Reports from "@/pages/usip/Reports";
 import EmailDrafts from "@/pages/usip/EmailDrafts";
 import EmailAnalytics from "@/pages/usip/EmailAnalytics";
 import { EmailSuppressions } from "@/pages/usip/EmailSuppressions";
@@ -341,6 +342,7 @@ function Router() {
       <Route path="/tasks"><AuthGate><Tasks /></AuthGate></Route>
       <Route path="/workflows"><AuthGate><Workflows /></AuthGate></Route>
       <Route path="/dashboards"><AuthGate><Dashboards /></AuthGate></Route>
+      <Route path="/reports"><AuthGate><Reports /></AuthGate></Route>
       <Route path="/dashboard-home2"><AuthGate><DashboardHome2 /></AuthGate></Route>
       <Route path="/products"><AuthGate><Products /></AuthGate></Route>
       <Route path="/quotes"><AuthGate><Quotes /></AuthGate></Route>

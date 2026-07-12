@@ -377,6 +377,7 @@ const SECTIONS: NavSection[] = [
       { href: "/lead-scoring", label: "Lead scoring", icon: Target },
       { href: "/lead-routing", label: "Lead routing", icon: Sparkles },
       { href: "/v2/analytics", label: "Analytics", icon: BarChart3 },
+      { href: "/reports", label: "Reports", icon: FileText },
       { href: "/dashboards", label: "Dashboards", icon: PieChart },
       { href: "/mindmaps", label: "Mindmaps", icon: GitFork },
     ],

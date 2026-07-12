@@ -51,6 +51,7 @@ import { toursRouter } from "./routers/tours";
 import { mindmapsRouter } from "./routers/mindmaps";
 import { aiCredentialsRouter } from "./routers/aiCredentials";
 import { voiceAgentsRouter } from "./routers/voiceAgents";
+import { reportsRouter } from "./routers/reports";
 import { profileRouter } from "./routers/profile";
 import { prospectsRouter } from "./routers/prospects";
 import { prospectImportsRouter } from "./routers/prospectImports";
@@ -159,6 +160,7 @@ export const appRouter = router({
   mindmaps: mindmapsRouter,
   aiCredentials: aiCredentialsRouter,
   voiceAgents: voiceAgentsRouter,
+  reports: reportsRouter,
   profile: profileRouter,
   prospects: prospectsRouter,
   prospectImports: prospectImportsRouter,

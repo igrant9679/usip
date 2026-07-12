@@ -114,6 +114,19 @@ async function pollImapAccount(account: any) {
           const fromAddr = parsed.from?.value?.[0];
           const toVal = parsed.to;
 
+          // Warmup traffic between our own mailboxes must never become a
+          // "reply": skip on the engine's marker header, and skip anything
+          // sent FROM one of this workspace's own sending accounts.
+          if (parsed.headers?.get?.("x-velocity-warmup")) continue;
+          if (fromAddr?.address) {
+            const own = await db3
+              .select({ id: sendingAccounts.id })
+              .from(sendingAccounts)
+              .where(and(eq(sendingAccounts.workspaceId, account.workspaceId), eq(sendingAccounts.fromEmail, fromAddr.address.toLowerCase())))
+              .limit(1);
+            if (own.length > 0) continue;
+          }
+
           // Cross-source dedup: same messageId already recorded for
           // this workspace (e.g. via the Unipile webhook earlier).
           const msgIdHeader = parsed.messageId ?? "";

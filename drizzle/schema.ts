@@ -2500,6 +2500,12 @@ export const sendingAccounts = mysqlTable(
       "in_progress",
       "complete",
     ]).default("not_started").notNull(),
+    /* ── Warmup engine (migration 0121) — real ramped peer-to-peer sends ── */
+    warmupStartedAt: timestamp("warmupStartedAt"), // stamped when the engine first picks the account up
+    warmupSentToday: int("warmupSentToday").default(0).notNull(),
+    warmupTodayDate: varchar("warmupTodayDate", { length: 10 }), // YYYY-MM-DD the counter belongs to (UTC)
+    warmupTotalSent: int("warmupTotalSent").default(0).notNull(),
+    warmupLastSentAt: timestamp("warmupLastSentAt"),
     /* ── Mailbox setup flow (migration 0118, Settings → Mailboxes) ── */
     isDefault: boolean("isDefault").default(false).notNull(),
     aliases: json("aliases"), // string[] of alternate send-as addresses
@@ -5044,3 +5050,25 @@ export const voiceCalls = mysqlTable(
   }),
 );
 export type VoiceCall = typeof voiceCalls.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Saved reports (Migration 0121) — the /reports builder's saved definitions.
+   `config` is the full report spec: { object, columns[], filters[], groupBy?,
+   aggregate?, sort?, limit } — validated server-side against per-object
+   column whitelists in server/routers/reports.ts (never raw SQL from input).
+   ────────────────────────────────────────────────────────────────────────── */
+export const savedReports = mysqlTable(
+  "saved_reports",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    ownerUserId: int("ownerUserId").notNull(),
+    name: varchar("name", { length: 160 }).notNull(),
+    object: varchar("object", { length: 32 }).notNull(), // deals|leads|prospects|contacts|activities
+    config: json("config").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({ byWs: index("ix_sr_ws").on(t.workspaceId) }),
+);
+export type SavedReport = typeof savedReports.$inferSelect;

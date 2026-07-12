@@ -54,6 +54,7 @@ import { runDealAutopilotAllWorkspaces } from "../services/dealAutopilot";
 import { runSocialAutopilotAllWorkspaces } from "../services/socialAutopilot";
 import { runPipelineAlertsCron } from "../routers/pipelineAlerts";
 import { runSegmentEnrollmentForAllWorkspaces } from "../routers/segmentRules"; // eslint-disable-line
+import { runWarmupEngine } from "../services/warmupEngine";
 import { registerEmailTrackingRoutes } from "../emailTracking";
 import { startInboundReplyPoller } from "../inboundReplyPoller";
 import { expireInvitations, sendExpiryWarningEmails } from "../inviteExpiry";
@@ -222,6 +223,14 @@ async function startServer() {
   };
   setTimeout(runSegmentEnrollment, 90_000); // first run after 90s
   setInterval(runSegmentEnrollment, 60 * 60 * 1000); // every hour
+
+  // Mailbox warmup engine: ramped peer-to-peer sends for accounts with the
+  // warmup toggle on (see services/warmupEngine.ts for the honest scope).
+  const runWarmup = () => {
+    runWarmupEngine().catch((e: unknown) => console.error("[Warmup] tick failed:", e));
+  };
+  setTimeout(runWarmup, 120_000); // first tick 2 min after boot
+  setInterval(runWarmup, 30 * 60 * 1000); // every 30 minutes
 
 
   // ARE engine: drive every active Autonomous Revenue Engine campaign through

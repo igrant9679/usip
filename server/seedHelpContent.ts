@@ -3,7 +3,7 @@
  *
  * Seeds (idempotently, per workspace):
  *   - 9 help categories  (deduped by (workspaceId, name) — no slug column on help_categories)
- *   - 36 help articles   (deduped by (workspaceId, slug), all status:'published')
+ *   - 38 help articles   (deduped by (workspaceId, slug), all status:'published')
  *   - 10 guided tours    (deduped by (workspaceId, name); steps delete+reinsert each run)
  *
  * Also retires the 5 legacy demo tours that the 10 SDR tours supersede
@@ -46,7 +46,7 @@ const CATEGORIES: CatSeed[] = [
   { slug: "settings-account", name: "Settings & Account", icon: "⚙️", sortOrder: 9 },
 ];
 
-/* ─── Articles (36) ──────────────────────────────────────────────────────── */
+/* ─── Articles (38) ──────────────────────────────────────────────────────── */
 
 type ArticleSeed = {
   slug: string;
@@ -431,7 +431,27 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     bodyMarkdown: `Three inbound tools feed your funnel without manual entry:\n\n- **Landing pages** (admin) — build simple hosted pages in the Landing Pages builder; each publishes at a public /l/your-slug URL with an optional lead-capture form. Submissions become leads instantly.\n- **Web forms** — embeddable forms whose submissions run **autonomous lead routing**: the lead is created, scored, routed to an owner, and **bridged** into the funnel — a company account is found-or-created from the corporate email domain (free-mail domains never become accounts) and a linked prospect is created, ready for sequences. Review the bridge on Data Enrichment → Form enrichment.\n- **Website visitor tracking** — a first-party snippet logs page views on your site. Visits from **known** prospects (they clicked a tracked link) are attributed to their record, and a high-intent visit (pricing, demo pages) fires an automatic follow-up task. Anonymous visitor de-anonymization isn't included — Velocity only claims what it can actually see.`,
   },
 
+  /* ── Reporting ───────────────────────────────────────────────────────────── */
+  {
+    slug: "reports-builder",
+    categorySlug: "crm-pipeline",
+    title: "The Reports builder",
+    summary: "Build, save, and export custom reports on deals, leads, prospects, contacts, and activities.",
+    readingTimeMinutes: 3,
+    tags: ["reports", "analytics", "export", "csv"],
+    bodyMarkdown: `**Reports** (sidebar → Automation and analytics) is the custom report builder.\n\n1. **Pick an object** — Deals, Leads, Prospects, Contacts, or Activities.\n2. **Choose columns** — check the fields you want; owners resolve to real names.\n3. **Stack filters** — equals / contains / greater-less / empty checks, combined with AND.\n4. **Group (optional)** — group by any column with a row **count**, or a **sum**/**average** of a numeric field (e.g. *deals by stage, sum of value* = your pipeline by stage in one click).\n5. **Sort & cap**, then **Run**.\n\n**Save** keeps the whole spec per workspace (everyone can reuse it; "Save as new" forks a loaded report). **Export CSV** downloads up to 1,000 rows of the current result.\n\nHow it fits with the rest of reporting: **Analytics** is the fixed autonomous-funnel overview, **Dashboards** is widget/chart canvases you arrange — **Reports** is where you answer ad-hoc questions in table form and hand the CSV to whoever asked.`,
+  },
+
   /* ── Settings & Account ──────────────────────────────────────────────────── */
+  {
+    slug: "mailbox-warmup",
+    categorySlug: "settings-account",
+    title: "Mailbox warmup",
+    summary: "Ramped warmup sending that builds a new mailbox's sending reputation.",
+    readingTimeMinutes: 2,
+    tags: ["mailboxes", "warmup", "deliverability"],
+    bodyMarkdown: `New mailboxes that suddenly send at volume get flagged. **Warmup** builds reputation first: flip the **warmup toggle** on a mailbox in **Settings → Mailboxes** and the engine sends a slowly-growing number of short, ordinary business emails from that mailbox each day — starting at ~2/day and ramping to ~40/day, spread across working hours with natural variation.\n\nWarmup mail goes to your workspace's **other connected mailboxes** (your own pool), carries no tracking, and is automatically excluded from replies/inbox views. The Mailboxes table shows live progress — *Day N · X sent today* — and after the **28-day ramp** the mailbox flips to **Warmed up** on its own. Pause anytime with the toggle.\n\nBeing straight about scope: this builds steady, authenticated sending history between real mailboxes you own. It does not fake engagement on external providers or use a third-party warmup network. Start warmup the day you connect a new mailbox, and let sequences take over once it completes.`,
+  },
   {
     slug: "settings-hub",
     categorySlug: "settings-account",
@@ -457,7 +477,7 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     summary: "Link sending mailboxes and configure signature, limits, and opt-out — step by step.",
     readingTimeMinutes: 3,
     tags: ["mailboxes", "email", "smtp", "deliverability", "settings"],
-    bodyMarkdown: `**Settings → Mailboxes** manages the accounts your sequences send from. Click **Link mailbox** to start the guided wizard:\n\n1. **Link** — pick your provider. *Other (SMTP/IMAP)* connects a single account with a **live Test SMTP** check before saving, or use **Bulk Import via CSV** (sample file provided, up to 100 accounts at once).\n2. **Configure** — three quick modules: **Signature** (used on that mailbox's sends), **Sending limits** (daily cap, hourly cap, delay between emails — the defaults are deliverability-safe), and **Opt-out link** (an unsubscribe footer for that mailbox).\n3. **Finish** — the overview shows a ✓/✗ per module; *Fix Configuration Issues* jumps you to whatever's incomplete.\n\nThe mailbox table shows each account's **setup %**, daily usage against its cap, deliverability signal, and aliases. Row menu: test the connection, refresh aliases, configure, set default, or unlink. Setup progress matters — a complete configuration (signature + limits + opt-out) is what keeps your mail out of spam folders.`,
+    bodyMarkdown: `**Settings → Mailboxes** manages the accounts your sequences send from. Click **Link mailbox** to start the guided wizard:\n\n1. **Link** — pick your provider. *Other (SMTP/IMAP)* connects a single account with a **live Test SMTP** check before saving, or use **Bulk Import via CSV** (sample file provided, up to 100 accounts at once).\n2. **Configure** — three quick modules: **Signature** (used on that mailbox's sends), **Sending limits** (daily cap, hourly cap, delay between emails — the defaults are deliverability-safe), and **Opt-out link** (an unsubscribe footer for that mailbox).\n3. **Finish** — the overview shows a ✓/✗ per module; *Fix Configuration Issues* jumps you to whatever's incomplete.\n\nThe mailbox table shows each account's **setup %**, daily usage against its cap, **warmup progress** (see "Mailbox warmup"), deliverability signal, and aliases. Row menu: test the connection, refresh aliases, configure, set default, or unlink. Setup progress matters — a complete configuration (signature + limits + opt-out) is what keeps your mail out of spam folders.`,
   },
 ];
 
