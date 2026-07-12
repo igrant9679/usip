@@ -21,6 +21,7 @@ import { and, eq, isNotNull } from "drizzle-orm";
 import { notifications, voiceAgents, voiceCalls } from "../drizzle/schema";
 import { getDb } from "./db";
 import { tryDecryptSecret } from "./_core/crypto";
+import { answerInboundCall } from "./services/voiceBridge";
 
 type SipHeader = { name?: string; value?: string };
 
@@ -114,6 +115,14 @@ export function registerVoiceWebhookRoutes(app: Express): void {
         startedAt: new Date(),
       });
       const callRowId = Number((insert as unknown as { insertId?: number })?.insertId ?? 0);
+
+      // Answer the call: fire-and-forget so this handler ACKs xAI fast.
+      answerInboundCall({
+        workspaceId: agent.workspaceId,
+        agentId: agent.id,
+        callRowId: callRowId,
+        xaiCallId: body.data.call_id,
+      });
 
       // Notify the member the agent answers for. kind stays inside the
       // notifications enum ("system") — do NOT invent a new enum value here.
