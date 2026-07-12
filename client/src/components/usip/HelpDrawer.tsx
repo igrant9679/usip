@@ -433,7 +433,7 @@ export function HelpDrawer({ onClose }: { onClose: () => void }) {
             Open full Help Center →
           </a>
           <a
-            href="/help/tour-builder"
+            href="/tour-builder"
             className="text-xs text-muted-foreground hover:text-muted-foreground"
           >
             Build a tour

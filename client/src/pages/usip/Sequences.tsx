@@ -1225,7 +1225,7 @@ function SequenceAbPanel({ sequenceId, steps }: { sequenceId: number; steps: any
       {/* Edit variant dialog */}
       {editVariant && (
         <Dialog open={!!editVariant} onOpenChange={(v) => !v && setEditVariant(null)}>
-          <DialogContent className="max-w-md">
+          <DialogContent className="sm:max-w-md">
             <DialogHeader><DialogTitle>Edit Variant {editVariant.variantLabel}</DialogTitle></DialogHeader>
             <div className="space-y-3 py-2">
               <div className="space-y-1"><Label>Subject</Label><Input defaultValue={editVariant.subject} id="ev-subject" /></div>

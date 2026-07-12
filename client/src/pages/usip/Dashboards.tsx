@@ -240,7 +240,7 @@ function AddWidgetDialog({ open, onOpenChange, onAdd, isPending }: AddWidgetDial
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Add widget</DialogTitle>
         </DialogHeader>

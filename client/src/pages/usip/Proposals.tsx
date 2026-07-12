@@ -184,7 +184,7 @@ function NewProposalWizard({ open, onClose, onCreated }: WizardProps) {
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && handleClose()}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <ClipboardList className="size-5 text-teal-600" />
@@ -896,7 +896,7 @@ export default function Proposals() {
 
       {/* Bulk Expiry Date Dialog */}
       <Dialog open={bulkExpiryOpen} onOpenChange={setBulkExpiryOpen}>
-        <DialogContent className="max-w-sm">
+        <DialogContent className="sm:max-w-sm">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Timer className="size-4 text-teal-600" />
@@ -1014,7 +1014,7 @@ export default function Proposals() {
       </Dialog>
       {/* Approve Extension Dialog */}
       <Dialog open={!!approveDialogState} onOpenChange={(o) => !o && setApproveDialogState(null)}>
-        <DialogContent className="max-w-sm">
+        <DialogContent className="sm:max-w-sm">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <ThumbsUp className="size-4 text-emerald-600" />
@@ -1065,7 +1065,7 @@ export default function Proposals() {
       </Dialog>
       {/* Decline Extension Dialog */}
       <Dialog open={!!denyDialogState} onOpenChange={(o) => !o && setDenyDialogState(null)}>
-        <DialogContent className="max-w-sm">
+        <DialogContent className="sm:max-w-sm">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <ThumbsDown className="size-4 text-red-600" />

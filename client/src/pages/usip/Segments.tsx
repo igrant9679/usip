@@ -515,7 +515,7 @@ export default function Segments() {
 
       {/* Delete Confirm */}
       <Dialog open={confirmDelete !== null} onOpenChange={(v) => !v && setConfirmDelete(null)}>
-        <DialogContent className="max-w-sm">
+        <DialogContent className="sm:max-w-sm">
           <DialogHeader>
             <DialogTitle>Delete Segment?</DialogTitle>
           </DialogHeader>

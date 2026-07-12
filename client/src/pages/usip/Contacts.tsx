@@ -121,7 +121,7 @@ function BulkVerifyModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <ShieldCheck className="h-5 w-5 text-[#14B89A]" />
@@ -265,7 +265,7 @@ function AddToSequenceModal({
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <ListPlus className="size-5 text-[#14B89A]" />
@@ -380,7 +380,7 @@ function SendEmailModal({
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Send className="size-5 text-[#14B89A]" />
@@ -487,7 +487,7 @@ function AddToCampaignModal({ open, onOpenChange, contactIds, onComplete }: { op
   });
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-sm">
+      <DialogContent className="sm:max-w-sm">
         <DialogHeader><DialogTitle className="flex items-center gap-2"><Megaphone className="size-4 text-orange-500" />Add to Campaign</DialogTitle></DialogHeader>
         <div className="space-y-4 py-2">
           <Select value={campaignId} onValueChange={setCampaignId}>
@@ -517,7 +517,7 @@ function AddToSegmentModal({ open, onOpenChange, contactIds, onComplete }: { ope
   });
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-sm">
+      <DialogContent className="sm:max-w-sm">
         <DialogHeader><DialogTitle className="flex items-center gap-2"><Tag className="size-4 text-violet-500" />Add to Segment</DialogTitle></DialogHeader>
         <div className="space-y-4 py-2">
           <Select value={segmentId} onValueChange={setSegmentId}>

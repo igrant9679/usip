@@ -1038,7 +1038,7 @@ export default function Team() {
 
       {/* Edit Member dialog — 3-tab layout */}
       <Dialog open={!!editTarget} onOpenChange={(v) => { if (!v) { setEditTarget(null); setEditDialogTab("profile"); setPermsDirty(false); } }}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>Edit member — {editTarget?.name ?? editTarget?.email}</DialogTitle>
           </DialogHeader>
@@ -1352,7 +1352,7 @@ export default function Team() {
 
       {/* Set Password dialog */}
       <Dialog open={!!pwTarget} onOpenChange={(v) => { if (!v) { setPwTarget(null); setPwValue(""); setPwConfirm(""); } }}>
-        <DialogContent className="max-w-sm">
+        <DialogContent className="sm:max-w-sm">
           <DialogHeader>
             <DialogTitle>Set password — {pwTarget?.name ?? pwTarget?.email}</DialogTitle>
           </DialogHeader>

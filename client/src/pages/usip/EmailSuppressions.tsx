@@ -251,7 +251,7 @@ export function EmailSuppressions() {
 
       {/* Add Suppression Dialog */}
       <Dialog open={addOpen} onOpenChange={setAddOpen}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Add Email Suppression</DialogTitle>
           </DialogHeader>
@@ -303,7 +303,7 @@ export function EmailSuppressions() {
 
       {/* Remove Confirmation Dialog */}
       <Dialog open={removeTarget !== null} onOpenChange={(o) => !o && setRemoveTarget(null)}>
-        <DialogContent className="max-w-sm">
+        <DialogContent className="sm:max-w-sm">
           <DialogHeader>
             <DialogTitle>Remove Suppression?</DialogTitle>
           </DialogHeader>

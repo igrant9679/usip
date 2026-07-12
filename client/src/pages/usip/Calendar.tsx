@@ -84,7 +84,7 @@ function ConnectCalendarDialog({ open, onClose }: { open: boolean; onClose: () =
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Connect Calendar Account</DialogTitle>
         </DialogHeader>
@@ -266,7 +266,7 @@ function EventDialog({
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>{event ? "Edit Event" : "New Event"}</DialogTitle>
         </DialogHeader>

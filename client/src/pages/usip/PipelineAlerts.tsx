@@ -88,7 +88,7 @@ function LogActivityDialog({
   });
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="sm:max-w-md">
         <DialogHeader><DialogTitle>Log Activity — {deal?.name}</DialogTitle></DialogHeader>
         <div className="space-y-3 py-2">
           <p className="text-sm text-muted-foreground">Add a note to this deal's activity timeline.</p>
@@ -125,7 +125,7 @@ function MoveStageDialog({
   });
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="max-w-sm">
+      <DialogContent className="sm:max-w-sm">
         <DialogHeader><DialogTitle>Move Stage — {deal?.name}</DialogTitle></DialogHeader>
         <div className="space-y-3 py-2">
           <p className="text-sm text-muted-foreground">Current: <span className="font-medium capitalize">{deal?.stage}</span> ({deal?.daysInStage ?? 0} days)</p>

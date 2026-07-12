@@ -182,7 +182,7 @@ export default function CustomFields() {
 
         {/* Add/Edit dialog */}
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-          <DialogContent className="max-w-lg">
+          <DialogContent className="sm:max-w-lg">
             <DialogHeader>
               <DialogTitle>{editDef ? "Edit Custom Field" : "Add Custom Field"}</DialogTitle>
             </DialogHeader>

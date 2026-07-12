@@ -264,7 +264,7 @@ export default function SnippetsPage() {
 
       {/* Create / Edit dialog */}
       <Dialog open={showDialog} onOpenChange={(o) => { setShowDialog(o); if (!o) { setEditId(null); setForm(DEFAULT_FORM); } }}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>{editId ? "Edit Snippet" : "New Snippet"}</DialogTitle>
           </DialogHeader>

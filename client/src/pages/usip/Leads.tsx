@@ -50,7 +50,7 @@ function SendEmailModal({ open, onOpenChange, leadIds, onComplete }: { open: boo
   function reset() { setSubject(""); setBody(""); setAiPrompt(""); setUseAi(false); setSent(false); }
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) { reset(); } onOpenChange(v); }}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="sm:max-w-lg">
         <DialogHeader><DialogTitle className="flex items-center gap-2"><Send className="size-4 text-blue-500" />Send Email to {leadIds.length} lead{leadIds.length !== 1 ? "s" : ""}</DialogTitle></DialogHeader>
         {sent ? (
           <div className="py-8 text-center space-y-3">
@@ -99,7 +99,7 @@ function AddToCampaignModal({ open, onOpenChange, leadIds, onComplete }: { open:
   });
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-sm">
+      <DialogContent className="sm:max-w-sm">
         <DialogHeader><DialogTitle className="flex items-center gap-2"><Megaphone className="size-4 text-orange-500" />Add to Campaign</DialogTitle></DialogHeader>
         <div className="space-y-4 py-2">
           <Select value={campaignId} onValueChange={setCampaignId}>
@@ -129,7 +129,7 @@ function AddToSegmentModal({ open, onOpenChange, leadIds, onComplete }: { open: 
   });
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-sm">
+      <DialogContent className="sm:max-w-sm">
         <DialogHeader><DialogTitle className="flex items-center gap-2"><Tag className="size-4 text-violet-500" />Add to Segment</DialogTitle></DialogHeader>
         <div className="space-y-4 py-2">
           <Select value={segmentId} onValueChange={setSegmentId}>

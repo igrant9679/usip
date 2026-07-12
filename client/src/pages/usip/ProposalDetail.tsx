@@ -762,7 +762,7 @@ function TimelineTab({ proposal, milestones, onRefetch }: { proposal: any; miles
       )}
 
       <Dialog open={addOpen} onOpenChange={(o) => { if (!o) { setAddOpen(false); setEditMilestone(null); resetForm(); } }}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>{editMilestone ? "Edit Milestone" : "Add Milestone"}</DialogTitle>
           </DialogHeader>
@@ -1008,7 +1008,7 @@ function ShareTab({ proposal, onRefetch }: { proposal: any; onRefetch: () => voi
 
       {/* Send to Client dialog */}
       <Dialog open={sendDialogOpen} onOpenChange={(open) => { setSendDialogOpen(open); if (!open) { setPersonalMessage(""); setSelectedAccountId("auto"); setShowPreview(false); } }}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>Send Proposal to Client</DialogTitle>
           </DialogHeader>
@@ -1532,7 +1532,7 @@ function PipelinePanel({ proposal, onRefetch }: { proposal: any; onRefetch: () =
       )}
       {/* Link Opportunity Dialog */}
       <Dialog open={linkDialogOpen} onOpenChange={setLinkDialogOpen}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Link Pipeline Opportunity</DialogTitle>
           </DialogHeader>
@@ -1779,7 +1779,7 @@ function ActivityFeed({ proposalId }: { proposalId: number }) {
       )}
     {/* Approve Extension Dialog */}
     <Dialog open={approveOpen} onOpenChange={setApproveOpen}>
-      <DialogContent className="max-w-sm">
+      <DialogContent className="sm:max-w-sm">
         <DialogHeader>
           <DialogTitle>Approve Extension Request</DialogTitle>
         </DialogHeader>
@@ -1812,7 +1812,7 @@ function ActivityFeed({ proposalId }: { proposalId: number }) {
     </Dialog>
     {/* Deny Extension Dialog */}
     <Dialog open={denyOpen} onOpenChange={setDenyOpen}>
-      <DialogContent className="max-w-sm">
+      <DialogContent className="sm:max-w-sm">
         <DialogHeader>
           <DialogTitle>Decline Extension Request</DialogTitle>
         </DialogHeader>
@@ -1882,7 +1882,7 @@ function ExpandedRevision({ rev, proposalId, onRestored }: { rev: any; proposalI
         </div>
       </div>
       <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
-        <DialogContent className="max-w-sm">
+        <DialogContent className="sm:max-w-sm">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <AlertTriangle className="size-4 text-amber-400" />

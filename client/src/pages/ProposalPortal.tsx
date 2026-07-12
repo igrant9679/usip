@@ -449,7 +449,7 @@ export default function ProposalPortal() {
 
       {/* Request Extension dialog */}
       <Dialog open={extensionDialogOpen} onOpenChange={setExtensionDialogOpen}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <CalendarClock className="size-5 text-orange-500" />
@@ -487,7 +487,7 @@ export default function ProposalPortal() {
       </Dialog>
       {/* Accept Proposal dialog */}
       <Dialog open={acceptDialogOpen} onOpenChange={setAcceptDialogOpen}>
-        <DialogContent className="max-w-sm">
+        <DialogContent className="sm:max-w-sm">
           <DialogHeader>
             <DialogTitle>Accept This Proposal?</DialogTitle>
           </DialogHeader>
