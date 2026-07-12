@@ -2499,6 +2499,56 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0120: Grok voice agents (xAI Voice Agent API) ──────────────────────────
+  {
+    name: "0120_grok_voice_agents.sql",
+    statements: [
+      `ALTER TABLE \`workspace_settings\` ADD COLUMN \`xaiApiKeyEnc\` text NULL`,
+      `ALTER TABLE \`workspace_settings\` ADD COLUMN \`xaiVoiceModel\` varchar(64) NULL`,
+      `CREATE TABLE IF NOT EXISTS \`voice_agents\` (
+        \`id\` int AUTO_INCREMENT NOT NULL,
+        \`workspaceId\` int NOT NULL,
+        \`ownerUserId\` int NULL,
+        \`name\` varchar(120) NOT NULL,
+        \`purpose\` enum('outbound_outreach','callback_receptionist') NOT NULL DEFAULT 'outbound_outreach',
+        \`voice\` varchar(40) NOT NULL DEFAULT 'eve',
+        \`model\` varchar(64) NOT NULL DEFAULT 'grok-voice-latest',
+        \`instructions\` text NULL,
+        \`phoneNumber\` varchar(32) NULL,
+        \`sipWebhookSecretEnc\` text NULL,
+        \`languageHint\` varchar(16) NULL,
+        \`status\` enum('active','paused') NOT NULL DEFAULT 'active',
+        \`createdAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        \`updatedAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        CONSTRAINT \`voice_agents_id\` PRIMARY KEY(\`id\`),
+        INDEX \`ix_va_ws\` (\`workspaceId\`),
+        INDEX \`ix_va_owner\` (\`ownerUserId\`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      `CREATE TABLE IF NOT EXISTS \`voice_calls\` (
+        \`id\` int AUTO_INCREMENT NOT NULL,
+        \`workspaceId\` int NOT NULL,
+        \`agentId\` int NOT NULL,
+        \`direction\` enum('outbound','inbound') NOT NULL,
+        \`toNumber\` varchar(32) NULL,
+        \`fromNumber\` varchar(32) NULL,
+        \`xaiCallId\` varchar(128) NULL,
+        \`status\` enum('queued','ringing','in_progress','completed','failed','no_answer') NOT NULL DEFAULT 'queued',
+        \`outcome\` text NULL,
+        \`relatedType\` varchar(24) NULL,
+        \`relatedId\` int NULL,
+        \`userId\` int NULL,
+        \`durationSec\` int NULL,
+        \`startedAt\` timestamp NULL,
+        \`endedAt\` timestamp NULL,
+        \`createdAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT \`voice_calls_id\` PRIMARY KEY(\`id\`),
+        INDEX \`ix_vc_ws\` (\`workspaceId\`,\`createdAt\`),
+        INDEX \`ix_vc_agent\` (\`agentId\`),
+        INDEX \`ix_vc_xai\` (\`xaiCallId\`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

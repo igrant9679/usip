@@ -58,6 +58,7 @@ import { registerEmailTrackingRoutes } from "../emailTracking";
 import { startInboundReplyPoller } from "../inboundReplyPoller";
 import { expireInvitations, sendExpiryWarningEmails } from "../inviteExpiry";
 import { registerUnipileWebhookRoutes } from "../unipileWebhook";
+import { registerVoiceWebhookRoutes } from "../voiceWebhook";
 import { registerWebsiteTrackingRoutes } from "../websiteTracking";
 import { registerUnsubscribeRoute } from "../unsubscribe";
 import { registerPasswordAuthRoutes } from "../passwordAuth";
@@ -93,8 +94,10 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 async function startServer() {
   const app = express();
   const server = createServer(app);
-  // Configure body parser with larger size limit for file uploads
-  app.use(express.json({ limit: "50mb" }));
+  // Configure body parser with larger size limit for file uploads.
+  // `verify` stashes the raw bytes so webhook signature checks (xAI voice)
+  // can HMAC the exact payload — JSON.stringify(req.body) is not byte-stable.
+  app.use(express.json({ limit: "50mb", verify: (req, _res, buf) => { (req as unknown as { rawBody?: Buffer }).rawBody = buf; } }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
   registerStorageProxy(app);
   registerOAuthRoutes(app);
@@ -102,6 +105,7 @@ async function startServer() {
   registerEmailTrackingRoutes(app);
   registerWebsiteTrackingRoutes(app);
   registerUnipileWebhookRoutes(app);
+  registerVoiceWebhookRoutes(app);
   registerUnsubscribeRoute(app);
   registerPasswordAuthRoutes(app);
   registerLLMStreamRoutes(app);

@@ -1420,6 +1420,10 @@ export const workspaceSettings = mysqlTable("workspace_settings", {
   openaiModel: varchar("openaiModel", { length: 128 }),
   geminiModel: varchar("geminiModel", { length: 128 }),
   aiDefaultProvider: varchar("aiDefaultProvider", { length: 32 }), // 'anthropic' | 'openai' | 'gemini'
+  // Grok voice agents (Migration 0120) — xAI API key for the Voice Agent API
+  // (wss://api.x.ai/v1/realtime + SIP). Same AES-256-GCM BYOK pattern as above.
+  xaiApiKeyEnc: text("xaiApiKeyEnc"),
+  xaiVoiceModel: varchar("xaiVoiceModel", { length: 64 }), // default grok-voice-latest (in code)
   // ── Task Autopilot (Migration 0099) — the /v2/tasks autonomy engine ──
   // off      = AI never generates tasks (fully manual)
   // approval = AI drafts next-best-action tasks; a human approves before they go live
@@ -4962,3 +4966,81 @@ export const websiteVisits = mysqlTable(
   }),
 );
 export type WebsiteVisit = typeof websiteVisits.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Grok voice agents (Migration 0120)
+
+   xAI Voice Agent API integration (docs.x.ai → audio/voice-agent). An agent is
+   a configured persona: voice + model + instructions, optionally bound to a
+   SIP phone number registered with xAI. Two purposes:
+     outbound_outreach    — workspace agent that places automated outreach calls
+     callback_receptionist — receives inbound call-backs ON BEHALF OF a team
+                             member (ownerUserId); xAI posts realtime.call.incoming
+                             to our webhook and the agent answers.
+   voice_calls is the call log both directions write into; rows link back to
+   CRM records via relatedType/relatedId like tasks do.
+   ────────────────────────────────────────────────────────────────────────── */
+export const voiceAgents = mysqlTable(
+  "voice_agents",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    /** null = shared workspace outreach agent; set = call-back agent answering
+     *  on behalf of this team member. */
+    ownerUserId: int("ownerUserId"),
+    name: varchar("name", { length: 120 }).notNull(),
+    purpose: mysqlEnum("purpose", ["outbound_outreach", "callback_receptionist"])
+      .default("outbound_outreach")
+      .notNull(),
+    voice: varchar("voice", { length: 40 }).default("eve").notNull(),
+    model: varchar("model", { length: 64 }).default("grok-voice-latest").notNull(),
+    instructions: text("instructions"),
+    /** E.164 number registered with xAI SIP (CreatePhoneNumberV2); null until provisioned. */
+    phoneNumber: varchar("phoneNumber", { length: 32 }),
+    /** Webhook signing secret returned once by xAI at number registration (AES-GCM enc). */
+    sipWebhookSecretEnc: text("sipWebhookSecretEnc"),
+    languageHint: varchar("languageHint", { length: 16 }),
+    status: mysqlEnum("status", ["active", "paused"]).default("active").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    byWs: index("ix_va_ws").on(t.workspaceId),
+    byOwner: index("ix_va_owner").on(t.ownerUserId),
+  }),
+);
+export type VoiceAgent = typeof voiceAgents.$inferSelect;
+
+export const voiceCalls = mysqlTable(
+  "voice_calls",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    agentId: int("agentId").notNull(),
+    direction: mysqlEnum("direction", ["outbound", "inbound"]).notNull(),
+    toNumber: varchar("toNumber", { length: 32 }),
+    fromNumber: varchar("fromNumber", { length: 32 }),
+    /** xAI realtime call id (from realtime.call.incoming / outbound create). */
+    xaiCallId: varchar("xaiCallId", { length: 128 }),
+    status: mysqlEnum("status", ["queued", "ringing", "in_progress", "completed", "failed", "no_answer"])
+      .default("queued")
+      .notNull(),
+    /** Post-call summary/transcript digest (filled by the bridge when available). */
+    outcome: text("outcome"),
+    /** CRM link, same shape as tasks: account|contact|lead|opportunity|prospect. */
+    relatedType: varchar("relatedType", { length: 24 }),
+    relatedId: int("relatedId"),
+    /** Rep on whose behalf the call happened (callback owner / outreach initiator). */
+    userId: int("userId"),
+    durationSec: int("durationSec"),
+    startedAt: timestamp("startedAt"),
+    endedAt: timestamp("endedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    byWs: index("ix_vc_ws").on(t.workspaceId, t.createdAt),
+    byAgent: index("ix_vc_agent").on(t.agentId),
+    byXaiCall: index("ix_vc_xai").on(t.xaiCallId),
+  }),
+);
+export type VoiceCall = typeof voiceCalls.$inferSelect;
