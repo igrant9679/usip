@@ -336,7 +336,7 @@ export default function ImportContacts() {
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="rounded-lg border overflow-hidden">
-                <table className="w-full text-sm">
+                <div className="overflow-x-auto"><table className="w-full text-sm">
                   <thead className="bg-muted/50">
                     <tr>
                       <th className="text-left px-4 py-2 font-medium">CSV Column</th>
@@ -380,7 +380,7 @@ export default function ImportContacts() {
                       </tr>
                     ))}
                   </tbody>
-                </table>
+                </table></div>
               </div>
 
               <p className="text-xs text-muted-foreground">

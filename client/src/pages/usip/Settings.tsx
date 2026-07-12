@@ -688,7 +688,7 @@ function NotificationsTab({ settings, save, canEdit }: { settings: any; save: (v
       }
     >
       <div className="p-4">
-        <table className="w-full text-sm">
+        <div className="overflow-x-auto"><table className="w-full text-sm">
           <thead className="text-xs text-muted-foreground">
             <tr className="text-left">
               <th className="py-2">Event</th>
@@ -719,7 +719,7 @@ function NotificationsTab({ settings, save, canEdit }: { settings: any; save: (v
               </tr>
             ))}
           </tbody>
-        </table>
+        </table></div>
       </div>
     </Section>
   );

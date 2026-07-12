@@ -302,7 +302,7 @@ export default function Leads() {
           <EmptyState icon={Target} title="No leads yet" description="Create one or wait for inbound." />
         ) : (
           <div className="rounded-lg border bg-card overflow-hidden">
-            <table className="w-full text-sm">
+            <div className="overflow-x-auto"><table className="w-full text-sm">
               <thead className="bg-secondary/50 text-xs uppercase text-muted-foreground">
                 <tr>
                   <th className="px-3 py-2 w-8">
@@ -398,7 +398,7 @@ export default function Leads() {
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </table></div>
           </div>
         )}
       </div>

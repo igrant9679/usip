@@ -373,7 +373,7 @@ export default function Accounts() {
             ) : listLoading ? (
               <TableSkeleton rows={8} />
             ) : (list ?? []).length === 0 ? <EmptyState icon={Building2} title="No accounts yet" description="Accounts are the companies you're working. They're created automatically when you convert a qualified lead, or you can add one manually." /> : (
-              <table className="w-full text-sm">
+              <div className="overflow-x-auto"><table className="w-full text-sm">
                 <thead className="bg-secondary/50 text-xs uppercase text-muted-foreground">
                   <tr>
                     <th className="px-3 py-2 w-8">
@@ -434,7 +434,7 @@ export default function Accounts() {
                     </tr>
                   ))}
                 </tbody>
-              </table>
+              </table></div>
             )}
           </Section>
         </div>

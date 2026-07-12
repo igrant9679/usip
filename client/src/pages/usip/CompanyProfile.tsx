@@ -119,7 +119,7 @@ export default function CompanyProfile() {
               <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">People at this company ({contacts?.length ?? 0})</div>
             </div>
             {contacts && contacts.length > 0 ? (
-              <table className="w-full text-sm">
+              <div className="overflow-x-auto"><table className="w-full text-sm">
                 <thead className="text-left text-[11px] uppercase tracking-wide text-muted-foreground border-b border-border/60">
                   <tr><th className="px-4 py-1.5 font-medium">Name</th><th className="px-2 py-1.5 font-medium">Title</th><th className="px-2 py-1.5 font-medium">Email</th><th className="px-2 py-1.5 font-medium">Type</th></tr>
                 </thead>
@@ -133,7 +133,7 @@ export default function CompanyProfile() {
                     </tr>
                   ))}
                 </tbody>
-              </table>
+              </table></div>
             ) : <div className="px-4 py-6 text-[13px] text-muted-foreground">No linked people yet.</div>}
           </section>
 

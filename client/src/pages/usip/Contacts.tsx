@@ -770,7 +770,7 @@ export default function Contacts() {
           <EmptyState icon={Users} title="No contacts" description="Add one or convert a lead." />
         ) : (
           <div className="rounded-lg border bg-card overflow-hidden">
-            <table className="w-full text-sm">
+            <div className="overflow-x-auto"><table className="w-full text-sm">
               <thead className="bg-secondary/50 text-xs uppercase text-muted-foreground">
                 <tr>
                   <th className="px-3 py-2 w-8">
@@ -897,7 +897,7 @@ export default function Contacts() {
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </table></div>
           </div>
         )}
       </div>

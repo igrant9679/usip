@@ -445,7 +445,7 @@ export default function EmailAnalytics() {
               description="Sent emails will appear here once you send approved drafts."
             />
           ) : (
-            <table className="w-full text-sm">
+            <div className="overflow-x-auto"><table className="w-full text-sm">
               <thead>
                 <tr className="border-b bg-muted/20 text-xs text-muted-foreground">
                   <th className="text-left px-4 py-2.5" aria-sort={sortField === "subject" ? (sortDir === "asc" ? "ascending" : "descending") : "none"}>
@@ -541,7 +541,7 @@ export default function EmailAnalytics() {
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </table></div>
           )}
         </div>
       </div>

@@ -93,7 +93,8 @@ export function MailboxesSection() {
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto bg-muted/40 mt-3 border-t border-border">
-        <div className="mx-auto w-full max-w-5xl px-4 sm:px-6 py-6">
+        {/* wide cap — the mailbox table needs ~1000px; a narrower cap permanently clipped the tail columns */}
+        <div className="mx-auto w-full max-w-[1500px] px-4 sm:px-6 py-6">
           {accountsQ.isLoading ? (
             <div className="h-64 rounded-xl bg-card/70 animate-pulse" />
           ) : accounts.length === 0 ? (
@@ -141,7 +142,7 @@ export function MailboxesSection() {
                 <table className="w-full min-w-[1080px] border-separate border-spacing-0 text-[13px]">
                   <thead>
                     <tr className="text-left text-[11px] uppercase tracking-wide text-muted-foreground">
-                      {["Mailbox", "Type", "Setup", "Warmup", "Daily Limit", "Deliverability", "Last Synced", "Hourly Limit", "Forwarding Email", "Warmup Billing", ""].map((h) => (
+                      {["Mailbox", "Type", "Setup", "Warmup", "Daily Limit", "Deliverability", "Last Synced", "Hourly Limit", "Forwarding Email", ""].map((h) => (
                         <th
                           key={h || "actions"}
                           className={cn(
@@ -173,7 +174,7 @@ export function MailboxesSection() {
                   <tbody>
                     {filtered.length === 0 ? (
                       <tr>
-                        <td colSpan={11} className="px-4 py-10 text-center text-muted-foreground">
+                        <td colSpan={10} className="px-4 py-10 text-center text-muted-foreground">
                           No mailboxes match "{query}"
                         </td>
                       </tr>
@@ -337,8 +338,6 @@ function MailboxRow({ a, onConfigure }: { a: MailboxAccount; onConfigure: () => 
       <td className={cn(cell, "tabular-nums")}>{a.hourlySendLimit ?? 6}</td>
       {/* Forwarding email */}
       <td className={cn(cell, "text-muted-foreground")}>{a.forwardingEmail ?? "—"}</td>
-      {/* Warmup billing */}
-      <td className={cn(cell, "text-muted-foreground")}>—</td>
       {/* actions — pinned to the right edge */}
       <td className={cn(cell, "w-10 sticky right-0 z-10 bg-inherit border-l border-border/60")}>
         <DropdownMenu>

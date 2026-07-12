@@ -87,7 +87,7 @@ export default function Customers() {
           <div className="lg:col-span-2">
             <Section title="All customers">
               {listError ? <QueryError message={listError.message} onRetry={() => listRefetch()} /> : listLoading ? <TableSkeleton rows={6} /> : (list ?? []).length === 0 ? <EmptyState icon={Heart} title="No customers" /> : (
-                <table className="w-full text-sm">
+                <div className="overflow-x-auto"><table className="w-full text-sm">
                   <thead className="bg-secondary/50 text-xs uppercase text-muted-foreground"><tr>
                     <th className="text-left px-3 py-2">Account</th><th className="text-left px-3 py-2">Tier</th>
                     <th className="text-right px-3 py-2">Health</th><th className="text-right px-3 py-2">ARR</th>
@@ -119,7 +119,7 @@ export default function Customers() {
                       </tr>
                     ))}
                   </tbody>
-                </table>
+                </table></div>
               )}
             </Section>
           </div>
