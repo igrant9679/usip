@@ -141,6 +141,8 @@ const specSchema = z.object({
   aggregateField: z.string().max(64).optional(),
   sort: z.object({ field: z.string().max(64), dir: z.enum(["asc", "desc"]) }).optional(),
   limit: z.number().int().min(1).max(1000).default(200),
+  /** client-side chart preference — persisted with saved reports */
+  viz: z.string().max(20).optional(),
 });
 export type ReportSpec = z.infer<typeof specSchema>;
 
