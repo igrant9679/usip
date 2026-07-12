@@ -7,7 +7,7 @@
  * pipeline / pipelineAlerts / forecastAi routers — this page only adds the
  * autonomy layer (deals.* ) on top. The classic editor stays at /pipeline.
  */
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Link } from "wouter";
 import { toast } from "sonner";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
@@ -48,6 +48,39 @@ const LEGACY_STAGES: Stage[] = [
   { key: "lost", label: "Lost", isLost: true },
 ];
 
+/* Per-stage hues — open stages cycle the palette in column order; won/lost are
+ * fixed. This is what carries colour across the board (dots, column washes,
+ * card accent bars). */
+const STAGE_HUES = ["#0EA5E9", "#8B5CF6", "#F59E0B", "#EC4899", "#06B6D4", "#84CC16"];
+function stageHue(st: Stage, index: number): string {
+  if (st.isWon || st.key === "won") return "#10B981";
+  if (st.isLost || st.key === "lost") return "#F43F5E";
+  return STAGE_HUES[index % STAGE_HUES.length];
+}
+
+/** Lightweight CSS confetti burst — mounts for ~1.6s after a deal goes Won. */
+function WonConfetti() {
+  const pieces = Array.from({ length: 28 });
+  return (
+    <div aria-hidden className="pointer-events-none fixed inset-x-0 top-0 z-[100] overflow-visible">
+      <style>{`@keyframes vconfetti { 0% { transform: translateY(-10px) rotate(0deg); opacity: 1; } 100% { transform: translateY(78vh) rotate(660deg); opacity: 0; } }`}</style>
+      {pieces.map((_, i) => (
+        <span
+          key={i}
+          className="absolute block rounded-[2px]"
+          style={{
+            left: `${(i * 37) % 100}%`,
+            width: 6 + (i % 3) * 3,
+            height: 10 + (i % 4) * 3,
+            backgroundColor: ["#10B981", "#0EA5E9", "#F59E0B", "#EC4899", "#8B5CF6"][i % 5],
+            animation: `vconfetti ${1.1 + (i % 5) * 0.12}s ease-in ${(i % 7) * 0.05}s forwards`,
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
 const MODE_META: Record<string, { label: string; blurb: string }> = {
   off: { label: "Autopilot off", blurb: "AI won't touch your deals." },
   approval: { label: "Autopilot: Approve", blurb: "AI writes a recommended next step + win probability on each open deal for you to act on." },
@@ -79,8 +112,16 @@ export default function DealsV2() {
     onSuccess: (r) => { utils.opportunities.board.invalidate(); toast.success(r.analyzed === 0 ? "No open deals to analyze" : `AI analyzed ${r.analyzed} deal${r.analyzed === 1 ? "" : "s"}`); },
     onError: (e) => toast.error(e.message),
   });
+  const [celebrate, setCelebrate] = useState(0);
   const setStage = trpc.opportunities.setStage.useMutation({
-    onSuccess: () => utils.opportunities.board.invalidate(),
+    onSuccess: (_d, vars) => {
+      utils.opportunities.board.invalidate();
+      if (vars.stage === "won") {
+        setCelebrate(Date.now());
+        toast.success("Deal won! 🎉");
+        setTimeout(() => setCelebrate(0), 1800);
+      }
+    },
     onError: (e) => toast.error(e.message),
   });
 
@@ -123,8 +164,8 @@ export default function DealsV2() {
     );
   };
 
-  const Card = ({ o }: { o: Opp }) => (
-    <div className="rounded-lg border bg-card p-2.5 shadow-sm space-y-1.5">
+  const Card = ({ o, hue }: { o: Opp; hue?: string }) => (
+    <div className="rounded-lg border bg-card p-2.5 shadow-sm space-y-1.5" style={hue ? { borderLeft: `3px solid ${hue}` } : undefined}>
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
           <Link href={`/opportunities/${o.id}`} className="text-[13px] font-medium truncate block hover:underline">{o.name}</Link>
@@ -234,20 +275,24 @@ export default function DealsV2() {
             </div>
           ) : (
             <div className="flex gap-3 overflow-x-auto pb-2">
-              {stages.map((st) => {
+              {stages.map((st, si) => {
                 const list = byStage[st.key] ?? [];
                 const colValue = list.reduce((s, o) => s + Number(o.value ?? 0), 0);
+                const hue = stageHue(st, si);
                 return (
                   <div key={st.key} className="w-64 shrink-0">
                     <div className="flex items-center justify-between px-1 mb-1.5">
-                      <div className="text-[12px] font-semibold flex items-center gap-1.5">
-                        <span className={cn("size-2 rounded-full", st.isWon ? "bg-emerald-500" : st.isLost ? "bg-rose-400" : "")} style={!st.isWon && !st.isLost ? { backgroundColor: accent } : undefined} />
+                      <div className="text-[12px] font-semibold flex items-center gap-1.5" style={{ color: hue }}>
+                        <span className="size-2 rounded-full" style={{ backgroundColor: hue }} />
                         {st.label} <span className="text-muted-foreground font-normal">{list.length}</span>
                       </div>
                       <span className="text-[10px] text-muted-foreground tabular-nums">{money(colValue)}</span>
                     </div>
-                    <div className="space-y-2 rounded-xl border bg-muted/20 p-2 min-h-[80px]">
-                      {list.map((o) => <Card key={o.id} o={o} />)}
+                    <div
+                      className="space-y-2 rounded-xl border p-2 min-h-[80px]"
+                      style={{ borderTop: `3px solid ${hue}`, backgroundColor: `${hue}0d`, borderColor: `${hue}33` }}
+                    >
+                      {list.map((o) => <Card key={o.id} o={o} hue={hue} />)}
                     </div>
                   </div>
                 );
@@ -256,6 +301,7 @@ export default function DealsV2() {
           )}
         </div>
       </div>
+      {celebrate > 0 && <WonConfetti />}
     </Shell>
   );
 }
