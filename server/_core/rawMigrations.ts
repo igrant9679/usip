@@ -2583,6 +2583,19 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0123: one-time — start warmup on every sender-pool member mailbox ──────
+  // (User-requested 2026-07-12. The engine still skips accounts without SMTP
+  //  creds, ramps 2/day → 40/day, and only mails connection-verified peers.)
+  {
+    name: "0123_enable_warmup_for_pool_members.sql",
+    statements: [
+      `UPDATE \`sending_accounts\` sa
+        JOIN \`sender_pool_members\` spm ON spm.\`accountId\` = sa.\`id\`
+        SET sa.\`warmupStatus\` = 'in_progress'
+        WHERE sa.\`warmupStatus\` = 'not_started' AND sa.\`enabled\` = 1`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------
