@@ -22,6 +22,7 @@ import { notifications, voiceAgents, voiceCalls } from "../drizzle/schema";
 import { getDb } from "./db";
 import { tryDecryptSecret } from "./_core/crypto";
 import { answerInboundCall } from "./services/voiceBridge";
+import { matchCallerToRecord } from "./services/voiceCrmLink";
 
 type SipHeader = { name?: string; value?: string };
 
@@ -103,6 +104,9 @@ export function registerVoiceWebhookRoutes(app: Express): void {
         return;
       }
 
+      // Best-effort caller → CRM record match (contact > lead > prospect).
+      const match = await matchCallerToRecord(agent.workspaceId, from).catch(() => null);
+
       const insert = await db.insert(voiceCalls).values({
         workspaceId: agent.workspaceId,
         agentId: agent.id,
@@ -111,6 +115,8 @@ export function registerVoiceWebhookRoutes(app: Express): void {
         toNumber: (to ?? agent.phoneNumber)?.slice(0, 32) ?? null,
         xaiCallId: body.data.call_id.slice(0, 128),
         status: "ringing",
+        relatedType: match?.relatedType ?? null,
+        relatedId: match?.relatedId ?? null,
         userId: agent.ownerUserId ?? null,
         startedAt: new Date(),
       });
@@ -131,8 +137,8 @@ export function registerVoiceWebhookRoutes(app: Express): void {
           workspaceId: agent.workspaceId,
           userId: agent.ownerUserId,
           kind: "system",
-          title: `Call-back${from ? ` from ${from}` : ""}`,
-          body: `Your voice agent "${agent.name}" received an inbound call.`,
+          title: `Call-back${match ? ` from ${match.name}` : from ? ` from ${from}` : ""}`,
+          body: `Your voice agent "${agent.name}" answered an inbound call${match ? ` from ${match.name} (${match.relatedType})` : ""}.`,
           relatedType: "voice_call",
           relatedId: callRowId || null,
         });

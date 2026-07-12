@@ -14,6 +14,7 @@ import { eq } from "drizzle-orm";
 import { users, voiceAgents, voiceCalls, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { tryDecryptSecret } from "../_core/crypto";
+import { logCallActivity } from "./voiceCrmLink";
 
 const XAI_REALTIME_WS = "wss://api.x.ai/v1/realtime";
 const XAI_API_BASE = "https://api.x.ai/v1";
@@ -106,6 +107,13 @@ export function answerInboundCall(opts: BridgeOpts): void {
         outcome: [note, digest].filter(Boolean).join("\n\n") || null,
         startedAtMs,
       });
+      // Completed calls that matched a CRM record land on its timeline as a
+      // real `call` activity (no-op when unmatched).
+      if (status === "completed") {
+        await logCallActivity(opts.callRowId, agent.name).catch((e) =>
+          console.error("[VoiceBridge] activity log failed:", e),
+        );
+      }
     };
 
     const sock = new WebSocket(`${XAI_REALTIME_WS}?call_id=${encodeURIComponent(opts.xaiCallId)}`, {
