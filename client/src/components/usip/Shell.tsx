@@ -69,6 +69,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { ReactNode, useEffect, useLayoutEffect, useState, useRef, createContext, useContext } from "react";
 import { Link, useLocation } from "wouter";
 import { PageTransition } from "@/components/PageTransition";
+import { HelpDrawer } from "@/components/usip/HelpDrawer";
 import { useTheme, PALETTES } from "@/contexts/ThemeContext";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Moon, Sun, Pencil, Check as CheckIcon, X as XIcon, Palette } from "lucide-react";
@@ -534,6 +535,7 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
   const { workspaces, current, switchTo, isLoading } = useWorkspace();
   const [wsOpen, setWsOpen] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
   const navRef = useRef<HTMLElement>(null);
   // Collapsible nav groups — persisted to localStorage so the choice survives
   // Shell's per-navigation remount (each page renders its own <Shell>).
@@ -675,6 +677,7 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
   useEffect(() => {
     setWsOpen(false);
     setMobileOpen(false);
+    setHelpOpen(false);
   }, [location]);
   return (
     <AccentContext.Provider value={accentColor}>
@@ -830,6 +833,19 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
             </button>
           )}
 
+          {/* Help Center — opens the contextual drawer (articles for this page,
+              Ask AI, guided tours). Anchored in the topbar, NOT a floating FAB. */}
+          <button
+            type="button"
+            data-tour-id="help-button"
+            onClick={() => setHelpOpen(true)}
+            className="p-2 rounded-md hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
+            title="Help Center"
+            aria-label="Open Help Center"
+          >
+            <HelpCircle className="size-4" />
+          </button>
+
           <Link href="/inbox" className="relative p-2 rounded-md hover:bg-secondary" title="Notifications">
             <Bell className="size-4" />
             {unread && unread > 0 ? (
@@ -837,6 +853,8 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
             ) : null}
           </Link>
         </header>
+
+        {helpOpen && <HelpDrawer onClose={() => setHelpOpen(false)} />}
 
         <main className="flex-1 overflow-auto bg-background">
           <PageTransition>{children}</PageTransition>

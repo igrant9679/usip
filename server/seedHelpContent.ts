@@ -80,7 +80,7 @@ const ARTICLES: ArticleSeed[] = [
     summary: "Sidebar, global search, and command bar.",
     readingTimeMinutes: 2,
     tags: ["getting-started", "navigation"],
-    bodyMarkdown: `The **sidebar** is your map — collapse it with the toggle, and it remembers your scroll position between pages. **Global search** (top bar, or ⌘K) jumps to any record or page by name. Page headers carry the primary action button on the right and a **sub-nav strip** beneath for related pages (e.g. Sequences → Email Drafts / Email Analytics). The **Help Center** link in the top bar opens articles, Ask AI, and guided tours from anywhere. Personal and workspace configuration lives in the **Settings hub** — open **Admin Settings** (bottom of the sidebar) → *All settings*, or head to /v2/settings. You can also pick a **colour theme** from the palette icon in the top bar; it syncs to your account. Tip: most list pages support inline filters and CSV export from the header.`,
+    bodyMarkdown: `The **sidebar** is your map — collapse it with the toggle, and it remembers your scroll position between pages. **Global search** (top bar, or ⌘K) jumps to any record or page by name. Page headers carry the primary action button on the right and a **sub-nav strip** beneath for related pages (e.g. Sequences → Email Drafts / Email Analytics). The **? button in the top bar** opens the Help drawer — articles for the page you're on, Ask AI, and guided tours — and the ? in the sidebar footer opens the full Help Center. Personal and workspace configuration lives in the **Settings hub** — open **Admin Settings** (bottom of the sidebar) → *All settings*, or head to /v2/settings. You can also pick a **colour theme** from the palette icon in the top bar; it syncs to your account. Tip: most list pages support inline filters and CSV export from the header.`,
   },
   {
     slug: "connect-email-linkedin",
@@ -499,7 +499,7 @@ const TOURS: TourSeed[] = [
       { title: "Welcome to Velocity", bodyMarkdown: "Quick 3-min tour of where you'll work each day.", routeTo: "/dashboard", visualTreatment: "coach", advanceCondition: "next_button" },
       { title: "Your sidebar", bodyMarkdown: "Quick links up top (Home, AI Assistant, Inbox, Mailbox, Calendar), then the work: Prospect and enrich, Engage, Win deals, Revenue Engine, and more.", targetDataTourId: "sidebar-nav", visualTreatment: "spotlight", advanceCondition: "next_button" },
       { title: "Your daily numbers", bodyMarkdown: "The Dashboard is your morning home — pipeline, leads, customers.", targetDataTourId: "dashboard-kpi-grid", visualTreatment: "spotlight", advanceCondition: "next_button" },
-      { title: "Help anytime", bodyMarkdown: "Open the Help Center (the ? icon in the sidebar footer, or /help) for articles, Ask AI, and these tours.", visualTreatment: "coach", advanceCondition: "next_button" },
+      { title: "Help anytime", bodyMarkdown: "Click the ? in the top bar for contextual articles, Ask AI, and these tours — on any page.", targetDataTourId: "help-button", visualTreatment: "pulse", advanceCondition: "next_button" },
     ],
   },
   {
