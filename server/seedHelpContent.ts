@@ -71,7 +71,7 @@ const ARTICLES: ArticleSeed[] = [
     tags: ["getting-started", "overview", "sdr"],
     pageKey: "dashboard",
     tourName: "Getting Started",
-    bodyMarkdown: `Velocity is your unified revenue workspace — prospecting, CRM, sequences, meetings, calls, and inbox in one place, so you never tab-hop between tools. As an SDR you'll spend most of your day in three areas: **Prospects/Find Prospects** (build your list), **Sequences & Conversations** (run outreach and handle replies), and **Pipeline/Contacts** (track what's working). The left sidebar groups everything: *Overview* (Dashboard, Inbox, Mailbox, Calendar), *Funnel* (Prospects, Leads, Contacts), *Engage* (Sequences, Conversations, Meetings, Calls), and *Revenue Engine* (ARE). Much of the busywork can run on **Autopilot** — see "The Autonomy Control Center" for the Off / Approve / Auto switches. Start each day on the **Dashboard** for your numbers, then move into prospecting. New here? Run the **Getting Started** guided tour (Help Center → Tours) for a 3-minute walkthrough.`,
+    bodyMarkdown: `Velocity is your unified revenue workspace — prospecting, CRM, sequences, meetings, calls, and inbox in one place, so you never tab-hop between tools. As an SDR you'll spend most of your day in three areas: **Prospects/Find Prospects** (build your list), **Sequences & Conversations** (run outreach and handle replies), and **Pipeline/Contacts** (track what's working). The left sidebar starts with your personal quick links (Home, AI Assistant, Inbox, My Mailbox, My Calendar), then groups the work: *Prospect and enrich* (People, Companies, Find Prospects), *Engage* (Sequences, Emails, Calls, Tasks, Social), *Win deals* (Leads, Deals, Meetings, Conversations), *Customer success*, *Revenue Engine* (ARE), *Automation and analytics*, and *Inbound*. Much of the busywork can run on **Autopilot** — see "The Autonomy Control Center" for the Off / Approve / Auto switches. Start each day on the **Dashboard** for your numbers, then move into prospecting. New here? Run the **Getting Started** guided tour (Help Center → Tours) for a 3-minute walkthrough.`,
   },
   {
     slug: "navigating-the-app",
@@ -101,7 +101,7 @@ const ARTICLES: ArticleSeed[] = [
     tags: ["prospecting", "discovery", "icp"],
     pageKey: "find-prospects",
     tourName: "Find Prospects",
-    bodyMarkdown: `**Find Prospects** (sidebar → Acquire) runs multi-source discovery against your ICP. Pick **Person** or **Account** mode, fill the fields you care about (job title, seniority, industry, location) and add keywords for intent. Click **Run discovery** — results fan out across LinkedIn, web, and news, then get scored and de-duplicated automatically. Anything fully verified lands in **Verified**; partial matches land in **Needs Review** for you to clean up. Click any result row to open the full prospect. Skipped fields are ignored, so start broad and narrow if you get noise.`,
+    bodyMarkdown: `**Find Prospects** (sidebar → Prospect and enrich) runs multi-source discovery against your ICP. Pick **Person** or **Account** mode, fill the fields you care about (job title, seniority, industry, location) and add keywords for intent. Click **Run discovery** — results fan out across LinkedIn, web, and news, then get scored and de-duplicated automatically. Anything fully verified lands in **Verified**; partial matches land in **Needs Review** for you to clean up. Click any result row to open the full prospect. Skipped fields are ignored, so start broad and narrow if you get noise.`,
   },
   {
     slug: "needs-review-queue",
@@ -205,7 +205,7 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     tags: ["crm", "pipeline", "kanban"],
     pageKey: "pipeline",
     tourName: "Master the Pipeline",
-    bodyMarkdown: `**Pipeline** shows opportunities as a kanban grouped by stage (discovery → qualified → proposal → negotiation → won/lost). Drag a card between columns to change its stage, or — keyboard/no-mouse — focus a card (Tab) and use the **◀ / ▶ Move** buttons on it. Cards show value, win probability, and AI next-best-actions; if AI suggests a stage change you'll see an **Accept** chip. Use the view toggle for the **Forecast** rollup. Every stage move is recorded in the opportunity's stage history. Keep stages honest — the forecast and alerts depend on it.`,
+    bodyMarkdown: `Your pipeline lives under **Win deals → Deals** — a kanban of opportunities grouped by stage (discovery → qualified → proposal → negotiation → won/lost), with the Deal Autopilot layered on top; the classic board also remains at /pipeline. Drag a card between columns to change its stage, or — keyboard/no-mouse — focus a card (Tab) and use the **◀ / ▶ Move** buttons on it. Cards show value, win probability, and AI next-best-actions; if AI suggests a stage change you'll see an **Accept** chip. Use the view toggle for the **Forecast** rollup. Every stage move is recorded in the opportunity's stage history. Keep stages honest — the forecast and alerts depend on it.`,
   },
   {
     slug: "logging-activities",
