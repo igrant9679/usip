@@ -747,19 +747,6 @@ export const teamRouter = router({
         notifEmail: z.string().email().nullable().optional(),
         notifPrefs: z
           .object({
-            // Per-event email notification prefs surfaced on the Notifications
-            // settings page (/v2/settings/notifications). NOTE: keys not listed
-            // here are SILENTLY DROPPED by zod — add any new event key here or
-            // its checkbox will never persist (the documented allowlist bug).
-            newLead: z.boolean().optional(),
-            taskDue: z.boolean().optional(),
-            dealStageChange: z.boolean().optional(),
-            emailReply: z.boolean().optional(),
-            sequenceComplete: z.boolean().optional(),
-            workflowFired: z.boolean().optional(),
-            npsSubmitted: z.boolean().optional(),
-            teamInvite: z.boolean().optional(),
-            // Legacy keys (kept so older stored prefs still round-trip).
             sequence_reply: z.boolean().optional(),
             social_response: z.boolean().optional(),
             workflow_alert: z.boolean().optional(),
@@ -1503,12 +1490,7 @@ export const teamRouter = router({
           eq(workspaceMembers.userId, ctx.user.id),
         ),
       );
-    // All per-event email prefs default ON. Keys mirror the Notifications
-    // settings page; the UI also treats any missing key as ON.
-    const DEFAULT_PREFS = {
-      newLead: true, taskDue: true, dealStageChange: true, emailReply: true,
-      sequenceComplete: true, workflowFired: true, npsSubmitted: true, teamInvite: true,
-    };
+    const DEFAULT_PREFS = { sequence_reply: true, social_response: true, workflow_alert: true, system: true };
     return {
       notifEmail: row?.notifEmail ?? null,
       notifPrefs: (row?.notifPrefs as Record<string, boolean> | null) ?? DEFAULT_PREFS,
