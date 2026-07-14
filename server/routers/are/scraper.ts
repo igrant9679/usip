@@ -312,6 +312,31 @@ export async function scrapeIndustryEvents(
 
 /* ─── Shared: save scrape job + queue prospects ─────────────────────────── */
 
+/**
+ * Column-width guards. Scraped values regularly exceed the prospect_queue
+ * varchar widths — LinkedIn headlines run up to ~220 chars vs title's
+ * varchar(120) — and MySQL strict mode then rejects the ENTIRE multi-row
+ * INSERT ("Data too long for column 'title' at row N"), silently discarding
+ * every prospect found that tick. Clamp before insert; never trust source
+ * lengths. (Documented enum/varchar runtime-insert bug class.)
+ */
+function clampStr(v: unknown, max: number): string | undefined {
+  const s = String(v ?? "").trim();
+  if (!s) return undefined;
+  return s.length > max ? s.slice(0, max) : s;
+}
+
+/** LLM scrapers emit placeholder names ("<UNKNOWN>", "N/A") when a source
+ *  doesn't reveal one — those must become empty strings, not greet-able
+ *  "Hi <UNKNOWN>" personalization inputs. */
+const PLACEHOLDER_NAME =
+  /^[\s<>[\]()"'.-]*(unknown|n\/?a|none|null|not\s*(available|found|known)|-+)[\s<>[\]()"'.-]*$/i;
+function cleanName(v: unknown, max: number): string {
+  const s = String(v ?? "").trim();
+  if (!s || PLACEHOLDER_NAME.test(s)) return "";
+  return s.length > max ? s.slice(0, max) : s;
+}
+
 export async function saveScrapeJobAndQueue(
   workspaceId: number,
   campaignId: number | null,
@@ -358,25 +383,47 @@ export async function saveScrapeJobAndQueue(
       workspaceId,
       campaignId,
       sourceType: sourceTypeMap[sourceType] ?? "web_scrape",
-      sourceUrl: String(p.sourceUrl ?? ""),
-      firstName: String(p.firstName ?? ""),
-      lastName: String(p.lastName ?? ""),
-      email: p.email ? String(p.email) : undefined,
-      linkedinUrl: p.linkedinUrl ? String(p.linkedinUrl) : undefined,
-      phone: p.phone ? String(p.phone) : undefined,
-      title: p.title ? String(p.title) : undefined,
-      companyName: p.companyName ? String(p.companyName) : undefined,
-      companyDomain: p.companyDomain ? String(p.companyDomain) : undefined,
-      companySize: p.companySize ? String(p.companySize) : undefined,
-      industry: p.industry ? String(p.industry) : undefined,
-      geography: p.geography ? String(p.geography) : undefined,
-      icpMatchScore: Number((p as any).icpMatchScore ?? 0),
+      sourceUrl: String(p.sourceUrl ?? ""), // text column — no clamp needed
+      firstName: cleanName(p.firstName, 80),
+      lastName: cleanName(p.lastName, 80),
+      email: clampStr(p.email, 320),
+      linkedinUrl: p.linkedinUrl ? String(p.linkedinUrl) : undefined, // text column
+      phone: clampStr(p.phone, 40),
+      title: clampStr(p.title, 120),
+      companyName: clampStr(p.companyName, 200),
+      companyDomain: clampStr(p.companyDomain, 200),
+      companySize: clampStr(p.companySize, 40),
+      industry: clampStr(p.industry, 80),
+      geography: clampStr(p.geography, 120),
+      // int column 0-100 — round and clamp (scores can arrive as floats)
+      icpMatchScore: Math.max(0, Math.min(100, Math.round(Number((p as any).icpMatchScore ?? 0) || 0))),
       enrichmentStatus: "pending" as const,
       sequenceStatus: "pending" as const,
     }));
 
     if (rows.length > 0) {
-      await db.insert(prospectQueue).values(rows);
+      try {
+        await db.insert(prospectQueue).values(rows);
+      } catch (batchErr) {
+        // A single poisoned row must never discard the whole batch: retry
+        // row-by-row so every valid prospect still lands, and surface the
+        // first row-level cause for the Logs tab.
+        let saved = 0;
+        let firstRowErr: unknown = null;
+        for (const r of rows) {
+          try {
+            await db.insert(prospectQueue).values(r);
+            saved++;
+          } catch (e) {
+            if (!firstRowErr) firstRowErr = e;
+          }
+        }
+        console.error(
+          `[saveScrapeJobAndQueue] batch insert failed; per-row fallback saved ${saved}/${rows.length}.`,
+          (batchErr as Error)?.message, firstRowErr,
+        );
+        if (saved === 0) throw batchErr;
+      }
     }
   }
 }

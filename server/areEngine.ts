@@ -836,6 +836,20 @@ async function runDiscovery(campaign: Campaign): Promise<number> {
       "Discovery skipped — campaign has no targeting (titles/industries/geos/keywords). Open the campaign and add targets, or apply a Persona.");
     return 0;
   }
+  // The campaign wizard's Targeting step is optional; when it was left blank
+  // discovery silently inherits the WORKSPACE ICP, which can search for a
+  // completely different audience than the campaign's name suggests. Say so
+  // loudly in the logs instead of letting the user wonder why "NonProfit
+  // Executives" is hunting for healthcare practice managers.
+  const hasOwnTargeting =
+    (overrides.targetTitles?.length ?? 0) > 0 ||
+    (overrides.targetIndustries?.length ?? 0) > 0 ||
+    (overrides.targetGeographies?.length ?? 0) > 0 ||
+    (overrides.keywords?.length ?? 0) > 0;
+  if (!hasOwnTargeting) {
+    await emitLog(campaign.workspaceId, campaign.id, "discovery", "warn",
+      `Campaign has no targeting of its own — discovery is using the workspace ICP profile instead (titles: ${titles.slice(0, 3).join(", ") || "—"}; industries: ${industries.slice(0, 3).join(", ") || "—"}). If that's not this campaign's audience, add Targeting to the campaign or apply a Persona.`);
+  }
 
   // Merge with persisted state so we know which slice to run next.
   const persistedState =
@@ -1183,9 +1197,14 @@ async function discoverViaLinkedIn(
     });
     return items
       .map((h: UnipileLinkedInSearchHit) => {
-        let firstName = h.first_name ?? "";
-        let lastName = h.last_name ?? "";
-        const fullName = (h.name ?? `${firstName} ${lastName}`).trim();
+        // LinkedIn display names routinely carry credential suffixes
+        // ("Rachele Thomas, BSN, RN, CDAL"). Strip everything after the
+        // first comma BEFORE splitting, otherwise the last-space split
+        // turns credentials into surnames (lastName "CDAL", "Belt", …).
+        const stripCreds = (s: string) => s.split(",")[0].trim();
+        let firstName = stripCreds(h.first_name ?? "");
+        let lastName = stripCreds(h.last_name ?? "");
+        const fullName = stripCreds((h.name ?? `${firstName} ${lastName}`).trim());
         if (!firstName && !lastName && fullName) {
           const sp = fullName.lastIndexOf(" ");
           firstName = sp === -1 ? fullName : fullName.slice(0, sp);
