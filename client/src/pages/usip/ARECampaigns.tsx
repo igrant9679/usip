@@ -28,6 +28,7 @@ import {
   X,
   Zap,
   Megaphone,
+  Sparkles,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useLocation } from "wouter";
@@ -184,10 +185,26 @@ export default function ARECampaigns() {
     // Per-campaign targeting (stored as icpOverrides on save)
     targetTitles: [] as string[],
     targetIndustries: [] as string[],
+    targetGeographies: [] as string[],
     employeeBand: "any" as (typeof EMPLOYEE_BANDS)[number]["value"],
     keywords: [] as string[],
   });
   const [form, setForm] = useState(blankForm);
+  // AI targeting generation — describe the audience, AI fills the filters.
+  const [aiAudience, setAiAudience] = useState("");
+  const genTargeting = trpc.are.campaigns.generateTargeting.useMutation({
+    onSuccess: (t) => {
+      setForm((f) => ({
+        ...f,
+        targetTitles: t.targetTitles.length ? t.targetTitles : f.targetTitles,
+        targetIndustries: t.targetIndustries.length ? t.targetIndustries : f.targetIndustries,
+        targetGeographies: t.targetGeographies.length ? t.targetGeographies : f.targetGeographies,
+        keywords: t.keywords.length ? t.keywords : f.keywords,
+      }));
+      toast.success("AI filled your targeting — review and tweak below.");
+    },
+    onError: (e) => toast.error(e.message),
+  });
 
   // Reset wizard whenever the dialog reopens.
   useEffect(() => {
@@ -240,6 +257,7 @@ export default function ARECampaigns() {
     const icpOverrides = {
       targetTitles: form.targetTitles,
       targetIndustries: form.targetIndustries,
+      targetGeographies: form.targetGeographies,
       ...(band?.min !== undefined ? { employeeMin: band.min } : {}),
       ...(band?.max !== undefined ? { employeeMax: band.max } : {}),
       keywords: form.keywords,
@@ -427,6 +445,30 @@ export default function ARECampaigns() {
           {/* ── Step 2: Targeting filters ────────────────────────────── */}
           {step === 2 && (
             <div className="space-y-4 py-2">
+              {/* AI targeting — describe the audience, AI fills the filters (hands-off setup) */}
+              <div className="rounded-lg border border-primary/30 bg-primary/5 p-3 space-y-2">
+                <Label className="text-xs font-medium flex items-center gap-1.5">
+                  <Sparkles className="size-3.5 text-primary" /> Describe your ideal audience — AI fills the targeting
+                </Label>
+                <div className="flex gap-2">
+                  <Input
+                    value={aiAudience}
+                    onChange={(e) => setAiAudience(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter" && aiAudience.trim() && !genTargeting.isPending) { e.preventDefault(); genTargeting.mutate({ description: aiAudience.trim() }); } }}
+                    placeholder="e.g. Nonprofit executive directors at grant-making foundations in the US"
+                    className="text-sm"
+                  />
+                  <Button
+                    type="button" size="sm" className="gap-1.5 shrink-0"
+                    disabled={!aiAudience.trim() || genTargeting.isPending}
+                    onClick={() => genTargeting.mutate({ description: aiAudience.trim() })}
+                  >
+                    {genTargeting.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}
+                    Generate
+                  </Button>
+                </div>
+                <p className="text-[11px] text-muted-foreground">AI turns your description into titles, industries, geographies, and keywords below — then edit anything.</p>
+              </div>
               <div className="rounded-md bg-muted/40 px-3 py-2 text-[11px] text-muted-foreground flex items-start gap-2">
                 <Target className="size-3.5 mt-0.5 flex-shrink-0" />
                 <span>
@@ -456,6 +498,14 @@ export default function ARECampaigns() {
                   values={form.targetIndustries}
                   onChange={(v) => setForm((f) => ({ ...f, targetIndustries: v }))}
                   placeholder="e.g. SaaS, Fintech"
+                />
+              </div>
+              <div>
+                <Label className="text-xs text-muted-foreground mb-1.5 block">Geographies</Label>
+                <TagInput
+                  values={form.targetGeographies}
+                  onChange={(v) => setForm((f) => ({ ...f, targetGeographies: v }))}
+                  placeholder="e.g. United States, London"
                 />
               </div>
               <div>

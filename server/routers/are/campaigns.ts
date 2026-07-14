@@ -12,6 +12,7 @@ import { getDb } from "../../db";
 import { router } from "../../_core/trpc";
 import { workspaceProcedure } from "../../_core/workspace";
 import { runAreEngine } from "../../areEngine";
+import { invokeLLM } from "../../_core/llm";
 
 export const campaignsRouter = router({
   list: workspaceProcedure
@@ -242,6 +243,68 @@ export const campaignsRouter = router({
         .set(updates)
         .where(and(eq(areCampaigns.id, input.id), eq(areCampaigns.workspaceId, ctx.workspace.id)));
       return { success: true };
+    }),
+
+  /**
+   * AI targeting generation — the "runs on its own" setup step. Turns a
+   * one-line audience description (e.g. "nonprofit executives at grant-making
+   * foundations in the US") into structured discovery targeting so a campaign
+   * can be configured with zero manual field entry. Returns the fields; the
+   * caller applies them to the wizard / campaign.
+   */
+  generateTargeting: workspaceProcedure
+    .input(z.object({ description: z.string().min(3).max(500) }))
+    .mutation(async ({ ctx, input }) => {
+      const res = await invokeLLM({
+        workspaceId: ctx.workspace.id,
+        messages: [
+          {
+            role: "system",
+            content:
+              "You are a B2B go-to-market strategist. Convert a plain-English description of a target audience into precise prospecting filters. Return concrete, searchable job titles (include common variants), specific industries, geographies, and intent keywords. Prefer 4-8 titles, 2-5 industries, 1-3 geographies, 2-5 keywords. Use widely-recognised industry names. If a field isn't implied, return an empty array — never invent geographies the user didn't imply.",
+          },
+          { role: "user", content: `Audience: ${input.description}` },
+        ],
+        response_format: {
+          type: "json_schema",
+          json_schema: {
+            name: "campaign_targeting",
+            strict: true,
+            schema: {
+              type: "object",
+              properties: {
+                targetTitles: { type: "array", items: { type: "string" } },
+                targetIndustries: { type: "array", items: { type: "string" } },
+                targetGeographies: { type: "array", items: { type: "string" } },
+                keywords: { type: "array", items: { type: "string" } },
+              },
+              required: ["targetTitles", "targetIndustries", "targetGeographies", "keywords"],
+              additionalProperties: false,
+            },
+          },
+        },
+      });
+      const content = res.choices[0]?.message?.content;
+      if (!content) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "AI returned no targeting" });
+      let parsed: {
+        targetTitles?: unknown; targetIndustries?: unknown;
+        targetGeographies?: unknown; keywords?: unknown;
+      };
+      try {
+        parsed = JSON.parse(content);
+      } catch {
+        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "AI targeting was not valid JSON" });
+      }
+      const clean = (v: unknown): string[] =>
+        Array.isArray(v)
+          ? Array.from(new Set(v.map((s) => String(s).trim()).filter(Boolean))).slice(0, 12)
+          : [];
+      return {
+        targetTitles: clean(parsed.targetTitles),
+        targetIndustries: clean(parsed.targetIndustries),
+        targetGeographies: clean(parsed.targetGeographies),
+        keywords: clean(parsed.keywords),
+      };
     }),
 
   /** Approve a batch of prospects for enrollment */
