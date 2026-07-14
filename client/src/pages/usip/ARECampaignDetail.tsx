@@ -73,11 +73,78 @@ import {
   Users,
   X,
   XCircle,
-  Zap, Megaphone, ScrollText, ListOrdered
+  Zap, Megaphone, ScrollText, ListOrdered, Upload
 } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
 import { Link, useParams, useLocation } from "wouter";
 import { toast } from "sonner";
+
+/* ─── CSV import helper ────────────────────────────────────────────────────── */
+export type ImportRow = {
+  firstName?: string; lastName?: string; email?: string; title?: string;
+  companyName?: string; companyDomain?: string; phone?: string;
+  linkedinUrl?: string; industry?: string; geography?: string;
+};
+
+/** Split one CSV line, honouring double-quoted fields (commas + "" escapes). */
+function splitCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let cur = "", inQ = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (inQ) {
+      if (c === '"') { if (line[i + 1] === '"') { cur += '"'; i++; } else inQ = false; }
+      else cur += c;
+    } else if (c === '"') inQ = true;
+    else if (c === ",") { out.push(cur); cur = ""; }
+    else cur += c;
+  }
+  out.push(cur);
+  return out.map((s) => s.trim());
+}
+
+/** Parse a CSV string into ImportRows, mapping common header aliases. */
+function parseImportCsv(text: string): ImportRow[] {
+  const lines = text.split(/\r?\n/).filter((l) => l.trim() !== "");
+  if (lines.length < 2) return [];
+  const norm = (h: string) => h.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const headers = splitCsvLine(lines[0]).map(norm);
+  const idx = (aliases: string[]) => headers.findIndex((h) => aliases.includes(h));
+  const col = {
+    first: idx(["firstname", "first", "givenname", "fname"]),
+    last: idx(["lastname", "last", "surname", "familyname", "lname"]),
+    name: idx(["name", "fullname", "contactname"]),
+    email: idx(["email", "emailaddress", "workemail", "email1"]),
+    title: idx(["title", "jobtitle", "position", "role"]),
+    company: idx(["company", "companyname", "organization", "organisation", "account", "employer"]),
+    domain: idx(["domain", "companydomain", "website", "companywebsite", "url", "site"]),
+    phone: idx(["phone", "phonenumber", "mobile", "tel", "telephone"]),
+    linkedin: idx(["linkedin", "linkedinurl", "linkedinprofile", "liurl"]),
+    industry: idx(["industry", "sector", "vertical"]),
+    geography: idx(["geography", "location", "city", "region", "state", "country", "geo"]),
+  };
+  const rows: ImportRow[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    const c = splitCsvLine(lines[i]);
+    const get = (n: number) => (n >= 0 && n < c.length ? c[n].trim() : "");
+    let first = get(col.first), last = get(col.last);
+    if (!first && !last && col.name >= 0) {
+      const full = get(col.name);
+      const sp = full.lastIndexOf(" ");
+      first = sp === -1 ? full : full.slice(0, sp);
+      last = sp === -1 ? "" : full.slice(sp + 1);
+    }
+    const row: ImportRow = {
+      firstName: first || undefined, lastName: last || undefined,
+      email: get(col.email) || undefined, title: get(col.title) || undefined,
+      companyName: get(col.company) || undefined, companyDomain: get(col.domain) || undefined,
+      phone: get(col.phone) || undefined, linkedinUrl: get(col.linkedin) || undefined,
+      industry: get(col.industry) || undefined, geography: get(col.geography) || undefined,
+    };
+    if (row.firstName || row.lastName || row.email) rows.push(row);
+  }
+  return rows;
+}
 
 /* ─── constants ────────────────────────────────────────────────────────────── */
 const SOURCE_ICON: Record<string, React.ElementType> = {
@@ -1642,6 +1709,26 @@ export default function ARECampaignDetail() {
     onError: (e) => toast.error(e.message),
   });
 
+  // ── CSV import (bring-your-own-list) ─────────────────────────────────────
+  const [importOpen, setImportOpen] = useState(false);
+  const [importParsed, setImportParsed] = useState<ImportRow[]>([]);
+  const [importFileName, setImportFileName] = useState("");
+  const importRowsMut = trpc.are.prospects.importRows.useMutation({
+    onSuccess: (d) => {
+      toast.success(
+        `Imported ${d.imported} prospect${d.imported === 1 ? "" : "s"}` +
+        (d.withEmail ? ` (${d.withEmail} with email)` : "") +
+        (d.skippedDuplicates ? ` · ${d.skippedDuplicates} duplicate${d.skippedDuplicates === 1 ? "" : "s"} skipped` : ""),
+      );
+      setImportOpen(false);
+      setImportParsed([]);
+      setImportFileName("");
+      utils.are.prospects.list.invalidate({ campaignId });
+      utils.are.campaigns.get.invalidate({ id: campaignId });
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
   const scrape = trpc.are.scraper.run.useMutation({
     onSuccess: (d) => {
       toast.success(`Scraped ${d.prospectsAdded} prospects from ${d.source.replace(/_/g, " ")}`);
@@ -1816,14 +1903,23 @@ export default function ARECampaignDetail() {
                   </span>
                 )}
               </div>
-              <Button
-                size="sm" variant="outline" className="gap-1.5 text-xs"
-                onClick={() => enrichBatch.mutate({ campaignId, limit: 20 })}
-                disabled={enrichBatch.isPending || pendingEnrich === 0}
-              >
-                {enrichBatch.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <FlaskConical className="size-3.5" />}
-                Enrich Batch (20)
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm" variant="outline" className="gap-1.5 text-xs"
+                  onClick={() => { setImportParsed([]); setImportFileName(""); setImportOpen(true); }}
+                >
+                  <Upload className="size-3.5" />
+                  Import CSV
+                </Button>
+                <Button
+                  size="sm" variant="outline" className="gap-1.5 text-xs"
+                  onClick={() => enrichBatch.mutate({ campaignId, limit: 20 })}
+                  disabled={enrichBatch.isPending || pendingEnrich === 0}
+                >
+                  {enrichBatch.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <FlaskConical className="size-3.5" />}
+                  Enrich Batch (20)
+                </Button>
+              </div>
             </div>
 
             {/* Select-all + legend row */}
@@ -2654,6 +2750,72 @@ export default function ARECampaignDetail() {
           </div>
         </SheetContent>
       </Sheet>
+
+      {/* ── Import CSV Dialog ── */}
+      <Dialog open={importOpen} onOpenChange={setImportOpen}>
+        <DialogContent className="max-w-[calc(100%-2rem)] sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Upload className="size-4" /> Import prospects from CSV
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-1">
+            <p className="text-sm text-muted-foreground">
+              Upload a CSV of prospects to add to this campaign. Recognised columns:
+              {" "}<span className="font-medium text-foreground">first name, last name (or name), email, title, company, domain/website, phone, linkedin, industry, location</span>.
+              Rows with an email flow straight into the sequence; rows with a company domain but no email get one during enrichment.
+            </p>
+            <label className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-border py-6 cursor-pointer hover:bg-muted/40 transition-colors">
+              <Upload className="size-5 text-muted-foreground" />
+              <span className="text-sm text-muted-foreground">
+                {importFileName ? importFileName : "Choose a .csv file"}
+              </span>
+              <input
+                type="file" accept=".csv,text/csv" className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  setImportFileName(file.name);
+                  const reader = new FileReader();
+                  reader.onload = () => {
+                    try {
+                      const parsed = parseImportCsv(String(reader.result ?? ""));
+                      setImportParsed(parsed);
+                      if (parsed.length === 0) toast.error("No usable rows found — check the CSV has a header row and a name or email column.");
+                    } catch {
+                      toast.error("Could not parse that CSV file.");
+                    }
+                  };
+                  reader.readAsText(file);
+                }}
+              />
+            </label>
+            {importParsed.length > 0 && (
+              <div className="rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs">
+                <div className="font-medium text-foreground mb-1">
+                  {importParsed.length} row{importParsed.length === 1 ? "" : "s"} parsed
+                  {" · "}{importParsed.filter((r) => r.email).length} with email
+                </div>
+                <div className="text-muted-foreground">
+                  Preview: {importParsed.slice(0, 3).map((r) => `${r.firstName ?? ""} ${r.lastName ?? ""}`.trim() || r.email || "—").join(", ")}
+                  {importParsed.length > 3 ? "…" : ""}
+                </div>
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setImportOpen(false)}>Cancel</Button>
+            <Button
+              size="sm" className="gap-1.5"
+              disabled={importParsed.length === 0 || importRowsMut.isPending}
+              onClick={() => importRowsMut.mutate({ campaignId, rows: importParsed.slice(0, 2000) })}
+            >
+              {importRowsMut.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Upload className="size-3.5" />}
+              Import {importParsed.length > 0 ? importParsed.length : ""}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* ── Reject Dialog ── */}
       <Dialog open={rejectDialogOpen} onOpenChange={setRejectDialogOpen}>

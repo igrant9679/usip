@@ -1236,6 +1236,108 @@ export const prospectsRouter = router({
       }).$returningId();
       return { id: row.id };
     }),
+  /**
+   * Bulk-import prospects into a campaign from a CSV/list. This is the
+   * "bring your own list" path — rows that already carry an email flow
+   * straight through enrich → sequence → dispatch; rows with a company
+   * domain but no email get one via the enrichment finder. Fills the gap
+   * where ARE could only self-scrape or add one prospect at a time.
+   */
+  importRows: workspaceProcedure
+    .input(z.object({
+      campaignId: z.number(),
+      rows: z.array(z.object({
+        firstName: z.string().optional(),
+        lastName: z.string().optional(),
+        email: z.string().optional(),
+        title: z.string().optional(),
+        companyName: z.string().optional(),
+        companyDomain: z.string().optional(),
+        phone: z.string().optional(),
+        linkedinUrl: z.string().optional(),
+        industry: z.string().optional(),
+        geography: z.string().optional(),
+      })).min(1).max(2000),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // Campaign must belong to the workspace.
+      const [camp] = await db.select({ id: areCampaigns.id })
+        .from(areCampaigns)
+        .where(and(eq(areCampaigns.id, input.campaignId), eq(areCampaigns.workspaceId, ctx.workspace.id)))
+        .limit(1);
+      if (!camp) throw new TRPCError({ code: "NOT_FOUND", message: "Campaign not found" });
+
+      // Clamp to column widths (same runtime-INSERT guard as the scrapers).
+      const clamp = (v: unknown, n: number) => {
+        const s = String(v ?? "").trim();
+        return s ? (s.length > n ? s.slice(0, n) : s) : undefined;
+      };
+      const emailOf = (v: unknown) => {
+        const s = String(v ?? "").trim().toLowerCase();
+        return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s) ? s.slice(0, 320) : undefined;
+      };
+
+      // Dedup against what's already in this campaign (by email + linkedin URL).
+      const existing = await db.select({ email: prospectQueue.email, linkedinUrl: prospectQueue.linkedinUrl })
+        .from(prospectQueue)
+        .where(and(eq(prospectQueue.campaignId, input.campaignId), eq(prospectQueue.workspaceId, ctx.workspace.id)));
+      const seen = new Set<string>();
+      for (const e of existing) {
+        if (e.email) seen.add("e:" + e.email.toLowerCase());
+        if (e.linkedinUrl) seen.add("u:" + e.linkedinUrl.toLowerCase());
+      }
+
+      const rows: Array<typeof prospectQueue.$inferInsert> = [];
+      let skippedDup = 0, skippedEmpty = 0;
+      for (const r of input.rows) {
+        const first = clamp(r.firstName, 80);
+        const last = clamp(r.lastName, 80);
+        const email = emailOf(r.email);
+        const linkedinUrl = r.linkedinUrl ? String(r.linkedinUrl).trim() : undefined;
+        // Need at least a name or an email to be worth anything.
+        if (!first && !last && !email) { skippedEmpty++; continue; }
+        const ek = email ? "e:" + email : null;
+        const uk = linkedinUrl ? "u:" + linkedinUrl.toLowerCase() : null;
+        if ((ek && seen.has(ek)) || (uk && seen.has(uk))) { skippedDup++; continue; }
+        if (ek) seen.add(ek);
+        if (uk) seen.add(uk);
+        rows.push({
+          workspaceId: ctx.workspace.id,
+          campaignId: input.campaignId,
+          sourceType: "internal_contact",
+          firstName: first,
+          lastName: last,
+          email,
+          title: clamp(r.title, 120),
+          companyName: clamp(r.companyName, 200),
+          companyDomain: clamp(r.companyDomain, 200),
+          phone: clamp(r.phone, 40),
+          linkedinUrl,
+          industry: clamp(r.industry, 80),
+          geography: clamp(r.geography, 120),
+          icpMatchScore: 0,
+          enrichmentStatus: "pending",
+          sequenceStatus: "pending",
+        });
+      }
+
+      let imported = 0;
+      if (rows.length > 0) {
+        try {
+          await db.insert(prospectQueue).values(rows);
+          imported = rows.length;
+        } catch {
+          // Per-row fallback so one bad row can't drop the whole import.
+          for (const row of rows) {
+            try { await db.insert(prospectQueue).values(row); imported++; } catch { /* skip */ }
+          }
+        }
+      }
+      return { imported, skippedDuplicates: skippedDup, skippedEmpty, withEmail: rows.filter((r) => r.email).length };
+    }),
+
   /** Reject a prospect with an optional reason */
   reject: workspaceProcedure
     .input(z.object({ prospectId: z.number(), reason: z.string().optional() }))
