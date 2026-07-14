@@ -51,7 +51,7 @@ import {
 } from "./routers/are/scraper";
 import { searchLinkedInPeople, type UnipileLinkedInSearchHit } from "./lib/unipile";
 import { listUsableAccounts } from "./services/linkedinLookup";
-import { sendWorkspaceEmail } from "./emailDelivery";
+import { sendWorkspaceEmail, sendCampaignEmailViaPool } from "./emailDelivery";
 import { resolveBookingUrl } from "./mergeVars";
 
 /* ─── Per-tick bounds (keep LLM cost + wall-time predictable) ───────────── */
@@ -642,7 +642,11 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
         if (bookingUrl === undefined) bookingUrl = await resolveBookingUrl(wsId, campaign.ownerUserId);
         const subject = applyMerge(mc.subject || `A quick note for ${p.firstName ?? "you"}`, p);
         const body = applyMerge(mc.body ?? "", p, bookingUrl);
-        const sendRes = await sendWorkspaceEmail(wsId, {
+        // Send through the workspace sender POOL (rotates across connected
+        // accounts, per-account daily-limit enforced) — better cold-outreach
+        // deliverability than blasting one address. Falls back to the single
+        // Email-Delivery config when no sending accounts exist.
+        const sendRes = await sendCampaignEmailViaPool(wsId, {
           to: p.email,
           subject,
           html: textToHtml(body),

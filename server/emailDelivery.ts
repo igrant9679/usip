@@ -17,8 +17,15 @@
  *   if (!result.ok) console.warn("Email not sent:", result.reason);
  */
 
-import { and, eq } from "drizzle-orm";
-import { sendingAccounts, smtpConfigs, workspaceSettings } from "../drizzle/schema";
+import { and, eq, inArray } from "drizzle-orm";
+import {
+  sendingAccounts,
+  smtpConfigs,
+  workspaceSettings,
+  senderPools,
+  senderPoolMembers,
+  sendingAccountDailyStats,
+} from "../drizzle/schema";
 import { getDb } from "./db";
 import { buildTransporter, decrypt } from "./routers/smtpConfig";
 
@@ -33,6 +40,124 @@ export interface SendEmailOptions {
 export interface SendEmailResult {
   ok: boolean;
   reason?: string;
+}
+
+/**
+ * Send an OUTBOUND campaign email through the workspace's sender POOL, spreading
+ * volume across the connected sending accounts with per-account daily-limit
+ * enforcement — the deliverability-correct path for cold outreach (ARE engine).
+ *
+ * Selection: prefer the workspace's first sender pool's members; if no pool
+ * exists, rotate across ALL enabled sending accounts. Among eligible accounts
+ * (under their dailySendLimit today) it picks the LEAST-used one, which evenly
+ * balances load and naturally round-robins. Records the send in
+ * sending_account_daily_stats so the next pick — and the Mailboxes UI usage
+ * readout — stay accurate.
+ *
+ * `fromName` overrides the display name (e.g. "Lucas Grant | LSI Media") while
+ * the From address rotates with the account.
+ *
+ * Falls back to the single Email-Delivery config (sendWorkspaceEmail) when the
+ * workspace has no usable sending accounts at all.
+ */
+export async function sendCampaignEmailViaPool(
+  workspaceId: number,
+  opts: SendEmailOptions & { fromName?: string },
+): Promise<SendEmailResult & { accountId?: number; fromEmail?: string }> {
+  try {
+    const db = await getDb();
+    if (!db) return { ok: false, reason: "DB unavailable" };
+
+    // 1. Candidate accounts — pool members first, else all enabled accounts.
+    const [pool] = await db
+      .select()
+      .from(senderPools)
+      .where(and(eq(senderPools.workspaceId, workspaceId), eq(senderPools.enabled, true)))
+      .orderBy(senderPools.id)
+      .limit(1);
+
+    let accounts: (typeof sendingAccounts.$inferSelect)[] = [];
+    if (pool) {
+      const members = await db
+        .select({ accountId: senderPoolMembers.accountId })
+        .from(senderPoolMembers)
+        .where(eq(senderPoolMembers.poolId, pool.id));
+      const ids = members.map((m) => m.accountId);
+      if (ids.length > 0) {
+        accounts = await db
+          .select()
+          .from(sendingAccounts)
+          .where(and(
+            eq(sendingAccounts.workspaceId, workspaceId),
+            inArray(sendingAccounts.id, ids),
+            eq(sendingAccounts.enabled, true),
+          ));
+      }
+    }
+    if (accounts.length === 0) {
+      accounts = await db
+        .select()
+        .from(sendingAccounts)
+        .where(and(eq(sendingAccounts.workspaceId, workspaceId), eq(sendingAccounts.enabled, true)));
+    }
+    // No sending accounts at all → fall back to the single Email-Delivery config.
+    if (accounts.length === 0) {
+      const r = await sendWorkspaceEmail(workspaceId, opts);
+      return r;
+    }
+
+    // 2. Today's per-account usage.
+    const today = new Date().toISOString().slice(0, 10);
+    const ids = accounts.map((a) => a.id);
+    const stats = await db
+      .select({ accountId: sendingAccountDailyStats.accountId, sent: sendingAccountDailyStats.sentCount })
+      .from(sendingAccountDailyStats)
+      .where(and(inArray(sendingAccountDailyStats.accountId, ids), eq(sendingAccountDailyStats.date, today)));
+    const usedMap = new Map(stats.map((s) => [s.accountId, s.sent]));
+
+    // 3. Eligible = under daily limit; pick the least-used (balances + rotates).
+    const eligible = accounts
+      .map((a) => ({ a, used: usedMap.get(a.id) ?? 0 }))
+      .filter((x) => x.used < (x.a.dailySendLimit ?? 500))
+      .sort((x, y) => x.used - y.used || x.a.id - y.a.id);
+    if (eligible.length === 0) {
+      return { ok: false, reason: "All sending accounts have hit their daily limit" };
+    }
+    const chosen = eligible[0].a;
+
+    // 4. Send via the account's adapter (SMTP/IMAP/OAuth).
+    const { createEmailAdapter } = await import("./emailAdapter");
+    const adapter = createEmailAdapter(chosen as any);
+    await adapter.sendEmail({
+      to: Array.isArray(opts.to) ? opts.to[0] : opts.to,
+      subject: opts.subject,
+      bodyHtml: opts.html,
+      bodyText: opts.text,
+      fromEmail: (chosen as any).fromEmail,
+      fromName: opts.fromName ?? (chosen as any).fromName ?? undefined,
+      replyTo: opts.replyTo ?? (chosen as any).replyTo ?? undefined,
+    } as any);
+
+    // 5. Record usage (no unique key on the table → read-then-write).
+    const [existing] = await db
+      .select({ id: sendingAccountDailyStats.id, sentCount: sendingAccountDailyStats.sentCount })
+      .from(sendingAccountDailyStats)
+      .where(and(eq(sendingAccountDailyStats.accountId, chosen.id), eq(sendingAccountDailyStats.date, today)))
+      .limit(1);
+    if (existing) {
+      await db.update(sendingAccountDailyStats)
+        .set({ sentCount: existing.sentCount + 1 })
+        .where(eq(sendingAccountDailyStats.id, existing.id));
+    } else {
+      await db.insert(sendingAccountDailyStats)
+        .values({ workspaceId, accountId: chosen.id, date: today, sentCount: 1 });
+    }
+
+    return { ok: true, accountId: chosen.id, fromEmail: (chosen as any).fromEmail };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { ok: false, reason: `Pool send failed: ${msg}` };
+  }
 }
 
 /**
