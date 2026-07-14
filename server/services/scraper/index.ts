@@ -77,6 +77,116 @@ const STATUS_RANK: Record<VerificationStatus, number> = {
   invalid: 0,
 };
 
+/* ─── Table-agnostic email resolver ────────────────────────────────────────
+ *
+ * The same scrape → pattern → Reoon pipeline as lookupContactInfo(), but pure:
+ * it takes a name + domain/website and returns a verified email WITHOUT
+ * touching any DB row. Used by the ARE engine to acquire an email for a
+ * prospect_queue prospect (which lookupContactInfo can't handle — it's bound
+ * to the `prospects` table). Never throws.
+ *
+ * Requires a company domain (or website). LinkedIn people-search prospects
+ * have neither, so those return { reason: "no_domain" } — the caller should
+ * source company-bearing prospects (google_business/web/import) for this to
+ * produce anything.
+ */
+export type ResolvedEmail = {
+  email: string | null;
+  status: VerificationStatus | null;
+  reason?: string;
+  creditsQuick: number;
+  creditsPower: number;
+};
+
+const ROLE_ACCOUNT = /^(info|contact|hello|help|support|sales|admin|team|office|mail|enquiries|inquiries|marketing|hr|jobs|careers|press|media|billing|accounts|noreply|no-reply)@/i;
+
+export async function resolveVerifiedEmail(input: {
+  firstName?: string | null;
+  lastName?: string | null;
+  companyDomain?: string | null;
+  companyWebsite?: string | null;
+}): Promise<ResolvedEmail> {
+  const first = (input.firstName ?? "").trim();
+  const last = (input.lastName ?? "").trim();
+  const domain =
+    normalizeDomain(input.companyDomain) ?? normalizeDomain(input.companyWebsite);
+  if (!domain) return { email: null, status: null, reason: "no_domain", creditsQuick: 0, creditsPower: 0 };
+  if (!first || !last) return { email: null, status: null, reason: "no_name", creditsQuick: 0, creditsPower: 0 };
+
+  let apiKey: string;
+  try {
+    apiKey = getReoonApiKey();
+  } catch {
+    return { email: null, status: null, reason: "reoon_key_missing", creditsQuick: 0, creditsPower: 0 };
+  }
+
+  // Scrape the company site (cached 30d) — occasionally a real personal email
+  // is published there, and it gives us phones/socials for free downstream.
+  let siteEmails: string[] = [];
+  try {
+    let scraped: ScrapedSite | null = await readDomainCache(domain);
+    if (!scraped) {
+      scraped = await scrapeCompanySite(domain);
+      await writeDomainCache(domain, scraped);
+    }
+    siteEmails = scraped.emails ?? [];
+  } catch {
+    /* site scrape is best-effort — pattern verification is the primary path */
+  }
+
+  const patterns = generatePatterns(first, last, domain);
+  if (patterns.length === 0) {
+    return { email: null, status: null, reason: "no_patterns", creditsQuick: 0, creditsPower: 0 };
+  }
+
+  // Stage A — quick filter (cheap instant credits), drop confident invalids.
+  let creditsQuick = 0;
+  const survivors: string[] = [];
+  const quick = await Promise.all(
+    patterns.map(async (p) => {
+      try {
+        const r = await reoonVerifySingle(p.email, apiKey, "quick");
+        return { email: p.email, status: reoonStatusToUsip(r.status), ok: true as const };
+      } catch {
+        return { email: p.email, status: "unknown" as VerificationStatus, ok: false as const };
+      }
+    }),
+  );
+  for (const q of quick) {
+    if (q.ok) creditsQuick++;
+    if (q.status !== "invalid") survivors.push(q.email);
+  }
+
+  // Stage B — power confirm (limited daily credits), early-stop on deliverable.
+  let creditsPower = 0;
+  let best: { email: string; status: VerificationStatus } | null = null;
+  for (const email of survivors) {
+    try {
+      const r = await reoonVerifySingle(email, apiKey, "power");
+      creditsPower++;
+      const status = reoonStatusToUsip(r.status);
+      if (!best || STATUS_RANK[status] > STATUS_RANK[best.status]) best = { email, status };
+      if (status === "valid") break; // deliverable — stop spending credits
+    } catch {
+      /* try the next survivor */
+    }
+  }
+
+  if (best && (best.status === "valid" || best.status === "accept_all")) {
+    return { email: best.email, status: best.status, creditsQuick, creditsPower };
+  }
+
+  // No deliverable pattern — fall back to a personal-looking email found on
+  // the site (skip generic role accounts), flagged unknown so the caller can
+  // decide whether to send.
+  const personal = siteEmails.find((e) => !ROLE_ACCOUNT.test(e));
+  if (personal) {
+    return { email: personal, status: "unknown", reason: "site_email_unverified", creditsQuick, creditsPower };
+  }
+  if (best) return { email: best.email, status: best.status, reason: "no_deliverable_pattern", creditsQuick, creditsPower };
+  return { email: null, status: null, reason: "no_valid_pattern", creditsQuick, creditsPower };
+}
+
 /* ─── Per-prospect lookup ──────────────────────────────────────────────── */
 
 export type ProspectLookupInput = {

@@ -40,6 +40,7 @@ import { parseLlmJson } from "./llmJson";
 import { invokeLLM, isRetryableLLMError } from "../../_core/llm";
 import { router } from "../../_core/trpc";
 import { workspaceProcedure } from "../../_core/workspace";
+import { resolveVerifiedEmail } from "../../services/scraper";
 
 /* ─── ICP Match Scorer ───────────────────────────────────────────────────── */
 
@@ -326,13 +327,43 @@ Produce:
       await db.insert(prospectIntelligence).values(intelligenceData);
     }
 
-    // Update prospect with ICP score
+    // ── Email acquisition ────────────────────────────────────────────────
+    // ARE's dispatch phase hard-requires an email, but scraped prospects
+    // (esp. LinkedIn) arrive without one. When the prospect has a company
+    // domain but no email, run the first-party finder (company-site scrape →
+    // name-based patterns → Reoon two-stage verify) and persist a deliverable
+    // address. Best-effort: a failure here never fails the enrichment.
+    let resolvedEmail: string | null = null;
+    let resolvedStatus: string | null = null;
+    if (!prospect.email && (prospect.companyDomain || prospect.companyName)) {
+      try {
+        const found = await resolveVerifiedEmail({
+          firstName: prospect.firstName,
+          lastName: prospect.lastName,
+          companyDomain: prospect.companyDomain,
+          companyWebsite: prospect.companyDomain, // no separate website column on the queue
+        });
+        if (found.email) {
+          resolvedEmail = found.email;
+          resolvedStatus = found.status;
+        }
+      } catch (e) {
+        console.error(`[AreEngine] email resolution for prospect ${prospectId} failed:`, e);
+      }
+    }
+
+    // Update prospect with ICP score (+ email if we found one)
     await db.update(prospectQueue).set({
       icpMatchScore,
       icpMatchBreakdown,
       enrichmentStatus: "complete",
       enrichedAt: new Date(),
+      ...(resolvedEmail ? { email: resolvedEmail } : {}),
     }).where(eq(prospectQueue.id, prospectId));
+    if (resolvedEmail) {
+      await emitSeqLog(db, workspaceId, prospect.campaignId, "info", "enrich",
+        `Found email for ${prospect.firstName ?? ""} ${prospect.lastName ?? ""} → ${resolvedEmail} (${resolvedStatus ?? "unknown"})`.trim());
+    }
 
   } catch (err) {
     // Persist a human-readable reason so the Prospects tab can surface it
