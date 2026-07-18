@@ -83,6 +83,73 @@ describe("Sequence Execution Engine", () => {
       expect(result.errors).toBe(0);
     });
 
+    it("honours the configured wait duration (regression: days vs waitDays)", async () => {
+      // REGRESSION GUARD. The engine used to read `step.waitDays`, but the
+      // only schema that validates sequences.steps stores a wait as
+      // `{type:"wait", days:N}`. So `waitDays` was always undefined and every
+      // wait fell through to `?? 1` — a 3-day gap silently became 1 day, and a
+      // "day 1 / day 4 / day 10" sequence actually sent on days 1, 2 and 3.
+      // This asserts the real persisted field name is respected.
+      const enrollment = {
+        id: 1, workspaceId: 1, sequenceId: 1, contactId: 1, leadId: null,
+        status: "active", currentStep: 0, nextActionAt: new Date(Date.now() - 1000),
+      };
+      const sequence = {
+        id: 1, workspaceId: 1, status: "active",
+        steps: [
+          { type: "wait", days: 3 },
+          { type: "task", body: "Call them about the proposal. Mention pricing." },
+        ],
+        dailyCap: null,
+      };
+
+      mockSelect.mockReturnValueOnce(makeSelectChain([enrollment]));
+      mockSelect.mockReturnValueOnce(makeSelectChain([sequence]));
+
+      const updateSet = vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) });
+      mockUpdate.mockReturnValue({ set: updateSet });
+
+      const before = Date.now();
+      const { processEnrollments } = await import("./sequenceEngine");
+      await processEnrollments();
+
+      const call = updateSet.mock.calls.find((c) => c[0]?.nextActionAt);
+      expect(call).toBeDefined();
+      const scheduledInDays =
+        (call![0].nextActionAt.getTime() - before) / 86400000;
+      // ~3 days, not the old 1-day default.
+      expect(scheduledInDays).toBeGreaterThan(2.9);
+      expect(scheduledInDays).toBeLessThan(3.1);
+    });
+
+    it("derives a task title from the step body instead of a generic label", async () => {
+      // The task editor only ever persists `body`; the engine read `taskTitle`,
+      // so every sequence task became "Follow up" due tomorrow with the
+      // user's text thrown away entirely.
+      const enrollment = {
+        id: 2, workspaceId: 1, sequenceId: 1, contactId: 5, leadId: null,
+        status: "active", currentStep: 0, nextActionAt: new Date(Date.now() - 1000),
+      };
+      const sequence = {
+        id: 1, workspaceId: 1, status: "active",
+        steps: [{ type: "task", body: "Call about the renewal. Ask about seat count." }],
+        dailyCap: null,
+      };
+
+      mockSelect.mockReturnValueOnce(makeSelectChain([enrollment]));
+      mockSelect.mockReturnValueOnce(makeSelectChain([sequence]));
+      const insertValues = vi.fn().mockResolvedValue(undefined);
+      mockInsert.mockReturnValue({ values: insertValues });
+
+      const { processEnrollments } = await import("./sequenceEngine");
+      await processEnrollments();
+
+      expect(insertValues).toHaveBeenCalled();
+      const task = insertValues.mock.calls[0][0];
+      expect(task.title).toBe("Call about the renewal");
+      expect(task.description).toBe("Call about the renewal. Ask about seat count.");
+    });
+
     it("marks enrollment finished when all steps done", async () => {
       const enrollment = {
         id: 1, workspaceId: 1, sequenceId: 1, contactId: 1, leadId: null,
@@ -92,7 +159,11 @@ describe("Sequence Execution Engine", () => {
         id: 1, workspaceId: 1, status: "active",
         steps: [
           { type: "email", subject: "Step 1", body: "Hello" },
-          { type: "wait", waitDays: 2 },
+          // `days` is the real persisted field name (stepSchema in
+          // routers/sequences.ts). This fixture previously said `waitDays`,
+          // matching the engine's mistaken read rather than the storage
+          // format — which is why the engine's wait bug passed CI for so long.
+          { type: "wait", days: 2 },
         ], // currentStep=2 >= steps.length=2 → finished
         dailyCap: null,
       };

@@ -40,8 +40,72 @@ type Step = {
   note?: string; // linkedin_invite note
   waitDays?: number;
   taskTitle?: string;
+  taskBody?: string;
   taskDueOffsetDays?: number;
 };
+
+/**
+ * Normalize a persisted step into the shape this engine reads.
+ *
+ * The engine and the storage format disagreed on field names, and the engine
+ * lost silently. `sequences.steps` is validated by ONE zod schema
+ * (`stepSchema` in routers/sequences.ts) which stores a wait as
+ * `{type:"wait", days}` and a task as `{type:"task", body}` — but the engine
+ * read `step.waitDays` and `step.taskTitle`, neither of which anything ever
+ * wrote. Both fell through to their `?? 1` / `?? "Follow up"` defaults, so
+ * EVERY wait step waited exactly one day regardless of the configured value,
+ * and every task step became a generic "Follow up" due tomorrow with the
+ * user's description discarded.
+ *
+ * Consequence worth remembering: a "day 1 / day 4 / day 10" sequence actually
+ * sent on days 1, 2 and 3 — a spam-shaped cadence on warmed mailboxes.
+ *
+ * Normalizing here (one call site, where the JSON is first read) fixes all
+ * downstream reads at once. Both spellings are accepted so any row already
+ * carrying the engine's names keeps working.
+ */
+function normalizeStep(raw: Record<string, unknown>): Step {
+  const num = (v: unknown): number | undefined => {
+    const n = Number(v);
+    return Number.isFinite(n) && n >= 0 ? n : undefined;
+  };
+  const str = (v: unknown): string | undefined => {
+    const s = typeof v === "string" ? v.trim() : "";
+    return s.length > 0 ? s : undefined;
+  };
+
+  const step: Step = {
+    type: raw.type as Step["type"],
+    subject: str(raw.subject),
+    body: str(raw.body),
+    note: str(raw.note),
+    // `days` is what the schema stores; `waitDays` is tolerated for safety.
+    waitDays: num(raw.days) ?? num(raw.waitDays),
+    taskDueOffsetDays: num(raw.taskDueOffsetDays),
+  };
+
+  if (step.type === "task") {
+    // The task editor produces one rich-text `body` and no title. Derive a
+    // usable title from it rather than labelling every task "Follow up",
+    // and keep the full text for the task description.
+    const body = str(raw.body);
+    step.taskBody = body;
+    const plain = body?.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+    const firstLine = plain?.split(/[.!?\n]/)[0]?.trim();
+    step.taskTitle =
+      str(raw.taskTitle) ??
+      (firstLine && firstLine.length > 0 ? firstLine.slice(0, 240) : undefined);
+  }
+
+  return step;
+}
+
+function normalizeSteps(raw: unknown): Step[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((s): s is Record<string, unknown> => !!s && typeof s === "object")
+    .map(normalizeStep);
+}
 
 type EnrollmentTrigger = {
   type: "status_change" | "tag_applied" | "score_threshold";
@@ -155,7 +219,7 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
         continue;
       }
 
-      const steps = (seq.steps as Step[]) ?? [];
+      const steps = normalizeSteps(seq.steps);
       const stepIndex = enrollment.currentStep;
 
       if (stepIndex >= steps.length) {
@@ -354,7 +418,10 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
         );
         await db.insert(tasks).values({
           workspaceId: enrollment.workspaceId,
-          title: step.taskTitle ?? "Follow up",
+          // title is varchar(240) — normalizeStep already clamps the derived
+          // title, but clamp again here so a legacy taskTitle can't overflow.
+          title: (step.taskTitle ?? "Follow up").slice(0, 240),
+          description: step.taskBody ?? null,
           dueAt,
           relatedType: enrollment.contactId ? "contact" : enrollment.leadId ? "lead" : "prospect",
           relatedId: (enrollment.contactId ?? enrollment.leadId ?? enrollment.prospectId) as number,
