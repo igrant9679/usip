@@ -56,6 +56,7 @@ import { listUsableAccounts } from "./services/linkedinLookup";
 import { sendWorkspaceEmail, sendCampaignEmailViaPool } from "./emailDelivery";
 import { resolveBookingUrl } from "./mergeVars";
 import { ARE_DEFAULT_SOURCES, normalizeSources } from "@shared/areSources";
+import { apolloPulledToday, apolloSearchPeople, getApolloDailyCap } from "./services/apollo";
 
 /* ─── Per-tick bounds (keep LLM cost + wall-time predictable) ───────────── */
 /** Max prospects enriched per engine cycle. Enrichment runs ONE AT A TIME
@@ -936,7 +937,8 @@ async function runDiscovery(campaign: Campaign): Promise<number> {
     | "linkedin_people"
     | "news"
     | "web_scrape"
-    | "internal";
+    | "internal"
+    | "apollo";
   type SourceResult = {
     sourceType: SourceType;
     query: string;
@@ -957,6 +959,15 @@ async function runDiscovery(campaign: Campaign): Promise<number> {
     tasks.push(
       discoverViaLinkedIn(campaign, query).then((raw) => ({
         sourceType: "linkedin_people" as const,
+        query,
+        raw,
+      })),
+    );
+  }
+  if (sources.includes("apollo")) {
+    tasks.push(
+      discoverViaApollo(campaign, { titles, industries, geos, keywords, overrides }).then((raw) => ({
+        sourceType: "apollo" as const,
         query,
         raw,
       })),
@@ -1181,6 +1192,66 @@ function nameOrgDedupKey(p: Record<string, unknown>): string | null {
   const org = norm(p.companyDomain) || norm(p.companyName);
   if (!name || !org) return null;
   return `n:${name}@${org}`;
+}
+
+/**
+ * Apollo.io discovery — structured people search against the campaign's ICP.
+ *
+ * Unlike the LLM scrapers, Apollo takes the targeting as real filters rather
+ * than a flattened query string, so titles/locations/headcount are applied by
+ * Apollo rather than hoped for in an extraction prompt.
+ *
+ * Search-only: zero Apollo credits, and no email comes back. What DOES come
+ * back is the company domain, which is precisely the input the enrichment
+ * step's resolveVerifiedEmail() needs and never had from LinkedIn. So Apollo
+ * finds the person and Velocity's own verifier finds the address.
+ *
+ * The daily cap is enforced here rather than inside the service so the
+ * remaining headroom can shrink the page size instead of dropping the tick.
+ */
+async function discoverViaApollo(
+  campaign: Campaign,
+  targeting: {
+    titles: string[];
+    industries: string[];
+    geos: string[];
+    keywords: string[];
+    overrides: { employeeMin?: number; employeeMax?: number };
+  },
+): Promise<Array<Record<string, unknown>>> {
+  const cap = await getApolloDailyCap(campaign.workspaceId);
+  const used = await apolloPulledToday(campaign.workspaceId);
+  const headroom = cap - used;
+  if (headroom <= 0) {
+    await emitLog(campaign.workspaceId, campaign.id, "discovery", "warn",
+      `Apollo skipped — daily record cap reached (${used}/${cap}). Raise it in ARE Settings → Apollo.io if you want more per day.`);
+    return [];
+  }
+
+  const res = await apolloSearchPeople(campaign.workspaceId, {
+    titles: targeting.titles,
+    industries: targeting.industries,
+    locations: targeting.geos,
+    keywords: targeting.keywords,
+    employeeMin: targeting.overrides.employeeMin,
+    employeeMax: targeting.overrides.employeeMax,
+    perPage: Math.min(headroom, 25),
+  });
+
+  if (!res.ok) {
+    await emitLog(campaign.workspaceId, campaign.id, "discovery", "error",
+      `Apollo search failed: ${res.error}`);
+    return [];
+  }
+
+  // Apollo returns no emails on this path by design; the enrich phase resolves
+  // them from companyDomain. Say so once per tick so a queue full of
+  // email-less prospects doesn't read as a bug.
+  const withDomain = res.prospects.filter((p) => p.companyDomain).length;
+  await emitLog(campaign.workspaceId, campaign.id, "discovery", "info",
+    `Apollo returned ${res.prospects.length} people (${withDomain} with a company domain) from ${res.totalAvailable.toLocaleString()} matches. Emails are resolved during enrichment — Apollo search never includes them.`);
+
+  return res.prospects.map((p) => ({ ...p }));
 }
 
 /**
