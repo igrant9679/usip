@@ -104,6 +104,17 @@ export const settingsRouter = router({
         emailUnsubscribeHeader: z.boolean().optional(),
         emailSequenceOptOutEnabled: z.boolean().optional(),
         emailSequenceOptOutMessage: z.string().max(2000).nullable().optional(),
+        // These two were written by the Settings General tab and consumed by
+        // nightlyBatch.ts, but were never listed here — so zod stripped them,
+        // the patch came out empty, the mutation returned ok:true and showed a
+        // success toast, and the AI Nightly Pipeline toggle reverted on every
+        // reload. It could not be switched on at all.
+        //
+        // This allowlist is the single gate on every workspace_settings write:
+        // ANY column missing from it is silently dropped, with a success
+        // response. Add the key here whenever you add a setting.
+        nightlyPipelineEnabled: z.boolean().optional(),
+        nightlyScoreThreshold: z.number().int().min(0).max(100).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
