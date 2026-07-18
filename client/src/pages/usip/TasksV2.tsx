@@ -173,7 +173,15 @@ export default function TasksV2() {
         return ta - tb;
       });
   }, [activeTasks]);
-  const done = useMemo(() => activeTasks.filter((t) => t.status === "done").slice(0, 10), [activeTasks]);
+  // "Recently closed" deliberately includes CANCELLED, not just done.
+  // Dismissing an AI-drafted task sets status="cancelled" (activities.dismissDraft),
+  // and this page rendered neither bucket for it — so the task vanished from
+  // the only Tasks page reachable from the nav, with no way to get it back
+  // (legacy /tasks, whose "All" tab would show it, is orphaned).
+  const done = useMemo(
+    () => activeTasks.filter((t) => t.status === "done" || t.status === "cancelled").slice(0, 10),
+    [activeTasks],
+  );
 
   const now = Date.now();
 
@@ -372,16 +380,25 @@ export default function TasksV2() {
           {/* Completed */}
           {done.length > 0 && (
             <section>
-              <h2 className="text-sm font-semibold mb-2 flex items-center gap-2 text-muted-foreground"><Check className="size-4" /> Recently completed</h2>
+              <h2 className="text-sm font-semibold mb-2 flex items-center gap-2 text-muted-foreground"><Check className="size-4" /> Recently closed</h2>
               <div className="rounded-xl border bg-card overflow-hidden shadow-sm opacity-80">
-                {done.map((t) => (
+                {done.map((t) => {
+                  const cancelled = t.status === "cancelled";
+                  return (
                   <div key={t.id} className="flex items-center gap-3 px-3 py-2 border-b border-border/60 last:border-0">
-                    <span className="shrink-0 size-5 rounded-full flex items-center justify-center text-white" style={{ backgroundColor: accent }}><Check className="size-3" /></span>
+                    <span
+                      className="shrink-0 size-5 rounded-full flex items-center justify-center text-white"
+                      style={{ backgroundColor: cancelled ? "hsl(var(--muted-foreground))" : accent }}
+                    >
+                      {cancelled ? <X className="size-3" /> : <Check className="size-3" />}
+                    </span>
                     <TypeIcon type={t.type} />
                     <div className="min-w-0 flex-1"><div className="text-sm truncate line-through text-muted-foreground">{t.title}</div></div>
+                    {cancelled && <span className="shrink-0 rounded px-1.5 py-0.5 text-[10px] bg-secondary text-muted-foreground">Dismissed</span>}
                     {t.disposition && <span className="shrink-0 rounded px-1.5 py-0.5 text-[10px] bg-secondary text-muted-foreground capitalize">{t.disposition.replace(/_/g, " ")}</span>}
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </section>
           )}

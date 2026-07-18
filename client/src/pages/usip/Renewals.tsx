@@ -5,8 +5,19 @@ import { RefreshCw, Sparkles, AlertTriangle } from "lucide-react";
 import { useMemo } from "react";
 import { toast } from "sonner";
 
+/**
+ * Column ids MUST match the customers.renewalStage enum in drizzle/schema.ts:
+ *   early | ninety | sixty | thirty | at_risk | renewed | churned
+ *
+ * The first column used to be `"secure"`, which is not a value the enum can
+ * ever hold. The real first value, `"early"`, is the column DEFAULT and is set
+ * on every newly-won deal (wonToCustomer.ts), so `buckets["early"]` was
+ * undefined and `?.push()` silently dropped every new customer — they appeared
+ * in no column at all, while "Secure" sat permanently empty. Reps were
+ * systematically undercounting their book.
+ */
 const STAGES = [
-  { id: "secure", label: "Secure", tone: "success" as const },
+  { id: "early", label: "Early", tone: "success" as const },
   { id: "thirty", label: "30 days", tone: "info" as const },
   { id: "sixty", label: "60 days", tone: "info" as const },
   { id: "ninety", label: "90 days", tone: "warning" as const },
@@ -25,9 +36,16 @@ export default function Renewals() {
   const grouped = useMemo(() => {
     const buckets: Record<string, any[]> = {};
     STAGES.forEach((s) => (buckets[s.id] = []));
-    (data ?? []).forEach((c: any) => buckets[c.renewalStage]?.push(c));
+    // Safety net: a stage with no column lands in `_unbucketed` instead of
+    // being silently discarded, so if the enum gains a value the board hasn't
+    // been taught about, the records stay visible instead of vanishing.
+    buckets._unbucketed = [];
+    (data ?? []).forEach((c: any) => {
+      (buckets[c.renewalStage] ?? buckets._unbucketed).push(c);
+    });
     return buckets;
   }, [data]);
+  const unbucketed = grouped._unbucketed ?? [];
 
   return (
     <Shell title="Renewals">
@@ -89,6 +107,27 @@ export default function Renewals() {
               </div>
             );
           })}
+          {/* Only renders when a renewalStage has no matching column — a
+              visible signal that the board is out of date with the enum,
+              rather than the records disappearing. */}
+          {unbucketed.length > 0 && (
+            <div className="w-72 shrink-0 bg-secondary/40 border border-dashed rounded-lg flex flex-col">
+              <div className="px-3 py-2 border-b flex items-center">
+                <StatusPill tone="warning">Unrecognised stage</StatusPill>
+                <div className="ml-auto text-[11px] text-muted-foreground">{unbucketed.length}</div>
+              </div>
+              <div className="flex-1 p-2 space-y-2 min-h-[60vh]">
+                {unbucketed.map((c: any) => (
+                  <div key={c.id} className="bg-card border rounded p-2.5">
+                    <div className="text-sm font-medium truncate">{c.account?.name ?? "—"}</div>
+                    <div className="text-[11px] text-muted-foreground mt-1">
+                      Stage: <code>{String(c.renewalStage)}</code>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
       )}

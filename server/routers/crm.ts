@@ -1859,15 +1859,48 @@ export const opportunitiesRouter = router({
     const db = await getDb();
     if (!db) return [];
     const rows = await db.select().from(opportunities).where(and(eq(opportunities.workspaceId, ctx.workspace.id), sql`${opportunities.stage} NOT IN ('won','lost')`))
-    const stageOrder = ["prospect", "qualified", "proposal", "negotiation", "closing"];
+
+    // The order used to be hardcoded as ["prospect",…,"closing"] — stage keys
+    // that do not exist in this system. The real default keys are discovery /
+    // qualified / proposal / negotiation (+ won/lost, excluded above), so
+    // `stageOrder.filter(s => map[s])` never matched "discovery" and EVERY
+    // newly created opportunity was missing from the funnel chart.
+    //
+    // opportunities.stage is a varchar, not an enum, because custom pipelines
+    // define their own keys — so read the workspace's actual stages rather
+    // than hardcoding any list, and append any stage present in the data that
+    // the pipeline config doesn't know about so nothing is ever dropped.
+    const stageDefs = await db
+      .select({ key: crmPipelineStages.key, label: crmPipelineStages.label, sortOrder: crmPipelineStages.sortOrder })
+      .from(crmPipelineStages)
+      .where(eq(crmPipelineStages.workspaceId, ctx.workspace.id))
+      .orderBy(crmPipelineStages.sortOrder);
+
+    const labelByKey = new Map<string, string>();
+    const ordered: string[] = [];
+    const seed = stageDefs.length > 0
+      ? stageDefs
+      : LEGACY_STAGES.map((s) => ({ key: s.key, label: s.label, sortOrder: s.sortOrder }));
+    for (const s of seed) {
+      if (s.key === "won" || s.key === "lost") continue;
+      if (!labelByKey.has(s.key)) { labelByKey.set(s.key, s.label); ordered.push(s.key); }
+    }
+
     const map: Record<string, { count: number; value: number }> = {};
     for (const o of rows) {
-      const s = o.stage ?? "prospect";
+      const s = o.stage ?? "discovery";
       if (!map[s]) map[s] = { count: 0, value: 0 };
       map[s].count++;
       map[s].value += Number(o.value ?? 0);
     }
-    return stageOrder.filter((s) => map[s]).map((s) => ({ stage: s.charAt(0).toUpperCase() + s.slice(1), count: map[s].count, value: map[s].value }));
+    // Any stage with deals but no definition still gets a column.
+    for (const s of Object.keys(map)) {
+      if (!labelByKey.has(s)) { labelByKey.set(s, s.charAt(0).toUpperCase() + s.slice(1)); ordered.push(s); }
+    }
+
+    return ordered
+      .filter((s) => map[s])
+      .map((s) => ({ stage: labelByKey.get(s) ?? s, count: map[s].count, value: map[s].value }));
   }),
 
   /** Top 5 reps by closed-won value (this month, fallback to all-time). */
