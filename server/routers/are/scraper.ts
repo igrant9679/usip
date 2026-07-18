@@ -340,7 +340,7 @@ function cleanName(v: unknown, max: number): string {
 export async function saveScrapeJobAndQueue(
   workspaceId: number,
   campaignId: number | null,
-  sourceType: "google_business" | "linkedin_company" | "linkedin_people" | "web_scrape" | "news" | "industry_events",
+  sourceType: "google_business" | "linkedin_company" | "linkedin_people" | "web_scrape" | "news" | "industry_events" | "apollo" | "internal",
   query: string,
   prospects: Array<Record<string, unknown>>,
 ): Promise<void> {
@@ -377,12 +377,33 @@ export async function saveScrapeJobAndQueue(
       web_scrape: "web_scrape",
       news: "news_event",
       industry_events: "industry_event",
+      apollo: "apollo",
+      internal: "internal_contact",
+    };
+
+    // The internal-CRM source yields a MIX of contacts and leads in one batch,
+    // which the job-level sourceType can't express. Rows may therefore carry
+    // `__queueSourceType` to pin their own prospect_queue value; anything else
+    // falls back to the job's mapping. Validated against the enum before use —
+    // an out-of-set string here fails at runtime INSERT, not at compile time.
+    const QUEUE_SOURCE_TYPES = new Set([
+      "internal_contact", "internal_lead",
+      "google_business", "linkedin_company", "linkedin_people",
+      "web_scrape", "news_event", "industry_event",
+      "apollo", "zoominfo", "clay", "ai_research",
+    ]);
+    const rowSourceType = (p: Record<string, unknown>) => {
+      const override = String(p.__queueSourceType ?? "");
+      if (override && QUEUE_SOURCE_TYPES.has(override)) {
+        return override as typeof prospectQueue.$inferInsert["sourceType"];
+      }
+      return sourceTypeMap[sourceType] ?? "web_scrape";
     };
 
     const rows = prospects.map((p) => ({
       workspaceId,
       campaignId,
-      sourceType: sourceTypeMap[sourceType] ?? "web_scrape",
+      sourceType: rowSourceType(p),
       sourceUrl: String(p.sourceUrl ?? ""), // text column — no clamp needed
       firstName: cleanName(p.firstName, 80),
       lastName: cleanName(p.lastName, 80),

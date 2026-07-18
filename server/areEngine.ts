@@ -31,14 +31,16 @@
  * Per-campaign and per-phase try/catch so one failure never blocks the rest.
  */
 import { createHash } from "node:crypto";
-import { and, desc, eq, inArray, lte, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, like, lte, notInArray, or, sql } from "drizzle-orm";
 import { getDb } from "./db";
 import {
   areCampaigns,
   areEngineLogs,
   areExecutionQueue,
   areSuppressionList,
+  contacts,
   icpProfiles,
+  leads,
   prospectIntelligence,
   prospectQueue,
 } from "../drizzle/schema";
@@ -933,7 +935,8 @@ async function runDiscovery(campaign: Campaign): Promise<number> {
     | "google_business"
     | "linkedin_people"
     | "news"
-    | "web_scrape";
+    | "web_scrape"
+    | "internal";
   type SourceResult = {
     sourceType: SourceType;
     query: string;
@@ -941,6 +944,15 @@ async function runDiscovery(campaign: Campaign): Promise<number> {
   };
 
   const tasks: Array<Promise<SourceResult>> = [];
+  if (sources.includes("internal")) {
+    tasks.push(
+      discoverViaInternalCrm(campaign, titles).then((raw) => ({
+        sourceType: "internal" as const,
+        query,
+        raw,
+      })),
+    );
+  }
   if (sources.includes("linkedin")) {
     tasks.push(
       discoverViaLinkedIn(campaign, query).then((raw) => ({
@@ -1169,6 +1181,127 @@ function nameOrgDedupKey(p: Record<string, unknown>): string | null {
   const org = norm(p.companyDomain) || norm(p.companyName);
   if (!name || !org) return null;
   return `n:${name}@${org}`;
+}
+
+/**
+ * Internal CRM discovery — seeds a campaign from people the workspace ALREADY
+ * has, instead of only hunting strangers.
+ *
+ * This source was offered in the wizard for a long time but never implemented:
+ * runDiscovery had no 'internal' branch, so ticking "Internal CRM" silently
+ * did nothing. The prospect_queue enum already carried internal_contact and
+ * internal_lead, so the data model was waiting for it.
+ *
+ * Matching is deliberately conservative — title LIKE against the campaign's
+ * target titles. Contacts and leads are already-known people, so a loose match
+ * would flood the queue with the entire CRM. With no target titles configured
+ * we return nothing rather than everything, since "every contact you have" is
+ * never a sensible campaign audience.
+ *
+ * Converted and unqualified leads are excluded: they're respectively already
+ * customers and already rejected.
+ */
+async function discoverViaInternalCrm(
+  campaign: Campaign,
+  titles: string[],
+  limit = 50,
+): Promise<Array<Record<string, unknown>>> {
+  const db = await getDb();
+  if (!db) return [];
+
+  const wanted = titles.map((t) => t.trim()).filter(Boolean).slice(0, 12);
+  if (wanted.length === 0) {
+    console.warn(
+      `[AreEngine] campaign ${campaign.id} — internal CRM source skipped: no target titles configured (refusing to enqueue the entire CRM)`,
+    );
+    return [];
+  }
+
+  const out: Array<Record<string, unknown>> = [];
+
+  try {
+    const contactRows = await db
+      .select({
+        firstName: contacts.firstName,
+        lastName: contacts.lastName,
+        title: contacts.title,
+        email: contacts.email,
+        phone: contacts.phone,
+        linkedinUrl: contacts.linkedinUrl,
+        city: contacts.city,
+        companyName: contacts.companyName,
+        companyDomain: contacts.companyDomain,
+      })
+      .from(contacts)
+      .where(
+        and(
+          eq(contacts.workspaceId, campaign.workspaceId),
+          or(...wanted.map((t) => like(contacts.title, `%${t}%`))),
+        ),
+      )
+      .limit(limit);
+
+    for (const c of contactRows) {
+      out.push({
+        firstName: c.firstName,
+        lastName: c.lastName,
+        title: c.title,
+        email: c.email,
+        phone: c.phone,
+        linkedinUrl: c.linkedinUrl,
+        companyName: c.companyName,
+        companyDomain: c.companyDomain,
+        geography: c.city,
+        sourceUrl: "",
+        __queueSourceType: "internal_contact",
+      });
+    }
+  } catch (e) {
+    console.error(`[AreEngine] internal CRM contact scan failed for campaign ${campaign.id}:`, e);
+  }
+
+  try {
+    const remaining = Math.max(limit - out.length, 0);
+    if (remaining > 0) {
+      const leadRows = await db
+        .select({
+          firstName: leads.firstName,
+          lastName: leads.lastName,
+          title: leads.title,
+          email: leads.email,
+          phone: leads.phone,
+          company: leads.company,
+        })
+        .from(leads)
+        .where(
+          and(
+            eq(leads.workspaceId, campaign.workspaceId),
+            notInArray(leads.status, ["converted", "unqualified"]),
+            or(...wanted.map((t) => like(leads.title, `%${t}%`))),
+          ),
+        )
+        .limit(remaining);
+
+      for (const l of leadRows) {
+        out.push({
+          firstName: l.firstName,
+          lastName: l.lastName,
+          title: l.title,
+          email: l.email,
+          phone: l.phone,
+          companyName: l.company,
+          companyDomain: "",
+          geography: "",
+          sourceUrl: "",
+          __queueSourceType: "internal_lead",
+        });
+      }
+    }
+  } catch (e) {
+    console.error(`[AreEngine] internal CRM lead scan failed for campaign ${campaign.id}:`, e);
+  }
+
+  return out;
 }
 
 /**
