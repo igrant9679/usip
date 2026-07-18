@@ -36,6 +36,7 @@ import {
   scrapeWeb,
 } from "../../routers/are/scraper";
 import { searchLinkedInProfiles } from "../linkedinLookup";
+import { apolloSearchPeople, getApolloDailyCap, apolloPulledToday } from "../apollo";
 import { processRun } from "./consolidate";
 
 /**
@@ -65,6 +66,45 @@ async function discoverLinkedInPeople(
     sourceUrl: h.linkedinUrl,
     geography: h.location,
   }));
+}
+
+/**
+ * Apollo as a Discovery v2 source. Takes the structured search input directly
+ * rather than the flattened query string, so Apollo filters on real fields
+ * instead of keyword-matching a sentence.
+ *
+ * Search-only (zero Apollo credits, no emails returned) — the company domain
+ * it supplies is what downstream enrichment needs. Returns [] when no key is
+ * configured or the daily cap is spent, so the rest of the fan-out is
+ * unaffected.
+ */
+async function discoverViaApollo(
+  workspaceId: number,
+  mode: SearchMode,
+  input: DiscoveryInput,
+): Promise<Array<Record<string, unknown>>> {
+  const cap = await getApolloDailyCap(workspaceId);
+  const headroom = cap - (await apolloPulledToday(workspaceId));
+  if (headroom <= 0) return [];
+
+  const p = input as PersonSearchInput;
+  const a = input as AccountSearchInput;
+  const titles = mode === "person" && p.jobTitle ? [p.jobTitle] : [];
+  const industry = (mode === "person" ? p.industry : a.industry) ?? "";
+  const location = (mode === "person" ? p.location : a.location) ?? "";
+  const keywords = [...(input.keywords ?? [])];
+  if (mode === "account" && a.companyName) keywords.push(a.companyName);
+  if (mode === "person" && p.seniority) keywords.push(p.seniority);
+
+  const res = await apolloSearchPeople(workspaceId, {
+    titles,
+    industries: industry ? [industry] : [],
+    locations: location ? [location] : [],
+    keywords,
+    perPage: Math.min(headroom, 25),
+  });
+  if (!res.ok) return [];
+  return res.prospects.map((x) => ({ ...x }));
 }
 
 export type SearchMode = "person" | "account";
@@ -276,6 +316,7 @@ export async function runDiscovery(
       discoverLinkedInPeople(workspaceId, query).then((raw) => ({ source: "linkedin_people", raw })),
       scrapeWeb(workspaceId, null, query, icpContext).then((raw) => ({ source: "web", raw })),
       scrapeNews(workspaceId, null, query, icpContext).then((raw) => ({ source: "news", raw })),
+      discoverViaApollo(workspaceId, mode, input).then((raw) => ({ source: "apollo", raw })),
     );
   } else {
     // Account mode keeps the company-shaped sources. LinkedIn's classic
@@ -285,6 +326,7 @@ export async function runDiscovery(
       scrapeGoogleBusiness(workspaceId, null, query, icpContext).then((raw) => ({ source: "google_business", raw })),
       scrapeWeb(workspaceId, null, query, icpContext).then((raw) => ({ source: "web", raw })),
       scrapeNews(workspaceId, null, query, icpContext).then((raw) => ({ source: "news", raw })),
+      discoverViaApollo(workspaceId, mode, input).then((raw) => ({ source: "apollo", raw })),
     );
   }
 
