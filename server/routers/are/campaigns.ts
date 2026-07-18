@@ -13,6 +13,7 @@ import { router } from "../../_core/trpc";
 import { workspaceProcedure } from "../../_core/workspace";
 import { runAreEngine } from "../../areEngine";
 import { invokeLLM } from "../../_core/llm";
+import { ARE_DEFAULT_SOURCES, normalizeSources } from "@shared/areSources";
 
 export const campaignsRouter = router({
   list: workspaceProcedure
@@ -65,7 +66,12 @@ export const campaignsRouter = router({
          * { targetTitles, targetIndustries, employeeMin, employeeMax, keywords }.
          */
         icpOverrides: z.any().optional(),
-        prospectSources: z.array(z.string()).default(["internal", "google_business", "linkedin", "news"]),
+        // Default: every working source (shared/areSources.ts). Unknown ids
+        // are dropped so a stale client can't persist a dead source.
+        prospectSources: z
+          .array(z.string())
+          .default([...ARE_DEFAULT_SOURCES])
+          .transform((v) => normalizeSources(v)),
         targetProspectCount: z.number().min(1).max(10000).default(100),
         dailySendCap: z.number().min(1).max(500).default(50),
         channelsEnabled: z.object({
@@ -173,7 +179,7 @@ export const campaignsRouter = router({
         promptSignature: z.string().max(2000).nullable().optional(),
         goalType: z.enum(["meeting_booked", "reply", "opportunity_created"]).optional(),
         icpOverrides: z.any().optional(),
-        prospectSources: z.array(z.string()).optional(),
+        prospectSources: z.array(z.string()).optional().transform((v) => (v === undefined ? undefined : normalizeSources(v))),
         autoApproveThreshold: z.number().min(0).max(100).nullable().optional(),
         minConfidence: z.number().int().min(0).max(100).nullable().optional(),
         signalToOpportunityEnabled: z.boolean().optional(),

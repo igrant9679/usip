@@ -30,7 +30,8 @@ import {
   Megaphone,
   Sparkles,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { ARE_SOURCES, ARE_SOURCE_IDS, ARE_DEFAULT_SOURCES } from "@shared/areSources";
 import { Link, useLocation } from "wouter";
 import { toast } from "sonner";
 
@@ -41,14 +42,9 @@ const STATUS_COLOR: Record<string, string> = {
   completed: "#60A5FA",
 };
 
-const SOURCE_OPTIONS = [
-  { id: "internal", label: "Internal CRM" },
-  { id: "google_business", label: "Google Business" },
-  { id: "linkedin", label: "LinkedIn" },
-  { id: "web", label: "Web Scraping" },
-  { id: "news", label: "News & Events" },
-  { id: "ai_research", label: "AI Research" },
-];
+// Single source of truth — shared with the server and the engine so a ticked
+// box always corresponds to a source that actually runs. See shared/areSources.ts.
+const SOURCE_OPTIONS = ARE_SOURCES;
 
 const EMPLOYEE_BANDS = [
   { value: "any", label: "Any size", min: undefined, max: undefined },
@@ -170,6 +166,19 @@ export default function ARECampaigns() {
   const { data: campaigns, isLoading } = trpc.are.campaigns.list.useQuery({});
   const [showCreate, setShowCreate] = useState(false);
 
+  // ARE Settings → "Default Scraper Sources" is the workspace default for new
+  // campaigns. That was previously only a claim in the description text — the
+  // wizard hardcoded its own list and never read this. Now it does.
+  const { data: wsSettings } = trpc.admin.getSettings.useQuery();
+  const defaultSources = useMemo(() => {
+    const saved = ((wsSettings as any)?.areScraperSources ?? null) as Record<string, boolean> | null;
+    if (!saved) return [...ARE_DEFAULT_SOURCES];
+    const picked = ARE_SOURCE_IDS.filter((id) => saved[id] ?? true);
+    // An all-off workspace default would silently create campaigns that can
+    // never source anything; treat that as "unset" instead.
+    return picked.length > 0 ? picked : [...ARE_DEFAULT_SOURCES];
+  }, [wsSettings]);
+
   const [step, setStep] = useState(1);
   const TOTAL_STEPS = 4;
   const blankForm = () => ({
@@ -180,7 +189,7 @@ export default function ARECampaigns() {
     targetProspectCount: 100,
     dailySendCap: 50,
     autoApproveThreshold: 60,
-    prospectSources: ["google_business", "news", "web"] as string[],
+    prospectSources: [...defaultSources] as string[],
     channelsEnabled: { email: true, linkedin: false, sms: false, voice: false },
     // Per-campaign targeting (stored as icpOverrides on save)
     targetTitles: [] as string[],

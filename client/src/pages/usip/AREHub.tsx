@@ -238,6 +238,12 @@ export default function AREHub() {
 
   const activeCampaigns = (campaigns ?? []).filter((c) => c.status === "active");
   const pausedCampaigns = (campaigns ?? []).filter((c) => c.status === "paused");
+  // Drafts were rendered nowhere on this page while still being counted in the
+  // "Campaigns" stat — so a campaign you created but didn't activate vanished,
+  // and the tile read one higher than the list. Give them their own group.
+  const draftCampaigns = (campaigns ?? []).filter(
+    (c) => c.status !== "active" && c.status !== "paused",
+  );
   const totalCampaigns = (campaigns ?? []).length;
 
   /* signal breakdown */
@@ -346,6 +352,13 @@ export default function AREHub() {
                   <span className="text-muted-foreground">Paused</span>
                   <span className="font-semibold tabular-nums">{pausedCampaigns.length}</span>
                 </div>
+                {draftCampaigns.length > 0 && (
+                  <div className="flex items-center gap-1.5">
+                    <span className="size-1.5 rounded-full bg-muted-foreground/40" />
+                    <span className="text-muted-foreground">Draft</span>
+                    <span className="font-semibold tabular-nums">{draftCampaigns.length}</span>
+                  </div>
+                )}
                 <div className="flex items-center gap-1.5">
                   <span className="text-muted-foreground">Meetings</span>
                   <span className="font-semibold tabular-nums text-violet-500">{totals.meetings}</span>
@@ -501,6 +514,25 @@ export default function AREHub() {
                       <div className="flex-1 min-w-0">
                         <div className="text-sm font-medium truncate">{c.name}</div>
                         <div className="text-xs text-muted-foreground">{c.prospectsContacted ?? 0} contacted</div>
+                      </div>
+                      <ArrowRight className="size-4 text-muted-foreground shrink-0" />
+                    </div>
+                  </Link>
+                ))}
+              </div>
+            )}
+
+            {/* Draft campaigns — configured but never activated */}
+            {draftCampaigns.length > 0 && (
+              <div className="mt-4 space-y-2">
+                <div className="text-xs text-muted-foreground uppercase tracking-wider">Draft ({draftCampaigns.length})</div>
+                {draftCampaigns.slice(0, 3).map((c) => (
+                  <Link key={c.id} href={`/are/campaigns/${c.id}`}>
+                    <div className="flex items-center gap-3 rounded-xl border border-dashed bg-card/50 px-4 py-3 hover:border-primary/30 transition-all cursor-pointer opacity-70 hover:opacity-100">
+                      <div className="size-2 rounded-full bg-muted-foreground/40 shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-medium truncate">{c.name}</div>
+                        <div className="text-xs text-muted-foreground">Not activated — nothing has sent</div>
                       </div>
                       <ArrowRight className="size-4 text-muted-foreground shrink-0" />
                     </div>

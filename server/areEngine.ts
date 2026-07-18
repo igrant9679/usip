@@ -53,6 +53,7 @@ import { searchLinkedInPeople, type UnipileLinkedInSearchHit } from "./lib/unipi
 import { listUsableAccounts } from "./services/linkedinLookup";
 import { sendWorkspaceEmail, sendCampaignEmailViaPool } from "./emailDelivery";
 import { resolveBookingUrl } from "./mergeVars";
+import { ARE_DEFAULT_SOURCES, normalizeSources } from "@shared/areSources";
 
 /* ─── Per-tick bounds (keep LLM cost + wall-time predictable) ───────────── */
 /** Max prospects enriched per engine cycle. Enrichment runs ONE AT A TIME
@@ -895,7 +896,12 @@ async function runDiscovery(campaign: Campaign): Promise<number> {
   // existing prospect_queue rows so cross-source overlap doesn't create
   // duplicate prospects. Each source still gets its own scrape_jobs
   // row so the Scraper tab shows per-source activity.
-  const sources = (campaign.prospectSources as string[] | null) ?? ["linkedin"];
+  // Campaigns created before the vocabulary was unified may carry dead ids
+  // ('ai_research', 'events') or null. normalizeSources strips the dead ones;
+  // a campaign with nothing left falls back to the full default set rather
+  // than the old lone "linkedin" guess.
+  const configured = normalizeSources(campaign.prospectSources);
+  const sources: string[] = configured.length > 0 ? configured : [...ARE_DEFAULT_SOURCES];
 
   // Seed the dedup set with everything already in the queue for this
   // campaign — keeps subsequent ticks from re-adding the same people.

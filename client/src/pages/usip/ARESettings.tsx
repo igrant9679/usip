@@ -10,6 +10,7 @@
  */
 import { Shell, PageHeader } from "@/components/usip/Shell";
 import { ApolloSourceCard } from "@/components/usip/settings/ApolloSourceCard";
+import { ARE_SOURCES, ARE_SOURCE_IDS } from "@shared/areSources";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -43,6 +44,12 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+
+/** Descriptions keyed by source id, so this page and the campaign wizard
+ *  describe the same source the same way. */
+const ARE_SOURCE_DESC: Record<string, string> = Object.fromEntries(
+  ARE_SOURCES.map((s) => [s.id, s.description]),
+);
 
 /* --- Types ---------------------------------------------------------------- */
 type AutonomyMode = "full" | "batch_approval" | "review_release";
@@ -131,7 +138,12 @@ export default function ARESettings() {
   // New settings
   const [sequenceTemplate, setSequenceTemplate] = useState("standard_7step");
   const [brandVoice, setBrandVoice] = useState("professional");
-  const [scraperSources, setScraperSources] = useState<Record<string, boolean>>({ google_business: true, linkedin_company: true, linkedin_people: true, web: true, news: true, events: false });
+  // Keys come from the shared ARE_SOURCES vocabulary — the same ids the wizard
+  // shows and the engine dispatches on. All on by default: a new campaign
+  // sources from everything unless the user narrows it.
+  const [scraperSources, setScraperSources] = useState<Record<string, boolean>>(
+    Object.fromEntries(ARE_SOURCE_IDS.map((id) => [id, true])),
+  );
   const [icpRegenSchedule, setIcpRegenSchedule] = useState("weekly");
   const [sequenceQualityThreshold, setSequenceQualityThreshold] = useState(65);
   const [dirty, setDirty] = useState(false);
@@ -150,7 +162,15 @@ export default function ARESettings() {
     setNotifyIcpUpdate(settings.areNotifyOnIcpUpdate ?? true);
     setSequenceTemplate((settings.areDefaultSequenceTemplate as string) ?? "standard_7step");
     setBrandVoice((settings as any).areBrandVoice ?? "professional");
-    setScraperSources((settings as any).areScraperSources ?? { google_business: true, linkedin_company: true, linkedin_people: true, web: true, news: true, events: false });
+    // Saved values may predate the unified vocabulary (linkedin_company /
+    // linkedin_people / events). Read only the live ids and default anything
+    // absent to on, so an old row doesn't silently disable a working source.
+    {
+      const saved = ((settings as any).areScraperSources ?? {}) as Record<string, boolean>;
+      setScraperSources(
+        Object.fromEntries(ARE_SOURCE_IDS.map((id) => [id, saved[id] ?? true])),
+      );
+    }
     setIcpRegenSchedule((settings as any).areIcpRegenSchedule ?? "weekly");
     setSequenceQualityThreshold((settings as any).areSequenceQualityThreshold ?? 65);
     setDirty(false);
@@ -503,16 +523,16 @@ export default function ARESettings() {
         <Section
           icon={Search}
           title="Default Scraper Sources"
-          description="New campaigns will have these sources pre-enabled. The AI uses them to discover and enrich prospects."
+          description="New campaigns start with these sources pre-enabled. Each campaign can still narrow the list in its own settings."
         >
           <div className="space-y-2">
             {[
-              { key: "google_business", label: "Google Business Profiles", desc: "Discover local and regional businesses via Google Maps and Business listings.", icon: Globe, color: "text-blue-500" },
-              { key: "linkedin_company", label: "LinkedIn Company Pages", desc: "Scrape company size, industry, recent posts, and hiring signals from LinkedIn.", icon: Linkedin, color: "text-blue-600" },
-              { key: "linkedin_people", label: "LinkedIn People Search", desc: "Find decision-makers matching your ICP title filters on LinkedIn.", icon: Linkedin, color: "text-blue-400" },
-              { key: "web", label: "General Web", desc: "Crawl company websites for contact info, tech stack signals, and about pages.", icon: Globe, color: "text-emerald-500" },
-              { key: "news", label: "News Monitoring", desc: "Track funding rounds, product launches, leadership changes, and press mentions.", icon: Newspaper, color: "text-amber-500" },
-              { key: "events", label: "Industry Events", desc: "Find companies attending or sponsoring relevant conferences and trade shows.", icon: Star, color: "text-violet-500" },
+              { key: "internal", label: "Internal CRM", desc: ARE_SOURCE_DESC.internal, icon: Database, color: "text-slate-500" },
+              { key: "google_business", label: "Google Business", desc: ARE_SOURCE_DESC.google_business, icon: Globe, color: "text-blue-500" },
+              { key: "linkedin", label: "LinkedIn", desc: ARE_SOURCE_DESC.linkedin, icon: Linkedin, color: "text-blue-600" },
+              { key: "web", label: "Web scraping", desc: ARE_SOURCE_DESC.web, icon: Globe, color: "text-emerald-500" },
+              { key: "news", label: "News & trigger events", desc: ARE_SOURCE_DESC.news, icon: Newspaper, color: "text-amber-500" },
+              { key: "apollo", label: "Apollo.io", desc: ARE_SOURCE_DESC.apollo, icon: Database, color: "text-violet-500" },
             ].map(({ key, label, desc, icon: Icon, color }) => {
               const active = !!scraperSources[key];
               return (
