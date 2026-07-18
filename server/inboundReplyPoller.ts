@@ -25,10 +25,12 @@ import {
   enrollments,
   activities,
   sequences,
+  prospectQueue,
 } from "../drizzle/schema";
 import { eq, and, or, desc, inArray, isNull } from "drizzle-orm";
 import { decryptField } from "./emailAdapter";
 import { bumpCampaignCounter } from "./campaignCounters";
+import { processSignal } from "./routers/are/execution";
 
 let pollerInterval: ReturnType<typeof setInterval> | null = null;
 let isPolling = false;
@@ -278,6 +280,35 @@ export async function processInboundReply(data: InboundReplyData) {
     }
   }
 
+  // 2b. ARE's own queue is a SEPARATE table from `prospects`, and nothing
+  //     here ever looked at it — so a prospect sourced, sequenced and mailed
+  //     by the autonomous engine could reply and the engine would never find
+  //     out. processSignal (the whole sentiment → opportunity → suppression
+  //     feedback loop) had exactly one caller, the ingestSignal mutation,
+  //     which nothing in the client or server ever invoked. The loop was
+  //     complete code with no producer wired to it.
+  //
+  //     Matching by email within the workspace is the same rule the tiers
+  //     above use. Newest queue row wins if a prospect appears in more than
+  //     one campaign.
+  let matchedQueueRow: { id: number; campaignId: number } | null = null;
+  try {
+    const [row] = await db
+      .select({ id: prospectQueue.id, campaignId: prospectQueue.campaignId })
+      .from(prospectQueue)
+      .where(
+        and(
+          eq(prospectQueue.workspaceId, data.workspaceId),
+          eq(prospectQueue.email, data.fromEmail),
+        ),
+      )
+      .orderBy(desc(prospectQueue.id))
+      .limit(1);
+    if (row) matchedQueueRow = row;
+  } catch (e) {
+    console.error("[InboundReplyPoller] ARE queue match failed:", e);
+  }
+
   // 3. Insert email_reply row (capture the id so the notification can
   //    deep-link "Open in Mailbox" straight to this conversation)
   const [insertedReply] = await db.insert(emailReplies).values({
@@ -316,6 +347,28 @@ export async function processInboundReply(data: InboundReplyData) {
       // consumed it off the notification.)
       relatedType: emailReplyId ? "email_reply" : null,
       relatedId: emailReplyId || null,
+    });
+  }
+
+  // 4b. Feed ARE's signal loop. Fire-and-forget: the engine's sentiment
+  //     analysis makes an LLM call, and the poller must not block (or fail)
+  //     on it — a reply is already durably recorded above either way.
+  if (matchedQueueRow) {
+    void processSignal(
+      data.workspaceId,
+      matchedQueueRow.id,
+      matchedQueueRow.campaignId,
+      "email_reply",
+      {
+        body: data.bodyText ?? data.bodyHtml ?? "",
+        subject: data.subject ?? "",
+        fromEmail: data.fromEmail,
+      },
+    ).catch((e) => {
+      console.error(
+        `[InboundReplyPoller] ARE processSignal failed for queue row ${matchedQueueRow?.id}:`,
+        e,
+      );
     });
   }
 
