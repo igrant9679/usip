@@ -2596,6 +2596,26 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0124: Apollo.io as an ARE prospect source ─────────────────────────────
+  // BYOK Apollo key (same AES-256-GCM pattern as the AI/xAI keys) + a daily
+  // record-pull cap. Apollo is used SEARCH-ONLY (zero Apollo credits): the
+  // People Search endpoint returns names/titles/company/domain but no emails,
+  // and costs nothing. Emails are then resolved by the existing Reoon-backed
+  // finder from the company domain Apollo supplies.
+  //
+  // are_scrape_jobs.sourceType gains 'apollo' and 'internal' so those sources
+  // get their own job rows in the Scraper tab. prospect_queue.sourceType
+  // already carries 'apollo'/'internal_contact'/'internal_lead' — no change
+  // needed there.
+  {
+    name: "0124_apollo_source.sql",
+    statements: [
+      `ALTER TABLE \`workspace_settings\` ADD COLUMN \`apolloApiKeyEnc\` text NULL`,
+      `ALTER TABLE \`workspace_settings\` ADD COLUMN \`apolloDailyPullCap\` int NOT NULL DEFAULT 50`,
+      `ALTER TABLE \`are_scrape_jobs\` MODIFY COLUMN \`sourceType\` enum('google_business','linkedin_company','linkedin_people','web_scrape','news','industry_events','apollo','internal') NOT NULL`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

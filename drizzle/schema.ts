@@ -1424,6 +1424,16 @@ export const workspaceSettings = mysqlTable("workspace_settings", {
   // (wss://api.x.ai/v1/realtime + SIP). Same AES-256-GCM BYOK pattern as above.
   xaiApiKeyEnc: text("xaiApiKeyEnc"),
   xaiVoiceModel: varchar("xaiVoiceModel", { length: 64 }), // default grok-voice-latest (in code)
+  // ── Apollo.io prospect source (Migration 0124) ──
+  // Same AES-256-GCM BYOK pattern as above. Used SEARCH-ONLY: Apollo's People
+  // Search returns names/titles/company/domain and consumes ZERO credits, but
+  // never emails. We deliberately do NOT call the enrichment/match endpoints
+  // (1 credit per email, +8 per mobile) — emails come from the existing
+  // Reoon-backed finder using the company domain Apollo hands us.
+  apolloApiKeyEnc: text("apolloApiKeyEnc"),
+  // Max Apollo person records pulled per workspace per day. Guards the API
+  // rate limit (no credit spend on the search-only path).
+  apolloDailyPullCap: int("apolloDailyPullCap").default(50).notNull(),
   // ── Task Autopilot (Migration 0099) — the /v2/tasks autonomy engine ──
   // off      = AI never generates tasks (fully manual)
   // approval = AI drafts next-best-action tasks; a human approves before they go live
@@ -3487,6 +3497,7 @@ export const areScrapeJobs = mysqlTable(
     sourceType: mysqlEnum("sourceType", [
       "google_business", "linkedin_company", "linkedin_people",
       "web_scrape", "news", "industry_events",
+      "apollo", "internal", // migration 0124
     ]).notNull(),
     query: text("query").notNull(),          // search query or URL
     status: mysqlEnum("status", ["pending", "running", "complete", "failed"]).default("pending").notNull(),

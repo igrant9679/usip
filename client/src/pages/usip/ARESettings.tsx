@@ -9,6 +9,7 @@
  *  5. Notification preferences — which ARE events trigger in-app notifications
  */
 import { Shell, PageHeader } from "@/components/usip/Shell";
+import { ApolloSourceCard } from "@/components/usip/settings/ApolloSourceCard";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -20,6 +21,7 @@ import {
   Brain,
   CheckCircle2,
   Clock,
+  Database,
   FileText,
   Globe,
   Linkedin,
@@ -527,6 +529,15 @@ export default function ARESettings() {
               );
             })}
           </div>
+        </Section>
+
+        {/* -- 8b. Apollo.io connection (feeds the "Apollo" source above) -- */}
+        <Section
+          icon={Database}
+          title="Apollo.io"
+          description="Connect your Apollo account so campaigns can source prospects from it. Search-only — costs no Apollo credits."
+        >
+          <ApolloSourceCard variant="bare" />
         </Section>
 
         {/* -- 9. ICP Regen Schedule -- */}

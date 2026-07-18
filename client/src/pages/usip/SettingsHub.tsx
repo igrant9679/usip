@@ -38,6 +38,7 @@ import { Switch } from "@/components/ui/switch";
 import { Checkbox } from "@/components/ui/checkbox";
 import { MailboxesSection } from "@/components/usip/settings/MailboxesSection";
 import { VoiceAgentsSection } from "@/components/usip/settings/VoiceAgentsSection";
+import { ApolloSourceCard } from "@/components/usip/settings/ApolloSourceCard";
 import {
   ArrowLeft,
   Search,
@@ -102,6 +103,7 @@ const GROUPS: HubGroup[] = [
       { id: "security", label: "Security", icon: ShieldCheck, href: "/settings?tab=security" },
       { id: "integrations", label: "Integrations", icon: Plug, href: "/settings?tab=integrations" },
       { id: "voice-agents", label: "Voice agents", icon: AudioLines, internal: true },
+      { id: "data-sources", label: "Data sources", icon: Database, internal: true },
       { id: "email-delivery", label: "Email delivery", icon: Send, href: "/settings?tab=smtp" },
       { id: "branding", label: "Branding", icon: Palette, href: "/settings?tab=branding" },
       { id: "billing", label: "Billing and credits", icon: CreditCard, href: "/settings?tab=billing" },
@@ -215,6 +217,11 @@ export default function SettingsHub() {
         {section === "profile" && <ProfileSection />}
         {section === "mailboxes" && <MailboxesSection />}
         {section === "voice-agents" && <VoiceAgentsSection />}
+        {section === "data-sources" && (
+          <div className="space-y-4">
+            <ApolloSourceCard />
+          </div>
+        )}
       </main>
     </div>
   );
