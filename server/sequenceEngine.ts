@@ -30,6 +30,7 @@ import {
 } from "../drizzle/schema";
 import { sendLinkedInInvitation, sendMessage } from "./lib/unipile";
 import { getDb } from "./db";
+import { invokeLLM } from "./_core/llm";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -42,6 +43,10 @@ type Step = {
   taskTitle?: string;
   taskBody?: string;
   taskDueOffsetDays?: number;
+  emailMode?: "typed" | "dynamic";
+  aiTone?: string;
+  aiLength?: string;
+  aiFocus?: string;
 };
 
 /**
@@ -82,6 +87,10 @@ function normalizeStep(raw: Record<string, unknown>): Step {
     // `days` is what the schema stores; `waitDays` is tolerated for safety.
     waitDays: num(raw.days) ?? num(raw.waitDays),
     taskDueOffsetDays: num(raw.taskDueOffsetDays),
+    emailMode: raw.emailMode === "dynamic" ? "dynamic" : undefined,
+    aiTone: str(raw.aiTone),
+    aiLength: str(raw.aiLength),
+    aiFocus: str(raw.aiFocus),
   };
 
   if (step.type === "task") {
@@ -105,6 +114,75 @@ function normalizeSteps(raw: unknown): Step[] {
   return raw
     .filter((s): s is Record<string, unknown> => !!s && typeof s === "object")
     .map(normalizeStep);
+}
+
+/**
+ * Generate copy for an "AI-dynamic" email step at send time.
+ *
+ * The canvas's dynamic mode deliberately offers no subject/body inputs — it
+ * promises the copy is written per-recipient at send. Nothing implemented
+ * that promise, so those steps produced empty drafts.
+ *
+ * Personalization tokens are left as {{merge}} placeholders rather than being
+ * resolved here: the send path (renderMergeFields) already substitutes them
+ * per recipient, and doing it in both places would double-resolve.
+ *
+ * Returns null on any failure — the caller then skips the send rather than
+ * mailing an empty body.
+ */
+async function generateDynamicEmail(
+  step: Step,
+  workspaceId: number,
+): Promise<{ subject: string; body: string } | null> {
+  const tone = step.aiTone ?? "professional";
+  const length = step.aiLength ?? "medium";
+  const focus = step.aiFocus?.trim();
+  if (!focus) {
+    console.error(
+      "[SequenceEngine] dynamic email step has no focus/goal configured — nothing to generate from.",
+    );
+    return null;
+  }
+
+  try {
+    const out = await invokeLLM({
+      workspaceId,
+      maxTokens: 700,
+      temperature: 0.7,
+      messages: [
+        {
+          role: "system",
+          content:
+            `You write short B2B outreach emails. Tone: ${tone}. Length: ${length}.\n` +
+            `Use {{firstName}}, {{company}} and {{senderName}} as literal placeholder tokens — they are substituted per recipient downstream, so never invent a real name or company.\n` +
+            `Do not fabricate facts, metrics, or customer names. Do not open with "I hope this email finds you well". Do not add a P.S.`,
+        },
+        { role: "user", content: `Write the email. Goal: ${focus}` },
+      ],
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          name: "email_draft",
+          strict: true,
+          schema: {
+            type: "object",
+            properties: { subject: { type: "string" }, body: { type: "string" } },
+            required: ["subject", "body"],
+            additionalProperties: false,
+          },
+        },
+      },
+    });
+    const content = out.choices?.[0]?.message?.content;
+    const parsed = typeof content === "string" ? JSON.parse(content) : content;
+    const subject = String(parsed?.subject ?? "").trim();
+    const body = String(parsed?.body ?? "").trim();
+    if (!body) return null;
+    return { subject: subject || "Following up", body };
+  } catch (e) {
+    console.error("[SequenceEngine] dynamic email generation failed:", e);
+    return null;
+  }
 }
 
 type EnrollmentTrigger = {
@@ -345,6 +423,34 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
             chosenVariantId = chosen.id;
             chosenVariantCount = chosen.sentCount;
           }
+
+          // AI-dynamic steps carry no static copy by design — the canvas
+          // deliberately hides subject/body for them. Generate now.
+          if (step.emailMode === "dynamic" && variants.length === 0) {
+            const generated = await generateDynamicEmail(step, enrollment.workspaceId);
+            if (generated) {
+              draftSubject = generated.subject;
+              draftBody = generated.body;
+            }
+          }
+
+          // HARD GUARD: never create a draft with no body. A dynamic step
+          // used to persist as subject:"" body:"" and land here unchanged —
+          // `step.subject ?? "Follow-up"` doesn't fire on "" — so the engine
+          // queued a genuinely blank email against a real prospect. If we
+          // still have nothing to say, skip the send and advance rather than
+          // mailing emptiness; the log names the sequence and step.
+          const hasContent = draftBody.trim().length > 0;
+          if (!hasContent) {
+            console.error(
+              `[SequenceEngine] sequence ${enrollment.sequenceId} step ${stepIndex}: empty body — send SKIPPED for enrollment ${enrollment.id}.` +
+              (step.emailMode === "dynamic"
+                ? " AI generation returned nothing (check the workspace's AI provider key)."
+                : " The step has no content saved."),
+            );
+          }
+
+          if (hasContent) {
           // Create email draft for review.
           // stepIndex captures which sequence step this draft was generated
           // for, since enrollment.currentStep will advance before the draft
@@ -373,6 +479,7 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
               .set({ sentCount: chosenVariantCount + 1 })
               .where(eq(sequenceAbVariants.id, chosenVariantId));
           }
+          } // end if (hasContent)
         }
 
         // Advance to next step

@@ -1,7 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { and, count, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { z } from "zod";
-import { accounts, activities, campaigns, contacts, emailDrafts, emailReplies, enrollments, leads, prospects, senderPoolMembers, sendingAccounts, sequenceAbVariants, sequenceEdges, sequenceNodes, sequences, unipileAccounts, users, workspaces, workspaceSettings } from "../../drizzle/schema";
+import { accounts, activities, campaigns, contacts, emailDrafts, emailReplies, enrollments, leads, prospects, senderPoolMembers, sendingAccounts, sequenceAbVariants, sequenceEdges, sequenceNodes, sequences, unipileAccounts, users, workspaceMembers, workspaces, workspaceSettings } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
 import { getDb } from "../db";
 import { createEmailAdapter } from "../emailAdapter";
@@ -244,8 +244,24 @@ const stepSchema = z.discriminatedUnion("type", [
   // Sequences edit dialog can render an "Applied from: <name>"
   // breadcrumb. The send engine ignores it — only subject/body matter
   // at send time.
-  z.object({ type: z.literal("email"), subject: z.string(), body: z.string().optional(), templateId: z.number().int().optional() }),
-  z.object({ type: z.literal("wait"), days: z.number().int().min(0).max(60) }),
+  // emailMode + ai* carry the canvas "AI-dynamic" configuration through to
+  // send time. They used to be dropped here, so a dynamic step persisted as
+  // subject:"" body:"" and the engine mailed an EMPTY email (the `?? ` guards
+  // don't fire on "" — only on null/undefined).
+  z.object({
+    type: z.literal("email"),
+    subject: z.string(),
+    body: z.string().optional(),
+    templateId: z.number().int().optional(),
+    emailMode: z.enum(["typed", "dynamic"]).optional(),
+    aiTone: z.string().max(40).optional(),
+    aiLength: z.string().max(40).optional(),
+    aiFocus: z.string().max(500).optional(),
+  }),
+  // Fractional days are allowed so the canvas Wait node's "hours" field
+  // survives (it was previously discarded); the engine multiplies by
+  // 86_400_000, which handles fractions fine.
+  z.object({ type: z.literal("wait"), days: z.number().min(0).max(60) }),
   z.object({ type: z.literal("task"), body: z.string() }),
   z.object({ type: z.literal("linkedin_dm"), body: z.string().optional() }),
   z.object({ type: z.literal("linkedin_invite"), note: z.string().optional() }),
@@ -332,12 +348,32 @@ function canvasNodeToStep(node: CanvasNode): ListStep | null {
       const templateId = typeof (d.staticTemplateId ?? d.templateId) === "number"
         ? (d.staticTemplateId ?? d.templateId)
         : undefined;
+      // Carry the AI-dynamic config. Dropping it here is what made dynamic
+      // steps send blank emails: the node has no static subject/body by
+      // design, so without the mode flag the engine had nothing to send and
+      // no way to know it was supposed to generate.
+      const mode = d.emailMode === "dynamic" ? "dynamic" : "typed";
+      const ai = mode === "dynamic"
+        ? {
+            emailMode: "dynamic" as const,
+            aiTone: d.aiTone ? String(d.aiTone).slice(0, 40) : undefined,
+            aiLength: d.aiLength ? String(d.aiLength).slice(0, 40) : undefined,
+            aiFocus: d.aiFocus ? String(d.aiFocus).slice(0, 500) : undefined,
+          }
+        : {};
       return templateId
-        ? { type: "email", subject, body, templateId }
-        : { type: "email", subject, body };
+        ? { type: "email", subject, body, templateId, ...ai }
+        : { type: "email", subject, body, ...ai };
     }
-    case "wait":
-      return { type: "wait", days: Math.max(0, Number(d.days ?? 1)) };
+    case "wait": {
+      // The canvas Wait node writes delayDays/delayHours (NodeEditPanel);
+      // reading `d.days` meant every canvas wait silently became 1 day and
+      // the hours field was discarded outright.
+      const days = Number(d.delayDays ?? d.days ?? 0);
+      const hours = Number(d.delayHours ?? 0);
+      const total = (Number.isFinite(days) ? days : 0) + (Number.isFinite(hours) ? hours : 0) / 24;
+      return { type: "wait", days: Math.min(60, Math.max(0, total || 1)) };
+    }
     case "action":
       return { type: "task", body: String(d.body ?? d.label ?? "") };
     case "linkedin_dm":
@@ -1460,6 +1496,27 @@ export async function deliverEmailDraft(params: {
     userSignature.length > 0 ? userSignature : (wsSettings?.emailSignature ?? "").trim();
   const bodyMentionsSignatureToken = /\{\{\s*signature\s*\}\}/i.test(draft.body ?? "");
 
+  // {{senderTitle}} / {{senderCompany}} are offered as clickable tokens in the
+  // Email Builder and used by two starter templates, but were never added to
+  // the merge map here — and renderMergeFields leaves unmatched tokens as
+  // literal text, so recipients received the raw "{{senderCompany}}" string.
+  // Sourced from the sender's workspace membership and the workspace name.
+  const [senderMember] = await db
+    .select({ title: workspaceMembers.title })
+    .from(workspaceMembers)
+    .where(
+      and(
+        eq(workspaceMembers.workspaceId, workspaceId),
+        eq(workspaceMembers.userId, userId),
+      ),
+    )
+    .limit(1);
+  const [senderWorkspace] = await db
+    .select({ name: workspaces.name })
+    .from(workspaces)
+    .where(eq(workspaces.id, workspaceId))
+    .limit(1);
+
   // Render merge fields.
   const mergeVars: Record<string, string> = {
     firstName: firstName ?? "",
@@ -1471,6 +1528,8 @@ export async function deliverEmailDraft(params: {
     accountName: company ?? "",
     senderName,
     senderEmail,
+    senderTitle: senderMember?.title ?? "",
+    senderCompany: senderWorkspace?.name ?? "",
     signature: sig,
   };
   const renderedSubject = renderMergeFields(draft.subject ?? "", mergeVars);

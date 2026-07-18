@@ -658,6 +658,22 @@ export const contactsRouter = router({
           : (wsSettings?.emailSignature ?? "").trim();
       const bodyMentionsSignatureToken = /\{\{\s*signature\s*\}\}/i.test(input.body);
 
+      // {{senderTitle}} / {{senderCompany}} are offered in the Email Builder
+      // token list but were missing from both merge maps, and unmatched
+      // tokens render literally — so recipients saw the raw braces.
+      const [senderMember] = await db
+        .select({ title: workspaceMembers.title })
+        .from(workspaceMembers)
+        .where(
+          and(
+            eq(workspaceMembers.workspaceId, ctx.workspace.id),
+            eq(workspaceMembers.userId, ctx.user.id),
+          ),
+        )
+        .limit(1);
+      const senderTitle = senderMember?.title ?? "";
+      const senderCompany = ctx.workspace.name ?? "";
+
       const results: {
         contactId: number;
         status: "sent" | "skipped" | "failed";
@@ -700,6 +716,8 @@ export const contactsRouter = router({
           accountName: contact.accountName ?? "",
           senderName,
           senderEmail,
+          senderTitle,
+          senderCompany,
           signature: workspaceSignature,
         };
         const renderedSubject = renderMergeFields(input.subject, mergeVars);

@@ -41,6 +41,10 @@ vi.mock("../drizzle/schema", () => ({
   tasks: {},
   contacts: { id: "id", email: "email" },
   leads: { id: "id", email: "email" },
+  // Needed by the email step path (A/B variant lookup + prospect-native
+  // enrollments). Absent before because no test exercised that path.
+  sequenceAbVariants: { sequenceId: "sequenceId", stepIndex: "stepIndex", id: "id" },
+  prospects: { id: "id", email: "email" },
 }));
 
 vi.mock("drizzle-orm", () => ({
@@ -69,6 +73,11 @@ function makeSelectChain(rows: any[]) {
 describe("Sequence Execution Engine", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // clearAllMocks does NOT drain mockReturnValueOnce queues, so any value a
+    // test queued but didn't consume leaks into the next test and shifts every
+    // subsequent select. mockSelect has no default implementation, so a full
+    // reset is safe here and makes the suite order-independent.
+    mockSelect.mockReset();
   });
 
   describe("processEnrollments", () => {
@@ -148,6 +157,48 @@ describe("Sequence Execution Engine", () => {
       const task = insertValues.mock.calls[0][0];
       expect(task.title).toBe("Call about the renewal");
       expect(task.description).toBe("Call about the renewal. Ask about seat count.");
+    });
+
+    it("never queues an email with an empty body, and still advances", async () => {
+      // REGRESSION GUARD. Canvas "AI-dynamic" email steps persisted as
+      // subject:"" body:"" because canvasNodeToStep dropped emailMode/ai*.
+      // `step.subject ?? "Follow-up"` does not fire on "", so the engine
+      // queued a genuinely blank email to a real prospect. Blank content must
+      // never produce a draft — but the enrollment should still move on
+      // rather than retrying the same empty step every 5 minutes forever.
+      const enrollment = {
+        id: 7, workspaceId: 1, sequenceId: 1, contactId: 3, leadId: null,
+        status: "active", currentStep: 0, nextActionAt: new Date(Date.now() - 1000),
+      };
+      const sequence = {
+        id: 1, workspaceId: 1, status: "active",
+        steps: [{ type: "email", subject: "", body: "" }, { type: "wait", days: 2 }],
+        dailyCap: null,
+        // The send path enforces a send window (default 08:00-18:00 in the
+        // sequence's tz) before doing anything else, so a test running outside
+        // office hours would otherwise skip the enrollment and assert nothing.
+        settings: { sendWindowStart: "00:00", sendWindowEnd: "23:59", skipWeekends: false },
+      };
+
+      mockSelect.mockReturnValueOnce(makeSelectChain([enrollment]));   // due enrollments
+      mockSelect.mockReturnValueOnce(makeSelectChain([sequence]));     // sequence
+      mockSelect.mockReturnValueOnce(makeSelectChain([{ email: "a@b.com" }])); // contact
+      mockSelect.mockReturnValueOnce(makeSelectChain([]));             // ab variants
+
+      const insertValues = vi.fn().mockResolvedValue(undefined);
+      mockInsert.mockReturnValue({ values: insertValues });
+      const updateSet = vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) });
+      mockUpdate.mockReturnValue({ set: updateSet });
+
+      const { processEnrollments } = await import("./sequenceEngine");
+      await processEnrollments();
+
+      // No draft created for the empty step...
+      expect(insertValues).not.toHaveBeenCalled();
+      // ...but the enrollment advanced past it.
+      expect(updateSet).toHaveBeenCalledWith(
+        expect.objectContaining({ currentStep: 1 }),
+      );
     });
 
     it("marks enrollment finished when all steps done", async () => {
