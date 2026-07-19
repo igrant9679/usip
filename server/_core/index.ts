@@ -263,6 +263,19 @@ async function startServer() {
   setTimeout(runAlerts, 2 * 60 * 1000); // first run 2 minutes after boot
   setInterval(runAlerts, 15 * 60 * 1000); // every 15 minutes
 
+  // task_overdue workflow trigger. The rule builder has always offered "When a
+  // task becomes overdue" but nothing dispatched it, so those rules sat at
+  // fireCount 0 forever. Scans a [now - interval, now) window so each task
+  // fires exactly once, on the tick that contains its due date.
+  const TASK_OVERDUE_INTERVAL_MS = 15 * 60 * 1000;
+  const runTaskOverdue = () => {
+    import("../services/workflowEngine")
+      .then((m) => m.runTaskOverdueCron(TASK_OVERDUE_INTERVAL_MS))
+      .catch((e) => console.error("[TaskOverdueCron] run failed:", e));
+  };
+  setTimeout(runTaskOverdue, 4 * 60 * 1000); // stagger: 4 minutes after boot
+  setInterval(runTaskOverdue, TASK_OVERDUE_INTERVAL_MS);
+
   // Task Autopilot: for every workspace with taskAutopilotMode != 'off', ask the
   // AI for the next-best-action per promising prospect and create tasks (drafts
   // in "approval" mode, live in "auto" mode). Respects the per-workspace daily

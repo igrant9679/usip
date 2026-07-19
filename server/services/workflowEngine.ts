@@ -12,13 +12,28 @@
  * + bumps fireCount — exactly like the deal_stuck / testFire paths, but for any
  * trigger and from any event site.
  *
- * Action coverage: webhook / post_slack / notify_teams (outbound alerts, same
- * logic as testFire) PLUS the CRM actions `create_task` and `notify`. Unknown
- * action types (e.g. update_field, enroll — which need entity-specific context)
- * are skipped silently rather than erroring. Best-effort throughout: a single
- * action or rule failing never throws into the caller's event path.
+ * Action coverage is now the FULL builder list: webhook / post_slack /
+ * notify_teams (outbound alerts, same logic as testFire) plus the CRM actions
+ * create_task, notify (aliased from the builder's `notify_user`),
+ * enroll_sequence, update_field and send_email_draft. An unrecognised action
+ * type returns an error string — it used to return null, i.e. report success
+ * while doing nothing, which is how four of the eight builder actions stayed
+ * dead without anyone noticing.
+ *
+ * Trigger dispatch sites (a trigger with no site here can never fire):
+ *   record_created  → routers/crm.ts (lead create)
+ *   record_updated  → routers/crm.ts (lead update)
+ *   stage_changed   → routers/crm.ts (opportunity setStage)
+ *   signal_received → services/linkedinEnrichment/jobChangeReengagement.ts
+ *   task_overdue    → runTaskOverdueCron below, registered in _core/index.ts
+ *   deal_stuck      → routers/operations.ts checkDealAging (separate path)
+ * If you add a trigger to the builder, add its dispatch site in the same
+ * commit — otherwise it saves, shows active, and sits at fireCount 0 forever.
+ *
+ * Best-effort throughout: a single action or rule failing never throws into
+ * the caller's event path.
  */
-import { and, eq } from "drizzle-orm";
+import { and, eq, gte, lt } from "drizzle-orm";
 import { getDb } from "../db";
 import {
   contacts, emailDrafts, enrollments, leads, notifications, opportunities,
@@ -387,5 +402,66 @@ export async function fireWorkflowRules(
   } catch (e) {
     console.error(`[WorkflowEngine] ws ${workspaceId} ${triggerType} failed:`, (e as Error).message);
     return { matched: 0, fired: 0 };
+  }
+}
+
+/**
+ * task_overdue trigger — cron dispatcher.
+ *
+ * This trigger was selectable in the rule builder from the start but nothing
+ * ever fired it, so any rule built on "When a task becomes overdue" sat at
+ * fireCount 0 permanently.
+ *
+ * Fires once per task, at the moment it crosses its due date: the scan window
+ * is [now - intervalMs, now), so a task is only picked up by the single tick
+ * whose window contains its dueAt. That avoids needing an "already fired" column
+ * while also not re-alerting on the same task every hour forever.
+ */
+export async function runTaskOverdueCron(intervalMs: number): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  const now = Date.now();
+  const windowStart = new Date(now - intervalMs);
+  const windowEnd = new Date(now);
+
+  const due = await db
+    .select({
+      id: tasks.id,
+      workspaceId: tasks.workspaceId,
+      title: tasks.title,
+      type: tasks.type,
+      priority: tasks.priority,
+      dueAt: tasks.dueAt,
+      ownerUserId: tasks.ownerUserId,
+      relatedType: tasks.relatedType,
+      relatedId: tasks.relatedId,
+    })
+    .from(tasks)
+    .where(and(
+      eq(tasks.status, "open"),
+      gte(tasks.dueAt, windowStart),
+      lt(tasks.dueAt, windowEnd),
+    ));
+
+  if (due.length === 0) return;
+  console.log(`[WorkflowEngine] task_overdue: ${due.length} task(s) crossed their due date`);
+
+  for (const t of due) {
+    await fireWorkflowRules(t.workspaceId, "task_overdue", {
+      payload: {
+        entity: "task",
+        taskId: t.id,
+        title: t.title,
+        type: t.type,
+        priority: t.priority,
+        dueAt: t.dueAt,
+      },
+      // Point actions at the record the task is ABOUT (so create_task /
+      // update_field / enroll_sequence act on the deal or person), falling
+      // back to the task itself when it isn't linked to anything.
+      relatedType: t.relatedType ?? "task",
+      relatedId: t.relatedId ?? t.id,
+      ownerUserId: t.ownerUserId ?? null,
+    }).catch((e) => console.error(`[WorkflowEngine] task_overdue fire failed for task ${t.id}:`, e));
   }
 }

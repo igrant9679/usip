@@ -7,17 +7,29 @@ import { Play, Plus, Save, Trash2, Workflow, GitBranch, Sparkles } from "lucide-
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
+/**
+ * Only triggers with a real dispatch site in the engine belong here — see the
+ * header of server/services/workflowEngine.ts for the site of each. A trigger
+ * offered without one saves fine, shows as active, and never fires.
+ *
+ * Removed for exactly that reason: `nps_submitted` (nothing submits an NPS
+ * score — it's a column edited like any other, so use "record is updated"),
+ * `field_equals` (that's a CONDITION, not an event — add it in the Conditions
+ * section below), and `schedule` (a cron rule with no record context;
+ * "deal is stuck" already covers the case it was seeded for).
+ */
 const TRIGGERS = [
   ["record_created", "When a record is created"],
   ["record_updated", "When a record is updated"],
   ["stage_changed", "When opportunity stage changes"],
   ["task_overdue", "When a task becomes overdue"],
-  ["nps_submitted", "When NPS is submitted"],
   ["signal_received", "When a buying signal fires"],
-  ["field_equals", "When a field equals a value"],
-  ["schedule", "On a schedule (cron)"],
   ["deal_stuck", "When a deal is stuck in a stage"],
 ] as const;
+
+/** Triggers that exist on old saved rules but can never fire. Shown as a
+ *  warning on the rule row instead of letting it look healthy. */
+const DEAD_TRIGGERS = new Set(["nps_submitted", "field_equals", "schedule"]);
 
 const OPS = [
   ["eq", "equals"], ["neq", "not equal"], ["gt", "greater than"], ["lt", "less than"],
@@ -127,7 +139,14 @@ export default function Workflows() {
                         <Trash2 className="size-3.5" />
                       </button>
                     </div>
-                    <div className="text-xs text-muted-foreground mt-0.5"><StatusPill tone="info">{r.triggerType}</StatusPill></div>
+                    <div className="text-xs text-muted-foreground mt-0.5 flex items-center gap-1.5 flex-wrap">
+                      <StatusPill tone={DEAD_TRIGGERS.has(r.triggerType) ? "muted" : "info"}>{r.triggerType}</StatusPill>
+                      {DEAD_TRIGGERS.has(r.triggerType) && (
+                        <span title="This trigger has no dispatcher — the rule will never fire. Edit it and pick another trigger.">
+                          <StatusPill tone="warning">never fires</StatusPill>
+                        </span>
+                      )}
+                    </div>
                   </li>
                 ))}
               </ul>

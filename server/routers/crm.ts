@@ -1010,6 +1010,17 @@ export const leadsRouter = router({
     if (!before) throw new TRPCError({ code: "NOT_FOUND" });
     await db.update(leads).set(input.patch).where(and(eq(leads.id, input.id), eq(leads.workspaceId, ctx.workspace.id)));
     await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "lead", entityId: input.id, before, after: input.patch });
+
+    // record_updated was offered in the rule builder but had no dispatch site
+    // anywhere, so rules using it sat at fireCount 0 forever. Payload carries
+    // the merged post-update row plus `changed` (the patched field names) so a
+    // rule can condition on what actually moved, not just the new value.
+    void import("../services/workflowEngine")
+      .then((m) => m.fireWorkflowRules(ctx.workspace.id, "record_updated", {
+        payload: { ...before, ...input.patch, entity: "lead", changed: Object.keys(input.patch) },
+        relatedType: "lead", relatedId: input.id, ownerUserId: before.ownerUserId ?? null,
+      }))
+      .catch(() => { /* workflow firing is best-effort */ });
     return { ok: true };
   }),
 
