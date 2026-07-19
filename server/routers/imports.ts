@@ -5,6 +5,7 @@ import { router } from "../_core/trpc";
 import { workspaceProcedure } from "../_core/workspace";
 import { getDb } from "../db";
 import {
+  accounts,
   contactImports,
   contactImportRows,
   contacts,
@@ -277,30 +278,158 @@ export const importsRouter = router({
         toInsert.push({ rowIndex, row, mapped });
       }
 
+      // ── Phase 1b: resolve companies to real Account rows ──
+      //
+      // The importer lets users map Company / Website / Industry / State /
+      // Country, and every one of those was being stuffed into the
+      // `customFields` JSON blob — which NOTHING in the app reads. So a
+      // 5,000-row import with those columns mapped reported success and the
+      // data was never visible again: not in the Contacts table, not on
+      // ContactDetail, not searchable, not filterable.
+      //
+      // `contacts` has had real companyName / companyDomain / accountId
+      // columns since migration 0098, and `accounts` has industry and region.
+      // Resolve each distinct company ONCE here (not per row — a 10k file
+      // would otherwise mean 10k lookups) and link the contacts to it.
+      const normDomain = (raw?: string | null): string | null => {
+        const s = (raw ?? "").trim();
+        if (!s) return null;
+        return s.replace(/^https?:\/\//i, "").replace(/^www\./i, "").replace(/\/.*$/, "").toLowerCase() || null;
+      };
+      const companyKey = (p: Pending): string | null => {
+        const domain = normDomain(p.mapped.website);
+        const name = p.mapped.company?.trim();
+        return domain || (name ? `name:${name.toLowerCase()}` : null);
+      };
+
+      const accountIdByKey = new Map<string, number>();
+      const distinct = new Map<string, Pending>();
+      for (const p of toInsert) {
+        const key = companyKey(p);
+        if (key && !distinct.has(key)) distinct.set(key, p);
+      }
+
+      // Resolved with a fixed number of queries regardless of file size: two
+      // batched lookups plus one bulk insert. Doing it per-company would
+      // reintroduce exactly the per-row round-trip problem Phase 1 was
+      // restructured to avoid (see the comment above about 10k-row files
+      // timing out inside a single tRPC request).
+      try {
+        const wantedDomains = [...distinct.values()]
+          .map((p) => normDomain(p.mapped.website))
+          .filter((d): d is string => !!d);
+        const wantedNames = [...distinct.values()]
+          .map((p) => p.mapped.company?.trim()?.slice(0, 200))
+          .filter((n): n is string => !!n);
+
+        const existingByDomain = new Map<string, number>();
+        const existingByName = new Map<string, number>();
+        if (wantedDomains.length > 0) {
+          const rows = await db.select({ id: accounts.id, domain: accounts.domain })
+            .from(accounts)
+            .where(and(eq(accounts.workspaceId, wsId), inArray(accounts.domain, wantedDomains)));
+          for (const r of rows) if (r.domain) existingByDomain.set(r.domain.toLowerCase(), r.id);
+        }
+        if (wantedNames.length > 0) {
+          const rows = await db.select({ id: accounts.id, name: accounts.name })
+            .from(accounts)
+            .where(and(eq(accounts.workspaceId, wsId), inArray(accounts.name, wantedNames)));
+          for (const r of rows) existingByName.set(r.name.toLowerCase(), r.id);
+        }
+
+        // Domain first: it is the reliable company identity. Two "Acme" rows
+        // are usually different companies; one domain is one company.
+        const toCreate: Array<{ key: string; values: Record<string, unknown> }> = [];
+        for (const [key, sample] of distinct) {
+          const domain = normDomain(sample.mapped.website);
+          const name = sample.mapped.company?.trim() || domain || "Unknown Company";
+          const hit = (domain && existingByDomain.get(domain))
+            || existingByName.get(name.toLowerCase());
+          if (hit) { accountIdByKey.set(key, hit); continue; }
+          // Region carries whatever geography the CSV had — state and country
+          // are the two fields `contacts` has no column for.
+          const region = [sample.mapped.state?.trim(), sample.mapped.country?.trim()]
+            .filter(Boolean).join(", ").slice(0, 80) || null;
+          toCreate.push({
+            key,
+            values: {
+              workspaceId: wsId,
+              name: name.slice(0, 200),
+              domain: domain ? domain.slice(0, 200) : null,
+              industry: sample.mapped.industry?.trim()?.slice(0, 80) || null,
+              region,
+              ownerUserId: input.postImportActions?.ownerUserId ?? userId,
+            },
+          });
+        }
+
+        // Bulk-insert the new accounts, then read their ids back with one
+        // more batched lookup. Deriving ids by offset from MySQL's single
+        // returned insertId would be faster but relies on auto-increment
+        // values being contiguous, which isn't guaranteed across every
+        // innodb_autoinc_lock_mode / replication setup — a wrong guess would
+        // silently attach contacts to the WRONG company.
+        const ACC_CHUNK = 200;
+        for (let i = 0; i < toCreate.length; i += ACC_CHUNK) {
+          await db.insert(accounts).values(toCreate.slice(i, i + ACC_CHUNK).map((c) => c.values) as never);
+        }
+        if (toCreate.length > 0) {
+          const newDomains = toCreate.map((c) => c.values.domain).filter((d): d is string => !!d);
+          const newNames = toCreate.map((c) => c.values.name).filter((n): n is string => !!n);
+          if (newDomains.length > 0) {
+            const rows = await db.select({ id: accounts.id, domain: accounts.domain }).from(accounts)
+              .where(and(eq(accounts.workspaceId, wsId), inArray(accounts.domain, newDomains)));
+            for (const r of rows) if (r.domain) existingByDomain.set(r.domain.toLowerCase(), r.id);
+          }
+          if (newNames.length > 0) {
+            const rows = await db.select({ id: accounts.id, name: accounts.name }).from(accounts)
+              .where(and(eq(accounts.workspaceId, wsId), inArray(accounts.name, newNames)));
+            for (const r of rows) existingByName.set(r.name.toLowerCase(), r.id);
+          }
+          for (const c of toCreate) {
+            const domain = c.values.domain as string | null;
+            const name = c.values.name as string;
+            const id = (domain && existingByDomain.get(domain)) || existingByName.get(name.toLowerCase());
+            if (id) accountIdByKey.set(c.key, id);
+          }
+        }
+      } catch (e) {
+        // Company linking must never sink the import — contacts still land,
+        // just unlinked. `.cause` carries the real DB reason; `.message` is
+        // only the SQL text.
+        console.error("[imports] account resolution failed:", (e as Error)?.cause ?? e);
+      }
+
       // ── Phase 2: chunked batch insert of contacts, then import-rows ──
       const CHUNK = 500;
-      const buildContactValues = (p: Pending) => ({
-        workspaceId: wsId,
-        firstName: p.mapped.firstName?.trim() ?? "",
-        lastName: p.mapped.lastName?.trim() ?? "",
-        email: p.mapped.email?.trim() || null,
-        phone: p.mapped.phone?.trim() || null,
-        title: p.mapped.title?.trim() || null,
-        linkedinUrl: p.mapped.linkedinUrl?.trim() || null,
-        city: p.mapped.city?.trim() || null,
-        seniority: p.mapped.seniority?.trim() || null,
-        ownerUserId: input.postImportActions?.ownerUserId ?? userId,
-        customFields: {
-          importTag: input.postImportActions?.tag ?? null,
-          importSource: "csv_import",
-          importId,
-          ...(p.mapped.company ? { company: p.mapped.company } : {}),
-          ...(p.mapped.industry ? { industry: p.mapped.industry } : {}),
-          ...(p.mapped.country ? { country: p.mapped.country } : {}),
-          ...(p.mapped.state ? { state: p.mapped.state } : {}),
-          ...(p.mapped.website ? { website: p.mapped.website } : {}),
-        },
-      });
+      const buildContactValues = (p: Pending) => {
+        const key = companyKey(p);
+        return {
+          workspaceId: wsId,
+          firstName: p.mapped.firstName?.trim() ?? "",
+          lastName: p.mapped.lastName?.trim() ?? "",
+          email: p.mapped.email?.trim() || null,
+          phone: p.mapped.phone?.trim() || null,
+          title: p.mapped.title?.trim() || null,
+          linkedinUrl: p.mapped.linkedinUrl?.trim() || null,
+          city: p.mapped.city?.trim() || null,
+          seniority: p.mapped.seniority?.trim() || null,
+          // Real columns now, not a JSON blob nobody reads. Clamped because
+          // MySQL strict mode REJECTS an over-long value rather than
+          // truncating, and a rejection kills the whole 500-row chunk.
+          companyName: p.mapped.company?.trim()?.slice(0, 200) || null,
+          companyDomain: normDomain(p.mapped.website)?.slice(0, 200) ?? null,
+          accountId: key ? accountIdByKey.get(key) ?? null : null,
+          ownerUserId: input.postImportActions?.ownerUserId ?? userId,
+          // customFields keeps import provenance only. The business fields
+          // that used to be buried here now live in real columns above.
+          customFields: {
+            importTag: input.postImportActions?.tag ?? null,
+            importSource: "csv_import",
+            importId,
+          },
+        };
+      };
 
       for (let i = 0; i < toInsert.length; i += CHUNK) {
         const chunk = toInsert.slice(i, i + CHUNK);
