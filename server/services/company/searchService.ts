@@ -64,12 +64,31 @@ export async function searchWorkspaceAccounts(ws: number, opts: {
         eq(scoreResults.objectId, accounts.id), inArray(scoreResults.rating, set)))));
   }
 
-  const sortCol = {
-    name: accounts.name, employeeCount: accounts.employeeCount, revenue: accounts.revenue,
-    score: accounts.accountScore, lastEnriched: accounts.lastEnrichedAt, createdAt: accounts.createdAt,
-    contactCount: accounts.createdAt, // contactCount sort handled post-fetch
-  }[opts.sort?.field ?? "createdAt"] ?? accounts.createdAt;
   const dir = opts.sort?.direction === "asc" ? asc : desc;
+
+  // "Most contacts" has to be ordered in SQL, not after fetching.
+  //
+  // It used to map to accounts.createdAt with the comment "handled post-fetch",
+  // and the post-fetch sort below only reordered the 50 rows this page had
+  // already selected BY CREATION DATE. Since contactCount is the page's own
+  // DEFAULT sort, page 1 showed the 50 newest accounts ranked among
+  // themselves — never the workspace's actual top companies by contact count.
+  // A company with 40 contacts created last year simply never appeared.
+  //
+  // Correlated subquery keeps the existing single-table select shape (no
+  // GROUP BY, so the row mapping and the separate count query stay valid).
+  const contactCountExpr = sql<number>`(
+    SELECT COUNT(*) FROM \`contact_account_links\` cal
+    WHERE cal.\`workspaceId\` = ${ws} AND cal.\`account_id\` = \`accounts\`.\`id\`
+  )`;
+
+  const sortField = opts.sort?.field ?? "createdAt";
+  const sortCol = sortField === "contactCount"
+    ? contactCountExpr
+    : ({
+        name: accounts.name, employeeCount: accounts.employeeCount, revenue: accounts.revenue,
+        score: accounts.accountScore, lastEnriched: accounts.lastEnrichedAt, createdAt: accounts.createdAt,
+      }[sortField] ?? accounts.createdAt);
 
   const rows = await db.select().from(accounts).where(and(...conds))
     .orderBy(dir(sortCol)).limit(perPage).offset((page - 1) * perPage);
@@ -86,7 +105,7 @@ export async function searchWorkspaceAccounts(ws: number, opts: {
     for (const r of cc) counts.set(r.accountId, Number(r.n));
   }
 
-  let data = rows.map((a) => {
+  const data = rows.map((a) => {
     const logo = resolveCompanyLogo(a);
     return {
       id: a.id, name: a.name, domain: a.domain, websiteUrl: a.websiteUrl, linkedinCompanyUrl: a.linkedinCompanyUrl,
@@ -101,10 +120,10 @@ export async function searchWorkspaceAccounts(ws: number, opts: {
     };
   });
 
-  if (opts.sort?.field === "contactCount") {
-    const m = opts.sort.direction === "asc" ? 1 : -1;
-    data = data.sort((x, y) => (x.contactCount - y.contactCount) * m);
-  }
+  // No post-fetch re-sort: ordering now happens in SQL above, across the whole
+  // result set rather than within one page. Re-sorting here would be a no-op at
+  // best and, on page 2+, would reshuffle rows into an order inconsistent with
+  // the pagination that produced them.
 
   return { data, total: Number(total), page, perPage };
 }
