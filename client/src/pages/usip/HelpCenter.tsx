@@ -17,6 +17,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { EmptyState, PageHeader, Shell } from "@/components/usip/Shell";
 import { useTourEngine, type Tour } from "@/components/usip/TourEngine";
 import { trpc } from "@/lib/trpc";
+import { Link } from "wouter";
 import {
   BookOpen,
   Bot,
@@ -145,13 +146,15 @@ function BrowseTab() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {displayArticles?.map((article) => (
-          <a
+          // wouter <Link>, not a bare <a>: an <a> forces a full page reload
+          // (losing app state) even now that the route exists.
+          <Link
             key={article.id}
             href={`/help/articles/${article.slug}`}
             onClick={() => {
               if (debouncedQuery) logClick.mutate({ query: debouncedQuery, articleId: article.id });
             }}
-            className="block rounded-xl border border-border bg-card p-4 hover:border-violet-300 hover:shadow-sm transition-all group"
+            className="block rounded-xl border border-border bg-card p-4 hover:border-violet-300 hover:shadow-sm transition-all group cursor-pointer"
           >
             <div className="flex items-start justify-between gap-2">
               <div className="flex-1 min-w-0">
@@ -174,7 +177,7 @@ function BrowseTab() {
                 </span>
               )}
             </div>
-          </a>
+          </Link>
         ))}
       </div>
     </div>

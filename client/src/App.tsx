@@ -105,6 +105,7 @@ import ARECampaigns from "@/pages/usip/ARECampaigns";
 import ARECampaignDetail from "@/pages/usip/ARECampaignDetail";
 import ARESettings from "@/pages/usip/ARESettings";
 import HelpCenter from "@/pages/usip/HelpCenter";
+import HelpArticle from "@/pages/usip/HelpArticle";
 import TourBuilder from "@/pages/usip/TourBuilder";
 import Mindmaps from "@/pages/usip/Mindmaps";
 import MindmapCanvas from "@/pages/usip/MindmapCanvas";
@@ -425,6 +426,9 @@ function Router() {
       <Route path="/v2/saved-companies"><AuthGate><SavedRecordsV2 entityType="companies" /></AuthGate></Route>
       <Route path="/v2/deliverability"><AuthGate><Deliverability /></AuthGate></Route>
       <Route path="/help"><AuthGate><HelpCenter /></AuthGate></Route>
+      {/* Article cards in the Help Center have always linked here; the route
+          was never registered, so all 39 articles 404'd. */}
+      <Route path="/help/articles/:slug"><AuthGate><HelpArticle /></AuthGate></Route>
       <Route path="/tour-builder"><AuthGate><TourBuilder /></AuthGate></Route>
       <Route path="/mindmaps"><AuthGate><Mindmaps /></AuthGate></Route>
       <Route path="/mindmaps/:id"><AuthGate><MindmapCanvas /></AuthGate></Route>
