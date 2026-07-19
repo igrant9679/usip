@@ -20,7 +20,11 @@
  */
 import { and, eq } from "drizzle-orm";
 import { getDb } from "../db";
-import { notifications, tasks, workflowRules, workflowRuns, workspaceSettings } from "../../drizzle/schema";
+import {
+  contacts, emailDrafts, enrollments, leads, notifications, opportunities,
+  sequences, tasks, workflowRules, workflowRuns, workspaceSettings,
+} from "../../drizzle/schema";
+import { invokeLLM } from "../_core/llm";
 
 /**
  * Evaluate a rule's condition spec against a flat payload. Supports `{all:[…]}`
@@ -124,7 +128,11 @@ async function runAction(
         } as never);
         return null;
       }
-      case "notify": {
+      // The rule builder emits "notify_user"; this case was named "notify",
+      // so every "Notify user" action fell through to the silent default and
+      // did nothing while the run still logged as successful.
+      case "notify":
+      case "notify_user": {
         const uid = p.userId ?? ctx.ownerUserId;
         if (!uid) return null; // no explicit target — skip quietly (team alerts use slack/teams/webhook)
         await db.insert(notifications).values({
@@ -134,8 +142,151 @@ async function runAction(
         } as never);
         return null;
       }
+
+      case "enroll_sequence": {
+        const sequenceId = Number(p.sequenceId);
+        if (!Number.isFinite(sequenceId) || sequenceId <= 0) return "enroll_sequence: no sequenceId set";
+        // Only people can be enrolled. An opportunity-triggered rule has no
+        // single person to mail, so say so rather than failing obscurely.
+        const target = ctx.relatedType;
+        if (target !== "contact" && target !== "lead" && target !== "prospect") {
+          return `enroll_sequence: cannot enroll a ${target ?? "record"} — needs a contact, lead or prospect`;
+        }
+        if (!ctx.relatedId) return "enroll_sequence: no record to enroll";
+        // Sequence must belong to this workspace (params come from user input).
+        const [seq] = await db.select({ id: sequences.id }).from(sequences)
+          .where(and(eq(sequences.id, sequenceId), eq(sequences.workspaceId, ws))).limit(1);
+        if (!seq) return `enroll_sequence: sequence ${sequenceId} not found in this workspace`;
+
+        const col = target === "contact" ? enrollments.contactId
+          : target === "lead" ? enrollments.leadId : enrollments.prospectId;
+        const [existing] = await db.select({ id: enrollments.id }).from(enrollments)
+          .where(and(
+            eq(enrollments.workspaceId, ws),
+            eq(enrollments.sequenceId, sequenceId),
+            eq(col, ctx.relatedId),
+          )).limit(1);
+        if (existing) return null; // already enrolled — not an error, just a no-op
+
+        await db.insert(enrollments).values({
+          workspaceId: ws,
+          sequenceId,
+          contactId: target === "contact" ? ctx.relatedId : null,
+          leadId: target === "lead" ? ctx.relatedId : null,
+          prospectId: target === "prospect" ? ctx.relatedId : null,
+          status: "active",
+          currentStep: 0,
+          nextActionAt: new Date(),
+        } as never);
+        return null;
+      }
+
+      case "update_field": {
+        const field = String(p.field ?? "").trim();
+        const raw = String(p.value ?? "").trim();
+        if (!field) return "update_field: no field set";
+        if (!ctx.relatedId) return "update_field: no record to update";
+
+        // Strict per-entity whitelist. Params are user input and this writes
+        // to the DB, so an allowlist is the only safe shape here — never
+        // interpolate a caller-supplied column name.
+        const ALLOWED: Record<string, Record<string, "string" | "number">> = {
+          opportunity: { stage: "string", value: "number", winProb: "number", ownerUserId: "number", nextStep: "string" },
+          lead:        { status: "string", score: "number", ownerUserId: "number" },
+          contact:     { title: "string", ownerUserId: "number" },
+        };
+        const entity = ctx.relatedType ?? "";
+        const allowed = ALLOWED[entity];
+        if (!allowed) return `update_field: not supported for ${entity || "this record type"}`;
+        const kind = allowed[field];
+        if (!kind) {
+          return `update_field: "${field}" is not updatable on a ${entity} (allowed: ${Object.keys(allowed).join(", ")})`;
+        }
+        let val: string | number = raw;
+        if (kind === "number") {
+          const n = Number(raw);
+          if (!Number.isFinite(n)) return `update_field: "${raw}" is not a number`;
+          val = n;
+        }
+        const table = entity === "opportunity" ? opportunities : entity === "lead" ? leads : contacts;
+        const idCol = entity === "opportunity" ? opportunities.id : entity === "lead" ? leads.id : contacts.id;
+        const wsCol = entity === "opportunity" ? opportunities.workspaceId : entity === "lead" ? leads.workspaceId : contacts.workspaceId;
+        await db.update(table)
+          .set({ [field]: val } as never)
+          .where(and(eq(idCol, ctx.relatedId), eq(wsCol, ws)));
+        return null;
+      }
+
+      case "send_email_draft": {
+        if (!ctx.relatedId) return "send_email_draft: no record to write to";
+        const entity = ctx.relatedType ?? "";
+        if (entity !== "contact" && entity !== "lead") {
+          return `send_email_draft: needs a contact or lead, got ${entity || "nothing"}`;
+        }
+        const table = entity === "contact" ? contacts : leads;
+        const idCol = entity === "contact" ? contacts.id : leads.id;
+        const wsCol = entity === "contact" ? contacts.workspaceId : leads.workspaceId;
+        const [rec] = await db.select().from(table)
+          .where(and(eq(idCol, ctx.relatedId), eq(wsCol, ws))).limit(1);
+        if (!rec?.email) return "send_email_draft: record has no email address";
+
+        const goal = String(p.goal ?? "follow up").slice(0, 500);
+        const tone = String(p.tone ?? "professional").slice(0, 40);
+        let subject = "";
+        let body = "";
+        try {
+          const out = await invokeLLM({
+            workspaceId: ws,
+            maxTokens: 700,
+            temperature: 0.7,
+            messages: [
+              {
+                role: "system",
+                content: `You write short B2B emails. Tone: ${tone}. Use {{firstName}} and {{senderName}} as literal placeholder tokens — they are substituted per recipient later, so never invent a real name. Do not fabricate facts or metrics.`,
+              },
+              { role: "user", content: `Write the email. Goal: ${goal}` },
+            ],
+            response_format: {
+              type: "json_schema",
+              json_schema: {
+                name: "email_draft", strict: true,
+                schema: {
+                  type: "object",
+                  properties: { subject: { type: "string" }, body: { type: "string" } },
+                  required: ["subject", "body"], additionalProperties: false,
+                },
+              },
+            },
+          });
+          const content = out.choices?.[0]?.message?.content;
+          const parsed = typeof content === "string" ? JSON.parse(content) : content;
+          subject = String(parsed?.subject ?? "").trim();
+          body = String(parsed?.body ?? "").trim();
+        } catch (e) {
+          return `send_email_draft: generation failed — ${(e as Error).message}`;
+        }
+        // Same rule as the sequence engine: never queue an empty email.
+        if (!body) return "send_email_draft: generation returned nothing";
+
+        await db.insert(emailDrafts).values({
+          workspaceId: ws,
+          subject: subject || "Following up",
+          body,
+          toContactId: entity === "contact" ? ctx.relatedId : null,
+          toLeadId: entity === "lead" ? ctx.relatedId : null,
+          toEmail: rec.email,
+          status: "pending_review",
+          aiGenerated: true,
+          aiPrompt: goal,
+        } as never);
+        return null;
+      }
+
       default:
-        return null; // update_field / enroll / etc. — unsupported here, skip silently
+        // Previously `return null` — an unknown action reported SUCCESS while
+        // doing nothing, so a misconfigured rule looked like it worked. Fail
+        // loudly instead; the error surfaces on the run record.
+        return `unsupported action type "${action.type}"`;
     }
   } catch (e) {
     return `${action.type}: ${(e as Error).message}`;
