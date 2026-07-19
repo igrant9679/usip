@@ -13,7 +13,7 @@ import { TRPCError } from "@trpc/server";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { workspaceSettings } from "../../drizzle/schema";
-import { getDb } from "../db";
+import { checkPermission, getDb } from "../db";
 import { encryptSecret, maskSecret, tryDecryptSecret } from "../_core/crypto";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
@@ -67,6 +67,7 @@ export const apolloRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      await checkPermission(ctx, "manage_api_keys");
       await ensureSettingsRow(ctx.workspace.id);
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });

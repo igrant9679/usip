@@ -634,29 +634,46 @@ function SecurityTab({ settings, save, canEdit }: { settings: any; save: (v: any
           />
           <div className="text-xs text-muted-foreground">Users re-authenticate after this interval (15 min – 7 days).</div>
         </div>
-        <div className="space-y-1">
+        {/* These two record a policy that NOTHING enforces: no auth or session
+            code path reads enforce2fa or ipAllowlist. Previously they rendered
+            as ordinary enabled controls whose helper text implied enforcement
+            ("Enforced on next login after save"), so an admin could switch on
+            "Require 2FA" and reasonably believe the workspace was protected.
+            Marked plainly until the auth path actually honours them — a
+            security control that lies is worse than one that's absent. */}
+        <div className="space-y-1 md:col-span-2">
+          <div className="rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+            <span className="font-semibold">Not enforced yet.</span> The two settings below are
+            stored but no sign-in check reads them, so changing them does not currently affect
+            access. They are shown disabled rather than implying protection that isn't there.
+          </div>
+        </div>
+        <div className="space-y-1 opacity-60">
           <Label>Enforce 2FA</Label>
           <label className="flex items-center gap-2 text-sm pt-1">
             <input
               type="checkbox"
               checked={enforce2fa}
               onChange={(e) => setEnforce2fa(e.target.checked)}
-              disabled={!canEdit}
+              disabled
             />
             Require 2FA for all members
           </label>
-          <div className="text-xs text-muted-foreground">Enforced on next login after save. UX surface is planned; policy is recorded now.</div>
+          <div className="text-xs text-muted-foreground">
+            Individual members can still enable authenticator-app 2FA on their own account today
+            (Profile → MFA) — that <em>is</em> enforced at sign-in.
+          </div>
         </div>
-        <div className="space-y-1 md:col-span-2">
+        <div className="space-y-1 md:col-span-2 opacity-60">
           <Label>IP allowlist (one per line, CIDR supported)</Label>
           <textarea
             className="w-full min-h-28 rounded-md border bg-transparent px-3 py-2 text-sm font-mono"
             value={ip}
             onChange={(e) => setIp(e.target.value)}
-            disabled={!canEdit}
+            disabled
             placeholder={"203.0.113.0/24\n198.51.100.42"}
           />
-          <div className="text-xs text-muted-foreground">Leave empty to allow all. Policy is recorded; edge enforcement pending.</div>
+          <div className="text-xs text-muted-foreground">No request path checks this list.</div>
         </div>
       </div>
     </Section>
@@ -1643,7 +1660,18 @@ function DangerTab({ canEdit }: { canEdit: boolean }) {
           <div className="flex items-start gap-3">
             <div className="flex-1">
               <div className="text-sm font-medium text-rose-700">Archive workspace</div>
-              <div className="text-xs text-muted-foreground">Members lose access. Data is retained for 90 days then purged.</div>
+              {/* Was: "Members lose access. Data is retained for 90 days then
+                  purged." Neither happens — archiveWorkspace only stamps
+                  workspaces.archivedAt, resolveWorkspace never reads it, and no
+                  job purges anything. The type-ARCHIVE gate implied a serious
+                  irreversible action that in fact has no operational effect.
+                  Note there is also no un-archive procedure, which is why the
+                  honest fix here is accurate copy rather than switching on
+                  enforcement — that would be a one-way lockout. */}
+              <div className="text-xs text-muted-foreground">
+                Marks the workspace archived and records who did it. Members keep their access and
+                no data is deleted — access revocation and the retention purge aren't built yet.
+              </div>
             </div>
             <Button variant="outline" size="sm" disabled={!canEdit} className="text-rose-700" onClick={() => setShowArchive((v) => !v)}>
               Archive

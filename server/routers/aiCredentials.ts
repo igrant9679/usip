@@ -10,7 +10,7 @@ import { TRPCError } from "@trpc/server";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { workspaceSettings } from "../../drizzle/schema";
-import { getDb } from "../db";
+import { checkPermission, getDb } from "../db";
 import {
   encryptSecret,
   maskSecret,
@@ -92,6 +92,7 @@ export const aiCredentialsRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      await checkPermission(ctx, "manage_api_keys");
       await ensureSettingsRow(ctx.workspace.id);
       const db = await getDb();
 

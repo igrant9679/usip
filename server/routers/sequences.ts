@@ -3,7 +3,7 @@ import { and, count, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { accounts, activities, campaigns, contacts, emailDrafts, emailReplies, enrollments, leads, prospects, senderPoolMembers, sendingAccounts, sequenceAbVariants, sequenceEdges, sequenceNodes, sequences, unipileAccounts, users, workspaceMembers, workspaces, workspaceSettings } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
-import { getDb } from "../db";
+import { checkPermission, getDb } from "../db";
 import { createEmailAdapter } from "../emailAdapter";
 import { invokeLLM } from "../_core/llm";
 import { isSuppressed, makeUnsubscribeUrl } from "../unsubscribe";
@@ -474,6 +474,7 @@ export const sequencesRouter = router({
   }),
 
   create: repProcedure.input(z.object({ name: z.string().min(1), description: z.string().optional(), steps: z.array(stepSchema).default([]) })).mutation(async ({ ctx, input }) => {
+    await checkPermission(ctx, "manage_sequences");
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const r = await db.insert(sequences).values({ ...input, workspaceId: ctx.workspace.id, ownerUserId: ctx.user.id, status: "draft" });
@@ -570,6 +571,7 @@ export const sequencesRouter = router({
       dailyCap: z.number().int().min(0).max(10000).nullable().optional(),
     }).strict(),
   })).mutation(async ({ ctx, input }) => {
+    await checkPermission(ctx, "manage_sequences");
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     await assertTemplateEditable(db, ctx, input.id);
@@ -640,6 +642,7 @@ export const sequencesRouter = router({
   }),
 
   delete: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
+    await checkPermission(ctx, "manage_sequences");
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     // Verify ownership first so we can fail fast (and so a NOT_FOUND

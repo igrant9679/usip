@@ -8,7 +8,7 @@ import { TRPCError } from "@trpc/server";
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { workspaceIntegrations } from "../../drizzle/schema";
-import { getDb } from "../db";
+import { checkPermission, getDb } from "../db";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { router } from "../_core/trpc";
 const PROVIDERS = [
@@ -55,6 +55,12 @@ export const integrationsRouter = router({
       .where(eq(workspaceIntegrations.workspaceId, ctx.workspace.id));
   }),
 
+  // manage_integrations is one of the six per-member permission toggles in
+  // Team settings. checkPermission had exactly ONE call site in the whole
+  // server (export_data), so five of those six switches wrote a DB row that
+  // nothing read — revoking them changed nothing about what a member could
+  // actually do. Note the gate is in ADDITION to adminWsProcedure: an
+  // explicit granted:false row blocks even an admin, which is the point.
   save: adminWsProcedure
     .input(
       z.object({
@@ -67,6 +73,7 @@ export const integrationsRouter = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
 
+      await checkPermission(ctx, "manage_integrations");
       const [existing] = await db
         .select()
         .from(workspaceIntegrations)
@@ -102,6 +109,7 @@ export const integrationsRouter = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
 
+      await checkPermission(ctx, "manage_integrations");
       let result = "OK";
       let success = true;
 
@@ -189,6 +197,7 @@ export const integrationsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      await checkPermission(ctx, "manage_integrations");
       const builtIn = ["manus_oauth", "data_api", "llm", "google_maps"];
       if (builtIn.includes(input.provider)) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Built-in integrations cannot be removed" });
