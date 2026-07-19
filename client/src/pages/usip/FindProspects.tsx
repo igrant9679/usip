@@ -407,11 +407,31 @@ function LinkedInSearchCard() {
 }
 
 /* ─── Main page ─────────────────────────────────────────────────────── */
+/** Read a query-string param without depending on wouter's search hook,
+ *  which isn't wired for this route. */
+function initialParams(): { runId: number | null; q: string } {
+  if (typeof window === "undefined") return { runId: null, q: "" };
+  const sp = new URLSearchParams(window.location.search);
+  const raw = Number(sp.get("runId"));
+  return {
+    runId: Number.isFinite(raw) && raw > 0 ? raw : null,
+    q: (sp.get("q") ?? "").slice(0, 200),
+  };
+}
+
 export default function FindProspectsPage() {
+  // This page ignored its own URL params entirely, so two links elsewhere in
+  // the app quietly went nowhere useful: ProspectDetail's "Run #N" link
+  // (/find-prospects?runId=…) landed on a blank new-search page instead of the
+  // run it named, and People's empty-state AI prompt had nowhere to send a
+  // typed query. Both are honoured now.
+  const params = initialParams();
   const [mode, setMode] = useState<"person" | "account">("person");
-  const [personForm, setPersonForm] = useState<PersonForm>(EMPTY_PERSON);
+  const [personForm, setPersonForm] = useState<PersonForm>(
+    params.q ? { ...EMPTY_PERSON, keywords: [params.q] } : EMPTY_PERSON,
+  );
   const [accountForm, setAccountForm] = useState<AccountForm>(EMPTY_ACCOUNT);
-  const [activeRunId, setActiveRunId] = useState<number | null>(null);
+  const [activeRunId, setActiveRunId] = useState<number | null>(params.runId);
 
   const utils = trpc.useUtils();
   const search = trpc.discovery.search.useMutation({

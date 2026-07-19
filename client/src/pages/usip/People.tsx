@@ -96,6 +96,7 @@ import { DefaultViewMenu } from "@/components/usip/people/DefaultViewMenu";
 import { ResearchAiMenu } from "@/components/usip/people/ResearchAiMenu";
 import { CreateWorkflowMenu } from "@/components/usip/people/CreateWorkflowMenu";
 import { SortMenu } from "@/components/usip/people/SortMenu";
+import { SequenceMenu, AddToListMenu } from "@/components/usip/people/SelectionToolbar";
 import { ProspectScoringPanel } from "@/components/usip/scoring/ProspectScoringPanel";
 import { SelectionToolbar } from "@/components/usip/people/SelectionToolbar";
 import { SearchSettingsSheet, type AppliedFilter } from "@/components/usip/people/SearchSettingsSheet";
@@ -794,7 +795,7 @@ export default function People() {
                     cLevel: () => { setSeniorities(new Set(["c-level", "vp"])); },
                   }}
                   onImport={() => setLocation("/import")}
-                  onDiscover={() => setLocation("/find-prospects")}
+                  onDiscover={(q) => setLocation(q ? `/find-prospects?q=${encodeURIComponent(q)}` : "/find-prospects")}
                 />
               ) : rows.length === 0 ? (
                 <div className="text-center py-20 px-4">
@@ -1077,9 +1078,19 @@ function DetailPanel({ p, onClose, onOpenFull }: { p: Prospect; onClose: () => v
       <div className="shrink-0 border-t border-border p-3 space-y-2">
         <Button className="w-full gap-1.5" onClick={onOpenFull}><ExternalLink className="size-4" /> Open full record</Button>
         <EnrichButton prospectIds={[p.id]} triggerType="open_profile_action" label="Enrich via LinkedIn" className="w-full" />
+        {/* These two rendered as ordinary enabled buttons with NO onClick —
+            clicking them did nothing at all. The real menus already existed
+            and were already exported with a `trigger` prop for exactly this;
+            they were simply never wired up here. */}
         <div className="grid grid-cols-2 gap-2">
-          <Button variant="outline" size="sm" className="gap-1.5"><Sparkles className="size-4" /> Sequence</Button>
-          <Button variant="outline" size="sm" className="gap-1.5"><Bookmark className="size-4" /> Save</Button>
+          <SequenceMenu
+            selectedIds={[p.id]}
+            trigger={<Button variant="outline" size="sm" className="gap-1.5 w-full"><Sparkles className="size-4" /> Sequence</Button>}
+          />
+          <AddToListMenu
+            selectedIds={[p.id]}
+            trigger={<Button variant="outline" size="sm" className="gap-1.5 w-full"><Bookmark className="size-4" /> Save</Button>}
+          />
         </div>
       </div>
     </aside>
@@ -1123,7 +1134,8 @@ function AiEmptyState({
   setPrompt: (s: string) => void;
   quick: { highFit: () => void; hasEmail: () => void; verified: () => void; cLevel: () => void };
   onImport: () => void;
-  onDiscover: () => void;
+  /** Optional query carries the typed AI prompt through to Discovery. */
+  onDiscover: (q?: string) => void;
 }) {
   return (
     <div className="max-w-2xl mx-auto px-4 py-14 text-center">
@@ -1144,7 +1156,17 @@ function AiEmptyState({
           placeholder="e.g. VPs of Sales at SaaS companies in the US with a verified email"
           className="flex-1 bg-transparent outline-none text-sm min-w-0"
         />
-        <Button size="sm" className="gap-1.5"><Sparkles className="size-4" /> Find people</Button>
+        {/* Had no onClick: you could type a query and clicking did nothing.
+            Hands the prompt to Discovery, which now reads ?q= and seeds its
+            search with it. */}
+        <Button
+          size="sm"
+          className="gap-1.5"
+          disabled={!prompt.trim()}
+          onClick={() => onDiscover(prompt.trim())}
+        >
+          <Sparkles className="size-4" /> Find people
+        </Button>
       </div>
 
       <div className="mt-6 rounded-xl border bg-card/50 p-4 text-left">
@@ -1209,7 +1231,14 @@ function MoreFiltersDialog({ open, onClose, count }: { open: boolean; onClose: (
         <DialogHeader>
           <DialogTitle>More filters</DialogTitle>
           <DialogDescription>
-            Every filter here is functional. Pin any filter to keep it at the top of the rail.
+            {/* This claimed "Every filter here is functional" while every row
+                below was a bare div with no handler and "Apply filters" only
+                closed the dialog. It's a catalogue, not a control surface —
+                described as one now rather than implying filtering that
+                doesn't happen. */}
+            Reference list of the filter types Velocity supports. The ones that
+            are wired up live in the filter rail on the left — use those to
+            actually narrow this view.
           </DialogDescription>
         </DialogHeader>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-5 py-1">
@@ -1218,7 +1247,7 @@ function MoreFiltersDialog({ open, onClose, count }: { open: boolean; onClose: (
               <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-2">{col.title}</div>
               <div className="space-y-1">
                 {col.items.map((it) => (
-                  <div key={it.label} className={cn("flex items-center justify-between rounded-md px-2 py-1.5 text-[13px]", it.locked ? "text-muted-foreground" : "hover:bg-muted cursor-pointer")}>
+                  <div key={it.label} className={cn("flex items-center justify-between rounded-md px-2 py-1.5 text-[13px]", it.locked && "text-muted-foreground")}>
                     <span>{it.label}</span>
                     {it.locked ? <Lock className="size-3.5" /> : <Plus className="size-3.5 text-muted-foreground" />}
                   </div>
@@ -1229,7 +1258,7 @@ function MoreFiltersDialog({ open, onClose, count }: { open: boolean; onClose: (
         </div>
         <div className="flex items-center justify-between border-t pt-3">
           <span className="text-[13px] text-muted-foreground tabular-nums">{fmtNum(count)} records</span>
-          <Button onClick={onClose}>Apply filters</Button>
+          <Button variant="outline" onClick={onClose}>Close</Button>
         </div>
       </DialogContent>
     </Dialog>
