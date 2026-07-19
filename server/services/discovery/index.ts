@@ -373,6 +373,23 @@ export async function runDiscovery(
   try {
     if (totalFinds > 0) {
       persistResult = await processRun(workspaceId, runId, mode);
+
+      // Link the new prospects to Accounts. persistAsProspects writes company
+      // NAME and DOMAIN but never accountId/globalOrganizationId, even though
+      // the schema comments say those are "populated by
+      // CompanyAssociationService" — so Discovery v2, the flagship sourcing
+      // path, produced prospects with no company association at all. Only the
+      // CSV-import path called this service, which is why imported people had
+      // companies and discovered people didn't, and why the same company
+      // appeared as separate unlinked entities per source.
+      //
+      // Fire-and-forget, same as the import path: linking must not slow or
+      // fail the discovery response the user is waiting on.
+      void import("../company/associationService")
+        .then((m) => m.associateUnlinkedProspects(workspaceId, 3000, "discovery"))
+        .then((s) => emitLog(workspaceId, runId, "company.associate", "info",
+          `Company association: ${s.linked} linked, ${s.created} accounts created, ${s.needsReview} need review, ${s.missing} without a company`))
+        .catch((e) => console.error("[discovery] company association failed:", e));
     }
   } catch (e) {
     await emitLog(workspaceId, runId, "consolidate.error", "error",

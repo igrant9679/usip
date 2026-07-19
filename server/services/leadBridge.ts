@@ -82,13 +82,13 @@ export async function bridgeLeadToRecords(workspaceId: number, leadId: number): 
 
   // ── 2. prospect find-or-create (linked back to the lead) ───────────────
   try {
-    let prospect: { id: number; linkedLeadId: number | null } | undefined;
+    let prospect: { id: number; linkedLeadId: number | null; accountId: number | null } | undefined;
     if (lead.email) {
-      [prospect] = await db.select({ id: prospects.id, linkedLeadId: prospects.linkedLeadId }).from(prospects)
+      [prospect] = await db.select({ id: prospects.id, linkedLeadId: prospects.linkedLeadId, accountId: prospects.accountId }).from(prospects)
         .where(and(eq(prospects.workspaceId, workspaceId), eq(prospects.email, lead.email)));
     }
     if (!prospect && lead.firstName && lead.lastName && company) {
-      [prospect] = await db.select({ id: prospects.id, linkedLeadId: prospects.linkedLeadId }).from(prospects)
+      [prospect] = await db.select({ id: prospects.id, linkedLeadId: prospects.linkedLeadId, accountId: prospects.accountId }).from(prospects)
         .where(and(
           eq(prospects.workspaceId, workspaceId),
           eq(prospects.firstName, lead.firstName),
@@ -98,8 +98,13 @@ export async function bridgeLeadToRecords(workspaceId: number, leadId: number): 
     }
     if (prospect) {
       out.prospectId = prospect.id;
-      if (!prospect.linkedLeadId) {
-        await db.update(prospects).set({ linkedLeadId: leadId })
+      const patch: Record<string, unknown> = {};
+      if (!prospect.linkedLeadId) patch.linkedLeadId = leadId;
+      // Backfill the company link on a pre-existing prospect too — it may
+      // have been created by a path that never set one.
+      if (out.accountId && !prospect.accountId) patch.accountId = out.accountId;
+      if (Object.keys(patch).length > 0) {
+        await db.update(prospects).set(patch)
           .where(and(eq(prospects.workspaceId, workspaceId), eq(prospects.id, prospect.id)));
       }
     } else if (lead.email || (lead.firstName && lead.lastName)) {
@@ -112,6 +117,12 @@ export async function bridgeLeadToRecords(workspaceId: number, leadId: number): 
         title: lead.title ?? null,
         company: company || null,
         companyDomain: domain,
+        // Step 1 above resolves (or creates) the account and parks it in
+        // out.accountId — and then this insert, twenty-five lines later,
+        // never used it. The bridge's whole point is connecting a web-form
+        // lead to a company and a person, and the company half was dropped
+        // on the floor, leaving orphaned prospects behind.
+        accountId: out.accountId ?? null,
         linkedLeadId: leadId,
         enrichmentData: { source: "webform_bridge", formLeadId: leadId },
       } as never);
