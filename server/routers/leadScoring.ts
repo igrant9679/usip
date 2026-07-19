@@ -1,10 +1,12 @@
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, gte, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
   accounts,
   activities,
   emailDrafts,
+  emailReplies,
+  emailSuppressions,
   enrollments,
   leadRoutingRules,
   leadScoreConfig,
@@ -63,12 +65,32 @@ async function aggregateBehavior(workspaceId: number, leadId: number) {
   const db = await getDb();
   if (!db) return { opens: 0, clicks: 0, replies: 0, completedSteps: 0, bounces: 0, unsubscribes: 0, daysSinceLastEngagement: 999 };
 
-  // Pull email draft activity (proxy for sends/opens/clicks/replies in this build).
+  // Real engagement, not a stub model.
+  //
+  // This used to FABRICATE every behavioural input:
+  //   opens   = sentDrafts.length          (every send counted as an open)
+  //   clicks  = sentDrafts.length / 3      (invented outright)
+  //   replies = drafts whose aiPrompt TEXT contained the word "reply"
+  //
+  // So a prospect who ignored everything scored identically to one who read
+  // and clicked every message — and the tracking pixel's real counters
+  // (emailDrafts.openCount / clickCount, maintained by server/emailTracking.ts)
+  // were never consulted despite existing all along. That matters more now
+  // that a lead's score can auto-enrol them in a sequence: fabricated
+  // engagement would have started real outreach.
   const drafts = await db.select().from(emailDrafts).where(and(eq(emailDrafts.workspaceId, workspaceId), eq(emailDrafts.toLeadId, leadId)));
   const sentDrafts = drafts.filter((d) => d.status === "sent");
-  const opens = sentDrafts.length; // 1 open per sent in stub model
-  const clicks = Math.floor(sentDrafts.length / 3);
-  const replies = sentDrafts.filter((d) => (d.aiPrompt ?? "").toLowerCase().includes("reply")).length;
+  const opens = sentDrafts.reduce((n, d) => n + (d.openCount ?? 0), 0);
+  const clicks = sentDrafts.reduce((n, d) => n + (d.clickCount ?? 0), 0);
+  const bounces = drafts.filter((d) => d.bouncedAt != null).length;
+
+  // Replies come from the emailReplies table the inbound poller writes, not
+  // from pattern-matching the outbound draft's own prompt text.
+  const replyRows = await db
+    .select({ receivedAt: emailReplies.receivedAt })
+    .from(emailReplies)
+    .where(and(eq(emailReplies.workspaceId, workspaceId), eq(emailReplies.leadId, leadId)));
+  const replies = replyRows.length;
 
   // Activity-row signals (calls/meetings count as engagement, replies as a stronger signal).
   const acts = await db
@@ -77,8 +99,43 @@ async function aggregateBehavior(workspaceId: number, leadId: number) {
     .where(and(eq(activities.workspaceId, workspaceId), eq(activities.relatedType, "lead"), eq(activities.relatedId, leadId)))
     .orderBy(desc(activities.occurredAt));
   const replyActs = acts.filter((a) => a.type === "email" && (a.subject ?? "").toLowerCase().includes("re:")).length;
-  const lastTs = acts[0]?.occurredAt ?? sentDrafts[sentDrafts.length - 1]?.sentAt ?? null;
-  const daysSinceLastEngagement = lastTs ? Math.max(0, Math.floor((Date.now() - new Date(lastTs).getTime()) / 86400000)) : 999;
+  // Recency now considers the prospect's OWN actions (opening, clicking,
+  // replying), not just rep-logged activity and send timestamps — previously
+  // someone could be actively reading every email and still look stale.
+  const engagementTimes = [
+    acts[0]?.occurredAt ?? null,
+    sentDrafts[sentDrafts.length - 1]?.sentAt ?? null,
+    ...sentDrafts.map((d) => d.lastOpenedAt ?? null),
+    ...sentDrafts.map((d) => d.lastClickedAt ?? null),
+    ...replyRows.map((r) => r.receivedAt ?? null),
+  ]
+    .filter((t): t is Date => !!t)
+    .map((t) => new Date(t).getTime());
+  const lastTs = engagementTimes.length > 0 ? Math.max(...engagementTimes) : null;
+  const daysSinceLastEngagement = lastTs ? Math.max(0, Math.floor((Date.now() - lastTs) / 86400000)) : 999;
+
+  // Unsubscribes were hardcoded to 0, so opting out never dented a lead's
+  // score — they could keep climbing toward "sales ready" (and now toward
+  // auto-enrolment) after asking not to be contacted. email_suppressions is
+  // the real record.
+  let unsubscribes = 0;
+  const [leadRow] = await db
+    .select({ email: leads.email })
+    .from(leads)
+    .where(and(eq(leads.workspaceId, workspaceId), eq(leads.id, leadId)))
+    .limit(1);
+  if (leadRow?.email) {
+    const sup = await db
+      .select({ id: emailSuppressions.id })
+      .from(emailSuppressions)
+      .where(and(
+        eq(emailSuppressions.workspaceId, workspaceId),
+        eq(emailSuppressions.email, leadRow.email),
+        inArray(emailSuppressions.reason, ["unsubscribe", "spam_complaint"]),
+      ))
+      .limit(1);
+    unsubscribes = sup.length;
+  }
 
   // Sequence step completion (proxy: enrollments.currentStep)
   const enr = await db.select().from(enrollments).where(and(eq(enrollments.workspaceId, workspaceId), eq(enrollments.leadId, leadId)));
@@ -87,10 +144,12 @@ async function aggregateBehavior(workspaceId: number, leadId: number) {
   return {
     opens,
     clicks,
+    // replyActs catches replies logged as activities (e.g. a rep noting one
+    // manually) that never came through the inbound poller.
     replies: replies + replyActs,
     completedSteps,
-    bounces: 0,
-    unsubscribes: 0,
+    bounces,
+    unsubscribes,
     daysSinceLastEngagement,
   };
 }
