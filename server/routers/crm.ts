@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, inArray, isNull, isNotNull, lt, lte, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, isNotNull, like, lt, lte, sql } from "drizzle-orm";
 import { z } from "zod";
 import { invokeLLM } from "../_core/llm";
 import {
@@ -18,6 +18,7 @@ import {
   opportunityContactRoles,
   opportunityStageHistory,
   products,
+  tasks,
   enrollments,
   sendingAccounts,
   sequences,
@@ -1498,6 +1499,49 @@ export const opportunitiesRouter = router({
         customerCreated = await ensureCustomerForWonOpp(db, ctx.workspace.id, before, ctx.user.id);
       } catch (e) {
         console.warn("[crm.setStage] closed-won customer creation failed:", e);
+      }
+    }
+    // Funnel: Closed Lost → schedule a win-back touch. Closed WON has had an
+    // automatic downstream step since day one (account becomes a Customer);
+    // closed LOST had nothing at all — the deal sat at stage "lost" forever
+    // with no reason recorded and no path back into nurture, so every lost
+    // deal was simply abandoned. Dated ~90 days out, which is the point of a
+    // win-back rather than an immediate re-pitch.
+    //
+    // NOTE: opportunities.lostReason exists in the schema but setStage takes
+    // no such input and no UI collects one, so it is still never populated.
+    // Capturing it needs a prompt on the three client call sites (kanban drag,
+    // kanban menu, DealsV2 menu) — deliberately not adding a server parameter
+    // that nothing sends.
+    if (isLost) {
+      try {
+        const dealName = (before as any).name ?? "the deal";
+        const existing = await db.select({ id: tasks.id }).from(tasks).where(and(
+          eq(tasks.workspaceId, ctx.workspace.id),
+          eq(tasks.relatedType, "opportunity"),
+          eq(tasks.relatedId, input.id),
+          like(tasks.title, "Win-back:%"),
+          inArray(tasks.status, ["open", "draft", "in_progress", "snoozed"]),
+        )).limit(1);
+        if (existing.length === 0) {
+          await db.insert(tasks).values({
+            workspaceId: ctx.workspace.id,
+            title: `Win-back: ${dealName}`.slice(0, 240),
+            description: `"${dealName}" closed lost from stage "${before.stage}". Check back in — circumstances (budget, priorities, the champion's role) often change within a quarter.`,
+            type: "follow_up",
+            priority: "normal",
+            status: "open",
+            dueAt: new Date(Date.now() + 90 * 86400000),
+            ownerUserId: before.ownerUserId ?? null,
+            relatedType: "opportunity",
+            relatedId: input.id,
+            source: "ai",
+            aiReasoning: "Auto-created on closed-lost so the deal re-enters nurture instead of being abandoned.",
+            aiConfidence: 70,
+          } as never);
+        }
+      } catch (e) {
+        console.warn("[crm.setStage] closed-lost win-back task failed:", e);
       }
     }
     await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "opportunity", entityId: input.id, before: { stage: before.stage }, after: { stage: input.stage, customerCreated } });

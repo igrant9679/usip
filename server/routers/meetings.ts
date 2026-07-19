@@ -20,6 +20,66 @@ import { proposeMeetingForProspect, runMeetingAutopilotForWorkspace, sendMeeting
 
 const MEETING_STATUSES = ["proposed", "invited", "scheduled", "completed", "no_show", "cancelled", "rescheduled"] as const;
 
+/**
+ * Create a recovery task for a meeting that didn't happen.
+ *
+ * Was inline in the no-show branch only. A cancelled meeting got nothing at
+ * all — no task, no notification, no re-engagement — even though a cancel is
+ * usually "not right now" rather than "not interested", so it's often the more
+ * recoverable of the two. Shared so both paths behave the same and neither can
+ * drift again.
+ *
+ * Deduped per linked record so repeated cancels don't pile up tasks. Returns
+ * the new task id, or null if one already existed / there was nothing to link.
+ * Never throws: losing the rebound task must not fail the status update the
+ * user actually asked for.
+ */
+async function createMeetingReboundTask(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  workspaceId: number,
+  m: typeof meetings.$inferSelect,
+  kind: "no_show" | "cancelled",
+): Promise<number | null> {
+  try {
+    const name = m.contactName?.trim() || "the prospect";
+    const prefix = kind === "no_show" ? "Re-book no-show" : "Re-book cancelled meeting";
+    if (m.relatedType && m.relatedId) {
+      const existing = await db.select({ id: tasks.id }).from(tasks).where(and(
+        eq(tasks.workspaceId, workspaceId),
+        eq(tasks.relatedType, m.relatedType),
+        eq(tasks.relatedId, m.relatedId),
+        like(tasks.title, `${prefix}:%`),
+        inArray(tasks.status, ["open", "draft", "in_progress", "snoozed"]),
+      )).limit(1);
+      if (existing.length > 0) return null;
+    }
+    const description = kind === "no_show"
+      ? `${name} didn't attend "${m.title}". Reach out to reschedule — share your booking link so they can self-book a new time.`
+      : `${name} cancelled "${m.title}". Follow up to find a better time — share your booking link so they can self-book.`;
+    const ins = await db.insert(tasks).values({
+      workspaceId,
+      title: `${prefix}: ${name}`.slice(0, 240),
+      description,
+      type: "follow_up",
+      priority: "high",
+      status: "open",
+      dueAt: new Date(Date.now() + 86400000),
+      ownerUserId: m.ownerUserId ?? null,
+      relatedType: m.relatedType ?? null,
+      relatedId: m.relatedId ?? null,
+      source: "ai",
+      aiReasoning: kind === "no_show"
+        ? "Auto-created after a no-show to recover the meeting."
+        : "Auto-created after a cancellation to recover the meeting.",
+      aiConfidence: 90,
+    } as never);
+    return Number((ins as any)[0]?.insertId ?? 0) || null;
+  } catch (e) {
+    console.error(`[meetings] ${kind} rebound task failed:`, (e as Error).message);
+    return null;
+  }
+}
+
 export const meetingsRouter = router({
   list: workspaceProcedure
     .input(z.object({
@@ -153,55 +213,28 @@ export const meetingsRouter = router({
       await db.update(meetings).set({ status, disposition: input.disposition ?? null } as never)
         .where(and(eq(meetings.id, input.id), eq(meetings.workspaceId, ctx.workspace.id)));
 
-      // No-show rebound: autonomously create a high-priority re-engagement task so
-      // a missed meeting is recovered (reach out + share the booking link to
-      // self-rebook) rather than silently lost. Deduped per linked record.
-      let reboundTaskId: number | null = null;
-      if (status === "no_show") {
-        try {
-          const name = m.contactName?.trim() || "the prospect";
-          let already = false;
-          if (m.relatedType && m.relatedId) {
-            const existing = await db.select({ id: tasks.id }).from(tasks).where(and(
-              eq(tasks.workspaceId, ctx.workspace.id),
-              eq(tasks.relatedType, m.relatedType),
-              eq(tasks.relatedId, m.relatedId),
-              like(tasks.title, "Re-book no-show:%"),
-              inArray(tasks.status, ["open", "draft", "in_progress", "snoozed"]),
-            )).limit(1);
-            already = existing.length > 0;
-          }
-          if (!already) {
-            const ins = await db.insert(tasks).values({
-              workspaceId: ctx.workspace.id,
-              title: `Re-book no-show: ${name}`.slice(0, 240),
-              description: `${name} didn't attend "${m.title}". Reach out to reschedule — share your booking link so they can self-book a new time.`,
-              type: "follow_up",
-              priority: "high",
-              status: "open",
-              dueAt: new Date(Date.now() + 86400000),
-              ownerUserId: m.ownerUserId ?? null,
-              relatedType: m.relatedType ?? null,
-              relatedId: m.relatedId ?? null,
-              source: "ai",
-              aiReasoning: "Auto-created after a no-show to recover the meeting.",
-              aiConfidence: 90,
-            } as never);
-            reboundTaskId = Number((ins as any)[0]?.insertId ?? 0) || null;
-          }
-        } catch (e) {
-          console.error("[meetings.complete] no-show rebound task failed:", (e as Error).message);
-        }
-      }
+      const reboundTaskId = status === "no_show"
+        ? await createMeetingReboundTask(db, ctx.workspace.id, m, "no_show")
+        : null;
       return { ok: true, reboundTaskId };
     }),
 
   cancel: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    const [m] = await db.select().from(meetings)
+      .where(and(eq(meetings.id, input.id), eq(meetings.workspaceId, ctx.workspace.id)));
+    if (!m) throw new TRPCError({ code: "NOT_FOUND" });
     await db.update(meetings).set({ status: "cancelled" } as never)
       .where(and(eq(meetings.id, input.id), eq(meetings.workspaceId, ctx.workspace.id)));
-    return { ok: true };
+
+    // A cancelled meeting used to be three lines that set a status and nothing
+    // else — while a no-show, twenty lines above, got an automatic recovery
+    // task. So a prospect who silently didn't turn up was chased and one who
+    // actively cancelled (often meaning "not this time", i.e. still
+    // interested) just vanished. Same rebound treatment now.
+    const reboundTaskId = await createMeetingReboundTask(db, ctx.workspace.id, m, "cancelled");
+    return { ok: true, reboundTaskId };
   }),
 
   /** Dismiss (delete) an unbooked AI proposal. */
