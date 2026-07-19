@@ -183,6 +183,26 @@ async function recomputeOne(workspaceId: number, leadId: number) {
     });
   }
 
+  // Auto-enrol into any active sequence whose enrollmentTrigger is a
+  // score_threshold this lead has now crossed.
+  //
+  // sequenceEngine.autoEnrollByTriggers was fully implemented AND unit-tested,
+  // but its only caller in the entire repo was its own test file — so scores
+  // were computed, stored, displayed and sorted on, and never actually started
+  // any outreach. This is the score → sequence handoff that was missing.
+  //
+  // Fire-and-forget: scoring must not fail because enrolment did. The function
+  // is idempotent (it checks for an existing enrolment first), so re-scoring
+  // the same lead never double-enrols.
+  void import("../sequenceEngine")
+    .then((m) => m.autoEnrollByTriggers({
+      kind: "score_threshold",
+      workspaceId,
+      leadId,
+      score: breakdown.total,
+    }))
+    .catch((e) => console.error(`[LeadScoring] auto-enroll failed for lead ${leadId}:`, e));
+
   return { ...breakdown, grade, aiFit: aiFitJson };
 }
 

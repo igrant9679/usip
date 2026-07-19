@@ -282,6 +282,35 @@ describe("Sequence Execution Engine", () => {
       );
     });
 
+    it("auto-enrolls a LEAD on status_change (leads are what have a status)", async () => {
+      // The event type originally accepted only contactId for status_change,
+      // but `contacts` has no status column — `leads.status` is the field that
+      // actually moves (new -> working -> qualified). The trigger therefore had
+      // no entity it could legitimately fire for, which is part of why nothing
+      // ever called it. crm.leads.update now fires this on a status change.
+      const sequence = {
+        id: 11, workspaceId: 1, status: "active",
+        enrollmentTrigger: [{ type: "status_change", value: "qualified" }],
+      };
+      mockSelect.mockReturnValueOnce(makeSelectChain([sequence])); // active sequences
+      mockSelect.mockReturnValueOnce(makeSelectChain([]));          // no existing enrollment
+
+      const insertValues = vi.fn().mockResolvedValue(undefined);
+      mockInsert.mockReturnValue({ values: insertValues });
+
+      const { autoEnrollByTriggers } = await import("./sequenceEngine");
+      await autoEnrollByTriggers({
+        kind: "status_change",
+        workspaceId: 1,
+        leadId: 42,
+        newStatus: "qualified",
+      });
+
+      expect(insertValues).toHaveBeenCalledWith(
+        expect.objectContaining({ sequenceId: 11, leadId: 42, status: "active" }),
+      );
+    });
+
     it("does not enroll when trigger does not match", async () => {
       const sequence = {
         id: 11, workspaceId: 1, status: "active",

@@ -1021,6 +1021,20 @@ export const leadsRouter = router({
         relatedType: "lead", relatedId: input.id, ownerUserId: before.ownerUserId ?? null,
       }))
       .catch(() => { /* workflow firing is best-effort */ });
+
+    // Sequences can be configured to auto-enrol on a status change. That
+    // trigger existed and was tested but nothing ever fired it.
+    const newStatus = (input.patch as Record<string, unknown>).status;
+    if (typeof newStatus === "string" && newStatus !== before.status) {
+      void import("../sequenceEngine")
+        .then((m) => m.autoEnrollByTriggers({
+          kind: "status_change",
+          workspaceId: ctx.workspace.id,
+          leadId: input.id,
+          newStatus,
+        }))
+        .catch((e) => console.error(`[CRM] lead ${input.id} auto-enroll failed:`, e));
+    }
     return { ok: true };
   }),
 

@@ -190,9 +190,14 @@ type EnrollmentTrigger = {
   value: string; // e.g. "qualified", "hot", "75"
 };
 
+// status_change originally accepted only a contactId — but `contacts` has no
+// status column; `leads.status` is the field that actually changes (new →
+// working → qualified → …). That mismatch meant the trigger had no entity it
+// could legitimately be fired for. Both ids are now optional on both event
+// kinds so the trigger can be driven by whichever record really moved.
 type AutoEnrollEvent =
-  | { kind: "status_change"; workspaceId: number; contactId: number; newStatus: string }
-  | { kind: "tag_applied"; workspaceId: number; contactId: number; tag: string }
+  | { kind: "status_change"; workspaceId: number; contactId?: number; leadId?: number; newStatus: string }
+  | { kind: "tag_applied"; workspaceId: number; contactId?: number; leadId?: number; tag: string }
   | { kind: "score_threshold"; workspaceId: number; contactId?: number; leadId?: number; score: number };
 
 // ─── Sequence-timezone clock ──────────────────────────────────────────────────
@@ -745,8 +750,11 @@ export async function autoEnrollByTriggers(event: AutoEnrollEvent): Promise<void
     if (!matches) continue;
 
     // Check if already enrolled
-    const contactId = event.kind !== "score_threshold" ? event.contactId : event.contactId;
-    const leadId = event.kind === "score_threshold" ? event.leadId : undefined;
+    // (Was a no-op ternary with identical branches, and leadId was only read
+    // for score_threshold — so a lead-driven status_change had no target.)
+    const contactId = event.contactId;
+    const leadId = event.leadId;
+    if (!contactId && !leadId) continue; // nothing to enrol
 
     const existing = await db
       .select({ id: enrollments.id })
