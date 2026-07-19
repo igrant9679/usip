@@ -458,23 +458,36 @@ export default function Pipeline() {
     generateIntel.mutate({ opportunityId });
   };
 
-  const requestStageChange = trpc.oppIntelligence.requestStageChange.useMutation({
-    onSuccess: (_data, vars) => {
-      utils.opportunities.board.invalidate();
-      utils.oppIntelligence.getIntelligenceForBoard.invalidate();
-      setAcceptingIds((prev) => { const next = new Set(prev); next.delete(vars.opportunityId); return next; });
-      toast.success("Stage change submitted for approval");
-    },
-    onError: (e, vars) => {
-      setAcceptingIds((prev) => { const next = new Set(prev); next.delete(vars.opportunityId); return next; });
-      toast.error(e.message);
-    },
-  });
-
+  /**
+   * "Accept AI stage suggestion" used to call oppIntelligence.requestStageChange
+   * and toast "Stage change submitted for approval" — and the deal never moved,
+   * because that approval could never be reviewed by anyone:
+   * listPendingApprovals and reviewStageChange have ZERO callers anywhere in
+   * client/src, so no screen lists pending requests and no notification fires.
+   * The row went into stage_approvals and sat there forever.
+   *
+   * It also wasn't gating anything: dragging the same card between columns
+   * calls opportunities.setStage directly with no approval at all, and both
+   * procedures are repProcedure — the same permission level. So the indirection
+   * added no control, only a dead end.
+   *
+   * Accepting a suggestion now does what the button says: moves the deal, via
+   * the same path (and optimistic update) as a drag. The stage_approvals
+   * mechanism is left intact but deliberately unused — do not route traffic
+   * into it again until a reviewer UI exists.
+   */
   const handleAcceptStage = (e: React.MouseEvent, opportunityId: number, toStage: string) => {
     e.stopPropagation();
     setAcceptingIds((prev) => new Set(prev).add(opportunityId));
-    requestStageChange.mutate({ opportunityId, toStage, note: "Accepted AI stage suggestion" });
+    setStage.mutate(
+      { id: opportunityId, stage: toStage },
+      {
+        onSettled: () => {
+          setAcceptingIds((prev) => { const next = new Set(prev); next.delete(opportunityId); return next; });
+          utils.oppIntelligence.getIntelligenceForBoard.invalidate();
+        },
+      },
+    );
   };
 
   const setStage = trpc.opportunities.setStage.useMutation({

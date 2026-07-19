@@ -14,6 +14,7 @@ import { useParams, useLocation, Link } from "wouter";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
 import { LinkedInUpdateIndicator, useEnrichJob } from "@/components/usip/people/LinkedInEnrichment";
 import { trpc } from "@/lib/trpc";
+import { ResearchAiMenu } from "@/components/usip/people/ResearchAiMenu";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -166,8 +167,10 @@ export default function ListDetail() {
 
         {/* toolbar */}
         <div className="shrink-0 border-b border-border px-3 py-1.5 flex items-center gap-1.5 flex-wrap bg-card/40 [&_button]:h-7">
-          <Button variant="outline" size="sm" className="gap-1.5">Default view <ChevronDown className="size-3.5 opacity-60" /></Button>
-          <Button variant="ghost" size="sm" className="gap-1.5"><Filter className="size-4" /> Show filters</Button>
+          {/* "Default view", "Show filters", "Save as new view" and "View
+              options" used to sit here with no onClick and no backing state —
+              four buttons that did nothing when clicked. Removed rather than
+              left as decoration; the controls that remain all work. */}
           <div className="flex items-center gap-2 px-2.5 h-7 rounded-md border bg-background text-sm min-w-0 flex-1 max-w-xs">
             <Search className="size-4 text-muted-foreground shrink-0" />
             <input value={search} onChange={(e) => setSearch(e.target.value)} className="bg-transparent outline-none flex-1 min-w-0 text-[13px]" placeholder="Search this list" />
@@ -186,9 +189,8 @@ export default function ListDetail() {
               {enriching ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />} Enrich all
             </Button>
           )}
-          <Button variant="outline" size="sm" className="gap-1.5"><Wand2 className="size-4" /> Research with AI <ChevronDown className="size-3.5 opacity-60" /></Button>
+          <ResearchAiMenu />
           <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setLocation("/v2/workflows")}><Workflow className="size-4" /> Create workflow <ChevronDown className="size-3.5 opacity-60" /></Button>
-          <Button variant="ghost" size="sm" className="gap-1.5"><Save className="size-4" /> Save as new view</Button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild><Button variant="ghost" size="icon-sm" title="Sort"><ArrowUpDown className="size-4" /></Button></DropdownMenuTrigger>
             <DropdownMenuContent align="end">
@@ -199,7 +201,6 @@ export default function ListDetail() {
               </DropdownMenuRadioGroup>
             </DropdownMenuContent>
           </DropdownMenu>
-          <Button variant="ghost" size="icon-sm" title="View options"><Settings2 className="size-4" /></Button>
         </div>
 
         {/* body */}

@@ -188,7 +188,9 @@ export default function Lists() {
         </div>
 
         <div className="shrink-0 border-b border-border px-3 py-1.5 flex items-center gap-1.5 flex-wrap bg-card/40 [&_button]:h-7">
-          <Button variant="ghost" size="sm" className="gap-1.5"><SlidersHorizontal className="size-4" /> Show filters</Button>
+          {/* "Show filters" and "View settings" sat here with no onClick and
+              no panel behind either — removed rather than left as decoration.
+              Search and Sort below both work. */}
           <div className="flex items-center gap-2 px-2.5 h-7 rounded-md border bg-background text-sm min-w-0 flex-1 max-w-xs">
             <Search className="size-4 text-muted-foreground shrink-0" />
             <input value={search} onChange={(e) => setSearch(e.target.value)} className="bg-transparent outline-none flex-1 min-w-0 text-[13px]" placeholder="Search lists" />
@@ -208,7 +210,6 @@ export default function Lists() {
               </DropdownMenuRadioGroup>
             </DropdownMenuContent>
           </DropdownMenu>
-          <Button variant="ghost" size="icon-sm" title="View settings"><Settings2 className="size-4" /></Button>
         </div>
 
         <div className="flex-1 min-h-0 overflow-auto p-4 md:p-6 space-y-4">
