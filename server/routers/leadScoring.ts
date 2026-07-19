@@ -2,6 +2,7 @@ import { TRPCError } from "@trpc/server";
 import { and, desc, eq, gte, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
+  accounts,
   activities,
   emailDrafts,
   enrollments,
@@ -385,6 +386,39 @@ export const leadRoutingRouter = router({
 export async function routeLeadOwner(workspaceId: number, payload: RoutingPayload): Promise<number | null> {
   const db = await getDb();
   if (!db) return null;
+
+  // The routing-rule builder offers industry / country / state conditions, but
+  // ALL THREE call sites passed null for them (leads have no such columns), so
+  // any rule using those conditions could never match — it silently never
+  // fired, with nothing to tell the admin who built it.
+  //
+  // Leads don't carry that data, but the matching Account does: accounts have
+  // `industry` and `region` (which is where CSV import now puts state +
+  // country). Enrich here rather than at each call site so all three paths
+  // — CRM lead create, webform submit, landing-page submit — benefit alike.
+  if (payload.company && (!payload.industry || (!payload.country && !payload.state))) {
+    try {
+      const [acct] = await db
+        .select({ industry: accounts.industry, region: accounts.region })
+        .from(accounts)
+        .where(and(eq(accounts.workspaceId, workspaceId), eq(accounts.name, payload.company)))
+        .limit(1);
+      if (acct) {
+        payload = {
+          ...payload,
+          industry: payload.industry ?? acct.industry ?? null,
+          // region is a free-text "State, Country" string; expose it to BOTH
+          // condition fields so either spelling of a rule can match it.
+          country: payload.country ?? acct.region ?? null,
+          state: payload.state ?? acct.region ?? null,
+        };
+      }
+    } catch (e) {
+      // Enrichment is a bonus — never fail routing because of it.
+      console.error("[leadRouting] account enrichment failed:", (e as Error)?.cause ?? e);
+    }
+  }
+
   const rows = await db.select().from(leadRoutingRules).where(eq(leadRoutingRules.workspaceId, workspaceId));
   const rules: RoutingRule[] = rows.map((r) => ({
     id: r.id,

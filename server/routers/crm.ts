@@ -287,8 +287,12 @@ export const accountsRouter = router({
       if (!resolvedTerritoryId) {
         const routed = await applyTerritoryRules(db, ctx.workspace.id, {
           industry: input.industry ?? null,
+          // `region` is the only geography an account carries (free text like
+          // "CA, US"). It was passed as country only, so any territory rule
+          // built on "State equals" could never match and silently never
+          // fired. Expose it to both fields so either spelling works.
           country: input.region ?? null,
-          state: null,
+          state: input.region ?? null,
           company: input.name,
         });
         if (routed) {
