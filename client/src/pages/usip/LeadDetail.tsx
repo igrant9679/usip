@@ -3,6 +3,7 @@
  */
 import { useParams, Link, useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
+import { CustomFieldsPanel } from "@/components/usip/CustomFieldsPanel";
 import { Shell, PageHeader, EmptyState } from "@/components/usip/Shell";
 import { EntityDetailTabs } from "@/components/usip/EntityDetail";
 import { RelatedTasks } from "@/pages/usip/Tasks";
@@ -78,6 +79,7 @@ export default function LeadDetail() {
         )}
       </CardContent></Card>
     </div>
+    <CustomFieldsPanel entityType="lead" entityId={lead.id} />
     <RelatedTasks entityType="lead" entityId={lead.id} />
     </div>
   );

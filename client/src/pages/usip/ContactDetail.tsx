@@ -3,6 +3,7 @@
  */
 import { useParams, Link, useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
+import { CustomFieldsPanel } from "@/components/usip/CustomFieldsPanel";
 import { Shell, PageHeader, EmptyState } from "@/components/usip/Shell";
 import { EntityDetailTabs } from "@/components/usip/EntityDetail";
 import { RelatedTasks } from "@/pages/usip/Tasks";
@@ -47,6 +48,7 @@ export default function ContactDetail() {
         ) : <div className="text-xs text-muted-foreground">Not linked to an account.</div>}
       </CardContent></Card>
     </div>
+    <CustomFieldsPanel entityType="contact" entityId={c.id} />
     <RelatedTasks entityType="contact" entityId={c.id} />
     </div>
   );

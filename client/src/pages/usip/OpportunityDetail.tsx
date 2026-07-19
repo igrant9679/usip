@@ -8,6 +8,7 @@
 import { useParams, Link, useLocation } from "wouter";
 import { useEffect, useState } from "react";
 import { trpc } from "@/lib/trpc";
+import { CustomFieldsPanel } from "@/components/usip/CustomFieldsPanel";
 import { Shell, PageHeader, EmptyState } from "@/components/usip/Shell";
 import { EntityDetailTabs } from "@/components/usip/EntityDetail";
 import { RelatedTasks } from "@/pages/usip/Tasks";
@@ -104,6 +105,7 @@ export default function OpportunityDetail() {
         ) : <div className="text-xs text-muted-foreground">No analysis yet — run from Pipeline.</div>}
       </CardContent></Card>
     </div>
+    <CustomFieldsPanel entityType="opportunity" entityId={o.id} />
     <RelatedTasks entityType="opportunity" entityId={o.id} />
     </div>
   );
