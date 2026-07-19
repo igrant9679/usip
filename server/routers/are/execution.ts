@@ -31,6 +31,151 @@ import { notifyOwner } from "../../_core/notification";
 import { areNotify } from "./notify";
 import { runSignalEnhancement } from "./signalEnhancement";
 
+/* ─── Prospect → CRM promotion ──────────────────────────────────────────── */
+
+/**
+ * Promote an ARE queue row into real CRM records.
+ *
+ * Until now this lived inline in the meeting_booked branch and was the ONLY
+ * way an ARE prospect ever reached the CRM — so a prospect that was sourced,
+ * enriched, sequenced, mailed and even replied to still appeared nowhere on
+ * the People or Companies pages. (And since processSignal itself had no
+ * caller, in practice it never ran at all.)
+ *
+ * Product rule, user-chosen 2026-07-18: promote on a POSITIVE SIGNAL, not on
+ * discovery. The People page stays a list of humans who engaged rather than
+ * filling up with unvalidated sourcing output. Note the schema comment on
+ * prospectQueue.linkedContactId already said "created after positive reply" —
+ * this is the behaviour the columns were designed for.
+ *
+ * `createOpportunity` is separate and heavier: a positive reply makes someone
+ * a contact, but only a booked meeting (with the campaign's
+ * signalToOpportunityEnabled on) creates a deal in the pipeline.
+ *
+ * Idempotent: re-running for the same prospect reuses the linked contact
+ * rather than creating duplicates, so a second positive signal is safe.
+ */
+export async function promoteProspectToCrm(
+  workspaceId: number,
+  prospectQueueId: number,
+  campaignId: number,
+  opts: { createOpportunity: boolean },
+): Promise<{ accountId: number; contactId: number; opportunityId?: number } | null> {
+  const db = await getDb();
+  if (!db) return null;
+
+  const [prospect] = await db.select().from(prospectQueue)
+    .where(eq(prospectQueue.id, prospectQueueId)).limit(1);
+  if (!prospect) return null;
+  const [campaign] = await db.select().from(areCampaigns)
+    .where(eq(areCampaigns.id, campaignId)).limit(1);
+  if (!campaign) return null;
+
+  const owner = campaign.ownerUserId ?? undefined;
+  const companyName = prospect.companyName ?? "Unknown Company";
+
+  // ── Account: match on DOMAIN first, then name. Domain is the reliable
+  // identity (two "Acme" rows are usually different companies; one domain
+  // is one company), and Apollo now supplies a domain for free.
+  let accountId: number | undefined;
+  if (prospect.companyDomain) {
+    const [byDomain] = await db.select({ id: accounts.id }).from(accounts)
+      .where(and(eq(accounts.workspaceId, workspaceId), eq(accounts.domain, prospect.companyDomain)))
+      .limit(1);
+    if (byDomain) accountId = byDomain.id;
+  }
+  if (!accountId) {
+    const [byName] = await db.select({ id: accounts.id }).from(accounts)
+      .where(and(eq(accounts.workspaceId, workspaceId), eq(accounts.name, companyName)))
+      .limit(1);
+    if (byName) accountId = byName.id;
+  }
+  if (!accountId) {
+    const [newAcc] = await db.insert(accounts).values({
+      workspaceId,
+      name: companyName,
+      domain: prospect.companyDomain ?? undefined,
+      industry: prospect.industry ?? undefined,
+      ownerUserId: owner,
+    }).$returningId();
+    accountId = newAcc.id;
+  }
+
+  // ── Contact: reuse the previously linked row, else match on email, else
+  // create. The old inline code inserted unconditionally, so a prospect who
+  // triggered two positive signals became two contacts.
+  let contactId: number | undefined = prospect.linkedContactId ?? undefined;
+  if (!contactId && prospect.email) {
+    const [byEmail] = await db.select({ id: contacts.id }).from(contacts)
+      .where(and(eq(contacts.workspaceId, workspaceId), eq(contacts.email, prospect.email)))
+      .limit(1);
+    if (byEmail) contactId = byEmail.id;
+  }
+  if (!contactId) {
+    const [newContact] = await db.insert(contacts).values({
+      workspaceId,
+      accountId,
+      firstName: prospect.firstName ?? "Unknown",
+      lastName: prospect.lastName ?? "Prospect",
+      title: prospect.title ?? undefined,
+      email: prospect.email ?? undefined,
+      phone: prospect.phone ?? undefined,
+      linkedinUrl: prospect.linkedinUrl ?? undefined,
+      companyName: prospect.companyName ?? undefined,
+      companyDomain: prospect.companyDomain ?? undefined,
+      ownerUserId: owner,
+    }).$returningId();
+    contactId = newContact.id;
+  }
+
+  let opportunityId: number | undefined;
+  if (opts.createOpportunity) {
+    const [intel] = await db.select().from(prospectIntelligence)
+      .where(eq(prospectIntelligence.prospectQueueId, prospectQueueId)).limit(1);
+    // prospectIntelligence stores these as TOP-LEVEL json columns — there is
+    // no `data` wrapper, so an earlier `intel?.data?.x` always resolved
+    // undefined and the note was permanently blank.
+    const hooks = ((intel?.personalisationHooks as Array<{ hook: string }> | null) ?? []);
+    const pains = ((intel?.painSignals as Array<{ signal: string }> | null) ?? []);
+    const timing = intel?.recommendedTiming as { dayOfWeek?: string; hourOfDay?: number; timezone?: string } | null;
+    const timingStr = timing
+      ? [timing.dayOfWeek, timing.hourOfDay != null ? `${timing.hourOfDay}:00` : null, timing.timezone].filter(Boolean).join(" ")
+      : "";
+    const aiNote = [
+      `ARE Campaign: ${campaign.name}`,
+      hooks.length > 0 ? `Hooks: ${hooks.slice(0, 2).map(h => h.hook).join(" | ")}` : null,
+      pains.length > 0 ? `Pain signals: ${pains.slice(0, 2).map(p => p.signal).join(", ")}` : null,
+      timingStr ? `Best timing: ${timingStr}` : null,
+    ].filter(Boolean).join("\n");
+
+    const [newOpp] = await db.insert(opportunities).values({
+      workspaceId,
+      accountId,
+      name: `${companyName} — ARE Meeting`,
+      stage: "discovery",
+      value: "0",
+      winProb: 30,
+      aiNote: aiNote || undefined,
+      campaignId,
+      ownerUserId: owner,
+    }).$returningId();
+    opportunityId = newOpp.id;
+    await db.execute(sql`UPDATE are_campaigns SET opportunitiesCreated = opportunitiesCreated + 1 WHERE id = ${campaignId}`);
+  }
+
+  // Write the linkage back. These columns existed from the start and were
+  // never populated by anything, so the queue row and its CRM records had no
+  // way to find each other.
+  await db.update(prospectQueue)
+    .set({
+      linkedContactId: contactId,
+      ...(opportunityId ? { linkedOpportunityId: opportunityId } : {}),
+    })
+    .where(eq(prospectQueue.id, prospectQueueId));
+
+  return { accountId, contactId, opportunityId };
+}
+
 /* ─── Signal Feedback Agent ─────────────────────────────────────────────── */
 
 export async function processSignal(
@@ -97,21 +242,37 @@ export async function processSignal(
             await db.update(prospectQueue).set({ sequenceStatus: "replied" }).where(eq(prospectQueue.id, prospectQueueId));
             actionTaken = "paused_sequence";
             break;
-          case "create_opportunity":
+          case "create_opportunity": {
             await db.update(prospectQueue).set({ sequenceStatus: "replied" }).where(eq(prospectQueue.id, prospectQueueId));
             // Increment prospectsReplied counter
             await db.execute(sql`UPDATE are_campaigns SET prospectsReplied = prospectsReplied + 1 WHERE id = ${campaignId}`);
             actionTaken = "flagged_for_opportunity";
+
+            // A positive reply is the promotion trigger the linkedContactId
+            // column was designed for ("created after positive reply"). The
+            // person becomes a real Contact + Account so the rest of the CRM
+            // — timeline, tasks, deals — can work with them. No opportunity
+            // yet: replying interestedly isn't a deal, a booked meeting is.
+            const promoted = await promoteProspectToCrm(
+              workspaceId, prospectQueueId, campaignId, { createOpportunity: false },
+            ).catch((e) => {
+              console.error("[ARE] promoteProspectToCrm failed on positive reply:", e);
+              return null;
+            });
+            if (promoted) actionTaken = "promoted_to_crm";
+
             // Notify owner of positive reply
             await areNotify({
               workspaceId,
               eventType: "signal_classified",
-              title: "ARE: Positive reply — opportunity flagged",
-              body: `A prospect replied positively. Sentiment: ${sentData.sentiment}. Reason: ${sentData.reason}. Flagged for opportunity creation.`,
+              title: "ARE: Positive reply — prospect added to CRM",
+              body: `A prospect replied positively. Sentiment: ${sentData.sentiment}. Reason: ${sentData.reason}.` +
+                (promoted ? " They've been added to Contacts and Companies." : ""),
               relatedId: campaignId,
               relatedType: "are_campaign",
             });
             break;
+          }
           case "add_suppression":
             const [prospect] = await db.select().from(prospectQueue).where(eq(prospectQueue.id, prospectQueueId)).limit(1);
             if (prospect) {
@@ -141,86 +302,29 @@ export async function processSignal(
     await db.execute(sql`UPDATE are_campaigns SET meetingsBooked = meetingsBooked + 1 WHERE id = ${campaignId}`);
     actionTaken = "meeting_booked";
 
-    // Check if signalToOpportunityEnabled is set on the campaign
+    // A booked meeting always promotes the prospect into the CRM (it is the
+    // strongest positive signal there is). The campaign's
+    // signalToOpportunityEnabled flag now governs only the heavier step —
+    // whether a deal is also opened in the pipeline.
     const [campaign] = await db.select().from(areCampaigns).where(eq(areCampaigns.id, campaignId)).limit(1);
-    if (campaign?.signalToOpportunityEnabled) {
-      // Fetch prospect details
-      const [prospect] = await db.select().from(prospectQueue).where(eq(prospectQueue.id, prospectQueueId)).limit(1);
-      if (prospect) {
-        // Fetch intelligence dossier for context
-        const [intel] = await db.select().from(prospectIntelligence)
-          .where(eq(prospectIntelligence.prospectQueueId, prospectQueueId)).limit(1);
+    const [prospect] = await db.select().from(prospectQueue).where(eq(prospectQueue.id, prospectQueueId)).limit(1);
+    const promoted = await promoteProspectToCrm(workspaceId, prospectQueueId, campaignId, {
+      createOpportunity: !!campaign?.signalToOpportunityEnabled,
+    });
 
-        // Create or find account
-        let accountId: number;
-        const companyName = prospect.companyName ?? "Unknown Company";
-        const [existingAccount] = await db.select().from(accounts)
-          .where(and(eq(accounts.workspaceId, workspaceId), eq(accounts.name, companyName))).limit(1);
-        if (existingAccount) {
-          accountId = existingAccount.id;
-        } else {
-          const [newAcc] = await db.insert(accounts).values({
-            workspaceId,
-            name: companyName,
-            domain: prospect.companyDomain ?? undefined,
-            industry: prospect.industry ?? undefined,
-            ownerUserId: campaign.ownerUserId ?? undefined,
-          }).$returningId();
-          accountId = newAcc.id;
-        }
-
-        // Create contact
-        const [newContact] = await db.insert(contacts).values({
-          workspaceId,
-          accountId,
-          firstName: prospect.firstName ?? "Unknown",
-          lastName: prospect.lastName ?? "Prospect",
-          title: prospect.title ?? undefined,
-          email: prospect.email ?? undefined,
-          phone: prospect.phone ?? undefined,
-          linkedinUrl: prospect.linkedinUrl ?? undefined,
-          ownerUserId: campaign.ownerUserId ?? undefined,
-        }).$returningId();
-
-        // Build AI note from intelligence dossier. prospectIntelligence
-        // stores these as TOP-LEVEL json columns — there is no `data`
-        // wrapper column, so the old `intel?.data?.x` always resolved
-        // undefined and the note was permanently blank.
-        const hooks = ((intel?.personalisationHooks as Array<{ hook: string }> | null) ?? []);
-        const pains = ((intel?.painSignals as Array<{ signal: string }> | null) ?? []);
-        const timing = intel?.recommendedTiming as { dayOfWeek?: string; hourOfDay?: number; timezone?: string } | null;
-        const timingStr = timing
-          ? [timing.dayOfWeek, timing.hourOfDay != null ? `${timing.hourOfDay}:00` : null, timing.timezone].filter(Boolean).join(" ")
-          : "";
-        const aiNote = [
-          `ARE Campaign: ${campaign.name}`,
-          hooks.length > 0 ? `Hooks: ${hooks.slice(0, 2).map(h => h.hook).join(" | ")}` : null,
-          pains.length > 0 ? `Pain signals: ${pains.slice(0, 2).map(p => p.signal).join(", ")}` : null,
-          timingStr ? `Best timing: ${timingStr}` : null,
-        ].filter(Boolean).join("\n");
-
-        // Create opportunity
-        const oppName = companyName + " — ARE Meeting";
-        await db.insert(opportunities).values({
-          workspaceId,
-          accountId,
-          name: oppName,
-          stage: "discovery",
-          value: "0",
-          winProb: 30,
-          aiNote: aiNote || undefined,
-          campaignId,
-          ownerUserId: campaign.ownerUserId ?? undefined,
-        });
-
-        // Increment opportunitiesCreated counter
-        await db.execute(sql`UPDATE are_campaigns SET opportunitiesCreated = opportunitiesCreated + 1 WHERE id = ${campaignId}`);
+    if (promoted) {
+      const who = `${prospect?.firstName ?? ""} ${prospect?.lastName ?? ""}`.trim() || "A prospect";
+      const where = prospect?.companyName ?? "their company";
+      if (promoted.opportunityId) {
         actionTaken = "opportunity_created";
-
-        // Notify owner
         await notifyOwner({
           title: `ARE: Meeting booked → Opportunity created`,
-          content: `Campaign "${campaign.name}" — ${prospect.firstName ?? ""} ${prospect.lastName ?? ""} at ${companyName} booked a meeting. A new opportunity "${oppName}" has been created in the pipeline.`,
+          content: `Campaign "${campaign?.name ?? ""}" — ${who} at ${where} booked a meeting. They're now in Contacts, and a new opportunity has been created in the pipeline.`,
+        }).catch(() => {/* non-fatal */});
+      } else {
+        await notifyOwner({
+          title: `ARE: Meeting booked`,
+          content: `Campaign "${campaign?.name ?? ""}" — ${who} at ${where} booked a meeting and has been added to your CRM. Turn on "Signal to opportunity" in the campaign's settings to also open a deal automatically.`,
         }).catch(() => {/* non-fatal */});
       }
     }
