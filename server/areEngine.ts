@@ -31,7 +31,7 @@
  * Per-campaign and per-phase try/catch so one failure never blocks the rest.
  */
 import { createHash } from "node:crypto";
-import { and, desc, eq, inArray, like, lte, notInArray, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, like, lte, notInArray, or, sql } from "drizzle-orm";
 import { getDb } from "./db";
 import {
   areCampaigns,
@@ -549,6 +549,37 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
     const remaining = Math.max(0, campaign.dailySendCap - Number(sentToday?.n ?? 0));
 
     if (remaining > 0) {
+      // Self-heal: a step that failed ONLY because the prospect had no email
+      // yet becomes schedulable again once enrichment resolves an address —
+      // otherwise the whole sequence sits dormant until its next step's day
+      // arrives, even though the prospect is now reachable.
+      try {
+        const healable = await db
+          .select({ id: areExecutionQueue.id })
+          .from(areExecutionQueue)
+          .innerJoin(prospectQueue, eq(areExecutionQueue.prospectQueueId, prospectQueue.id))
+          .where(
+            and(
+              eq(areExecutionQueue.campaignId, campId),
+              eq(areExecutionQueue.workspaceId, wsId),
+              eq(areExecutionQueue.status, "failed"),
+              eq(areExecutionQueue.failureReason, "Prospect has no email address"),
+              isNotNull(prospectQueue.email),
+              eq(prospectQueue.sequenceStatus, "enrolled"),
+            ),
+          );
+        if (healable.length > 0) {
+          await db
+            .update(areExecutionQueue)
+            .set({ status: "scheduled", failureReason: null, executedAt: null })
+            .where(inArray(areExecutionQueue.id, healable.map((h) => h.id)));
+          await emitLog(wsId, campId, "dispatch", "info",
+            `Re-scheduled ${healable.length} step(s) whose prospects now have an email address`);
+        }
+      } catch (e) {
+        console.error(`[AreEngine] campaign ${campId} no-email step heal failed:`, e);
+      }
+
       const due = await db
         .select()
         .from(areExecutionQueue)
