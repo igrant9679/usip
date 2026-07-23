@@ -215,21 +215,44 @@ export async function apolloSearchPeople(
   }
 
   const perPage = Math.min(Math.max(input.perPage ?? 25, 1), 100);
-  const body: Record<string, unknown> = {
+  const baseBody: Record<string, unknown> = {
     page: Math.max(input.page ?? 1, 1),
     per_page: perPage,
   };
-  if (input.titles?.length) body.person_titles = input.titles;
-  if (input.seniorities?.length) body.person_seniorities = input.seniorities;
-  if (input.locations?.length) body.organization_locations = input.locations;
-  if (input.industries?.length || input.keywords?.length) {
-    body.q_keywords = [...(input.industries ?? []), ...(input.keywords ?? [])].join(" ");
-  }
+  if (input.titles?.length) baseBody.person_titles = input.titles;
+  if (input.seniorities?.length) baseBody.person_seniorities = input.seniorities;
+  if (input.locations?.length) baseBody.organization_locations = input.locations;
   const bands = toEmployeeBands(input.employeeMin, input.employeeMax);
-  if (bands.length) body.organization_num_employees_ranges = bands;
+  if (bands.length) baseBody.organization_num_employees_ranges = bands;
   // NOTE: no reveal_personal_emails / reveal_phone_number here, ever. Those
   // flags are what turn a free search into a billed enrichment.
 
+  // q_keywords is a narrow AND-ish text match. Stuffing every AI-generated
+  // industry label + keyword into it ("Nonprofit - Human Services Nonprofit -
+  // Community Development … organizational management") reliably matched ZERO
+  // people. Use at most the first two campaign keywords — titles, locations,
+  // and size carry the real targeting — and if that still matches nothing,
+  // retry once with no keywords at all.
+  const kw = (input.keywords ?? []).map((s) => s.trim()).filter(Boolean).slice(0, 2).join(" ");
+  const attempts: Array<Record<string, unknown>> = kw
+    ? [{ ...baseBody, q_keywords: kw }, { ...baseBody }]
+    : [{ ...baseBody }];
+
+  let last: ApolloSearchResult = { ok: false, prospects: [], totalAvailable: 0, error: "No search attempted" };
+  for (const body of attempts) {
+    last = await runApolloSearch(key, body);
+    // Stop on hard failure (auth/rate-limit/network) or on any results;
+    // only an ok-but-empty result falls through to the relaxed retry.
+    if (!last.ok || last.prospects.length > 0) return last;
+  }
+  return last;
+}
+
+/** One POST to /mixed_people/api_search, parsed into ApolloSearchResult. */
+async function runApolloSearch(
+  key: string,
+  body: Record<string, unknown>,
+): Promise<ApolloSearchResult> {
   let res: Response;
   try {
     const controller = new AbortController();

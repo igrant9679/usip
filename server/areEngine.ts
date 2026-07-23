@@ -1313,6 +1313,11 @@ async function discoverViaInternalCrm(
       .limit(limit);
 
     for (const c of contactRows) {
+      // A contact with no email AND no company/domain is un-actionable
+      // downstream: dispatch needs an email and the enrichment email-finder
+      // needs a domain. Queueing them just burns LLM enrichment on rows
+      // that can never send (this workspace had 1,500+ such rows).
+      if (!c.email && !c.companyDomain && !c.companyName) continue;
       out.push({
         firstName: c.firstName,
         lastName: c.lastName,
