@@ -687,7 +687,9 @@ function TimelineTab({ proposal, milestones, onRefetch }: { proposal: any; miles
   }
 
   const ownerColors = { lsi_media: "bg-teal-500/15 text-teal-400", client: "bg-blue-500/15 text-blue-400", both: "bg-purple-500/15 text-purple-400" };
-  const ownerLabels = { lsi_media: "LSI Media", client: "Client", both: "Both" };
+  // "lsi_media" is a legacy DB enum value meaning "the proposing company" —
+  // display it tenant-neutrally (multi-company requirement).
+  const ownerLabels = { lsi_media: "Our Team", client: "Client", both: "Both" };
 
   return (
     <div className="space-y-4">
@@ -780,7 +782,7 @@ function TimelineTab({ proposal, milestones, onRefetch }: { proposal: any; miles
               <Select value={form.owner} onValueChange={(v: any) => setForm(f => ({ ...f, owner: v }))}>
                 <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="lsi_media">LSI Media</SelectItem>
+                  <SelectItem value="lsi_media">Our Team</SelectItem>
                   <SelectItem value="client">Client</SelectItem>
                   <SelectItem value="both">Both</SelectItem>
                 </SelectContent>
@@ -846,6 +848,7 @@ function FeedbackTab({ feedback }: { feedback: any[] }) {
 
 // ── Share Tab ─────────────────────────────────────────────────────────────────
 function ShareTab({ proposal, onRefetch }: { proposal: any; onRefetch: () => void }) {
+  const { current } = useWorkspace();
   const [copied, setCopied] = useState(false);
   const [sendDialogOpen, setSendDialogOpen] = useState(false);
   const [personalMessage, setPersonalMessage] = useState("");
@@ -899,7 +902,7 @@ function ShareTab({ proposal, onRefetch }: { proposal: any; onRefetch: () => voi
   const hasClientEmail = !!proposal.clientEmail;
   const previewHtml = [
     '<div style="font-family:sans-serif;max-width:560px;margin:0 auto;padding:24px;color:#111827;background:#fff">',
-    '<div style="margin-bottom:16px"><span style="font-size:12px;font-weight:600;color:#14b8a6;text-transform:uppercase">LSI Media</span></div>',
+    `<div style="margin-bottom:16px"><span style="font-size:12px;font-weight:600;color:#14b8a6;text-transform:uppercase">${current?.name ?? ""}</span></div>`,
     '<h2 style="margin:0 0 8px;font-size:18px;font-weight:700">You have a new proposal to review</h2>',
     `<p style="margin:0 0 12px;color:#6b7280">Hi ${proposal.clientName},</p>`,
     `<p style="margin:0 0 12px;color:#374151">A proposal has been shared: <strong>${proposal.title}</strong>.</p>`,
@@ -1247,7 +1250,9 @@ export default function ProposalDetail() {
     (sections ?? []).map((s) => [s.sectionKey, s.content ?? ""]),
   );
 
-  // Shared printable-proposal shape consumed by both exporters.
+  // Shared printable-proposal shape consumed by both exporters. The
+  // "Submitted By" block is branded with the WORKSPACE's company name —
+  // never a hardcoded tenant (multi-company requirement).
   const printable = {
     title: proposal.title,
     clientName: proposal.clientName,
@@ -1256,6 +1261,7 @@ export default function ProposalDetail() {
     projectType: proposal.projectType,
     rfpDeadline: proposal.rfpDeadline,
     completionDate: proposal.completionDate,
+    senderOrg: current?.name,
   };
 
   // Map ProposalMilestone (server) → shape both exporters expect.

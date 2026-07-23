@@ -614,7 +614,7 @@ export const proposalsRouter = router({
       const emailHtml = `
 <div style="font-family:sans-serif;max-width:560px;margin:0 auto;padding:24px;color:#111827">
   <div style="margin-bottom:24px">
-    <span style="font-size:13px;font-weight:600;letter-spacing:0.05em;color:#14b8a6;text-transform:uppercase">LSI Media · USIP</span>
+    <span style="font-size:13px;font-weight:600;letter-spacing:0.05em;color:#14b8a6;text-transform:uppercase">${ctx.workspace.name}</span>
   </div>
   <h2 style="margin:0 0 8px;font-size:20px;font-weight:700">You have a new proposal to review</h2>
   <p style="margin:0 0 16px;color:#6b7280">Hi ${clientName}${orgAbbr},</p>
@@ -829,7 +829,7 @@ export const proposalsRouter = router({
       const sectionLabel =
         SECTION_LABELS[input.sectionKey as SectionKey] ?? input.sectionKey;
       const { clientName, orgAbbr, projectType, description, budget } = input.context;
-      const systemPrompt = `You are an expert proposal writer for LSI Media, a professional services firm. Write compelling, professional proposal content in clear, concise prose. Use markdown formatting (headers, bullets where appropriate). Do not include placeholder text — write real, polished content.`;
+      const systemPrompt = `You are an expert proposal writer for ${ctx.workspace.name}. Write compelling, professional proposal content in clear, concise prose. Use markdown formatting (headers, bullets where appropriate). Do not include placeholder text — write real, polished content.`;
       const userPrompt = `Write the "${sectionLabel}" section for a proposal to ${clientName}${orgAbbr ? ` (${orgAbbr})` : ""}.
 ${projectType ? `Project type: ${projectType}` : ""}
 ${description ? `Project description: ${description}` : ""}

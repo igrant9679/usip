@@ -481,8 +481,12 @@ export async function ensureUserHasWorkspace(userId: number, userName: string | 
   if (existing.length > 0) return;
 
   const slug = `ws-${userId}-${Math.random().toString(36).slice(2, 6)}`;
+  // Name the workspace after the signing-up user — NEVER a hardcoded tenant
+  // (multi-company requirement). They can rename it in Settings → General.
+  const firstName = (userName ?? "").trim().split(/\s+/)[0];
+  const wsName = firstName ? `${firstName}'s Workspace` : "My Workspace";
   const r = await db.insert(workspaces).values({
-    name: "LSI Media",
+    name: wsName,
     slug,
     ownerUserId: userId,
     plan: "trial",

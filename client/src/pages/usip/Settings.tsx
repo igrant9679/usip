@@ -289,8 +289,48 @@ function GeneralTab({
     if (settings?.nightlyScoreThreshold !== undefined) setNightlyThreshold(Number(settings.nightlyScoreThreshold));
   }, [settings?.timezone, settings?.nightlyPipelineEnabled, settings?.nightlyScoreThreshold]);
 
+  // ── Workspace name (tenant-facing: brands emails, AI prompts, switcher) ──
+  const { current } = useWorkspace();
+  const utils = trpc.useUtils();
+  const [wsName, setWsName] = useState("");
+  useEffect(() => {
+    if (current?.name) setWsName(current.name);
+  }, [current?.name]);
+  const rename = trpc.workspace.rename.useMutation({
+    onSuccess: (d) => {
+      toast.success(`Workspace renamed to "${d.name}"`);
+      utils.workspace.list.invalidate();
+      utils.workspace.current.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
   return (
     <>
+      <Section
+        title="Workspace"
+        description="Your company's name in Velocity — it brands proposal emails, AI-written content, and the workspace switcher."
+        right={
+          canEdit ? (
+            <Button
+              size="sm"
+              disabled={rename.isPending || wsName.trim().length < 2 || wsName.trim() === current?.name}
+              onClick={() => rename.mutate({ name: wsName.trim() })}
+            >
+              {rename.isPending ? "Saving…" : "Save"}
+            </Button>
+          ) : null
+        }
+      >
+        <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="space-y-1">
+            <Label>Company / workspace name</Label>
+            <Input value={wsName} onChange={(e) => setWsName(e.target.value)} disabled={!canEdit} placeholder="Acme Inc." maxLength={120} />
+            <div className="text-xs text-muted-foreground">Shown to your prospects and clients — keep it your real company name.</div>
+          </div>
+        </div>
+      </Section>
+
       <Section
         title="General"
         description="Default locale & workspace-wide timezone used for scheduling, reporting, and activity timestamps."
@@ -568,7 +608,7 @@ function BrandingTab({ settings, save, canEdit }: { settings: any; save: (v: any
         </div>
         <div className="space-y-1 md:col-span-2">
           <Label>Email From-name</Label>
-          <Input value={fromName} onChange={(e) => setFromName(e.target.value)} disabled={!canEdit} placeholder="LSI Media Sales" />
+          <Input value={fromName} onChange={(e) => setFromName(e.target.value)} disabled={!canEdit} placeholder="Acme Inc. Sales" />
         </div>
         <div className="space-y-1 md:col-span-2">
           <Label>Default signature</Label>
@@ -577,7 +617,7 @@ function BrandingTab({ settings, save, canEdit }: { settings: any; save: (v: any
             value={sig}
             onChange={(e) => setSig(e.target.value)}
             disabled={!canEdit}
-            placeholder={"Best,\nJane Doe\nAE, LSI Media"}
+            placeholder={"Best,\nJane Doe\nAE, Acme Inc."}
           />
         </div>
       </div>

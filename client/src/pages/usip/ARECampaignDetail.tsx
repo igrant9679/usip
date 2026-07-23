@@ -927,7 +927,7 @@ const PROMPT_FIELDS = [
     max: 2000,
     rows: 4,
     help: "Stamped verbatim onto each email; the agent won't write its own sign-off. Merge tags like {{firstName}} still resolve at send.",
-    placeholder: `Best,\nIdris Grant\nFounder, LSI Media\nidris@lsi-media.com · book a call: cal.com/lsi`,
+    placeholder: `Best,\nJane Doe\nFounder, Acme Inc.\njane@acme.com · book a call: acme.com/meet`,
   },
 ];
 

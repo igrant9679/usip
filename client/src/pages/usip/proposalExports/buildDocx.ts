@@ -119,18 +119,21 @@ function computePricing(pt: PricingTable | null | undefined) {
 }
 
 const OWNER_LABEL: Record<string, string> = {
-  lsi_media: "LSI Media",
+  lsi_media: "Our Team", // legacy DB enum value = "the proposing company"
   client: "Client",
   both: "Both",
 };
 
+// Tenant-neutral defaults: the caller passes the workspace's own company
+// details (senderOrg = workspace name); anything not provided is simply
+// omitted. Never hardcode a tenant here.
 const DEFAULTS = {
-  senderOrg: "LSI Media LLC",
-  senderName: "Sabine Grant",
-  senderTitle: "Chief Creative Officer",
-  senderAddress: ["25 Catoctin Cir. SE, #4087", "Leesburg, VA 20177"],
-  senderPhone: "1.866.960.8737",
-  senderWebsite: "lsi-media.com",
+  senderOrg: "",
+  senderName: "",
+  senderTitle: "",
+  senderAddress: [] as string[],
+  senderPhone: "",
+  senderWebsite: "",
 };
 
 /**
@@ -342,14 +345,16 @@ export async function downloadProposalDocx(opts: {
             shading: { fill: LGRAY, type: ShadingType.CLEAR },
             children: [
               new Paragraph({ children: [TBold("SUBMITTED BY", { size: 17, color: BLUE })], spacing: { after: 80 } }),
-              new Paragraph({ children: [TBold(sender.name)], spacing: { after: 40 } }),
-              new Paragraph({ children: [T(sender.title, { italics: true, size: 19 })], spacing: { after: 80 } }),
-              new Paragraph({ children: [TBold(sender.org)], spacing: { after: 40 } }),
+              // Only render the letterhead lines that exist — blank sender
+              // fields must not leave empty paragraphs.
+              ...(sender.name ? [new Paragraph({ children: [TBold(sender.name)], spacing: { after: 40 } })] : []),
+              ...(sender.title ? [new Paragraph({ children: [T(sender.title, { italics: true, size: 19 })], spacing: { after: 80 } })] : []),
+              ...(sender.org ? [new Paragraph({ children: [TBold(sender.org)], spacing: { after: 40 } })] : []),
               ...sender.address.map(
                 (line) => new Paragraph({ children: [T(line, { size: 19 })], spacing: { after: 40 } }),
               ),
-              new Paragraph({ children: [T(sender.phone, { size: 19 })], spacing: { after: 40 } }),
-              new Paragraph({ children: [T(sender.website, { size: 19 })], spacing: { after: 0 } }),
+              ...(sender.phone ? [new Paragraph({ children: [T(sender.phone, { size: 19 })], spacing: { after: 40 } })] : []),
+              ...(sender.website ? [new Paragraph({ children: [T(sender.website, { size: 19 })], spacing: { after: 0 } })] : []),
             ],
           }),
           new TableCell({
@@ -547,9 +552,9 @@ export async function downloadProposalDocx(opts: {
             width: { size: W / 2, type: WidthType.DXA },
             margins: { top: 140, bottom: 200, left: 160, right: 160 },
             children: [
-              new Paragraph({ children: [TBold(sender.org)], spacing: { after: 40 } }),
+              ...(sender.org ? [new Paragraph({ children: [TBold(sender.org)], spacing: { after: 40 } })] : []),
               new Paragraph({
-                children: [T(`${sender.name}, ${sender.title}`, { size: 19 })],
+                children: [T([sender.name, sender.title].filter(Boolean).join(", "), { size: 19 })],
                 spacing: { after: 300 },
               }),
               new Paragraph({
@@ -655,7 +660,7 @@ export async function downloadProposalDocx(opts: {
           default: new Header({
             children: [
               new Paragraph({
-                children: [TSect(`${sender.org}  |  Proposal: `), TSect(proposal.title, { italics: true })],
+                children: [TSect(sender.org ? `${sender.org}  |  Proposal: ` : "Proposal: "), TSect(proposal.title, { italics: true })],
                 border: { bottom: { style: BorderStyle.SINGLE, size: 4, color: BLUE } },
                 spacing: { after: 0 },
               }),
@@ -668,7 +673,9 @@ export async function downloadProposalDocx(opts: {
               new Paragraph({
                 children: [
                   TSect(
-                    `${sender.org}  ·  ${sender.address.join(", ")}  ·  ${sender.phone}  ·  ${sender.website}`,
+                    [sender.org, sender.address.join(", "), sender.phone, sender.website]
+                      .filter(Boolean)
+                      .join("  ·  "),
                   ),
                 ],
                 alignment: AlignmentType.CENTER,

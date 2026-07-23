@@ -531,10 +531,18 @@ export function registerEmailTrackingRoutes(app: Express) {
           const daysLeft = Math.ceil((expDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
           const countdownText = daysLeft <= 1 ? "today" : `in ${daysLeft} day${daysLeft === 1 ? "" : "s"}`;
           const shareUrl = `${process.env.MANUS_APP_URL ?? ""}/p/${rp.shareToken}`;
+          // Brand the reminder with the proposal's own workspace, never a
+          // hardcoded tenant name (multi-company requirement).
+          const [wsRow] = await db
+            .select({ name: workspaces.name })
+            .from(workspaces)
+            .where(eq(workspaces.id, rp.workspaceId))
+            .limit(1);
+          const wsName = wsRow?.name ?? "";
           const emailHtml = `
 <div style="font-family:sans-serif;max-width:560px;margin:0 auto;padding:24px;color:#111827">
   <div style="margin-bottom:24px">
-    <span style="font-size:13px;font-weight:600;letter-spacing:0.05em;color:#14b8a6;text-transform:uppercase">LSI Media · USIP</span>
+    <span style="font-size:13px;font-weight:600;letter-spacing:0.05em;color:#14b8a6;text-transform:uppercase">${wsName}</span>
   </div>
   <div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;padding:16px;margin-bottom:20px">
     <p style="margin:0;font-weight:700;color:#c2410c;font-size:15px">⏰ Proposal Expiring ${countdownText}</p>
@@ -569,7 +577,7 @@ export function registerEmailTrackingRoutes(app: Express) {
               const adapter = createEmailAdapter(sendingAcc);
               await adapter.sendEmail({
                 fromEmail: sendingAcc.fromEmail,
-                fromName: sendingAcc.fromName ?? "LSI Media",
+                fromName: sendingAcc.fromName ?? (wsName || undefined),
                 to: rp.clientEmail,
                 subject: `Reminder: "${rp.title}" proposal expires ${countdownText}`,
                 bodyHtml: emailHtml,

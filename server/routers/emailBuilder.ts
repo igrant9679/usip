@@ -38,7 +38,7 @@ const MERGE_TAGS: Record<string, string> = {
   title: "VP of Sales",
   senderName: "Your Name",
   senderTitle: "Account Executive",
-  senderCompany: "LSI Media",
+  senderCompany: "Your Company",
 };
 
 /**

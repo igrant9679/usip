@@ -521,7 +521,7 @@ export default function ProposalPortal() {
         </DialogContent>
       </Dialog>
       <footer className="text-center py-6 text-xs text-gray-400 border-t border-gray-200 mt-8">
-        Powered by USIP — Unified Sales Intelligence Platform
+        Powered by Velocity
       </footer>
     </div>
   );

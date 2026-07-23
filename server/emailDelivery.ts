@@ -54,7 +54,7 @@ export interface SendEmailResult {
  * sending_account_daily_stats so the next pick — and the Mailboxes UI usage
  * readout — stay accurate.
  *
- * `fromName` overrides the display name (e.g. "Lucas Grant | LSI Media") while
+ * `fromName` overrides the display name (e.g. "Jane Doe | Acme Inc.") while
  * the From address rotates with the account.
  *
  * Falls back to the single Email-Delivery config (sendWorkspaceEmail) when the

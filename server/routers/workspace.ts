@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { protectedProcedure, router } from "../_core/trpc";
 import { workspaceProcedure } from "../_core/workspace";
 import { ensureUserHasWorkspace } from "../seed";
@@ -26,6 +27,29 @@ export const workspaceRouter = router({
     workspace: ctx.workspace,
     member: ctx.member,
   })),
+
+  /**
+   * Rename the workspace (admin+). The name is tenant-facing: it brands
+   * proposal emails, AI prompts, and the workspace switcher — there was
+   * previously no way to change it at all.
+   */
+  rename: workspaceProcedure
+    .input(z.object({ name: z.string().trim().min(2).max(120) }))
+    .mutation(async ({ ctx, input }) => {
+      if (ctx.member.role !== "admin" && ctx.member.role !== "super_admin") {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Requires admin role" });
+      }
+      const { getDb } = await import("../db");
+      const { workspaces } = await import("../../drizzle/schema");
+      const { eq } = await import("drizzle-orm");
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      await db
+        .update(workspaces)
+        .set({ name: input.name })
+        .where(eq(workspaces.id, ctx.workspace.id));
+      return { ok: true, name: input.name };
+    }),
 
   members: workspaceProcedure.query(async ({ ctx }) => {
     return getWorkspaceMembers(ctx.workspace.id);

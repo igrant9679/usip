@@ -53,7 +53,7 @@ export type PrintableProposal = {
   projectType?: string | null;
   rfpDeadline?: string | Date | null;
   completionDate?: string | Date | null;
-  /** Friendly company "Submitted By" block — defaults to LSI Media. */
+  /** Friendly company "Submitted By" block — pass the workspace's company. */
   senderOrg?: string;
   senderName?: string;
   senderTitle?: string;
@@ -64,14 +64,17 @@ export type PrintableProposal = {
   logoUrl?: string;
 };
 
+// Tenant-neutral defaults: the caller passes the workspace's own company
+// details (senderOrg = workspace name); anything not provided is simply
+// omitted from the letterhead. Never hardcode a tenant here.
 const DEFAULTS = {
-  senderOrg: "LSI Media LLC",
-  senderName: "Sabine Grant",
-  senderTitle: "Chief Creative Officer",
-  senderAddress: ["25 Catoctin Cir. SE, #4087", "Leesburg, VA 20177"],
-  senderPhone: "1.866.960.8737",
-  senderWebsite: "lsi-media.com",
-  logoUrl: "https://www.lsi-media.com/wp-content/uploads/2018/03/lsi-media-logo-120_450-retina.png",
+  senderOrg: "",
+  senderName: "",
+  senderTitle: "",
+  senderAddress: [] as string[],
+  senderPhone: "",
+  senderWebsite: "",
+  logoUrl: "",
 };
 
 const esc = (s: unknown): string =>
@@ -102,7 +105,7 @@ function computePricing(pt: PricingTable | null | undefined) {
 }
 
 const OWNER_LABEL: Record<string, string> = {
-  lsi_media: "LSI Media",
+  lsi_media: "Our Team", // legacy DB enum value = "the proposing company"
   client: "Client",
   both: "Both",
 };
@@ -295,12 +298,20 @@ export function buildPrintHTML(opts: {
     year: "numeric",
   });
 
+  // Build the sender block from only the parts that exist — blank fields
+  // must not leave stray <br>s in the letterhead.
+  const senderLines = [
+    sender.name ? `<strong>${esc(sender.name)}</strong>` : "",
+    sender.title ? esc(sender.title) : "",
+    sender.org ? `<strong>${esc(sender.org)}</strong>` : "",
+    ...(sender.address ?? []).map(esc),
+    sender.phone ? esc(sender.phone) : "",
+    sender.website ? esc(sender.website) : "",
+  ].filter(Boolean).join("<br>");
   const submittedSection = `<table class="mt"><tr>
   <td>
     <span class="ml">Submitted By</span>
-    <strong>${esc(sender.name)}</strong><br>${esc(sender.title)}<br><br>
-    <strong>${esc(sender.org)}</strong><br>${sender.address.map(esc).join("<br>")}<br>
-    ${esc(sender.phone)}<br>${esc(sender.website)}
+    ${senderLines}
   </td>
   <td>
     <span class="ml">Submitted To</span>

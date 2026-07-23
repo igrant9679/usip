@@ -20,7 +20,7 @@ export type TimelineMilestone = {
 };
 
 const OWNER_STYLE: Record<string, { label: string; bg: string; ring: string; text: string; Icon: React.ComponentType<{ className?: string }> }> = {
-  lsi_media: { label: "LSI Media", bg: "bg-blue-600", ring: "ring-blue-100", text: "text-blue-700", Icon: Briefcase },
+  lsi_media: { label: "Our Team", bg: "bg-blue-600", ring: "ring-blue-100", text: "text-blue-700", Icon: Briefcase },
   client: { label: "Client", bg: "bg-amber-500", ring: "ring-amber-100", text: "text-amber-700", Icon: User },
   both: { label: "Both", bg: "bg-teal-600", ring: "ring-teal-100", text: "text-teal-700", Icon: Users },
 };

@@ -13,7 +13,7 @@
  */
 import type { Express, Request, Response } from "express";
 import { and, eq } from "drizzle-orm";
-import { proposals, workspaceMembers } from "../drizzle/schema";
+import { proposals, workspaceMembers, workspaces } from "../drizzle/schema";
 import { getDb } from "./db";
 import { sdk } from "./_core/sdk";
 import { streamLLM } from "./_core/llmStream";
@@ -39,10 +39,10 @@ type Context = {
   budget?: number;
 };
 
-function buildPrompt(sectionKey: string, ctx: Context): { system: string; user: string } {
+function buildPrompt(sectionKey: string, ctx: Context, companyName: string): { system: string; user: string } {
   const label = SECTION_LABELS[sectionKey] ?? sectionKey;
   const system =
-    "You are an expert proposal writer for LSI Media, a professional services firm. " +
+    `You are an expert proposal writer for ${companyName}. ` +
     "Write compelling, professional proposal content in clear, concise prose. " +
     "Use markdown formatting (headers, bullets where appropriate). " +
     "Do not include placeholder text — write real, polished content.";
@@ -121,7 +121,14 @@ export function registerProposalsStreamRoutes(app: Express) {
 
       // ── Build prompt ────────────────────────────────────────────────────
       const ctx = (req.body?.context ?? {}) as Context;
-      const { system, user } = buildPrompt(sectionKey, ctx);
+      // The proposal is written on behalf of the WORKSPACE's company — never
+      // a hardcoded tenant name (multi-company requirement).
+      const [ws] = await db
+        .select({ name: workspaces.name })
+        .from(workspaces)
+        .where(eq(workspaces.id, workspaceId))
+        .limit(1);
+      const { system, user } = buildPrompt(sectionKey, ctx, ws?.name ?? "our company");
 
       // ── SSE setup ───────────────────────────────────────────────────────
       res.status(200);
