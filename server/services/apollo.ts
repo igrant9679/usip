@@ -4,7 +4,7 @@
  * WHY SEARCH-ONLY
  * ---------------
  * Apollo splits its API in two:
- *   • People Search  (/mixed_people/search) — returns name, title, seniority,
+ *   • People Search  (/mixed_people/api_search) — returns name, title, seniority,
  *     company, **company domain**, LinkedIn URL, location. Consumes ZERO
  *     Apollo credits. Never returns a real email.
  *   • People Enrichment (/people/match)     — reveals the email. Costs 1
@@ -235,7 +235,9 @@ export async function apolloSearchPeople(
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 20_000);
     try {
-      res = await fetch(`${APOLLO_BASE}/mixed_people/search`, {
+      // Apollo deprecated /mixed_people/search for API callers (422) in favour
+      // of /mixed_people/api_search — same params/response, different path.
+      res = await fetch(`${APOLLO_BASE}/mixed_people/api_search`, {
         method: "POST",
         signal: controller.signal,
         headers: {
