@@ -143,11 +143,42 @@ export async function runEnrichAgent(
       .where(and(eq(icpProfiles.workspaceId, workspaceId), eq(icpProfiles.isActive, true)))
       .limit(1);
 
+    // Score against the CAMPAIGN's targeting, not just the workspace ICP.
+    // Scoring only the global ICP meant a nonprofit campaign's Executive
+    // Directors were graded against a B2B-tech profile — every on-audience
+    // prospect scored 10-40 and the screening phase auto-rejected them all,
+    // while off-audience SaaS people sailed through. Campaign icpOverrides
+    // win per-field; the workspace ICP fills the gaps.
+    const [scoringCampaign] = await db
+      .select({ icpOverrides: areCampaigns.icpOverrides })
+      .from(areCampaigns)
+      .where(eq(areCampaigns.id, prospect.campaignId))
+      .limit(1);
+    const ov = (scoringCampaign?.icpOverrides ?? {}) as {
+      targetTitles?: string[]; targetIndustries?: string[]; targetGeographies?: string[];
+      employeeMin?: number; employeeMax?: number;
+    };
+    const hasOverrides =
+      (ov.targetTitles?.length ?? 0) > 0 ||
+      (ov.targetIndustries?.length ?? 0) > 0 ||
+      (ov.targetGeographies?.length ?? 0) > 0;
+    const effectiveIcp = (icp || hasOverrides)
+      ? ({
+          ...(icp ?? {}),
+          targetTitles: ov.targetTitles?.length ? ov.targetTitles : (icp?.targetTitles ?? []),
+          targetIndustries: ov.targetIndustries?.length ? ov.targetIndustries : (icp?.targetIndustries ?? []),
+          targetGeographies: ov.targetGeographies?.length ? ov.targetGeographies : (icp?.targetGeographies ?? []),
+          targetCompanySizeMin: ov.employeeMin ?? icp?.targetCompanySizeMin ?? null,
+          targetCompanySizeMax: ov.employeeMax ?? icp?.targetCompanySizeMax ?? null,
+          antiPatterns: icp?.antiPatterns ?? [],
+        } as typeof icpProfiles.$inferSelect)
+      : null;
+
     // Score ICP match
     let icpMatchScore = 50;
     let icpMatchBreakdown: Record<string, number> = {};
-    if (icp) {
-      const match = await scoreIcpMatch(prospect, icp, workspaceId);
+    if (effectiveIcp) {
+      const match = await scoreIcpMatch(prospect, effectiveIcp, workspaceId);
       icpMatchScore = match.score;
       icpMatchBreakdown = match.breakdown;
     }
