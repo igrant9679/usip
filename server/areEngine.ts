@@ -563,7 +563,17 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
               eq(areExecutionQueue.campaignId, campId),
               eq(areExecutionQueue.workspaceId, wsId),
               eq(areExecutionQueue.status, "failed"),
-              eq(areExecutionQueue.failureReason, "Prospect has no email address"),
+              // Two retryable failure classes: (a) the prospect had no email
+              // at send time but enrichment has since resolved one, and
+              // (b) the pool send itself failed (SMTP/TLS/infra) — a fact
+              // about the moment or a since-fixed account config, not about
+              // the prospect. Retries are harmless: only SENT steps count
+              // against the daily cap, and a still-broken account simply
+              // re-fails the same bounded batch next tick.
+              or(
+                eq(areExecutionQueue.failureReason, "Prospect has no email address"),
+                like(areExecutionQueue.failureReason, "Pool send failed:%"),
+              ),
               isNotNull(prospectQueue.email),
               eq(prospectQueue.sequenceStatus, "enrolled"),
             ),
@@ -574,10 +584,10 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
             .set({ status: "scheduled", failureReason: null, executedAt: null })
             .where(inArray(areExecutionQueue.id, healable.map((h) => h.id)));
           await emitLog(wsId, campId, "dispatch", "info",
-            `Re-scheduled ${healable.length} step(s) whose prospects now have an email address`);
+            `Re-scheduled ${healable.length} failed step(s) (email resolved or send infra recovered)`);
         }
       } catch (e) {
-        console.error(`[AreEngine] campaign ${campId} no-email step heal failed:`, e);
+        console.error(`[AreEngine] campaign ${campId} step heal failed:`, e);
       }
 
       const due = await db
