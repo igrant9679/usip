@@ -115,6 +115,38 @@ Score each dimension 0-20 and provide a total score 0-100.
   };
 }
 
+/**
+ * Merge a campaign's icpOverrides over the workspace ICP into the "effective
+ * ICP" that scoring must use. Scoring only the global ICP graded a nonprofit
+ * campaign's Executive Directors against a B2B-tech profile — every
+ * on-audience prospect scored 10-40 and screening auto-rejected them all.
+ * Overrides win per-field; the ICP fills gaps + supplies anti-patterns.
+ * Returns null when there is neither an ICP nor any override targeting.
+ */
+function buildEffectiveIcp(
+  icp: typeof icpProfiles.$inferSelect | undefined,
+  icpOverrides: unknown,
+): typeof icpProfiles.$inferSelect | null {
+  const ov = (icpOverrides ?? {}) as {
+    targetTitles?: string[]; targetIndustries?: string[]; targetGeographies?: string[];
+    employeeMin?: number; employeeMax?: number;
+  };
+  const hasOverrides =
+    (ov.targetTitles?.length ?? 0) > 0 ||
+    (ov.targetIndustries?.length ?? 0) > 0 ||
+    (ov.targetGeographies?.length ?? 0) > 0;
+  if (!icp && !hasOverrides) return null;
+  return {
+    ...(icp ?? {}),
+    targetTitles: ov.targetTitles?.length ? ov.targetTitles : (icp?.targetTitles ?? []),
+    targetIndustries: ov.targetIndustries?.length ? ov.targetIndustries : (icp?.targetIndustries ?? []),
+    targetGeographies: ov.targetGeographies?.length ? ov.targetGeographies : (icp?.targetGeographies ?? []),
+    targetCompanySizeMin: ov.employeeMin ?? icp?.targetCompanySizeMin ?? null,
+    targetCompanySizeMax: ov.employeeMax ?? icp?.targetCompanySizeMax ?? null,
+    antiPatterns: icp?.antiPatterns ?? [],
+  } as typeof icpProfiles.$inferSelect;
+}
+
 /* ─── Enrich Agent ───────────────────────────────────────────────────────── */
 
 export async function runEnrichAgent(
@@ -143,36 +175,14 @@ export async function runEnrichAgent(
       .where(and(eq(icpProfiles.workspaceId, workspaceId), eq(icpProfiles.isActive, true)))
       .limit(1);
 
-    // Score against the CAMPAIGN's targeting, not just the workspace ICP.
-    // Scoring only the global ICP meant a nonprofit campaign's Executive
-    // Directors were graded against a B2B-tech profile — every on-audience
-    // prospect scored 10-40 and the screening phase auto-rejected them all,
-    // while off-audience SaaS people sailed through. Campaign icpOverrides
-    // win per-field; the workspace ICP fills the gaps.
+    // Score against the CAMPAIGN's targeting, not just the workspace ICP
+    // (see buildEffectiveIcp).
     const [scoringCampaign] = await db
       .select({ icpOverrides: areCampaigns.icpOverrides })
       .from(areCampaigns)
       .where(eq(areCampaigns.id, prospect.campaignId))
       .limit(1);
-    const ov = (scoringCampaign?.icpOverrides ?? {}) as {
-      targetTitles?: string[]; targetIndustries?: string[]; targetGeographies?: string[];
-      employeeMin?: number; employeeMax?: number;
-    };
-    const hasOverrides =
-      (ov.targetTitles?.length ?? 0) > 0 ||
-      (ov.targetIndustries?.length ?? 0) > 0 ||
-      (ov.targetGeographies?.length ?? 0) > 0;
-    const effectiveIcp = (icp || hasOverrides)
-      ? ({
-          ...(icp ?? {}),
-          targetTitles: ov.targetTitles?.length ? ov.targetTitles : (icp?.targetTitles ?? []),
-          targetIndustries: ov.targetIndustries?.length ? ov.targetIndustries : (icp?.targetIndustries ?? []),
-          targetGeographies: ov.targetGeographies?.length ? ov.targetGeographies : (icp?.targetGeographies ?? []),
-          targetCompanySizeMin: ov.employeeMin ?? icp?.targetCompanySizeMin ?? null,
-          targetCompanySizeMax: ov.employeeMax ?? icp?.targetCompanySizeMax ?? null,
-          antiPatterns: icp?.antiPatterns ?? [],
-        } as typeof icpProfiles.$inferSelect)
-      : null;
+    const effectiveIcp = buildEffectiveIcp(icp, scoringCampaign?.icpOverrides);
 
     // Score ICP match
     let icpMatchScore = 50;
@@ -1653,14 +1663,21 @@ export const prospectsRouter = router({
         ))
         .limit(1);
       if (!prospect) throw new TRPCError({ code: "NOT_FOUND", message: "Prospect not found" });
-      // Get latest active ICP
+      // Get latest active ICP + the campaign's own targeting — the effective
+      // ICP (overrides win) is what the prospect must be graded against.
       const [icp] = await db
         .select()
         .from(icpProfiles)
         .where(and(eq(icpProfiles.workspaceId, ctx.workspace.id), eq(icpProfiles.isActive, true)))
         .limit(1);
-      if (!icp) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "No active ICP profile" });
-      const match = await scoreIcpMatch(prospect, icp, workspaceId);
+      const [reCamp] = await db
+        .select({ icpOverrides: areCampaigns.icpOverrides })
+        .from(areCampaigns)
+        .where(and(eq(areCampaigns.id, prospect.campaignId), eq(areCampaigns.workspaceId, ctx.workspace.id)))
+        .limit(1);
+      const effectiveIcp = buildEffectiveIcp(icp, reCamp?.icpOverrides);
+      if (!effectiveIcp) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "No active ICP profile or campaign targeting" });
+      const match = await scoreIcpMatch(prospect, effectiveIcp, ctx.workspace.id);
       const autoApproveThreshold = 70; // fallback default
       const newStatus = match.score >= autoApproveThreshold ? "pending" : "skipped";
       await db.update(prospectQueue).set({
@@ -1697,20 +1714,21 @@ export const prospectsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
-      // Get the campaign to read its actual autoApproveThreshold
+      // Get the campaign to read its actual autoApproveThreshold + targeting
       const [campaign] = await db
-        .select({ autoApproveThreshold: areCampaigns.autoApproveThreshold })
+        .select({ autoApproveThreshold: areCampaigns.autoApproveThreshold, icpOverrides: areCampaigns.icpOverrides })
         .from(areCampaigns)
         .where(and(eq(areCampaigns.id, input.campaignId), eq(areCampaigns.workspaceId, ctx.workspace.id)))
         .limit(1);
       if (!campaign) throw new TRPCError({ code: "NOT_FOUND", message: "Campaign not found" });
-      // Get latest active ICP
+      // Get latest active ICP; grade against the campaign-effective ICP.
       const [icp] = await db
         .select()
         .from(icpProfiles)
         .where(and(eq(icpProfiles.workspaceId, ctx.workspace.id), eq(icpProfiles.isActive, true)))
         .limit(1);
-      if (!icp) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "No active ICP profile" });
+      const effectiveIcp = buildEffectiveIcp(icp, campaign.icpOverrides);
+      if (!effectiveIcp) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "No active ICP profile or campaign targeting" });
       // Fetch all rejected (skipped) prospects for this campaign
       const rejected = await db
         .select()
@@ -1726,7 +1744,7 @@ export const prospectsRouter = router({
       let requalified = 0;
       for (const prospect of rejected) {
         try {
-          const match = await scoreIcpMatch(prospect, icp, workspaceId);
+          const match = await scoreIcpMatch(prospect, effectiveIcp, ctx.workspace.id);
           const newStatus = match.score >= autoApproveThreshold ? "pending" : "skipped";
           if (newStatus === "pending") requalified++;
           await db.update(prospectQueue).set({
