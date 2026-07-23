@@ -6,11 +6,12 @@
  * This module is that engine. It is invoked on a cron from _core/index.ts.
  *
  * Each run first performs a single GLOBAL enrichment pass
- * (enrichPendingGlobally): pending prospects across EVERY campaign — active or
- * paused — are enriched ONE AT A TIME (strictly serial), best-fit first,
- * bounded per cycle. Enrichment is deliberately decoupled from campaign status
- * so dossiers keep building even while a campaign is paused, and serial so it
- * never trips the LLM provider's concurrent-connection limit.
+ * (enrichPendingGlobally): pending prospects across every ACTIVE campaign are
+ * enriched ONE AT A TIME (strictly serial), best-fit first, bounded per cycle.
+ * Pausing a campaign pauses its enrichment too — no background LLM spend on a
+ * paused campaign (user directive 2026-07-23; manual are.prospects.enrich /
+ * enrichBatch remain available regardless of status). Serial so it never trips
+ * the LLM provider's concurrent-connection limit.
  *
  * Then, for every campaign with status='active', it performs one bounded
  * "tick" through the remaining pipeline phases:
@@ -60,10 +61,10 @@ import { apolloPulledToday, apolloSearchPeople, getApolloDailyCap } from "./serv
 
 /* ─── Per-tick bounds (keep LLM cost + wall-time predictable) ───────────── */
 /** Max prospects enriched per engine cycle. Enrichment runs ONE AT A TIME
- *  (strictly serial) across ALL campaigns regardless of status, so a paused
- *  campaign's prospects still get dossiers and the LLM provider never sees more
- *  than one concurrent enrichment call. Bounded so a large backlog drains
- *  steadily over multiple ticks instead of stalling dispatch for other work. */
+ *  (strictly serial) across all ACTIVE campaigns, so the LLM provider never
+ *  sees more than one concurrent enrichment call. Bounded so a large backlog
+ *  drains steadily over multiple ticks instead of stalling dispatch for other
+ *  work. */
 const ENRICH_PER_TICK = 5;
 const SEQUENCE_PER_TICK = 3;
 const ENROLL_PER_TICK = 10;
@@ -235,8 +236,8 @@ export async function runAreEngine(): Promise<AreEngineResult> {
 
   engineRunning = true;
   try {
-    // Global, serial, bounded enrichment FIRST — independent of campaign status
-    // so paused campaigns' prospects still get dossiers, one LLM call at a time.
+    // Global, serial, bounded enrichment FIRST — active campaigns only, one
+    // LLM call at a time. Paused campaigns spend nothing until resumed.
     try {
       await enrichPendingGlobally(result);
     } catch (e) {
@@ -271,13 +272,15 @@ export async function runAreEngine(): Promise<AreEngineResult> {
   return result;
 }
 
-/* ─── Global enrichment pass (serial, bounded, status-agnostic) ─────────── */
+/* ─── Global enrichment pass (serial, bounded, active campaigns only) ───── */
 /**
- * Enrich the next batch of pending prospects across EVERY campaign in EVERY
- * workspace — active or paused — ONE AT A TIME. This is intentionally separate
- * from the per-campaign tick (which only runs for active campaigns): a paused
- * campaign should keep building dossiers so the moment it's resumed, screening
- * and sequencing have data to work with.
+ * Enrich the next batch of pending prospects across every ACTIVE campaign in
+ * EVERY workspace, ONE AT A TIME. This is kept separate from the per-campaign
+ * tick so ordering is global (best-fit first across campaigns) and strictly
+ * serial. Paused/draft/completed campaigns are skipped: pausing a campaign
+ * must stop ALL its background LLM spend, not just dispatch (user directive
+ * 2026-07-23). Manual enrichment (are.prospects.enrich / enrichBatch /
+ * reEvaluateAll) still works on any campaign regardless of status.
  *
  * Strictly serial (await each enrichment before the next) so only one LLM call
  * is ever in flight — the whole point of the request: never overload the API.
@@ -303,6 +306,7 @@ async function enrichPendingGlobally(result: AreEngineResult): Promise<void> {
     .innerJoin(areCampaigns, eq(areCampaigns.id, prospectQueue.campaignId))
     .where(
       and(
+        eq(areCampaigns.status, "active"),
         inArray(prospectQueue.enrichmentStatus, ["pending", "enriching"]),
         sql`(${prospectQueue.icpMatchScore} >= COALESCE(${areCampaigns.minConfidence}, 40) OR ${prospectQueue.icpMatchScore} = 0)`,
       ),
@@ -342,8 +346,8 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
   const campId = campaign.id;
 
   // NOTE: enrichment is NOT a per-campaign phase — it runs once, globally and
-  // serially, in enrichPendingGlobally() before this loop (so paused campaigns
-  // enrich too, one LLM call at a time). The tick below starts at SCREEN.
+  // serially, in enrichPendingGlobally() before this loop (active campaigns
+  // only, one LLM call at a time). The tick below starts at SCREEN.
 
   /* ── Phase 1: SCREEN — auto-approve / auto-reject ──────────────────── */
   try {
