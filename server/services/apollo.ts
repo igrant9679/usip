@@ -32,6 +32,7 @@ import { and, eq, gte, sql } from "drizzle-orm";
 import { areScrapeJobs, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { tryDecryptSecret } from "../_core/crypto";
+import { normalizeDomain } from "./scraper/domain";
 
 const APOLLO_BASE = "https://api.apollo.io/api/v1";
 const DEFAULT_DAILY_PULL_CAP = 50;
@@ -317,6 +318,97 @@ async function runApolloSearch(
     totalAvailable: Number(pagination.total_entries ?? prospects.length) || prospects.length,
     rateLimit,
   };
+}
+
+/* ─── Company name → domain resolution ───────────────────────────────────── */
+
+/** Process-lifetime cache — the same org names recur across prospects and
+ *  campaigns; no point re-asking Apollo. Capped to bound memory. */
+const domainCache = new Map<string, string | null>();
+const DOMAIN_CACHE_MAX = 500;
+
+/**
+ * Resolve a company/organization NAME to its website domain via Apollo's
+ * organization search (zero Apollo credits — same free tier as people
+ * search). This is the missing link for LinkedIn-sourced prospects, which
+ * carry an org name in the headline but no domain — and without a domain the
+ * enrichment email-finder can't generate/verify addresses.
+ *
+ * Never throws; returns { domain: null } when unresolvable. Tries the
+ * legacy search path first and falls back to the api_search variant if
+ * Apollo has deprecated it for API callers (as happened with mixed_people).
+ */
+export async function apolloResolveDomain(
+  workspaceId: number,
+  companyName: string,
+): Promise<{ domain: string | null; error?: string }> {
+  const name = (companyName ?? "").trim();
+  if (name.length < 2) return { domain: null, error: "no_name" };
+
+  const cacheKey = name.toLowerCase();
+  if (domainCache.has(cacheKey)) return { domain: domainCache.get(cacheKey) ?? null };
+
+  const key = await getApolloKey(workspaceId);
+  if (!key) return { domain: null, error: "No Apollo API key configured" };
+
+  const body = { q_organization_name: name, page: 1, per_page: 3 };
+  let lastError: string | undefined;
+
+  for (const path of ["mixed_companies/search", "mixed_companies/api_search"]) {
+    let res: Response;
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 15_000);
+      try {
+        res = await fetch(`${APOLLO_BASE}/${path}`, {
+          method: "POST",
+          signal: controller.signal,
+          headers: {
+            "Content-Type": "application/json",
+            "Cache-Control": "no-cache",
+            "x-api-key": key,
+          },
+          body: JSON.stringify(body),
+        });
+      } finally {
+        clearTimeout(timer);
+      }
+    } catch (e) {
+      lastError = `Apollo org request failed: ${(e as Error)?.message ?? e}`;
+      break; // network problem — the other path won't fare better
+    }
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      lastError = `Apollo org search returned ${res.status} ${text.slice(0, 200)}`.trim();
+      // Deprecated-path 422 → try the api_search variant; anything else stop.
+      if (res.status === 422 && /deprecat/i.test(text)) continue;
+      break;
+    }
+
+    const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+    const orgs = [
+      ...((json.organizations as Array<Record<string, unknown>>) ?? []),
+      ...((json.accounts as Array<Record<string, unknown>>) ?? []),
+    ];
+    for (const org of orgs) {
+      const domain =
+        normalizeDomain(String(org.primary_domain ?? "")) ??
+        normalizeDomain(String(org.website_url ?? "")) ??
+        normalizeDomain(String(org.domain ?? ""));
+      if (domain) {
+        if (domainCache.size >= DOMAIN_CACHE_MAX) domainCache.clear();
+        domainCache.set(cacheKey, domain);
+        return { domain };
+      }
+    }
+    // ok response but no domain-bearing org — cache the miss.
+    if (domainCache.size >= DOMAIN_CACHE_MAX) domainCache.clear();
+    domainCache.set(cacheKey, null);
+    return { domain: null, error: "no_match" };
+  }
+
+  return { domain: null, error: lastError ?? "unresolved" };
 }
 
 /* ─── Key test / usage ───────────────────────────────────────────────────── */

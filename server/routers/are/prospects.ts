@@ -41,6 +41,7 @@ import { invokeLLM, isRetryableLLMError } from "../../_core/llm";
 import { router } from "../../_core/trpc";
 import { workspaceProcedure } from "../../_core/workspace";
 import { resolveVerifiedEmail } from "../../services/scraper";
+import { apolloResolveDomain } from "../../services/apollo";
 
 /* ─── ICP Match Scorer ───────────────────────────────────────────────────── */
 
@@ -223,6 +224,7 @@ Produce:
 7. A 2-sentence LinkedIn summary for this person
 8. A 1-sentence company description
 9. Recommended outreach channel (email/linkedin/sms/voice) and best timing
+10. inferredCompanyName: the organization this person CURRENTLY works at, extracted from their title/headline (e.g. "Executive Director at Children & Charity International" → "Children & Charity International"). Use the Company field if provided. Empty string if it cannot be determined — never guess.
 `,
         },
       ],
@@ -307,6 +309,7 @@ Produce:
               },
               linkedinSummary: { type: "string" },
               companyOneLiner: { type: "string" },
+              inferredCompanyName: { type: "string" },
               recommendedChannel: { type: "string" },
               recommendedTiming: {
                 type: "object",
@@ -322,7 +325,7 @@ Produce:
             },
             required: [
               "triggerEvents", "painSignals", "personalisationHooks", "techStack",
-              "recentNews", "industryEvents", "linkedinSummary", "companyOneLiner",
+              "recentNews", "industryEvents", "linkedinSummary", "companyOneLiner", "inferredCompanyName",
               "recommendedChannel", "recommendedTiming", "enrichmentConfidence",
             ],
             additionalProperties: false,
@@ -370,36 +373,55 @@ Produce:
 
     // ── Email acquisition ────────────────────────────────────────────────
     // ARE's dispatch phase hard-requires an email, but scraped prospects
-    // (esp. LinkedIn) arrive without one. When the prospect has a company
-    // domain but no email, run the first-party finder (company-site scrape →
-    // name-based patterns → Reoon two-stage verify) and persist a deliverable
-    // address. Best-effort: a failure here never fails the enrichment.
+    // (esp. LinkedIn) arrive without one — often without even a company
+    // field, just an org name buried in the headline. Chain the full
+    // resolution: headline → inferredCompanyName (from the dossier LLM call
+    // above, no extra call) → Apollo org search resolves the DOMAIN (zero
+    // credits) → first-party finder (site scrape → name patterns → Reoon
+    // two-stage verify) produces a deliverable address. Every recovered
+    // field is persisted so later passes and the UI see it. Best-effort:
+    // a failure here never fails the enrichment.
+    const inferredCompany = String((enrichData as Record<string, unknown>).inferredCompanyName ?? "").trim();
+    const effCompanyName = prospect.companyName ?? (inferredCompany || null);
+    let effCompanyDomain: string | null = prospect.companyDomain ?? null;
     let resolvedEmail: string | null = null;
     let resolvedStatus: string | null = null;
-    if (!prospect.email && (prospect.companyDomain || prospect.companyName)) {
+    if (!prospect.email) {
       try {
-        const found = await resolveVerifiedEmail({
-          firstName: prospect.firstName,
-          lastName: prospect.lastName,
-          companyDomain: prospect.companyDomain,
-          companyWebsite: prospect.companyDomain, // no separate website column on the queue
-        });
-        if (found.email) {
-          resolvedEmail = found.email;
-          resolvedStatus = found.status;
+        if (!effCompanyDomain && effCompanyName) {
+          const r = await apolloResolveDomain(workspaceId, effCompanyName);
+          if (r.domain) {
+            effCompanyDomain = r.domain;
+            await emitSeqLog(db, workspaceId, prospect.campaignId, "info", "enrich",
+              `Resolved company domain for ${prospect.firstName ?? ""} ${prospect.lastName ?? ""}: "${effCompanyName}" → ${r.domain}`.trim());
+          }
+        }
+        if (effCompanyDomain) {
+          const found = await resolveVerifiedEmail({
+            firstName: prospect.firstName,
+            lastName: prospect.lastName,
+            companyDomain: effCompanyDomain,
+            companyWebsite: effCompanyDomain, // no separate website column on the queue
+          });
+          if (found.email) {
+            resolvedEmail = found.email;
+            resolvedStatus = found.status;
+          }
         }
       } catch (e) {
         console.error(`[AreEngine] email resolution for prospect ${prospectId} failed:`, e);
       }
     }
 
-    // Update prospect with ICP score (+ email if we found one)
+    // Update prospect with ICP score + everything the chain recovered.
     await db.update(prospectQueue).set({
       icpMatchScore,
       icpMatchBreakdown,
       enrichmentStatus: "complete",
       enrichedAt: new Date(),
       ...(resolvedEmail ? { email: resolvedEmail } : {}),
+      ...(effCompanyDomain && !prospect.companyDomain ? { companyDomain: effCompanyDomain.slice(0, 200) } : {}),
+      ...(effCompanyName && !prospect.companyName ? { companyName: effCompanyName.slice(0, 200) } : {}),
     }).where(eq(prospectQueue.id, prospectId));
     if (resolvedEmail) {
       await emitSeqLog(db, workspaceId, prospect.campaignId, "info", "enrich",
