@@ -24,8 +24,6 @@ import {
   scimEvents,
   scimProviders,
   smtpConfigs,
-  socialAccounts,
-  socialPosts,
   users,
   workflowRules,
   workflowRuns,
@@ -348,181 +346,6 @@ export const workflowsRouter = router({
     }),
 });
 
-/* ───── Social Publishing ───────────────────────────────────────────── */
-
-export const socialRouter = router({
-  listAccounts: workspaceProcedure.query(async ({ ctx }) => {
-    const db = await getDb();
-    if (!db) return [];
-    return db.select().from(socialAccounts).where(eq(socialAccounts.workspaceId, ctx.workspace.id));
-  }),
-
-  /** Stub OAuth — flips connected=true and writes a fake token marker. */
-  connectAccount: workspaceProcedure
-    .input(z.object({ platform: z.enum(["linkedin", "twitter", "facebook", "instagram"]), handle: z.string().min(1), displayName: z.string().optional() }))
-    .mutation(async ({ ctx, input }) => {
-      const db = await getDb();
-      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      await db.insert(socialAccounts).values({
-        workspaceId: ctx.workspace.id, platform: input.platform, handle: input.handle, displayName: input.displayName ?? input.handle,
-        connected: true, accessTokenStub: "stub_" + Math.random().toString(36).slice(2, 10), connectedAt: new Date(),
-      });
-      return { ok: true };
-    }),
-
-  disconnectAccount: workspaceProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-    const db = await getDb();
-    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    await db.update(socialAccounts).set({ connected: false, accessTokenStub: null, connectedAt: null }).where(and(eq(socialAccounts.id, input.id), eq(socialAccounts.workspaceId, ctx.workspace.id)));
-    return { ok: true };
-  }),
-
-  listPosts: workspaceProcedure.input(z.object({ status: z.string().optional() }).optional()).query(async ({ ctx, input }) => {
-    const db = await getDb();
-    if (!db) return [];
-    let rows = await db.select().from(socialPosts).where(eq(socialPosts.workspaceId, ctx.workspace.id)).orderBy(desc(socialPosts.scheduledFor));
-    if (input?.status) rows = rows.filter((r) => r.status === input.status);
-    return rows;
-  }),
-
-  createPost: repProcedure.input(z.object({
-    socialAccountId: z.number(),
-    platform: z.enum(["linkedin", "twitter", "facebook", "instagram"]),
-    body: z.string().min(1),
-    firstComment: z.string().optional(),
-    scheduledFor: z.string().optional(),
-    status: z.enum(["draft", "in_review", "scheduled"]).default("draft"),
-    campaignId: z.number().optional(),
-  })).mutation(async ({ ctx, input }) => {
-    const db = await getDb();
-    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    const r = await db.insert(socialPosts).values({
-      ...input,
-      workspaceId: ctx.workspace.id,
-      scheduledFor: input.scheduledFor ? new Date(input.scheduledFor) : null,
-      authorUserId: ctx.user.id,
-    });
-    return { id: Number((r as any)[0]?.insertId ?? 0) };
-  }),
-
-  updatePost: repProcedure.input(z.object({ id: z.number(), patch: z.record(z.string(), z.any()) })).mutation(async ({ ctx, input }) => {
-    const db = await getDb();
-    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    const patch: any = { ...input.patch };
-    if (patch.scheduledFor && typeof patch.scheduledFor === "string") patch.scheduledFor = new Date(patch.scheduledFor);
-    await db.update(socialPosts).set(patch).where(and(eq(socialPosts.id, input.id), eq(socialPosts.workspaceId, ctx.workspace.id)));
-    return { ok: true };
-  }),
-
-  approvePost: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-    const db = await getDb();
-    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    await db.update(socialPosts).set({ status: "approved", approverUserId: ctx.user.id }).where(and(eq(socialPosts.id, input.id), eq(socialPosts.workspaceId, ctx.workspace.id)));
-    return { ok: true };
-  }),
-
-  schedulePost: repProcedure.input(z.object({ id: z.number(), scheduledFor: z.string() })).mutation(async ({ ctx, input }) => {
-    const db = await getDb();
-    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    await db.update(socialPosts).set({ status: "scheduled", scheduledFor: new Date(input.scheduledFor) }).where(and(eq(socialPosts.id, input.id), eq(socialPosts.workspaceId, ctx.workspace.id)));
-    return { ok: true };
-  }),
-
-  /** "Publish now" — stub that marks as published with random metrics. */
-  publishNowStub: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-    const db = await getDb();
-    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    const impressions = Math.floor(800 + Math.random() * 17000);
-    const engagements = Math.floor(impressions * (0.02 + Math.random() * 0.05));
-    const clicks = Math.floor(engagements * 0.4);
-    await db.update(socialPosts).set({ status: "published", publishedAt: new Date(), impressions, engagements, clicks }).where(and(eq(socialPosts.id, input.id), eq(socialPosts.workspaceId, ctx.workspace.id)));
-    return { ok: true, impressions, engagements, clicks };
-  }),
-
-  deletePost: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-    const db = await getDb();
-    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    await db.delete(socialPosts).where(and(eq(socialPosts.id, input.id), eq(socialPosts.workspaceId, ctx.workspace.id)));
-    return { ok: true };
-  }),
-
-  /** AI generate variants of a post body. */
-  generateVariants: repProcedure.input(z.object({ topic: z.string().min(4), platform: z.enum(["linkedin", "twitter", "facebook", "instagram"]), count: z.number().int().min(1).max(5).default(3) })).mutation(async ({ ctx, input }) => {
-    let variants: string[] = [];
-    try {
-      const charLimit = input.platform === "twitter" ? 240 : input.platform === "linkedin" ? 800 : 500;
-      const out = await invokeLLM({
-        messages: [
-          { role: "system", content: `You write ${input.platform} posts for a B2B SaaS audience. Output JSON only. Each variant under ${charLimit} characters.` },
-          { role: "user", content: `Topic: ${input.topic}\n\nReturn JSON {variants: string[]} with ${input.count} variants.` },
-        ],
-        response_format: {
-          type: "json_schema",
-          json_schema: {
-            name: "post_variants",
-            strict: true,
-            schema: { type: "object", properties: { variants: { type: "array", items: { type: "string" } } }, required: ["variants"], additionalProperties: false },
-          },
-        },
-      });
-      const content = out.choices?.[0]?.message?.content;
-      const parsed = typeof content === "string" ? JSON.parse(content) : content;
-      variants = Array.isArray(parsed.variants) ? parsed.variants.slice(0, input.count) : [];
-    } catch (e) {
-      console.warn("[generateVariants] LLM failed", e);
-      variants = Array.from({ length: input.count }, (_, i) => `${input.topic} — angle ${i + 1}: a sharper take goes here.`);
-    }
-    return { variants };
-  }),
-
-  /** Set or update recurrence config for a post. When recurrence is set and post is scheduled,
-   *  future occurrences are automatically spawned on publish. */
-  setRecurrence: repProcedure
-    .input(
-      z.object({
-        id: z.number(),
-        recurrence: z
-          .object({
-            type: z.enum(["daily", "weekly", "custom"]),
-            interval: z.number().int().min(1).max(365).optional(),
-            daysOfWeek: z.array(z.number().int().min(0).max(6)).optional(),
-            endDate: z.string().optional(), // ISO date string
-          })
-          .nullable(),
-      }),
-    )
-    .mutation(async ({ ctx, input }) => {
-      const db = await getDb();
-      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      await db
-        .update(socialPosts)
-        .set({ recurrence: input.recurrence })
-        .where(and(eq(socialPosts.id, input.id), eq(socialPosts.workspaceId, ctx.workspace.id)));
-      return { ok: true };
-    }),
-
-  /** Aggregate analytics. */
-  analytics: workspaceProcedure.query(async ({ ctx }) => {
-    const db = await getDb();
-    if (!db) return null;
-    const rows = await db.select().from(socialPosts).where(and(eq(socialPosts.workspaceId, ctx.workspace.id), eq(socialPosts.status, "published")));
-    const byPlat: Record<string, { posts: number; impressions: number; engagements: number; clicks: number }> = {};
-    for (const r of rows) {
-      const p = (byPlat[r.platform] ||= { posts: 0, impressions: 0, engagements: 0, clicks: 0 });
-      p.posts++; p.impressions += r.impressions; p.engagements += r.engagements; p.clicks += r.clicks;
-    }
-    const totalImp = rows.reduce((s, r) => s + r.impressions, 0);
-    const totalEng = rows.reduce((s, r) => s + r.engagements, 0);
-    return {
-      totalPosts: rows.length,
-      totalImpressions: totalImp,
-      totalEngagements: totalEng,
-      engagementRate: totalImp ? totalEng / totalImp : 0,
-      byPlatform: byPlat,
-    };
-  }),
-});
-
 /* ───── Campaigns ───────────────────────────────────────────────────── */
 
 export const campaignsRouter = router({
@@ -545,19 +368,24 @@ export const campaignsRouter = router({
     return db.select().from(campaignComponents).where(and(eq(campaignComponents.campaignId, input.campaignId), eq(campaignComponents.workspaceId, ctx.workspace.id)));
   }),
 
-  /** Aggregated unified analytics across attached opps/social/sequences. */
+  /**
+   * Aggregated campaign analytics from attached opportunities.
+   *
+   * This previously also returned socialPosts / socialImpressions /
+   * socialEngagements sourced from `social_posts` — but those numbers were
+   * FABRICATED by the removed `publishNowStub` (it invented random impression
+   * and engagement counts), so campaign reporting was mixing invented social
+   * metrics in with real pipeline figures. The social fields are gone; no
+   * client ever read them.
+   */
   analytics: workspaceProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) return null;
     const opps = await db.select().from(opportunities).where(and(eq(opportunities.workspaceId, ctx.workspace.id), eq(opportunities.campaignId, input.id)));
-    const posts = await db.select().from(socialPosts).where(and(eq(socialPosts.workspaceId, ctx.workspace.id), eq(socialPosts.campaignId, input.id)));
     return {
       pipelineCount: opps.length,
       pipelineValue: opps.reduce((s, o) => s + Number(o.value), 0),
       wonValue: opps.filter((o) => o.stage === "won").reduce((s, o) => s + Number(o.value), 0),
-      socialPosts: posts.length,
-      socialImpressions: posts.reduce((s, p) => s + p.impressions, 0),
-      socialEngagements: posts.reduce((s, p) => s + p.engagements, 0),
     };
   }),
 

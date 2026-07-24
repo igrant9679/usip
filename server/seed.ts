@@ -19,8 +19,6 @@ import {
   products,
   qbrs,
   sequences,
-  socialAccounts,
-  socialPosts,
   supportTickets,
   tasks,
   territories,
@@ -365,47 +363,6 @@ export async function seedWorkspace(workspaceId: number, ownerUserId: number) {
   ]) {
     await db.insert(workflowRules).values({
       workspaceId, ...wf, enabled: true, fireCount: randInt(3, 25), lastFiredAt: daysFromNow(-randInt(0, 5)),
-    });
-  }
-
-  // Social accounts (4 connected stubs)
-  const saIds: number[] = [];
-  for (const p of [
-    { platform: "linkedin" as const, handle: "lsi-media", displayName: "LSI Media" },
-    { platform: "twitter" as const, handle: "lsimedia", displayName: "LSI Media" },
-    { platform: "facebook" as const, handle: "lsimedia", displayName: "LSI Media" },
-    { platform: "instagram" as const, handle: "lsi.media", displayName: "LSI Media" },
-  ]) {
-    const r = await db.insert(socialAccounts).values({
-      workspaceId, platform: p.platform, handle: p.handle, displayName: p.displayName, connected: true, accessTokenStub: "stub_" + Math.random().toString(36).slice(2, 10), connectedAt: daysFromNow(-30),
-    });
-    saIds.push(Number((r as any)[0]?.insertId ?? 0));
-  }
-
-  // Social posts (mix of statuses across two weeks)
-  const POSTS = [
-    "How modern revenue ops teams are consolidating their tool stack — 3 patterns we see weekly.",
-    "Quick reminder: pipeline hygiene > pipeline volume. A clean $400k beats a messy $1.2M.",
-    "We just shipped multi-workspace support. Real one.",
-    "If your CRM doesn't tell you what to do next, it's a database with extra steps.",
-    "Three customer success metrics that actually predict renewal — and which ones are vanity.",
-    "Unpopular take: the best growth lever for most teams isn't a new tool, it's a deleted process.",
-  ];
-  for (let i = 0; i < 14; i++) {
-    const status = rand(["draft", "in_review", "approved", "scheduled", "scheduled", "published", "published"] as const);
-    const scheduled = daysFromNow(status === "published" ? -randInt(1, 14) : randInt(0, 14));
-    await db.insert(socialPosts).values({
-      workspaceId,
-      socialAccountId: rand(saIds),
-      platform: rand(["linkedin", "twitter", "facebook", "instagram"] as const),
-      body: rand(POSTS),
-      status,
-      scheduledFor: scheduled,
-      publishedAt: status === "published" ? scheduled : null,
-      impressions: status === "published" ? randInt(800, 18000) : 0,
-      engagements: status === "published" ? randInt(20, 600) : 0,
-      clicks: status === "published" ? randInt(5, 200) : 0,
-      authorUserId: ownerUserId,
     });
   }
 

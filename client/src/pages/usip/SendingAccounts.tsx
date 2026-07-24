@@ -831,7 +831,7 @@ export default function SendingAccounts() {
           { href: "/sender-pools", label: "Sender Pools", title: "Group sending accounts into pools for sequence load-balancing" },
           { href: "/connected-accounts", label: "Connected Accounts", title: "Connected mailboxes and calendars used for sync (read-side)" },
           { href: "/email-suppressions", label: "Opt-Outs", title: "Opt-outs and global suppression list — required for compliance" },
-          { href: "/my-linkedin", label: "My LinkedIn", title: "Manage your personal LinkedIn bridge" },
+          { href: "/v2/settings/social-accounts", label: "Social Accounts", title: "Connect LinkedIn and messaging accounts for prospecting and DMs" },
         ]} />
 
         {/* Summary KPIs */}

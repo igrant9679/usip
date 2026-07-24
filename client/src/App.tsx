@@ -85,7 +85,6 @@ import BrandVoice from "@/pages/usip/BrandVoice";
 import Personas from "@/pages/usip/Personas";
 import PromptTemplates from "@/pages/usip/PromptTemplates";
 import ImportContacts from "@/pages/usip/ImportContacts";
-import MyLinkedIn from "@/pages/usip/MyLinkedIn";
 import DataHealth from "@/pages/usip/DataHealth";
 import Segments from "@/pages/usip/Segments";
 import AIPipelineQueue from "@/pages/usip/AIPipelineQueue";
@@ -365,7 +364,6 @@ function Router() {
       <Route path="/personas"><AuthGate><Personas /></AuthGate></Route>
       <Route path="/prompt-templates"><AuthGate><PromptTemplates /></AuthGate></Route>
       <Route path="/import"><AuthGate><ImportContacts /></AuthGate></Route>
-      <Route path="/my-linkedin"><AuthGate><MyLinkedIn /></AuthGate></Route>
       <Route path="/connected-accounts"><AuthGate><ConnectedAccounts /></AuthGate></Route>
       <Route path="/unified-inbox"><AuthGate><UnifiedInbox /></AuthGate></Route>
       <Route path="/data-health"><AuthGate><DataHealth /></AuthGate></Route>

@@ -1448,7 +1448,7 @@ async function discoverViaLinkedIn(
         `[AreEngine] campaign ${campaign.id} — no bridged LinkedIn account in workspace ${campaign.workspaceId}, LinkedIn discovery skipped`,
       );
       await emitLog(campaign.workspaceId, campaign.id, "discovery", "warn",
-        "LinkedIn source skipped — no bridged LinkedIn account in this workspace. Connect one at /my-linkedin or disable the LinkedIn source on this campaign.");
+        "LinkedIn source skipped — no bridged LinkedIn account in this workspace. Connect one in Settings › Social accounts or disable the LinkedIn source on this campaign.");
       return [];
     }
     // 25 is the Unipile wrapper's per-call max (searchLinkedInPeople clamps

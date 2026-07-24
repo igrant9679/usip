@@ -253,7 +253,7 @@ const _LEGACY_NAV: NavGroup[] = [
     activeBg: "rgba(71,85,105,0.10)",
     darkActiveBg: "rgba(203,213,225,0.12)",
     // Trimmed 10 → 5. Removed (links added on adjacent pages):
-    //   - /my-linkedin      → opens from /sending-accounts
+    //   - social accounts   → Settings › Social accounts (from /sending-accounts)
     //   - /tour-builder     → opens from /settings (super-admin tool)
     //   - /audit            → opens from /settings
     //   - /scim             → opens from /team (identity provisioning)

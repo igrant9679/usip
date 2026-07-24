@@ -883,68 +883,6 @@ export const workflowRuns = mysqlTable(
 );
 
 /* ──────────────────────────────────────────────────────────────────────────
-   Social Publishing
-   ────────────────────────────────────────────────────────────────────────── */
-
-export const socialAccounts = mysqlTable(
-  "social_accounts",
-  {
-    id: int("id").autoincrement().primaryKey(),
-    workspaceId: int("workspaceId").notNull(),
-    platform: mysqlEnum("platform", ["linkedin", "twitter", "facebook", "instagram"]).notNull(),
-    handle: varchar("handle", { length: 120 }).notNull(),
-    displayName: varchar("displayName", { length: 200 }),
-    avatarUrl: text("avatarUrl"),
-    connected: boolean("connected").default(false).notNull(),
-    accessTokenStub: varchar("accessTokenStub", { length: 64 }), // mock — never store real tokens here
-    connectedAt: timestamp("connectedAt"),
-    createdAt: timestamp("createdAt").defaultNow().notNull(),
-  },
-  (t) => ({ byWs: index("ix_sa_ws").on(t.workspaceId) }),
-);
-
-export const socialPosts = mysqlTable(
-  "social_posts",
-  {
-    id: int("id").autoincrement().primaryKey(),
-    workspaceId: int("workspaceId").notNull(),
-    socialAccountId: int("socialAccountId").notNull(),
-    platform: mysqlEnum("platform", ["linkedin", "twitter", "facebook", "instagram"]).notNull(),
-    body: text("body").notNull(),
-    mediaUrls: json("mediaUrls"),
-    firstComment: text("firstComment"),
-    status: mysqlEnum("status", [
-      "draft",
-      "in_review",
-      "approved",
-      "scheduled",
-      "published",
-      "failed",
-      "rejected",
-    ]).default("draft").notNull(),
-    scheduledFor: timestamp("scheduledFor"),
-    publishedAt: timestamp("publishedAt"),
-    impressions: int("impressions").default(0).notNull(),
-    engagements: int("engagements").default(0).notNull(),
-    clicks: int("clicks").default(0).notNull(),
-    campaignId: int("campaignId"),
-    aiVariants: json("aiVariants"),
-    authorUserId: int("authorUserId"),
-    approverUserId: int("approverUserId"),
-    /** Recurrence config: { type: 'daily'|'weekly'|'custom', interval?: number, daysOfWeek?: number[], endDate?: string } */
-    recurrence: json("recurrence"),
-    /** ID of the parent post this was spawned from (for recurrence chains) */
-    parentPostId: int("parentPostId"),
-    createdAt: timestamp("createdAt").defaultNow().notNull(),
-    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-  },
-  (t) => ({
-    byWs: index("ix_sp_ws").on(t.workspaceId, t.scheduledFor),
-    byStatus: index("ix_sp_status").on(t.workspaceId, t.status),
-  }),
-);
-
-/* ──────────────────────────────────────────────────────────────────────────
    Campaigns
    ────────────────────────────────────────────────────────────────────────── */
 
@@ -2187,31 +2125,6 @@ export const emailVerificationJobs = mysqlTable(
   }),
 );
 export type EmailVerificationJob = typeof emailVerificationJobs.$inferSelect;
-
-/* ──────────────────────────────────────────────────────────────────────────
-   Module 13 — LinkedIn OAuth Connection (LNK-004)
-   ────────────────────────────────────────────────────────────────────────── */
-
-export const linkedinConnections = mysqlTable(
-  "linkedin_connections",
-  {
-    id: int("id").autoincrement().primaryKey(),
-    userId: int("userId").notNull().unique(), // one connection per user
-    workspaceId: int("workspaceId").notNull(),
-    accessToken: text("accessToken").notNull(), // encrypted at rest (AES-256)
-    tokenExpiry: timestamp("tokenExpiry"),
-    linkedinId: varchar("linkedinId", { length: 64 }),
-    displayName: varchar("displayName", { length: 200 }),
-    profileUrl: text("profileUrl"),
-    syncedAt: timestamp("syncedAt"),
-    createdAt: timestamp("createdAt").defaultNow().notNull(),
-    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-  },
-  (t) => ({
-    byWs: index("ix_lc_ws").on(t.workspaceId),
-  }),
-);
-export type LinkedinConnection = typeof linkedinConnections.$inferSelect;
 
 /* ──────────────────────────────────────────────────────────────────────────
    Email Verification Snapshots (daily health trend)

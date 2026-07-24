@@ -7,7 +7,7 @@ import { accountsRouter, contactsRouter, crmNotesRouter, crmPipelinesRouter, crm
 import { activitiesRouter, attachmentsRouter, tasksRouter } from "./routers/activities";
 import { emailDraftsRouter, sequencesRouter, sequenceAbRouter } from "./routers/sequences";
 import { csRouter } from "./routers/cs";
-import { auditRouter, campaignsRouter, dashboardsRouter, notificationsRouter, quotesRouter, scimRouter, socialRouter, workflowsRouter } from "./routers/operations";
+import { auditRouter, campaignsRouter, dashboardsRouter, notificationsRouter, quotesRouter, scimRouter, workflowsRouter } from "./routers/operations";
 import { leadRoutingRouter, leadScoringRouter } from "./routers/leadScoring";
 import { settingsRouter, teamRouter, usageRouter, dangerZoneRouter } from "./routers/admin";
 import { integrationsRouter } from "./routers/integrations";
@@ -21,7 +21,6 @@ import { emailTemplatesRouter, snippetsRouter, brandVoiceRouter, emailPromptTemp
 import { savedSectionsRouter } from "./routers/savedSections";
 import { importsRouter } from "./routers/imports";
 import { emailVerificationRouter } from "./routers/emailVerification";
-import { linkedinRouter } from "./routers/linkedin";
 import { dataHealthRouter } from "./routers/dataHealth";
 import { segmentsRouter } from "./routers/segments";
 import { recordListsRouter } from "./routers/recordLists";
@@ -103,7 +102,6 @@ export const appRouter = router({
   sequenceAb: sequenceAbRouter,
   cs: csRouter,
   workflows: workflowsRouter,
-  social: socialRouter,
   campaigns: campaignsRouter,
   dashboards: dashboardsRouter,
   quotes: quotesRouter,
@@ -130,7 +128,6 @@ export const appRouter = router({
   savedSections: savedSectionsRouter,
   imports: importsRouter,
   emailVerification: emailVerificationRouter,
-  linkedin: linkedinRouter,
   dataHealth: dataHealthRouter,
   segments: segmentsRouter,
   recordLists: recordListsRouter,
