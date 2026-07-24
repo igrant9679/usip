@@ -4,10 +4,13 @@ import { protectedProcedure, router } from "../_core/trpc";
 import { workspaceProcedure } from "../_core/workspace";
 import { ensureUserHasWorkspace } from "../seed";
 import {
+  getDb,
   getUserWorkspaces,
   getWorkspaceCounts,
   getWorkspaceMembers,
 } from "../db";
+import { eq } from "drizzle-orm";
+import { workspaces, workspaceSettings, brandVoiceProfiles } from "../../drizzle/schema";
 
 export const workspaceRouter = router({
   /**
@@ -49,6 +52,65 @@ export const workspaceRouter = router({
         .set({ name: input.name })
         .where(eq(workspaces.id, ctx.workspace.id));
       return { ok: true, name: input.name };
+    }),
+
+  /**
+   * Aggregated per-workspace branding for the Branding settings section:
+   * logo + display name (workspaces), colours + company profile
+   * (workspace_settings), and brand voice (brand_voice_profiles) in one read.
+   * Colours + company fields are ALSO editable via settings.save; voice via
+   * brandVoice.save; the logo via updateBranding below. This is a read-only
+   * convenience aggregator so the section renders from a single query.
+   */
+  getBranding: workspaceProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    const [ws] = await db
+      .select({ id: workspaces.id, name: workspaces.name, logoUrl: workspaces.logoUrl })
+      .from(workspaces)
+      .where(eq(workspaces.id, ctx.workspace.id));
+    const [s] = await db
+      .select()
+      .from(workspaceSettings)
+      .where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
+    const [voice] = await db
+      .select()
+      .from(brandVoiceProfiles)
+      .where(eq(brandVoiceProfiles.workspaceId, ctx.workspace.id));
+    return {
+      name: ws?.name ?? "",
+      logoUrl: ws?.logoUrl ?? null,
+      brandPrimary: s?.brandPrimary ?? "#14B89A",
+      brandAccent: s?.brandAccent ?? "#0F766E",
+      companyDescription: s?.companyDescription ?? "",
+      valueProposition: s?.valueProposition ?? "",
+      companyIndustry: s?.companyIndustry ?? "",
+      companyWebsite: s?.companyWebsite ?? "",
+      companyKeywords: Array.isArray(s?.companyKeywords) ? (s!.companyKeywords as string[]) : [],
+      companyTopics: Array.isArray(s?.companyTopics) ? (s!.companyTopics as string[]) : [],
+      voice: voice
+        ? { tone: voice.tone, vocabulary: voice.vocabulary ?? [], avoidWords: voice.avoidWords ?? [], applyToAI: voice.applyToAI }
+        : null,
+    };
+  }),
+
+  /**
+   * Set the workspace logo URL (admin+). The logo lives on workspaces.logoUrl
+   * and is rendered in the Shell + workspace switcher. Pass null to clear.
+   */
+  updateBranding: workspaceProcedure
+    .input(z.object({ logoUrl: z.string().url().max(1000).nullable() }))
+    .mutation(async ({ ctx, input }) => {
+      if (ctx.member.role !== "admin" && ctx.member.role !== "super_admin") {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Requires admin role" });
+      }
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      await db
+        .update(workspaces)
+        .set({ logoUrl: input.logoUrl })
+        .where(eq(workspaces.id, ctx.workspace.id));
+      return { ok: true, logoUrl: input.logoUrl };
     }),
 
   members: workspaceProcedure.query(async ({ ctx }) => {

@@ -73,6 +73,8 @@ export const settingsRouter = router({
       ...s,
       ipAllowlist: Array.isArray(s.ipAllowlist) ? s.ipAllowlist : [],
       notifyPolicy: (s.notifyPolicy as Record<string, any>) ?? DEFAULT_NOTIFY_POLICY,
+      companyKeywords: Array.isArray(s.companyKeywords) ? s.companyKeywords : [],
+      companyTopics: Array.isArray(s.companyTopics) ? s.companyTopics : [],
     };
   }),
 
@@ -115,6 +117,15 @@ export const settingsRouter = router({
         // response. Add the key here whenever you add a setting.
         nightlyPipelineEnabled: z.boolean().optional(),
         nightlyScoreThreshold: z.number().int().min(0).max(100).optional(),
+        // Per-workspace company/branding profile (Migration 0125). Consumed by
+        // buildBrandContext (AI outreach generation) + the Branding settings
+        // section. Must be listed here or the save silently drops them.
+        companyDescription: z.string().max(4000).nullable().optional(),
+        valueProposition: z.string().max(2000).nullable().optional(),
+        companyIndustry: z.string().max(120).nullable().optional(),
+        companyWebsite: z.string().max(255).nullable().optional(),
+        companyKeywords: z.array(z.string().max(80)).max(50).nullable().optional(),
+        companyTopics: z.array(z.string().max(80)).max(50).nullable().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {

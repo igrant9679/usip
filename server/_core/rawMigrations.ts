@@ -2616,6 +2616,27 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0125: per-workspace company/branding profile ──────────────────────────
+  // Branding was almost entirely dead-wired: brandPrimary/brandAccent were
+  // stored but never applied, brand_voice_profiles were never read by any AI
+  // path, and there was NO store for the seller's OWN company facts (every
+  // ARE/outreach prompt described the PROSPECT's company, never ours). These
+  // columns hold the workspace's own company profile so the app UI (colors,
+  // logo) and the AI generators (sequence/email writers) can finally reflect
+  // each workspace's brand. Colours already exist on this table; the logo
+  // reuses workspaces.logoUrl (set via workspace.updateBranding).
+  {
+    name: "0125_workspace_company_branding.sql",
+    statements: [
+      `ALTER TABLE \`workspace_settings\` ADD COLUMN \`companyDescription\` text NULL`,
+      `ALTER TABLE \`workspace_settings\` ADD COLUMN \`valueProposition\` text NULL`,
+      `ALTER TABLE \`workspace_settings\` ADD COLUMN \`companyIndustry\` varchar(120) NULL`,
+      `ALTER TABLE \`workspace_settings\` ADD COLUMN \`companyWebsite\` varchar(255) NULL`,
+      `ALTER TABLE \`workspace_settings\` ADD COLUMN \`companyKeywords\` json NULL`,
+      `ALTER TABLE \`workspace_settings\` ADD COLUMN \`companyTopics\` json NULL`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

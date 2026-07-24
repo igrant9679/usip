@@ -1353,6 +1353,17 @@ export const workspaceSettings = mysqlTable("workspace_settings", {
   timezone: varchar("timezone", { length: 64 }).default("UTC").notNull(),
   brandPrimary: varchar("brandPrimary", { length: 16 }).default("#14B89A").notNull(),
   brandAccent: varchar("brandAccent", { length: 16 }).default("#0F766E").notNull(),
+  /** Per-workspace company profile (Migration 0125) — the seller's OWN company
+   *  facts, injected into AI outreach generation (via buildBrandContext) so
+   *  emails/sequences describe this workspace's company, and surfaced in the
+   *  Branding settings section. The workspace's display name lives on
+   *  workspaces.name; the logo on workspaces.logoUrl. */
+  companyDescription: text("companyDescription"),   // what the company does
+  valueProposition: text("valueProposition"),       // core value prop / offer
+  companyIndustry: varchar("companyIndustry", { length: 120 }),
+  companyWebsite: varchar("companyWebsite", { length: 255 }),
+  companyKeywords: json("companyKeywords"),          // string[] — describe the company
+  companyTopics: json("companyTopics"),              // string[] — themes to emphasise in outreach
   emailFromName: varchar("emailFromName", { length: 120 }),
   emailSignature: text("emailSignature"),
   sessionTimeoutMin: int("sessionTimeoutMin").default(480).notNull(),
