@@ -80,6 +80,10 @@ export const unipileRouter = router({
         providers: z.array(z.string()).optional(), // defaults to all
         reconnectAccountId: z.string().optional(),
         origin: z.string().optional(), // window.location.origin from frontend
+        // Which in-app page the hosted wizard returns to on success. A closed
+        // enum mapped to a fixed path below — never an arbitrary URL, so this
+        // can't be abused as an open redirect.
+        returnTo: z.enum(["connected-accounts", "settings"]).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -92,7 +96,9 @@ export const unipileRouter = router({
         ""
       ).replace(/\/$/, "");
       const notifyUrl = `${appBase}/api/unipile/account-webhook?userId=${ctx.user.id}&workspaceId=${ctx.workspace.id}`;
-      const successRedirectUrl = `${appBase}/connected-accounts?connected=1`;
+      const returnPath =
+        input.returnTo === "settings" ? "/v2/settings/social-accounts" : "/connected-accounts";
+      const successRedirectUrl = `${appBase}${returnPath}?connected=1`;
       const expiresOn = new Date(Date.now() + 30 * 60 * 1000).toISOString(); // 30 min
 
       // Unipile's hosted-auth-link endpoint accepts `providers` as a single

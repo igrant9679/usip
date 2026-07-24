@@ -364,12 +364,11 @@ export function BrandingSection() {
                 </Button>
               </Card>
 
-              {/* Social accounts — honest placeholder */}
-              <Card title="Social accounts" description="Connect your workspace's social profiles for branded outreach.">
-                <div className="flex items-center gap-3 rounded-lg border border-dashed border-border/70 bg-muted/20 px-4 py-3 text-[13px] text-muted-foreground">
-                  <Share2 className="size-4 shrink-0" />
-                  Coming soon — you'll be able to add your workspace's social accounts here.
-                </div>
+              {/* Social accounts — lead-gen identity, managed in its own section */}
+              <Card title="Social accounts" description="The LinkedIn and messaging accounts used to find prospects and send direct messages.">
+                <Button variant="outline" size="sm" className="gap-1.5" onClick={() => navigate("/v2/settings/social-accounts")}>
+                  <Share2 className="size-3.5" /> Manage social accounts <ExternalLink className="size-3.5 opacity-60" />
+                </Button>
               </Card>
             </>
           )}

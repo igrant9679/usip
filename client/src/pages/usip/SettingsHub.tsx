@@ -40,6 +40,7 @@ import { MailboxesSection } from "@/components/usip/settings/MailboxesSection";
 import { VoiceAgentsSection } from "@/components/usip/settings/VoiceAgentsSection";
 import { ApolloSourceCard } from "@/components/usip/settings/ApolloSourceCard";
 import { BrandingSection } from "@/components/usip/settings/BrandingSection";
+import { SocialAccountsSection } from "@/components/usip/settings/SocialAccountsSection";
 import {
   ArrowLeft,
   Search,
@@ -93,7 +94,7 @@ const GROUPS: HubGroup[] = [
       { id: "mailboxes", label: "Mailboxes", icon: Mail, internal: true },
       { id: "phone-numbers", label: "Phone numbers", icon: Phone, href: "/v2/calls" },
       { id: "notifications", label: "Notifications", icon: Bell, href: "/notification-prefs" },
-      { id: "my-linkedin", label: "My LinkedIn", icon: Link2, href: "/my-linkedin" },
+      { id: "social-accounts", label: "Social accounts", icon: Link2, internal: true },
     ],
   },
   {
@@ -219,6 +220,7 @@ export default function SettingsHub() {
         {section === "mailboxes" && <MailboxesSection />}
         {section === "voice-agents" && <VoiceAgentsSection />}
         {section === "branding" && <BrandingSection />}
+        {section === "social-accounts" && <SocialAccountsSection />}
         {section === "data-sources" && (
           <div className="space-y-4">
             <ApolloSourceCard />
