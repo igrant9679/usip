@@ -116,6 +116,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
+import { WorkspaceBrandingSync } from "@/components/usip/WorkspaceBrandingSync";
 
 const INVITE_RETURN_KEY = "usip_invite_return";
 
@@ -303,7 +304,9 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
   if (loading) return <div className="min-h-screen flex items-center justify-center"><Loader2 className="size-6 animate-spin text-muted-foreground" /></div>;
   if (!user) return <Landing />;
-  return <WorkspaceProvider><InviteReturnRedirect />{children}</WorkspaceProvider>;
+  // WorkspaceBrandingSync sits here, not in Shell — the settings hub renders
+  // without Shell, so brand colours would otherwise never reach it.
+  return <WorkspaceProvider><InviteReturnRedirect /><WorkspaceBrandingSync />{children}</WorkspaceProvider>;
 }
 
 function Router() {

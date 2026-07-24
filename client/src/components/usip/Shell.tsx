@@ -596,27 +596,11 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
     if (PALETTES.some((p) => p.id === server) && server !== palette) setPalette(server);
   }, [appearanceQ.data]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Per-workspace branding (logo + brand colour). The brand colour is the
-  // workspace DEFAULT: it drives the primary token family ONLY while the user
-  // is on the default "teal" palette. The moment a user picks a personal
-  // palette, that wins (its [data-theme] rules apply and we clear the inline
-  // override). Inline props on <html> outrank the attribute rules, so they MUST
-  // be removed for a named palette to take effect.
+  // Per-workspace logo for the sidebar + switcher. The brand COLOUR is applied
+  // app-wide by WorkspaceBrandingSync (mounted in AuthGate) — deliberately not
+  // here, because the settings hub renders without Shell and would miss it.
+  // Same query key, so react-query serves both from one fetch.
   const brandingQ = trpc.workspace.getBranding.useQuery(undefined, { enabled: !!current, staleTime: 60_000 });
-  useEffect(() => {
-    const root = document.documentElement;
-    const brand = brandingQ.data?.brandPrimary;
-    const brandProps = ["--primary", "--ring", "--sidebar-primary", "--chart-1"];
-    const isDefaultPalette = palette === "teal";
-    const isCustomBrand =
-      !!brand && /^#([0-9A-Fa-f]{3})([0-9A-Fa-f]{3})?([0-9A-Fa-f]{2})?$/.test(brand) &&
-      brand.toLowerCase() !== "#14b89a";
-    if (isDefaultPalette && isCustomBrand) {
-      for (const p of brandProps) root.style.setProperty(p, brand!);
-    } else {
-      for (const p of brandProps) root.style.removeProperty(p);
-    }
-  }, [brandingQ.data?.brandPrimary, palette]);
   const workspaceLogo = brandingQ.data?.logoUrl ?? null;
 
   // Respect the user's "Set as Home" preference for the Dashboard nav link
