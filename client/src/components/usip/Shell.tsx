@@ -596,6 +596,29 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
     if (PALETTES.some((p) => p.id === server) && server !== palette) setPalette(server);
   }, [appearanceQ.data]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Per-workspace branding (logo + brand colour). The brand colour is the
+  // workspace DEFAULT: it drives the primary token family ONLY while the user
+  // is on the default "teal" palette. The moment a user picks a personal
+  // palette, that wins (its [data-theme] rules apply and we clear the inline
+  // override). Inline props on <html> outrank the attribute rules, so they MUST
+  // be removed for a named palette to take effect.
+  const brandingQ = trpc.workspace.getBranding.useQuery(undefined, { enabled: !!current, staleTime: 60_000 });
+  useEffect(() => {
+    const root = document.documentElement;
+    const brand = brandingQ.data?.brandPrimary;
+    const brandProps = ["--primary", "--ring", "--sidebar-primary", "--chart-1"];
+    const isDefaultPalette = palette === "teal";
+    const isCustomBrand =
+      !!brand && /^#([0-9A-Fa-f]{3})([0-9A-Fa-f]{3})?([0-9A-Fa-f]{2})?$/.test(brand) &&
+      brand.toLowerCase() !== "#14b89a";
+    if (isDefaultPalette && isCustomBrand) {
+      for (const p of brandProps) root.style.setProperty(p, brand!);
+    } else {
+      for (const p of brandProps) root.style.removeProperty(p);
+    }
+  }, [brandingQ.data?.brandPrimary, palette]);
+  const workspaceLogo = brandingQ.data?.logoUrl ?? null;
+
   // Respect the user's "Set as Home" preference for the Dashboard nav link
   const homeDashboardHref = (typeof window !== "undefined" ? localStorage.getItem(HOME_DASHBOARD_KEY) : null) ?? "/";
 
@@ -701,10 +724,22 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
         // Palette-aware rail wash — the chosen theme visibly re-hues the nav.
         style={{ backgroundImage: "linear-gradient(180deg, color-mix(in oklch, var(--primary) 9%, transparent), color-mix(in oklch, var(--primary) 3%, transparent) 40%, transparent 75%)" }}
       >
-        {/* Logo header — bolt follows the selected colour theme */}
+        {/* Logo header — custom workspace logo if set, else the Velocity bolt
+            (which follows the selected colour theme). */}
         <div className="px-4 pt-4 pb-3 flex items-center gap-2.5">
-          <svg className="size-7 shrink-0" style={{ color: "var(--primary)" }} viewBox="0 0 24 24" fill="currentColor"><path d="M13 2L4.09 12.97 12 12l-1 9 8.91-10.97L12 11l1-9z"/></svg>
-          <span className="text-[20px] font-bold tracking-tight">Velocity</span>
+          {workspaceLogo ? (
+            <img
+              src={workspaceLogo}
+              alt={`${current?.name ?? "Workspace"} logo`}
+              className="h-7 max-w-[150px] object-contain shrink-0"
+              onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
+            />
+          ) : (
+            <>
+              <svg className="size-7 shrink-0" style={{ color: "var(--primary)" }} viewBox="0 0 24 24" fill="currentColor"><path d="M13 2L4.09 12.97 12 12l-1 9 8.91-10.97L12 11l1-9z"/></svg>
+              <span className="text-[20px] font-bold tracking-tight">Velocity</span>
+            </>
+          )}
           <button
             type="button"
             onClick={() => setMobileOpen(false)}
@@ -787,7 +822,11 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
               className="flex items-center gap-2 px-2.5 py-1.5 rounded-md hover:bg-secondary text-sm min-w-0 max-w-full"
               disabled={isLoading || !current}
             >
-              <Building2 className="size-4 text-muted-foreground shrink-0" />
+              {(current as { logoUrl?: string | null })?.logoUrl ? (
+                <img src={(current as { logoUrl?: string | null }).logoUrl!} alt="" className="size-4 rounded-sm object-contain shrink-0" onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} />
+              ) : (
+                <Building2 className="size-4 text-muted-foreground shrink-0" />
+              )}
               <span className="font-medium truncate">{current?.name ?? "Loading…"}</span>
               <ChevronsUpDown className="size-3.5 text-muted-foreground shrink-0" />
             </button>
@@ -800,6 +839,9 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
                     className="w-full flex items-center gap-2 px-2 py-1.5 rounded-sm text-sm hover:bg-secondary"
                   >
                     {current?.id === w.id ? <Check className="size-3.5 text-primary" /> : <span className="size-3.5" />}
+                    {(w as { logoUrl?: string | null }).logoUrl && (
+                      <img src={(w as { logoUrl?: string | null }).logoUrl!} alt="" className="size-5 rounded-sm object-contain shrink-0" onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} />
+                    )}
                     <div className="flex-1 text-left">
                       <div>{w.name}</div>
                       <div className="text-[11px] text-muted-foreground">{w.role} · {w.plan}</div>

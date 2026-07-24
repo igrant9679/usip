@@ -93,6 +93,7 @@ export async function getUserWorkspaces(userId: number) {
       name: workspaces.name,
       slug: workspaces.slug,
       plan: workspaces.plan,
+      logoUrl: workspaces.logoUrl,
       role: workspaceMembers.role,
     })
     .from(workspaceMembers)
