@@ -49,10 +49,14 @@ import {
   ExternalLink,
 } from "lucide-react";
 
-/** Providers that serve lead-gen (search / invite / DM). Mailbox providers
- *  (MICROSOFT, IMAP) are intentionally excluded — they're managed in Mailboxes. */
+/** Providers that serve lead-gen (search / invite / DM). Everything NOT in this
+ *  allowlist is treated as a non-social (email) account and listed separately
+ *  rather than filtered away — the stored provider string is whatever Unipile
+ *  wrote, and it does NOT always match the label constants (a live Outlook row
+ *  stores "OUTLOOK", not "MICROSOFT"). Using an allowlist for social + a
+ *  catch-all for the rest means no connected account can silently disappear. */
 const SOCIAL_PROVIDERS = ["LINKEDIN", "WHATSAPP", "INSTAGRAM", "MESSENGER", "TELEGRAM", "TWITTER"] as const;
-const MAILBOX_PROVIDERS = ["MICROSOFT", "IMAP"] as const;
+const isSocial = (p: unknown) => SOCIAL_PROVIDERS.includes(String(p ?? "").toUpperCase() as any);
 
 const PROVIDER_META: Record<string, { label: string; color: string }> = {
   LINKEDIN: { label: "LinkedIn", color: "#0A66C2" },
@@ -62,6 +66,9 @@ const PROVIDER_META: Record<string, { label: string; color: string }> = {
   TELEGRAM: { label: "Telegram", color: "#2AABEE" },
   TWITTER: { label: "X (Twitter)", color: "#000000" },
   MICROSOFT: { label: "Outlook", color: "#0078D4" },
+  OUTLOOK: { label: "Outlook", color: "#0078D4" },
+  GOOGLE: { label: "Gmail", color: "#EA4335" },
+  GMAIL: { label: "Gmail", color: "#EA4335" },
   IMAP: { label: "IMAP Email", color: "#6B7280" },
 };
 
@@ -156,14 +163,9 @@ export function SocialAccountsSection() {
 
   // Stop polling once something actually lands.
   const accounts = (accountsQ.data ?? []) as any[];
-  const social = useMemo(
-    () => accounts.filter((a) => SOCIAL_PROVIDERS.includes(String(a.provider).toUpperCase() as any)),
-    [accounts],
-  );
-  const mailboxes = useMemo(
-    () => accounts.filter((a) => MAILBOX_PROVIDERS.includes(String(a.provider).toUpperCase() as any)),
-    [accounts],
-  );
+  const social = useMemo(() => accounts.filter((a) => isSocial(a.provider)), [accounts]);
+  // Catch-all so an unrecognised provider is still shown somewhere.
+  const mailboxes = useMemo(() => accounts.filter((a) => !isSocial(a.provider)), [accounts]);
   useEffect(() => {
     if (awaitingConnect && social.length > 0) setAwaitingConnect(false);
   }, [social.length]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -391,12 +393,17 @@ export function SocialAccountsSection() {
 
           {/* Mailbox providers land in the same Unipile table — point them home */}
           {mailboxes.length > 0 && (
-            <Card title="Email accounts" description="You've also connected email accounts through the same wizard. They're managed under Mailboxes.">
+            <Card title="Other connected accounts" description="Also connected through the same wizard. Email accounts are managed under Mailboxes.">
               <div className="space-y-2">
                 {mailboxes.map((a) => (
                   <div key={a.id ?? a.unipileAccountId} className="flex items-center gap-3 rounded-lg border border-border/70 bg-background px-4 py-2.5">
                     <Mail className="size-4 shrink-0 text-muted-foreground" />
-                    <span className="min-w-0 flex-1 truncate text-[13px]">{a.displayName || (PROVIDER_META[String(a.provider).toUpperCase()]?.label ?? a.provider)}</span>
+                    <span className="min-w-0 flex-1 truncate text-[13px]">
+                      {a.displayName || (PROVIDER_META[String(a.provider).toUpperCase()]?.label ?? a.provider)}
+                      <span className="ml-1.5 text-[11.5px] text-muted-foreground">
+                        {PROVIDER_META[String(a.provider).toUpperCase()]?.label ?? String(a.provider)}
+                      </span>
+                    </span>
                     <StatusPill status={String(a.status ?? "").toUpperCase()} />
                   </div>
                 ))}
