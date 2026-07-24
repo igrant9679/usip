@@ -1523,6 +1523,46 @@ export const teamRouter = router({
 
 export const dangerZoneRouter = router({
   /**
+   * Report whether specific physical tables still exist in the live database,
+   * with an exact row count for any that do.
+   *
+   * Why this exists: rawMigrations.ts SWALLOWS a failed migration — it logs
+   * "[RawMigrations] FAILED <name>" and continues to the next one, so the app
+   * boots perfectly whether or not a migration actually applied. That makes
+   * schema/prod drift invisible from outside (a recurring problem in this
+   * repo). This proc is the read path that makes a DDL migration verifiable,
+   * and lets you see what a table holds BEFORE dropping it.
+   *
+   * Safety: admin-only, read-only, and every table name is validated against
+   * /^[a-z0-9_]+$/ before it can reach the COUNT(*) — no injection surface.
+   */
+  tableStatus: adminWsProcedure
+    .input(z.object({ tables: z.array(z.string().regex(/^[a-z0-9_]+$/)).min(1).max(25) }))
+    .query(async ({ input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const out: Array<{ table: string; exists: boolean; rows: number | null }> = [];
+      for (const t of input.tables) {
+        // Defence in depth — the zod regex already guarantees this shape.
+        if (!/^[a-z0-9_]+$/.test(t)) continue;
+        const [existsRows] = (await db.execute(
+          sql`SELECT COUNT(*) AS n FROM information_schema.TABLES
+              WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ${t}`,
+        )) as unknown as [Array<{ n: number }>];
+        const exists = Number(existsRows?.[0]?.n ?? 0) > 0;
+        let rows: number | null = null;
+        if (exists) {
+          const [cnt] = (await db.execute(
+            sql.raw(`SELECT COUNT(*) AS n FROM \`${t}\``),
+          )) as unknown as [Array<{ n: number }>];
+          rows = Number(cnt?.[0]?.n ?? 0);
+        }
+        out.push({ table: t, exists, rows });
+      }
+      return out;
+    }),
+
+  /**
    * Soft-archive the workspace. Sets archivedAt = now.
    * Only the workspace owner (super_admin) can archive.
    * After archiving, the workspace is hidden from workspace switcher.
