@@ -492,7 +492,7 @@ export default function ProspectsPage() {
                 className="text-destructive border-destructive/40 hover:bg-destructive/10"
                 onClick={() => {
                   const ids = Array.from(selectedIds);
-                  confirmAction({ title: `Delete ${ids.length} prospect${ids.length !== 1 ? "s" : ""}? Converted leads will be kept.` }, () => {
+                  confirmAction({ title: `Delete ${ids.length} prospect${ids.length !== 1 ? "s" : ""}?`, description: "Converted leads will be kept.", confirmLabel: "Delete" }, () => {
                     bulkDelete.mutate({ prospectIds: ids });
                   });
                 }}
@@ -699,10 +699,16 @@ export default function ProspectsPage() {
                             className="text-destructive"
                             onClick={() => {
                               const label = `${p.firstName} ${p.lastName}`.trim() || "this prospect";
-                              const warn = p.linkedLeadId
-                                ? `Delete ${label}? They've been converted to a lead — the lead row will be kept.`
-                                : `Delete ${label}?`;
-                              confirmAction({ title: warn }, () => { deleteProspect.mutate({ prospectId: p.id }); });
+                              confirmAction(
+                                {
+                                  title: `Delete ${label}?`,
+                                  description: p.linkedLeadId
+                                    ? "They've been converted to a lead — the lead row will be kept."
+                                    : "This prospect will be permanently deleted. This cannot be undone.",
+                                  confirmLabel: "Delete",
+                                },
+                                () => { deleteProspect.mutate({ prospectId: p.id }); },
+                              );
                             }}
                           >
                             <Trash2 className="h-4 w-4 mr-2" />

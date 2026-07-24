@@ -803,7 +803,7 @@ function SavedSectionsPanel({
                     </button>
                     <button
                       onClick={() => {
-                        confirmAction({ title: `Delete "${section.name}"?` }, () => { deleteMutation.mutate({ id: section.id }); });
+                        confirmAction({ title: `Delete "${section.name}"?`, description: "This saved section will be permanently deleted. This cannot be undone.", confirmLabel: "Delete" }, () => { deleteMutation.mutate({ id: section.id }); });
                       }}
                       className="p-1 rounded hover:bg-destructive/10 hover:text-destructive transition-colors"
                       title="Delete section"

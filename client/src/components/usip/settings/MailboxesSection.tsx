@@ -362,7 +362,7 @@ function MailboxRow({ a, onConfigure }: { a: MailboxAccount; onConfigure: () => 
               className="text-rose-600 focus:text-rose-600"
               disabled={del.isPending}
               onClick={() => {
-                confirmAction({ title: `Unlink ${a.fromEmail}? Sequences using this mailbox will stop sending from it.` }, () => {
+                confirmAction({ title: `Unlink ${a.fromEmail}?`, description: "Sequences using this mailbox will stop sending from it.", confirmLabel: "Unlink" }, () => {
                   del.mutate({ id: a.id });
                 });
               }}

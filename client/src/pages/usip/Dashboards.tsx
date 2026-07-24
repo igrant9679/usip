@@ -509,7 +509,7 @@ export default function Dashboards() {
                         <Pencil className="h-3 w-3" />
                       </Button>
                       <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-destructive"
-                        onClick={() => { confirmAction({ title: "Delete this dashboard?" }, () => { delDash.mutate({ id: selected }); }); }}
+                        onClick={() => { confirmAction({ title: "Delete this dashboard?", description: "This dashboard and its layout will be permanently deleted. This cannot be undone.", confirmLabel: "Delete" }, () => { delDash.mutate({ id: selected }); }); }}
                         title="Delete dashboard">
                         <Trash2 className="h-3 w-3" />
                       </Button>

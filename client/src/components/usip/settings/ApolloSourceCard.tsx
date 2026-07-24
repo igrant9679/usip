@@ -151,7 +151,7 @@ export function ApolloSourceCard({
               size="sm"
               disabled={save.isPending}
               onClick={() => {
-                confirmAction({ title: "Remove the saved Apollo API key? Campaigns using Apollo as a source stop sourcing from it." }, () => {
+                confirmAction({ title: "Remove the saved Apollo API key?", description: "Campaigns using Apollo as a source stop sourcing from it.", confirmLabel: "Remove" }, () => {
                   save.mutate({ apiKey: "" });
                 });
               }}

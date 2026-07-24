@@ -125,7 +125,7 @@ export default function LeadRouting() {
                         strategy: r.strategy as any,
                         targetUserIds: (r.targetUserIds as number[] | null) ?? [],
                       })}><Pencil className="size-3.5" /> Edit</Button>
-                      <Button size="sm" variant="ghost" className="text-rose-600" onClick={() => { confirmAction({ title: `Delete rule "${r.name}"?` }, () => { remove.mutate({ id: r.id }); }); }}><Trash2 className="size-3.5" /></Button>
+                      <Button size="sm" variant="ghost" className="text-rose-600" onClick={() => { confirmAction({ title: `Delete rule "${r.name}"?`, description: "This routing rule will be permanently deleted. This cannot be undone.", confirmLabel: "Delete" }, () => { remove.mutate({ id: r.id }); }); }}><Trash2 className="size-3.5" /></Button>
                     </td>
                   </tr>
                 ))}

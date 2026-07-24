@@ -92,7 +92,7 @@ export default function CompanyProfile() {
             <div className="flex items-center gap-2 shrink-0">
               {canManage && <Button size="sm" className="gap-1.5" disabled={enrich.isPending} onClick={() => enrich.mutate({ accountId: id })}><RefreshCw className={`size-3.5 ${enrich.isPending ? "animate-spin" : ""}`} /> Enrich</Button>}
               <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setLocation(`/v2/people`)}><Sparkles className="size-3.5" /> Find people</Button>
-              {isAdmin && <Button size="sm" variant="outline" className="gap-1.5 text-red-600" onClick={() => { confirmAction({ title: `Archive ${c.name}?` }, () => { archive.mutate({ accountId: id }); }); }}><Archive className="size-3.5" /></Button>}
+              {isAdmin && <Button size="sm" variant="outline" className="gap-1.5 text-red-600" onClick={() => { confirmAction({ title: `Archive ${c.name}?`, description: "The company is hidden from active views. You can restore it later.", confirmLabel: "Archive", destructive: false }, () => { archive.mutate({ accountId: id }); }); }}><Archive className="size-3.5" /></Button>}
             </div>
           </div>
         </div>

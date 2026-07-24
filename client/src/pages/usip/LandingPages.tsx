@@ -271,7 +271,7 @@ export default function LandingPages() {
               </Section>
 
               <div className="flex items-center justify-between pt-2 border-t">
-                <Button variant="ghost" size="sm" className="text-rose-600 gap-1" onClick={() => { confirmAction({ title: "Delete this landing page?" }, () => { remove.mutate({ id: form.id }); }); }}><Trash2 className="size-4" /> Delete page</Button>
+                <Button variant="ghost" size="sm" className="text-rose-600 gap-1" onClick={() => { confirmAction({ title: "Delete this landing page?", description: "The page and its captured-lead link will be permanently deleted. This cannot be undone.", confirmLabel: "Delete" }, () => { remove.mutate({ id: form.id }); }); }}><Trash2 className="size-4" /> Delete page</Button>
                 <Button size="sm" disabled={update.isPending} onClick={save} style={{ backgroundColor: accent }} className="text-white">Save changes</Button>
               </div>
             </div>

@@ -775,7 +775,7 @@ function AccountCard({ account, onEdit }: { account: any; onEdit: (id: number) =
               className="h-6 w-6 text-destructive hover:text-destructive"
               title="Remove account"
               onClick={() => {
-                confirmAction({ title: `Remove "${account.name}"?` }, () => {
+                confirmAction({ title: `Remove "${account.name}"?`, description: "Sequences using this account will stop sending from it. This cannot be undone.", confirmLabel: "Remove" }, () => {
                   deleteMutation.mutate({ id: account.id });
                 });
               }}

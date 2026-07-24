@@ -209,7 +209,7 @@ export default function Personas() {
   };
 
   const remove = (id: number) => {
-    confirmAction({ title: "Delete this persona?", confirmLabel: "Delete" }, async () => {
+    confirmAction({ title: "Delete this persona?", description: "This targeting template will be permanently deleted. This cannot be undone.", confirmLabel: "Delete" }, async () => {
       try {
         await del.mutateAsync({ id });
         await refetch();

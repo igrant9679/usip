@@ -354,7 +354,7 @@ export default function ARECampaigns() {
                     variant="ghost"
                     className="text-destructive/60 hover:text-destructive gap-1 text-xs"
                     onClick={() => {
-                      confirmAction({ title: "Delete this campaign?" }, () => { deleteCampaign.mutate({ id: c.id }); });
+                      confirmAction({ title: "Delete this campaign?", description: "The campaign and its prospect queue will be permanently deleted. This cannot be undone.", confirmLabel: "Delete" }, () => { deleteCampaign.mutate({ id: c.id }); });
                     }}
                   >
                     <Trash2 className="size-3" />

@@ -394,7 +394,7 @@ function PoolCard({ pool }: { pool: any }) {
               className="h-7 w-7 text-destructive hover:text-destructive"
               title="Delete pool"
               onClick={() => {
-                confirmAction({ title: `Delete pool "${pool.name}"?` }, () => {
+                confirmAction({ title: `Delete pool "${pool.name}"?`, description: "The pool is removed; its member accounts are not deleted. This cannot be undone.", confirmLabel: "Delete" }, () => {
                   deleteMutation.mutate({ id: pool.id });
                 });
               }}

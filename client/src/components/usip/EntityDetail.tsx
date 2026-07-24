@@ -176,7 +176,7 @@ function NotesTab({ entityType, entityId }: { entityType: CrmEntityType; entityI
                     {n.pinned ? <PinOff className="size-3.5" /> : <Pin className="size-3.5" />}
                   </Button>
                   <Button variant="ghost" size="icon" className="size-7 text-destructive"
-                    onClick={() => { confirmAction({ title: "Delete this note?" }, () => { del.mutate({ id: n.id }); }); }}>
+                    onClick={() => { confirmAction({ title: "Delete this note?", description: "This note will be permanently removed. This cannot be undone.", confirmLabel: "Delete" }, () => { del.mutate({ id: n.id }); }); }}>
                     <Trash2 className="size-3.5" />
                   </Button>
                 </div>
@@ -245,7 +245,7 @@ function FilesTab({ entityType, entityId }: { entityType: CrmEntityType; entityI
                 </a>
               )}
               <Button variant="ghost" size="icon" className="size-7 text-destructive"
-                onClick={() => { confirmAction({ title: "Delete this file?" }, () => { del.mutate({ id: f.id }); }); }}>
+                onClick={() => { confirmAction({ title: "Delete this file?", description: "This attachment will be permanently removed. This cannot be undone.", confirmLabel: "Delete" }, () => { del.mutate({ id: f.id }); }); }}>
                 <Trash2 className="size-3.5" />
               </Button>
             </li>

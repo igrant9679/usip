@@ -426,14 +426,14 @@ function MoreMenu({ selectedIds, onClear, onPick }: { selectedIds: number[]; onC
             <it.icon className="size-4 mr-2" /> {it.label}
           </DropdownMenuItem>
         ))}
-        <DropdownMenuItem disabled={optOut.isPending} onClick={() => { confirmAction({ title: `Opt out ${n} selected ${n === 1 ? "person" : "people"} from all outreach?` }, () => { optOut.mutate({ prospectIds: selectedIds } as any); }); }}>
+        <DropdownMenuItem disabled={optOut.isPending} onClick={() => { confirmAction({ title: `Opt out ${n} selected ${n === 1 ? "person" : "people"}?`, description: "They'll be suppressed from all outreach.", confirmLabel: "Opt out", destructive: false }, () => { optOut.mutate({ prospectIds: selectedIds } as any); }); }}>
           <UserX className="size-4 mr-2" /> Opt Out
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem
           className="text-rose-600 focus:text-rose-600"
           disabled={bulkDelete.isPending}
-          onClick={() => { confirmAction({ title: `Delete ${n} selected ${n === 1 ? "person" : "people"}? This cannot be undone.` }, () => { bulkDelete.mutate({ prospectIds: selectedIds } as any); }); }}
+          onClick={() => { confirmAction({ title: `Delete ${n} selected ${n === 1 ? "person" : "people"}?`, description: "This cannot be undone.", confirmLabel: "Delete" }, () => { bulkDelete.mutate({ prospectIds: selectedIds } as any); }); }}
         >
           <Trash2 className="size-4 mr-2" /> Delete
         </DropdownMenuItem>

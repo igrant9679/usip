@@ -173,7 +173,7 @@ export default function Lists() {
     if (!newName.trim()) return;
     createMut.mutate({ name: newName.trim(), entityType: newObject === "People" ? "people" : "companies" });
   };
-  const del = (l: RecordList) => { confirmAction({ title: `Delete list "${l.name}"? This removes the list, not the records.` }, () => { deleteMut.mutate({ id: l.id }); }); };
+  const del = (l: RecordList) => { confirmAction({ title: `Delete list "${l.name}"?`, description: "This removes the list, not the records in it.", confirmLabel: "Delete" }, () => { deleteMut.mutate({ id: l.id }); }); };
 
   return (
     <Shell title="Lists">

@@ -272,7 +272,7 @@ export default function Leads() {
               className="gap-2 text-destructive border-destructive/40 hover:bg-destructive/10"
               onClick={() => {
                 const ids = Array.from(selectedIds);
-                confirmAction({ title: `Delete ${ids.length} lead${ids.length === 1 ? "" : "s"}? This cannot be undone.` }, () => {
+                confirmAction({ title: `Delete ${ids.length} lead${ids.length === 1 ? "" : "s"}?`, description: "This cannot be undone.", confirmLabel: "Delete" }, () => {
                   bulkDeleteMut.mutate({ ids });
                 });
               }}
@@ -390,7 +390,7 @@ export default function Leads() {
                             <Tag className="size-4 mr-2" />Add to Segment
                           </DropdownMenuItem>
                           <DropdownMenuSeparator />
-                          <DropdownMenuItem className="text-destructive" onClick={() => { confirmAction({ title: `Delete ${l.firstName} ${l.lastName}?` }, () => { deleteMut.mutate({ id: l.id }); }); }}>
+                          <DropdownMenuItem className="text-destructive" onClick={() => { confirmAction({ title: `Delete ${l.firstName} ${l.lastName}?`, description: "This lead will be permanently deleted. This cannot be undone.", confirmLabel: "Delete" }, () => { deleteMut.mutate({ id: l.id }); }); }}>
                             <Trash2 className="size-4 mr-2" />Delete
                           </DropdownMenuItem>
                         </DropdownMenuContent>

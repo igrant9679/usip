@@ -614,7 +614,7 @@ export default function TourBuilderPage() {
                   variant="ghost"
                   className="h-8 w-8 p-0 text-muted-foreground hover:text-red-500"
                   onClick={() => {
-                    confirmAction({ title: `Delete tour "${tour.name}"?` }, () => { deleteMut.mutate({ id: tour.id }); });
+                    confirmAction({ title: `Delete tour "${tour.name}"?`, description: "This product tour will be permanently deleted. This cannot be undone.", confirmLabel: "Delete" }, () => { deleteMut.mutate({ id: tour.id }); });
                   }}
                 >
                   <Trash2 className="h-3.5 w-3.5" />

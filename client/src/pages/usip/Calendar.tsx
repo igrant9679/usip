@@ -567,7 +567,7 @@ export default function CalendarPage() {
                         onClick={(e) => {
                           e.stopPropagation();
                           const label = acc.label ?? acc.email ?? acc.provider;
-                          confirmAction({ title: `Disconnect ${label}? Past events stay in the local cache, but new sync will stop.` }, () => {
+                          confirmAction({ title: `Disconnect ${label}?`, description: "Past events stay in the local cache, but new sync will stop.", confirmLabel: "Disconnect" }, () => {
                             disconnectAccount.mutate({ accountId: acc.id });
                           });
                         }}

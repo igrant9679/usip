@@ -145,7 +145,7 @@ export default function Companies() {
   const doMerge = () => {
     const ids = [...checked];
     if (ids.length !== 2) { toast.error("Select exactly two companies to merge"); return; }
-    confirmAction({ title: "Merge the second company into the first? Contacts, prospects and deals move to the first." }, () => { merge.mutate({ primaryAccountId: ids[0], duplicateAccountId: ids[1] }); });
+    confirmAction({ title: "Merge the second company into the first?", description: "Contacts, prospects and deals move to the first.", confirmLabel: "Merge" }, () => { merge.mutate({ primaryAccountId: ids[0], duplicateAccountId: ids[1] }); });
   };
 
   return (

@@ -274,7 +274,7 @@ function ConnectionCard({
               variant="outline"
               size="sm"
               disabled={save.isPending}
-              onClick={() => { confirmAction({ title: "Remove the saved xAI API key? Agents stop answering until a new key is added." }, () => { save.mutate({ apiKey: "" }); }); }}
+              onClick={() => { confirmAction({ title: "Remove the saved xAI API key?", description: "Agents stop answering until a new key is added.", confirmLabel: "Remove" }, () => { save.mutate({ apiKey: "" }); }); }}
               className="text-rose-600 hover:text-rose-600"
             >
               Remove key
@@ -337,7 +337,7 @@ function AgentRow({ a, canManage, onEdit }: { a: Agent; canManage: boolean; onEd
       <button
         type="button"
         disabled={!canManage || remove.isPending}
-        onClick={() => { confirmAction({ title: `Delete ${a.name}? Its call history is kept.` }, () => { remove.mutate({ id: a.id }); }); }}
+        onClick={() => { confirmAction({ title: `Delete ${a.name}?`, description: "Its call history is kept.", confirmLabel: "Delete" }, () => { remove.mutate({ id: a.id }); }); }}
         aria-label={`Delete ${a.name}`}
         className="shrink-0 rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-rose-600 disabled:opacity-40"
       >

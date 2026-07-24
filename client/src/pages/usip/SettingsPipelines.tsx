@@ -116,7 +116,7 @@ export default function SettingsPipelines() {
                   </Button>
                   {!detail.pipeline.isDefault && (
                     <Button size="sm" variant="ghost" className="text-destructive"
-                      onClick={() => { confirmAction({ title: `Delete pipeline "${detail.pipeline.name}"? Stages will be removed; existing opportunities keep their stage value.` }, () => { deletePipeline.mutate({ id: detail.pipeline.id }); }); }}>
+                      onClick={() => { confirmAction({ title: `Delete pipeline "${detail.pipeline.name}"?`, description: "Stages will be removed; existing opportunities keep their stage value.", confirmLabel: "Delete" }, () => { deletePipeline.mutate({ id: detail.pipeline.id }); }); }}>
                       <Trash2 className="size-3.5 mr-1" /> Delete
                     </Button>
                   )}
@@ -165,7 +165,7 @@ export default function SettingsPipelines() {
                         Lost
                       </label>
                       <Button size="icon" variant="ghost" className="size-7 text-destructive"
-                        onClick={() => { confirmAction({ title: `Delete stage "${s.label}"? Opportunities currently in this stage keep their stored value.` }, () => { deleteStage.mutate({ id: s.id }); }); }}>
+                        onClick={() => { confirmAction({ title: `Delete stage "${s.label}"?`, description: "Opportunities currently in this stage keep their stored value.", confirmLabel: "Delete" }, () => { deleteStage.mutate({ id: s.id }); }); }}>
                         <Trash2 className="size-3.5" />
                       </Button>
                     </div>
