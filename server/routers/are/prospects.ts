@@ -42,6 +42,7 @@ import { router } from "../../_core/trpc";
 import { workspaceProcedure } from "../../_core/workspace";
 import { resolveVerifiedEmail } from "../../services/scraper";
 import { apolloResolveDomain } from "../../services/apollo";
+import { buildBrandContext } from "../../services/brandContext";
 
 /* ─── ICP Match Scorer ───────────────────────────────────────────────────── */
 
@@ -593,8 +594,12 @@ async function personalizeForProspect(
   const subjectGuidance = (campaign.promptSubject ?? "").trim();
   const bodyGuidance = (campaign.promptBody ?? "").trim();
   const signature = (campaign.promptSignature ?? "").trim();
+  // The seller's own company + brand voice (migration 0125). "" when the
+  // workspace has no branding set or brand-voice applyToAI is off.
+  const brandBlock = await buildBrandContext(campaign.workspaceId);
   const systemContent =
     `You are an elite B2B sales copywriter. You will be given a campaign skeleton and a prospect dossier. Fill in subject+body for each step, keeping the structure, cadence, and CTA pattern from the skeleton. Every message must reference something real about the prospect. Never use generic openers ("I hope this finds you well", "I wanted to reach out").` +
+    (brandBlock ? `\n\n${brandBlock}` : "") +
     (customInstructions ? `\n\n## Campaign-specific instructions\n${customInstructions}` : "") +
     (subjectGuidance ? `\n\n## Subject line instructions\n${subjectGuidance}` : "") +
     (bodyGuidance ? `\n\n## Body instructions\n${bodyGuidance}` : "") +

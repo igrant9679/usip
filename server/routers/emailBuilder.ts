@@ -23,6 +23,7 @@ import {
 } from "../_core/workspace";
 import { router } from "../_core/trpc";
 import { invokeLLM } from "../_core/llm";
+import { buildBrandContext } from "../services/brandContext";
 
 /** manager+ see/edit all shared assets; reps are limited to team-visible + their own. */
 function isManagerPlus(role: string): boolean {
@@ -449,9 +450,14 @@ Rules:
 - includeCta: ${input.includeCta} - if false, omit the button block
 - Return ONLY valid JSON, no markdown fences, no extra text`;
 
+      // Inject the seller's own company + brand voice (migration 0125) so the
+      // draft describes THIS workspace and follows its voice — "" when unset.
+      const brandBlock = await buildBrandContext(ctx.workspace.id);
+      const systemContentWithBrand = brandBlock ? `${systemPrompt}\n\n${brandBlock}` : systemPrompt;
+
       const res = await invokeLLM({
         messages: [
-          { role: "system", content: systemPrompt },
+          { role: "system", content: systemContentWithBrand },
           { role: "user", content: input.prompt },
         ],
         // outputSchema forces valid JSON on Anthropic (the primary provider);

@@ -6,6 +6,7 @@ import { recordAudit } from "../audit";
 import { checkPermission, getDb } from "../db";
 import { createEmailAdapter } from "../emailAdapter";
 import { invokeLLM } from "../_core/llm";
+import { buildBrandContext } from "../services/brandContext";
 import { isSuppressed, makeUnsubscribeUrl } from "../unsubscribe";
 import { bumpCampaignCounter } from "../campaignCounters";
 import { assertSendAllowed } from "../sendLimits";
@@ -1882,6 +1883,9 @@ export const emailDraftsRouter = router({
         }
       }
 
+      // Seller's own company + brand voice (migration 0125); "" when unset.
+      const brandBlock = await buildBrandContext(ctx.workspace.id);
+
       let subject = "Quick question";
       let body = "";
       try {
@@ -1916,7 +1920,7 @@ DO NOT
 - Don't fabricate facts, metrics, customer names, or quotes.
 - Don't start the body with "Hi {{firstName}}, I hope this email finds you well" or any near-variant.
 - Don't write "As a [role]..." or "I came across your profile".
-- Don't add "P.S." unless the prompt explicitly asks for one.`,
+- Don't add "P.S." unless the prompt explicitly asks for one.${brandBlock ? `\n\n${brandBlock}` : ""}`,
             },
             { role: "user", content: `${contextLine}\n\nGoal: ${input.prompt}` },
           ],
