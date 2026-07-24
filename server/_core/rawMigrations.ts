@@ -2637,6 +2637,26 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0126: drop the two dead social/LinkedIn systems' tables ───────────────
+  // Their code was removed in b9cc065 (user-directed) and this drop was
+  // explicitly approved afterwards. Both systems were fake:
+  //   - social_accounts / social_posts backed the stub publishing router —
+  //     connectAccount wrote a placeholder token ("Connected (stub)") and
+  //     publishNowStub INVENTED impressions/engagements/clicks, which then
+  //     flowed into campaign analytics as if real.
+  //   - linkedin_connections backed the legacy /my-linkedin page, a
+  //     non-Unipile store that automated nothing.
+  // The real social integration is Unipile (`unipile_accounts`) — untouched.
+  // DESTRUCTIVE + IRREVERSIBLE: verify with dangerZone.tableStatus first.
+  {
+    name: "0126_drop_dead_social_tables.sql",
+    statements: [
+      "DROP TABLE IF EXISTS `social_posts`",
+      "DROP TABLE IF EXISTS `social_accounts`",
+      "DROP TABLE IF EXISTS `linkedin_connections`",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------
