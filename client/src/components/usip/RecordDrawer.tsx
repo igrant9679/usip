@@ -1,7 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { trpc } from "@/lib/trpc";
-import { fmtDate, StatusPill } from "./Common";
+import { ConfirmButton, fmtDate, StatusPill } from "./Common";
 import { Brain, ChevronDown, CheckCircle2, Clock, Loader2, Paperclip, Phone, Calendar, MessageSquare, RefreshCw, Sparkles, Trash2, Users, XCircle, ShieldCheck, FileText, Download, Send, Wand2, Sparkle, Linkedin, UserPlus } from "lucide-react";
 import { EmailVerificationBadge } from "./EmailVerificationBadge";
 import { ContactOverview } from "./detail/ContactOverview";
@@ -765,10 +765,11 @@ export function RecordDrawer({
   const delAccount = trpc.accounts.delete.useMutation();
   const delLead = trpc.leads.delete.useMutation();
   const delOpp = trpc.opportunities.delete.useMutation();
+  // Confirmation is handled by <ConfirmButton> (an in-app AlertDialog), NOT
+  // window.confirm — the native dialog blocks the renderer thread, which makes
+  // the whole app unresponsive until it's dismissed and is unstyleable.
   const deleteRecord = () => {
     if (!relatedId) return;
-    const label = title || relatedType;
-    if (!window.confirm(`Delete this ${relatedType} "${label}"? This cannot be undone.`)) return;
     const opts = {
       onSuccess: () => {
         toast.success(`${relatedType.charAt(0).toUpperCase() + relatedType.slice(1)} deleted`);
@@ -817,14 +818,17 @@ export function RecordDrawer({
             <div className="flex items-center gap-2 shrink-0">
               {headerExtras}
               {relatedId && (relatedType === "contact" || relatedType === "account" || relatedType === "lead" || relatedType === "opportunity") && (
-                <button
-                  className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 p-1.5 rounded-md ml-1 border-l border-border pl-2"
-                  title={`Delete this ${relatedType}`}
-                  onClick={deleteRecord}
+                <ConfirmButton
+                  ariaLabel={`Delete this ${relatedType}`}
+                  className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 p-1.5 h-auto rounded-md ml-1 border-l border-border pl-2"
+                  title={`Delete this ${relatedType}?`}
+                  description={`"${title || relatedType}" will be permanently deleted. This cannot be undone.`}
+                  confirmLabel="Delete"
                   disabled={delContact.isPending || delAccount.isPending || delLead.isPending || delOpp.isPending}
+                  onConfirm={deleteRecord}
                 >
                   <Trash2 className="size-4" />
-                </button>
+                </ConfirmButton>
               )}
             </div>
           </SheetTitle>
@@ -870,17 +874,16 @@ export function RecordDrawer({
                     <span className="font-semibold uppercase tracking-wide">{a.kind}</span>
                     {a.disposition && <StatusPill tone={a.disposition === "connected" ? "success" : a.disposition === "not_interested" ? "danger" : "warning"}>{a.disposition.replace(/_/g, " ")}</StatusPill>}
                     <span className="ml-auto text-muted-foreground">{fmtDate(a.createdAt)}</span>
-                    <button
-                      className="text-muted-foreground hover:text-destructive p-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity"
-                      title="Delete activity"
-                      onClick={() => {
-                        if (window.confirm("Delete this activity? This cannot be undone.")) {
-                          delActivity.mutate({ id: a.id });
-                        }
-                      }}
+                    <ConfirmButton
+                      ariaLabel="Delete activity"
+                      className="text-muted-foreground hover:text-destructive p-0.5 h-auto rounded opacity-0 group-hover:opacity-100 transition-opacity"
+                      title="Delete this activity?"
+                      description="This activity will be permanently removed from the timeline. This cannot be undone."
+                      confirmLabel="Delete"
+                      onConfirm={() => delActivity.mutate({ id: a.id })}
                     >
                       <Trash2 className="size-3" />
-                    </button>
+                    </ConfirmButton>
                   </div>
                   {a.subject && <div className="text-sm font-semibold mt-1">{a.subject}</div>}
                   {a.notes && <div className="text-sm whitespace-pre-wrap mt-1 text-foreground/90">{a.notes}</div>}

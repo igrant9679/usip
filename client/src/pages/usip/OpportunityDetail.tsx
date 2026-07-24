@@ -16,7 +16,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { ArrowLeft, KanbanSquare, Building2, Users, DollarSign, Brain, History, Loader2 } from "lucide-react";
+import { ArrowLeft, KanbanSquare, Building2, Users, DollarSign, Brain, History, Loader2, Trash2 } from "lucide-react";
+import { ConfirmButton } from "@/components/usip/Common";
 import { toast } from "sonner";
 
 function fmt$(n: any) {
@@ -40,6 +41,18 @@ export default function OpportunityDetail() {
   const update = trpc.opportunities.update.useMutation({
     onSuccess: () => { utils.opportunities.getWithRelated.invalidate({ id }); toast.success("Saved"); },
     onError: (e) => toast.error(e.message),
+  });
+
+  // Delete was previously reachable ONLY from the pipeline board's record
+  // drawer — this page had no way to remove the record you were looking at.
+  const del = trpc.opportunities.delete.useMutation({
+    onSuccess: () => {
+      toast.success("Opportunity deleted");
+      utils.opportunities.board.invalidate();
+      utils.opportunities.list.invalidate();
+      setLocation("/pipeline");
+    },
+    onError: (e) => toast.error(`Failed to delete: ${e.message}`),
   });
 
   const [reason, setReason] = useState("");
@@ -191,6 +204,19 @@ export default function OpportunityDetail() {
     <Shell title={o.name}>
       <PageHeader title={o.name} description={account?.name ?? undefined} icon={<KanbanSquare className="size-5" />}>
         <Button variant="outline" size="sm" onClick={() => setLocation("/pipeline")}><ArrowLeft className="size-4 mr-1" /> Back to pipeline</Button>
+        <ConfirmButton
+          variant="outline"
+          size="sm"
+          ariaLabel="Delete this opportunity"
+          title="Delete this opportunity?"
+          description={`"${o.name}" will be permanently deleted, along with its stage history and line items. This cannot be undone.`}
+          confirmLabel="Delete"
+          disabled={del.isPending}
+          className="text-destructive hover:text-destructive hover:bg-destructive/10"
+          onConfirm={() => del.mutate({ id })}
+        >
+          <Trash2 className="size-4 mr-1" /> Delete
+        </ConfirmButton>
       </PageHeader>
       <div className="p-4 md:p-5">
         <EntityDetailTabs
