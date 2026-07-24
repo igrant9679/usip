@@ -112,5 +112,4 @@ temp/
 # Manus version file (auto-generated, not part of source)
 client/public/__manus__/version.json
 
-# Local session handoff / resume doc (kept out of history — rewritten most sessions)
 SESSION_STATUS.md
