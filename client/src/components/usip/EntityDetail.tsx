@@ -39,6 +39,7 @@ import {
   Calendar,
 } from "lucide-react";
 import { EmptyState } from "@/components/usip/Shell";
+import { confirmAction } from "@/components/usip/Common";
 
 export type CrmEntityType = "account" | "contact" | "lead" | "opportunity" | "customer";
 
@@ -175,7 +176,7 @@ function NotesTab({ entityType, entityId }: { entityType: CrmEntityType; entityI
                     {n.pinned ? <PinOff className="size-3.5" /> : <Pin className="size-3.5" />}
                   </Button>
                   <Button variant="ghost" size="icon" className="size-7 text-destructive"
-                    onClick={() => { if (confirm("Delete this note?")) del.mutate({ id: n.id }); }}>
+                    onClick={() => { confirmAction({ title: "Delete this note?" }, () => { del.mutate({ id: n.id }); }); }}>
                     <Trash2 className="size-3.5" />
                   </Button>
                 </div>
@@ -244,7 +245,7 @@ function FilesTab({ entityType, entityId }: { entityType: CrmEntityType; entityI
                 </a>
               )}
               <Button variant="ghost" size="icon" className="size-7 text-destructive"
-                onClick={() => { if (confirm("Delete this file?")) del.mutate({ id: f.id }); }}>
+                onClick={() => { confirmAction({ title: "Delete this file?" }, () => { del.mutate({ id: f.id }); }); }}>
                 <Trash2 className="size-3.5" />
               </Button>
             </li>

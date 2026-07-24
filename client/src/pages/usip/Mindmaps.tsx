@@ -14,6 +14,7 @@ import { Shell, PageHeader } from "@/components/usip/Shell";
 import { formatDistanceToNow } from "date-fns";
 import { toast } from "sonner";
 import { GitFork, MoreHorizontal, Pencil, Plus, Trash2 } from "lucide-react";
+import { confirmAction } from "@/components/usip/Common";
 
 export default function Mindmaps() {
   const { data: maps = [], refetch } = trpc.mindmaps.list.useQuery();
@@ -55,13 +56,17 @@ export default function Mindmaps() {
   }
 
   function handleDelete(id: number) {
-    if (!confirm("Delete this mindmap? This cannot be undone.")) return;
-    deleteMut.mutate(
-      { id },
-      {
-        onSuccess: () => toast.success("Mindmap deleted"),
-        onError: () => toast.error("Failed to delete"),
-      }
+    confirmAction(
+      { title: "Delete this mindmap?", description: "This cannot be undone.", confirmLabel: "Delete" },
+      () => {
+        deleteMut.mutate(
+          { id },
+          {
+            onSuccess: () => toast.success("Mindmap deleted"),
+            onError: () => toast.error("Failed to delete"),
+          }
+        );
+      },
     );
   }
 

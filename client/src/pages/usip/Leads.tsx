@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
+import { confirmAction } from "@/components/usip/Common";
 
 const GRADE_TONE: Record<string, string> = { A: "bg-emerald-100 text-emerald-800", B: "bg-blue-100 text-blue-800", C: "bg-amber-100 text-amber-800", D: "bg-rose-100 text-rose-800" };
 const TIER_TONE: Record<string, { label: string; cls: string }> = {
@@ -271,9 +272,9 @@ export default function Leads() {
               className="gap-2 text-destructive border-destructive/40 hover:bg-destructive/10"
               onClick={() => {
                 const ids = Array.from(selectedIds);
-                if (confirm(`Delete ${ids.length} lead${ids.length === 1 ? "" : "s"}? This cannot be undone.`)) {
+                confirmAction({ title: `Delete ${ids.length} lead${ids.length === 1 ? "" : "s"}? This cannot be undone.` }, () => {
                   bulkDeleteMut.mutate({ ids });
-                }
+                });
               }}
               disabled={bulkDeleteMut.isPending}
             >
@@ -389,7 +390,7 @@ export default function Leads() {
                             <Tag className="size-4 mr-2" />Add to Segment
                           </DropdownMenuItem>
                           <DropdownMenuSeparator />
-                          <DropdownMenuItem className="text-destructive" onClick={() => { if (confirm(`Delete ${l.firstName} ${l.lastName}?`)) deleteMut.mutate({ id: l.id }); }}>
+                          <DropdownMenuItem className="text-destructive" onClick={() => { confirmAction({ title: `Delete ${l.firstName} ${l.lastName}?` }, () => { deleteMut.mutate({ id: l.id }); }); }}>
                             <Trash2 className="size-4 mr-2" />Delete
                           </DropdownMenuItem>
                         </DropdownMenuContent>

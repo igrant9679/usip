@@ -21,6 +21,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Database, Loader2, ShieldCheck } from "lucide-react";
+import { confirmAction } from "@/components/usip/Common";
 
 export function ApolloSourceCard({
   variant = "standalone",
@@ -150,9 +151,9 @@ export function ApolloSourceCard({
               size="sm"
               disabled={save.isPending}
               onClick={() => {
-                if (confirm("Remove the saved Apollo API key? Campaigns using Apollo as a source stop sourcing from it.")) {
+                confirmAction({ title: "Remove the saved Apollo API key? Campaigns using Apollo as a source stop sourcing from it." }, () => {
                   save.mutate({ apiKey: "" });
-                }
+                });
               }}
               className="text-rose-600 hover:text-rose-600"
             >

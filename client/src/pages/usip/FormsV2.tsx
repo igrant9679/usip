@@ -19,6 +19,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
+import { confirmAction } from "@/components/usip/Common";
 import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
 } from "@/components/ui/select";
@@ -128,7 +129,7 @@ export default function FormsV2() {
                     <a href={publicUrl(f.publicId)} target="_blank" rel="noreferrer"><Button size="sm" variant="ghost" className="h-7 gap-1 text-[11px]"><ExternalLink className="size-3" /> Preview</Button></a>
                     <Button size="sm" variant="ghost" className="h-7 gap-1 text-[11px]" onClick={() => setSubsFor(f)}><Inbox className="size-3" /> Submissions</Button>
                     <div className="flex-1" />
-                    <Button size="icon" variant="ghost" className="size-7 text-muted-foreground hover:text-rose-600" title="Delete" onClick={() => { if (confirm(`Delete "${f.title}"?`)) del.mutate({ id: f.id }); }}><Trash2 className="size-3.5" /></Button>
+                    <Button size="icon" variant="ghost" className="size-7 text-muted-foreground hover:text-rose-600" title="Delete" onClick={() => { confirmAction({ title: `Delete "${f.title}"?` }, () => { del.mutate({ id: f.id }); }); }}><Trash2 className="size-3.5" /></Button>
                   </div>
                 </div>
               ))}

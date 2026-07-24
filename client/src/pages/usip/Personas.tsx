@@ -22,6 +22,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import { Users, Plus, Pencil, Trash2, Sparkles, ChevronDown, ArrowUp, ArrowDown, FolderPlus } from "lucide-react";
+import { confirmAction } from "@/components/usip/Common";
 
 interface PersonaForm {
   name: string;
@@ -207,14 +208,15 @@ export default function Personas() {
     }
   };
 
-  const remove = async (id: number) => {
-    if (!confirm("Delete this persona?")) return;
-    try {
-      await del.mutateAsync({ id });
-      await refetch();
-    } catch (e: any) {
-      toast.error(e?.message ?? "Delete failed");
-    }
+  const remove = (id: number) => {
+    confirmAction({ title: "Delete this persona?", confirmLabel: "Delete" }, async () => {
+      try {
+        await del.mutateAsync({ id });
+        await refetch();
+      } catch (e: any) {
+        toast.error(e?.message ?? "Delete failed");
+      }
+    });
   };
 
   // ── Category handlers ──────────────────────────────────────────────
@@ -239,14 +241,18 @@ export default function Personas() {
     }
   };
 
-  const removeCategory = async (c: any) => {
-    if (!confirm(`Delete category "${c.name}"? Its personas move to Uncategorized.`)) return;
-    try {
-      await deleteCategory.mutateAsync({ id: c.id });
-      await Promise.all([refetchCats(), refetch()]);
-    } catch (e: any) {
-      toast.error(e?.message ?? "Delete failed");
-    }
+  const removeCategory = (c: any) => {
+    confirmAction(
+      { title: `Delete category "${c.name}"?`, description: "Its personas move to Uncategorized.", confirmLabel: "Delete" },
+      async () => {
+        try {
+          await deleteCategory.mutateAsync({ id: c.id });
+          await Promise.all([refetchCats(), refetch()]);
+        } catch (e: any) {
+          toast.error(e?.message ?? "Delete failed");
+        }
+      },
+    );
   };
 
   const moveCategory = async (i: number, dir: -1 | 1) => {

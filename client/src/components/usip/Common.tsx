@@ -8,7 +8,112 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
-import { ReactNode, useState } from "react";
+import { ReactNode, createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+
+/* ─────────────────────── promise-based confirm ──────────────────────────
+ * `ConfirmButton` below only fits when the action hangs off a button you own.
+ * Plenty of destructive actions live in a plain handler instead
+ * (`const del = (x) => { … }`, bulk-toolbar callbacks, dropdown items), and
+ * those historically fell back to the NATIVE confirm() — which blocks the
+ * renderer thread, freezing the whole app until it's dismissed, can't be
+ * styled, and is invisible to anything driving the page.
+ *
+ * useConfirm() gives those call sites an in-app AlertDialog:
+ *     if (confirm("Delete?")) del()              →  native, blocking
+ *     confirm({ title: "Delete?" }, () => del()) →  in-app, non-blocking
+ *
+ * The API takes a CALLBACK rather than returning a promise on purpose. A
+ * promise-returning confirm() invites `if (confirm(...))` — which is always
+ * truthy when the await is forgotten, silently running the destructive action
+ * with no confirmation at all. With a callback there is no boolean to test,
+ * so that failure mode cannot be written.
+ * ---------------------------------------------------------------------- */
+
+export type ConfirmOptions = {
+  title: string;
+  description?: ReactNode;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  destructive?: boolean;
+};
+
+type ConfirmFn = (opts: ConfirmOptions, onAccept: () => void) => void;
+
+const ConfirmContext = createContext<ConfirmFn | null>(null);
+
+/* Module-level binding so NON-component code (plain handlers, callbacks
+ * defined outside a component body) can raise the same dialog without being
+ * rewritten into a hook call. ConfirmProvider registers itself here on mount.
+ * If it somehow isn't mounted we log and do NOTHING — never run the action
+ * unconfirmed, since every caller is a destructive operation. */
+let boundConfirm: ConfirmFn | null = null;
+
+export const confirmAction: ConfirmFn = (opts, onAccept) => {
+  if (!boundConfirm) {
+    console.error("[confirmAction] ConfirmProvider is not mounted — action cancelled:", opts.title);
+    return;
+  }
+  boundConfirm(opts, onAccept);
+};
+
+export function ConfirmProvider({ children }: { children: ReactNode }) {
+  const [opts, setOpts] = useState<ConfirmOptions | null>(null);
+  // Held across renders so the dialog's buttons can reach the pending action.
+  const action = useRef<(() => void) | null>(null);
+
+  const confirm = useCallback<ConfirmFn>((o, onAccept) => {
+    action.current = onAccept;
+    setOpts(o);
+  }, []);
+
+  // Expose the same function to the module-level confirmAction() binding.
+  useEffect(() => {
+    boundConfirm = confirm;
+    return () => { if (boundConfirm === confirm) boundConfirm = null; };
+  }, [confirm]);
+
+  const settle = (accepted: boolean) => {
+    const run = action.current;
+    action.current = null;
+    setOpts(null);
+    if (accepted) run?.();
+  };
+
+  return (
+    <ConfirmContext.Provider value={confirm}>
+      {children}
+      <AlertDialog
+        open={!!opts}
+        // Covers Esc and outside-click — both must drop the pending action.
+        onOpenChange={(open) => { if (!open) settle(false); }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{opts?.title}</AlertDialogTitle>
+            {opts?.description && <AlertDialogDescription>{opts.description}</AlertDialogDescription>}
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => settle(false)}>{opts?.cancelLabel ?? "Cancel"}</AlertDialogCancel>
+            <AlertDialogAction
+              className={opts?.destructive !== false ? "bg-destructive text-destructive-foreground hover:bg-destructive/90" : undefined}
+              onClick={() => settle(true)}
+            >
+              {opts?.confirmLabel ?? "Confirm"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </ConfirmContext.Provider>
+  );
+}
+
+/** Returns confirm(opts, onAccept). Throws if the provider isn't mounted,
+ *  rather than silently running a destructive action unconfirmed. */
+export function useConfirm(): ConfirmFn {
+  const ctx = useContext(ConfirmContext);
+  if (!ctx) throw new Error("useConfirm must be used within <ConfirmProvider>");
+  return ctx;
+}
 
 /**
  * Drop-in button that requires confirmation before running a destructive or

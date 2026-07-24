@@ -33,6 +33,7 @@ import {
 } from "lucide-react";
 import { ResearchAiMenu } from "./ResearchAiMenu";
 import { WorkflowSelectionMenu } from "./CreateWorkflowMenu";
+import { confirmAction } from "@/components/usip/Common";
 
 const CSV_COLS: Array<{ key: string; label: string }> = [
   { key: "firstName", label: "First name" }, { key: "lastName", label: "Last name" },
@@ -425,14 +426,14 @@ function MoreMenu({ selectedIds, onClear, onPick }: { selectedIds: number[]; onC
             <it.icon className="size-4 mr-2" /> {it.label}
           </DropdownMenuItem>
         ))}
-        <DropdownMenuItem disabled={optOut.isPending} onClick={() => { if (confirm(`Opt out ${n} selected ${n === 1 ? "person" : "people"} from all outreach?`)) optOut.mutate({ prospectIds: selectedIds } as any); }}>
+        <DropdownMenuItem disabled={optOut.isPending} onClick={() => { confirmAction({ title: `Opt out ${n} selected ${n === 1 ? "person" : "people"} from all outreach?` }, () => { optOut.mutate({ prospectIds: selectedIds } as any); }); }}>
           <UserX className="size-4 mr-2" /> Opt Out
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem
           className="text-rose-600 focus:text-rose-600"
           disabled={bulkDelete.isPending}
-          onClick={() => { if (confirm(`Delete ${n} selected ${n === 1 ? "person" : "people"}? This cannot be undone.`)) bulkDelete.mutate({ prospectIds: selectedIds } as any); }}
+          onClick={() => { confirmAction({ title: `Delete ${n} selected ${n === 1 ? "person" : "people"}? This cannot be undone.` }, () => { bulkDelete.mutate({ prospectIds: selectedIds } as any); }); }}
         >
           <Trash2 className="size-4 mr-2" /> Delete
         </DropdownMenuItem>

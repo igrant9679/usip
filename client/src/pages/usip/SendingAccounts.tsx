@@ -28,6 +28,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { confirmAction } from "@/components/usip/Common";
 import {
   AlertCircle,
   CheckCircle2,
@@ -774,9 +775,9 @@ function AccountCard({ account, onEdit }: { account: any; onEdit: (id: number) =
               className="h-6 w-6 text-destructive hover:text-destructive"
               title="Remove account"
               onClick={() => {
-                if (confirm(`Remove "${account.name}"?`)) {
+                confirmAction({ title: `Remove "${account.name}"?` }, () => {
                   deleteMutation.mutate({ id: account.id });
-                }
+                });
               }}
             >
               <Trash2 className="w-3 h-3" />

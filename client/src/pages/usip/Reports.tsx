@@ -17,6 +17,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
 } from "@/components/ui/dialog";
 import { DashboardChartRenderer } from "@/components/usip/DashboardChartRenderer";
+import { confirmAction } from "@/components/usip/Common";
 import {
   BarChart3, Clock, Download, FolderOpen, Loader2, Play, Plus, Save, Sparkles, Trash2, X,
 } from "lucide-react";
@@ -212,7 +213,7 @@ export default function Reports() {
                         type="button"
                         aria-label={`Delete ${r.name}`}
                         className="shrink-0 rounded p-0.5 text-muted-foreground opacity-0 hover:text-rose-600 group-hover:opacity-100"
-                        onClick={() => { if (confirm(`Delete report "${r.name}"?`)) remove.mutate({ id: r.id }); }}
+                        onClick={() => { confirmAction({ title: `Delete report "${r.name}"?` }, () => { remove.mutate({ id: r.id }); }); }}
                       >
                         <Trash2 className="size-3" />
                       </button>

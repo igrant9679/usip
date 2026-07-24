@@ -14,6 +14,7 @@ import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { confirmAction } from "@/components/usip/Common";
 import {
   Dialog,
   DialogContent,
@@ -172,7 +173,7 @@ export default function Lists() {
     if (!newName.trim()) return;
     createMut.mutate({ name: newName.trim(), entityType: newObject === "People" ? "people" : "companies" });
   };
-  const del = (l: RecordList) => { if (confirm(`Delete list "${l.name}"? This removes the list, not the records.`)) deleteMut.mutate({ id: l.id }); };
+  const del = (l: RecordList) => { confirmAction({ title: `Delete list "${l.name}"? This removes the list, not the records.` }, () => { deleteMut.mutate({ id: l.id }); }); };
 
   return (
     <Shell title="Lists">

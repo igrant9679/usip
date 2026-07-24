@@ -34,6 +34,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ARE_SOURCES, ARE_SOURCE_IDS, ARE_DEFAULT_SOURCES } from "@shared/areSources";
 import { Link, useLocation } from "wouter";
 import { toast } from "sonner";
+import { confirmAction } from "@/components/usip/Common";
 
 const STATUS_COLOR: Record<string, string> = {
   draft: "#94A3B8",
@@ -353,7 +354,7 @@ export default function ARECampaigns() {
                     variant="ghost"
                     className="text-destructive/60 hover:text-destructive gap-1 text-xs"
                     onClick={() => {
-                      if (confirm("Delete this campaign?")) deleteCampaign.mutate({ id: c.id });
+                      confirmAction({ title: "Delete this campaign?" }, () => { deleteCampaign.mutate({ id: c.id }); });
                     }}
                   >
                     <Trash2 className="size-3" />

@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
-import { Field, FormDialog, SelectField } from "@/components/usip/Common";
+import { confirmAction, Field, FormDialog, SelectField } from "@/components/usip/Common";
 import { EmptyState, PageHeader, QueryError, Shell, TableSkeleton } from "@/components/usip/Shell";
 import { RecordDrawer } from "@/components/usip/RecordDrawer";
 import { EmailVerificationBadge } from "@/components/usip/EmailVerificationBadge";
@@ -735,9 +735,9 @@ export default function Contacts() {
               className="gap-2 text-destructive border-destructive/40 hover:bg-destructive/10"
               onClick={() => {
                 const ids = Array.from(selectedIds);
-                if (confirm(`Delete ${ids.length} contact${ids.length === 1 ? "" : "s"}? This cannot be undone.`)) {
+                confirmAction({ title: `Delete ${ids.length} contact${ids.length === 1 ? "" : "s"}? This cannot be undone.` }, () => {
                   bulkDeleteMut.mutate({ ids });
-                }
+                });
               }}
               disabled={bulkDeleteMut.isPending}
             >
@@ -888,7 +888,7 @@ export default function Contacts() {
                             <Tag className="size-4 mr-2" />Add to Segment
                           </DropdownMenuItem>
                           <DropdownMenuSeparator />
-                          <DropdownMenuItem className="text-destructive" onClick={() => { if (confirm(`Delete ${c.firstName} ${c.lastName}?`)) deleteMut.mutate({ id: c.id }); }}>
+                          <DropdownMenuItem className="text-destructive" onClick={() => { confirmAction({ title: `Delete ${c.firstName} ${c.lastName}?` }, () => { deleteMut.mutate({ id: c.id }); }); }}>
                             <Trash2 className="size-4 mr-2" />Delete
                           </DropdownMenuItem>
                         </DropdownMenuContent>

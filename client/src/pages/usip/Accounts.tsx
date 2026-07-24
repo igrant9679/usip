@@ -4,7 +4,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { Field, fmt$, FormDialog, SelectField, Section, StatusPill } from "@/components/usip/Common";
+import { confirmAction, Field, fmt$, FormDialog, SelectField, Section, StatusPill } from "@/components/usip/Common";
 import { EmptyState, PageHeader, QueryError, Shell, TableSkeleton } from "@/components/usip/Shell";
 import { RecordDrawer } from "@/components/usip/RecordDrawer";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -343,9 +343,9 @@ export default function Accounts() {
               className="gap-2 text-destructive border-destructive/40 hover:bg-destructive/10"
               onClick={() => {
                 const ids = Array.from(selectedIds);
-                if (confirm(`Delete ${ids.length} account${ids.length === 1 ? "" : "s"}? This cannot be undone.`)) {
+                confirmAction({ title: `Delete ${ids.length} account${ids.length === 1 ? "" : "s"}? This cannot be undone.` }, () => {
                   bulkDeleteMut.mutate({ ids });
-                }
+                });
               }}
               disabled={bulkDeleteMut.isPending}
             >
@@ -425,7 +425,7 @@ export default function Accounts() {
                               <Tag className="size-4 mr-2" />Add to Segment
                             </DropdownMenuItem>
                             <DropdownMenuSeparator />
-                            <DropdownMenuItem className="text-destructive" onClick={() => { if (confirm(`Delete ${a.name}?`)) deleteMut.mutate({ id: a.id }); }}>
+                            <DropdownMenuItem className="text-destructive" onClick={() => { confirmAction({ title: `Delete ${a.name}?` }, () => { deleteMut.mutate({ id: a.id }); }); }}>
                               <Trash2 className="size-4 mr-2" />Delete
                             </DropdownMenuItem>
                           </DropdownMenuContent>

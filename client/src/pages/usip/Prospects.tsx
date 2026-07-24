@@ -68,6 +68,7 @@ import {
 import { toast } from "sonner";
 import { useLocation } from "wouter";
 import { ProspectImportDialog } from "./ProspectImportDialog";
+import { confirmAction } from "@/components/usip/Common";
 
 /* ─── Types ────────────────────────────────────────────────────────────────── */
 type EnrichmentData = {
@@ -386,14 +387,19 @@ export default function ProspectsPage() {
       toast.error(`Pick 25 or fewer prospects per batch (you selected ${ids.length})`);
       return;
     }
-    if (!confirm(
-      `Find contact info for ${ids.length} prospect${ids.length !== 1 ? "s" : ""}?\n\n` +
-      `For each prospect: scrape the company site, then verify up to 3 email ` +
-      `patterns via Reoon (quick pre-filter → power confirmation on survivors).\n\n` +
-      `Worst-case spend: ~${ids.length * 3} instant + ~${ids.length * 3} daily ` +
-      `credits. Typical spend is much lower (early-stop on first valid hit).`
-    )) return;
-    findContactBatch.mutate({ prospectIds: ids, skipIfHasEmail: true });
+    confirmAction(
+      {
+        title: `Find contact info for ${ids.length} prospect${ids.length !== 1 ? "s" : ""}?`,
+        description:
+          `For each prospect: scrape the company site, then verify up to 3 email patterns via ` +
+          `Reoon (quick pre-filter → power confirmation on survivors). Worst-case spend: ` +
+          `~${ids.length * 3} instant + ~${ids.length * 3} daily credits. Typical spend is much ` +
+          `lower (early-stop on first valid hit).`,
+        confirmLabel: "Find contact info",
+        destructive: false,
+      },
+      () => findContactBatch.mutate({ prospectIds: ids, skipIfHasEmail: true }),
+    );
   };
 
   const handleImportClick = () => {
@@ -486,9 +492,9 @@ export default function ProspectsPage() {
                 className="text-destructive border-destructive/40 hover:bg-destructive/10"
                 onClick={() => {
                   const ids = Array.from(selectedIds);
-                  if (confirm(`Delete ${ids.length} prospect${ids.length !== 1 ? "s" : ""}? Converted leads will be kept.`)) {
+                  confirmAction({ title: `Delete ${ids.length} prospect${ids.length !== 1 ? "s" : ""}? Converted leads will be kept.` }, () => {
                     bulkDelete.mutate({ prospectIds: ids });
-                  }
+                  });
                 }}
                 disabled={bulkDelete.isPending}
               >
@@ -696,7 +702,7 @@ export default function ProspectsPage() {
                               const warn = p.linkedLeadId
                                 ? `Delete ${label}? They've been converted to a lead — the lead row will be kept.`
                                 : `Delete ${label}?`;
-                              if (confirm(warn)) deleteProspect.mutate({ prospectId: p.id });
+                              confirmAction({ title: warn }, () => { deleteProspect.mutate({ prospectId: p.id }); });
                             }}
                           >
                             <Trash2 className="h-4 w-4 mr-2" />

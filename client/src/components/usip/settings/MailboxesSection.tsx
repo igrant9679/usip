@@ -17,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { confirmAction } from "@/components/usip/Common";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -361,9 +362,9 @@ function MailboxRow({ a, onConfigure }: { a: MailboxAccount; onConfigure: () => 
               className="text-rose-600 focus:text-rose-600"
               disabled={del.isPending}
               onClick={() => {
-                if (confirm(`Unlink ${a.fromEmail}? Sequences using this mailbox will stop sending from it.`)) {
+                confirmAction({ title: `Unlink ${a.fromEmail}? Sequences using this mailbox will stop sending from it.` }, () => {
                   del.mutate({ id: a.id });
-                }
+                });
               }}
             >
               <Trash2 className="size-4 mr-2" /> Unlink mailbox

@@ -117,6 +117,7 @@ import { Label } from "@/components/ui/label";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import { WorkspaceBrandingSync } from "@/components/usip/WorkspaceBrandingSync";
+import { ConfirmProvider } from "@/components/usip/Common";
 
 const INVITE_RETURN_KEY = "usip_invite_return";
 
@@ -445,8 +446,11 @@ function App() {
       <ThemeProvider defaultTheme="light" switchable={true}>
         <TooltipProvider>
           <TourEngineProvider>
-            <Toaster />
-            <Router />
+            {/* Backs useConfirm() — the in-app replacement for native confirm() */}
+            <ConfirmProvider>
+              <Toaster />
+              <Router />
+            </ConfirmProvider>
           </TourEngineProvider>
         </TooltipProvider>
       </ThemeProvider>

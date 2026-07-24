@@ -26,6 +26,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
+import { confirmAction } from "@/components/usip/Common";
 import {
   AlertCircle,
   CheckCircle2,
@@ -393,9 +394,9 @@ function PoolCard({ pool }: { pool: any }) {
               className="h-7 w-7 text-destructive hover:text-destructive"
               title="Delete pool"
               onClick={() => {
-                if (confirm(`Delete pool "${pool.name}"?`)) {
+                confirmAction({ title: `Delete pool "${pool.name}"?` }, () => {
                   deleteMutation.mutate({ id: pool.id });
-                }
+                });
               }}
             >
               <Trash2 className="w-3.5 h-3.5" />

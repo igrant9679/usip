@@ -29,6 +29,7 @@ import {
   CalendarDays, Plus, RefreshCw, Settings, Loader2, Users, Trash2, Link2, Sparkles, ArrowUpRight
 } from "lucide-react";
 import { Streamdown } from "streamdown";
+import { confirmAction } from "@/components/usip/Common";
 
 // ─── Connect Calendar Dialog ───────────────────────────────────────────────────
 
@@ -566,9 +567,9 @@ export default function CalendarPage() {
                         onClick={(e) => {
                           e.stopPropagation();
                           const label = acc.label ?? acc.email ?? acc.provider;
-                          if (confirm(`Disconnect ${label}? Past events stay in the local cache, but new sync will stop.`)) {
+                          confirmAction({ title: `Disconnect ${label}? Past events stay in the local cache, but new sync will stop.` }, () => {
                             disconnectAccount.mutate({ accountId: acc.id });
-                          }
+                          });
                         }}
                         title="Disconnect"
                       >

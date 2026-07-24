@@ -29,7 +29,7 @@ import {
   DashboardFilters,
 } from "@/components/usip/DashboardFilterBar";
 import { WidgetDataRenderer } from "@/components/usip/DashboardWidgets";
-import { Field, FormDialog, Section, SelectField } from "@/components/usip/Common";
+import { confirmAction, Field, FormDialog, Section, SelectField } from "@/components/usip/Common";
 import { EmptyState, PageHeader, Shell, SubNav, HOME_DASHBOARD_KEY } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import {
@@ -509,7 +509,7 @@ export default function Dashboards() {
                         <Pencil className="h-3 w-3" />
                       </Button>
                       <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-destructive"
-                        onClick={() => { if (confirm("Delete this dashboard?")) delDash.mutate({ id: selected }); }}
+                        onClick={() => { confirmAction({ title: "Delete this dashboard?" }, () => { delDash.mutate({ id: selected }); }); }}
                         title="Delete dashboard">
                         <Trash2 className="h-3 w-3" />
                       </Button>

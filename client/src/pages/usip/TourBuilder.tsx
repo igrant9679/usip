@@ -31,6 +31,7 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { confirmAction } from "@/components/usip/Common";
 import {
   clearSteps as clearRecorderSteps,
   getSteps as getRecorderSteps,
@@ -613,7 +614,7 @@ export default function TourBuilderPage() {
                   variant="ghost"
                   className="h-8 w-8 p-0 text-muted-foreground hover:text-red-500"
                   onClick={() => {
-                    if (confirm(`Delete tour "${tour.name}"?`)) deleteMut.mutate({ id: tour.id });
+                    confirmAction({ title: `Delete tour "${tour.name}"?` }, () => { deleteMut.mutate({ id: tour.id }); });
                   }}
                 >
                   <Trash2 className="h-3.5 w-3.5" />

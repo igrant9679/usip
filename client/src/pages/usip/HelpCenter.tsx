@@ -39,6 +39,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { confirmAction } from "@/components/usip/Common";
 
 /* ─── Types ──────────────────────────────────────────────────────────────── */
 
@@ -530,7 +531,7 @@ function AdminTab() {
                   variant="ghost"
                   className="h-7 w-7 p-0 text-muted-foreground hover:text-red-600"
                   onClick={() => {
-                    if (confirm("Delete this article?")) deleteMut.mutate({ id: article.id });
+                    confirmAction({ title: "Delete this article?" }, () => { deleteMut.mutate({ id: article.id }); });
                   }}
                 >
                   <Trash2 className="h-3.5 w-3.5" />

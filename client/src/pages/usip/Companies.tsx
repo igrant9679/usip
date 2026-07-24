@@ -23,6 +23,7 @@ import {
   DropdownMenuSeparator, DropdownMenuRadioGroup, DropdownMenuRadioItem,
 } from "@/components/ui/dropdown-menu";
 import { CompanyAvatar } from "@/components/usip/company/CompanyAvatar";
+import { confirmAction } from "@/components/usip/Common";
 import {
   Search, Upload, ChevronDown, Filter, X, Building2, Globe, Link2, Users, Briefcase,
   MapPin, DollarSign, BarChart3, ArrowUpDown, RefreshCw, GitMerge, ListPlus, Sparkles, Gauge,
@@ -144,7 +145,7 @@ export default function Companies() {
   const doMerge = () => {
     const ids = [...checked];
     if (ids.length !== 2) { toast.error("Select exactly two companies to merge"); return; }
-    if (confirm("Merge the second company into the first? Contacts, prospects and deals move to the first.")) merge.mutate({ primaryAccountId: ids[0], duplicateAccountId: ids[1] });
+    confirmAction({ title: "Merge the second company into the first? Contacts, prospects and deals move to the first." }, () => { merge.mutate({ primaryAccountId: ids[0], duplicateAccountId: ids[1] }); });
   };
 
   return (

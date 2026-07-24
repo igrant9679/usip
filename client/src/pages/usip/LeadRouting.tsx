@@ -8,6 +8,7 @@ import { trpc } from "@/lib/trpc";
 import { ArrowDown, ArrowUp, Pencil, Plus, Sparkles, Trash2, GitMerge } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { confirmAction } from "@/components/usip/Common";
 
 type Cond = { field: string; op: string; value: any };
 type Rule = {
@@ -124,7 +125,7 @@ export default function LeadRouting() {
                         strategy: r.strategy as any,
                         targetUserIds: (r.targetUserIds as number[] | null) ?? [],
                       })}><Pencil className="size-3.5" /> Edit</Button>
-                      <Button size="sm" variant="ghost" className="text-rose-600" onClick={() => { if (confirm(`Delete rule "${r.name}"?`)) remove.mutate({ id: r.id }); }}><Trash2 className="size-3.5" /></Button>
+                      <Button size="sm" variant="ghost" className="text-rose-600" onClick={() => { confirmAction({ title: `Delete rule "${r.name}"?` }, () => { remove.mutate({ id: r.id }); }); }}><Trash2 className="size-3.5" /></Button>
                     </td>
                   </tr>
                 ))}

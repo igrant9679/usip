@@ -35,7 +35,7 @@ import {
   Wand2, X, Zap, Sparkles, Lightbulb,
   Loader2, RefreshCw, PenLine
 } from "lucide-react";
-import { ConfirmButton } from "@/components/usip/Common";
+import { confirmAction, ConfirmButton } from "@/components/usip/Common";
 
 /* ─── Types ─────────────────────────────────────────────────────────────── */
 type BlockType = "header" | "text" | "image" | "button" | "divider" | "spacer" | "two_column" | "footer";
@@ -803,7 +803,7 @@ function SavedSectionsPanel({
                     </button>
                     <button
                       onClick={() => {
-                        if (confirm(`Delete "${section.name}"?`)) deleteMutation.mutate({ id: section.id });
+                        confirmAction({ title: `Delete "${section.name}"?` }, () => { deleteMutation.mutate({ id: section.id }); });
                       }}
                       className="p-1 rounded hover:bg-destructive/10 hover:text-destructive transition-colors"
                       title="Delete section"

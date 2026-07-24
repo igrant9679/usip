@@ -20,7 +20,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { Field, FormDialog, SelectField } from "@/components/usip/Common";
+import { confirmAction, Field, FormDialog, SelectField } from "@/components/usip/Common";
 import { toast } from "sonner";
 import { Plus, Star, Trash2, KanbanSquare, ChevronUp, ChevronDown, Check, X } from "lucide-react";
 
@@ -116,7 +116,7 @@ export default function SettingsPipelines() {
                   </Button>
                   {!detail.pipeline.isDefault && (
                     <Button size="sm" variant="ghost" className="text-destructive"
-                      onClick={() => { if (confirm(`Delete pipeline "${detail.pipeline.name}"? Stages will be removed; existing opportunities keep their stage value.`)) deletePipeline.mutate({ id: detail.pipeline.id }); }}>
+                      onClick={() => { confirmAction({ title: `Delete pipeline "${detail.pipeline.name}"? Stages will be removed; existing opportunities keep their stage value.` }, () => { deletePipeline.mutate({ id: detail.pipeline.id }); }); }}>
                       <Trash2 className="size-3.5 mr-1" /> Delete
                     </Button>
                   )}
@@ -165,7 +165,7 @@ export default function SettingsPipelines() {
                         Lost
                       </label>
                       <Button size="icon" variant="ghost" className="size-7 text-destructive"
-                        onClick={() => { if (confirm(`Delete stage "${s.label}"? Opportunities currently in this stage keep their stored value.`)) deleteStage.mutate({ id: s.id }); }}>
+                        onClick={() => { confirmAction({ title: `Delete stage "${s.label}"? Opportunities currently in this stage keep their stored value.` }, () => { deleteStage.mutate({ id: s.id }); }); }}>
                         <Trash2 className="size-3.5" />
                       </Button>
                     </div>
