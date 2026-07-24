@@ -35,6 +35,7 @@ import {
   Wand2, X, Zap, Sparkles, Lightbulb,
   Loader2, RefreshCw, PenLine
 } from "lucide-react";
+import { ConfirmButton } from "@/components/usip/Common";
 
 /* ─── Types ─────────────────────────────────────────────────────────────── */
 type BlockType = "header" | "text" | "image" | "button" | "divider" | "spacer" | "two_column" | "footer";
@@ -688,18 +689,20 @@ function TemplateList({ onOpen }: { onOpen: (id: number) => void }) {
                 </div>
                 <p className="text-[10px] text-muted-foreground mt-0.5 truncate">{t.category}</p>
               </button>
-              <button
-                className="px-2 py-2 text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-destructive transition-opacity"
-                title="Delete template"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (window.confirm(`Delete template "${t.name}"? This cannot be undone.`)) {
-                    deleteMutation.mutate({ id: t.id });
-                  }
-                }}
-              >
-                <Trash2 size={12} />
-              </button>
+              {/* span stops the click reaching the row behind it — ConfirmButton
+                  has no onClick of its own to call stopPropagation in. */}
+              <span onClick={(e) => e.stopPropagation()} className="contents">
+                <ConfirmButton
+                  className="px-2 py-2 h-auto text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-destructive transition-opacity"
+                  ariaLabel="Delete template"
+                  title="Delete this template?"
+                  description={`"${t.name}" will be permanently deleted. This cannot be undone.`}
+                  confirmLabel="Delete"
+                  onConfirm={() => deleteMutation.mutate({ id: t.id })}
+                >
+                  <Trash2 size={12} />
+                </ConfirmButton>
+              </span>
             </div>
           ))}
         </div>

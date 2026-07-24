@@ -1,5 +1,5 @@
 import { Button } from "@/components/ui/button";
-import { fmt$, fmtDate, Field, FormDialog, Section, SelectField, StatusPill, TextareaField } from "@/components/usip/Common";
+import { ConfirmButton, fmt$, fmtDate, Field, FormDialog, Section, SelectField, StatusPill, TextareaField } from "@/components/usip/Common";
 import { EmptyState, PageHeader, QueryError, Shell, StatCard, TableSkeleton } from "@/components/usip/Shell";
 import { RecordDrawer } from "@/components/usip/RecordDrawer";
 import { trpc } from "@/lib/trpc";
@@ -54,21 +54,20 @@ export default function Customers() {
         icon={<HeartHandshake className="size-5" />}
       >
         {(list?.length ?? 0) > 0 && (
-          <Button
+          <ConfirmButton
             size="sm"
             variant="outline"
             className="text-muted-foreground hover:text-destructive"
-            onClick={() => {
-              if (window.confirm(`Reset ALL customer-success data for this workspace? This deletes every customer, QBR, support ticket, and contract amendment (${list?.length} customer records). The underlying accounts/contacts/opportunities stay intact. Cannot be undone.`)) {
-                resetCs.mutate();
-              }
-            }}
+            onConfirm={() => resetCs.mutate()}
             disabled={resetCs.isPending}
-            title="Delete every customer-success record for this workspace"
+            ariaLabel="Delete every customer-success record for this workspace"
+            title="Reset ALL customer-success data?"
+            description={`This deletes every customer, QBR, support ticket, and contract amendment (${list?.length ?? 0} customer records). The underlying accounts, contacts, and opportunities stay intact. This cannot be undone.`}
+            confirmLabel="Reset CS data"
           >
             <RotateCcw className="size-3.5 mr-1" />
             Reset CS data
-          </Button>
+          </ConfirmButton>
         )}
       </PageHeader>
       <div className="p-4 md:p-5 space-y-4">
@@ -104,17 +103,16 @@ export default function Customers() {
                         <td className="px-3 py-2 text-right font-mono tabular-nums">{c.npsScore}</td>
                         <td className="px-3 py-2 text-right text-xs text-muted-foreground">{fmtDate(c.renewalDate)}</td>
                         <td className="px-1 py-2 text-right" onClick={(e) => e.stopPropagation()}>
-                          <button
-                            className="text-muted-foreground hover:text-destructive p-1 rounded"
-                            title="Delete customer (CS overlay only — account stays)"
-                            onClick={() => {
-                              if (window.confirm(`Delete customer "${c.account?.name ?? "this customer"}" and all its QBRs, tickets, and amendments? The underlying account stays. Cannot be undone.`)) {
-                                removeCustomer.mutate({ id: c.id });
-                              }
-                            }}
+                          <ConfirmButton
+                            className="text-muted-foreground hover:text-destructive p-1 h-auto rounded"
+                            ariaLabel="Delete customer (CS overlay only — account stays)"
+                            title="Delete this customer record?"
+                            description={`"${c.account?.name ?? "This customer"}" and all its QBRs, tickets, and amendments will be deleted. The underlying account stays. This cannot be undone.`}
+                            confirmLabel="Delete"
+                            onConfirm={() => removeCustomer.mutate({ id: c.id })}
                           >
                             <Trash2 className="size-3.5" />
-                          </button>
+                          </ConfirmButton>
                         </td>
                       </tr>
                     ))}

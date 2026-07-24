@@ -52,6 +52,7 @@ import { EntityPicker } from "@/components/usip/EntityPicker";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
+import { ConfirmButton } from "@/components/usip/Common";
 
 type Preset = "more_formal" | "shorter" | "stronger_cta" | "different_angle";
 
@@ -298,20 +299,19 @@ function DraftCard({ draft, onAction }: { draft: any; onAction: () => void }) {
                 {reject.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <XCircle className="h-3.5 w-3.5" />}
                 Reject
               </Button>
-              <Button
+              <ConfirmButton
                 size="sm"
                 variant="ghost"
-                onClick={() => {
-                  if (window.confirm("Delete this draft permanently? This cannot be undone.")) {
-                    remove.mutate({ id: draft.id });
-                  }
-                }}
+                onConfirm={() => remove.mutate({ id: draft.id })}
                 disabled={remove.isPending}
                 className="text-muted-foreground hover:text-destructive"
-                title="Delete draft"
+                ariaLabel="Delete draft"
+                title="Delete this draft?"
+                description="This draft will be permanently deleted. This cannot be undone."
+                confirmLabel="Delete"
               >
                 {remove.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
-              </Button>
+              </ConfirmButton>
               <div className="flex items-center gap-1 ml-auto">
                 <Select value={regenPreset} onValueChange={(v) => setRegenPreset(v as Preset)}>
                   <SelectTrigger className="h-7 text-xs w-36">
@@ -804,17 +804,16 @@ export default function AIPipelineQueue() {
               </Button>
             )}
             {(drafts?.length ?? 0) > 0 && (
-              <Button
+              <ConfirmButton
                 size="sm"
                 variant="ghost"
                 className="text-muted-foreground hover:text-destructive"
-                onClick={() => {
-                  if (window.confirm(`Delete all ${drafts.length} draft${drafts.length === 1 ? "" : "s"} on this page? This cannot be undone.`)) {
-                    clearDrafts.mutate({});
-                  }
-                }}
+                onConfirm={() => clearDrafts.mutate({})}
                 disabled={clearDrafts.isPending}
-                title="Permanently delete all drafts in the queue"
+                ariaLabel="Permanently delete all drafts in the queue"
+                title={`Delete all ${drafts?.length ?? 0} draft${(drafts?.length ?? 0) === 1 ? "" : "s"}?`}
+                description="Every draft in this queue will be permanently deleted. This cannot be undone."
+                confirmLabel="Delete all"
               >
                 {clearDrafts.isPending ? (
                   <Loader2 className="h-4 w-4 animate-spin mr-1" />
@@ -822,7 +821,7 @@ export default function AIPipelineQueue() {
                   <Trash2 className="h-4 w-4 mr-1" />
                 )}
                 Clear queue
-              </Button>
+              </ConfirmButton>
             )}
             </div>
           </div>

@@ -75,6 +75,7 @@ import { buildPrintHTML, openPrintWindow } from "./proposalExports/buildPrintHTM
 import { downloadProposalDocx } from "./proposalExports/buildDocx";
 import { ProposalTimeline } from "./proposalExports/ProposalTimeline";
 import { FileDown, FileType2 } from "lucide-react";
+import { ConfirmButton } from "@/components/usip/Common";
 
 // ── Status config ─────────────────────────────────────────────────────────────
 const STATUS_CONFIG = {
@@ -1368,21 +1369,20 @@ export default function ProposalDetail() {
           <Files className="size-3.5" />
           {duplicateMutation.isPending ? "Duplicating..." : "Duplicate"}
         </Button>
-        <Button
+        <ConfirmButton
           variant="outline"
           size="sm"
-          onClick={() => {
-            if (window.confirm(`Delete proposal "${proposal.title}"? This cannot be undone.`)) {
-              deleteProposal.mutate({ id: proposal.id });
-            }
-          }}
+          onConfirm={() => deleteProposal.mutate({ id: proposal.id })}
           disabled={deleteProposal.isPending}
           className="gap-1.5 shrink-0 text-muted-foreground hover:text-destructive"
-          title="Permanently delete this proposal"
+          ariaLabel="Permanently delete this proposal"
+          title="Delete this proposal?"
+          description={`"${proposal.title}" will be permanently deleted. This cannot be undone.`}
+          confirmLabel="Delete"
         >
           <Trash2 className="size-3.5" />
           {deleteProposal.isPending ? "Deleting..." : "Delete"}
-        </Button>
+        </ConfirmButton>
       </div>
 
       {/* Tabs */}

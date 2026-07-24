@@ -38,6 +38,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { Link } from "wouter";
+import { ConfirmButton } from "@/components/usip/Common";
 
 const ALERT_CONFIG: Record<
   string,
@@ -336,17 +337,16 @@ export default function PipelineAlerts() {
           Refresh
         </Button>
         {totalAlerts > 0 && (
-          <Button
+          <ConfirmButton
             variant="outline"
             size="sm"
             className="text-muted-foreground hover:text-destructive"
-            onClick={() => {
-              if (window.confirm(`Delete all ${totalAlerts} alert${totalAlerts === 1 ? "" : "s"}? This hard-deletes every alert row for the workspace; new ones will appear on the next health scan. Cannot be undone.`)) {
-                clearAll.mutate();
-              }
-            }}
+            onConfirm={() => clearAll.mutate()}
             disabled={clearAll.isPending}
-            title="Delete every alert for this workspace"
+            ariaLabel="Delete every alert for this workspace"
+            title={`Delete all ${totalAlerts} alert${totalAlerts === 1 ? "" : "s"}?`}
+            description="This hard-deletes every alert row for the workspace. New ones will appear on the next health scan. This cannot be undone."
+            confirmLabel="Delete all"
           >
             {clearAll.isPending ? (
               <Loader2 className="h-4 w-4 animate-spin mr-1" />
@@ -354,7 +354,7 @@ export default function PipelineAlerts() {
               <Trash2 className="h-4 w-4 mr-1" />
             )}
             Clear all
-          </Button>
+          </ConfirmButton>
         )}
         <Button
           size="sm"

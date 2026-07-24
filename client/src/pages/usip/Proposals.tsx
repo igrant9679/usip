@@ -52,6 +52,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Checkbox } from "@/components/ui/checkbox";
+import { ConfirmButton } from "@/components/usip/Common";
 
 // ── Status config ─────────────────────────────────────────────────────────────
 const STATUS_CONFIG = {
@@ -876,18 +877,19 @@ export default function Proposals() {
                   </div>
                 </div>
                 </button>
-                <button
-                  className="ml-1 text-muted-foreground hover:text-destructive p-1.5 rounded opacity-0 group-hover:opacity-100 transition-opacity self-center"
-                  title="Delete proposal"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    if (window.confirm(`Delete proposal "${p.title}"? This cannot be undone.`)) {
-                      removeProposal.mutate({ id: p.id });
-                    }
-                  }}
-                >
-                  <Trash2 className="size-4" />
-                </button>
+                {/* span stops the click reaching the row behind it. */}
+                <span onClick={(e) => e.stopPropagation()} className="contents">
+                  <ConfirmButton
+                    className="ml-1 text-muted-foreground hover:text-destructive p-1.5 h-auto rounded opacity-0 group-hover:opacity-100 transition-opacity self-center"
+                    ariaLabel="Delete proposal"
+                    title="Delete this proposal?"
+                    description={`"${p.title}" will be permanently deleted. This cannot be undone.`}
+                    confirmLabel="Delete"
+                    onConfirm={() => removeProposal.mutate({ id: p.id })}
+                  >
+                    <Trash2 className="size-4" />
+                  </ConfirmButton>
+                </span>
               </div>
             ))}
           </div>

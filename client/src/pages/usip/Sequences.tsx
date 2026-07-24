@@ -5,7 +5,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { Field, FormDialog, Section, SelectField, StatusPill, TextareaField } from "@/components/usip/Common";
+import { ConfirmButton, Field, FormDialog, Section, SelectField, StatusPill, TextareaField } from "@/components/usip/Common";
 import { EmptyState, PageHeader, Shell, SubNav } from "@/components/usip/Shell";
 import { RichTextEditor } from "@/components/usip/RichTextEditor";
 import { EmailClientPreview } from "@/components/usip/EmailClientPreview";
@@ -1520,18 +1520,19 @@ export default function Sequences() {
                     <div className="flex items-center gap-2">
                       <div className="flex-1 text-sm font-medium truncate">{s.name}</div>
                       <StatusPill tone={s.status === "active" ? "success" : s.status === "paused" ? "warning" : "muted"}>{s.status}</StatusPill>
-                      <button
-                        className="text-muted-foreground hover:text-destructive p-1 rounded"
-                        title="Delete sequence"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (window.confirm(`Delete sequence "${s.name}"? This removes the sequence and its steps; enrollments stop. This cannot be undone.`)) {
-                            remove.mutate({ id: s.id });
-                          }
-                        }}
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
+                      {/* span stops the click reaching the row behind it. */}
+                      <span onClick={(e) => e.stopPropagation()} className="contents">
+                        <ConfirmButton
+                          className="text-muted-foreground hover:text-destructive p-1 h-auto rounded"
+                          ariaLabel="Delete sequence"
+                          title="Delete this sequence?"
+                          description={`"${s.name}" and its steps will be deleted, and enrollments will stop. This cannot be undone.`}
+                          confirmLabel="Delete"
+                          onConfirm={() => remove.mutate({ id: s.id })}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </ConfirmButton>
+                      </span>
                     </div>
                     <div className="text-xs text-muted-foreground line-clamp-1">{s.description}</div>
                     <div className="text-xs text-muted-foreground mt-0.5">

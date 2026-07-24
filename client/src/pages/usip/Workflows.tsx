@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
-import { Field, fmtDate, FormDialog, Section, SelectField, StatusPill } from "@/components/usip/Common";
+import { ConfirmButton, Field, fmtDate, FormDialog, Section, SelectField, StatusPill } from "@/components/usip/Common";
 import { EmptyState, PageHeader, QueryError, Shell, TableSkeleton } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import { Play, Plus, Save, Trash2, Workflow, GitBranch, Sparkles } from "lucide-react";
@@ -126,18 +126,19 @@ export default function Workflows() {
                       <Switch checked={r.enabled} onCheckedChange={(v) => toggle.mutate({ id: r.id, enabled: v })} onClick={(e) => e.stopPropagation()} />
                       <div className="text-sm font-medium flex-1 truncate">{r.name}</div>
                       <span className="text-xs text-muted-foreground font-mono tabular-nums">{r.fireCount}x</span>
-                      <button
-                        className="text-muted-foreground hover:text-destructive p-1 rounded"
-                        title="Delete rule"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (window.confirm(`Delete workflow rule "${r.name}"? This cannot be undone.`)) {
-                            removeRule.mutate({ id: r.id });
-                          }
-                        }}
-                      >
-                        <Trash2 className="size-3.5" />
-                      </button>
+                      {/* span stops the click reaching the row behind it. */}
+                      <span onClick={(e) => e.stopPropagation()} className="contents">
+                        <ConfirmButton
+                          className="text-muted-foreground hover:text-destructive p-1 h-auto rounded"
+                          ariaLabel="Delete rule"
+                          title="Delete this workflow rule?"
+                          description={`"${r.name}" will be permanently deleted and will stop firing. This cannot be undone.`}
+                          confirmLabel="Delete"
+                          onConfirm={() => removeRule.mutate({ id: r.id })}
+                        >
+                          <Trash2 className="size-3.5" />
+                        </ConfirmButton>
+                      </span>
                     </div>
                     <div className="text-xs text-muted-foreground mt-0.5 flex items-center gap-1.5 flex-wrap">
                       <StatusPill tone={DEAD_TRIGGERS.has(r.triggerType) ? "muted" : "info"}>{r.triggerType}</StatusPill>
