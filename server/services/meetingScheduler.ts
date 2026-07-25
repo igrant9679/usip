@@ -24,6 +24,7 @@ import { calendarAccounts, calendarEvents, contacts, leads, meetings, prospects,
 import { getDb } from "../db";
 import { invokeLLM } from "../_core/llm";
 import { createCalendarAdapter } from "../calendarAdapter";
+import { attributeMeetingBookingToAre } from "../routers/are/execution";
 
 export type MeetingAutopilotMode = "off" | "approval" | "auto";
 
@@ -255,6 +256,9 @@ export async function sendMeetingInvite(workspaceId: number, meetingId: number, 
         status: "scheduled", scheduledAt: start, inviteSent: true,
         calendarEventId: calEventId, calendarAccountId: acc.id, meetingUrl: result.meetingUrl ?? null,
       } as never).where(eq(meetings.id, meetingId));
+      // Count this toward the ARE campaign KPI if the attendee is an ARE
+      // prospect (non-blocking, deduped, no-op otherwise).
+      void attributeMeetingBookingToAre(workspaceId, { id: meetingId, contactEmail: m.contactEmail });
       return { sent: true, scheduledAt: start.toISOString() };
     } catch (e) {
       console.error(`[MeetingScheduler] provider send failed for meeting ${meetingId}:`, e);
@@ -265,6 +269,8 @@ export async function sendMeetingInvite(workspaceId: number, meetingId: number, 
   // No calendar connected (or provider failed) — record the booking locally, invite not sent.
   await db.update(meetings).set({ status: "scheduled", scheduledAt: start, inviteSent: false } as never)
     .where(eq(meetings.id, meetingId));
+  // Booked locally (no calendar / provider error) still counts as a booking.
+  void attributeMeetingBookingToAre(workspaceId, { id: meetingId, contactEmail: m.contactEmail });
   return { sent: false, scheduledAt: start.toISOString(), reason: acc ? "provider_error" : "no_calendar_connected" };
 }
 

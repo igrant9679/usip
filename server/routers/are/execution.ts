@@ -378,6 +378,68 @@ export async function processSignal(
   });
 }
 
+/**
+ * Attribute a just-booked meeting back to its originating ARE campaign.
+ *
+ * Called (fire-and-forget) from the meeting-booking chokepoint sendMeetingInvite
+ * after a meeting is scheduled. If the attendee's email matches an ARE
+ * prospect_queue row, we run the SAME `meeting_booked` signal path a manual /
+ * webhook signal would — so the campaign's headline `meetingsBooked` KPI
+ * increments and the prospect is promoted to the CRM.
+ *
+ * Why this exists: `meetingsBooked` only ever moved when someone POSTed a
+ * `meeting_booked` signal by hand. Every meeting booked autonomously (Meeting
+ * Autopilot's auto mode, a prospect self-booking via /b/:slug, a rep booking a
+ * proposed time) went uncounted — the metric the whole product optimises for
+ * ("meetings booked for sales calls") sat at 0 in autonomous operation.
+ *
+ * Deduped via are_signal_log so a reschedule or a repeat invite counts once.
+ * No-op when the attendee isn't an ARE-sourced prospect. Best-effort: never
+ * throws into the booking flow.
+ */
+export async function attributeMeetingBookingToAre(
+  workspaceId: number,
+  meeting: { id: number; contactEmail?: string | null },
+): Promise<void> {
+  try {
+    const db = await getDb();
+    if (!db) return;
+    const email = (meeting.contactEmail ?? "").trim().toLowerCase();
+    if (!email) return;
+
+    // Emails can recur across campaigns — attribute to the attendee's most
+    // recent ARE prospect row.
+    const [row] = await db
+      .select({ id: prospectQueue.id, campaignId: prospectQueue.campaignId })
+      .from(prospectQueue)
+      .where(and(
+        eq(prospectQueue.workspaceId, workspaceId),
+        sql`lower(${prospectQueue.email}) = ${email}`,
+      ))
+      .orderBy(desc(prospectQueue.id))
+      .limit(1);
+    if (!row) return; // attendee isn't an ARE-sourced prospect — nothing to attribute
+
+    // Only the first booking for a prospect counts.
+    const [prior] = await db
+      .select({ id: areSignalLog.id })
+      .from(areSignalLog)
+      .where(and(
+        eq(areSignalLog.prospectQueueId, row.id),
+        eq(areSignalLog.signalType, "meeting_booked" as never),
+      ))
+      .limit(1);
+    if (prior) return;
+
+    await processSignal(workspaceId, row.id, row.campaignId, "meeting_booked", {
+      source: "autonomous_booking",
+      meetingId: meeting.id,
+    });
+  } catch (e) {
+    console.error(`[ARE] attributeMeetingBookingToAre failed for meeting ${meeting.id}:`, (e as Error).message);
+  }
+}
+
 /* ─── Router ─────────────────────────────────────────────────────────────── */
 
 export const executionRouter = router({
