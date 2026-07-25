@@ -17,6 +17,7 @@ import { customFieldsRouter } from "./routers/customFields";
 import { dashboardLayoutsRouter } from "./routers/dashboardLayouts";
 import { researchPipelineRouter } from "./routers/researchPipeline";
 import { opportunityIntelligenceRouter } from "./routers/opportunityIntelligence";
+import { optimizationRouter } from "./routers/optimization";
 import { emailTemplatesRouter, snippetsRouter, brandVoiceRouter, emailPromptTemplatesRouter } from "./routers/emailBuilder";
 import { savedSectionsRouter } from "./routers/savedSections";
 import { importsRouter } from "./routers/imports";
@@ -121,6 +122,7 @@ export const appRouter = router({
   dashboardLayouts: dashboardLayoutsRouter,
   researchPipeline: researchPipelineRouter,
   oppIntelligence: opportunityIntelligenceRouter,
+  optimization: optimizationRouter,
   emailTemplates: emailTemplatesRouter,
   snippets: snippetsRouter,
   brandVoice: brandVoiceRouter,

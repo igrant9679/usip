@@ -16,10 +16,13 @@
  *      no tracking pixel, so opens are reported as unavailable, never as 0.
  */
 import { Link } from "wouter";
+import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { Shell, PageHeader, SubNav, StatCard, EmptyState, useAccentColor } from "@/components/usip/Shell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { BarChart3, Info, Loader2, MailOpen, Radar, TrendingUp } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { BarChart3, Check, Info, Lightbulb, Loader2, MailOpen, Radar, TrendingUp, X } from "lucide-react";
 
 /** Below this many sends a per-row rate is noise; we show the count, not a verdict. */
 const MIN_ROW_SAMPLE = 20;
@@ -70,8 +73,37 @@ function RateCell({ value, sample }: { value: number; sample: number }) {
 const th = "px-3 py-2 text-left text-[11px] font-medium text-muted-foreground whitespace-nowrap";
 const td = "px-3 py-2 text-[13px] tabular-nums whitespace-nowrap border-t border-border/60";
 
+const CONF_TONE: Record<string, string> = {
+  high: "border-emerald-500/30 text-emerald-700 bg-emerald-500/10 dark:text-emerald-300",
+  medium: "border-amber-500/30 text-amber-700 bg-amber-500/10 dark:text-amber-300",
+  low: "border-muted-foreground/30 text-muted-foreground bg-muted",
+};
+
 export default function AREPerformance() {
   const accent = useAccentColor();
+  const utils = trpc.useUtils();
+  const recs = trpc.optimization.list.useQuery({ status: "pending", limit: 50 } as any, { retry: false });
+  const approve = trpc.optimization.approve.useMutation({
+    onSuccess: () => { utils.optimization.list.invalidate(); toast.success("Accepted — make the change and it stays on record"); },
+    onError: (e) => toast.error(e.message.includes("FORBIDDEN") ? "Only admins can act on recommendations" : e.message),
+  });
+  const dismiss = trpc.optimization.dismiss.useMutation({
+    onSuccess: () => { utils.optimization.list.invalidate(); toast.success("Dismissed — it won't be suggested again"); },
+    onError: (e) => toast.error(e.message.includes("FORBIDDEN") ? "Only admins can act on recommendations" : e.message),
+  });
+  const analyze = trpc.optimization.analyzeNow.useMutation({
+    onSuccess: (r: any) => {
+      utils.optimization.list.invalidate();
+      toast.success(
+        r?.proposed > 0
+          ? `${r.proposed} new recommendation${r.proposed === 1 ? "" : "s"}`
+          : "No new recommendations — not enough measured data yet to say anything useful",
+      );
+    },
+    onError: (e) => toast.error(e.message.includes("FORBIDDEN") ? "Only admins can run the analyzers" : e.message),
+  });
+  const recRows = (recs.data as any[]) ?? [];
+
   const steps = trpc.are.metrics.sequenceSteps.useQuery(undefined as any, { retry: false });
   const sources = trpc.are.metrics.sourceYield.useQuery(undefined as any, { retry: false });
   const replies = trpc.are.metrics.replyMix.useQuery(undefined as any, { retry: false });
@@ -98,7 +130,10 @@ export default function AREPerformance() {
     .sort((a, b) => b.meetingRate - a.meetingRate)[0];
 
   const loading = steps.isLoading || sources.isLoading || replies.isLoading;
-  const nothingYet = !loading && stepRows.length === 0 && sourceRows.length === 0 && replyRows.length === 0;
+  // Recommendations count as content: with metrics empty but a proposal pending,
+  // the full-page empty state would hide the only actionable thing here.
+  const nothingYet =
+    !loading && stepRows.length === 0 && sourceRows.length === 0 && replyRows.length === 0 && recRows.length === 0;
 
   return (
     <Shell title="What's Working">
@@ -128,6 +163,88 @@ export default function AREPerformance() {
           />
         ) : (
           <>
+            {/* ── Recommendations ──────────────────────────────────────────
+                  Above the metrics because this is the actionable part; the
+                  tables below are the evidence behind it. */}
+            <Card style={{ borderColor: recRows.length > 0 ? `${accent}55` : undefined }}>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm flex items-center gap-2">
+                  <Lightbulb className="size-4" style={{ color: accent }} /> Recommendations
+                  {recRows.length > 0 && (
+                    <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4">{recRows.length}</Badge>
+                  )}
+                  <Button
+                    size="sm" variant="outline" className="ml-auto h-7 gap-1.5 text-xs"
+                    disabled={analyze.isPending}
+                    onClick={() => analyze.mutate()}
+                  >
+                    {analyze.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <TrendingUp className="size-3.5" />}
+                    Analyse now
+                  </Button>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="px-0 pb-0">
+                {recRows.length === 0 ? (
+                  <p className="px-4 pb-4 text-[13px] text-muted-foreground">
+                    Nothing to recommend yet. The analyzers stay silent until there is enough measured
+                    activity to say something honest — a suggestion drawn from a handful of sends would
+                    be noise. They re-run daily as volume builds.
+                  </p>
+                ) : (
+                  <ul className="divide-y divide-border/60">
+                    {recRows.map((r) => (
+                      <li key={r.id} className="px-4 py-3">
+                        <div className="flex items-start gap-3">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="text-[13px] font-medium">{r.title}</span>
+                              <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 capitalize">{r.module}</Badge>
+                              <Badge variant="outline" className={`text-[10px] px-1.5 py-0 h-4 ${CONF_TONE[r.confidence] ?? ""}`}>
+                                {r.confidence} confidence · n={r.sampleSize}
+                              </Badge>
+                              {/* An advisory proposal carries no applicable patch — say so
+                                  rather than implying a one-click fix exists. */}
+                              {!r.proposedValue && (
+                                <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4">advisory</Badge>
+                              )}
+                            </div>
+                            {r.scopeLabel && (
+                              <div className="text-[11px] text-muted-foreground mt-0.5">{r.scopeLabel}</div>
+                            )}
+                            <p className="text-[12px] text-muted-foreground mt-1.5 leading-relaxed">{r.rationale}</p>
+                          </div>
+                          <div className="flex items-center gap-1 shrink-0">
+                            <Button
+                              size="sm" variant="outline" className="h-7 gap-1 text-xs"
+                              disabled={approve.isPending}
+                              onClick={() => approve.mutate({ id: r.id })}
+                              title="Record that you accept this recommendation"
+                            >
+                              <Check className="size-3.5" /> Accept
+                            </Button>
+                            <Button
+                              size="icon" variant="ghost" className="size-7 text-muted-foreground"
+                              disabled={dismiss.isPending}
+                              onClick={() => dismiss.mutate({ id: r.id })}
+                              title="Dismiss — never suggest this again"
+                            >
+                              <X className="size-4" />
+                            </Button>
+                          </div>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {recRows.length > 0 && (
+                  <p className="px-4 py-2.5 border-t border-border/60 text-[11px] text-muted-foreground">
+                    Accepting records the decision — it does not change your sequences or sources yet.
+                    Automatic application (with before/after tracking and auto-revert) is the next phase.
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+
             {/* Headline counters — raw counts only, no derived claims. */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
               <StatCard label="Sequence emails sent" value={totalSent} hint="Drafts with status 'sent' that belong to a sequence step" />

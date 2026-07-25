@@ -344,6 +344,21 @@ async function startServer() {
   setTimeout(runSocialAutopilot, 7 * 60 * 1000); // first run 7 minutes after boot
   setInterval(runSocialAutopilot, 60 * 60 * 1000); // every 60 minutes
 
+  // Optimisation analyzers: derive "here's a tweak worth making" proposals from
+  // measured outcomes and queue them for review. GENERATE ONLY — nothing here
+  // applies a change (Phase 3 adds the gated apply path). Deterministic and
+  // LLM-free, so an idle workspace costs a few aggregate queries and no spend;
+  // that matters because background LLM cost on paused campaigns has bitten
+  // this codebase before. Daily is plenty — these are strategy-level nudges,
+  // and re-proposing hourly would just train the user to ignore them.
+  const runOptimization = () => {
+    import("../services/optimization/runner")
+      .then((m) => m.runOptimizationForAllWorkspaces())
+      .catch((e) => console.error("[Optimization] cron run failed:", e));
+  };
+  setTimeout(runOptimization, 8 * 60 * 1000); // stagger: 8 minutes after boot
+  setInterval(runOptimization, 24 * 60 * 60 * 1000); // daily
+
   // Nightly AI pipeline batch: midnight cron for leads above score threshold
   const scheduleNightlyBatch = () => {
     const now = new Date();

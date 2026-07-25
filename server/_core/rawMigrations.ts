@@ -2657,6 +2657,54 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0127: optimisation recommendations store ──────────────────────────────
+  // Phase 2 of the continuous-optimisation layer. ONE table for every
+  // "here's a tweak worth making" proposal across all modules, so the
+  // approve → apply → attribute → revert lifecycle is implemented once.
+  //
+  // `proposedValue` holds a machine-applicable patch (not prose) and
+  // `currentValue` the value it replaces — that pairing is what makes the
+  // later Auto mode and its auto-revert possible. `evidence`/`sampleSize`/
+  // `confidence` travel with the proposal so a claim from 3 sends can never be
+  // displayed as confidently as one from 300.
+  //
+  // Dedupe is check-then-insert in code, NOT a unique index: scopeId is NULL
+  // for global-scope rows and MySQL treats NULLs as distinct in unique
+  // indexes, so a unique index would silently admit duplicate globals.
+  {
+    name: "0127_optimization_recommendations.sql",
+    statements: [
+      `CREATE TABLE IF NOT EXISTS \`optimization_recommendations\` (
+        \`id\` int NOT NULL AUTO_INCREMENT,
+        \`workspaceId\` int NOT NULL,
+        \`module\` enum('sequences','messaging','sourcing','voice','crm','icp','sdr_coaching') NOT NULL,
+        \`scopeType\` enum('global','campaign','sequence','source','step') NOT NULL DEFAULT 'global',
+        \`scopeId\` int NULL,
+        \`scopeLabel\` varchar(160) NULL,
+        \`kind\` varchar(64) NOT NULL,
+        \`title\` varchar(240) NOT NULL,
+        \`rationale\` text NULL,
+        \`evidence\` json NULL,
+        \`sampleSize\` int NOT NULL DEFAULT 0,
+        \`confidence\` enum('low','medium','high') NOT NULL DEFAULT 'low',
+        \`currentValue\` json NULL,
+        \`proposedValue\` json NULL,
+        \`status\` enum('pending','approved','applied','dismissed','reverted','superseded') NOT NULL DEFAULT 'pending',
+        \`appliedAt\` timestamp NULL,
+        \`appliedByUserId\` int NULL,
+        \`dismissedAt\` timestamp NULL,
+        \`dismissedByUserId\` int NULL,
+        \`resultDelta\` json NULL,
+        \`generatedBy\` varchar(40) NOT NULL DEFAULT 'rules',
+        \`createdAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        \`updatedAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (\`id\`),
+        KEY \`ix_optrec_ws\` (\`workspaceId\`, \`status\`),
+        KEY \`ix_optrec_scope\` (\`workspaceId\`, \`module\`, \`scopeType\`, \`scopeId\`)
+      )`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

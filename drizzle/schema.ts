@@ -5011,3 +5011,77 @@ export const savedReports = mysqlTable(
   (t) => ({ byWs: index("ix_sr_ws").on(t.workspaceId) }),
 );
 export type SavedReport = typeof savedReports.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Optimisation recommendations (migration 0127)
+
+   The single store for every "here's a tweak worth making" proposal the system
+   produces, across ALL modules — sequences, messaging, sourcing, voice, CRM,
+   ICP, SDR coaching. One table rather than per-module stores so the approve /
+   dismiss / apply / attribute lifecycle is written once and every module
+   inherits it.
+
+   Two design rules that make later auto-apply possible at all:
+
+   1. `proposedValue` is a MACHINE-APPLICABLE patch, not prose. "Consider
+      shorter subject lines" cannot be applied by code; {"subject": "..."} can.
+      `currentValue` is captured alongside it so a change can be reverted and so
+      the UI can show a real before/after diff.
+   2. `evidence` + `sampleSize` + `confidence` travel WITH the proposal. A
+      recommendation with no evidence is an opinion; the UI shows the sample
+      size on every card so a suggestion drawn from 3 sends can never look as
+      authoritative as one drawn from 300.
+
+   `resultDelta` is filled after a change is applied (the attribution pass) so
+   the system can tell whether its own advice helped — and revert it if not.
+
+   NOTE on dedupe: recommendations are deduped by check-then-insert in code, NOT
+   a unique index. MySQL treats NULLs as distinct in unique indexes, and
+   `scopeId` is NULL for global-scope rows, so a unique index would silently let
+   duplicate global recommendations through. See the same trap in
+   email_suppressions.
+   ────────────────────────────────────────────────────────────────────────── */
+export const optimizationRecommendations = mysqlTable(
+  "optimization_recommendations",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    module: mysqlEnum("module", [
+      "sequences", "messaging", "sourcing", "voice", "crm", "icp", "sdr_coaching",
+    ]).notNull(),
+    /** What the proposal targets. `global` = workspace-wide, scopeId NULL. */
+    scopeType: mysqlEnum("scopeType", ["global", "campaign", "sequence", "source", "step"])
+      .default("global").notNull(),
+    scopeId: int("scopeId"),
+    /** Human label for the target, so the card reads without extra lookups. */
+    scopeLabel: varchar("scopeLabel", { length: 160 }),
+    /** Stable machine key for the proposal type, e.g. `retire_dead_step`. */
+    kind: varchar("kind", { length: 64 }).notNull(),
+    title: varchar("title", { length: 240 }).notNull(),
+    rationale: text("rationale"),
+    /** {metric, value, comparison, …} — what the claim rests on. */
+    evidence: json("evidence"),
+    sampleSize: int("sampleSize").default(0).notNull(),
+    confidence: mysqlEnum("confidence", ["low", "medium", "high"]).default("low").notNull(),
+    currentValue: json("currentValue"),
+    proposedValue: json("proposedValue"),
+    status: mysqlEnum("status", [
+      "pending", "approved", "applied", "dismissed", "reverted", "superseded",
+    ]).default("pending").notNull(),
+    appliedAt: timestamp("appliedAt"),
+    appliedByUserId: int("appliedByUserId"),
+    dismissedAt: timestamp("dismissedAt"),
+    dismissedByUserId: int("dismissedByUserId"),
+    /** Before/after metric window, written by the attribution pass. */
+    resultDelta: json("resultDelta"),
+    /** `rules` | `llm` — how this proposal was produced. */
+    generatedBy: varchar("generatedBy", { length: 40 }).default("rules").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    byWs: index("ix_optrec_ws").on(t.workspaceId, t.status),
+    byScope: index("ix_optrec_scope").on(t.workspaceId, t.module, t.scopeType, t.scopeId),
+  }),
+);
+export type OptimizationRecommendation = typeof optimizationRecommendations.$inferSelect;
