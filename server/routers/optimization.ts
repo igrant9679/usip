@@ -148,9 +148,13 @@ export const optimizationRouter = router({
       if (input.mode !== undefined) set.optimizationMode = input.mode;
       if (input.dailyCap !== undefined) set.optimizationDailyCap = input.dailyCap;
       if (Object.keys(set).length === 0) return { ok: true as const };
-      // Settings row may not exist yet for this workspace.
+      // Settings row may not exist yet for this workspace. NOTE: this table has
+      // no `id` column — workspaceId IS the primary key. Selecting a
+      // non-existent column here threw "Cannot convert undefined or null to
+      // object" at runtime, which no unit test caught because the failure is in
+      // the query builder, not the logic.
       const [existing] = await db
-        .select({ id: workspaceSettings.id })
+        .select({ workspaceId: workspaceSettings.workspaceId })
         .from(workspaceSettings)
         .where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
       if (existing) {

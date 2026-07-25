@@ -271,9 +271,11 @@ describe("runner wiring", () => {
     expect(ANALYZERS.map((a) => a.module).sort()).toEqual(["sequences", "sourcing"]);
   });
 
+  // Importing the whole appRouter pulls in every router in the app, which takes
+  // several seconds — well past vitest's 5s default as the app grows.
   it("mounts the optimization router on the app router", async () => {
     const { appRouter } = await import("./routers");
     const record = (appRouter as any)._def?.record ?? (appRouter as any)._def?.procedures ?? {};
     expect(Object.keys(record)).toContain("optimization");
-  });
+  }, 30_000);
 });
