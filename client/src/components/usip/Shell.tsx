@@ -416,7 +416,9 @@ const SECTIONS: NavSection[] = [
  * it reads as one of the rail's rows. */
 const ADMIN_MENU_ITEMS = [
   { label: "Users and Teams", icon: Users, href: "/team" },
-  { label: "System Activity", icon: Activity, href: "/audit" },
+  // Label matches the destination page's title ("Audit log"); it read as a
+  // broken link when it was called "System Activity" but opened /audit.
+  { label: "Audit Log", icon: Activity, href: "/audit" },
   { label: "Security", icon: ShieldCheck, href: "/settings?tab=security" },
   { label: "Integrations", icon: Plug, href: "/settings?tab=integrations" },
 ];

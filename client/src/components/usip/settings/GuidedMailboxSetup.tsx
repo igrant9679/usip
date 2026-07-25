@@ -778,6 +778,19 @@ function SmtpImapFormDialog({
   const [imapTest, setImapTest] = useState<null | "ok" | "fail">(null);
 
   const runSmtpTest = async () => {
+    // The button used to be disabled until every field was valid, so a click
+    // with anything missing did nothing at all (no test, no message) — the
+    // QA "Test SMTP Connection does nothing" report. Keep it clickable and say
+    // exactly what's missing instead of silently no-op'ing.
+    if (!smtpReady) {
+      const missing: string[] = [];
+      if (!emailOk) missing.push("a valid email address");
+      if (f.password.length === 0) missing.push("the password");
+      if (f.smtpHost.trim().length === 0) missing.push("the SMTP host");
+      if (!(Number(f.smtpPort) > 0)) missing.push("the SMTP port");
+      toast.error(`Add ${missing.join(", ")} before testing the SMTP connection.`);
+      return;
+    }
     setSmtpTest(null);
     try {
       const r: any = await testConfig.mutateAsync({
@@ -924,7 +937,7 @@ function SmtpImapFormDialog({
                   <Label>Encryption</Label>
                   <div><EncryptionPicker value={f.smtpEnc} onChange={(v) => set("smtpEnc", v)} /></div>
                 </div>
-                <Button variant="outline" size="sm" disabled={!smtpReady || testConfig.isPending} onClick={runSmtpTest} className="gap-1.5 border-sky-300 text-sky-700 hover:bg-sky-50 hover:text-sky-800 dark:border-sky-800 dark:text-sky-300 dark:hover:bg-sky-950/40">
+                <Button variant="outline" size="sm" disabled={testConfig.isPending} onClick={runSmtpTest} className="gap-1.5 border-sky-300 text-sky-700 hover:bg-sky-50 hover:text-sky-800 dark:border-sky-800 dark:text-sky-300 dark:hover:bg-sky-950/40">
                   {testConfig.isPending ? <Loader2 className="size-3.5 animate-spin" /> : smtpTest === "ok" ? <CheckCircle2 className="size-3.5 text-emerald-600" /> : smtpTest === "fail" ? <XCircle className="size-3.5 text-rose-600" /> : null}
                   Test SMTP Connection
                 </Button>

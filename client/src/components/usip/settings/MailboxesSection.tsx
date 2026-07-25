@@ -35,6 +35,7 @@ import {
   RefreshCw,
   Settings2,
   Activity,
+  Star,
   Trash2,
   Loader2,
   SearchX,
@@ -243,6 +244,14 @@ function MailboxRow({ a, onConfigure }: { a: MailboxAccount; onConfigure: () => 
     },
     onError: (e: any) => toast.error(e?.message ?? "Could not unlink"),
   });
+  const setDefault = trpc.sendingAccounts.setDefault.useMutation({
+    onSuccess: () => {
+      utils.sendingAccounts.list.invalidate();
+      toast.success(`${a.fromEmail} is now the default sender`);
+    },
+    // adminWsProcedure — reps get FORBIDDEN; surface it plainly.
+    onError: (e: any) => toast.error(e?.message?.includes("FORBIDDEN") ? "Only admins can change the default mailbox" : e?.message ?? "Could not set default"),
+  });
 
   const deliverability =
     a.connectionStatus === "untested"
@@ -357,6 +366,11 @@ function MailboxRow({ a, onConfigure }: { a: MailboxAccount; onConfigure: () => 
             <DropdownMenuItem disabled={checkDeliv.isPending} onClick={() => checkDeliv.mutate({ id: a.id })}>
               {checkDeliv.isPending ? <Loader2 className="size-4 mr-2 animate-spin" /> : <Activity className="size-4 mr-2" />} Check deliverability
             </DropdownMenuItem>
+            {!a.isDefault && (
+              <DropdownMenuItem disabled={setDefault.isPending} onClick={() => setDefault.mutate({ id: a.id })}>
+                {setDefault.isPending ? <Loader2 className="size-4 mr-2 animate-spin" /> : <Star className="size-4 mr-2" />} Set as default
+              </DropdownMenuItem>
+            )}
             <DropdownMenuSeparator />
             <DropdownMenuItem
               className="text-rose-600 focus:text-rose-600"
