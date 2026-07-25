@@ -321,6 +321,7 @@ export default function AREHub() {
         </Link>
       </PageHeader>
       <SubNav items={[
+        { href: "/are/performance", label: "What's Working", title: "Measured performance — which steps and sources actually book meetings" },
         { href: "/are/icp", label: "ICP Agent", title: "Manage the Ideal Customer Profile agent" },
         { href: "/are/campaigns", label: "Campaigns", title: "All ARE-managed outbound campaigns" },
         { href: "/are/settings", label: "ARE Settings", title: "ARE configuration, throttles, and limits" },

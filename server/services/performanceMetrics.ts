@@ -38,6 +38,7 @@ import {
   areSignalLog,
   emailDrafts,
   emailReplies,
+  prospectQueue,
 } from "../../drizzle/schema";
 
 /** Percentage (0-100, one decimal) guarded against a zero denominator. */
@@ -155,6 +156,142 @@ export async function getSequenceStepStats(
   });
 
   out.sort((a, b) => a.sequenceId - b.sequenceId || a.stepIndex - b.stepIndex);
+  return out;
+}
+
+/* ─── Sourcing yield by source ──────────────────────────────────────────── */
+
+export interface SourceYieldStats {
+  sourceType: string;
+  discovered: number;
+  contacted: number;
+  replied: number;
+  meetings: number;
+  /** Mean ICP match score of prospects this source produced (0-100). */
+  avgIcpScore: number;
+  contactedRate: number;
+  /** replied / contacted — reply quality of the people this source found. */
+  replyRate: number;
+  /** meetings / contacted — THE metric that matters. */
+  meetingRate: number;
+}
+
+/**
+ * Per-source sourcing yield, scored on OUTCOMES rather than volume.
+ *
+ * A source that finds 500 prospects and books nothing is worse than one that
+ * finds 20 and books three; ranking by `prospectsDiscovered` (what the campaign
+ * cards show) actively misleads. `meetingRate` is therefore the headline column.
+ *
+ * Counts are DISTINCT prospects, so a prospect who got four sends still counts
+ * once toward `contacted` and can't inflate a source's apparent reach.
+ */
+export async function getSourceYieldStats(workspaceId: number): Promise<SourceYieldStats[]> {
+  const db = await getDb();
+  if (!db) return [];
+
+  const discovered = await db
+    .select({
+      sourceType: prospectQueue.sourceType,
+      n: sql<number>`count(*)`,
+      avgIcp: sql<number>`coalesce(avg(${prospectQueue.icpMatchScore}), 0)`,
+    })
+    .from(prospectQueue)
+    .where(eq(prospectQueue.workspaceId, workspaceId))
+    .groupBy(prospectQueue.sourceType);
+
+  // Contacted = at least one dispatched send, counted once per prospect.
+  const contacted = await db
+    .select({
+      sourceType: prospectQueue.sourceType,
+      n: sql<number>`count(distinct ${prospectQueue.id})`,
+    })
+    .from(areExecutionQueue)
+    .innerJoin(prospectQueue, eq(areExecutionQueue.prospectQueueId, prospectQueue.id))
+    .where(and(
+      eq(areExecutionQueue.workspaceId, workspaceId),
+      eq(areExecutionQueue.status, "sent" as never),
+    ))
+    .groupBy(prospectQueue.sourceType);
+
+  const outcomes = await db
+    .select({
+      sourceType: prospectQueue.sourceType,
+      signalType: areSignalLog.signalType,
+      n: sql<number>`count(distinct ${prospectQueue.id})`,
+    })
+    .from(areSignalLog)
+    .innerJoin(prospectQueue, eq(areSignalLog.prospectQueueId, prospectQueue.id))
+    .where(eq(areSignalLog.workspaceId, workspaceId))
+    .groupBy(prospectQueue.sourceType, areSignalLog.signalType);
+
+  const contactedMap = new Map(contacted.map((r) => [String(r.sourceType), Number(r.n ?? 0)]));
+  const repliedMap = new Map<string, number>();
+  const meetingMap = new Map<string, number>();
+  for (const row of outcomes) {
+    const src = String(row.sourceType);
+    const t = String(row.signalType);
+    if (t === "email_reply") repliedMap.set(src, (repliedMap.get(src) ?? 0) + Number(row.n ?? 0));
+    else if (t === "meeting_booked") meetingMap.set(src, (meetingMap.get(src) ?? 0) + Number(row.n ?? 0));
+  }
+
+  const out: SourceYieldStats[] = discovered.map((row) => {
+    const src = String(row.sourceType);
+    const disc = Number(row.n ?? 0);
+    const cont = contactedMap.get(src) ?? 0;
+    const rep = repliedMap.get(src) ?? 0;
+    const mtg = meetingMap.get(src) ?? 0;
+    return {
+      sourceType: src,
+      discovered: disc,
+      contacted: cont,
+      replied: rep,
+      meetings: mtg,
+      avgIcpScore: Math.round(Number(row.avgIcp ?? 0)),
+      contactedRate: rate(cont, disc),
+      replyRate: rate(rep, cont),
+      meetingRate: rate(mtg, cont),
+    };
+  });
+
+  // Best outcome first; volume only breaks ties.
+  out.sort((a, b) => b.meetingRate - a.meetingRate || b.replyRate - a.replyRate || b.discovered - a.discovered);
+  return out;
+}
+
+/* ─── Inbound reply mix ─────────────────────────────────────────────────── */
+
+export interface ReplyClassStats {
+  replyClass: string;
+  count: number;
+  share: number;
+}
+
+/**
+ * Breakdown of inbound replies by the 8-class taxonomy. Shows whether replies
+ * are actually progressing deals (`willing_to_meet`) or just churn
+ * (`out_of_office`, `not_interested`) — a raw reply count hides that entirely.
+ */
+export async function getReplyClassStats(workspaceId: number): Promise<ReplyClassStats[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db
+    .select({
+      replyClass: emailReplies.replyClass,
+      n: sql<number>`count(*)`,
+    })
+    .from(emailReplies)
+    .where(eq(emailReplies.workspaceId, workspaceId))
+    .groupBy(emailReplies.replyClass);
+
+  const total = rows.reduce((n, r) => n + Number(r.n ?? 0), 0);
+  const out = rows.map((r) => ({
+    // Unclassified replies are real replies; label them rather than dropping them.
+    replyClass: r.replyClass ? String(r.replyClass) : "unclassified",
+    count: Number(r.n ?? 0),
+    share: rate(Number(r.n ?? 0), total),
+  }));
+  out.sort((a, b) => b.count - a.count);
   return out;
 }
 

@@ -113,6 +113,25 @@ describe("computeVariantCells — outcome attribution", () => {
   });
 });
 
+describe("metrics router wiring", () => {
+  // A router that exists but was never mounted is this codebase's most common
+  // defect — the /are/performance page would 404 on every query with no
+  // compile error to catch it.
+  it("is mounted on areRouter as `metrics`", async () => {
+    const { areRouter } = await import("./routers/are");
+    const record = (areRouter as any)._def?.record ?? (areRouter as any)._def?.procedures ?? {};
+    expect(Object.keys(record)).toContain("metrics");
+  });
+
+  it("exposes every procedure the dashboard queries", async () => {
+    const { metricsRouter } = await import("./routers/are/metrics");
+    const record = (metricsRouter as any)._def?.record ?? (metricsRouter as any)._def?.procedures ?? {};
+    for (const proc of ["sequenceSteps", "sourceYield", "replyMix", "abVariants", "thresholds"]) {
+      expect(Object.keys(record)).toContain(proc);
+    }
+  });
+});
+
 describe("sample-size guard", () => {
   it("sets a threshold high enough to avoid crowning winners on noise", () => {
     expect(MIN_VARIANT_SAMPLE).toBeGreaterThanOrEqual(20);

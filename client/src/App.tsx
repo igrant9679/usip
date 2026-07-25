@@ -99,6 +99,7 @@ import Proposals from "@/pages/usip/Proposals";
 import ProposalDetail from "@/pages/usip/ProposalDetail";
 import ProposalPortal from "@/pages/ProposalPortal";
 import AREHub from "@/pages/usip/AREHub";
+import AREPerformance from "@/pages/usip/AREPerformance";
 import AREIcpAgent from "@/pages/usip/AREIcpAgent";
 import ARECampaigns from "@/pages/usip/ARECampaigns";
 import ARECampaignDetail from "@/pages/usip/ARECampaignDetail";
@@ -415,6 +416,7 @@ function Router() {
       <Route path="/proposals"><AuthGate><Proposals /></AuthGate></Route>
       <Route path="/proposals/:id"><AuthGate><ProposalDetail /></AuthGate></Route>
       <Route path="/are"><AuthGate><AREHub /></AuthGate></Route>
+      <Route path="/are/performance"><AuthGate><AREPerformance /></AuthGate></Route>
       <Route path="/are/icp"><AuthGate><AREIcpAgent /></AuthGate></Route>
       <Route path="/are/campaigns"><AuthGate><ARECampaigns /></AuthGate></Route>
       <Route path="/are/campaigns/:id"><AuthGate><ARECampaignDetail /></AuthGate></Route>
