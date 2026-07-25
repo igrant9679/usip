@@ -3235,6 +3235,18 @@ export const areExecutionQueue = mysqlTable(
     executedAt: timestamp("executedAt"),
     status: mysqlEnum("status", ["scheduled", "sent", "failed", "skipped", "paused"]).default("scheduled").notNull(),
     messageContent: json("messageContent"), // {subject?, body, variantKey, abVariantId?}
+    /* ── Open tracking (migration 0129) ──────────────────────────────────
+       ARE campaign mail goes out via sendCampaignEmailViaPool, which — unlike
+       the email_drafts path — injected no tracking pixel, so opens were the one
+       funnel stage the optimisation layer could not see at all. The token is
+       per-SEND (not per-prospect) so an open resolves to an exact campaign +
+       step + variant. openedAt records only the FIRST open: opens are noisy
+       (Apple Mail Privacy Protection and security scanners prefetch images), so
+       "did this message get opened" is far more trustworthy than a raw count,
+       and the ARE signal fires once per message rather than once per pixel hit. */
+    trackingToken: varchar("trackingToken", { length: 64 }),
+    openedAt: timestamp("openedAt"),
+    openCount: int("openCount").default(0).notNull(),
     externalId: varchar("externalId", { length: 256 }), // message ID from sending provider
     failureReason: text("failureReason"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
@@ -3243,6 +3255,9 @@ export const areExecutionQueue = mysqlTable(
     byCampaign: index("ix_aeq_campaign").on(t.campaignId),
     byProspect: index("ix_aeq_prospect").on(t.prospectQueueId),
     byScheduled: index("ix_aeq_scheduled").on(t.workspaceId, t.status, t.scheduledAt),
+    // Every tracking-pixel hit looks a row up by this token — unindexed it would
+    // be a full scan of the execution queue on each open.
+    byToken: index("ix_aeq_token").on(t.trackingToken),
   }),
 );
 export type AreExecutionQueue = typeof areExecutionQueue.$inferSelect;

@@ -351,7 +351,7 @@ export default function AREPerformance() {
                   </p>
                   <p className="flex items-center gap-1.5">
                     <MailOpen className="size-3.5 shrink-0" />
-                    Sequence email opens are tracked. <span className="font-medium text-foreground">ARE campaign sends are not</span> — those go out through the sending pool with no tracking pixel, so opens are shown as unavailable rather than as zero.
+                    Opens count <span className="font-medium text-foreground">distinct messages opened</span>, not pixel hits — mail privacy proxies prefetch images, so treat opens as a soft signal and replies as the real one. Sends made before open tracking shipped show as "not tracked" rather than 0%.
                   </p>
                 </div>
               </CardContent>

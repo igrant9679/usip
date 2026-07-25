@@ -22,13 +22,17 @@
  * A/B tab now reads computed stats from here; those columns stay untouched and
  * the table keeps only its metadata role (subject line, hook type).
  *
- * HONESTY NOTE — opens are NOT available for ARE campaign sends. Sequence mail
- * goes out as email_drafts rows and gets a tracking pixel (emailTracking.ts
- * increments openCount), but the ARE engine dispatches through
- * sendCampaignEmailViaPool, which injects no pixel, and nothing in the codebase
- * emits the `email_open` ARE signal. So AbVariantStats reports opensTracked:
- * false instead of a 0 that would read as "nobody opened it". Adding ARE open
- * tracking is a separate change (a per-send token tied to prospect + step).
+ * OPENS — available for both paths as of migration 0129. Sequence mail carries a
+ * pixel via email_drafts; ARE campaign sends now carry a per-SEND token on
+ * are_execution_queue (so an open resolves to an exact campaign + step +
+ * variant). Two deliberate rules:
+ *   • Opens count DISTINCT MESSAGES opened, never raw pixel hits. Apple Mail
+ *     Privacy Protection and security scanners prefetch images, so a hit count
+ *     measures proxies as much as people.
+ *   • The open rate is computed over TRACKABLE sends only. Sends dispatched
+ *     before 0129 have no token and can never report an open; leaving them in
+ *     the denominator would understate the rate forever. `opensTracked` is
+ *     false for those cells, so the UI can say "not tracked" rather than "0%".
  */
 import { and, eq, isNotNull, isNull, sql } from "drizzle-orm";
 import { getDb } from "../db";
@@ -598,11 +602,18 @@ export interface AbVariantStats {
   hookType: string | null;
   bodyPreview: string | null;
   sent: number;
+  /** Distinct messages opened at least once (not raw pixel hits). */
+  opens: number;
+  openRate: number;
   replies: number;
   meetings: number;
   replyRate: number;
   meetingRate: number;
-  /** Always false today — ARE pool sends carry no tracking pixel. */
+  /**
+   * True once sends in this cell carry a tracking pixel (migration 0129).
+   * Sends dispatched BEFORE that migration have no token and can never report
+   * opens, so this stays false for them rather than showing a misleading 0%.
+   */
   opensTracked: boolean;
   /** Below this, differences are noise — the UI must not crown a winner. */
   sampleSufficient: boolean;
@@ -616,12 +627,24 @@ export interface VariantSendRow {
   stepIndex: number;
   variantKey: string;
   executedAt: Date | string | null;
+  /** Set on the first open of this message (migration 0129). */
+  openedAt?: Date | string | null;
+  /** Absent on sends dispatched before open tracking existed. */
+  trackingToken?: string | null;
 }
 export interface VariantSignalRow {
   prospectQueueId: number;
   signalType: string;
 }
-export interface VariantCell { sent: number; replies: number; meetings: number }
+export interface VariantCell {
+  sent: number;
+  replies: number;
+  meetings: number;
+  /** Distinct messages opened at least once. */
+  opens: number;
+  /** Sends in this cell that carry a tracking pixel and so COULD report an open. */
+  trackable: number;
+}
 
 export const variantCellKey = (stepIndex: number, variantKey: string) => `${stepIndex}:${variantKey}`;
 
@@ -641,7 +664,7 @@ export function computeVariantCells(
 ): Map<string, VariantCell> {
   const cells = new Map<string, VariantCell>();
   const bump = (k: string, field: keyof VariantCell) => {
-    const c = cells.get(k) ?? { sent: 0, replies: 0, meetings: 0 };
+    const c = cells.get(k) ?? { sent: 0, replies: 0, meetings: 0, opens: 0, trackable: 0 };
     c[field] += 1;
     cells.set(k, c);
   };
@@ -651,6 +674,10 @@ export function computeVariantCells(
     const step = Number(s.stepIndex ?? 0);
     const v = String(s.variantKey ?? "A");
     bump(variantCellKey(step, v), "sent");
+    // Only sends carrying a pixel can ever report an open; counting pre-0129
+    // sends in the denominator would understate the open rate forever.
+    if (s.trackingToken) bump(variantCellKey(step, v), "trackable");
+    if (s.openedAt) bump(variantCellKey(step, v), "opens");
     const pid = Number(s.prospectQueueId);
     const at = s.executedAt ? new Date(s.executedAt).getTime() : 0;
     const prev = lastByProspect.get(pid);
@@ -694,6 +721,11 @@ export async function getAbVariantStats(
       stepIndex: areExecutionQueue.stepIndex,
       variantKey: variantKeyExpr,
       executedAt: areExecutionQueue.executedAt,
+      // Migration 0129. Counted as distinct messages opened, NOT raw pixel hits
+      // — mail privacy proxies prefetch images, so a hit count overstates
+      // interest while "was it opened at all" stays meaningful.
+      openedAt: areExecutionQueue.openedAt,
+      trackingToken: areExecutionQueue.trackingToken,
     })
     .from(areExecutionQueue)
     .where(and(
@@ -736,7 +768,7 @@ export async function getAbVariantStats(
     // Surface a defined variant even before its first send, so a freshly
     // generated A/B pair appears at 0 sends instead of vanishing.
     const k = cellKey(Number(row.stepIndex), String(row.variantKey));
-    if (!cells.has(k)) cells.set(k, { sent: 0, replies: 0, meetings: 0 });
+    if (!cells.has(k)) cells.set(k, { sent: 0, replies: 0, meetings: 0, opens: 0, trackable: 0 });
   }
   const metaMap = new Map(
     stored.map((r) => [cellKey(Number(r.stepIndex), String(r.variantKey)), r]),
@@ -752,11 +784,15 @@ export async function getAbVariantStats(
       hookType: (meta?.hookType as string | null) ?? null,
       bodyPreview: (meta?.bodyPreview as string | null) ?? null,
       sent: c.sent,
+      opens: c.opens,
+      // Rate is over TRACKABLE sends, not all sends — mixing pre- and
+      // post-pixel sends in the denominator would permanently understate it.
+      openRate: rate(c.opens, c.trackable),
       replies: c.replies,
       meetings: c.meetings,
       replyRate: rate(c.replies, c.sent),
       meetingRate: rate(c.meetings, c.sent),
-      opensTracked: false,
+      opensTracked: c.trackable > 0,
       sampleSufficient: c.sent >= MIN_VARIANT_SAMPLE,
     };
   });

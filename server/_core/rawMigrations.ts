@@ -2722,6 +2722,27 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0129: ARE open tracking ───────────────────────────────────────────────
+  // ARE campaign mail goes out through sendCampaignEmailViaPool, which injected
+  // no tracking pixel — so opens were the one funnel stage the optimisation
+  // layer was blind to (the A/B tab honestly reported "Opens: not tracked").
+  // The token is per-SEND so an open resolves to an exact campaign + step +
+  // variant, which a per-prospect token could not do.
+  // openedAt records only the FIRST open: Apple Mail Privacy Protection and
+  // security scanners prefetch images, so "was this opened at all" is far more
+  // trustworthy than a raw count — and it lets the ARE email_open signal fire
+  // once per message instead of once per pixel hit (that signal triggers an LLM
+  // enhancement pass, so per-hit firing would be a cost explosion).
+  {
+    name: "0129_are_open_tracking.sql",
+    statements: [
+      "ALTER TABLE `are_execution_queue` ADD COLUMN `trackingToken` varchar(64) NULL",
+      "ALTER TABLE `are_execution_queue` ADD COLUMN `openedAt` timestamp NULL",
+      "ALTER TABLE `are_execution_queue` ADD COLUMN `openCount` int NOT NULL DEFAULT 0",
+      "CREATE INDEX `ix_aeq_token` ON `are_execution_queue` (`trackingToken`)",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

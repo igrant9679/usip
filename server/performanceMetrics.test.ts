@@ -113,6 +113,80 @@ describe("computeVariantCells — outcome attribution", () => {
   });
 });
 
+describe("computeVariantCells — open tracking (migration 0129)", () => {
+  const send = (o: Partial<any> = {}) => ({
+    prospectQueueId: 1, stepIndex: 0, variantKey: "A",
+    executedAt: "2026-07-01T10:00:00Z", ...o,
+  });
+
+  it("counts a distinct message opened, not repeated pixel hits", () => {
+    // openedAt is set once on FIRST open; repeat hits only bump openCount, which
+    // this fold deliberately ignores — privacy proxies prefetch images.
+    const cells = computeVariantCells(
+      [send({ prospectQueueId: 1, trackingToken: "t1", openedAt: "2026-07-01T11:00:00Z" })],
+      [],
+    );
+    expect(cells.get(variantCellKey(0, "A"))?.opens).toBe(1);
+  });
+
+  it("separates trackable sends from total sends", () => {
+    const cells = computeVariantCells(
+      [
+        // pre-0129 send: no token, can never report an open
+        send({ prospectQueueId: 1 }),
+        send({ prospectQueueId: 2, trackingToken: "t2", openedAt: "2026-07-02T10:00:00Z" }),
+        send({ prospectQueueId: 3, trackingToken: "t3" }),
+      ],
+      [],
+    );
+    const c = cells.get(variantCellKey(0, "A"))!;
+    expect(c.sent).toBe(3);
+    expect(c.trackable).toBe(2); // only the two tokened sends
+    expect(c.opens).toBe(1);
+    // Rate is over trackable, so 1/2 = 50% — NOT 1/3, which would understate
+    // the open rate forever because of sends made before tracking existed.
+    expect(rate(c.opens, c.trackable)).toBe(50);
+  });
+
+  it("reports no trackable sends when nothing carries a pixel", () => {
+    const cells = computeVariantCells([send({ prospectQueueId: 1 }), send({ prospectQueueId: 2 })], []);
+    const c = cells.get(variantCellKey(0, "A"))!;
+    expect(c.trackable).toBe(0);
+    // The UI keys "Opens: not tracked" off this, rather than showing 0%.
+    expect(rate(c.opens, c.trackable)).toBe(0);
+  });
+
+  it("attributes opens to the right variant", () => {
+    const cells = computeVariantCells(
+      [
+        send({ prospectQueueId: 1, variantKey: "A", trackingToken: "a1", openedAt: "2026-07-02T10:00:00Z" }),
+        send({ prospectQueueId: 2, variantKey: "B", trackingToken: "b1" }),
+      ],
+      [],
+    );
+    expect(cells.get(variantCellKey(0, "A"))?.opens).toBe(1);
+    expect(cells.get(variantCellKey(0, "B"))?.opens).toBe(0);
+  });
+});
+
+describe("ARE open tracking wiring", () => {
+  it("the dispatcher injects an open pixel and stores the token", async () => {
+    const src = await import("node:fs").then((fs) => fs.readFileSync("server/areEngine.ts", "utf8"));
+    expect(src).toContain("injectTracking");
+    expect(src).toMatch(/trackingToken/);
+    // Links are NOT click-wrapped on cold outbound (deliverability).
+    expect(src).toMatch(/open:\s*true,\s*\n?\s*click:\s*false/);
+  });
+
+  it("fires the ARE email_open signal only on the FIRST open", async () => {
+    const src = await import("node:fs").then((fs) => fs.readFileSync("server/emailTracking.ts", "utf8"));
+    expect(src).toContain("recordAreOpen");
+    // That signal triggers an LLM enhancement pass + owner notification, so
+    // per-pixel-hit firing would be a cost and noise explosion.
+    expect(src).toContain("if (!isFirstOpen) return;");
+  });
+});
+
 describe("metrics router wiring", () => {
   // A router that exists but was never mounted is this codebase's most common
   // defect — the /are/performance page would 404 on every query with no

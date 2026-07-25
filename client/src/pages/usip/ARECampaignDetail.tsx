@@ -2212,12 +2212,14 @@ export default function ARECampaignDetail() {
                             <Progress value={replyRate} className="h-1.5" />
                             <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
                               <span>Sent: {v.sent}</span>
+                              {/* Only claim an open rate for sends that actually
+                                  carry a pixel; older sends can never report one,
+                                  and "0 opens" would read as failure not silence. */}
+                              {v.opensTracked
+                                ? <span title="Distinct messages opened at least once. Mail privacy proxies can inflate this.">Opens: {v.opens} ({v.openRate.toFixed(0)}%)</span>
+                                : <span className="italic">Opens: not tracked</span>}
                               <span>Replies: {v.replies}</span>
                               <span>Meetings: {v.meetings}</span>
-                              {/* Opens are deliberately not shown as 0 — ARE pool
-                                  sends carry no tracking pixel, so "0 opens" would
-                                  read as failure rather than "not measured". */}
-                              {!v.opensTracked && <span className="italic">Opens: not tracked</span>}
                             </div>
                             {v.sent > 0 && !v.sampleSufficient && (
                               <p className="text-[10px] text-amber-600 dark:text-amber-500">

@@ -27,6 +27,60 @@ export function registerEmailTrackingRoutes(app: Express) {
   /**
    * Open pixel — called when the email client loads images
    */
+  /**
+   * Record an open against an ARE campaign send (are_execution_queue).
+   *
+   * Deliberately fires the ARE `email_open` signal ONLY on the first open of a
+   * given message. Two reasons, both cost/noise:
+   *   • processSignal("email_open") runs the Signal Enhancement Agent, which
+   *     makes an LLM call — and Apple Mail Privacy Protection plus security
+   *     scanners prefetch pixels, so a single send can produce many hits.
+   *   • It also notifies the campaign owner. Per-hit firing would spam them.
+   * openCount still increments on every hit, so raw curiosity is preserved
+   * without paying for it repeatedly.
+   */
+  async function recordAreOpen(db: any, token: string): Promise<void> {
+    const { areExecutionQueue } = await import("../drizzle/schema");
+    const [row] = await db
+      .select({
+        id: areExecutionQueue.id,
+        workspaceId: areExecutionQueue.workspaceId,
+        campaignId: areExecutionQueue.campaignId,
+        prospectQueueId: areExecutionQueue.prospectQueueId,
+        stepIndex: areExecutionQueue.stepIndex,
+        openedAt: areExecutionQueue.openedAt,
+      })
+      .from(areExecutionQueue)
+      .where(eq(areExecutionQueue.trackingToken, token))
+      .limit(1);
+    if (!row) return; // unknown token — nothing to attribute
+
+    const isFirstOpen = !row.openedAt;
+    await db
+      .update(areExecutionQueue)
+      .set({
+        openCount: sql`${areExecutionQueue.openCount} + 1`,
+        ...(isFirstOpen ? { openedAt: new Date() } : {}),
+      })
+      .where(eq(areExecutionQueue.id, row.id));
+
+    if (!isFirstOpen) return;
+    try {
+      const { processSignal } = await import("./routers/are/execution");
+      await processSignal(
+        row.workspaceId,
+        row.prospectQueueId,
+        row.campaignId,
+        "email_open",
+        { stepIndex: row.stepIndex, source: "tracking_pixel" },
+        row.id,
+      );
+    } catch (e) {
+      // Never let signal processing break the pixel response path.
+      console.error(`[EmailTracking] ARE open signal failed for exec ${row.id}:`, (e as Error).message);
+    }
+  }
+
   app.get("/api/track/open/:token", async (req: Request, res: Response) => {
     // Always return the pixel immediately so the email client doesn't hang
     res.setHeader("Content-Type", "image/gif");
@@ -50,7 +104,13 @@ export function registerEmailTrackingRoutes(app: Express) {
         .where(eq(emailDrafts.trackingToken, token))
         .limit(1);
 
-      if (!draft) return;
+      if (!draft) {
+        // Not a draft token — it may be an ARE campaign send (migration 0129).
+        // ARE mail goes out through the sending pool, not email_drafts, so it
+        // carries its own token on are_execution_queue.
+        await recordAreOpen(db, token);
+        return;
+      }
 
       // Insert tracking event
       await db.insert(emailTrackingEvents).values({

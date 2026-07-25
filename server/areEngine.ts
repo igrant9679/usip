@@ -54,7 +54,9 @@ import {
 } from "./routers/are/scraper";
 import { searchLinkedInPeople, type UnipileLinkedInSearchHit } from "./lib/unipile";
 import { listUsableAccounts } from "./services/linkedinLookup";
+import { randomUUID } from "node:crypto";
 import { sendWorkspaceEmail, sendCampaignEmailViaPool } from "./emailDelivery";
+import { injectTracking } from "./mergeVars";
 import { resolveBookingUrl } from "./mergeVars";
 import { ARE_DEFAULT_SOURCES, normalizeSources } from "@shared/areSources";
 import { apolloPulledToday, apolloSearchPeople, getApolloDailyCap } from "./services/apollo";
@@ -695,16 +697,31 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
         // accounts, per-account daily-limit enforced) — better cold-outreach
         // deliverability than blasting one address. Falls back to the single
         // Email-Delivery config when no sending accounts exist.
+        // Open tracking (migration 0129). A per-SEND token means an open
+        // resolves to this exact campaign + step + variant, which is what the
+        // A/B and step metrics need — a per-prospect token could not.
+        const trackingToken = randomUUID().replace(/-/g, "");
+        const appBaseUrl = process.env.VITE_OAUTH_PORTAL_URL
+          ? new URL(process.env.VITE_OAUTH_PORTAL_URL).origin
+          : "http://localhost:3000";
+        // Open pixel only — links are NOT click-wrapped here. Cold outbound is
+        // deliverability-sensitive and rewriting every URL to a tracking domain
+        // is a well-known spam signal; the open pixel is the cheaper trade.
+        const html = injectTracking(textToHtml(body), trackingToken, appBaseUrl, {
+          open: true,
+          click: false,
+        });
+
         const sendRes = await sendCampaignEmailViaPool(wsId, {
           to: p.email,
           subject,
-          html: textToHtml(body),
+          html,
           text: body,
         });
         if (sendRes.ok) {
           await db
             .update(areExecutionQueue)
-            .set({ status: "sent", executedAt: new Date() })
+            .set({ status: "sent", executedAt: new Date(), trackingToken })
             .where(eq(areExecutionQueue.id, step.id));
           result.sent++;
         } else {
