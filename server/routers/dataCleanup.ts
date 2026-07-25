@@ -25,6 +25,27 @@ import { adminWsProcedure } from "../_core/workspace";
 import { getDb } from "../db";
 import { accounts, contacts, prospectQueue } from "../../drizzle/schema";
 
+/** Hosts that identify a social/profile site, never the company's own domain. */
+const SOCIAL_HOST = /(facebook|linkedin|twitter|instagram|youtube|crunchbase|x)\.com$/i;
+
+/**
+ * The company's own domain from a URL — or null when the URL is a social
+ * profile.
+ *
+ * Caught by the first dry run: preserving the host blindly would have written
+ * companyDomain="facebook.com" onto 756 contacts. A wrong domain is worse than
+ * an empty one — it would poison company matching, account linking, and any
+ * future email-pattern enrichment.
+ */
+export function companyDomainFromUrl(url?: string | null): string | null {
+  const s = (url ?? "").trim();
+  if (!s) return null;
+  const host = s.replace(/^https?:\/\//i, "").replace(/^www\./i, "").split("/")[0]?.toLowerCase();
+  if (!host || !host.includes(".")) return null;
+  if (SOCIAL_HOST.test(host)) return null;
+  return host.slice(0, 200);
+}
+
 /** Does this look like a URL rather than a company name? */
 export function looksLikeUrl(value?: string | null): boolean {
   const s = (value ?? "").trim();
@@ -154,10 +175,11 @@ export const dataCleanupRouter = router({
 
             if (next && next !== current) {
               set.companyName = next.slice(0, 200);
-              // Preserve the URL as a domain when we have nowhere else for it.
+              // Preserve the URL's host as the company domain ONLY when it is
+              // the company's own site — never a social profile host.
               if (!c.companyDomain && current && looksLikeUrl(current)) {
-                const dom = current.replace(/^https?:\/\//i, "").replace(/^www\./i, "").split("/")[0];
-                if (dom) set.companyDomain = dom.slice(0, 200);
+                const dom = companyDomainFromUrl(current);
+                if (dom) set.companyDomain = dom;
               }
             } else if (!next) {
               companyUnrecoverable++;

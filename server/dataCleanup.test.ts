@@ -45,3 +45,25 @@ describe("companyFromUrl", () => {
     expect(companyFromUrl(null)).toBeNull();
   });
 });
+
+describe("companyDomainFromUrl", () => {
+  it("refuses to treat a social host as the company's domain", async () => {
+    const { companyDomainFromUrl } = await import("./routers/dataCleanup");
+    // Caught by the first dry run: this would have written facebook.com onto
+    // 756 contacts. A wrong domain poisons matching worse than an empty one.
+    expect(companyDomainFromUrl("https://facebook.com/mongodb")).toBeNull();
+    expect(companyDomainFromUrl("https://www.linkedin.com/company/softchoice")).toBeNull();
+  });
+
+  it("keeps a genuine company domain", async () => {
+    const { companyDomainFromUrl } = await import("./routers/dataCleanup");
+    expect(companyDomainFromUrl("https://www.acme.com/about")).toBe("acme.com");
+    expect(companyDomainFromUrl("acme.co.uk")).toBe("acme.co.uk");
+  });
+
+  it("returns null for anything without a host", async () => {
+    const { companyDomainFromUrl } = await import("./routers/dataCleanup");
+    expect(companyDomainFromUrl("acme")).toBeNull();
+    expect(companyDomainFromUrl("")).toBeNull();
+  });
+});
