@@ -1260,17 +1260,23 @@ export const prospectsRouter = router({
       return { success: true, scheduledRowsUpdated };
     }),
 
-  /** Get A/B variant performance for a campaign */
+  /**
+   * Get A/B variant performance for a campaign.
+   *
+   * Reads COMPUTED stats (services/performanceMetrics) rather than the
+   * are_ab_variants counter columns. Those columns were never written by any
+   * code path, so this endpoint used to return sentCount/openCount/replyCount/
+   * meetingCount permanently at 0 — the A/B tab's reply-rate bars always showed
+   * 0%. Stats are now derived from dispatched execution-queue rows + signal log;
+   * the stored row still supplies the subject line / hook type.
+   */
   getAbVariants: workspaceProcedure
     .input(z.object({ campaignId: z.number() }))
     .query(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      return db
-        .select()
-        .from(areAbVariants)
-        .where(and(eq(areAbVariants.campaignId, input.campaignId), eq(areAbVariants.workspaceId, ctx.workspace.id)))
-        .orderBy(areAbVariants.stepIndex, areAbVariants.variantKey);
+      const { getAbVariantStats } = await import("../../services/performanceMetrics");
+      return getAbVariantStats(ctx.workspace.id, input.campaignId);
     }),
 
   /** Add a prospect manually */

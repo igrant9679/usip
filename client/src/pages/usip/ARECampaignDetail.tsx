@@ -2177,10 +2177,13 @@ export default function ARECampaignDetail() {
                 </p>
                 <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
                   {abVariants.map((v) => {
-                    const replyRate = v.sentCount > 0 ? ((v.replyCount / v.sentCount) * 100) : 0;
+                    // Rates come computed from the server (performanceMetrics) —
+                    // the old client-side maths divided counter columns that were
+                    // never written, so every bar read 0%.
+                    const replyRate = v.replyRate;
                     const isA = v.variantKey === "A";
                     return (
-                      <Card key={v.id} className="bg-card border">
+                      <Card key={`${v.stepIndex}-${v.variantKey}`} className="bg-card border">
                         <CardHeader className="pb-2 pt-4 px-4">
                           <div className="flex items-center gap-2">
                             <Badge variant="outline" className={`text-[10px] px-2 py-0.5 border font-bold ${isA ? "border-emerald-500/30 text-emerald-600 bg-emerald-500/10" : "border-blue-500/30 text-blue-600 bg-blue-500/10"}`}>
@@ -2208,10 +2211,19 @@ export default function ARECampaignDetail() {
                             </div>
                             <Progress value={replyRate} className="h-1.5" />
                             <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
-                              <span>Sent: {v.sentCount}</span>
-                              <span>Opens: {v.openCount}</span>
-                              <span>Replies: {v.replyCount}</span>
+                              <span>Sent: {v.sent}</span>
+                              <span>Replies: {v.replies}</span>
+                              <span>Meetings: {v.meetings}</span>
+                              {/* Opens are deliberately not shown as 0 — ARE pool
+                                  sends carry no tracking pixel, so "0 opens" would
+                                  read as failure rather than "not measured". */}
+                              {!v.opensTracked && <span className="italic">Opens: not tracked</span>}
                             </div>
+                            {v.sent > 0 && !v.sampleSufficient && (
+                              <p className="text-[10px] text-amber-600 dark:text-amber-500">
+                                Only {v.sent} send{v.sent === 1 ? "" : "s"} — too few to call a winner yet.
+                              </p>
+                            )}
                           </div>
                         </CardContent>
                       </Card>
