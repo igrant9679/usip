@@ -6,8 +6,24 @@
  * SIGNAL FEEDBACK AGENT — processes incoming signals (replies, opens, etc.):
  *   1. Sentiment analysis via LLM (positive/neutral/negative/objection)
  *   2. Determines action: pause sequence, create opportunity, add suppression
- *   3. Feeds back into ICP learning (positive signals reinforce ICP dimensions)
- *   4. Updates A/B variant performance counters
+ *   3. Promotes the prospect to the CRM on a positive signal / booked meeting
+ *   4. Writes an are_signal_log row — the durable record everything downstream
+ *      reads
+ *
+ * What this module does NOT do, despite two long-standing claims here:
+ *   • It does not "update A/B variant performance counters". Nothing ever wrote
+ *     are_ab_variants.sentCount/openCount/replyCount/meetingCount; the A/B tab
+ *     rendered permanent 0% bars for months because of it. Those counters are
+ *     now dead columns — A/B performance is COMPUTED on read from the execution
+ *     queue plus this signal log (services/performanceMetrics.getAbVariantStats).
+ *   • It does not itself "reinforce ICP dimensions". Signals reach the ICP
+ *     indirectly and on a schedule: getSegmentPerformance aggregates these rows
+ *     into reply/meeting rates per industry/title/size/geography, which the
+ *     daily ICP inference consumes (routers/are/icp.ts). Nothing in this file
+ *     writes to icp_profiles.
+ *
+ * The practical consequence: adding a new signal type here makes it available to
+ * the metrics layer automatically, but no counter anywhere needs updating.
  */
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, sql } from "drizzle-orm";
