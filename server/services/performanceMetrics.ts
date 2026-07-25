@@ -38,7 +38,9 @@ import {
   areSignalLog,
   emailDrafts,
   emailReplies,
+  opportunities,
   prospectQueue,
+  voiceCalls,
 } from "../../drizzle/schema";
 
 /** Percentage (0-100, one decimal) guarded against a zero denominator. */
@@ -319,6 +321,271 @@ export async function getReplyMix(workspaceId: number): Promise<ReplyMix> {
   }));
   classes.sort((a, b) => b.count - a.count);
   return { classes, attributed, unattributedInbound: Number(unmatched?.n ?? 0) };
+}
+
+/* ─── Segment performance (feeds ICP learning) ──────────────────────────── */
+
+export interface SegmentStats {
+  dimension: "industry" | "title" | "companySize" | "geography";
+  value: string;
+  prospects: number;
+  contacted: number;
+  replied: number;
+  meetings: number;
+  replyRate: number;
+  meetingRate: number;
+}
+
+/**
+ * Outbound outcomes grouped by ICP dimension.
+ *
+ * This is the input the ICP inference never had: it learns only from CLOSED
+ * deals, so a workspace with no won deals (the common early case) produced a
+ * zero-confidence profile even when hundreds of prospects had been worked.
+ * Reply and meeting rates per industry/title/size/geography are real learning
+ * signal available long before the first close.
+ */
+export async function getSegmentPerformance(
+  workspaceId: number,
+  opts: { minProspects?: number } = {},
+): Promise<SegmentStats[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const minProspects = opts.minProspects ?? 5;
+
+  // Prospects that were actually contacted, and their outcome signals.
+  const contactedRows = await db
+    .selectDistinct({
+      id: prospectQueue.id,
+      industry: prospectQueue.industry,
+      title: prospectQueue.title,
+      companySize: prospectQueue.companySize,
+      geography: prospectQueue.geography,
+    })
+    .from(prospectQueue)
+    .innerJoin(areExecutionQueue, eq(areExecutionQueue.prospectQueueId, prospectQueue.id))
+    .where(and(
+      eq(prospectQueue.workspaceId, workspaceId),
+      eq(areExecutionQueue.status, "sent" as never),
+    ));
+  if (contactedRows.length === 0) return [];
+
+  const signals = await db
+    .select({ prospectQueueId: areSignalLog.prospectQueueId, signalType: areSignalLog.signalType })
+    .from(areSignalLog)
+    .where(eq(areSignalLog.workspaceId, workspaceId));
+
+  const repliedIds = new Set<number>();
+  const meetingIds = new Set<number>();
+  for (const s of signals) {
+    const t = String(s.signalType);
+    if (t === "email_reply") repliedIds.add(Number(s.prospectQueueId));
+    else if (t === "meeting_booked") meetingIds.add(Number(s.prospectQueueId));
+  }
+
+  const DIMS: Array<SegmentStats["dimension"]> = ["industry", "title", "companySize", "geography"];
+  const buckets = new Map<string, SegmentStats>();
+  for (const row of contactedRows) {
+    for (const dim of DIMS) {
+      const raw = (row as any)[dim];
+      const value = typeof raw === "string" ? raw.trim() : "";
+      if (!value) continue; // never bucket under "unknown" — it teaches nothing
+      const key = `${dim}:${value.toLowerCase()}`;
+      const b = buckets.get(key) ?? {
+        dimension: dim, value, prospects: 0, contacted: 0, replied: 0,
+        meetings: 0, replyRate: 0, meetingRate: 0,
+      };
+      b.prospects += 1;
+      b.contacted += 1;
+      if (repliedIds.has(Number(row.id))) b.replied += 1;
+      if (meetingIds.has(Number(row.id))) b.meetings += 1;
+      buckets.set(key, b);
+    }
+  }
+
+  const out = [...buckets.values()]
+    .filter((b) => b.contacted >= minProspects)
+    .map((b) => ({ ...b, replyRate: rate(b.replied, b.contacted), meetingRate: rate(b.meetings, b.contacted) }));
+  out.sort((a, b) => b.meetingRate - a.meetingRate || b.replyRate - a.replyRate || b.contacted - a.contacted);
+  return out;
+}
+
+/* ─── Per-rep outbound performance (SDR coaching) ───────────────────────── */
+
+export interface RepStats {
+  userId: number;
+  sent: number;
+  replies: number;
+  positiveReplies: number;
+  replyRate: number;
+  positiveRate: number;
+}
+
+/**
+ * Per-rep send/reply performance from their own drafts.
+ *
+ * Replies are joined through `draftId`, which also scopes them correctly — see
+ * getReplyMix: email_replies holds ALL synced inbound mail, so an unscoped
+ * per-rep count would be measuring each rep's personal inbox.
+ */
+export async function getRepPerformance(workspaceId: number): Promise<RepStats[]> {
+  const db = await getDb();
+  if (!db) return [];
+
+  const sent = await db
+    .select({
+      userId: emailDrafts.createdByUserId,
+      sent: sql<number>`count(*)`,
+    })
+    .from(emailDrafts)
+    .where(and(
+      eq(emailDrafts.workspaceId, workspaceId),
+      eq(emailDrafts.status, "sent" as never),
+      isNotNull(emailDrafts.createdByUserId),
+    ))
+    .groupBy(emailDrafts.createdByUserId);
+  if (sent.length === 0) return [];
+
+  const replies = await db
+    .select({
+      userId: emailDrafts.createdByUserId,
+      replies: sql<number>`count(*)`,
+      positive: sql<number>`sum(case when ${emailReplies.replyClass} = 'willing_to_meet' then 1 else 0 end)`,
+    })
+    .from(emailReplies)
+    .innerJoin(emailDrafts, eq(emailReplies.draftId, emailDrafts.id))
+    .where(and(
+      eq(emailDrafts.workspaceId, workspaceId),
+      isNotNull(emailDrafts.createdByUserId),
+    ))
+    .groupBy(emailDrafts.createdByUserId);
+
+  const rmap = new Map(replies.map((r) => [Number(r.userId), r]));
+  const out = sent.map((s) => {
+    const r = rmap.get(Number(s.userId));
+    const n = Number(s.sent ?? 0);
+    const rep = Number(r?.replies ?? 0);
+    const pos = Number(r?.positive ?? 0);
+    return {
+      userId: Number(s.userId),
+      sent: n,
+      replies: rep,
+      positiveReplies: pos,
+      replyRate: rate(rep, n),
+      positiveRate: rate(pos, n),
+    };
+  });
+  out.sort((a, b) => b.replyRate - a.replyRate);
+  return out;
+}
+
+/* ─── Win/loss + pipeline shape (CRM) ───────────────────────────────────── */
+
+export interface WinLossStats {
+  won: number;
+  lost: number;
+  open: number;
+  winRate: number;
+  /** Lost-reason clusters, most common first. */
+  lostReasons: Array<{ reason: string; count: number; share: number }>;
+  /** Open pipeline by stage — reveals where deals pile up. */
+  openByStage: Array<{ stage: string; count: number }>;
+  avgWonValue: number;
+}
+
+export async function getWinLossStats(workspaceId: number): Promise<WinLossStats> {
+  const empty: WinLossStats = { won: 0, lost: 0, open: 0, winRate: 0, lostReasons: [], openByStage: [], avgWonValue: 0 };
+  const db = await getDb();
+  if (!db) return empty;
+
+  const byStage = await db
+    .select({
+      stage: opportunities.stage,
+      n: sql<number>`count(*)`,
+      avgValue: sql<number>`coalesce(avg(${opportunities.value}), 0)`,
+    })
+    .from(opportunities)
+    .where(eq(opportunities.workspaceId, workspaceId))
+    .groupBy(opportunities.stage);
+  if (byStage.length === 0) return empty;
+
+  let won = 0, lost = 0, open = 0, avgWonValue = 0;
+  const openByStage: Array<{ stage: string; count: number }> = [];
+  for (const row of byStage) {
+    const stage = String(row.stage);
+    const n = Number(row.n ?? 0);
+    if (stage === "won") { won = n; avgWonValue = Math.round(Number(row.avgValue ?? 0)); }
+    else if (stage === "lost") lost = n;
+    else { open += n; openByStage.push({ stage, count: n }); }
+  }
+  openByStage.sort((a, b) => b.count - a.count);
+
+  const reasonRows = await db
+    .select({ reason: opportunities.lostReason, n: sql<number>`count(*)` })
+    .from(opportunities)
+    .where(and(eq(opportunities.workspaceId, workspaceId), eq(opportunities.stage, "lost")))
+    .groupBy(opportunities.lostReason);
+  const reasonTotal = reasonRows.reduce((n, r) => n + Number(r.n ?? 0), 0);
+  const lostReasons = reasonRows
+    .map((r) => ({
+      reason: r.reason ? String(r.reason) : "not recorded",
+      count: Number(r.n ?? 0),
+      share: rate(Number(r.n ?? 0), reasonTotal),
+    }))
+    .sort((a, b) => b.count - a.count);
+
+  return { won, lost, open, winRate: rate(won, won + lost), lostReasons, openByStage, avgWonValue };
+}
+
+/* ─── Voice call outcomes ───────────────────────────────────────────────── */
+
+export interface VoiceStats {
+  direction: "inbound" | "outbound";
+  calls: number;
+  connected: number;
+  noAnswer: number;
+  failed: number;
+  connectRate: number;
+  avgDurationSec: number;
+}
+
+export async function getVoiceStats(workspaceId: number): Promise<VoiceStats[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db
+    .select({
+      direction: voiceCalls.direction,
+      status: voiceCalls.status,
+      n: sql<number>`count(*)`,
+      avgDur: sql<number>`coalesce(avg(${voiceCalls.durationSec}), 0)`,
+    })
+    .from(voiceCalls)
+    .where(eq(voiceCalls.workspaceId, workspaceId))
+    .groupBy(voiceCalls.direction, voiceCalls.status);
+  if (rows.length === 0) return [];
+
+  const acc = new Map<string, VoiceStats & { durWeight: number }>();
+  for (const r of rows) {
+    const dir = String(r.direction) as VoiceStats["direction"];
+    const cur = acc.get(dir) ?? {
+      direction: dir, calls: 0, connected: 0, noAnswer: 0, failed: 0,
+      connectRate: 0, avgDurationSec: 0, durWeight: 0,
+    };
+    const n = Number(r.n ?? 0);
+    const status = String(r.status);
+    cur.calls += n;
+    if (status === "completed") {
+      cur.connected += n;
+      cur.durWeight += Number(r.avgDur ?? 0) * n;
+    } else if (status === "no_answer") cur.noAnswer += n;
+    else if (status === "failed") cur.failed += n;
+    acc.set(dir, cur);
+  }
+  return [...acc.values()].map(({ durWeight, ...v }) => ({
+    ...v,
+    connectRate: rate(v.connected, v.calls),
+    avgDurationSec: v.connected > 0 ? Math.round(durWeight / v.connected) : 0,
+  }));
 }
 
 /* ─── ARE A/B variant performance ───────────────────────────────────────── */

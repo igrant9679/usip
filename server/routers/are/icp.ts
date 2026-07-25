@@ -13,7 +13,7 @@
  *   icp.override     — manually adjust ICP weights
  */
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { areNotify } from "./notify";
 import {
@@ -83,7 +83,10 @@ export async function runIcpInference(workspaceId: number): Promise<void> {
   }
 
   const sampleCount = wonDeals.length;
-  const confidenceScore = Math.min(100, Math.round((sampleCount / 20) * 100));
+  // Won deals are the strongest evidence: 20 of them = full confidence. Funnel
+  // signal is folded in below (weaker per observation, but available far
+  // earlier), so a workspace with no closes yet no longer reports 0%.
+  let confidenceScore = Math.min(100, Math.round((sampleCount / 20) * 100));
 
   // 4. Build statistical summaries for the LLM
   const industryCounts: Record<string, number> = {};
@@ -118,6 +121,43 @@ export async function runIcpInference(workspaceId: number): Promise<void> {
   const avgDealValue = sampleCount > 0 ? Math.round(totalValue / sampleCount) : 0;
   const avgSalesCycleDays = dealCount > 0 ? Math.round(totalDays / dealCount) : 0;
 
+  /* 4b. FUNNEL signal — outcomes by ICP dimension.
+     Until now this function learned only from CLOSED deals, so a workspace with
+     no wins yet produced a zero-confidence profile even after working hundreds
+     of prospects. Reply and meeting rates per industry/title/size/geography are
+     real learning signal that exists long before the first close, and they are
+     what the product promises ("analyses your conversion rates, email
+     responses"). Best-effort: a failure here must not block inference. */
+  let segmentSummary = "No contacted-prospect outcome data yet.";
+  let funnelContacted = 0;
+  try {
+    const { getSegmentPerformance } = await import("../../services/performanceMetrics");
+    const segments = await getSegmentPerformance(workspaceId);
+    if (segments.length > 0) {
+      funnelContacted = segments
+        .filter((s) => s.dimension === "industry")
+        .reduce((n, s) => n + s.contacted, 0);
+      const fmt = (dim: string) =>
+        segments
+          .filter((s) => s.dimension === dim)
+          .slice(0, 6)
+          .map((s) => `${s.value}: ${s.contacted} contacted, ${s.replyRate}% reply, ${s.meetingRate}% meeting`)
+          .join(" | ") || "none";
+      segmentSummary =
+        `By industry — ${fmt("industry")}\n` +
+        `By title — ${fmt("title")}\n` +
+        `By company size — ${fmt("companySize")}\n` +
+        `By geography — ${fmt("geography")}`;
+    }
+  } catch (e) {
+    console.error(`[ICP] segment performance unavailable for ws ${workspaceId}:`, (e as Error).message);
+  }
+
+  // Funnel evidence is deliberately capped at 60: reply rates validate a segment
+  // but only a closed deal proves it. Won deals can still carry the score to 100.
+  const funnelConfidence = Math.min(60, Math.round((funnelContacted / 200) * 60));
+  confidenceScore = Math.max(confidenceScore, funnelConfidence);
+
   // 5. Invoke LLM with structured JSON schema
   const systemPrompt = `You are an expert B2B sales analyst. Analyse the provided CRM data and produce a structured Ideal Customer Profile (ICP) for this sales team. Be specific, data-driven, and actionable. Identify clear patterns and anti-patterns. If sample size is small, note low confidence but still produce your best inference.`;
 
@@ -133,6 +173,14 @@ export async function runIcpInference(workspaceId: number): Promise<void> {
 ## Lost Deal Statistics (${lostDeals.length} deals)
 - Lost reasons: ${JSON.stringify(lostReasonCounts)}
 - Lost industries: ${JSON.stringify(lostIndustryCounts)}
+
+## Live Funnel Signal (outbound outcomes by segment, ${funnelContacted} prospects contacted)
+${segmentSummary}
+
+Weight the funnel signal alongside closed deals. Where there are few or no closed
+deals, the funnel is the better evidence — a segment that replies and books
+meetings is validating itself even before a deal closes. Where the two conflict,
+prefer closed-won patterns and say so in the rationale.
 
 Based on this data, produce a comprehensive ICP with:
 1. Target industries (top 3-5 with weights summing to 100)
@@ -300,6 +348,82 @@ Based on this data, produce a comprehensive ICP with:
 }
 
 /* ─── Router ─────────────────────────────────────────────────────────────── */
+
+/**
+ * Cron entry: regenerate the ICP for every workspace that has something new to
+ * learn from.
+ *
+ * Closes a real gap. `runIcpInference` was reachable only from a manual
+ * "Regenerate" button and from POST /api/scheduled/icp-regen, whose own comment
+ * said it was "called by the Manus scheduled task agent" — the retired dev
+ * platform. index.ts registered 17 background jobs and none of them mentioned
+ * the ICP, so in production the "living" profile only ever changed when a human
+ * clicked a button.
+ *
+ * Each run costs one LLM call per workspace, so it is gated hard:
+ *   • skip workspaces with NO evidence at all (no closed deals, no contacted
+ *     prospects) — there is nothing to infer from and it would burn spend
+ *   • skip if the active profile is younger than MIN_AGE_HOURS
+ *   • skip if neither the closed-deal count nor the contacted count has moved
+ *     since that profile was generated
+ * Background LLM spend on idle workspaces has bitten this codebase before.
+ */
+const ICP_MIN_AGE_HOURS = 20;
+
+export async function runIcpInferenceAllWorkspaces(): Promise<{ regenerated: number; skipped: number }> {
+  const db = await getDb();
+  if (!db) return { regenerated: 0, skipped: 0 };
+  const { workspaces } = await import("../../../drizzle/schema");
+  const rows = await db.select({ id: workspaces.id }).from(workspaces);
+
+  let regenerated = 0;
+  let skipped = 0;
+  for (const ws of rows) {
+    try {
+      const [closed] = await db
+        .select({ n: sql<number>`count(*)` })
+        .from(opportunities)
+        .where(and(
+          eq(opportunities.workspaceId, ws.id),
+          inArray(opportunities.stage, ["won", "lost"]),
+        ));
+      const closedCount = Number(closed?.n ?? 0);
+
+      let contactedCount = 0;
+      try {
+        const { getSegmentPerformance } = await import("../../services/performanceMetrics");
+        const segs = await getSegmentPerformance(ws.id);
+        contactedCount = segs
+          .filter((s) => s.dimension === "industry")
+          .reduce((n, s) => n + s.contacted, 0);
+      } catch { /* treat as no funnel evidence */ }
+
+      // No evidence of any kind → nothing to infer, no spend.
+      if (closedCount === 0 && contactedCount === 0) { skipped++; continue; }
+
+      const [active] = await db
+        .select({
+          createdAt: icpProfiles.createdAt,
+          sampleWonDeals: icpProfiles.sampleWonDeals,
+        })
+        .from(icpProfiles)
+        .where(and(eq(icpProfiles.workspaceId, ws.id), eq(icpProfiles.isActive, true)))
+        .limit(1);
+
+      if (active?.createdAt) {
+        const ageHours = (Date.now() - new Date(active.createdAt).getTime()) / 3600000;
+        if (ageHours < ICP_MIN_AGE_HOURS) { skipped++; continue; }
+      }
+
+      await runIcpInference(ws.id);
+      regenerated++;
+      console.log(`[IcpCron] ws ${ws.id} regenerated (closed=${closedCount}, contacted=${contactedCount})`);
+    } catch (e) {
+      console.error(`[IcpCron] ws ${ws.id} failed:`, (e as Error).message);
+    }
+  }
+  return { regenerated, skipped };
+}
 
 export const icpRouter = router({
   /** Return the latest active ICP for the workspace */

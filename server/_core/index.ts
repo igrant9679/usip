@@ -377,6 +377,23 @@ async function startServer() {
   setTimeout(runAttribution, 10 * 60 * 1000); // stagger: 10 minutes after boot
   setInterval(runAttribution, 12 * 60 * 60 * 1000); // twice daily
 
+  // ICP inference. runIcpInference was previously reachable ONLY from a manual
+  // "Regenerate" button and POST /api/scheduled/icp-regen, which its own comment
+  // says was called by the retired Manus scheduler — so the "living" ICP only
+  // ever changed when a human clicked. This is that missing loop. The worker
+  // skips workspaces with no evidence and profiles younger than 20h, so idle
+  // workspaces cost no LLM spend.
+  const runIcpCron = () => {
+    import("../routers/are/icp")
+      .then((m) => m.runIcpInferenceAllWorkspaces())
+      .then((r) => {
+        if (r.regenerated > 0) console.log(`[IcpCron] regenerated=${r.regenerated} skipped=${r.skipped}`);
+      })
+      .catch((e) => console.error("[IcpCron] run failed:", e));
+  };
+  setTimeout(runIcpCron, 12 * 60 * 1000); // stagger: 12 minutes after boot
+  setInterval(runIcpCron, 24 * 60 * 60 * 1000); // daily
+
   // Nightly AI pipeline batch: midnight cron for leads above score threshold
   const scheduleNightlyBatch = () => {
     const now = new Date();

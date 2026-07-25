@@ -265,10 +265,141 @@ describe("sequence engine honours a disabled step", () => {
   });
 });
 
+describe("phase 4 analyzers — restraint", () => {
+  async function runWith(mod: string, exportName: string, stub: Record<string, any>) {
+    vi.doMock("./services/performanceMetrics", async (importOriginal) => ({
+      ...(await (importOriginal as any)()),
+      ...stub,
+    }));
+    const m = await import(mod);
+    return m[exportName].run(1);
+  }
+
+  it("crm analyzer stays silent below the closed-deal gate", async () => {
+    const out = await runWith("./services/optimization/crmAnalyzer", "crmAnalyzer", {
+      getWinLossStats: vi.fn().mockResolvedValue({
+        won: 2, lost: 3, open: 1, winRate: 40, avgWonValue: 1000,
+        lostReasons: [{ reason: "price", count: 3, share: 100 }],
+        openByStage: [{ stage: "discovery", count: 1 }],
+      }),
+    });
+    // 5 closed deals cannot support a loss-pattern claim.
+    expect(out).toEqual([]);
+  });
+
+  it("crm analyzer names a dominant loss reason once there is volume", async () => {
+    const out = await runWith("./services/optimization/crmAnalyzer", "crmAnalyzer", {
+      getWinLossStats: vi.fn().mockResolvedValue({
+        won: 10, lost: 20, open: 2, winRate: 33.3, avgWonValue: 5000,
+        lostReasons: [{ reason: "price", count: 12, share: 60 }, { reason: "timing", count: 8, share: 40 }],
+        openByStage: [{ stage: "discovery", count: 2 }],
+      }),
+    });
+    const p = out.find((x: any) => x.kind === "dominant_loss_reason");
+    expect(p).toBeDefined();
+    expect(p.proposedValue).toBeNull(); // advisory: no correct automatic action
+  });
+
+  it("crm analyzer flags unrecorded loss reasons", async () => {
+    const out = await runWith("./services/optimization/crmAnalyzer", "crmAnalyzer", {
+      getWinLossStats: vi.fn().mockResolvedValue({
+        won: 5, lost: 15, open: 0, winRate: 25, avgWonValue: 0,
+        lostReasons: [{ reason: "not recorded", count: 12, share: 80 }],
+        openByStage: [],
+      }),
+    });
+    expect(out.some((x: any) => x.kind === "missing_loss_reasons")).toBe(true);
+  });
+
+  it("sdr analyzer stays silent with a single rep (nothing to compare)", async () => {
+    const out = await runWith("./services/optimization/sdrAnalyzer", "sdrAnalyzer", {
+      getRepPerformance: vi.fn().mockResolvedValue([
+        { userId: 1, sent: 500, replies: 5, positiveReplies: 1, replyRate: 1, positiveRate: 0.2 },
+      ]),
+    });
+    expect(out).toEqual([]);
+  });
+
+  it("sdr analyzer stays silent when reps lack individual volume", async () => {
+    const out = await runWith("./services/optimization/sdrAnalyzer", "sdrAnalyzer", {
+      getRepPerformance: vi.fn().mockResolvedValue([
+        { userId: 1, sent: 40, replies: 8, positiveReplies: 2, replyRate: 20, positiveRate: 5 },
+        { userId: 2, sent: 30, replies: 0, positiveReplies: 0, replyRate: 0, positiveRate: 0 },
+      ]),
+    });
+    // Per-rep splitting multiplies small-sample unfairness — must not judge.
+    expect(out).toEqual([]);
+  });
+
+  it("sdr analyzer raises a genuine gap, framed as advisory", async () => {
+    const out = await runWith("./services/optimization/sdrAnalyzer", "sdrAnalyzer", {
+      getRepPerformance: vi.fn().mockResolvedValue([
+        { userId: 1, sent: 200, replies: 30, positiveReplies: 10, replyRate: 15, positiveRate: 5 },
+        { userId: 2, sent: 200, replies: 4, positiveReplies: 0, replyRate: 2, positiveRate: 0 },
+      ]),
+    });
+    const p = out.find((x: any) => x.kind === "rep_reply_rate_below_team");
+    expect(p).toBeDefined();
+    expect(p.scopeLabel).toBe("Rep #2");
+    expect(p.proposedValue).toBeNull(); // coaching is never auto-applied
+    expect(p.rationale).toMatch(/not enough to explain it/); // stays fair to the person
+  });
+
+  it("voice analyzer stays silent below the dial gate", async () => {
+    const out = await runWith("./services/optimization/voiceAnalyzer", "voiceAnalyzer", {
+      getVoiceStats: vi.fn().mockResolvedValue([
+        { direction: "outbound", calls: 20, connected: 1, noAnswer: 19, failed: 0, connectRate: 5, avgDurationSec: 60 },
+      ]),
+    });
+    expect(out).toEqual([]);
+  });
+
+  it("voice analyzer flags a low connect rate with enough dials", async () => {
+    const out = await runWith("./services/optimization/voiceAnalyzer", "voiceAnalyzer", {
+      getVoiceStats: vi.fn().mockResolvedValue([
+        { direction: "outbound", calls: 200, connected: 10, noAnswer: 180, failed: 10, connectRate: 5, avgDurationSec: 90 },
+      ]),
+    });
+    expect(out.some((x: any) => x.kind === "low_call_connect_rate")).toBe(true);
+  });
+
+  it("voice analyzer distinguishes immediate hang-ups from not connecting", async () => {
+    const out = await runWith("./services/optimization/voiceAnalyzer", "voiceAnalyzer", {
+      getVoiceStats: vi.fn().mockResolvedValue([
+        { direction: "outbound", calls: 200, connected: 100, noAnswer: 100, failed: 0, connectRate: 50, avgDurationSec: 8 },
+      ]),
+    });
+    expect(out.some((x: any) => x.kind === "calls_ending_immediately")).toBe(true);
+    // Connect rate is fine here, so it must NOT also cry "low connect rate".
+    expect(out.some((x: any) => x.kind === "low_call_connect_rate")).toBe(false);
+  });
+});
+
+describe("ICP autonomous loop", () => {
+  it("exports the cron entry that was missing", async () => {
+    const m = await import("./routers/are/icp");
+    // Previously runIcpInference had no scheduled caller inside the app at all.
+    expect(typeof m.runIcpInferenceAllWorkspaces).toBe("function");
+  }, 20_000);
+
+  it("is registered as a background job in index.ts", async () => {
+    const src = await import("node:fs").then((fs) => fs.readFileSync("server/_core/index.ts", "utf8"));
+    expect(src).toContain("runIcpInferenceAllWorkspaces");
+  });
+
+  it("the scheduled icp-regen endpoint checks a shared secret", async () => {
+    const src = await import("node:fs").then((fs) => fs.readFileSync("server/emailTracking.ts", "utf8"));
+    // It triggers an LLM call per workspace; it must not stay open to anyone.
+    expect(src).toContain("SCHEDULED_TASK_SECRET");
+  });
+});
+
 describe("runner wiring", () => {
-  it("registers both analyzers", async () => {
+  it("registers every analyzer module", async () => {
     const { ANALYZERS } = await import("./services/optimization/runner");
-    expect(ANALYZERS.map((a) => a.module).sort()).toEqual(["sequences", "sourcing"]);
+    expect(ANALYZERS.map((a) => a.module).sort()).toEqual(
+      ["crm", "sdr_coaching", "sequences", "sourcing", "voice"],
+    );
   });
 
   // Importing the whole appRouter pulls in every router in the app, which takes

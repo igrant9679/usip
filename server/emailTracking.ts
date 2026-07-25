@@ -849,6 +849,18 @@ export function registerEmailTrackingRoutes(app: Express) {
   ----------------------------------------------------------------- */
   app.post("/api/scheduled/icp-regen", async (req: any, res: any) => {
     try {
+      // This endpoint triggers an LLM call per workspace and was completely
+      // unauthenticated — anyone could run up the bill. Now gated on a shared
+      // secret when SCHEDULED_TASK_SECRET is configured. The internal daily
+      // cron (index.ts → runIcpInferenceAllWorkspaces) is the primary trigger;
+      // this stays for external schedulers.
+      const secret = process.env.SCHEDULED_TASK_SECRET;
+      if (secret) {
+        const provided = String(req.headers["x-scheduled-secret"] ?? "");
+        if (provided !== secret) {
+          return res.status(401).json({ ok: false, error: "Unauthorized" });
+        }
+      }
       const db = await getDb();
       if (!db) return res.status(503).json({ ok: false, error: "DB unavailable" });
       const { workspaces } = await import("../drizzle/schema");

@@ -18,12 +18,21 @@ import { and, eq, gte, inArray } from "drizzle-orm";
 import { getDb } from "../../db";
 import { optimizationRecommendations, workspaceSettings } from "../../../drizzle/schema";
 import { applyRecommendation, isApplicable } from "./apply";
+import { crmAnalyzer } from "./crmAnalyzer";
+import { sdrAnalyzer } from "./sdrAnalyzer";
 import { sequenceAnalyzer } from "./sequenceAnalyzer";
 import { sourceAnalyzer } from "./sourceAnalyzer";
+import { voiceAnalyzer } from "./voiceAnalyzer";
 import type { Analyzer, Proposal } from "./types";
 
 /** Registered analyzers. Adding a module = adding it to this list. */
-export const ANALYZERS: Analyzer[] = [sequenceAnalyzer, sourceAnalyzer];
+export const ANALYZERS: Analyzer[] = [
+  sequenceAnalyzer,
+  sourceAnalyzer,
+  crmAnalyzer,
+  sdrAnalyzer,
+  voiceAnalyzer,
+];
 
 /** Statuses that block an identical new proposal. */
 const BLOCKING_STATUSES = ["pending", "approved", "applied", "dismissed"] as const;
