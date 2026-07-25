@@ -78,7 +78,12 @@ export default function AREPerformance() {
 
   const stepRows = steps.data ?? [];
   const sourceRows = sources.data ?? [];
-  const replyRows = replies.data ?? [];
+  // Scoped to replies answering something we sent. The unattributed remainder
+  // is the workspace's wider synced mailbox — surfaced as a footnote, never
+  // folded into the mix (it would swamp it and mean nothing).
+  const replyRows = replies.data?.classes ?? [];
+  const attributedReplies = replies.data?.attributed ?? 0;
+  const unattributedInbound = replies.data?.unattributedInbound ?? 0;
 
   const totalSent = stepRows.reduce((n, r) => n + r.sent, 0);
   const totalReplies = stepRows.reduce((n, r) => n + r.replies, 0);
@@ -127,7 +132,7 @@ export default function AREPerformance() {
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
               <StatCard label="Sequence emails sent" value={totalSent} hint="Drafts with status 'sent' that belong to a sequence step" />
               <StatCard label="Replies" value={totalReplies} hint="Inbound replies attributed to a sequence step" />
-              <StatCard label="Willing to meet" value={positive} tone={positive > 0 ? "success" : undefined} hint="Replies classified as wanting a meeting" />
+              <StatCard label="Willing to meet" value={positive} tone={positive > 0 ? "success" : undefined} hint="Replies to our outbound classified as wanting a meeting" />
               <StatCard label="Meetings from steps" value={totalMeetings} tone={totalMeetings > 0 ? "success" : undefined} hint="Replies that produced a meeting record" />
             </div>
 
@@ -254,12 +259,14 @@ export default function AREPerformance() {
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm flex items-center gap-2">
                   <MailOpen className="size-4" style={{ color: accent }} /> Reply mix
-                  <span className="ml-auto text-[11px] font-normal text-muted-foreground">What replies actually say</span>
+                  <span className="ml-auto text-[11px] font-normal text-muted-foreground">
+                    {attributedReplies} repl{attributedReplies === 1 ? "y" : "ies"} to our outbound
+                  </span>
                 </CardTitle>
               </CardHeader>
               <CardContent className="px-0 pb-0">
                 {replyRows.length === 0 ? (
-                  <p className="px-4 pb-4 text-[13px] text-muted-foreground">No inbound replies recorded yet. A raw reply count would hide whether replies progress deals — this breaks them out by intent once they arrive.</p>
+                  <p className="px-4 pb-4 text-[13px] text-muted-foreground">No replies to our outbound yet. A raw reply count would hide whether replies progress deals — this breaks them out by intent once they arrive.</p>
                 ) : (
                   <ul className="divide-y divide-border/60">
                     {replyRows.map((r) => {
@@ -279,6 +286,13 @@ export default function AREPerformance() {
                       );
                     })}
                   </ul>
+                )}
+                {unattributedInbound > 0 && (
+                  <p className="px-4 py-3 border-t border-border/60 text-[11px] text-muted-foreground">
+                    Excluded: {unattributedInbound.toLocaleString()} inbound message{unattributedInbound === 1 ? "" : "s"} that
+                    {" "}matched no outbound send of ours. Mailbox sync records all inbound mail, so counting it here would
+                    {" "}measure the whole mailbox rather than campaign performance.
+                  </p>
                 )}
               </CardContent>
             </Card>

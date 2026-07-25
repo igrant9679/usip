@@ -30,7 +30,7 @@
  * false instead of a 0 that would read as "nobody opened it". Adding ARE open
  * tracking is a separate change (a per-send token tied to prospect + step).
  */
-import { and, eq, isNotNull, sql } from "drizzle-orm";
+import { and, eq, isNotNull, isNull, sql } from "drizzle-orm";
 import { getDb } from "../db";
 import {
   areAbVariants,
@@ -267,32 +267,58 @@ export interface ReplyClassStats {
   share: number;
 }
 
+export interface ReplyMix {
+  /** Class breakdown of replies to OUR outbound only. */
+  classes: ReplyClassStats[];
+  /** Replies matched to a draft we sent — the denominator for `classes`. */
+  attributed: number;
+  /**
+   * Inbound mail with no matching outbound draft. Reported so the number is
+   * visible rather than silently dropped, but deliberately EXCLUDED from the
+   * mix above.
+   */
+  unattributedInbound: number;
+}
+
 /**
- * Breakdown of inbound replies by the 8-class taxonomy. Shows whether replies
- * are actually progressing deals (`willing_to_meet`) or just churn
- * (`out_of_office`, `not_interested`) — a raw reply count hides that entirely.
+ * Breakdown of replies by the 8-class taxonomy, scoped to replies that answer
+ * something WE sent (`draftId IS NOT NULL`).
+ *
+ * The scope is the whole point. inboundReplyPoller inserts a row for every
+ * processed inbound message, with `draftId` null when it matches no outbound
+ * draft — so `email_replies` is the workspace's entire synced mailbox, not its
+ * campaign replies. Measured unscoped on live data this read 61k rows, 98%
+ * unclassified: the user's personal inbox, swamping the few hundred real
+ * campaign replies. Any analyzer that later reasons over "reply mix" would have
+ * been learning from private mail against a meaningless denominator.
  */
-export async function getReplyClassStats(workspaceId: number): Promise<ReplyClassStats[]> {
+export async function getReplyMix(workspaceId: number): Promise<ReplyMix> {
   const db = await getDb();
-  if (!db) return [];
+  if (!db) return { classes: [], attributed: 0, unattributedInbound: 0 };
+
   const rows = await db
     .select({
       replyClass: emailReplies.replyClass,
       n: sql<number>`count(*)`,
     })
     .from(emailReplies)
-    .where(eq(emailReplies.workspaceId, workspaceId))
+    .where(and(eq(emailReplies.workspaceId, workspaceId), isNotNull(emailReplies.draftId)))
     .groupBy(emailReplies.replyClass);
 
-  const total = rows.reduce((n, r) => n + Number(r.n ?? 0), 0);
-  const out = rows.map((r) => ({
-    // Unclassified replies are real replies; label them rather than dropping them.
+  const [unmatched] = await db
+    .select({ n: sql<number>`count(*)` })
+    .from(emailReplies)
+    .where(and(eq(emailReplies.workspaceId, workspaceId), isNull(emailReplies.draftId)));
+
+  const attributed = rows.reduce((n, r) => n + Number(r.n ?? 0), 0);
+  const classes = rows.map((r) => ({
+    // A matched reply the classifier hasn't processed is still a real reply.
     replyClass: r.replyClass ? String(r.replyClass) : "unclassified",
     count: Number(r.n ?? 0),
-    share: rate(Number(r.n ?? 0), total),
+    share: rate(Number(r.n ?? 0), attributed),
   }));
-  out.sort((a, b) => b.count - a.count);
-  return out;
+  classes.sort((a, b) => b.count - a.count);
+  return { classes, attributed, unattributedInbound: Number(unmatched?.n ?? 0) };
 }
 
 /* ─── ARE A/B variant performance ───────────────────────────────────────── */

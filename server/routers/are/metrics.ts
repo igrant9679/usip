@@ -15,7 +15,7 @@ import { router } from "../../_core/trpc";
 import { workspaceProcedure } from "../../_core/workspace";
 import {
   getAbVariantStats,
-  getReplyClassStats,
+  getReplyMix,
   getSequenceStepStats,
   getSourceYieldStats,
   MIN_VARIANT_SAMPLE,
@@ -32,8 +32,12 @@ export const metricsRouter = router({
   /** Sourcing yield per source, ranked by meetings-per-contacted. */
   sourceYield: workspaceProcedure.query(async ({ ctx }) => getSourceYieldStats(ctx.workspace.id)),
 
-  /** Inbound reply mix across the 8-class taxonomy. */
-  replyMix: workspaceProcedure.query(async ({ ctx }) => getReplyClassStats(ctx.workspace.id)),
+  /**
+   * Reply mix across the 8-class taxonomy, scoped to replies to OUR outbound.
+   * Also returns the unattributed-inbound count so the excluded volume is
+   * visible rather than silently dropped.
+   */
+  replyMix: workspaceProcedure.query(async ({ ctx }) => getReplyMix(ctx.workspace.id)),
 
   /** A/B variant performance for one campaign (same data the campaign tab shows). */
   abVariants: workspaceProcedure
