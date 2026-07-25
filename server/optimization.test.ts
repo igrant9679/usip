@@ -394,6 +394,42 @@ describe("ICP autonomous loop", () => {
   });
 });
 
+describe("retired steps survive being saved", () => {
+  // The optimisation layer writes enabled:false into sequences.steps. Every save
+  // path must preserve it: while the zod stepSchema omitted the field, saving
+  // ANYTHING from the editor silently re-enabled a retired step while the
+  // optimisation audit trail still reported it as disabled.
+  it("stepSchema accepts enabled on every step type", async () => {
+    const src = await import("node:fs").then((fs) =>
+      fs.readFileSync("server/routers/sequences.ts", "utf8"),
+    );
+    expect(src).toContain("const enabledField = { enabled: z.boolean().optional() }");
+    // 5 variants + the email object = every branch of the discriminated union.
+    const spreads = src.match(/\.\.\.enabledField/g) ?? [];
+    expect(spreads.length).toBeGreaterThanOrEqual(5);
+  });
+
+  it("the canvas round-trip carries the flag in both directions", async () => {
+    const src = await import("node:fs").then((fs) =>
+      fs.readFileSync("server/routers/sequences.ts", "utf8"),
+    );
+    // steps -> canvas
+    expect(src).toMatch(/enabled === false\) data\.enabled = false/);
+    // canvas -> steps
+    expect(src).toContain("const retired = d.enabled === false");
+    const spread = src.match(/\.\.\.retired/g) ?? [];
+    expect(spread.length).toBeGreaterThanOrEqual(5);
+  });
+
+  it("the editor surfaces a retired step instead of showing it as normal", async () => {
+    const src = await import("node:fs").then((fs) =>
+      fs.readFileSync("client/src/pages/usip/SequenceEditor.tsx", "utf8"),
+    );
+    expect(src).toContain("Skipped — not sending");
+    expect(src).toContain("toggleStepEnabled");
+  });
+});
+
 describe("runner wiring", () => {
   it("registers every analyzer module", async () => {
     const { ANALYZERS } = await import("./services/optimization/runner");

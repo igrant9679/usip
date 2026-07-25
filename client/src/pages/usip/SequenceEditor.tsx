@@ -22,15 +22,22 @@ import {
 import {
   Send, Star, Share2, Zap, UserPlus, ChevronDown, Plus, Mail, MailOpen, Phone,
   CheckSquare, MessageSquare, Clock, Trash2, GripVertical, ArrowUp, ArrowDown,
+  PauseCircle, PlayCircle,
   Loader2, Users, Activity as ActivityIcon, BarChart3, Settings2, X,
 } from "lucide-react";
 
+/**
+ * `enabled: false` marks a RETIRED step: the send engine skips it entirely.
+ * Set either by hand here or by the optimisation layer when a step has real
+ * volume and has never earned a reply (/are/performance → Recommendations).
+ * Absent/true means active, so existing sequences are unaffected.
+ */
 type Step =
-  | { type: "email"; subject: string; body?: string }
-  | { type: "wait"; days: number }
-  | { type: "task"; body: string }
-  | { type: "linkedin_dm"; body?: string }
-  | { type: "linkedin_invite"; note?: string };
+  | { type: "email"; subject: string; body?: string; enabled?: boolean }
+  | { type: "wait"; days: number; enabled?: boolean }
+  | { type: "task"; body: string; enabled?: boolean }
+  | { type: "linkedin_dm"; body?: string; enabled?: boolean }
+  | { type: "linkedin_invite"; note?: string; enabled?: boolean };
 
 const STEP_OPTIONS: { key: string; label: string; icon: any; make: () => Step }[] = [
   { key: "email_auto", label: "Automatic email", icon: Mail, make: () => ({ type: "email", subject: "", body: "" }) },
@@ -88,6 +95,17 @@ export default function SequenceEditor() {
   const commit = (next: Step[]) => { setSteps(next); updateSteps.mutate({ id, steps: next as any }); };
   const addStep = (make: () => Step) => { const next = [...steps, make()]; setSteps(next); updateSteps.mutate({ id, steps: next as any }); setExpanded(next.length - 1); setAddOpen(false); };
   const removeStep = (i: number) => { const next = steps.filter((_, idx) => idx !== i); commit(next); if (expanded === i) setExpanded(null); };
+  /**
+   * Retire / restore a step. Retiring keeps it in the sequence (so its history
+   * and copy survive) but the engine skips it — the reversible alternative to
+   * deleting a step that isn't working.
+   */
+  const toggleStepEnabled = (i: number) => {
+    const next = steps.map((s, idx) =>
+      idx === i ? ({ ...s, enabled: (s as any).enabled === false ? true : false } as Step) : s,
+    );
+    commit(next);
+  };
   const moveStep = (i: number, dir: -1 | 1) => { const j = i + dir; if (j < 0 || j >= steps.length) return; const next = [...steps]; [next[i], next[j]] = [next[j], next[i]]; commit(next); };
   const patchStep = (i: number, patch: Partial<Step>) => { setSteps((prev) => prev.map((s, idx) => (idx === i ? ({ ...s, ...patch } as Step) : s))); };
   const commitEdits = () => updateSteps.mutate({ id, steps: steps as any });
@@ -166,23 +184,52 @@ export default function SequenceEditor() {
                     const meta = stepMeta(s);
                     const Icon = meta.icon;
                     const open = expanded === i;
+                    // A retired step still sends nothing. It must LOOK inactive —
+                    // otherwise the engine silently skipping it is invisible here.
+                    const retired = (s as any).enabled === false;
                     return (
-                      <div key={i} className="rounded-xl border bg-card shadow-sm">
+                      <div key={i} className={cn("rounded-xl border bg-card shadow-sm", retired && "border-dashed opacity-70")}>
                         <div className="flex items-center gap-3 px-3 py-2.5 cursor-pointer" onClick={() => setExpanded(open ? null : i)}>
                           <GripVertical className="size-4 text-muted-foreground/50 shrink-0" />
-                          <span className="shrink-0 size-7 rounded-lg flex items-center justify-center text-[11px] font-bold" style={{ backgroundColor: `${accent}1f`, color: accent }}>{i + 1}</span>
-                          <Icon className="size-4 shrink-0" style={{ color: accent }} />
+                          <span
+                            className="shrink-0 size-7 rounded-lg flex items-center justify-center text-[11px] font-bold"
+                            style={retired
+                              ? { backgroundColor: "hsl(var(--muted))", color: "hsl(var(--muted-foreground))" }
+                              : { backgroundColor: `${accent}1f`, color: accent }}
+                          >{i + 1}</span>
+                          <Icon className="size-4 shrink-0" style={{ color: retired ? "hsl(var(--muted-foreground))" : accent }} />
                           <div className="min-w-0 flex-1">
-                            <div className="text-[11px] uppercase tracking-wide text-muted-foreground">{meta.label}</div>
-                            <div className="text-[13px] truncate">{meta.summary}</div>
+                            <div className="text-[11px] uppercase tracking-wide text-muted-foreground flex items-center gap-1.5">
+                              {meta.label}
+                              {retired && (
+                                <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-wide text-amber-900 dark:bg-amber-950/50 dark:text-amber-300">
+                                  Skipped — not sending
+                                </span>
+                              )}
+                            </div>
+                            <div className={cn("text-[13px] truncate", retired && "line-through text-muted-foreground")}>{meta.summary}</div>
                           </div>
                           <div className="flex items-center gap-0.5 shrink-0" onClick={(e) => e.stopPropagation()}>
+                            <Button
+                              variant="ghost" size="icon-sm"
+                              className={retired ? "text-amber-600" : "text-muted-foreground"}
+                              title={retired ? "Restore this step — the engine will send it again" : "Retire this step — keeps its copy but stops sending it"}
+                              onClick={() => toggleStepEnabled(i)}
+                            >
+                              {retired ? <PlayCircle className="size-3.5" /> : <PauseCircle className="size-3.5" />}
+                            </Button>
                             <Button variant="ghost" size="icon-sm" disabled={i === 0} onClick={() => moveStep(i, -1)}><ArrowUp className="size-3.5" /></Button>
                             <Button variant="ghost" size="icon-sm" disabled={i === steps.length - 1} onClick={() => moveStep(i, 1)}><ArrowDown className="size-3.5" /></Button>
                             <Button variant="ghost" size="icon-sm" className="text-muted-foreground hover:text-destructive" onClick={() => removeStep(i)}><Trash2 className="size-3.5" /></Button>
                             <ChevronDown className={cn("size-4 text-muted-foreground transition-transform", open && "rotate-180")} />
                           </div>
                         </div>
+                        {retired && (
+                          <div className="border-t border-dashed border-border/60 px-3 py-2 text-[11px] text-muted-foreground">
+                            Enrollments skip straight past this step. It may have been retired automatically because it
+                            had sends but no replies — see <span className="font-medium">What's Working</span> → Applied changes.
+                          </div>
+                        )}
                         {open && (
                           <div className="border-t border-border/60 p-3 space-y-2" onBlur={commitEdits}>
                             <StepEditor step={s} onChange={(patch) => patchStep(i, patch)} accent={accent} />

@@ -239,6 +239,18 @@ function renderMergeFields(template: string, vars: Record<string, string | null 
   });
 }
 
+/**
+ * `enabled: false` retires a step: the engine skips it without sending (see
+ * sequenceEngine's enabled===false branch). Written by the optimisation layer's
+ * retire_dead_step apply path, and toggleable by hand in the editor.
+ *
+ * It MUST be declared on every variant below. zod strips unknown keys, so while
+ * this was absent, saving anything from the editor silently re-enabled a retired
+ * step — while the optimisation audit trail still reported it as disabled. A
+ * change the system claims to have made but hasn't is worse than no feature.
+ */
+const enabledField = { enabled: z.boolean().optional() };
+
 const stepSchema = z.discriminatedUnion("type", [
   // `templateId` is optional provenance: it records that this step's
   // subject/body originated from an Email Builder template so the
@@ -258,14 +270,15 @@ const stepSchema = z.discriminatedUnion("type", [
     aiTone: z.string().max(40).optional(),
     aiLength: z.string().max(40).optional(),
     aiFocus: z.string().max(500).optional(),
+    ...enabledField,
   }),
   // Fractional days are allowed so the canvas Wait node's "hours" field
   // survives (it was previously discarded); the engine multiplies by
   // 86_400_000, which handles fractions fine.
-  z.object({ type: z.literal("wait"), days: z.number().min(0).max(60) }),
-  z.object({ type: z.literal("task"), body: z.string() }),
-  z.object({ type: z.literal("linkedin_dm"), body: z.string().optional() }),
-  z.object({ type: z.literal("linkedin_invite"), note: z.string().optional() }),
+  z.object({ type: z.literal("wait"), days: z.number().min(0).max(60), ...enabledField }),
+  z.object({ type: z.literal("task"), body: z.string(), ...enabledField }),
+  z.object({ type: z.literal("linkedin_dm"), body: z.string().optional(), ...enabledField }),
+  z.object({ type: z.literal("linkedin_invite"), note: z.string().optional(), ...enabledField }),
 ]);
 
 /* ─── Canvas ↔ list-steps sync ────────────────────────────────────────────
@@ -295,12 +308,13 @@ type CanvasNode = {
   data: Record<string, unknown>;
 };
 type CanvasEdge = { id: string; source: string; target: string; sourceHandle?: string | null; label?: string | null };
+/** `enabled: false` = retired step; the engine skips it. Absent means active. */
 type ListStep =
-  | { type: "email"; subject: string; body?: string; templateId?: number }
-  | { type: "wait"; days: number }
-  | { type: "task"; body: string }
-  | { type: "linkedin_dm"; body?: string }
-  | { type: "linkedin_invite"; note?: string };
+  | { type: "email"; subject: string; body?: string; templateId?: number; enabled?: boolean }
+  | { type: "wait"; days: number; enabled?: boolean }
+  | { type: "task"; body: string; enabled?: boolean }
+  | { type: "linkedin_dm"; body?: string; enabled?: boolean }
+  | { type: "linkedin_invite"; note?: string; enabled?: boolean };
 
 function canvasToSteps(nodes: CanvasNode[], edges: CanvasEdge[]): ListStep[] {
   if (nodes.length === 0) return [];
@@ -338,6 +352,9 @@ function canvasToSteps(nodes: CanvasNode[], edges: CanvasEdge[]): ListStep[] {
 
 function canvasNodeToStep(node: CanvasNode): ListStep | null {
   const d: any = node.data ?? {};
+  // A retired step stays retired across a canvas round-trip. Only an explicit
+  // false disables — an absent flag means active.
+  const retired = d.enabled === false ? { enabled: false as const } : {};
   switch (node.type) {
     case "email": {
       // Canvas stores email fields under static* (see NodeEditPanel),
@@ -363,8 +380,8 @@ function canvasNodeToStep(node: CanvasNode): ListStep | null {
           }
         : {};
       return templateId
-        ? { type: "email", subject, body, templateId, ...ai }
-        : { type: "email", subject, body, ...ai };
+        ? { type: "email", subject, body, templateId, ...ai, ...retired }
+        : { type: "email", subject, body, ...ai, ...retired };
     }
     case "wait": {
       // The canvas Wait node writes delayDays/delayHours (NodeEditPanel);
@@ -373,14 +390,14 @@ function canvasNodeToStep(node: CanvasNode): ListStep | null {
       const days = Number(d.delayDays ?? d.days ?? 0);
       const hours = Number(d.delayHours ?? 0);
       const total = (Number.isFinite(days) ? days : 0) + (Number.isFinite(hours) ? hours : 0) / 24;
-      return { type: "wait", days: Math.min(60, Math.max(0, total || 1)) };
+      return { type: "wait", days: Math.min(60, Math.max(0, total || 1)), ...retired };
     }
     case "action":
-      return { type: "task", body: String(d.body ?? d.label ?? "") };
+      return { type: "task", body: String(d.body ?? d.label ?? ""), ...retired };
     case "linkedin_dm":
-      return { type: "linkedin_dm", body: String(d.body ?? "") };
+      return { type: "linkedin_dm", body: String(d.body ?? ""), ...retired };
     case "linkedin_invite":
-      return { type: "linkedin_invite", note: String(d.note ?? "") };
+      return { type: "linkedin_invite", note: String(d.note ?? ""), ...retired };
     default:
       return null;
   }
@@ -413,6 +430,9 @@ function stepsToCanvas(steps: ListStep[]): { nodes: CanvasNode[]; edges: CanvasE
       case "linkedin_dm": data = { body: s.body ?? "", label: "LinkedIn DM" }; break;
       case "linkedin_invite": data = { note: s.note ?? "", label: "LinkedIn invite" }; break;
     }
+    // Carry a retired step's flag into the canvas so a
+    // steps → canvas → steps round-trip cannot silently re-enable it.
+    if ((s as { enabled?: boolean }).enabled === false) data.enabled = false;
     const canvasType: CanvasNode["type"] = s.type === "task" ? "action" : (s.type as CanvasNode["type"]);
     nodes.push({ id, type: canvasType, positionX: X, positionY: yFor(i + 1), data });
   });
