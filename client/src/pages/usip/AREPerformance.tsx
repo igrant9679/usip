@@ -22,7 +22,8 @@ import { Shell, PageHeader, SubNav, StatCard, EmptyState, useAccentColor } from 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { BarChart3, Check, Info, Lightbulb, Loader2, MailOpen, Radar, TrendingUp, X } from "lucide-react";
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
+import { BarChart3, Check, History, Info, Lightbulb, Loader2, MailOpen, Radar, TrendingUp, Undo2, X } from "lucide-react";
 
 /** Below this many sends a per-row rate is noise; we show the count, not a verdict. */
 const MIN_ROW_SAMPLE = 20;
@@ -83,8 +84,25 @@ export default function AREPerformance() {
   const accent = useAccentColor();
   const utils = trpc.useUtils();
   const recs = trpc.optimization.list.useQuery({ status: "pending", limit: 50 } as any, { retry: false });
+  const history = trpc.optimization.list.useQuery({ status: "applied", limit: 20 } as any, { retry: false });
+  const optSettings = trpc.optimization.getSettings.useQuery(undefined as any, { retry: false });
+  const setOptSettings = trpc.optimization.setSettings.useMutation({
+    onSuccess: () => { utils.optimization.getSettings.invalidate(); toast.success("Autonomy updated"); },
+    onError: (e) => toast.error(e.message.includes("FORBIDDEN") ? "Only admins can change autonomy" : e.message),
+  });
+  const revert = trpc.optimization.revert.useMutation({
+    onSuccess: (r: any) => {
+      utils.optimization.list.invalidate();
+      toast.success(r?.detail ?? "Reverted");
+    },
+    onError: (e) => toast.error(e.message),
+  });
   const approve = trpc.optimization.approve.useMutation({
-    onSuccess: () => { utils.optimization.list.invalidate(); toast.success("Accepted — make the change and it stays on record"); },
+    onSuccess: (r: any) => {
+      utils.optimization.list.invalidate();
+      // Distinguish a real change from a recorded-only decision.
+      toast.success(r?.detail ?? (r?.applied ? "Applied" : "Recorded"));
+    },
     onError: (e) => toast.error(e.message.includes("FORBIDDEN") ? "Only admins can act on recommendations" : e.message),
   });
   const dismiss = trpc.optimization.dismiss.useMutation({
@@ -103,6 +121,8 @@ export default function AREPerformance() {
     onError: (e) => toast.error(e.message.includes("FORBIDDEN") ? "Only admins can run the analyzers" : e.message),
   });
   const recRows = (recs.data as any[]) ?? [];
+  const appliedRows = (history.data as any[]) ?? [];
+  const mode = (optSettings.data as any)?.mode ?? "approval";
 
   const steps = trpc.are.metrics.sequenceSteps.useQuery(undefined as any, { retry: false });
   const sources = trpc.are.metrics.sourceYield.useQuery(undefined as any, { retry: false });
@@ -133,7 +153,8 @@ export default function AREPerformance() {
   // Recommendations count as content: with metrics empty but a proposal pending,
   // the full-page empty state would hide the only actionable thing here.
   const nothingYet =
-    !loading && stepRows.length === 0 && sourceRows.length === 0 && replyRows.length === 0 && recRows.length === 0;
+    !loading && stepRows.length === 0 && sourceRows.length === 0 && replyRows.length === 0
+    && recRows.length === 0 && appliedRows.length === 0;
 
   return (
     <Shell title="What's Working">
@@ -173,14 +194,32 @@ export default function AREPerformance() {
                   {recRows.length > 0 && (
                     <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4">{recRows.length}</Badge>
                   )}
-                  <Button
-                    size="sm" variant="outline" className="ml-auto h-7 gap-1.5 text-xs"
-                    disabled={analyze.isPending}
-                    onClick={() => analyze.mutate()}
-                  >
-                    {analyze.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <TrendingUp className="size-3.5" />}
-                    Analyse now
-                  </Button>
+                  <div className="ml-auto flex items-center gap-2">
+                    {/* Off / Approve / Auto — the same autonomy convention the
+                        other autopilots use. Auto only applies proposals that
+                        clear the confidence gate, within a daily change budget,
+                        and reverts itself if outbound gets worse. */}
+                    <Select
+                      value={mode}
+                      onValueChange={(m) => setOptSettings.mutate({ mode: m as any })}
+                      disabled={setOptSettings.isPending || !optSettings.data}
+                    >
+                      <SelectTrigger className="h-7 w-[132px] text-xs"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="off">Off</SelectItem>
+                        <SelectItem value="approval">Approve</SelectItem>
+                        <SelectItem value="auto">Autonomous</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <Button
+                      size="sm" variant="outline" className="h-7 gap-1.5 text-xs"
+                      disabled={analyze.isPending}
+                      onClick={() => analyze.mutate()}
+                    >
+                      {analyze.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <TrendingUp className="size-3.5" />}
+                      Analyse now
+                    </Button>
+                  </div>
                 </CardTitle>
               </CardHeader>
               <CardContent className="px-0 pb-0">
@@ -218,9 +257,9 @@ export default function AREPerformance() {
                               size="sm" variant="outline" className="h-7 gap-1 text-xs"
                               disabled={approve.isPending}
                               onClick={() => approve.mutate({ id: r.id })}
-                              title="Record that you accept this recommendation"
+                              title={r.proposedValue ? "Apply this change now (reversible)" : "Record that you accept this advice"}
                             >
-                              <Check className="size-3.5" /> Accept
+                              <Check className="size-3.5" /> {r.proposedValue ? "Apply" : "Accept"}
                             </Button>
                             <Button
                               size="icon" variant="ghost" className="size-7 text-muted-foreground"
@@ -236,14 +275,63 @@ export default function AREPerformance() {
                     ))}
                   </ul>
                 )}
-                {recRows.length > 0 && (
-                  <p className="px-4 py-2.5 border-t border-border/60 text-[11px] text-muted-foreground">
-                    Accepting records the decision — it does not change your sequences or sources yet.
-                    Automatic application (with before/after tracking and auto-revert) is the next phase.
-                  </p>
-                )}
+                <p className="px-4 py-2.5 border-t border-border/60 text-[11px] text-muted-foreground">
+                  {mode === "auto"
+                    ? "Autonomous: proposals with enough evidence apply themselves (capped per day), and revert automatically if outbound gets worse."
+                    : mode === "off"
+                      ? "Off: the analyzers don't run on their own. Use Analyse now for a one-off look."
+                      : "Approve: nothing changes until you click Apply. Applied changes are tracked and can be reverted."}
+                </p>
               </CardContent>
             </Card>
+
+            {/* ── Applied changes ─────────────────────────────────────────
+                  The audit trail. Without this, a system that edits your
+                  outbound is unaccountable. */}
+            {appliedRows.length > 0 && (
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm flex items-center gap-2">
+                    <History className="size-4" style={{ color: accent }} /> Applied changes
+                    <span className="ml-auto text-[11px] font-normal text-muted-foreground">
+                      Judged after 3 days and 30 sends; reverted automatically if worse
+                    </span>
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="px-0 pb-0">
+                  <ul className="divide-y divide-border/60">
+                    {appliedRows.map((r) => {
+                      const ev = r.resultDelta?.evaluation;
+                      const tone = ev?.verdict === "improved" ? "text-emerald-600 dark:text-emerald-400"
+                        : ev?.verdict === "degraded" ? "text-rose-600"
+                          : "text-muted-foreground";
+                      return (
+                        <li key={r.id} className="px-4 py-2.5 flex items-start gap-3">
+                          <div className="min-w-0 flex-1">
+                            <div className="text-[13px] font-medium">{r.title}</div>
+                            <div className="text-[11px] text-muted-foreground mt-0.5">
+                              {r.resultDelta?.appliedDetail ?? r.scopeLabel}
+                              {r.appliedByUserId === null && " · applied autonomously"}
+                            </div>
+                            <div className={`text-[11px] mt-0.5 ${tone}`}>
+                              {ev ? `${ev.verdict.replace(/_/g, " ")} — ${ev.note}` : "Awaiting enough data to judge the result"}
+                            </div>
+                          </div>
+                          <Button
+                            size="sm" variant="ghost" className="h-7 gap-1 text-xs shrink-0 text-muted-foreground"
+                            disabled={revert.isPending}
+                            onClick={() => revert.mutate({ id: r.id })}
+                            title="Undo this change"
+                          >
+                            <Undo2 className="size-3.5" /> Revert
+                          </Button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </CardContent>
+              </Card>
+            )}
 
             {/* Headline counters — raw counts only, no derived claims. */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">

@@ -2705,6 +2705,23 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0128: self-optimisation autonomy mode ─────────────────────────────────
+  // Phase 3. Unlike the other autopilots (which create tasks/drafts for
+  // humans), this one edits the outbound machine itself — retiring sequence
+  // steps, dropping prospect sources. Default is 'approval', NOT 'auto': the
+  // system should earn trust by making visibly good calls under review before
+  // it is allowed to change live outbound unattended.
+  // optimizationDailyCap is a change budget — constant tweaking would destroy
+  // the ability to attribute any result to any change.
+  {
+    name: "0128_optimization_autonomy.sql",
+    statements: [
+      `ALTER TABLE \`workspace_settings\` ADD COLUMN \`optimizationMode\` enum('off','approval','auto') NOT NULL DEFAULT 'approval'`,
+      `ALTER TABLE \`workspace_settings\` ADD COLUMN \`optimizationDailyCap\` int NOT NULL DEFAULT 3`,
+      `ALTER TABLE \`workspace_settings\` ADD COLUMN \`optimizationLastRunAt\` timestamp NULL`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

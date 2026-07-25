@@ -359,6 +359,24 @@ async function startServer() {
   setTimeout(runOptimization, 8 * 60 * 1000); // stagger: 8 minutes after boot
   setInterval(runOptimization, 24 * 60 * 60 * 1000); // daily
 
+  // Attribution pass: judge each APPLIED optimisation against what happened
+  // since, and auto-revert anything that made outbound measurably worse. This
+  // is what makes Auto mode defensible — a bad call undoes itself. Runs twice
+  // daily; the pass itself refuses to judge before a 3-day grace period and 30
+  // post-change sends, so a tighter cadence buys nothing.
+  const runAttribution = () => {
+    import("../services/optimization/attribution")
+      .then((m) => m.runAttributionPass())
+      .then((r) => {
+        if (r.evaluated > 0 || r.reverted > 0) {
+          console.log(`[Attribution] evaluated=${r.evaluated} reverted=${r.reverted}`);
+        }
+      })
+      .catch((e) => console.error("[Attribution] cron run failed:", e));
+  };
+  setTimeout(runAttribution, 10 * 60 * 1000); // stagger: 10 minutes after boot
+  setInterval(runAttribution, 12 * 60 * 60 * 1000); // twice daily
+
   // Nightly AI pipeline batch: midnight cron for leads above score threshold
   const scheduleNightlyBatch = () => {
     const now = new Date();

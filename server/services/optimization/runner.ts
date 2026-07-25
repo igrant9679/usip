@@ -14,9 +14,10 @@
  *     user rejected every night is how a "smart" feature becomes noise the user
  *     turns off. Only `reverted` and `superseded` rows allow a fresh proposal.
  */
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, gte, inArray } from "drizzle-orm";
 import { getDb } from "../../db";
-import { optimizationRecommendations } from "../../../drizzle/schema";
+import { optimizationRecommendations, workspaceSettings } from "../../../drizzle/schema";
+import { applyRecommendation, isApplicable } from "./apply";
 import { sequenceAnalyzer } from "./sequenceAnalyzer";
 import { sourceAnalyzer } from "./sourceAnalyzer";
 import type { Analyzer, Proposal } from "./types";
@@ -31,7 +32,24 @@ export interface RunResult {
   proposed: number;
   skippedDuplicate: number;
   analyzersRun: number;
+  autoApplied: number;
   errors: string[];
+}
+
+/**
+ * Confidence required before a change may be applied UNATTENDED.
+ *
+ * 'low' is excluded deliberately: confidenceFromSample only reaches 'medium' at
+ * n>=75, so Auto mode cannot act on a handful of observations. A human in
+ * Approve mode may still accept a low-confidence proposal — they can weigh
+ * context the analyzer cannot.
+ */
+const AUTO_MIN_CONFIDENCE = ["medium", "high"];
+
+function startOfUtcDay(): Date {
+  const d = new Date();
+  d.setUTCHours(0, 0, 0, 0);
+  return d;
 }
 
 /** True when an equivalent recommendation already exists in a blocking state. */
@@ -62,14 +80,50 @@ async function alreadyExists(db: any, workspaceId: number, p: Proposal): Promise
   );
 }
 
-/** Run every analyzer for one workspace and persist new proposals. */
-export async function runOptimizationAnalyzers(workspaceId: number): Promise<RunResult> {
-  const result: RunResult = { proposed: 0, skippedDuplicate: 0, analyzersRun: 0, errors: [] };
+/** Applies remaining in today's change budget, and whether Auto is even on. */
+async function autoBudget(db: any, workspaceId: number): Promise<{ mode: string; remaining: number }> {
+  const [settings] = await db
+    .select({
+      mode: workspaceSettings.optimizationMode,
+      cap: workspaceSettings.optimizationDailyCap,
+    })
+    .from(workspaceSettings)
+    .where(eq(workspaceSettings.workspaceId, workspaceId));
+  // No settings row yet → treat as the column default ('approval'), i.e. review.
+  const mode = String(settings?.mode ?? "approval");
+  if (mode !== "auto") return { mode, remaining: 0 };
+
+  const cap = Number(settings?.cap ?? 3);
+  const todaysApplies = await db
+    .select({ id: optimizationRecommendations.id })
+    .from(optimizationRecommendations)
+    .where(and(
+      eq(optimizationRecommendations.workspaceId, workspaceId),
+      eq(optimizationRecommendations.status, "applied" as never),
+      gte(optimizationRecommendations.appliedAt, startOfUtcDay()),
+    ));
+  return { mode, remaining: Math.max(0, cap - todaysApplies.length) };
+}
+
+/**
+ * Run every analyzer for one workspace, persist new proposals, and — only when
+ * optimizationMode is 'auto' — apply the ones that clear the confidence gate,
+ * up to the daily change budget.
+ *
+ * `force` lets a human "Analyse now" even when the mode is 'off'.
+ */
+export async function runOptimizationAnalyzers(workspaceId: number, force = false): Promise<RunResult> {
+  const result: RunResult = { proposed: 0, skippedDuplicate: 0, analyzersRun: 0, autoApplied: 0, errors: [] };
   const db = await getDb();
   if (!db) {
     result.errors.push("database unavailable");
     return result;
   }
+
+  const budget = await autoBudget(db, workspaceId);
+  // 'off' means the analyzers don't run at all — no work, no cost.
+  if (budget.mode === "off" && !force) return result;
+  let remaining = budget.remaining;
 
   for (const analyzer of ANALYZERS) {
     let proposals: Proposal[] = [];
@@ -88,7 +142,7 @@ export async function runOptimizationAnalyzers(workspaceId: number): Promise<Run
           result.skippedDuplicate++;
           continue;
         }
-        await db.insert(optimizationRecommendations).values({
+        const ins = await db.insert(optimizationRecommendations).values({
           workspaceId,
           module: p.module as never,
           scopeType: p.scopeType as never,
@@ -106,6 +160,35 @@ export async function runOptimizationAnalyzers(workspaceId: number): Promise<Run
           generatedBy: p.generatedBy ?? "rules",
         } as never);
         result.proposed++;
+
+        /* Auto mode: apply now if this proposal clears every gate. Anything that
+           fails a gate simply stays `pending` for a human — an unapplied
+           proposal is a safe outcome, a wrongly-applied one is not. */
+        if (
+          budget.mode === "auto" &&
+          remaining > 0 &&
+          isApplicable(p) &&
+          AUTO_MIN_CONFIDENCE.includes(p.confidence)
+        ) {
+          const id = Number((ins as any)?.[0]?.insertId ?? 0);
+          if (id > 0) {
+            const [row] = await db
+              .select()
+              .from(optimizationRecommendations)
+              .where(eq(optimizationRecommendations.id, id));
+            if (row) {
+              // byUserId null marks this as the system's own decision.
+              const outcome = await applyRecommendation(workspaceId, row, null);
+              if (outcome.ok) {
+                result.autoApplied++;
+                remaining--;
+                console.log(`[Optimization] ws ${workspaceId} AUTO-APPLIED rec ${id}: ${outcome.detail}`);
+              } else {
+                result.errors.push(`auto-apply ${id}: ${outcome.detail}`);
+              }
+            }
+          }
+        }
       } catch (e) {
         result.errors.push(`${analyzer.name} insert: ${(e as Error).message}`);
       }
@@ -136,12 +219,16 @@ export async function runOptimizationForAllWorkspaces(): Promise<{ workspaces: n
       const r = await runOptimizationAnalyzers(ws.id);
       proposed += r.proposed;
       count++;
-      if (r.proposed > 0 || r.errors.length > 0) {
+      if (r.proposed > 0 || r.autoApplied > 0 || r.errors.length > 0) {
         console.log(
-          `[Optimization] ws ${ws.id}: proposed=${r.proposed} duplicates=${r.skippedDuplicate}` +
+          `[Optimization] ws ${ws.id}: proposed=${r.proposed} autoApplied=${r.autoApplied} duplicates=${r.skippedDuplicate}` +
             (r.errors.length ? ` errors=${r.errors.join("; ")}` : ""),
         );
       }
+      await db
+        .update(workspaceSettings)
+        .set({ optimizationLastRunAt: new Date() } as never)
+        .where(eq(workspaceSettings.workspaceId, ws.id));
     } catch (e) {
       console.error(`[Optimization] ws ${ws.id} failed:`, (e as Error).message);
     }

@@ -47,6 +47,13 @@ type Step = {
   aiTone?: string;
   aiLength?: string;
   aiFocus?: string;
+  /**
+   * False disables the step: enrollments skip straight past it without sending.
+   * Written by the optimisation layer's `retire_dead_step` apply path (a step
+   * with volume and zero replies) and reversible by it. Absent/true = active,
+   * so every existing row keeps working untouched.
+   */
+  enabled?: boolean;
 };
 
 /**
@@ -91,6 +98,10 @@ function normalizeStep(raw: Record<string, unknown>): Step {
     aiTone: str(raw.aiTone),
     aiLength: str(raw.aiLength),
     aiFocus: str(raw.aiFocus),
+    // Only an explicit `false` disables a step. This normaliser rebuilds a fixed
+    // field list, so a flag omitted here would be silently dropped and the
+    // optimisation layer's "disable step" patch would do nothing at all.
+    enabled: raw.enabled === false ? false : undefined,
   };
 
   if (step.type === "task") {
@@ -318,6 +329,23 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
       const step = steps[stepIndex];
       const nextStepIndex = stepIndex + 1;
       const hasNextStep = nextStepIndex < steps.length;
+
+      // A disabled step is skipped entirely: advance the enrollment past it on
+      // this tick rather than sending, waiting, or creating a task. Enrollments
+      // already mid-sequence therefore roll forward the moment a step is
+      // retired, instead of stalling on it.
+      if (step.enabled === false) {
+        await db
+          .update(enrollments)
+          .set(
+            hasNextStep
+              ? { currentStep: nextStepIndex, nextActionAt: new Date() }
+              : { status: "finished" as never },
+          )
+          .where(eq(enrollments.id, enrollment.id));
+        processed++;
+        continue;
+      }
 
       if (step.type === "email") {
         // Enforce the sequence's send window + weekend skip in ITS timezone.

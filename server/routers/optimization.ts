@@ -15,7 +15,7 @@ import { and, desc, eq, inArray } from "drizzle-orm";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { getDb } from "../db";
-import { optimizationRecommendations } from "../../drizzle/schema";
+import { optimizationRecommendations, workspaceSettings } from "../../drizzle/schema";
 
 const MODULES = ["sequences", "messaging", "sourcing", "voice", "crm", "icp", "sdr_coaching"] as const;
 const STATUSES = ["pending", "approved", "applied", "dismissed", "reverted", "superseded"] as const;
@@ -70,8 +70,11 @@ export const optimizationRouter = router({
   }),
 
   /**
-   * Accept a recommendation. Records the decision only — Phase 2 does not
-   * apply changes, so the caller must still make the change itself.
+   * Accept a recommendation and APPLY it when it carries an applicable patch.
+   *
+   * Advisory proposals (no machine-applicable change — e.g. "rewrite this
+   * step's copy") are recorded as `approved` and say so, rather than reporting
+   * an apply that never happened.
    */
   approve: adminWsProcedure
     .input(z.object({ id: z.number().int() }))
@@ -79,14 +82,84 @@ export const optimizationRouter = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const row = await loadOwned(db, ctx.workspace.id, input.id);
-      if (row.status !== "pending") {
+      if (row.status !== "pending" && row.status !== "approved") {
         throw new TRPCError({ code: "BAD_REQUEST", message: `Already ${row.status}.` });
       }
-      await db
-        .update(optimizationRecommendations)
-        .set({ status: "approved" as never, appliedByUserId: ctx.user.id })
-        .where(eq(optimizationRecommendations.id, input.id));
-      return { ok: true as const, applied: false as const };
+      const { applyRecommendation, isApplicable } = await import("../services/optimization/apply");
+
+      if (!isApplicable(row)) {
+        await db
+          .update(optimizationRecommendations)
+          .set({ status: "approved" as never, appliedByUserId: ctx.user.id })
+          .where(eq(optimizationRecommendations.id, input.id));
+        return {
+          ok: true as const,
+          applied: false as const,
+          detail: "Recorded — this one is advisory, so there is no automatic change to make.",
+        };
+      }
+
+      const outcome = await applyRecommendation(ctx.workspace.id, row, ctx.user.id);
+      if (!outcome.ok) throw new TRPCError({ code: "BAD_REQUEST", message: outcome.detail });
+      return { ok: true as const, applied: true as const, detail: outcome.detail };
+    }),
+
+  /** Undo an applied change, restoring the recorded previous state. */
+  revert: adminWsProcedure
+    .input(z.object({ id: z.number().int(), reason: z.string().max(300).optional() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const row = await loadOwned(db, ctx.workspace.id, input.id);
+      if (row.status !== "applied") {
+        throw new TRPCError({ code: "BAD_REQUEST", message: `Only applied changes can be reverted (this one is ${row.status}).` });
+      }
+      const { revertRecommendation } = await import("../services/optimization/apply");
+      const outcome = await revertRecommendation(ctx.workspace.id, row, input.reason ?? "reverted by admin");
+      if (!outcome.ok) throw new TRPCError({ code: "BAD_REQUEST", message: outcome.detail });
+      return { ok: true as const, detail: outcome.detail };
+    }),
+
+  /** Current autonomy mode + change budget for the optimisation layer. */
+  getSettings: workspaceProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    const [s] = await db
+      .select({
+        mode: workspaceSettings.optimizationMode,
+        dailyCap: workspaceSettings.optimizationDailyCap,
+        lastRunAt: workspaceSettings.optimizationLastRunAt,
+      })
+      .from(workspaceSettings)
+      .where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
+    return s ?? { mode: "approval" as const, dailyCap: 3, lastRunAt: null };
+  }),
+
+  /** Set Off / Approve / Auto (and the daily change budget). */
+  setSettings: adminWsProcedure
+    .input(z.object({
+      mode: z.enum(["off", "approval", "auto"]).optional(),
+      dailyCap: z.number().int().min(1).max(20).optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const set: Record<string, unknown> = {};
+      if (input.mode !== undefined) set.optimizationMode = input.mode;
+      if (input.dailyCap !== undefined) set.optimizationDailyCap = input.dailyCap;
+      if (Object.keys(set).length === 0) return { ok: true as const };
+      // Settings row may not exist yet for this workspace.
+      const [existing] = await db
+        .select({ id: workspaceSettings.id })
+        .from(workspaceSettings)
+        .where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
+      if (existing) {
+        await db.update(workspaceSettings).set(set as never)
+          .where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
+      } else {
+        await db.insert(workspaceSettings).values({ workspaceId: ctx.workspace.id, ...set } as never);
+      }
+      return { ok: true as const };
     }),
 
   /** Reject a recommendation. Dismissed proposals are never re-generated. */
@@ -131,7 +204,9 @@ export const optimizationRouter = router({
    */
   analyzeNow: adminWsProcedure.mutation(async ({ ctx }) => {
     const { runOptimizationAnalyzers } = await import("../services/optimization/runner");
-    return runOptimizationAnalyzers(ctx.workspace.id);
+    // force: a human asking explicitly should get an answer even when the mode
+    // is 'off' (which otherwise skips the analyzers entirely).
+    return runOptimizationAnalyzers(ctx.workspace.id, true);
   }),
 
   /** Which analyzers exist, so the UI can explain what is and isn't covered. */

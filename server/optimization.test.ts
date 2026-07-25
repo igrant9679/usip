@@ -18,9 +18,15 @@ const source = (o: Partial<any> = {}) => ({
   avgIcpScore: 60, contactedRate: 0, replyRate: 0, meetingRate: 0, ...o,
 });
 
-/** Run the sequence analyzer against fixed step stats. */
+/**
+ * Run the sequence analyzer against fixed step stats.
+ *
+ * Spreads the REAL module so only the one query is stubbed — replacing the whole
+ * module would strip `rate()`, which attribution.ts imports from it.
+ */
 async function runSequenceWith(rows: any[]) {
-  vi.doMock("./services/performanceMetrics", () => ({
+  vi.doMock("./services/performanceMetrics", async (importOriginal) => ({
+    ...(await (importOriginal as any)()),
     getSequenceStepStats: vi.fn().mockResolvedValue(rows),
   }));
   const { sequenceAnalyzer } = await import("./services/optimization/sequenceAnalyzer");
@@ -29,7 +35,8 @@ async function runSequenceWith(rows: any[]) {
 
 /** Run the source analyzer against fixed source stats. */
 async function runSourceWith(rows: any[]) {
-  vi.doMock("./services/performanceMetrics", () => ({
+  vi.doMock("./services/performanceMetrics", async (importOriginal) => ({
+    ...(await (importOriginal as any)()),
     getSourceYieldStats: vi.fn().mockResolvedValue(rows),
   }));
   const { sourceAnalyzer } = await import("./services/optimization/sourceAnalyzer");
@@ -159,6 +166,102 @@ describe("rankSources", () => {
       source({ sourceType: "quiet", discovered: 20, contacted: 20, replyRate: 5, meetingRate: 10 }),
     ] as any);
     expect(ranked[0].sourceType).toBe("quiet");
+  });
+});
+
+describe("attribution — verdict rules", () => {
+  const snap = (o: Partial<any> = {}) => ({
+    capturedAt: "2026-07-01T00:00:00.000Z", sent: 0, replies: 0, meetings: 0,
+    replyRate: 0, meetingRate: 0, ...o,
+  });
+
+  it("refuses to judge before enough post-change sends", async () => {
+    const { evaluate, MIN_POST_SAMPLE } = await import("./services/optimization/attribution");
+    const before = snap({ sent: 100, replies: 10, replyRate: 10 });
+    const after = snap({ sent: 100 + MIN_POST_SAMPLE - 1, replies: 10, replyRate: 8 });
+    const e = evaluate(before, after);
+    // Reverting on a handful of sends would be worse than never reverting.
+    expect(e.verdict).toBe("insufficient_data");
+  });
+
+  it("flags a real degradation past the tolerance", async () => {
+    const { evaluate } = await import("./services/optimization/attribution");
+    // baseline 10%; post-window 100 sends / 5 replies = 5% → beyond 20% relative drop
+    const e = evaluate(snap({ sent: 200, replies: 20, replyRate: 10 }), snap({ sent: 300, replies: 25, replyRate: 8.3 }));
+    expect(e.verdict).toBe("degraded");
+    expect(e.postSent).toBe(100);
+    expect(e.postReplies).toBe(5);
+  });
+
+  it("tolerates ordinary variation instead of thrashing", async () => {
+    const { evaluate } = await import("./services/optimization/attribution");
+    // baseline 10%; post-window 100 sends / 9 replies = 9% → within tolerance
+    const e = evaluate(snap({ sent: 200, replies: 20, replyRate: 10 }), snap({ sent: 300, replies: 29 }));
+    expect(e.verdict).not.toBe("degraded");
+  });
+
+  it("counts a first-ever meeting as an improvement even if reply rate dipped", async () => {
+    const { evaluate } = await import("./services/optimization/attribution");
+    const e = evaluate(
+      snap({ sent: 200, replies: 20, replyRate: 10, meetings: 0 }),
+      snap({ sent: 300, replies: 21, meetings: 1 }),
+    );
+    expect(e.verdict).toBe("improved");
+  });
+
+  it("treats any reply as improvement when the baseline had none", async () => {
+    const { evaluate } = await import("./services/optimization/attribution");
+    const e = evaluate(snap({ sent: 100, replies: 0, replyRate: 0 }), snap({ sent: 200, replies: 3 }));
+    expect(e.verdict).toBe("improved");
+  });
+
+  it("never produces negative post-window counts if totals move oddly", async () => {
+    const { evaluate } = await import("./services/optimization/attribution");
+    const e = evaluate(snap({ sent: 500, replies: 50, replyRate: 10 }), snap({ sent: 400, replies: 40 }));
+    expect(e.postSent).toBeGreaterThanOrEqual(0);
+    expect(e.postReplies).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe("apply — applicability gate", () => {
+  it("treats an advisory proposal (no patch) as not applicable", async () => {
+    const { isApplicable } = await import("./services/optimization/apply");
+    expect(isApplicable({ kind: "copy_winning_step_pattern", proposedValue: null })).toBe(false);
+    expect(isApplicable({ kind: "increase_best_source_share", proposedValue: null })).toBe(false);
+  });
+
+  it("treats an unknown kind as not applicable even with a patch", async () => {
+    const { isApplicable } = await import("./services/optimization/apply");
+    // Must fail loudly rather than report success while doing nothing.
+    expect(isApplicable({ kind: "some_future_kind", proposedValue: { x: 1 } })).toBe(false);
+  });
+
+  it("recognises the two applicable kinds", async () => {
+    const { isApplicable } = await import("./services/optimization/apply");
+    expect(isApplicable({ kind: "retire_dead_step", proposedValue: { stepIndex: 1, enabled: false } })).toBe(true);
+    expect(isApplicable({ kind: "deprioritise_unproductive_source", proposedValue: { enabled: false } })).toBe(true);
+  });
+
+  it("every applicable kind has a revert handler", async () => {
+    const { APPLY_HANDLERS } = await import("./services/optimization/apply");
+    // Auto mode is only defensible because every change can be undone.
+    for (const [kind, h] of Object.entries(APPLY_HANDLERS)) {
+      expect(typeof h.apply, `${kind}.apply`).toBe("function");
+      expect(typeof h.revert, `${kind}.revert`).toBe("function");
+    }
+  });
+});
+
+describe("sequence engine honours a disabled step", () => {
+  it("skips a step marked enabled:false", async () => {
+    // The optimisation layer's apply path writes enabled:false into the steps
+    // JSON; if the engine ignored it the change would be pure dead-wiring.
+    const src = await import("node:fs").then((fs) =>
+      fs.readFileSync("server/sequenceEngine.ts", "utf8"),
+    );
+    expect(src).toContain("step.enabled === false");
+    // normalizeStep rebuilds a fixed field list, so the flag must be carried.
+    expect(src).toMatch(/enabled:\s*raw\.enabled === false/);
   });
 });
 

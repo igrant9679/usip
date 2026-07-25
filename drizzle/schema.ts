@@ -1430,6 +1430,21 @@ export const workspaceSettings = mysqlTable("workspace_settings", {
   jobChangeAutopilotDailyCap: int("jobChangeAutopilotDailyCap").default(25).notNull(),
   jobChangeAutopilotLastRunAt: timestamp("jobChangeAutopilotLastRunAt"),
 
+  // ── Self-optimisation (migration 0128) ──────────────────────────────────
+  // Governs the continuous-optimisation layer, which differs from every other
+  // autopilot above: those create tasks/drafts for people, this one edits the
+  // outbound machine itself (retiring sequence steps, dropping sources).
+  //   off      = analyzers don't run at all (zero cost)
+  //   approval = proposals queue on /are/performance for a human (DEFAULT)
+  //   auto     = high-confidence proposals apply themselves, with before/after
+  //              tracking and automatic revert if the metric degrades
+  // Default is deliberately 'approval', not 'auto': the system must earn trust
+  // by making visibly good calls before it is allowed to act unattended.
+  optimizationMode: mysqlEnum("optimizationMode", ["off", "approval", "auto"]).default("approval").notNull(),
+  /** Change budget — max auto-applies per day. Thrash destroys attributability. */
+  optimizationDailyCap: int("optimizationDailyCap").default(3).notNull(),
+  optimizationLastRunAt: timestamp("optimizationLastRunAt"),
+
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
 export type WorkspaceSettings = typeof workspaceSettings.$inferSelect;
