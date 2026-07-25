@@ -59,6 +59,32 @@ function mapRowToContact(
 
 /* ─── Router ────────────────────────────────────────────────────────────── */
 
+/**
+ * Identity key for a contact when NO email is available.
+ *
+ * Why this is opt-in and off by default: email is a true unique identifier,
+ * a name is not. Two different people called "John Smith" are common, and
+ * silently merging them loses a real contact — worse than importing a
+ * duplicate. Requiring company narrows it a lot, but cannot eliminate it, so
+ * the user chooses. A row with no company produces NO key and is never matched.
+ *
+ * Discovered by re-testing QA #7: dedup was 100% email-based while every one of
+ * this workspace's 1,520 contacts has email = null, so `existingEmails` was an
+ * empty set and no import could ever detect an already-existing contact.
+ */
+export function nameCompanyKey(
+  firstName?: string | null,
+  lastName?: string | null,
+  company?: string | null,
+): string | null {
+  const norm = (s?: string | null) => (s ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+  const f = norm(firstName);
+  const l = norm(lastName);
+  const c = norm(company).replace(/[.,]/g, "").replace(/\b(inc|llc|ltd|corp|co|company)\b/g, "").trim();
+  if (!f || !l || !c) return null; // never match on name alone
+  return `${f}|${l}|${c}`;
+}
+
 export const importsRouter = router({
   /** Step 1: Parse CSV text, return headers + first 5 preview rows */
   parseCSV: workspaceProcedure
@@ -97,6 +123,8 @@ export const importsRouter = router({
         filename: z.string().max(255),
         /** { "CSV Column Name": "systemFieldKey" | null } */
         fieldMapping: z.record(z.string(), z.string().nullable()),
+        /** Opt-in name+company matching for rows with no email. Default OFF. */
+        matchOnNameCompany: z.boolean().default(false),
       }),
     )
     .mutation(async ({ input, ctx }) => {
@@ -117,20 +145,38 @@ export const importsRouter = router({
         });
       }
 
-      // Fetch existing emails in this workspace for duplicate detection
+      // Fetch existing contacts for duplicate detection. Name+company is pulled
+      // too so the opt-in matcher has something to compare against.
       const existingContacts = await db
-        .select({ email: contacts.email })
+        .select({
+          email: contacts.email,
+          firstName: contacts.firstName,
+          lastName: contacts.lastName,
+          companyName: contacts.companyName,
+        })
         .from(contacts)
         .where(eq(contacts.workspaceId, wsId));
       const existingEmails = new Set(
         existingContacts.map((c: { email: string | null }) => c.email?.toLowerCase() ?? "").filter((e: string) => e.length > 0),
       );
+      const existingNameKeys = new Set<string>();
+      if (input.matchOnNameCompany) {
+        for (const c of existingContacts) {
+          const k = nameCompanyKey(c.firstName, c.lastName, c.companyName);
+          if (k) existingNameKeys.add(k);
+        }
+      }
 
       // Validate each row
       const validRows: number[] = [];
       const duplicateRows: number[] = [];
       const errorRows: Array<{ rowIndex: number; reason: string }> = [];
       const seenEmails = new Set<string>();
+      const seenNameKeys = new Set<string>();
+      /** Rows carrying no email — these cannot be deduped by email at all. */
+      let noEmailRows = 0;
+      /** Of those, how many also produced no name+company key to fall back on. */
+      let unmatchableRows = 0;
 
       rows.forEach((row, idx) => {
         const mapped = mapRowToContact(row, input.fieldMapping as Record<string, string | null>);
@@ -157,6 +203,20 @@ export const importsRouter = router({
             }
             seenEmails.add(emailLower);
           }
+        } else {
+          // No email on this row: email dedup cannot see it at all. Fall back to
+          // name+company only when the user opted in.
+          noEmailRows++;
+          const key = nameCompanyKey(mapped.firstName, mapped.lastName, mapped.company);
+          if (!key) {
+            unmatchableRows++;
+          } else if (input.matchOnNameCompany) {
+            if (existingNameKeys.has(key) || seenNameKeys.has(key)) {
+              duplicateRows.push(rowIndex);
+              return;
+            }
+            seenNameKeys.add(key);
+          }
         }
 
         // Phone validation
@@ -178,6 +238,14 @@ export const importsRouter = router({
         errorCount: errorRows.length,
         errorRows: errorRows.slice(0, 200), // return first 200 errors
         canImport: validRows.length > 0,
+        /**
+         * Rows with no email. Surfaced so the summary can never imply that
+         * duplicate detection ran on rows it structurally cannot see.
+         */
+        noEmailCount: noEmailRows,
+        /** No email AND no name+company — undedupable however the flags are set. */
+        unmatchableCount: unmatchableRows,
+        matchOnNameCompany: input.matchOnNameCompany,
       };
     }),
 
@@ -190,6 +258,12 @@ export const importsRouter = router({
         fieldMapping: z.record(z.string(), z.string().nullable()),
         /** Skip duplicates (true) or abort on first duplicate (false) */
         skipDuplicates: z.boolean().default(true),
+        /**
+         * Opt-in name+company matching for rows with no email. MUST default to
+         * false and MUST match validateRows, or the preview would promise one
+         * thing and the import do another.
+         */
+        matchOnNameCompany: z.boolean().default(false),
         postImportActions: z
           .object({
             tag: z.string().optional(),
@@ -222,19 +296,33 @@ export const importsRouter = router({
         .$returningId();
       const importId = importRecord.id;
 
-      // Fetch existing emails
+      // Fetch existing contacts (name+company too, for the opt-in matcher)
       const existingContacts = await db
-        .select({ email: contacts.email })
+        .select({
+          email: contacts.email,
+          firstName: contacts.firstName,
+          lastName: contacts.lastName,
+          companyName: contacts.companyName,
+        })
         .from(contacts)
         .where(eq(contacts.workspaceId, wsId));
       const existingEmails = new Set(
         existingContacts.map((c: { email: string | null }) => c.email?.toLowerCase() ?? "").filter((e: string) => e.length > 0),
       );
+      const existingNameKeys = new Set<string>();
+      if (input.matchOnNameCompany) {
+        for (const c of existingContacts) {
+          const k = nameCompanyKey(c.firstName, c.lastName, c.companyName);
+          if (k) existingNameKeys.add(k);
+        }
+      }
 
       let importedRows = 0;
       let skippedRows = 0;
       let errorRows = 0;
+      let noEmailRows = 0;
       const seenEmails = new Set<string>();
+      const seenNameKeys = new Set<string>();
 
       // ── Phase 1: validate + dedup entirely in memory (no DB I/O) ──
       // Previously this loop did ~2 sequential awaited inserts PER ROW
@@ -274,6 +362,21 @@ export const importsRouter = router({
           }
           seenEmails.add(emailLower);
           existingEmails.add(emailLower);
+        } else {
+          // No email — email dedup is blind to this row. Use name+company only
+          // if the user opted in; otherwise it imports as-is (and the summary
+          // reports it under noEmailCount so that is never a silent outcome).
+          noEmailRows++;
+          const key = nameCompanyKey(mapped.firstName, mapped.lastName, mapped.company);
+          if (key && input.matchOnNameCompany) {
+            if ((existingNameKeys.has(key) || seenNameKeys.has(key)) && input.skipDuplicates) {
+              importRowValues.push({ importId, rowIndex, rowData: row, mappedData: mapped, status: "duplicate", errorReason: "Duplicate name + company" });
+              skippedRows++;
+              continue;
+            }
+            seenNameKeys.add(key);
+            existingNameKeys.add(key);
+          }
         }
         toInsert.push({ rowIndex, row, mapped });
       }
@@ -495,6 +598,9 @@ export const importsRouter = router({
         importedRows,
         skippedRows,
         errorRows,
+        /** Imported without an email — duplicate detection could not see these. */
+        noEmailCount: noEmailRows,
+        matchOnNameCompany: input.matchOnNameCompany,
       };
     }),
 

@@ -122,6 +122,18 @@ export default function ImportContacts() {
   const [errorRows, setErrorRows] = useState<Array<{ rowIndex: number; reason: string }>>([]);
   const [totalRowCount, setTotalRowCount] = useState(0);
   const [skipDuplicates, setSkipDuplicates] = useState(true);
+  /**
+   * Match rows that have NO email on first+last name + company.
+   *
+   * Defaults OFF deliberately: email is a unique identifier, a name is not.
+   * Two different people called "John Smith" are common, and silently merging
+   * them loses a real contact — worse than importing a duplicate. Requiring a
+   * company narrows it but cannot eliminate it, so this stays the user's call.
+   */
+  const [matchOnNameCompany, setMatchOnNameCompany] = useState(false);
+  /** Rows with no email — email dedup is structurally blind to these. */
+  const [noEmailCount, setNoEmailCount] = useState(0);
+  const [unmatchableCount, setUnmatchableCount] = useState(0);
   const [tag, setTag] = useState("");
 
   // Step 4: import result
@@ -187,17 +199,23 @@ export default function ImportContacts() {
   }
 
   /* ── Step 3: Validate ── */
-  async function handleValidate() {
+  // `override` lets the name+company toggle re-validate immediately with its new
+  // value, rather than waiting a render for state to settle (which would show
+  // counts from the previous setting).
+  async function handleValidate(override?: { matchOnNameCompany?: boolean }) {
     try {
       const result = await validateRowsMutation.mutateAsync({
         csvText,
         filename,
         fieldMapping,
-      });
+        matchOnNameCompany: override?.matchOnNameCompany ?? matchOnNameCompany,
+      } as any);
       setValidCount(result.validCount);
       setDuplicateCount(result.duplicateCount);
       setErrorRows(result.errorRows);
       setTotalRowCount(result.totalRows);
+      setNoEmailCount((result as any).noEmailCount ?? 0);
+      setUnmatchableCount((result as any).unmatchableCount ?? 0);
       setStep(3);
     } catch (err: any) {
       toast.error(err.message ?? "Validation failed.");
@@ -212,8 +230,11 @@ export default function ImportContacts() {
         filename,
         fieldMapping,
         skipDuplicates,
+        // Must mirror what the preview was computed with, or the summary would
+        // promise one thing and the import do another.
+        matchOnNameCompany,
         postImportActions: { tag: tag || undefined },
-      });
+      } as any);
       setImportResult(result);
       setStep(5);
     } catch (err: any) {
@@ -437,15 +458,51 @@ export default function ImportContacts() {
                 {duplicateCount > 0 && (
                   <div className="flex items-center justify-between rounded-lg border p-3">
                     <div>
-                      <p className="text-sm font-medium">Skip duplicate emails?</p>
+                      <p className="text-sm font-medium">Skip duplicates?</p>
                       <p className="text-xs text-muted-foreground mt-0.5">
-                        {duplicateCount} rows match existing contacts by email
+                        {duplicateCount} row{duplicateCount === 1 ? "" : "s"} match an existing contact
+                        {matchOnNameCompany ? " by email, or by name + company" : " by email"}
                       </p>
                     </div>
                     <Switch
                       checked={skipDuplicates}
                       onCheckedChange={setSkipDuplicates}
                     />
+                  </div>
+                )}
+
+                {/* Duplicate detection is email-based. Say so plainly whenever
+                    rows lack one, so the summary can never imply that dedup ran
+                    on rows it structurally cannot see. */}
+                {noEmailCount > 0 && (
+                  <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 dark:border-amber-900 dark:bg-amber-950/30">
+                    <p className="text-sm font-medium text-amber-900 dark:text-amber-200">
+                      {noEmailCount} row{noEmailCount === 1 ? " has" : "s have"} no email address
+                    </p>
+                    <p className="mt-0.5 text-xs text-amber-800/90 dark:text-amber-300/90">
+                      Duplicate detection normally matches on email, so {noEmailCount === 1 ? "this row" : "these rows"} can't be
+                      checked against your existing contacts that way — {noEmailCount === 1 ? "it" : "they"} will import even if
+                      already present.
+                      {unmatchableCount > 0 && ` ${unmatchableCount} of them also have no company, so no fallback match is possible at all.`}
+                    </p>
+                    <div className="mt-2.5 flex items-center justify-between gap-3 rounded-md bg-background/60 p-2.5">
+                      <div className="min-w-0">
+                        <p className="text-xs font-medium">Also match on name + company</p>
+                        <p className="mt-0.5 text-[11px] text-muted-foreground">
+                          Off by default: two different people can share a name, and merging them
+                          loses a real contact. Only rows with a company are matched.
+                        </p>
+                      </div>
+                      <Switch
+                        checked={matchOnNameCompany}
+                        disabled={validateRowsMutation.isPending}
+                        onCheckedChange={(v) => {
+                          setMatchOnNameCompany(v);
+                          // Re-validate so the counts above reflect the new rule.
+                          handleValidate({ matchOnNameCompany: v });
+                        }}
+                      />
+                    </div>
                   </div>
                 )}
 
