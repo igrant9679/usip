@@ -132,6 +132,11 @@ function Landing() {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  // MFA step: revealed after the server accepts the password but requires the
+  // authenticator code (mfaRequired in the 401). TOTP/authenticator app only —
+  // there is deliberately no SMS/text option.
+  const [mfaStep, setMfaStep] = useState(false);
+  const [totpCode, setTotpCode] = useState("");
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -144,6 +149,10 @@ function Landing() {
       setError("Password must be at least 8 characters.");
       return;
     }
+    if (mode === "signin" && mfaStep && !totpCode.trim()) {
+      setError("Enter the 6-digit code from your authenticator app.");
+      return;
+    }
     setLoading(true);
     try {
       const endpoint = mode === "signup" ? "/api/auth/register" : "/api/auth/password-login";
@@ -153,6 +162,7 @@ function Landing() {
         returnPath,
       };
       if (mode === "signup" && name.trim()) body.name = name.trim();
+      if (mfaStep && totpCode.trim()) body.totpCode = totpCode.trim();
 
       const res = await fetch(endpoint, {
         method: "POST",
@@ -162,6 +172,14 @@ function Landing() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
+        // MFA-enabled account: the first mfaRequired 401 means the password was
+        // accepted and the server now wants the authenticator code — reveal the
+        // code field. A second mfaRequired means the code was wrong.
+        if (data.mfaRequired) {
+          if (!mfaStep) setMfaStep(true);
+          else setError(data.error ?? "That authentication code didn't match — try again.");
+          return;
+        }
         setError(
           data.error ?? (mode === "signup" ? "Sign-up failed. Please try again." : "Login failed. Please try again."),
         );
@@ -238,6 +256,23 @@ function Landing() {
               </button>
             </div>
           </div>
+          {mode === "signin" && mfaStep && (
+            <div className="space-y-2">
+              <Label htmlFor="login-totp" className="text-white/80">Authentication code</Label>
+              <Input
+                id="login-totp"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                placeholder="6-digit code"
+                value={totpCode}
+                onChange={(e) => { setTotpCode(e.target.value.replace(/[^\d\s]/g, "")); setError(null); }}
+                className="bg-white/10 border-white/20 text-white placeholder:text-white/30 focus:border-[#14B89A] tracking-widest"
+                disabled={loading}
+                autoFocus
+              />
+              <p className="text-xs text-white/40">Open your authenticator app and enter the current code.</p>
+            </div>
+          )}
           {error && (
             <p className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-md px-3 py-2">
               {error}
@@ -249,9 +284,9 @@ function Landing() {
             disabled={loading}
           >
             {loading ? (
-              <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> {mode === "signup" ? "Creating account…" : "Signing in…"}</>
+              <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> {mode === "signup" ? "Creating account…" : mfaStep ? "Verifying…" : "Signing in…"}</>
             ) : (
-              <><LogIn className="mr-2 h-4 w-4" /> {mode === "signup" ? "Create account" : "Sign in"}</>
+              <><LogIn className="mr-2 h-4 w-4" /> {mode === "signup" ? "Create account" : mfaStep ? "Verify code" : "Sign in"}</>
             )}
           </Button>
         </form>
@@ -263,7 +298,7 @@ function Landing() {
               <button
                 type="button"
                 className="text-[#14B89A] hover:underline font-medium"
-                onClick={() => { setMode("signup"); setError(null); }}
+                onClick={() => { setMode("signup"); setError(null); setMfaStep(false); setTotpCode(""); }}
               >
                 Create one
               </button>
@@ -274,7 +309,7 @@ function Landing() {
               <button
                 type="button"
                 className="text-[#14B89A] hover:underline font-medium"
-                onClick={() => { setMode("signin"); setError(null); }}
+                onClick={() => { setMode("signin"); setError(null); setMfaStep(false); setTotpCode(""); }}
               >
                 Sign in
               </button>
