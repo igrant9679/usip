@@ -15,10 +15,11 @@
  *     page, and offers it
  *   • starting one hands off to the existing TourEngine
  *
- * The preference is per-user and per-device (localStorage). It is a UI
- * preference on a control the user can see and flip in one click, so it does
- * not justify a migration — but it does mean it will not follow them to another
- * machine.
+ * The preference follows the ACCOUNT (users.elsie_enabled, migration 0133),
+ * exactly like themePalette. localStorage is kept, but demoted to an
+ * instant-boot cache: it is what renders the toggle in the right state before
+ * the first round trip, and the server value overrides it once per mount.
+ * Without that cache the toggle visibly flips on every page load.
  *
  * Offering is rate-limited by memory of what was already offered: a guide that
  * re-asks on every route change is not a guide, it is a popup.
@@ -48,6 +49,27 @@ function readEnabled(): boolean {
   }
 }
 
+function cacheEnabled(v: boolean) {
+  try {
+    localStorage.setItem(STORAGE_KEY, v ? "1" : "0");
+  } catch {
+    /* private mode — the toggle still works for this session */
+  }
+}
+
+/**
+ * Adopt the account's stored value. Called once per mount from Shell, which
+ * already fetches appearance for the colour theme, so this costs no extra
+ * request. Updates the cache but does NOT write back to the server — this is
+ * the server telling us, not the user choosing.
+ */
+export function adoptServerElsiePref(v: boolean) {
+  if (enabledState === v) return;
+  enabledState = v;
+  cacheEnabled(v);
+  listeners.forEach((fn) => fn(v));
+}
+
 /**
  * Shared on/off state. A plain module-level listener set rather than a context,
  * because the toggle lives in Shell's top bar and the controller is mounted up
@@ -62,13 +84,10 @@ function getEnabled(): boolean {
   return enabledState;
 }
 
+/** Local-only update. The toggle also persists to the account; see ElsieToggle. */
 export function setElsieEnabled(v: boolean) {
   enabledState = v;
-  try {
-    localStorage.setItem(STORAGE_KEY, v ? "1" : "0");
-  } catch {
-    /* private mode — the toggle still works for this session */
-  }
+  cacheEnabled(v);
   listeners.forEach((fn) => fn(v));
 }
 
@@ -166,9 +185,17 @@ export function pageKeyForRoute(path: string): string | null {
  */
 export function ElsieToggle() {
   const [enabled, setEnabled] = useElsieEnabled();
+  // Best-effort account sync: the local state flips immediately either way, so
+  // a failed write costs this device's session rather than the interaction.
+  const save = trpc.profile.updateMyAppearance.useMutation();
+  const toggle = () => {
+    const next = !enabled;
+    setEnabled(next);
+    save.mutate({ elsieEnabled: next });
+  };
   return (
     <button
-      onClick={() => setEnabled(!enabled)}
+      onClick={toggle}
       title={enabled ? `${ELSIE_NAME} is on — click to turn guidance off` : `${ELSIE_NAME} is off — click to turn guidance on`}
       aria-pressed={enabled}
       className={cn(

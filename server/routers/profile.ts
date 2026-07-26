@@ -279,24 +279,41 @@ export const profileRouter = router({
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const [row] = await db
-      .select({ themePalette: users.themePalette })
+      .select({ themePalette: users.themePalette, elsieEnabled: users.elsieEnabled })
       .from(users)
       .where(eq(users.id, ctx.user.id))
       .limit(1);
-    return { themePalette: row?.themePalette ?? null };
+    // elsieEnabled NULL = never set = ON. Resolved here so no caller has to
+    // remember which way the default falls.
+    return {
+      themePalette: row?.themePalette ?? null,
+      elsieEnabled: row?.elsieEnabled ?? true,
+    };
   }),
 
-  /** Persist the colour theme so it follows the user across devices. */
+  /**
+   * Persist appearance choices so they follow the user across devices.
+   * Both fields are optional: omitting one leaves it untouched, so the theme
+   * picker and the Elsie toggle can write independently without either
+   * clobbering the other.
+   */
   updateMyAppearance: workspaceProcedure
     .input(z.object({
-      themePalette: z.enum(["teal", "indigo", "violet", "rose", "amber", "ocean", "graphite"]).nullable(),
+      themePalette: z.enum(["teal", "indigo", "violet", "rose", "amber", "ocean", "graphite"]).nullable().optional(),
+      elsieEnabled: z.boolean().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      // "teal" is the default — store null so future default changes apply.
-      const value = input.themePalette && input.themePalette !== "teal" ? input.themePalette : null;
-      await db.update(users).set({ themePalette: value }).where(eq(users.id, ctx.user.id));
-      return { themePalette: value };
+      const set: Record<string, unknown> = {};
+      if (input.themePalette !== undefined) {
+        // "teal" is the default — store null so future default changes apply.
+        set.themePalette = input.themePalette && input.themePalette !== "teal" ? input.themePalette : null;
+      }
+      if (input.elsieEnabled !== undefined) set.elsieEnabled = input.elsieEnabled;
+      if (Object.keys(set).length > 0) {
+        await db.update(users).set(set as never).where(eq(users.id, ctx.user.id));
+      }
+      return { ok: true as const, themePalette: set.themePalette ?? null };
     }),
 });

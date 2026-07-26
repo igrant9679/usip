@@ -68,7 +68,7 @@ import {
   Loader2,
 } from "lucide-react";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { ElsieToggle } from "@/components/usip/Elsie";
+import { ElsieToggle, adoptServerElsiePref } from "@/components/usip/Elsie";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
@@ -605,6 +605,9 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
     adoptedServerPalette.current = true;
     const server = (appearanceQ.data.themePalette ?? "teal") as typeof palette;
     if (PALETTES.some((p) => p.id === server) && server !== palette) setPalette(server);
+    // Elsie rides the same query — her on/off follows the account too, and
+    // adopting it here costs no extra request.
+    adoptServerElsiePref(appearanceQ.data.elsieEnabled !== false);
   }, [appearanceQ.data]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Per-workspace logo for the sidebar + switcher. The brand COLOUR is applied

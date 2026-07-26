@@ -2853,6 +2853,20 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0133: Elsie on/off follows the user ───────────────────────────────────
+  // The in-app guide toggle was localStorage only, so a user who turned it off
+  // met it again on their next machine. Mirrors themePalette (0114), which
+  // already syncs a per-user UI choice for exactly this reason.
+  //
+  // NULL means "never set", which resolves to ON — a new user is precisely who
+  // the guide exists for, and the toggle is one visible click away.
+  {
+    name: "0133_elsie_pref.sql",
+    statements: [
+      "ALTER TABLE `users` ADD COLUMN `elsie_enabled` boolean NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------
