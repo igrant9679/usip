@@ -17,15 +17,21 @@
  * verification on plausible patterns only). Nothing here touches Apollo.
  */
 import { and, eq, isNotNull, isNull, ne, or } from "drizzle-orm";
-import { prospects, workspaceSettings, workspaces } from "../../drizzle/schema";
+import { areCampaigns, prospectQueue, prospects, workspaceSettings, workspaces } from "../../drizzle/schema";
 import { getDb } from "../db";
-import { lookupContactInfo } from "./scraper";
+import { lookupContactInfo, resolveVerifiedEmail } from "./scraper";
 import { getReoonKey, reoonCheckBalance } from "./reoon";
+// Pure name predicate only — importing it does NOT reach any paid Apollo path.
+// It is the one definition of "this campaign is a demo, don't work it".
+import { isEnrichableCampaign } from "./apolloEnrich";
 
 export type SweepMode = "off" | "approval" | "auto";
 
 export interface SweepResult {
   attempted: number;
+  /** Where the attempts landed. The backlog lives in prospect_queue, not prospects. */
+  fromQueue: number;
+  fromProspects: number;
   emailsFound: number;
   creditsQuick: number;
   creditsPower: number;
@@ -35,7 +41,7 @@ export interface SweepResult {
 
 /** A run that did nothing, shaped so callers never special-case null. */
 const emptyResult = (stoppedBecause: SweepResult["stoppedBecause"]): SweepResult => ({
-  attempted: 0, emailsFound: 0, creditsQuick: 0, creditsPower: 0, stoppedBecause,
+  attempted: 0, fromQueue: 0, fromProspects: 0, emailsFound: 0, creditsQuick: 0, creditsPower: 0, stoppedBecause,
 });
 
 /**
@@ -97,10 +103,63 @@ async function candidatesFor(workspaceId: number, limit: number, retryFailed: bo
     .limit(limit);
 }
 
-/** How many candidates are waiting, for the UI to show before anyone spends. */
+/**
+ * ARE campaign prospects worth attempting — and this, NOT `prospects`, is where
+ * the backlog actually lives. `prospect_queue` holds everything the autonomous
+ * engine sourced; the `prospects` table is the separate People/CRM list, which
+ * on a workspace sourcing purely through ARE is empty.
+ *
+ * Mirrors findEnrichCandidates' guards, for the same reasons: INNER JOIN
+ * are_campaigns so an orphaned row whose campaign is gone is never worked, and
+ * `[Demo]` campaigns excluded so credits are never spent on invented people.
+ *
+ * Differs in ONE way: that query requires a linkedinUrl because Apollo matches
+ * on it. The free finder needs a company DOMAIN instead, which is exactly what
+ * Apollo search supplies at zero credits.
+ */
+async function queueCandidatesFor(workspaceId: number, limit: number, retryFailed: boolean) {
+  const db = await getDb();
+  if (!db) return [];
+  const conds = [
+    eq(prospectQueue.workspaceId, workspaceId),
+    or(isNull(prospectQueue.email), eq(prospectQueue.email, "")),
+    isNotNull(prospectQueue.companyDomain),
+    ne(prospectQueue.companyDomain, ""),
+    isNotNull(prospectQueue.firstName),
+    isNotNull(prospectQueue.lastName),
+  ];
+  // enrichedAt is the attempt marker here — prospect_queue has a real one, so
+  // unlike the prospects table there is nothing to infer from a json column.
+  if (!retryFailed) conds.push(isNull(prospectQueue.enrichedAt));
+
+  const rows = await db
+    .select({
+      id: prospectQueue.id,
+      firstName: prospectQueue.firstName,
+      lastName: prospectQueue.lastName,
+      companyDomain: prospectQueue.companyDomain,
+      campaignName: areCampaigns.name,
+    })
+    .from(prospectQueue)
+    .innerJoin(areCampaigns, eq(prospectQueue.campaignId, areCampaigns.id))
+    .where(and(...conds))
+    .orderBy(prospectQueue.id)
+    .limit(limit);
+
+  return rows.filter((r) => isEnrichableCampaign(r.campaignName));
+}
+
+/**
+ * How many candidates are waiting, for the UI to show before anyone spends.
+ * Counts BOTH tables — reporting only `prospects` is what made the first
+ * version of this report a confident zero on a workspace with a real backlog.
+ */
 export async function countCandidates(workspaceId: number, retryFailed = false): Promise<number> {
-  const rows = await candidatesFor(workspaceId, 10000, retryFailed);
-  return rows.length;
+  const [p, q] = await Promise.all([
+    candidatesFor(workspaceId, 10000, retryFailed),
+    queueCandidatesFor(workspaceId, 10000, retryFailed),
+  ]);
+  return p.length + q.length;
 }
 
 /**
@@ -118,8 +177,14 @@ export async function sweepWorkspace(
   if (!key) return emptyResult("no_key");
 
   const cap = Math.max(1, Math.min(500, opts.limit ?? 50));
-  const rows = await candidatesFor(workspaceId, cap, opts.retryFailed ?? false);
-  if (rows.length === 0) return emptyResult("no_candidates");
+  const retry = opts.retryFailed ?? false;
+  // Queue first: it is where the ARE backlog lives, and those rows are the ones
+  // a campaign will actually mail once they have an address.
+  const [queueRows, rows] = await Promise.all([
+    queueCandidatesFor(workspaceId, cap, retry),
+    candidatesFor(workspaceId, cap, retry),
+  ]);
+  if (rows.length === 0 && queueRows.length === 0) return emptyResult("no_candidates");
 
   // One balance read up front, then decremented locally. Re-reading per
   // prospect would add a network round trip to every single lookup.
@@ -133,6 +198,50 @@ export async function sweepWorkspace(
   }
 
   const result: SweepResult = { ...emptyResult("done") };
+
+  // ── ARE queue rows ──
+  // resolveVerifiedEmail is the SAME resolver the ARE engine calls at sourcing
+  // time; only the write-back differs, because lookupContactInfo persists to the
+  // prospects table and these rows live in prospect_queue.
+  for (const q of queueRows) {
+    if (!shouldContinue({ attempted: result.attempted, cap, dailyCreditsLeft })) {
+      result.stoppedBecause = result.attempted >= cap ? "cap" : "no_credits";
+      break;
+    }
+    try {
+      const found = await resolveVerifiedEmail({
+        firstName: q.firstName,
+        lastName: q.lastName,
+        companyDomain: q.companyDomain,
+        companyWebsite: q.companyDomain,
+        workspaceId,
+      });
+      result.attempted++;
+      result.fromQueue++;
+      result.creditsQuick += found.creditsQuick ?? 0;
+      result.creditsPower += found.creditsPower ?? 0;
+      dailyCreditsLeft -= found.creditsPower ?? 0;
+      // Stamp enrichedAt on EVERY attempt, hit or miss — it is the marker that
+      // stops the next sweep paying to re-check the same miss forever.
+      const patch: Record<string, unknown> = {
+        enrichedAt: new Date(),
+        enrichmentStatus: found.email ? "complete" : "failed",
+      };
+      if (found.email) {
+        patch.email = found.email;
+        result.emailsFound++;
+      } else if (found.reason) {
+        patch.enrichmentError = found.reason.slice(0, 500);
+      }
+      await db.update(prospectQueue).set(patch as never).where(eq(prospectQueue.id, q.id));
+    } catch (e) {
+      result.attempted++;
+      result.fromQueue++;
+      console.error(`[EnrichmentSweep] queue prospect ${q.id} failed:`, (e as Error).message);
+    }
+  }
+
+  // ── prospects (People/CRM) rows ──
   for (const p of rows) {
     if (!shouldContinue({ attempted: result.attempted, cap, dailyCreditsLeft })) {
       result.stoppedBecause = result.attempted >= cap ? "cap" : "no_credits";
@@ -149,6 +258,7 @@ export async function sweepWorkspace(
         existingPhone: p.phone ?? null,
       });
       result.attempted++;
+      result.fromProspects++;
       result.creditsQuick += r.reoonCreditsQuick ?? 0;
       result.creditsPower += r.reoonCreditsPower ?? 0;
       dailyCreditsLeft -= r.reoonCreditsPower ?? 0;
@@ -157,6 +267,7 @@ export async function sweepWorkspace(
       // Count the attempt anyway: a prospect that reliably throws must not be
       // retried forever inside the same run.
       result.attempted++;
+      result.fromProspects++;
       console.error(`[EnrichmentSweep] prospect ${p.id} failed:`, (e as Error).message);
     }
   }
