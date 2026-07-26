@@ -1026,6 +1026,8 @@ export const prospectsRouter = router({
     .input(z.object({
       limit: z.number().int().min(1).max(200).default(25),
       retryFailed: z.boolean().default(false),
+      /** Resolve missing company domains first (free). Off only for debugging. */
+      resolveDomains: z.boolean().default(true),
     }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
@@ -1042,7 +1044,7 @@ export const prospectsRouter = router({
         });
       }
       const { sweepWorkspace } = await import("../services/enrichmentSweeper");
-      return sweepWorkspace(ctx.workspace.id, { limit: input.limit, retryFailed: input.retryFailed });
+      return sweepWorkspace(ctx.workspace.id, { limit: input.limit, retryFailed: input.retryFailed, resolveDomains: input.resolveDomains });
     }),
 
   reoonBalance: workspaceProcedure.query(async ({ ctx }) => {

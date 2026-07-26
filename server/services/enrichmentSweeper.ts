@@ -13,8 +13,14 @@
  * implementation of "find this person's address" would drift from the one the
  * ARE engine uses.
  *
- * Cost: every candidate costs Reoon credits (quick pre-filter, then power
- * verification on plausible patterns only). Nothing here touches Apollo.
+ * Two passes, because measuring the live workspace showed the second one alone
+ * does nothing: of 234 sourced prospects with no email, only 4 had a company
+ * domain. So a sweep first resolves missing domains, then finds emails.
+ *
+ * Cost: the domain pass calls Apollo's ORGANIZATION search — **zero Apollo
+ * credits**, same free tier as people search, and never the paid /people/match
+ * path. The email pass costs Reoon credits (quick pre-filter, then power
+ * verification on plausible patterns only).
  */
 import { and, eq, isNotNull, isNull, ne, or } from "drizzle-orm";
 import { areCampaigns, prospectQueue, prospects, workspaceSettings, workspaces } from "../../drizzle/schema";
@@ -150,6 +156,64 @@ async function queueCandidatesFor(workspaceId: number, limit: number, retryFaile
 }
 
 /**
+ * Resolve missing company domains, so the email finder has anything to work with.
+ *
+ * Measured on the live workspace: of 234 sourced prospects with no email, only
+ * 4 carried a company domain. The finder builds address patterns from
+ * name + domain, so the other 230 were unworkable — the bottleneck was never
+ * verification, it was the domain.
+ *
+ * Uses Apollo's ORGANIZATION search via apolloResolveDomain: name → domain, and
+ * **zero Apollo credits**, the same free tier as people search. This does not
+ * touch the paid /people/match path, which is permanently off the table.
+ *
+ * Writes the domain and nothing else — the email pass runs separately, so a
+ * resolved domain is durable even if verification later fails or runs dry.
+ */
+export async function resolveMissingDomains(
+  workspaceId: number,
+  limit = 100,
+): Promise<{ attempted: number; resolved: number }> {
+  const db = await getDb();
+  if (!db) return { attempted: 0, resolved: 0 };
+
+  const rows = await db
+    .select({ id: prospectQueue.id, companyName: prospectQueue.companyName, campaignName: areCampaigns.name })
+    .from(prospectQueue)
+    .innerJoin(areCampaigns, eq(prospectQueue.campaignId, areCampaigns.id))
+    .where(and(
+      eq(prospectQueue.workspaceId, workspaceId),
+      or(isNull(prospectQueue.email), eq(prospectQueue.email, "")),
+      or(isNull(prospectQueue.companyDomain), eq(prospectQueue.companyDomain, "")),
+      isNotNull(prospectQueue.companyName),
+      ne(prospectQueue.companyName, ""),
+    ))
+    .orderBy(prospectQueue.id)
+    .limit(Math.max(1, Math.min(500, limit)));
+
+  const live = rows.filter((r) => isEnrichableCampaign(r.campaignName));
+  const { apolloResolveDomain } = await import("./apollo");
+
+  let attempted = 0;
+  let resolved = 0;
+  for (const r of live) {
+    attempted++;
+    try {
+      const out = await apolloResolveDomain(workspaceId, r.companyName ?? "");
+      if (out.domain) {
+        await db.update(prospectQueue)
+          .set({ companyDomain: out.domain } as never)
+          .where(eq(prospectQueue.id, r.id));
+        resolved++;
+      }
+    } catch (e) {
+      console.error(`[EnrichmentSweep] domain resolve for queue ${r.id} failed:`, (e as Error).message);
+    }
+  }
+  return { attempted, resolved };
+}
+
+/**
  * Why the candidate count is what it is.
  *
  * "0 waiting" has several very different causes — nothing left to do, everything
@@ -208,7 +272,7 @@ export async function countCandidates(workspaceId: number, retryFailed = false):
  */
 export async function sweepWorkspace(
   workspaceId: number,
-  opts: { limit?: number; retryFailed?: boolean } = {},
+  opts: { limit?: number; retryFailed?: boolean; resolveDomains?: boolean } = {},
 ): Promise<SweepResult> {
   const db = await getDb();
   if (!db) return emptyResult("no_key");
@@ -218,6 +282,20 @@ export async function sweepWorkspace(
 
   const cap = Math.max(1, Math.min(500, opts.limit ?? 50));
   const retry = opts.retryFailed ?? false;
+
+  // Domain pre-pass. Costs no Apollo credits and no Reoon credits, and without
+  // it almost every sourced prospect is unworkable — so it runs first, and its
+  // results are visible to the candidate query immediately below.
+  if (opts.resolveDomains !== false) {
+    try {
+      const d = await resolveMissingDomains(workspaceId, cap);
+      if (d.attempted > 0) {
+        console.log(`[EnrichmentSweep] ws=${workspaceId} domains attempted=${d.attempted} resolved=${d.resolved}`);
+      }
+    } catch (e) {
+      console.error("[EnrichmentSweep] domain pre-pass failed:", (e as Error).message);
+    }
+  }
   // Queue first: it is where the ARE backlog lives, and those rows are the ones
   // a campaign will actually mail once they have an address.
   const [queueRows, rows] = await Promise.all([
