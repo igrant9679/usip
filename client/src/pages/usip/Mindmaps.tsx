@@ -72,7 +72,7 @@ export default function Mindmaps() {
 
   return (
     <Shell title="Mindmaps">
-    <div className="flex flex-col h-full">
+    <div data-tour-id="mindmaps-list" className="flex flex-col h-full">
       <PageHeader
         title="Mindmaps"
         description="Visually develop ideas, plan projects, and create tasks or notes directly from your maps."

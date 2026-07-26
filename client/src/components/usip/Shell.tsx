@@ -1005,6 +1005,10 @@ export function PageHeader({ title, description: defaultDescription, pageKey, ic
 
   return (
     <div
+      // Gives every PageHeader page a tour anchor for free, derived from the
+      // pageKey it already declares — 69 pages, one definition, and no chance
+      // of an anchor drifting away from the page it belongs to.
+      data-tour-id={pageKey ? `page-${pageKey}` : undefined}
       className={`relative shrink-0 px-4 md:px-6 py-5 border-b border-border bg-card/40 flex flex-col sm:flex-row sm:items-center sm:flex-wrap gap-3 sm:gap-4${className ? ` ${className}` : ""}`}
       style={{
         // Subtle section-accent wash — colourful wayfinding without shouting.

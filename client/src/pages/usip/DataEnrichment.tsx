@@ -132,7 +132,7 @@ export default function DataEnrichment() {
 
   return (
     <Shell title="Data enrichment">
-      <div className="flex flex-col h-full min-h-0">
+      <div data-tour-id="data-enrichment-panel" className="flex flex-col h-full min-h-0">
         {/* header */}
         <div className="relative shrink-0 flex items-center gap-2 px-4 pt-2.5 border-b border-border bg-card/40">
           <span aria-hidden className="absolute inset-x-0 top-0 h-0.5" style={{ backgroundColor: accent }} />
