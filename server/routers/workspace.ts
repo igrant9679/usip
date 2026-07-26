@@ -32,6 +32,94 @@ export const workspaceRouter = router({
   })),
 
   /**
+   * Create a new workspace. **super_admin only.**
+   *
+   * Until now a `workspaces` row could only come into existence from seed.ts —
+   * there was no in-product path at all, which is awkward for anything keyed on
+   * a workspace (the Reoon/Apollo keys, autopilot modes, ICP profiles all are).
+   *
+   * The gate is deliberately "super_admin of a workspace you are already in",
+   * not "any authenticated user": this is the agency shape, one workspace per
+   * client, spun up by the operator — not self-serve tenant signup.
+   *
+   * `seedDemoData` defaults FALSE. A client workspace full of invented accounts
+   * and [Demo] campaigns is worse than an empty one, and several engines read
+   * those rows as real (the enrichment sweeper has to filter them out by name).
+   * Help Center content is always seeded — it is enablement, not demo data.
+   * Pipelines self-heal via ensureDefaultPipeline, so an empty workspace works.
+   */
+  create: workspaceProcedure
+    .input(z.object({
+      name: z.string().trim().min(2).max(120),
+      seedDemoData: z.boolean().default(false),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      if (ctx.member.role !== "super_admin") {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Only super admins can create workspaces." });
+      }
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+
+      // slug is UNIQUE — derive from the name, then add entropy. Retry rather
+      // than trusting one draw, so two workspaces named the same never collide.
+      const base = input.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "workspace";
+      let workspaceId = 0;
+      let slug = "";
+      for (let attempt = 0; attempt < 5 && !workspaceId; attempt++) {
+        slug = `${base}-${Math.random().toString(36).slice(2, 7)}`.slice(0, 64);
+        try {
+          const r = await db.insert(workspaces).values({
+            name: input.name,
+            slug,
+            ownerUserId: ctx.user.id,
+            plan: "trial",
+          });
+          workspaceId = Number((r as any)[0]?.insertId ?? 0) || 0;
+        } catch (e) {
+          if (attempt === 4) {
+            console.error("[workspace.create] insert failed:", (e as Error).message);
+            throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Could not create the workspace." });
+          }
+        }
+      }
+      if (!workspaceId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Could not create the workspace." });
+
+      // The creator must be a member, or they cannot open what they just made.
+      const { workspaceMembers } = await import("../../drizzle/schema");
+      await db.insert(workspaceMembers).values({
+        workspaceId,
+        userId: ctx.user.id,
+        role: "super_admin",
+        title: "Owner",
+      });
+
+      // Give per-workspace settings a home up front. Several dedicated setters
+      // ensure this row lazily, but not all do, and a missing row makes those
+      // saves look like they worked while writing nothing.
+      try {
+        await db.insert(workspaceSettings).values({ workspaceId });
+      } catch (e) {
+        console.error("[workspace.create] settings row failed:", (e as Error).message);
+      }
+
+      try {
+        if (input.seedDemoData) {
+          const { seedWorkspace } = await import("../seed");
+          await seedWorkspace(workspaceId, ctx.user.id);
+        } else {
+          const { seedHelpContent } = await import("../seedHelpContent");
+          await seedHelpContent(db as never, workspaceId);
+        }
+      } catch (e) {
+        // The workspace exists and is usable; content seeding is not worth
+        // failing the whole creation over.
+        console.error("[workspace.create] seeding failed:", (e as Error).message);
+      }
+
+      return { id: workspaceId, slug, name: input.name };
+    }),
+
+  /**
    * Rename the workspace (admin+). The name is tenant-facing: it brands
    * proposal emails, AI prompts, and the workspace switcher — there was
    * previously no way to change it at all.

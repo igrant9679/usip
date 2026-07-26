@@ -64,8 +64,14 @@ import {
   Phone,
   Globe,
   ShieldCheck,
+  Plus,
+  Loader2,
 } from "lucide-react";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import { toast } from "sonner";
 import { ReactNode, useEffect, useLayoutEffect, useState, useRef, createContext, useContext } from "react";
 import { Link, useLocation } from "wouter";
 import { PageTransition } from "@/components/PageTransition";
@@ -539,6 +545,7 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
   const { user, logout } = useAuth();
   const { workspaces, current, switchTo, isLoading } = useWorkspace();
   const [wsOpen, setWsOpen] = useState(false);
+  const [newWsOpen, setNewWsOpen] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const navRef = useRef<HTMLElement>(null);
@@ -835,8 +842,24 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
                     </div>
                   </button>
                 ))}
+                {/* Creation is super_admin-only server-side; hiding it for
+                    everyone else keeps the menu honest rather than offering a
+                    button that always 403s. */}
+                {current?.role === "super_admin" && (
+                  <>
+                    <div className="my-1 h-px bg-border" />
+                    <button
+                      onClick={() => { setWsOpen(false); setNewWsOpen(true); }}
+                      className="w-full flex items-center gap-2 px-2 py-1.5 rounded-sm text-sm hover:bg-secondary"
+                    >
+                      <Plus className="size-3.5 text-muted-foreground" />
+                      <span className="flex-1 text-left">New workspace</span>
+                    </button>
+                  </>
+                )}
               </div>
             )}
+            <NewWorkspaceDialog open={newWsOpen} onOpenChange={setNewWsOpen} onCreated={(id) => switchTo(id)} />
           </div>
 
           {title && <div className="hidden sm:block text-sm text-muted-foreground truncate">/ {title}</div>}
@@ -1159,5 +1182,87 @@ export function SubNav({ items }: { items: Array<{ href: string; label: string; 
         <SubNavPill key={it.href} href={it.href} label={it.label} title={it.title} active={loc === it.href} accent={accent} />
       ))}
     </nav>
+  );
+}
+
+/**
+ * NewWorkspaceDialog — super_admin-only workspace creation.
+ *
+ * Lives in Shell because the switcher is the only place the concept appears;
+ * there is no workspace-management page to hang it off, and inventing one for a
+ * single button would be worse.
+ *
+ * Demo data is opt-IN. A client workspace pre-filled with invented accounts and
+ * [Demo] campaigns is worse than an empty one — several engines read those rows
+ * as real, and the enrichment sweeper has to filter them out by name.
+ */
+function NewWorkspaceDialog({
+  open, onOpenChange, onCreated,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  onCreated: (id: number) => void;
+}) {
+  const utils = trpc.useUtils();
+  const [name, setName] = useState("");
+  const [seedDemoData, setSeedDemoData] = useState(false);
+
+  const create = trpc.workspace.create.useMutation({
+    onSuccess: async (r: any) => {
+      // Refresh the switcher BEFORE switching, or the new id is not yet a
+      // member row the context knows about and the switch is rejected.
+      await utils.workspace.list.invalidate();
+      toast.success(`Created "${r.name}"`);
+      onOpenChange(false);
+      setName("");
+      setSeedDemoData(false);
+      onCreated(r.id);
+    },
+    onError: (e: any) => toast.error(e?.message ?? "Could not create the workspace"),
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      {/* sm:max-w-* — a bare max-w-* loses to the component default. */}
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader><DialogTitle>New workspace</DialogTitle></DialogHeader>
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <Label>Workspace name</Label>
+            <Input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Acme Nonprofit"
+              autoFocus
+              onKeyDown={(e) => { if (e.key === "Enter" && name.trim().length >= 2) create.mutate({ name: name.trim(), seedDemoData }); }}
+            />
+            <p className="text-[11px] text-muted-foreground">
+              You will be its super admin. Members, mailboxes, API keys and autopilot
+              settings are all separate from this workspace.
+            </p>
+          </div>
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <Label className="text-sm">Add sample data</Label>
+              <p className="text-[11px] text-muted-foreground">
+                Demo accounts, contacts and campaigns for exploring the product. Leave
+                off for a real client workspace.
+              </p>
+            </div>
+            <Switch checked={seedDemoData} onCheckedChange={setSeedDemoData} />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button
+            disabled={create.isPending || name.trim().length < 2}
+            onClick={() => create.mutate({ name: name.trim(), seedDemoData })}
+            className="gap-1.5"
+          >
+            {create.isPending ? <Loader2 className="size-3.5 animate-spin" /> : null} Create workspace
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
