@@ -23,7 +23,7 @@ import {
 } from "@/components/ui/select";
 import {
   Workflow, ListTodo, CalendarClock, MessageSquare, KanbanSquare, Bot, Zap, Sparkles, Rocket,
-  ExternalLink, Play, Pause, Check, X, Activity, GitBranch, Users, Mail, Share2, UserRoundCog,
+  ExternalLink, Play, Pause, Check, X, Activity, GitBranch, Users, Mail, Share2, UserRoundCog, Database,
 } from "lucide-react";
 
 function fmtWhen(d?: string | Date | null): string {
@@ -49,6 +49,10 @@ export default function WorkflowsV2() {
   // Chat autonomy lives per-agent; this row reports the most permissive agent
   // and writes to all of them. Per-agent control is on /v2/chat.
   const chatAp = trpc.chatAgents.getAutopilotSettings.useQuery(undefined as any, { retry: false });
+  // Backlog enrichment sweep. "Approve" here means an attended run, not a
+  // queued draft — enrichment writes data and sends nothing, so the only thing
+  // worth gating is unattended Reoon credit spend.
+  const sweepAp = trpc.prospects.sweepStatus.useQuery(undefined as any, { retry: false });
 
   const setTaskAp = trpc.tasks.setAutopilotSettings.useMutation({ onSuccess: () => utils.tasks.getAutopilotSettings.invalidate() });
   const setMeetAp = trpc.meetings.setAutopilotSettings.useMutation({ onSuccess: () => utils.meetings.getAutopilotSettings.invalidate() });
@@ -56,6 +60,7 @@ export default function WorkflowsV2() {
   const setDealAp = trpc.deals.setAutopilotSettings.useMutation({ onSuccess: () => utils.deals.getAutopilotSettings.invalidate() });
   const setSocialAp = trpc.unipile.setSocialAutopilotSettings.useMutation({ onSuccess: () => utils.unipile.getSocialAutopilotSettings.invalidate(), onError: (e) => toast.error(e.message.includes("FORBIDDEN") ? "Only admins can change Social Autopilot" : e.message) });
   const setJobChangeAp = trpc.linkedinEnrichment.setJobChangeSettings.useMutation({ onSuccess: () => utils.linkedinEnrichment.getJobChangeSettings.invalidate(), onError: (e) => toast.error(e.message.includes("FORBIDDEN") ? "Only admins can change Job Change Autopilot" : e.message) });
+  const setSweepAp = trpc.prospects.setSweepSettings.useMutation({ onSuccess: () => utils.prospects.sweepStatus.invalidate(), onError: (e) => toast.error(e.message) });
   const setChatAp = trpc.chatAgents.setAutopilotSettings.useMutation({ onSuccess: () => utils.chatAgents.getAutopilotSettings.invalidate(), onError: (e) => toast.error(e.message.includes("FORBIDDEN") ? "Only admins can change the Chat Agent" : e.message) });
 
   // Email AI auto-send — a boolean autonomy control, surfaced here too.
@@ -81,6 +86,7 @@ export default function WorkflowsV2() {
     { key: "deals", label: "Deal Autopilot", icon: KanbanSquare, blurb: "Advance deals toward close", href: "/v2/deals", mode: dealAp.data?.mode ?? "off", lastRunAt: dealAp.data?.lastRunAt, set: (m: string) => setDealAp.mutate({ mode: m as any }) },
     { key: "social", label: "Social Autopilot", icon: Share2, blurb: "Auto-invite leads → opener on accept", href: "/v2/conversations", mode: socialAp.data?.mode ?? "off", lastRunAt: socialAp.data?.lastRunAt, set: (m: string) => setSocialAp.mutate({ mode: m as any }) },
     { key: "jobChange", label: "Job Change Autopilot", icon: UserRoundCog, blurb: "Re-engage when a prospect changes jobs", href: "/v2/data-enrichment", mode: jobChangeAp.data?.mode ?? "off", lastRunAt: jobChangeAp.data?.lastRunAt, set: (m: string) => setJobChangeAp.mutate({ mode: m as any }) },
+    { key: "enrichSweep", label: "Enrichment Sweep", icon: Database, blurb: "Backfill missing emails from company sites", href: "/prospects", mode: sweepAp.data?.mode ?? "off", lastRunAt: sweepAp.data?.lastRunAt, set: (m: string) => setSweepAp.mutate({ mode: m as any }) },
     { key: "chat", label: "Inbound Chat Agent", icon: MessageSquare, blurb: "Qualify website visitors → book the meeting", href: "/v2/chat", mode: chatAp.data?.mode ?? "off", lastRunAt: undefined, set: (m: string) => setChatAp.mutate({ mode: m as any }) },
   ];
   const onCount = autopilots.filter((a) => a.mode !== "off").length;
@@ -93,6 +99,7 @@ export default function WorkflowsV2() {
     setSocialAp.mutate({ mode: mode as any });
     setJobChangeAp.mutate({ mode: mode as any });
     setChatAp.mutate({ mode: mode as any });
+    setSweepAp.mutate({ mode: mode as any });
     toast.success(mode === "off" ? "All autopilots turned off" : `All autopilots set to ${MODE_LABEL[mode]}`);
   };
 
@@ -105,6 +112,7 @@ export default function WorkflowsV2() {
     setSocialAp.mutate({ mode: "approval" as any });
     setJobChangeAp.mutate({ mode: "approval" as any });
     setChatAp.mutate({ mode: "approval" as any });
+    setSweepAp.mutate({ mode: "approval" as any });
     setEmailAutoEnabled(true);
     toast.success("Full autonomy on (Approve mode) — AI actions will queue for your review");
   };

@@ -18,7 +18,7 @@ import { TRPCError } from "@trpc/server";
 import { router } from "../_core/trpc";
 import { workspaceProcedure } from "../_core/workspace";
 import { getDb } from "../db";
-import { contacts, leads, prospects, scoreResults, scoreModels } from "../../drizzle/schema";
+import { contacts, leads, prospects, scoreResults, scoreModels, workspaceSettings } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
 import { lookupContactInfo, type LookupResult } from "../services/scraper";
 // Shared synthetic-name detector — anchored to the lastName sentinel so it
@@ -963,6 +963,85 @@ export const prospectsRouter = router({
     }),
 
   /** Check remaining Reoon daily/instant credits. Used by the UI header. */
+  /* ── Backlog enrichment sweeper ───────────────────────────────────────── */
+
+  /**
+   * Everything the sweep card needs BEFORE anyone spends a credit: how many
+   * prospects are actually waiting, and whether a key exists to spend at all.
+   */
+  sweepStatus: workspaceProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    const [s] = await db
+      .select({
+        mode: workspaceSettings.enrichmentSweepMode,
+        dailyCap: workspaceSettings.enrichmentSweepDailyCap,
+        lastRunAt: workspaceSettings.enrichmentSweepLastRunAt,
+      })
+      .from(workspaceSettings)
+      .where(eq(workspaceSettings.workspaceId, ctx.workspace.id))
+      .limit(1);
+    const [{ countCandidates }, key] = await Promise.all([
+      import("../services/enrichmentSweeper"),
+      getReoonKey(ctx.workspace.id),
+    ]);
+    return {
+      mode: (s?.mode ?? "off") as "off" | "approval" | "auto",
+      dailyCap: s?.dailyCap ?? 50,
+      lastRunAt: s?.lastRunAt ?? null,
+      candidates: await countCandidates(ctx.workspace.id),
+      /** Retryable = already attempted; surfaced separately so "0 waiting" is unambiguous. */
+      attemptedAlready: Math.max(0, (await countCandidates(ctx.workspace.id, true)) - (await countCandidates(ctx.workspace.id))),
+      reoonConfigured: key.length > 0,
+    };
+  }),
+
+  /** Dedicated setter — keeps these columns off the settings.save allowlist. */
+  setSweepSettings: workspaceProcedure
+    .input(z.object({
+      mode: z.enum(["off", "approval", "auto"]).optional(),
+      dailyCap: z.number().int().min(1).max(500).optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const set: Record<string, unknown> = {};
+      if (input.mode !== undefined) set.enrichmentSweepMode = input.mode;
+      if (input.dailyCap !== undefined) set.enrichmentSweepDailyCap = input.dailyCap;
+      if (Object.keys(set).length === 0) return { ok: true as const };
+      await db.update(workspaceSettings).set(set as never)
+        .where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
+      return { ok: true as const };
+    }),
+
+  /**
+   * Run a sweep now (the `approval`-mode path, and a manual override in any
+   * mode except off). Synchronous and bounded — each prospect is a live scrape
+   * plus verification, so the cap is what keeps this a request rather than a job.
+   */
+  runSweep: workspaceProcedure
+    .input(z.object({
+      limit: z.number().int().min(1).max(200).default(25),
+      retryFailed: z.boolean().default(false),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [s] = await db
+        .select({ mode: workspaceSettings.enrichmentSweepMode })
+        .from(workspaceSettings)
+        .where(eq(workspaceSettings.workspaceId, ctx.workspace.id))
+        .limit(1);
+      if ((s?.mode ?? "off") === "off") {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "Enrichment sweeping is off for this workspace. Set it to Approve or Autonomous first.",
+        });
+      }
+      const { sweepWorkspace } = await import("../services/enrichmentSweeper");
+      return sweepWorkspace(ctx.workspace.id, { limit: input.limit, retryFailed: input.retryFailed });
+    }),
+
   reoonBalance: workspaceProcedure.query(async ({ ctx }) => {
     try {
       const apiKey = await getReoonKey(ctx.workspace.id);

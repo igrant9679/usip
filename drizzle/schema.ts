@@ -1390,6 +1390,15 @@ export const workspaceSettings = mysqlTable("workspace_settings", {
   // reads this first and falls back to the env var so existing deployments
   // keep working.
   reoonApiKeyEnc: text("reoonApiKeyEnc"),
+  // ── Backlog enrichment sweeper (Migration 0132) ──
+  // off      = never sweeps
+  // approval = sweeps only when a human presses "Run sweep"
+  // auto     = daily cron sweeps up to enrichmentSweepDailyCap prospects
+  // Enrichment writes data and sends nothing, so the only thing worth gating
+  // is unattended Reoon credit spend — hence approval means "attended run".
+  enrichmentSweepMode: mysqlEnum("enrichmentSweepMode", ["off", "approval", "auto"]).default("off").notNull(),
+  enrichmentSweepDailyCap: int("enrichmentSweepDailyCap").default(50).notNull(),
+  enrichmentSweepLastRunAt: timestamp("enrichmentSweepLastRunAt"),
   // ── Task Autopilot (Migration 0099) — the /v2/tasks autonomy engine ──
   // off      = AI never generates tasks (fully manual)
   // approval = AI drafts next-best-action tasks; a human approves before they go live

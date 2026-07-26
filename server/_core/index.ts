@@ -394,6 +394,23 @@ async function startServer() {
   setTimeout(runIcpCron, 12 * 60 * 1000); // stagger: 12 minutes after boot
   setInterval(runIcpCron, 24 * 60 * 60 * 1000); // daily
 
+  // Backlog enrichment sweep. The email finder only ever ran at sourcing time
+  // or one prospect at a time from the UI, so prospects that predate that path
+  // keep a real name, a real company domain, and no address. Only workspaces in
+  // 'auto' are swept ('approval' runs from the button); the service enforces
+  // the per-workspace daily cap and a >20h gap, so a redeploy cannot turn the
+  // daily cap into a per-boot cap.
+  const runEnrichmentSweep = () => {
+    import("../services/enrichmentSweeper")
+      .then((m) => m.runEnrichmentSweepAllWorkspaces())
+      .then((r) => {
+        if (r.swept > 0) console.log(`[EnrichmentSweep] workspaces=${r.swept} emailsFound=${r.emailsFound}`);
+      })
+      .catch((e) => console.error("[EnrichmentSweep] run failed:", e));
+  };
+  setTimeout(runEnrichmentSweep, 15 * 60 * 1000); // stagger: 15 minutes after boot
+  setInterval(runEnrichmentSweep, 6 * 60 * 60 * 1000); // every 6h; the 20h gap gates the real cadence
+
   // Nightly AI pipeline batch: midnight cron for leads above score threshold
   const scheduleNightlyBatch = () => {
     const now = new Date();

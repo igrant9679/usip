@@ -2833,6 +2833,26 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0132: backlog enrichment sweeper ──────────────────────────────────────
+  // The first-party email finder only ever ran at SOURCING time (inside the ARE
+  // engine) or one prospect at a time from the UI. Nothing swept prospects that
+  // predate that path — which is why a workspace can hold hundreds of sourced
+  // people with a company domain, a real name, and no email.
+  //
+  // 'approval' here means "runs only when a human presses the button", not
+  // "queues a draft for review": enrichment writes data, it never sends
+  // anything, so the only thing worth gating is unattended Reoon credit spend.
+  // Default 'off' — never start spending someone's verification credits on a
+  // backlog they didn't ask you to touch.
+  {
+    name: "0132_enrichment_sweeper.sql",
+    statements: [
+      `ALTER TABLE \`workspace_settings\` ADD COLUMN \`enrichmentSweepMode\` enum('off','approval','auto') NOT NULL DEFAULT 'off'`,
+      "ALTER TABLE `workspace_settings` ADD COLUMN `enrichmentSweepDailyCap` int NOT NULL DEFAULT 50",
+      "ALTER TABLE `workspace_settings` ADD COLUMN `enrichmentSweepLastRunAt` timestamp NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------
