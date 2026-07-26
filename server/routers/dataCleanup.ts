@@ -95,10 +95,16 @@ export const dataCleanupRouter = router({
     .input(z.object({
       dryRun: z.boolean().default(true),
       limit: z.number().int().min(1).max(500).default(50),
+      /** Restrict to specific campaigns. Demo campaigns are excluded regardless. */
+      campaignIds: z.array(z.number().int()).max(50).optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       const { enrichProspectEmails } = await import("../services/apolloEnrich");
-      return enrichProspectEmails(ctx.workspace.id, { dryRun: input.dryRun, limit: input.limit });
+      return enrichProspectEmails(ctx.workspace.id, {
+        dryRun: input.dryRun,
+        limit: input.limit,
+        campaignIds: input.campaignIds,
+      });
     }),
 
   /**

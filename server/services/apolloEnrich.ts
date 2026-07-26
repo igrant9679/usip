@@ -21,7 +21,7 @@
  * would consume before a single one is spent.
  */
 import { and, eq, isNotNull, isNull, ne, or } from "drizzle-orm";
-import { prospectQueue } from "../../drizzle/schema";
+import { areCampaigns, prospectQueue } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { getApolloKey } from "./apollo";
 
@@ -41,6 +41,23 @@ export interface EnrichCandidate {
   lastName: string | null;
   linkedinUrl: string | null;
   companyName: string | null;
+  campaignId: number | null;
+  campaignName: string | null;
+}
+
+/**
+ * Campaigns whose prospects must never be enriched by default.
+ *
+ * Learned the hard way: the first pilot spent 17 credits on prospects that
+ * belong to NO listed campaign (prospect_queue holds 559 rows; the live
+ * campaigns account for 177). Seeded demo campaigns are worse than useless to
+ * enrich — their people are invented, so Apollo either finds nothing or matches
+ * a real stranger who happens to share the name.
+ */
+export function isEnrichableCampaign(name?: string | null): boolean {
+  const n = (name ?? "").trim();
+  if (!n) return false; // orphaned prospect: no campaign, no reason to pay
+  return !/^\[demo\]/i.test(n);
 }
 
 export interface EnrichResult {
@@ -57,6 +74,12 @@ export interface EnrichResult {
   errors: string[];
   creditsSpent: number;
   sample: Array<{ id: number; name: string; outcome: string }>;
+  /**
+   * Where the credits would go, per campaign. The first pilot spent 17 credits
+   * on prospects outside every live campaign precisely because this breakdown
+   * did not exist — a single "eligible: 400" hid which list was being paid for.
+   */
+  byCampaign: Array<{ campaignId: number; campaignName: string; eligible: number }>;
 }
 
 /**
@@ -64,9 +87,14 @@ export interface EnrichResult {
  * Ordered by id so repeated capped runs march through the list predictably
  * rather than re-attempting the same rows.
  */
-export async function findEnrichCandidates(workspaceId: number): Promise<EnrichCandidate[]> {
+export async function findEnrichCandidates(
+  workspaceId: number,
+  opts: { campaignIds?: number[] } = {},
+): Promise<EnrichCandidate[]> {
   const db = await getDb();
   if (!db) return [];
+  // INNER join: a prospect whose campaign row no longer exists is orphaned and
+  // will never be mailed, so it must not be paid for.
   const rows = await db
     .select({
       id: prospectQueue.id,
@@ -74,8 +102,11 @@ export async function findEnrichCandidates(workspaceId: number): Promise<EnrichC
       lastName: prospectQueue.lastName,
       linkedinUrl: prospectQueue.linkedinUrl,
       companyName: prospectQueue.companyName,
+      campaignId: areCampaigns.id,
+      campaignName: areCampaigns.name,
     })
     .from(prospectQueue)
+    .innerJoin(areCampaigns, eq(prospectQueue.campaignId, areCampaigns.id))
     .where(and(
       eq(prospectQueue.workspaceId, workspaceId),
       isNotNull(prospectQueue.linkedinUrl),
@@ -83,7 +114,13 @@ export async function findEnrichCandidates(workspaceId: number): Promise<EnrichC
       or(isNull(prospectQueue.email), eq(prospectQueue.email, "")),
     ))
     .orderBy(prospectQueue.id);
-  return rows.filter((r) => !!(r.linkedinUrl ?? "").trim());
+
+  return rows
+    .filter((r) => !!(r.linkedinUrl ?? "").trim())
+    .filter((r) => (opts.campaignIds?.length ? opts.campaignIds.includes(Number(r.campaignId)) : true))
+    // Demo campaigns are excluded even when explicitly requested — paying to
+    // enrich invented people cannot be the intent.
+    .filter((r) => isEnrichableCampaign(r.campaignName));
 }
 
 /**
@@ -95,13 +132,24 @@ export async function findEnrichCandidates(workspaceId: number): Promise<EnrichC
  */
 export async function enrichProspectEmails(
   workspaceId: number,
-  opts: { dryRun?: boolean; limit?: number } = {},
+  opts: { dryRun?: boolean; limit?: number; campaignIds?: number[] } = {},
 ): Promise<EnrichResult> {
   const dryRun = opts.dryRun !== false;
   const limit = Math.max(1, Math.min(500, opts.limit ?? 50));
 
-  const candidates = await findEnrichCandidates(workspaceId);
+  const candidates = await findEnrichCandidates(workspaceId, { campaignIds: opts.campaignIds });
   const batch = candidates.slice(0, limit);
+
+  const counts = new Map<number, { campaignName: string; eligible: number }>();
+  for (const c of candidates) {
+    const id = Number(c.campaignId);
+    const cur = counts.get(id) ?? { campaignName: String(c.campaignName ?? `campaign ${id}`), eligible: 0 };
+    cur.eligible += 1;
+    counts.set(id, cur);
+  }
+  const byCampaign = [...counts.entries()]
+    .map(([campaignId, v]) => ({ campaignId, campaignName: v.campaignName, eligible: v.eligible }))
+    .sort((a, b) => b.eligible - a.eligible);
   const result: EnrichResult = {
     dryRun,
     eligible: candidates.length,
@@ -113,6 +161,7 @@ export async function enrichProspectEmails(
     errors: [],
     creditsSpent: 0,
     sample: [],
+    byCampaign,
   };
   if (dryRun) return result;
 

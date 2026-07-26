@@ -56,3 +56,40 @@ describe("cost safety", () => {
     expect(codeHits).toEqual([]);
   });
 });
+
+describe("campaign targeting — added after the pilot mis-spent", () => {
+  it("refuses to enrich a prospect with no campaign", async () => {
+    const { isEnrichableCampaign } = await import("./services/apolloEnrich");
+    // The first pilot spent 17 credits on orphaned rows: prospect_queue held
+    // 559 rows while the live campaigns accounted for 177. An orphan will never
+    // be mailed, so it must never be paid for.
+    expect(isEnrichableCampaign(null)).toBe(false);
+    expect(isEnrichableCampaign("")).toBe(false);
+    expect(isEnrichableCampaign("   ")).toBe(false);
+  });
+
+  it("refuses to enrich seeded demo campaigns", async () => {
+    const { isEnrichableCampaign } = await import("./services/apolloEnrich");
+    // Demo people are invented — Apollo either finds nothing or matches a real
+    // stranger who happens to share the name.
+    expect(isEnrichableCampaign("[Demo] Autonomous Outbound — SaaS RevOps")).toBe(false);
+    expect(isEnrichableCampaign("[demo] anything")).toBe(false);
+  });
+
+  it("allows real campaigns", async () => {
+    const { isEnrichableCampaign } = await import("./services/apolloEnrich");
+    expect(isEnrichableCampaign("Nonprofit Community Service")).toBe(true);
+    expect(isEnrichableCampaign("AI Audit - CFO Cost Savings ROI")).toBe(true);
+  });
+
+  it("joins campaigns so orphaned prospects cannot be selected", () => {
+    // An INNER join is what structurally excludes orphans; a left join would
+    // silently reintroduce the bug.
+    expect(SRC).toContain("innerJoin(areCampaigns");
+  });
+
+  it("reports spend per campaign so the target is never invisible", () => {
+    // A single "eligible: 400" is what hid the wrong list the first time.
+    expect(SRC).toContain("byCampaign");
+  });
+});
