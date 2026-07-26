@@ -69,6 +69,8 @@ import PublicForm from "@/pages/PublicForm";
 import BookingPage from "@/pages/BookingPage";
 import LandingPage from "@/pages/LandingPage";
 import LandingPages from "@/pages/usip/LandingPages";
+import ChatPage from "@/pages/ChatPage";
+import ChatAgents from "@/pages/usip/ChatAgents";
 import Team from "@/pages/usip/Team";
 import Territories from "@/pages/usip/Territories";
 import Workflows from "@/pages/usip/Workflows";
@@ -460,7 +462,9 @@ function Router() {
       <Route path="/f/:publicId"><PublicForm /></Route>
       <Route path="/b/:slug"><BookingPage /></Route>
       <Route path="/l/:slug"><LandingPage /></Route>
+      <Route path="/c/:slug"><ChatPage /></Route>
       <Route path="/v2/landing-pages"><AuthGate><LandingPages /></AuthGate></Route>
+      <Route path="/v2/chat"><AuthGate><ChatAgents /></AuthGate></Route>
       <Route path="/v2/saved-people"><AuthGate><SavedRecordsV2 entityType="people" /></AuthGate></Route>
       <Route path="/v2/saved-companies"><AuthGate><SavedRecordsV2 entityType="companies" /></AuthGate></Route>
       <Route path="/v2/deliverability"><AuthGate><Deliverability /></AuthGate></Route>

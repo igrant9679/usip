@@ -1,0 +1,345 @@
+/**
+ * ChatAgents — Admin-only builder for the inbound AI chat agent (/v2/chat).
+ *
+ * Configure the agent's persona and qualifying questions, set its autonomy
+ * (Off / Approve / Auto), publish it, then either share the /c/:slug link or
+ * paste the iframe snippet into a website. The transcripts panel shows what
+ * the agent actually said and what it produced (lead, meeting).
+ *
+ * The mode selector here is the real control; the Autonomy Control Center's
+ * single "Inbound Chat" row is a bulk shortcut over the same field.
+ */
+import { useEffect, useState } from "react";
+import { toast } from "sonner";
+import { Shell, useAccentColor } from "@/components/usip/Shell";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { trpc } from "@/lib/trpc";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Switch } from "@/components/ui/switch";
+import { confirmAction } from "@/components/usip/Common";
+import {
+  MessageSquare, Plus, Trash2, Copy, ExternalLink, Check, Globe, Loader2, Users, CalendarCheck, Code2,
+} from "lucide-react";
+
+const MODES = [
+  { value: "off", label: "Off", blurb: "The widget refuses to serve." },
+  { value: "approval", label: "Approve", blurb: "Chats and captures the lead; a qualified visitor becomes a task for a rep." },
+  { value: "auto", label: "Autonomous", blurb: "Shows your real availability and books the meeting itself." },
+];
+
+export default function ChatAgents() {
+  const accent = useAccentColor();
+  const { current } = useWorkspace();
+  const isAdmin = current?.role === "admin" || current?.role === "super_admin";
+
+  const utils = trpc.useUtils();
+  const list = trpc.chatAgents.list.useQuery(undefined as any, { retry: false, enabled: isAdmin });
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const detail = trpc.chatAgents.get.useQuery({ id: selectedId! }, { enabled: isAdmin && !!selectedId, retry: false });
+  const seqQ = trpc.sequences.list.useQuery(undefined as any, { enabled: isAdmin, retry: false });
+  const sequences = ((seqQ.data as any[]) ?? []).filter((s) => s.status !== "archived");
+  const sessionsQ = trpc.chatAgents.sessions.useQuery({ agentId: selectedId!, limit: 50 } as any, { enabled: isAdmin && !!selectedId, retry: false });
+  const sessions = (sessionsQ.data as any[]) ?? [];
+
+  const create = trpc.chatAgents.create.useMutation({
+    onSuccess: (r: any) => { utils.chatAgents.list.invalidate(); setSelectedId(r.id); toast.success("Chat agent created"); },
+    onError: (e: any) => toast.error(e?.message ?? "Failed"),
+  });
+  const update = trpc.chatAgents.update.useMutation({
+    onSuccess: () => { utils.chatAgents.list.invalidate(); utils.chatAgents.get.invalidate(); toast.success("Saved"); },
+    onError: (e: any) => toast.error(e?.message ?? "Save failed"),
+  });
+  const remove = trpc.chatAgents.remove.useMutation({
+    onSuccess: () => { utils.chatAgents.list.invalidate(); setSelectedId(null); toast.success("Deleted"); },
+    onError: (e: any) => toast.error(e?.message ?? "Failed"),
+  });
+
+  const [form, setForm] = useState<any>(null);
+  const [copied, setCopied] = useState<"url" | "embed" | null>(null);
+  const [openSession, setOpenSession] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (detail.data) setForm({ ...detail.data, qualifyingQuestions: detail.data.qualifyingQuestions ?? [] });
+  }, [detail.data]);
+
+  const agents = (list.data as any[]) ?? [];
+  const publicUrl = form?.slug ? `${window.location.origin}/c/${form.slug}` : "";
+  const embedCode = publicUrl
+    ? `<iframe src="${publicUrl}" title="Chat" style="position:fixed;bottom:20px;right:20px;width:380px;height:560px;border:0;border-radius:16px;box-shadow:0 8px 40px rgba(0,0,0,.18);z-index:2147483000"></iframe>`
+    : "";
+  const patch = (k: string, v: any) => setForm((f: any) => ({ ...f, [k]: v }));
+
+  const copy = (text: string, which: "url" | "embed") => {
+    navigator.clipboard?.writeText(text);
+    setCopied(which);
+    setTimeout(() => setCopied(null), 1500);
+  };
+
+  const save = () => {
+    if (!form) return;
+    update.mutate({
+      id: form.id,
+      name: form.name, displayName: form.displayName, greeting: form.greeting,
+      persona: form.persona, themeColor: form.themeColor,
+      qualifyingQuestions: (form.qualifyingQuestions as string[]).filter(Boolean),
+      qualifyThreshold: form.qualifyThreshold,
+      autoCreateLead: form.autoCreateLead, autoRoute: form.autoRoute,
+      autoEnrollSequenceId: form.autoEnrollSequenceId ?? null,
+    } as any);
+  };
+
+  /** Mode and publish state are one-click toggles — save immediately. */
+  const setField = (k: string, v: any) => {
+    patch(k, v);
+    if (form?.id) update.mutate({ id: form.id, [k]: v } as any);
+  };
+
+  if (!isAdmin) {
+    return (
+      <Shell title="Chat">
+        <div className="h-full flex items-center justify-center p-6 text-center">
+          <div>
+            <MessageSquare className="size-8 mx-auto text-muted-foreground opacity-50 mb-3" />
+            <div className="text-sm font-semibold">Admins only</div>
+            <p className="text-sm text-muted-foreground mt-1">Chat agent configuration is restricted to workspace admins.</p>
+          </div>
+        </div>
+      </Shell>
+    );
+  }
+
+  return (
+    <Shell title="Chat">
+      <div className="flex h-full min-h-0">
+        {/* List */}
+        <aside className="w-72 shrink-0 border-r border-border flex flex-col bg-card/40">
+          <div className="h-11 shrink-0 flex items-center gap-2 px-3 border-b border-border">
+            <MessageSquare className="size-4" style={{ color: accent }} />
+            <span className="text-sm font-semibold">Chat agents</span>
+            <div className="flex-1" />
+            <Button size="sm" className="h-7 gap-1 text-white" style={{ backgroundColor: accent }}
+              disabled={create.isPending} onClick={() => create.mutate({ name: "Website chat" } as any)}>
+              <Plus className="size-3.5" /> New
+            </Button>
+          </div>
+          <div className="flex-1 min-h-0 overflow-auto p-2 space-y-1">
+            {agents.length === 0 ? (
+              <p className="text-xs text-muted-foreground p-3">No chat agents yet. Click <b>New</b> to create one — it captures meetings from your website without sending a single email.</p>
+            ) : agents.map((a) => (
+              <button key={a.id} onClick={() => setSelectedId(a.id)}
+                className={`w-full text-left rounded-lg px-3 py-2 border transition-colors ${selectedId === a.id ? "border-primary bg-primary/5" : "border-transparent hover:bg-muted"}`}>
+                <div className="flex items-center gap-2">
+                  <span className="text-[13px] font-medium truncate flex-1">{a.name}</span>
+                  <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-medium ${a.status === "published" ? "bg-emerald-100 text-emerald-700" : "bg-muted text-muted-foreground"}`}>{a.status}</span>
+                </div>
+                <div className="text-[11px] text-muted-foreground mt-0.5 flex items-center gap-2">
+                  <span className="inline-flex items-center gap-0.5"><MessageSquare className="size-3" /> {a.sessionCount}</span>
+                  <span className="inline-flex items-center gap-0.5"><Users className="size-3" /> {a.leadCount}</span>
+                  <span className="inline-flex items-center gap-0.5"><CalendarCheck className="size-3" /> {a.meetingCount}</span>
+                  <span className="ml-auto">{a.mode === "auto" ? "Autonomous" : a.mode === "approval" ? "Approve" : "Off"}</span>
+                </div>
+              </button>
+            ))}
+          </div>
+        </aside>
+
+        {/* Editor */}
+        <div className="flex-1 min-w-0 overflow-auto">
+          {!form ? (
+            <div className="h-full flex items-center justify-center text-sm text-muted-foreground">
+              {selectedId ? <Loader2 className="size-5 animate-spin" /> : "Select an agent, or create a new one."}
+            </div>
+          ) : (
+            <div className="max-w-2xl mx-auto p-6 space-y-6">
+              <div className="flex items-center gap-2">
+                <Input value={form.name} onChange={(e) => patch("name", e.target.value)} className="h-9 text-base font-semibold flex-1" />
+                {form.status === "published" ? (
+                  <Button variant="outline" size="sm" className="h-8" onClick={() => setField("status", "draft")}>Unpublish</Button>
+                ) : (
+                  <Button size="sm" className="h-8 gap-1 text-white" style={{ backgroundColor: accent }} onClick={() => setField("status", "published")}><Globe className="size-3.5" /> Publish</Button>
+                )}
+                <Button size="sm" className="h-8" disabled={update.isPending} onClick={save}>Save</Button>
+              </div>
+
+              {/* Autonomy — the thing that decides whether it books */}
+              <Section title="Autonomy">
+                <div className="grid gap-2">
+                  {MODES.map((m) => (
+                    <button key={m.value} type="button" onClick={() => setField("mode", m.value)}
+                      className={`text-left rounded-lg border p-3 transition-colors ${form.mode === m.value ? "border-primary bg-primary/5" : "hover:bg-muted"}`}>
+                      <div className="text-[13px] font-semibold">{m.label}</div>
+                      <div className="text-[12px] text-muted-foreground mt-0.5">{m.blurb}</div>
+                    </button>
+                  ))}
+                </div>
+                {form.mode === "auto" && form.status === "published" && (
+                  <p className="text-[11px] text-muted-foreground">
+                    Qualified visitors will see your real open slots and book them. Make sure your booking link at <b>/b/…</b> has the working hours you want.
+                  </p>
+                )}
+              </Section>
+
+              {/* Share */}
+              <Section title="Install">
+                <div className="rounded-lg border bg-card p-3 flex items-center gap-2">
+                  <Globe className="size-4 shrink-0" style={{ color: accent }} />
+                  <code className="text-[12px] truncate flex-1">{publicUrl}</code>
+                  <Button variant="outline" size="sm" className="h-7 gap-1 shrink-0" onClick={() => copy(publicUrl, "url")}>
+                    {copied === "url" ? <><Check className="size-3.5" /> Copied</> : <><Copy className="size-3.5" /> Copy</>}
+                  </Button>
+                  <Button variant="ghost" size="sm" className="h-7 gap-1 shrink-0" disabled={form.status !== "published"} onClick={() => window.open(publicUrl, "_blank")}><ExternalLink className="size-3.5" /> Open</Button>
+                </div>
+                <Field label="Embed on your website">
+                  <div className="rounded-lg border bg-muted/40 p-3 space-y-2">
+                    <code className="block text-[11px] leading-relaxed break-all text-muted-foreground">{embedCode}</code>
+                    <Button variant="outline" size="sm" className="h-7 gap-1" onClick={() => copy(embedCode, "embed")}>
+                      {copied === "embed" ? <><Check className="size-3.5" /> Copied</> : <><Code2 className="size-3.5" /> Copy snippet</>}
+                    </Button>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground">Paste before <code>&lt;/body&gt;</code> on any page. The agent hides its own header when embedded.</p>
+                </Field>
+              </Section>
+
+              {/* Persona */}
+              <Section title="Persona">
+                <Field label="Agent name (shown to visitors)"><Input value={form.displayName ?? ""} onChange={(e) => patch("displayName", e.target.value)} /></Field>
+                <Field label="Opening message"><Textarea rows={2} value={form.greeting ?? ""} onChange={(e) => patch("greeting", e.target.value)} /></Field>
+                <Field label="Extra instructions (optional)">
+                  <Textarea rows={4} value={form.persona ?? ""} onChange={(e) => patch("persona", e.target.value)}
+                    placeholder="e.g. We only work with nonprofits over 50 staff. Never quote prices — say pricing depends on scope." />
+                  <p className="text-[11px] text-muted-foreground">Layered on top of your brand voice and company profile, which the agent already knows.</p>
+                </Field>
+                <Field label="Accent color">
+                  <div className="flex items-center gap-2">
+                    <input type="color" value={form.themeColor ?? "#14B89A"} onChange={(e) => patch("themeColor", e.target.value)} className="h-9 w-14 rounded border" />
+                    <Input value={form.themeColor ?? ""} onChange={(e) => patch("themeColor", e.target.value)} className="w-32" />
+                  </div>
+                </Field>
+              </Section>
+
+              {/* Qualification */}
+              <Section title="Qualification">
+                <Field label="Questions the agent should work in">
+                  <div className="space-y-2">
+                    {(form.qualifyingQuestions as string[]).map((q, i) => (
+                      <div key={i} className="flex items-center gap-2">
+                        <Input value={q} onChange={(e) => { const n = [...form.qualifyingQuestions]; n[i] = e.target.value; patch("qualifyingQuestions", n); }} />
+                        <Button variant="ghost" size="icon" className="size-8 shrink-0 text-muted-foreground"
+                          onClick={() => patch("qualifyingQuestions", form.qualifyingQuestions.filter((_: string, j: number) => j !== i))}>
+                          <Trash2 className="size-4" />
+                        </Button>
+                      </div>
+                    ))}
+                    {(form.qualifyingQuestions as string[]).length < 8 && (
+                      <Button variant="outline" size="sm" className="gap-1" onClick={() => patch("qualifyingQuestions", [...form.qualifyingQuestions, ""])}><Plus className="size-3.5" /> Add question</Button>
+                    )}
+                  </div>
+                </Field>
+                <Field label={`Qualified at score ${form.qualifyThreshold ?? 60} and above`}>
+                  <input type="range" min={0} max={100} step={5} value={form.qualifyThreshold ?? 60}
+                    onChange={(e) => patch("qualifyThreshold", Number(e.target.value))} className="w-full" />
+                  <p className="text-[11px] text-muted-foreground">Lower captures more meetings and more noise. A visitor who explicitly asks for a meeting is offered one from 40 regardless.</p>
+                </Field>
+              </Section>
+
+              {/* Outcomes */}
+              <Section title="What happens to a visitor">
+                <div className="flex items-center justify-between">
+                  <Label className="text-sm">Create a lead once we have an email</Label>
+                  <Switch checked={!!form.autoCreateLead} onCheckedChange={(v) => patch("autoCreateLead", v)} />
+                </div>
+                <div className="flex items-center justify-between">
+                  <Label className="text-sm">Auto-route to an owner</Label>
+                  <Switch checked={!!form.autoRoute} onCheckedChange={(v) => patch("autoRoute", v)} />
+                </div>
+                <Field label="Auto-enroll captured leads into a sequence">
+                  <select className="h-9 w-full rounded-md border bg-background px-2 text-sm"
+                    value={form.autoEnrollSequenceId ?? ""}
+                    onChange={(e) => patch("autoEnrollSequenceId", e.target.value ? Number(e.target.value) : null)}>
+                    <option value="">None — capture only</option>
+                    {sequences.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                  </select>
+                </Field>
+              </Section>
+
+              {/* Transcripts */}
+              <Section title={`Conversations${sessions.length ? ` (${sessions.length})` : ""}`}>
+                {sessionsQ.isLoading ? (
+                  <p className="text-xs text-muted-foreground">Loading…</p>
+                ) : sessions.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">No conversations yet. Publish the agent and install it to start capturing.</p>
+                ) : (
+                  <div className="rounded-lg border divide-y divide-border/60">
+                    {sessions.map((s) => {
+                      const msgs = Array.isArray(s.messages) ? (s.messages as Array<{ role: string; text: string }>) : [];
+                      const open = openSession === s.id;
+                      return (
+                        <div key={s.id}>
+                          <button className="w-full text-left px-3 py-2 hover:bg-muted/50" onClick={() => setOpenSession(open ? null : s.id)}>
+                            <div className="flex items-center gap-2 text-[13px]">
+                              <span className="font-medium truncate">{s.visitorName || s.visitorEmail || "Anonymous visitor"}</span>
+                              {s.visitorCompany && <span className="text-muted-foreground truncate hidden sm:inline">· {s.visitorCompany}</span>}
+                              <span className="flex-1" />
+                              {s.meetingId ? (
+                                <span className="text-[9px] px-1.5 py-0.5 rounded-full font-medium bg-emerald-100 text-emerald-700">booked</span>
+                              ) : s.status === "qualified" ? (
+                                <span className="text-[9px] px-1.5 py-0.5 rounded-full font-medium bg-amber-100 text-amber-700">qualified</span>
+                              ) : null}
+                              <span className="text-[11px] text-muted-foreground shrink-0">{s.score}</span>
+                            </div>
+                            {s.aiSummary && <p className="text-[11px] text-muted-foreground mt-0.5 truncate">{s.aiSummary}</p>}
+                          </button>
+                          {open && (
+                            <div className="px-3 pb-3 space-y-1.5 bg-muted/20">
+                              {msgs.map((m, i) => (
+                                <div key={i} className="text-[12px]">
+                                  <span className="font-medium">{m.role === "visitor" ? "Visitor" : form.displayName}:</span>{" "}
+                                  <span className="text-muted-foreground">{m.text}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </Section>
+
+              <div className="flex items-center justify-between pt-2 border-t">
+                <Button variant="ghost" size="sm" className="text-rose-600 gap-1"
+                  onClick={() => confirmAction(
+                    { title: "Delete this chat agent?", description: "The agent, its public URL and all of its conversation transcripts will be permanently deleted. Leads and meetings it created are kept.", confirmLabel: "Delete" },
+                    () => { remove.mutate({ id: form.id }); },
+                  )}>
+                  <Trash2 className="size-4" /> Delete agent
+                </Button>
+                <Button size="sm" disabled={update.isPending} onClick={save} style={{ backgroundColor: accent }} className="text-white">Save changes</Button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </Shell>
+  );
+}
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="space-y-3">
+      <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{title}</h3>
+      {children}
+    </div>
+  );
+}
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="space-y-1.5">
+      <Label className="text-[13px]">{label}</Label>
+      {children}
+    </div>
+  );
+}

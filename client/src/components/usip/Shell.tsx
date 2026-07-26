@@ -391,6 +391,7 @@ const SECTIONS: NavSection[] = [
       { href: "/v2/website-visitors", label: "Website visitors", icon: Globe },
       { href: "/v2/forms", label: "Forms", icon: FileText },
       { href: "/v2/landing-pages", label: "Landing Pages", icon: LayoutTemplate, adminOnly: true },
+      { href: "/v2/chat", label: "Chat", icon: MessageSquare, adminOnly: true },
     ],
   },
   {
