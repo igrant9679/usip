@@ -150,6 +150,46 @@ async function queueCandidatesFor(workspaceId: number, limit: number, retryFaile
 }
 
 /**
+ * Why the candidate count is what it is.
+ *
+ * "0 waiting" has several very different causes — nothing left to do, everything
+ * already attempted, or (the one that actually bites) prospects sourced without
+ * a company domain, which the free finder cannot work from. Reporting the bare
+ * count hides that distinction and invites the wrong conclusion, which is how
+ * this feature shipped pointed at an empty table in the first place.
+ */
+export async function queueDiagnostics(workspaceId: number): Promise<{
+  noEmailTotal: number;
+  withDomain: number;
+  /** No email AND no domain — needs domain resolution before it can be worked. */
+  needsDomain: number;
+  alreadyAttempted: number;
+}> {
+  const db = await getDb();
+  if (!db) return { noEmailTotal: 0, withDomain: 0, needsDomain: 0, alreadyAttempted: 0 };
+  const rows = await db
+    .select({
+      domain: prospectQueue.companyDomain,
+      enrichedAt: prospectQueue.enrichedAt,
+      campaignName: areCampaigns.name,
+    })
+    .from(prospectQueue)
+    .innerJoin(areCampaigns, eq(prospectQueue.campaignId, areCampaigns.id))
+    .where(and(
+      eq(prospectQueue.workspaceId, workspaceId),
+      or(isNull(prospectQueue.email), eq(prospectQueue.email, "")),
+    ));
+  const live = rows.filter((r) => isEnrichableCampaign(r.campaignName));
+  const hasDomain = (d: string | null) => !!(d ?? "").trim();
+  return {
+    noEmailTotal: live.length,
+    withDomain: live.filter((r) => hasDomain(r.domain)).length,
+    needsDomain: live.filter((r) => !hasDomain(r.domain)).length,
+    alreadyAttempted: live.filter((r) => !!r.enrichedAt).length,
+  };
+}
+
+/**
  * How many candidates are waiting, for the UI to show before anyone spends.
  * Counts BOTH tables — reporting only `prospects` is what made the first
  * version of this report a confident zero on a workspace with a real backlog.

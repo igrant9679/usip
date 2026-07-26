@@ -981,10 +981,11 @@ export const prospectsRouter = router({
       .from(workspaceSettings)
       .where(eq(workspaceSettings.workspaceId, ctx.workspace.id))
       .limit(1);
-    const [{ countCandidates }, key] = await Promise.all([
+    const [mod, key] = await Promise.all([
       import("../services/enrichmentSweeper"),
       getReoonKey(ctx.workspace.id),
     ]);
+    const { countCandidates, queueDiagnostics } = mod;
     return {
       mode: (s?.mode ?? "off") as "off" | "approval" | "auto",
       dailyCap: s?.dailyCap ?? 50,
@@ -993,6 +994,8 @@ export const prospectsRouter = router({
       /** Retryable = already attempted; surfaced separately so "0 waiting" is unambiguous. */
       attemptedAlready: Math.max(0, (await countCandidates(ctx.workspace.id, true)) - (await countCandidates(ctx.workspace.id))),
       reoonConfigured: key.length > 0,
+      /** Why the count is what it is — see queueDiagnostics. */
+      queue: await queueDiagnostics(ctx.workspace.id),
     };
   }),
 
