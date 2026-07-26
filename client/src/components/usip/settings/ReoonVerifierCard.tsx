@@ -158,7 +158,7 @@ export function ReoonVerifierCard({
   if (variant === "bare") return <div className="space-y-4">{body}</div>;
 
   return (
-    <section className="rounded-xl border border-border/70 bg-card p-5 shadow-sm space-y-4">
+    <section data-tour-id="reoon-key-card" className="rounded-xl border border-border/70 bg-card p-5 shadow-sm space-y-4">
       <div className="flex items-start gap-2.5">
         <MailCheck className="size-4 mt-0.5 shrink-0 text-cyan-500" />
         <div>

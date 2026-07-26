@@ -102,6 +102,8 @@ const ROUTE_PAGE_KEYS: Array<[string, string]> = [
   ["/ai-pipeline", "ai-pipeline"],
   ["/email-drafts", "email-drafts"],
   ["/connected-accounts", "connected-accounts"],
+  ["/v2/chat", "chat"],
+  ["/v2/settings/data-sources", "data-sources"],
   ["/v2/workflows", "workflows"],
   ["/workflows", "workflows"],
   ["/are", "are"],

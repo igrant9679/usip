@@ -177,12 +177,12 @@ export default function WorkflowsV2() {
               <div className="text-sm font-medium">Autonomous operation</div>
               <div className="text-[12px] text-muted-foreground">Turn on the autopilots to run the pipeline — prospect → task → reply → meeting → deal — with limited or no manual work. Set each to <b>Approve</b> to review first, or <b>Autonomous</b> to run hands-off.</div>
             </div>
-            <Button size="sm" className="shrink-0 gap-1.5" onClick={turnOnFullAutonomy}><Rocket className="size-3.5" /> Turn on full autonomy</Button>
+            <Button data-tour-id="autonomy-turn-on-all" size="sm" className="shrink-0 gap-1.5" onClick={turnOnFullAutonomy}><Rocket className="size-3.5" /> Turn on full autonomy</Button>
           </div>
 
           {/* Autopilots */}
           <Section icon={Bot} title="Autopilots">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div data-tour-id="autonomy-autopilots" className="grid grid-cols-1 md:grid-cols-2 gap-3">
               {autopilots.map((a) => (
                 <div key={a.key} className="rounded-xl border bg-card p-3 shadow-sm flex items-center gap-3">
                   <span className="shrink-0 size-9 rounded-full flex items-center justify-center" style={{ backgroundColor: a.mode === "off" ? "hsl(var(--muted))" : "#7c3aed1f", color: a.mode === "off" ? undefined : "#7c3aed" }}>

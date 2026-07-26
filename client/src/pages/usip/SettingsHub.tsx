@@ -223,7 +223,7 @@ export default function SettingsHub() {
         {section === "branding" && <BrandingSection />}
         {section === "social-accounts" && <SocialAccountsSection />}
         {section === "data-sources" && (
-          <div className="space-y-4">
+          <div className="space-y-4" data-tour-id="settings-data-sources">
             <ApolloSourceCard />
             <ReoonVerifierCard />
           </div>

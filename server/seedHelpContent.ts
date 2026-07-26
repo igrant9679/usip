@@ -517,6 +517,56 @@ type TourSeed = {
 };
 
 const TOURS: TourSeed[] = [
+  // ── Tours for the surfaces added after the original 10 ──────────────────
+  // Every targetDataTourId below has a matching data-tour-id in the page it
+  // points at. A step whose target does not resolve spotlights nothing and the
+  // tour silently degrades, so anchors and steps must land in the same commit.
+  {
+    name: "Your Website Chat Agent",
+    description: "Turn website visitors into booked meetings without sending anything.",
+    type: "feature",
+    estimatedMinutes: 3,
+    pageKey: "chat",
+    route: "/v2/chat",
+    roleTags: ["sdr", "admin"],
+    steps: [
+      { title: "Meetings with no outbound", bodyMarkdown: "This is the one meeting source that sends nothing at all. A visitor lands on your site, the agent qualifies them, and books straight onto your calendar — no email volume, no deliverability risk, no enrichment credits.", routeTo: "/v2/chat", visualTreatment: "coach", advanceCondition: "next_button" },
+      { title: "Your agents", bodyMarkdown: "Each agent is a separate widget with its own persona and autonomy. The counters show conversations, leads captured, and meetings booked. Click **New** to create one.", targetDataTourId: "chat-agent-list", visualTreatment: "spotlight", advanceCondition: "next_button" },
+      { title: "Decide how far it goes", bodyMarkdown: "**Off** — the widget refuses to serve. **Approve** — it chats and captures the lead, but a qualified visitor becomes a task for a human. **Autonomous** — it shows your real open calendar slots and books the meeting itself. Start on Approve and read a few transcripts before going autonomous.", targetDataTourId: "chat-autonomy", visualTreatment: "spotlight", advanceCondition: "next_button" },
+      { title: "Teach it who is a fit", bodyMarkdown: "Your qualifying questions get worked into the conversation naturally — one at a time, never as an interrogation. The threshold is the score at which a visitor counts as qualified. Someone who explicitly asks for a meeting is offered one from 40 regardless.", targetDataTourId: "chat-qualification", visualTreatment: "spotlight", advanceCondition: "next_button" },
+      { title: "Put it on your site", bodyMarkdown: "Share the link directly, or paste the iframe snippet at the end of any page. The agent hides its own header when embedded, so the same URL works as both.", targetDataTourId: "chat-install", visualTreatment: "spotlight", advanceCondition: "next_button" },
+      { title: "Read what it actually said", bodyMarkdown: "Every conversation is kept in full, with the fit score and what it produced — a lead, a booked meeting, or neither. Read these before trusting it unattended.", visualTreatment: "coach", advanceCondition: "next_button" },
+    ],
+  },
+  {
+    name: "Turn On Email Finding",
+    description: "Connect the verifier that turns a name into a sendable address.",
+    type: "onboarding",
+    estimatedMinutes: 2,
+    pageKey: "data-sources",
+    route: "/v2/settings/data-sources",
+    roleTags: ["admin"],
+    steps: [
+      { title: "Two halves of one pipeline", bodyMarkdown: "Apollo hands over the name, title, company and **company domain** for free. Velocity then scrapes that company site, works out the most likely address patterns, and asks Reoon which one is real. Neither half finds an email on its own.", routeTo: "/v2/settings/data-sources", visualTreatment: "coach", advanceCondition: "next_button" },
+      { title: "The verifier key", bodyMarkdown: "Paste your Reoon key here and hit **Test & check credits** — it reports your remaining balance, so you know whether a run will resolve anything before you start one. Without a key the finder still collects phones and social links, but every email lookup stops and no address is resolved.", targetDataTourId: "reoon-key-card", visualTreatment: "spotlight", advanceCondition: "next_button" },
+      { title: "Keys are per workspace", bodyMarkdown: "These credentials belong to this workspace only. A new workspace starts with none — which is the point when you run one per client.", targetDataTourId: "settings-data-sources", visualTreatment: "pulse", advanceCondition: "next_button" },
+    ],
+  },
+  {
+    name: "The Autonomy Control Center",
+    description: "One screen for every engine that runs without you.",
+    type: "onboarding",
+    estimatedMinutes: 3,
+    pageKey: "workflows",
+    route: "/v2/workflows",
+    roleTags: ["sdr", "admin"],
+    steps: [
+      { title: "Everything autonomous, in one place", bodyMarkdown: "Each engine here runs on its own. This screen is where you decide how much rope each one gets.", routeTo: "/v2/workflows", visualTreatment: "coach", advanceCondition: "next_button" },
+      { title: "Off, Approve, Autonomous", bodyMarkdown: "Every engine takes the same three settings. **Off** does nothing. **Approve** does the work but leaves the last step to a human. **Autonomous** runs hands-off. The honest way to adopt these is Approve first — watch what each one proposes for a few days, then promote the ones you agree with.", targetDataTourId: "autonomy-autopilots", visualTreatment: "spotlight", advanceCondition: "next_button" },
+      { title: "Enrichment Sweep is different", bodyMarkdown: "Most engines send or act on your behalf. This one only fills in missing data, so **Approve** means it runs when you press the button, rather than queuing a draft for review. The only thing being gated is unattended credit spend.", targetDataTourId: "autonomy-autopilots", visualTreatment: "pulse", advanceCondition: "next_button" },
+      { title: "Or turn the whole stack on", bodyMarkdown: "This sets every engine to **Approve** at once — the safe setting. Nothing goes out without you seeing it first.", targetDataTourId: "autonomy-turn-on-all", visualTreatment: "arrow", advanceCondition: "next_button" },
+    ],
+  },
   {
     name: "Getting Started",
     description: "Quick 3-minute tour of where you'll work each day.",

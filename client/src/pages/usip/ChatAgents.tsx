@@ -115,7 +115,7 @@ export default function ChatAgents() {
     <Shell title="Chat">
       <div className="flex h-full min-h-0">
         {/* List */}
-        <aside className="w-72 shrink-0 border-r border-border flex flex-col bg-card/40">
+        <aside data-tour-id="chat-agent-list" className="w-72 shrink-0 border-r border-border flex flex-col bg-card/40">
           <div className="h-11 shrink-0 flex items-center gap-2 px-3 border-b border-border">
             <MessageSquare className="size-4" style={{ color: accent }} />
             <span className="text-sm font-semibold">Chat agents</span>
@@ -165,7 +165,7 @@ export default function ChatAgents() {
               </div>
 
               {/* Autonomy — the thing that decides whether it books */}
-              <Section title="Autonomy">
+              <Section title="Autonomy" tourId="chat-autonomy">
                 <div className="grid gap-2">
                   {MODES.map((m) => (
                     <button key={m.value} type="button" onClick={() => setField("mode", m.value)}
@@ -183,7 +183,7 @@ export default function ChatAgents() {
               </Section>
 
               {/* Share */}
-              <Section title="Install">
+              <Section title="Install" tourId="chat-install">
                 <div className="rounded-lg border bg-card p-3 flex items-center gap-2">
                   <Globe className="size-4 shrink-0" style={{ color: accent }} />
                   <code className="text-[12px] truncate flex-1">{publicUrl}</code>
@@ -221,7 +221,7 @@ export default function ChatAgents() {
               </Section>
 
               {/* Qualification */}
-              <Section title="Qualification">
+              <Section title="Qualification" tourId="chat-qualification">
                 <Field label="Questions the agent should work in">
                   <div className="space-y-2">
                     {(form.qualifyingQuestions as string[]).map((q, i) => (
@@ -327,9 +327,9 @@ export default function ChatAgents() {
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Section({ title, children, tourId }: { title: string; children: React.ReactNode; tourId?: string }) {
   return (
-    <div className="space-y-3">
+    <div className="space-y-3" data-tour-id={tourId}>
       <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{title}</h3>
       {children}
     </div>
