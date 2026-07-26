@@ -14,6 +14,12 @@
  * path here that hits /people/match, and no parameter that asks for a phone
  * number — credit spend is structurally impossible, not merely toggled off.
  *
+ * The paid enrichment path DOES now exist, but deliberately in a separate
+ * module: services/apolloEnrich.ts (admin-only, dry-run by default, targets
+ * prospects by LinkedIn URL). It was kept out of this file so the guarantee
+ * above stays literally true for anyone reading or editing here. If you are
+ * about to add a paid call below — don't; add it there.
+ *
  * The company DOMAIN is the whole point. LinkedIn people-search gave us names
  * with no domain, so the existing Reoon-backed `resolveVerifiedEmail()` had
  * nothing to work with. Apollo hands us the domain for free, which is exactly

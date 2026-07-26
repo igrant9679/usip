@@ -81,6 +81,27 @@ export function companyFromUrl(url?: string | null): string | null {
 
 export const dataCleanupRouter = router({
   /**
+   * Apollo People Enrichment for prospect emails. THIS SPENDS APOLLO CREDITS.
+   *
+   * dryRun defaults TRUE and makes no network call — it reports the addressable
+   * set and the worst-case credit cost so spend is always knowable in advance.
+   * Admin-only, and capped per run.
+   *
+   * Targets prospects with a LinkedIn URL (Apollo's strongest match key) rather
+   * than the 1,520 contacts, which have no email, no LinkedIn URL and only a
+   * lowercase company slug — ~10x the credits for a far worse hit rate.
+   */
+  enrichProspectEmails: adminWsProcedure
+    .input(z.object({
+      dryRun: z.boolean().default(true),
+      limit: z.number().int().min(1).max(500).default(50),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const { enrichProspectEmails } = await import("../services/apolloEnrich");
+      return enrichProspectEmails(ctx.workspace.id, { dryRun: input.dryRun, limit: input.limit });
+    }),
+
+  /**
    * Repair contacts. Defaults to a DRY RUN — pass dryRun:false to write.
    *
    * Sources, in priority order:
