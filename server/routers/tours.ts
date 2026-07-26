@@ -4,7 +4,7 @@
  * achievements, recommendations, and tour analytics.
  */
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, ne, sql, notInArray } from "drizzle-orm";
 import { z } from "zod";
 import {
   tourAchievements,
@@ -326,8 +326,13 @@ export const toursRouter = router({
         eq(tours.workspaceId, ctx.workspace.id),
         eq(tours.status, "published"),
       ];
+      // Exclude EVERY completed/skipped tour, not just the first. The old
+      // "simplified exclusion" only dropped doneIds[0], so a user who had
+      // finished several tours kept being recommended the rest of them —
+      // harmless when this was only read by the Help Center, but Elsie offers
+      // the result unprompted, where re-offering a finished tour is nagging.
       if (doneIds.length > 0) {
-        conditions.push(ne(tours.id, doneIds[0])); // simplified exclusion
+        conditions.push(notInArray(tours.id, doneIds));
       }
       if (input.pageKey) conditions.push(eq(tours.pageKey, input.pageKey));
 

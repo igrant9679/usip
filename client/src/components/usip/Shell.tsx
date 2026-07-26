@@ -68,6 +68,7 @@ import {
   Loader2,
 } from "lucide-react";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { ElsieToggle } from "@/components/usip/Elsie";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
@@ -864,6 +865,8 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
 
           {title && <div className="hidden sm:block text-sm text-muted-foreground truncate">/ {title}</div>}
           <div className="flex-1" />
+
+          <ElsieToggle />
 
           <div className="hidden md:flex items-center gap-2 px-2.5 py-1.5 rounded-md bg-secondary text-sm w-72">
             <Search className="size-4 text-muted-foreground" />

@@ -112,6 +112,7 @@ import TourBuilder from "@/pages/usip/TourBuilder";
 import Mindmaps from "@/pages/usip/Mindmaps";
 import MindmapCanvas from "@/pages/usip/MindmapCanvas";
 import { TourEngineProvider } from "@/components/usip/TourEngine";
+import { ElsieController } from "@/components/usip/Elsie";
 import { Loader2, Eye, EyeOff, LogIn } from "lucide-react";
 import { Route, Switch, useLocation } from "wouter";
 import { useEffect, useState } from "react";
@@ -491,6 +492,8 @@ function App() {
             <ConfirmProvider>
               <Toaster />
               <Router />
+              {/* Inside TourEngineProvider — Elsie hands tours to it. */}
+              <ElsieController />
             </ConfirmProvider>
           </TourEngineProvider>
         </TooltipProvider>

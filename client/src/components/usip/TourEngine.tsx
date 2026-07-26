@@ -7,7 +7,9 @@
  *  - Floating tooltip card with title, body, progress bar, prev/next/skip
  *  - Confetti burst on tour completion
  *  - Achievement toast on completion
- *  - Proactive trigger: shows a "Start tour?" nudge when user first visits a page
+ *  - Proactive offering is NOT done here: TourEngine only runs a tour it is
+ *    handed. Deciding when to offer one belongs to Elsie (components/usip/Elsie),
+ *    which is what the user can turn on and off.
  *  - Supports advance conditions: next_button, element_clicked, route_changed
  *  - Route navigation: each step declares routeTo to navigate before spotlighting
  */
