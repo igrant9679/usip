@@ -109,7 +109,7 @@ export default function LandingPages() {
 
   return (
     <Shell title="Landing Pages">
-      <div className="flex h-full min-h-0">
+      <div data-tour-id="landing-pages-list" className="flex h-full min-h-0">
         {/* List */}
         <aside className="w-72 shrink-0 border-r border-border flex flex-col bg-card/40">
           <div className="h-11 shrink-0 flex items-center gap-2 px-3 border-b border-border">

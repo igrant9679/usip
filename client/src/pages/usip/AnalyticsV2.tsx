@@ -91,7 +91,7 @@ export default function AnalyticsV2() {
 
   return (
     <Shell title="Analytics">
-      <div className="flex flex-col h-full min-h-0">
+      <div data-tour-id="analytics-overview" className="flex flex-col h-full min-h-0">
         <div className="relative shrink-0 flex items-center gap-2 px-4 h-11 border-b border-border bg-card/40">
           <span aria-hidden className="absolute inset-x-0 top-0 h-0.5" style={{ backgroundColor: accent }} />
           <BarChart3 className="size-4" style={{ color: accent }} />

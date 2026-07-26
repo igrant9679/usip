@@ -655,7 +655,7 @@ export default function People() {
 
   return (
     <Shell title="People">
-      <div className="flex flex-col h-full min-h-0" style={{ ["--people-accent" as any]: accent }}>
+      <div data-tour-id="people-table" className="flex flex-col h-full min-h-0" style={{ ["--people-accent" as any]: accent }}>
         {/* Compact title row */}
         <div className="relative shrink-0 flex items-center gap-2 px-4 h-11 border-b border-border bg-card/40">
           <span aria-hidden className="absolute inset-x-0 top-0 h-0.5" style={{ backgroundColor: accent }} />
