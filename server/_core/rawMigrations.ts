@@ -2743,6 +2743,78 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0130: inbound AI chat agent ───────────────────────────────────────────
+  // Apollo "Chat" parity: an AI agent on a public page (/c/:slug, embeddable
+  // as an iframe) that qualifies visitors, captures a routed lead, and in
+  // `auto` mode books a real meeting through the same path as /b/:slug.
+  //
+  // Every other meeting source in the product depends on outbound sending.
+  // This one does not, which is the point: it produces booked meetings with
+  // zero send volume, zero deliverability exposure and zero credit spend.
+  //
+  // Transcript lives in a json column on the session rather than a messages
+  // table — a conversation is only ever read whole, and the alternative adds
+  // a join to every public turn for no query we actually make.
+  //
+  // `token` is the visitor's ONLY credential: it is the unique key, it is
+  // generated server-side, and no public procedure accepts a session id.
+  {
+    name: "0130_chat_agents.sql",
+    statements: [
+      `CREATE TABLE IF NOT EXISTS \`chat_agents\` (
+        \`id\` int NOT NULL AUTO_INCREMENT,
+        \`workspaceId\` int NOT NULL,
+        \`slug\` varchar(80) NOT NULL,
+        \`name\` varchar(160) NOT NULL,
+        \`status\` enum('draft','published') NOT NULL DEFAULT 'draft',
+        \`mode\` enum('off','approval','auto') NOT NULL DEFAULT 'off',
+        \`displayName\` varchar(120) NOT NULL DEFAULT 'Assistant',
+        \`greeting\` varchar(500) NOT NULL DEFAULT 'Hi! What brings you here today?',
+        \`persona\` text NULL,
+        \`themeColor\` varchar(16) NOT NULL DEFAULT '#14B89A',
+        \`qualifyingQuestions\` json NULL,
+        \`qualifyThreshold\` int NOT NULL DEFAULT 60,
+        \`bookingUserId\` int NULL,
+        \`autoCreateLead\` boolean NOT NULL DEFAULT true,
+        \`autoRoute\` boolean NOT NULL DEFAULT true,
+        \`autoEnrollSequenceId\` int NULL,
+        \`sessionCount\` int NOT NULL DEFAULT 0,
+        \`leadCount\` int NOT NULL DEFAULT 0,
+        \`meetingCount\` int NOT NULL DEFAULT 0,
+        \`createdByUserId\` int NULL,
+        \`createdAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        \`updatedAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (\`id\`),
+        UNIQUE KEY \`ux_chat_agent_slug\` (\`slug\`),
+        KEY \`ix_chat_agent_ws\` (\`workspaceId\`, \`status\`)
+      )`,
+      `CREATE TABLE IF NOT EXISTS \`chat_sessions\` (
+        \`id\` int NOT NULL AUTO_INCREMENT,
+        \`workspaceId\` int NOT NULL,
+        \`agentId\` int NOT NULL,
+        \`token\` varchar(64) NOT NULL,
+        \`visitorName\` varchar(200) NULL,
+        \`visitorEmail\` varchar(320) NULL,
+        \`visitorCompany\` varchar(200) NULL,
+        \`visitorPhone\` varchar(40) NULL,
+        \`messages\` json NULL,
+        \`messageCount\` int NOT NULL DEFAULT 0,
+        \`status\` enum('active','qualified','booked','closed') NOT NULL DEFAULT 'active',
+        \`qualified\` boolean NOT NULL DEFAULT false,
+        \`score\` int NOT NULL DEFAULT 0,
+        \`intent\` varchar(240) NULL,
+        \`aiSummary\` varchar(1000) NULL,
+        \`leadId\` int NULL,
+        \`meetingId\` int NULL,
+        \`createdAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        \`updatedAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (\`id\`),
+        UNIQUE KEY \`ux_chat_session_token\` (\`token\`),
+        KEY \`ix_chat_session_agent\` (\`workspaceId\`, \`agentId\`, \`status\`)
+      )`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

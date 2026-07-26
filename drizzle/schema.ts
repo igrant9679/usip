@@ -1533,6 +1533,96 @@ export const landingPages = mysqlTable(
 export type LandingPage = typeof landingPages.$inferSelect;
 
 /* ──────────────────────────────────────────────────────────────────────────
+   Inbound Chat Agent (Migration 0130) — Apollo "Chat" parity.
+
+   An AI agent that talks to website visitors at /c/:slug (standalone page or
+   iframe embed), qualifies them against the workspace ICP, captures a routed
+   lead, and — in `auto` mode — offers real calendar slots and books the
+   meeting itself through the SAME booking path as /b/:slug. This is the one
+   meeting source that needs no outbound send, so it carries no deliverability
+   or credit cost.
+
+   `mode` follows the house Off/Approve/Auto convention: off = widget refuses
+   to serve, approval = chat + capture but hand the booking to a human via a
+   notification, auto = the agent books unattended.
+   ────────────────────────────────────────────────────────────────────────── */
+export const chatAgents = mysqlTable(
+  "chat_agents",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    slug: varchar("slug", { length: 80 }).notNull(), // public URL: /c/:slug
+    name: varchar("name", { length: 160 }).notNull(), // internal name
+    status: mysqlEnum("status", ["draft", "published"]).default("draft").notNull(),
+    /** Autonomy level — see the house Off/Approve/Auto convention. */
+    mode: mysqlEnum("mode", ["off", "approval", "auto"]).default("off").notNull(),
+    // ── Persona ──
+    displayName: varchar("displayName", { length: 120 }).default("Assistant").notNull(),
+    greeting: varchar("greeting", { length: 500 }).default("Hi! What brings you here today?").notNull(),
+    /** Extra instructions layered on top of the built-in SDR system prompt. */
+    persona: text("persona"),
+    themeColor: varchar("themeColor", { length: 16 }).default("#14B89A").notNull(),
+    /** qualifyingQuestions: string[] the agent should work through, in order. */
+    qualifyingQuestions: json("qualifyingQuestions"),
+    /** Score (0-100) at or above which a visitor counts as qualified. */
+    qualifyThreshold: int("qualifyThreshold").default(60).notNull(),
+    // ── Outcomes ──
+    /** Whose calendar gets booked; falls back to createdByUserId. */
+    bookingUserId: int("bookingUserId"),
+    autoCreateLead: boolean("autoCreateLead").default(true).notNull(),
+    autoRoute: boolean("autoRoute").default(true).notNull(),
+    autoEnrollSequenceId: int("autoEnrollSequenceId"),
+    // ── Metrics ──
+    sessionCount: int("sessionCount").default(0).notNull(),
+    leadCount: int("leadCount").default(0).notNull(),
+    meetingCount: int("meetingCount").default(0).notNull(),
+    createdByUserId: int("createdByUserId"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    bySlug: uniqueIndex("ux_chat_agent_slug").on(t.slug),
+    byWs: index("ix_chat_agent_ws").on(t.workspaceId, t.status),
+  }),
+);
+export type ChatAgent = typeof chatAgents.$inferSelect;
+
+/** One visitor conversation. `token` is the visitor's opaque handle to it. */
+export const chatSessions = mysqlTable(
+  "chat_sessions",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    agentId: int("agentId").notNull(),
+    /** Opaque per-visitor token — the only credential the public API accepts. */
+    token: varchar("token", { length: 64 }).notNull(),
+    // ── What the agent learned ──
+    visitorName: varchar("visitorName", { length: 200 }),
+    visitorEmail: varchar("visitorEmail", { length: 320 }),
+    visitorCompany: varchar("visitorCompany", { length: 200 }),
+    visitorPhone: varchar("visitorPhone", { length: 40 }),
+    /** messages: [{ role: "visitor" | "agent", text, at }] */
+    messages: json("messages"),
+    messageCount: int("messageCount").default(0).notNull(),
+    status: mysqlEnum("status", ["active", "qualified", "booked", "closed"]).default("active").notNull(),
+    qualified: boolean("qualified").default(false).notNull(),
+    score: int("score").default(0).notNull(),
+    intent: varchar("intent", { length: 240 }),
+    aiSummary: varchar("aiSummary", { length: 1000 }),
+    // ── What it produced ──
+    leadId: int("leadId"),
+    meetingId: int("meetingId"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    byToken: uniqueIndex("ux_chat_session_token").on(t.token),
+    byAgent: index("ix_chat_session_agent").on(t.workspaceId, t.agentId, t.status),
+  }),
+);
+export type ChatSession = typeof chatSessions.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
    Login History
    ────────────────────────────────────────────────────────────────────────── */
 export const loginHistory = mysqlTable(

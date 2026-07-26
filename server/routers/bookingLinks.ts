@@ -21,7 +21,7 @@ import { and, eq, gte, lte } from "drizzle-orm";
 import { router, publicProcedure } from "../_core/trpc";
 import { workspaceProcedure } from "../_core/workspace";
 import { getDb } from "../db";
-import { activities, bookingLinks, calendarEvents, leads, meetings, notifications, users } from "../../drizzle/schema";
+import { activities, bookingLinks, calendarEvents, leads, meetings, notifications, users, type BookingLink } from "../../drizzle/schema";
 import { sendMeetingInvite } from "../services/meetingScheduler";
 
 /** Availability defaults + generation bounds. */
@@ -171,6 +171,144 @@ async function busyEventsFor(workspaceId: number, userId: number, nowMs: number)
   return busy;
 }
 
+/**
+ * The link's currently-open slots. Exported so every public booking surface
+ * (the /b/:slug page AND the inbound chat agent) computes availability the
+ * same way — one definition of "open", one place to change it.
+ */
+export async function openSlotsForLink(link: BookingLink, nowMs = Date.now()): Promise<string[]> {
+  const busy = await busyEventsFor(link.workspaceId, link.userId, nowMs);
+  return generateSlots(busy, link.durationMin, nowMs, {
+    timezone: link.timezone,
+    startHour: link.startHour,
+    endHour: link.endHour,
+    workDays: parseWorkDays(link.workDays),
+  });
+}
+
+export interface BookSlotOpts {
+  startAt: Date;
+  name: string;
+  email: string;
+  notes?: string | null;
+  /** `leads.source` for a newly-created lead (e.g. "booking_link", "chat:acme"). */
+  leadSource?: string;
+  /** Reuse a lead the caller already created (the chat agent does) instead of a new one. */
+  existingLeadId?: number | null;
+  /** `meetings.source` — how this booking reached us. */
+  meetingSource?: string;
+  /** Extra line appended to the rep notification, e.g. "Booked by the chat agent." */
+  notificationSuffix?: string;
+}
+
+/**
+ * Book one slot on a booking link: revalidate availability, ensure a lead,
+ * create the meeting, push it to the real calendar, bump the counter, and tell
+ * the rep. Exported so the chat agent books through EXACTLY this path — a
+ * second implementation would inevitably drift on the conflict check, which is
+ * the part that must never be wrong.
+ *
+ * Throws TRPCError CONFLICT if the slot is no longer open.
+ */
+export async function bookSlotForLink(link: BookingLink, opts: BookSlotOpts) {
+  const db = await getDb();
+  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+  const start = opts.startAt;
+
+  // Re-validate against the CURRENT open slots: enforces busy-conflicts,
+  // the working-hours window/timezone, workdays, lead time, and horizon in
+  // one place — a hand-crafted POST can't book 3am outside the window.
+  const openSlots = await openSlotsForLink(link);
+  if (!openSlots.includes(start.toISOString())) {
+    throw new TRPCError({ code: "CONFLICT", message: "That time is no longer available — please pick another slot." });
+  }
+
+  // Inbound lead for the booker (routed to the link owner), unless the caller
+  // already has one for this person.
+  const parts = opts.name.trim().split(/\s+/);
+  const firstName = parts[0] || "Guest";
+  const lastName = parts.slice(1).join(" ") || "";
+  let leadId: number | null = opts.existingLeadId ?? null;
+  if (!leadId) {
+    try {
+      const r = await db.insert(leads).values({
+        workspaceId: link.workspaceId,
+        firstName, lastName,
+        email: opts.email,
+        source: opts.leadSource ?? "booking_link",
+        status: "new",
+        ownerUserId: link.userId,
+      } as never);
+      leadId = Number((r as any)[0]?.insertId ?? 0) || null;
+    } catch (e) {
+      console.error("[bookingLinks] lead insert failed:", (e as Error).message);
+    }
+  }
+
+  // Proposed meeting at the chosen time, then book it for real.
+  const ins = await db.insert(meetings).values({
+    workspaceId: link.workspaceId,
+    ownerUserId: link.userId,
+    relatedType: leadId ? "lead" : null,
+    relatedId: leadId,
+    contactName: opts.name.slice(0, 200),
+    contactEmail: opts.email,
+    title: link.title,
+    status: "proposed",
+    proposedTimes: [start.toISOString()],
+    scheduledAt: start,
+    durationMin: link.durationMin,
+    inviteMessage: opts.notes ? opts.notes.slice(0, 1500) : null,
+    source: opts.meetingSource ?? "inbound",
+  } as never);
+  const meetingId = Number((ins as any)[0]?.insertId ?? 0) || 0;
+  if (!meetingId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Could not create the meeting." });
+
+  // Book the real calendar event (no-op-safe if no calendar is connected).
+  let result: { sent: boolean; scheduledAt: string | null; reason?: string } = { sent: false, scheduledAt: start.toISOString() };
+  try {
+    result = await sendMeetingInvite(link.workspaceId, meetingId, start.toISOString());
+  } catch (e) {
+    console.error("[bookingLinks] sendMeetingInvite failed:", (e as Error).message);
+  }
+
+  await db.update(bookingLinks)
+    .set({ bookingCount: (link.bookingCount ?? 0) + 1 } as never)
+    .where(eq(bookingLinks.id, link.id));
+
+  // Notify the rep + log a timeline activity so a self-booked meeting never
+  // goes unseen — critical when no calendar is connected (no provider invite).
+  const whenLabel = `${start.toISOString().slice(0, 16).replace("T", " ")} UTC`;
+  try {
+    await db.insert(notifications).values({
+      workspaceId: link.workspaceId,
+      userId: link.userId,
+      kind: "system",
+      title: `New meeting booked: ${opts.name}`,
+      body: `${opts.name} booked "${link.title}" for ${whenLabel}.${result.sent ? "" : " No calendar connected — add it to their calendar."}${opts.notificationSuffix ? ` ${opts.notificationSuffix}` : ""}`,
+    } as never);
+  } catch (e) {
+    console.error("[bookingLinks] rep notification failed:", (e as Error).message);
+  }
+  if (leadId) {
+    try {
+      await db.insert(activities).values({
+        workspaceId: link.workspaceId,
+        type: "meeting",
+        relatedType: "lead",
+        relatedId: leadId,
+        subject: `Meeting booked via link: ${opts.name}`.slice(0, 240),
+        body: `${opts.name} <${opts.email}> booked "${link.title}" for ${whenLabel}. ${result.sent ? "Calendar invite sent." : "No calendar connected — confirm manually."}`,
+        actorUserId: null,
+      } as never);
+    } catch (e) {
+      console.error("[bookingLinks] activity emit failed:", (e as Error).message);
+    }
+  }
+
+  return { meetingId, leadId, calendarBooked: result.sent, scheduledAt: start.toISOString() };
+}
+
 export const bookingLinksRouter = router({
   /** Get (or lazily create) the current rep's booking link. */
   mine: workspaceProcedure.query(async ({ ctx }) => {
@@ -253,14 +391,7 @@ export const bookingLinksRouter = router({
       const [link] = await db.select().from(bookingLinks).where(eq(bookingLinks.slug, input.slug));
       if (!link || !link.active) throw new TRPCError({ code: "NOT_FOUND", message: "This booking link is not available." });
       const [owner] = await db.select({ name: users.name }).from(users).where(eq(users.id, link.userId));
-      const nowMs = Date.now();
-      const busy = await busyEventsFor(link.workspaceId, link.userId, nowMs);
-      const slots = generateSlots(busy, link.durationMin, nowMs, {
-        timezone: link.timezone,
-        startHour: link.startHour,
-        endHour: link.endHour,
-        workDays: parseWorkDays(link.workDays),
-      });
+      const slots = await openSlotsForLink(link);
       return {
         title: link.title,
         description: link.description,
@@ -291,104 +422,19 @@ export const bookingLinksRouter = router({
       if (Number.isNaN(start.getTime()) || start.getTime() < Date.now()) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Please pick a valid future time." });
       }
-      // Re-validate against the CURRENT open slots: enforces busy-conflicts,
-      // the working-hours window/timezone, workdays, lead time, and horizon in
-      // one place — a hand-crafted POST can't book 3am outside the window.
-      const busy = await busyEventsFor(link.workspaceId, link.userId, Date.now());
-      const openSlots = generateSlots(busy, link.durationMin, Date.now(), {
-        timezone: link.timezone,
-        startHour: link.startHour,
-        endHour: link.endHour,
-        workDays: parseWorkDays(link.workDays),
+
+      const booked = await bookSlotForLink(link, {
+        startAt: start,
+        name: input.name,
+        email: input.email,
+        notes: input.notes ?? null,
+        leadSource: "booking_link",
       });
-      if (!openSlots.includes(start.toISOString())) {
-        throw new TRPCError({ code: "CONFLICT", message: "That time is no longer available — please pick another slot." });
-      }
-
-      // Inbound lead for the booker (routed to the link owner).
-      const parts = input.name.trim().split(/\s+/);
-      const firstName = parts[0] || "Guest";
-      const lastName = parts.slice(1).join(" ") || "";
-      let leadId: number | null = null;
-      try {
-        const r = await db.insert(leads).values({
-          workspaceId: link.workspaceId,
-          firstName, lastName,
-          email: input.email,
-          source: "booking_link",
-          status: "new",
-          ownerUserId: link.userId,
-        } as never);
-        leadId = Number((r as any)[0]?.insertId ?? 0) || null;
-      } catch (e) {
-        console.error("[bookingLinks] lead insert failed:", (e as Error).message);
-      }
-
-      // Proposed meeting at the chosen time, then book it for real.
-      const ins = await db.insert(meetings).values({
-        workspaceId: link.workspaceId,
-        ownerUserId: link.userId,
-        relatedType: leadId ? "lead" : null,
-        relatedId: leadId,
-        contactName: input.name.slice(0, 200),
-        contactEmail: input.email,
-        title: link.title,
-        status: "proposed",
-        proposedTimes: [start.toISOString()],
-        scheduledAt: start,
-        durationMin: link.durationMin,
-        inviteMessage: input.notes ? input.notes.slice(0, 1500) : null,
-        source: "inbound",
-      } as never);
-      const meetingId = Number((ins as any)[0]?.insertId ?? 0) || 0;
-      if (!meetingId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Could not create the meeting." });
-
-      // Book the real calendar event (no-op-safe if no calendar is connected).
-      let result: { sent: boolean; scheduledAt: string | null; reason?: string } = { sent: false, scheduledAt: start.toISOString() };
-      try {
-        result = await sendMeetingInvite(link.workspaceId, meetingId, start.toISOString());
-      } catch (e) {
-        console.error("[bookingLinks] sendMeetingInvite failed:", (e as Error).message);
-      }
-
-      await db.update(bookingLinks)
-        .set({ bookingCount: (link.bookingCount ?? 0) + 1 } as never)
-        .where(eq(bookingLinks.id, link.id));
-
-      // Notify the rep + log a timeline activity so a self-booked meeting never
-      // goes unseen — critical when no calendar is connected (no provider invite).
-      const whenLabel = `${start.toISOString().slice(0, 16).replace("T", " ")} UTC`;
-      try {
-        await db.insert(notifications).values({
-          workspaceId: link.workspaceId,
-          userId: link.userId,
-          kind: "system",
-          title: `New meeting booked: ${input.name}`,
-          body: `${input.name} booked "${link.title}" for ${whenLabel}.${result.sent ? "" : " No calendar connected — add it to their calendar."}`,
-        } as never);
-      } catch (e) {
-        console.error("[bookingLinks] rep notification failed:", (e as Error).message);
-      }
-      if (leadId) {
-        try {
-          await db.insert(activities).values({
-            workspaceId: link.workspaceId,
-            type: "meeting",
-            relatedType: "lead",
-            relatedId: leadId,
-            subject: `Meeting booked via link: ${input.name}`.slice(0, 240),
-            body: `${input.name} <${input.email}> booked "${link.title}" for ${whenLabel}. ${result.sent ? "Calendar invite sent." : "No calendar connected — confirm manually."}`,
-            actorUserId: null,
-          } as never);
-        } catch (e) {
-          console.error("[bookingLinks] activity emit failed:", (e as Error).message);
-        }
-      }
 
       return {
         ok: true as const,
-        scheduledAt: start.toISOString(),
-        calendarBooked: result.sent,
+        scheduledAt: booked.scheduledAt,
+        calendarBooked: booked.calendarBooked,
         ownerName: undefined as string | undefined,
       };
     }),

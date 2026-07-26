@@ -41,6 +41,7 @@ import { dealsRouter } from "./routers/deals";
 import { formsRouter } from "./routers/forms";
 import { bookingLinksRouter } from "./routers/bookingLinks";
 import { landingPagesRouter } from "./routers/landingPages";
+import { chatAgentsRouter } from "./routers/chatAgents";
 import { websiteVisitorsRouter } from "./routers/websiteVisitors";
 import { proposalsRouter } from "./routers/proposals";
 import { unipileRouter } from "./routers/unipile";
@@ -93,6 +94,7 @@ export const appRouter = router({
   forms: formsRouter,
   bookingLinks: bookingLinksRouter,
   landingPages: landingPagesRouter,
+  chatAgents: chatAgentsRouter,
   websiteVisitors: websiteVisitorsRouter,
   activities: activitiesRouter,
   attachments: attachmentsRouter,
