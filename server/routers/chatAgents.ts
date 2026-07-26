@@ -307,21 +307,33 @@ export const chatAgentsRouter = router({
       }
 
       let slots: string[] = [];
-      if (action === "book" && link) {
-        try {
-          slots = (await openSlotsForLink(link)).slice(0, SLOTS_SHOWN);
-        } catch (e) {
-          console.error("[chatAgents] slot lookup failed:", (e as Error).message);
+      let effective = action;
+      let reply = turn.reply;
+      if (action === "book") {
+        if (link) {
+          try {
+            slots = (await openSlotsForLink(link)).slice(0, SLOTS_SHOWN);
+          } catch (e) {
+            console.error("[chatAgents] slot lookup failed:", (e as Error).message);
+          }
+        }
+        // The rep has published no availability, or the horizon is full. Fall
+        // back to a human rather than leaving a qualified visitor staring at a
+        // promise of times that never appear.
+        if (slots.length === 0) {
+          effective = "handoff";
+          reply = `${reply}\n\nI don't have open times in front of me right now — someone from the team will reach out shortly to find one.`;
         }
       }
       // Fire the handoff on the TRANSITION into qualified only. Without this
       // guard every later turn of the same conversation would mint another
       // task and another notification for the same visitor.
-      if (action === "handoff" && session.status !== "qualified") {
+      if (effective === "handoff" && session.status !== "qualified") {
         await handoffToRep(agent, session.token, visitor, turn.summary, leadId);
       }
 
       const qualified = turn.score >= agent.qualifyThreshold;
+      messages[messages.length - 1] = { role: "agent", text: reply, at: messages[messages.length - 1].at };
       await db.update(chatSessions).set({
         messages,
         messageCount: messages.length,
@@ -339,7 +351,7 @@ export const chatAgentsRouter = router({
 
       return {
         token: session.token,
-        reply: turn.reply,
+        reply,
         slots,
         durationMin: link?.durationMin ?? 0,
         booked: session.status === "booked",
