@@ -101,6 +101,43 @@ export function getReoonApiKey(): string {
   return key;
 }
 
+/**
+ * The Reoon key for a workspace: its own BYOK column first, the process-wide
+ * env var second, "" when neither is set.
+ *
+ * Migration 0131 made this per-workspace. The env fallback is not legacy
+ * politeness — it is what lets an already-deployed instance keep verifying
+ * while nobody has pasted a key into Settings yet. **Every** Reoon call site
+ * must go through here: a key entered in Settings that only some of the app
+ * honours is worse than no field at all.
+ *
+ * Returns "" rather than throwing — callers report `reoon_key_missing` as a
+ * skip reason, and a missing key is a configuration state, not an exception.
+ */
+export async function getReoonKey(workspaceId?: number | null): Promise<string> {
+  if (workspaceId) {
+    try {
+      const { getDb } = await import("../db");
+      const { tryDecryptSecret } = await import("../_core/crypto");
+      const { workspaceSettings } = await import("../../drizzle/schema");
+      const { eq } = await import("drizzle-orm");
+      const db = await getDb();
+      if (db) {
+        const [row] = await db
+          .select({ enc: workspaceSettings.reoonApiKeyEnc })
+          .from(workspaceSettings)
+          .where(eq(workspaceSettings.workspaceId, workspaceId))
+          .limit(1);
+        const plaintext = tryDecryptSecret(row?.enc);
+        if (plaintext) return plaintext;
+      }
+    } catch (e) {
+      console.error("[reoon] workspace key lookup failed:", (e as Error).message);
+    }
+  }
+  return process.env.REOON_API_KEY ?? "";
+}
+
 export type ReoonMode = "power" | "quick";
 
 /**

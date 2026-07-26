@@ -22,6 +22,7 @@ import {
   reoonCheckBalance,
   reoonStatusToUsip,
   VERIFICATION_BADGE,
+  getReoonKey,
   type VerificationStatus,
 } from "../services/reoon";
 
@@ -29,9 +30,22 @@ import {
 export { reoonStatusToUsip, VERIFICATION_BADGE };
 export type { VerificationStatus };
 
-function getApiKey(): string {
-  const key = process.env.REOON_API_KEY;
-  if (!key) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "REOON_API_KEY not configured." });
+/**
+ * The workspace's Reoon key, or a clear precondition failure.
+ *
+ * Goes through getReoonKey so a key pasted into Settings works here too —
+ * before migration 0131 this read the env var directly, which would have made
+ * the new Settings field look configured while every verification screen still
+ * reported "not configured".
+ */
+async function getApiKey(workspaceId: number): Promise<string> {
+  const key = await getReoonKey(workspaceId);
+  if (!key) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "No Reoon API key configured. Add one in Settings → Data sources.",
+    });
+  }
   return key;
 }
 
@@ -89,7 +103,7 @@ export async function triggerScheduledReverify(workspaceId: number): Promise<voi
   const db = await getDb();
   if (!db) return;
 
-  const apiKey = process.env.REOON_API_KEY;
+  const apiKey = await getReoonKey(workspaceId);
   if (!apiKey) return;
 
   const [settings] = await db
@@ -174,8 +188,6 @@ export async function runDailyVerificationMaintenance(): Promise<void> {
  * try/catch so one stuck job can't block the rest.
  */
 export async function advanceRunningVerificationJobs(): Promise<void> {
-  const apiKey = process.env.REOON_API_KEY;
-  if (!apiKey) return; // nothing to do without a key
   const db = await getDb();
   if (!db) return;
 
@@ -188,6 +200,11 @@ export async function advanceRunningVerificationJobs(): Promise<void> {
   for (const job of running) {
     if (!job.reoonTaskId) continue;
     try {
+      // Per-JOB key: this cron spans workspaces, and since 0131 each one can
+      // hold its own Reoon credential. A single process-wide key would poll
+      // workspace A's task with workspace B's account.
+      const apiKey = await getReoonKey(job.workspaceId);
+      if (!apiKey) continue;
       const result = await reoonGetBulkResult(job.reoonTaskId, apiKey);
       const progressPct = result.progress_percentage ?? 0;
       const isCompleted = result.status === "completed";
@@ -239,7 +256,7 @@ export const emailVerificationRouter = router({
     .mutation(async ({ input, ctx }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      const apiKey = getApiKey();
+      const apiKey = await getApiKey(ctx.workspace.id);
 
       const [contact] = await db
         .select({ id: contacts.id, email: contacts.email, workspaceId: contacts.workspaceId })
@@ -282,7 +299,7 @@ export const emailVerificationRouter = router({
     .mutation(async ({ input, ctx }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      const apiKey = getApiKey();
+      const apiKey = await getApiKey(ctx.workspace.id);
 
       const rows = await db
         .select({ id: contacts.id, email: contacts.email })
@@ -326,7 +343,7 @@ export const emailVerificationRouter = router({
     .query(async ({ input, ctx }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      const apiKey = getApiKey();
+      const apiKey = await getApiKey(ctx.workspace.id);
 
       const [job] = await db
         .select()
@@ -403,8 +420,8 @@ export const emailVerificationRouter = router({
     }),
 
   /** Check Reoon account balance */
-  getAccountBalance: workspaceProcedure.query(async () => {
-    const apiKey = getApiKey();
+  getAccountBalance: workspaceProcedure.query(async ({ ctx }) => {
+    const apiKey = await getApiKey(ctx.workspace.id);
     const balance = await reoonCheckBalance(apiKey);
     return balance;
   }),

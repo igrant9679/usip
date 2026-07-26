@@ -1383,6 +1383,13 @@ export const workspaceSettings = mysqlTable("workspace_settings", {
   // Max Apollo person records pulled per workspace per day. Guards the API
   // rate limit (no credit spend on the search-only path).
   apolloDailyPullCap: int("apolloDailyPullCap").default(50).notNull(),
+  // ── Reoon Email Verifier (Migration 0131) ──
+  // The verifier behind the first-party email finder (company-site scrape →
+  // name patterns → verify). Was env-only (REOON_API_KEY), which made it the
+  // one integration a user could not configure in the app; getReoonKey()
+  // reads this first and falls back to the env var so existing deployments
+  // keep working.
+  reoonApiKeyEnc: text("reoonApiKeyEnc"),
   // ── Task Autopilot (Migration 0099) — the /v2/tasks autonomy engine ──
   // off      = AI never generates tasks (fully manual)
   // approval = AI drafts next-best-action tasks; a human approves before they go live

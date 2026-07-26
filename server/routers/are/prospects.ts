@@ -403,6 +403,7 @@ Produce:
             lastName: prospect.lastName,
             companyDomain: effCompanyDomain,
             companyWebsite: effCompanyDomain, // no separate website column on the queue
+            workspaceId,
           });
           if (found.email) {
             resolvedEmail = found.email;

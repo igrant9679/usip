@@ -19,7 +19,7 @@ import { prospects } from "../../../drizzle/schema";
 import {
   reoonVerifySingle,
   reoonStatusToUsip,
-  getReoonApiKey,
+  getReoonKey,
   type VerificationStatus,
 } from "../reoon";
 import { normalizeDomain } from "./domain";
@@ -105,6 +105,8 @@ export async function resolveVerifiedEmail(input: {
   lastName?: string | null;
   companyDomain?: string | null;
   companyWebsite?: string | null;
+  /** Resolves the workspace's own Reoon key; omit to fall back to the env var. */
+  workspaceId?: number | null;
 }): Promise<ResolvedEmail> {
   const first = (input.firstName ?? "").trim();
   const last = (input.lastName ?? "").trim();
@@ -113,10 +115,8 @@ export async function resolveVerifiedEmail(input: {
   if (!domain) return { email: null, status: null, reason: "no_domain", creditsQuick: 0, creditsPower: 0 };
   if (!first || !last) return { email: null, status: null, reason: "no_name", creditsQuick: 0, creditsPower: 0 };
 
-  let apiKey: string;
-  try {
-    apiKey = getReoonApiKey();
-  } catch {
+  const apiKey = await getReoonKey(input.workspaceId);
+  if (!apiKey) {
     return { email: null, status: null, reason: "reoon_key_missing", creditsQuick: 0, creditsPower: 0 };
   }
 
@@ -351,10 +351,8 @@ export async function lookupContactInfo(
   // quick mode (syntax/MX/disposable/role-account). Without the pre-filter
   // every pattern would burn 1 daily credit; with it, daily credits are
   // only spent on plausible candidates.
-  let apiKey: string;
-  try {
-    apiKey = getReoonApiKey();
-  } catch {
+  const apiKey = await getReoonKey(input.workspaceId);
+  if (!apiKey) {
     enrichment.skipReason = "reoon_key_missing";
     return {
       ok: false,
@@ -365,7 +363,7 @@ export async function lookupContactInfo(
       reoonCredits: 0,
       reoonCreditsQuick: 0,
       reoonCreditsPower: 0,
-      message: "REOON_API_KEY not configured",
+      message: "No Reoon API key configured. Add one in Settings → Data sources.",
     };
   }
 

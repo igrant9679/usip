@@ -39,6 +39,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { MailboxesSection } from "@/components/usip/settings/MailboxesSection";
 import { VoiceAgentsSection } from "@/components/usip/settings/VoiceAgentsSection";
 import { ApolloSourceCard } from "@/components/usip/settings/ApolloSourceCard";
+import { ReoonVerifierCard } from "@/components/usip/settings/ReoonVerifierCard";
 import { BrandingSection } from "@/components/usip/settings/BrandingSection";
 import { SocialAccountsSection } from "@/components/usip/settings/SocialAccountsSection";
 import {
@@ -224,6 +225,7 @@ export default function SettingsHub() {
         {section === "data-sources" && (
           <div className="space-y-4">
             <ApolloSourceCard />
+            <ReoonVerifierCard />
           </div>
         )}
       </main>

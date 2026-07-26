@@ -25,7 +25,7 @@ import { lookupContactInfo, type LookupResult } from "../services/scraper";
 // keeps working after the scraper overwrites enrichmentData. See
 // services/prospectFromSource.ts.
 import { isSyntheticNameProspect } from "../services/prospectFromSource";
-import { reoonCheckBalance, getReoonApiKey } from "../services/reoon";
+import { reoonCheckBalance, getReoonKey } from "../services/reoon";
 import { resolveProspectProfileImage } from "../services/profileImage";
 
 export const prospectsRouter = router({
@@ -963,9 +963,10 @@ export const prospectsRouter = router({
     }),
 
   /** Check remaining Reoon daily/instant credits. Used by the UI header. */
-  reoonBalance: workspaceProcedure.query(async () => {
+  reoonBalance: workspaceProcedure.query(async ({ ctx }) => {
     try {
-      const apiKey = getReoonApiKey();
+      const apiKey = await getReoonKey(ctx.workspace.id);
+      if (!apiKey) throw new Error("No Reoon API key configured.");
       return await reoonCheckBalance(apiKey);
     } catch (e) {
       // Don't fail the page render if Reoon is unconfigured / down

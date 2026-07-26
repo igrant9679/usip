@@ -10,6 +10,7 @@
  */
 import { Shell, PageHeader } from "@/components/usip/Shell";
 import { ApolloSourceCard } from "@/components/usip/settings/ApolloSourceCard";
+import { ReoonVerifierCard } from "@/components/usip/settings/ReoonVerifierCard";
 import { ARE_SOURCES, ARE_SOURCE_IDS } from "@shared/areSources";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -40,7 +41,7 @@ import {
   Sliders,
   Sparkles,
   Star,
-  Zap, Settings2
+  Zap, Settings2, MailCheck
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -558,6 +559,15 @@ export default function ARESettings() {
           description="Connect your Apollo account so campaigns can source prospects from it. Search-only — costs no Apollo credits."
         >
           <ApolloSourceCard variant="bare" />
+        </Section>
+
+        {/* -- 8c. Reoon connection (turns the domain above into a real address) -- */}
+        <Section
+          icon={MailCheck}
+          title="Reoon Email Verifier"
+          description="Verifies the addresses Velocity derives from the company domain. Without it, sourcing finds people but never a sendable email."
+        >
+          <ReoonVerifierCard variant="bare" />
         </Section>
 
         {/* -- 9. ICP Regen Schedule -- */}

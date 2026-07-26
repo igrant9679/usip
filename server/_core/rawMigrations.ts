@@ -2815,6 +2815,24 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0131: Reoon API key as workspace BYOK ─────────────────────────────────
+  // Reoon backs the first-party email finder (company-site scrape → name
+  // patterns → verify) — the ONLY email path left now that paid Apollo
+  // enrichment is permanently off the table. It was also the only integration
+  // whose key could not be entered in the app: `process.env.REOON_API_KEY` and
+  // nothing else, while Anthropic/OpenAI/Gemini/xAI/Apollo all had encrypted
+  // per-workspace columns.
+  //
+  // getReoonKey() reads this column FIRST and falls back to the env var, so a
+  // deployment that already sets REOON_API_KEY keeps working untouched and can
+  // migrate whenever it likes.
+  {
+    name: "0131_reoon_byok.sql",
+    statements: [
+      "ALTER TABLE `workspace_settings` ADD COLUMN `reoonApiKeyEnc` text NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------
