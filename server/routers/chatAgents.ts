@@ -33,6 +33,7 @@ import {
   type ChatMessage, type VisitorFacts,
 } from "../services/chatAgent";
 import { formatKnowledge, selectKnowledge } from "../services/chatKnowledge";
+import { describePageContext } from "../services/chatPageContext";
 
 /** How many slots the widget offers. A short list converts; a wall of times doesn't. */
 const SLOTS_SHOWN = 6;
@@ -295,6 +296,10 @@ export const chatAgentsRouter = router({
       slug: z.string().min(1).max(80),
       token: z.string().max(64).optional(),
       message: z.string().min(1).max(2000),
+      /** Where the widget is embedded (0138). Untrusted, length-capped, stored once. */
+      pageUrl: z.string().max(1000).optional(),
+      pageTitle: z.string().max(300).optional(),
+      referrer: z.string().max(1000).optional(),
     }))
     .mutation(async ({ input }) => {
       const db = await getDb();
@@ -318,6 +323,9 @@ export const chatAgentsRouter = router({
           agentId: agent.id,
           token,
           messages: [{ role: "agent", text: agent.greeting, at: new Date().toISOString() }],
+          pageUrl: input.pageUrl ?? null,
+          pageTitle: input.pageTitle ?? null,
+          referrer: input.referrer ?? null,
         } as never);
         const [created] = await db.select().from(chatSessions).where(eq(chatSessions.token, token));
         if (!created) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Could not start the chat." });
@@ -372,6 +380,11 @@ export const chatAgentsRouter = router({
         known,
         canBook: !!link,
         knowledge,
+        pageContext: describePageContext({
+          pageUrl: session.pageUrl ?? input.pageUrl ?? null,
+          pageTitle: session.pageTitle ?? input.pageTitle ?? null,
+          referrer: session.referrer ?? input.referrer ?? null,
+        }),
       });
 
       const visitor = mergeVisitor(known, turn.extracted);

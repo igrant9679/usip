@@ -2950,6 +2950,23 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0138: the agent finds out where the visitor is standing ───────────────
+  // Until now it opened with the same line whether someone was on the pricing
+  // page or the careers page, because it was told nothing about the page it was
+  // embedded in. The page is the strongest intent signal available before the
+  // visitor types anything, and it cost nothing to collect.
+  //
+  // Stored on the session rather than passed per-turn so a transcript can be
+  // read later WITH the context that produced it.
+  {
+    name: "0138_chat_page_context.sql",
+    statements: [
+      "ALTER TABLE `chat_sessions` ADD COLUMN `pageUrl` varchar(1000) NULL",
+      "ALTER TABLE `chat_sessions` ADD COLUMN `pageTitle` varchar(300) NULL",
+      "ALTER TABLE `chat_sessions` ADD COLUMN `referrer` varchar(1000) NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

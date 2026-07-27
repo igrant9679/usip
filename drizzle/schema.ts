@@ -1692,6 +1692,11 @@ export const chatSessions = mysqlTable(
      * can never be followed up twice however often the cron runs.
      */
     followUpAt: timestamp("followUpAt"),
+    // ── Where they were when they started talking (Migration 0138) ──
+    /** Page the widget was embedded on. The agent's only situational awareness. */
+    pageUrl: varchar("pageUrl", { length: 1000 }),
+    pageTitle: varchar("pageTitle", { length: 300 }),
+    referrer: varchar("referrer", { length: 1000 }),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },

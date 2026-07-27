@@ -30,6 +30,9 @@ describe("/v/chat.js", () => {
   it("loads the chat only once a visitor opens it", () => {
     // frame.src is assigned inside render(), guarded by `loaded`, not at mount.
     expect(WIDGET_JS).toContain("if(!loaded){loaded=true;frame.src=");
+    // and it hands the HOST page over, which the iframe cannot read itself (0138).
+    expect(WIDGET_JS).toContain("pu=");
+    expect(WIDGET_JS).toContain("pt=");
   });
 
   it("never lets a failure escape onto the host page", () => {

@@ -10,7 +10,7 @@
  * it. If we still don't have an email by then, the confirm step asks for it
  * rather than failing at the booking call.
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRoute } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
@@ -46,6 +46,25 @@ export default function ChatPage() {
 
   const accent = agent.data?.themeColor || "#14B89A";
 
+  /**
+   * The page the widget is embedded on (0138), sent once with the first turn.
+   *
+   * Both launchers put it in the iframe URL as `pu`/`pt`, because inside an
+   * iframe `document.title` is OUR title and `window.parent.location` is
+   * cross-origin blocked. `document.referrer` is the honest fallback — it is
+   * the host page — but it carries no title.
+   */
+  const pageCtx = useMemo(() => {
+    const q = new URLSearchParams(window.location.search);
+    const url = (q.get("pu") || (embedded ? document.referrer : window.location.href) || "").slice(0, 1000);
+    const title = (q.get("pt") || (embedded ? "" : document.title) || "").slice(0, 300);
+    return {
+      ...(url ? { pageUrl: url } : {}),
+      ...(title ? { pageTitle: title } : {}),
+      ...(!embedded && document.referrer ? { referrer: document.referrer.slice(0, 1000) } : {}),
+    };
+  }, [embedded]);
+
   // Seed the transcript with the configured greeting once the agent loads.
   useEffect(() => {
     if (agent.data && messages.length === 0) {
@@ -64,7 +83,7 @@ export default function ChatPage() {
     setDraft("");
     setError(null);
     setMessages((m) => [...m, { role: "visitor", text }]);
-    send.mutate({ slug, token, message: text }, {
+    send.mutate({ slug, token, message: text, ...(token ? {} : pageCtx) }, {
       onSuccess: (r: any) => {
         setToken(r.token);
         setMessages((m) => [...m, { role: "agent", text: r.reply }]);

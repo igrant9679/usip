@@ -62,7 +62,9 @@ export default function ChatLauncher({ slug, color = "#14B89A", label = "Chat wi
       {loaded && (
         <iframe
           title={label}
-          src={`/c/${encodeURIComponent(slug)}?embed=1`}
+          // pu/pt carry the HOST page (0138) — inside the iframe the widget can
+          // read neither, so the launcher has to hand them over.
+          src={`/c/${encodeURIComponent(slug)}?embed=1&pu=${encodeURIComponent(window.location.href.slice(0, 1000))}&pt=${encodeURIComponent(document.title.slice(0, 300))}`}
           // An iframe is a replaced element: `w-auto` would resolve to its
           // intrinsic 300px, not to left/right, so the small-screen width is
           // explicit. See the same note in server/chatWidget.ts.

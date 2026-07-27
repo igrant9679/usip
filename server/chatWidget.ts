@@ -68,7 +68,7 @@ function render(){
 btn.innerHTML=open?CLOSE:CHAT;
 btn.setAttribute('aria-expanded',open?'true':'false');
 if(open){
-if(!loaded){loaded=true;frame.src=base+'/c/'+encodeURIComponent(slug)+'?embed=1';}
+if(!loaded){loaded=true;frame.src=base+'/c/'+encodeURIComponent(slug)+'?embed=1&pu='+encodeURIComponent(String(location.href).slice(0,1000))+'&pt='+encodeURIComponent(String(document.title||'').slice(0,300));}
 frame.className='vlc-p';
 }else{frame.className='vlc-p vlc-hidden';}
 try{sessionStorage.setItem(KEY,open?'1':'0');}catch(e){}

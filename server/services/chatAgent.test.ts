@@ -9,6 +9,7 @@ import {
   MEETING_REQUEST_FLOOR,
   decideOffer,
   emailAskCount,
+  emailInText,
   scrubUnsupportedClaims,
   mergeVisitor,
   plausibleEmail,
@@ -245,5 +246,37 @@ describe("sanitizeTurn + claim scrubbing", () => {
     const t = sanitizeTurn({ reply: "We've helped dozens of food banks save weeks.", score: 70 }, "fb");
     expect(t.reply).not.toMatch(/we've helped/i);
     expect(t.reply.length).toBeGreaterThan(20);
+  });
+});
+
+/**
+ * `known` is built from the session row and lags one turn, so on the exact turn
+ * a visitor types their address the prompt believed we had none and told the
+ * model it MUST ask. Measured live: "Can I send you a calendar link? (I'll just
+ * need your work email to set that up.)" — in reply to a message giving it.
+ */
+describe("emailInText", () => {
+  it("finds an address inside a sentence", () => {
+    expect(emailInText("I am Testy McTestface, my email is testy@northwind.org"))
+      .toBe("testy@northwind.org");
+  });
+
+  it("strips trailing punctuation", () => {
+    expect(emailInText("reach me at dana@acme.io.")).toBe("dana@acme.io");
+    expect(emailInText("is it sam@acme.io?")).toBe("sam@acme.io");
+  });
+
+  it("handles a plus-tag", () => {
+    expect(emailInText("use idris.grant+chattest@gmail.com please"))
+      .toBe("idris.grant+chattest@gmail.com");
+  });
+
+  it("still rejects the placeholders models invent", () => {
+    expect(emailInText("email john.doe@example.com")).toBeNull();
+  });
+
+  it("returns null when there is no address", () => {
+    expect(emailInText("let me discuss internally and come back to you")).toBeNull();
+    expect(emailInText("")).toBeNull();
   });
 });

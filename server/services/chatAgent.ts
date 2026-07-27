@@ -229,6 +229,20 @@ const CLAIM_FALLBACK =
   "I'd rather not guess at that — the honest answer depends on your setup. The best next step is a short audit conversation where we look at your actual process. Would that be useful?";
 
 /**
+ * First plausible email address appearing anywhere in free text.
+ *
+ * `known` is built from the SESSION row, which is only updated AFTER a turn is
+ * generated. So on the exact turn a visitor types their address, the prompt
+ * still believed we had none — and told the model it MUST ask. Measured live:
+ * "Can I send you a calendar link? (I'll just need your work email to set that
+ * up.)" in reply to a message that had just given it.
+ */
+export function emailInText(text: string): string | null {
+  const m = String(text ?? "").match(/[^\s<>()[\]{},;:"']+@[^\s<>()[\]{},;:"']+\.[a-z]{2,}/i);
+  return m ? plausibleEmail(m[0].replace(/[.,;:!?]+$/, "")) : null;
+}
+
+/**
  * How many times the agent has already asked this visitor for an email.
  *
  * The prompt has always said "ask only once per conversation" and the model has
@@ -268,6 +282,12 @@ export interface ChatTurnInput {
    * rendered for this turn. Empty string when the workspace has written none.
    */
   knowledge?: string;
+  /**
+   * Where the visitor is standing (migration 0138), already rendered by
+   * describePageContext. The only situational awareness the agent has at turn
+   * zero, and the only thing that stops it pitching on a careers page.
+   */
+  pageContext?: string;
 }
 
 /**
@@ -293,9 +313,14 @@ export async function runChatTurn(input: ChatTurnInput): Promise<ChatTurn> {
     input.known.phone ? `phone: ${input.known.phone}` : null,
   ].filter(Boolean);
 
+  // An address the visitor typed THIS turn counts as having it — `known` lags
+  // by one turn (see emailInText), and without this the agent asks for an email
+  // it is currently looking at.
+  const lastVisitorText = [...(input.messages ?? [])].reverse()
+    .find((m) => m.role === "visitor")?.text ?? "";
+  const hasEmail = !!input.known.email || !!emailInText(lastVisitorText);
   // Counted, not requested — see emailAskCount.
-  const emailAsks = input.known.email ? 0 : emailAskCount(input.messages);
-  const hasEmail = !!input.known.email;
+  const emailAsks = hasEmail ? 0 : emailAskCount(input.messages);
 
   /**
    * One instruction, not two. The first version had an "ask for the email"
@@ -316,7 +341,7 @@ export async function runChatTurn(input: ChatTurnInput): Promise<ChatTurn> {
 
 ${brand ? `About us:\n${brand}\n` : ""}${input.persona ? `Additional instructions:\n${input.persona}\n` : ""}
 ${input.knowledge ? `Facts you may answer from:\n${input.knowledge}\nThese facts and "About us" above are the ONLY specifics you may state. This applies to WHAT SERVICES WE OFFER as much as to anything else: if a visitor asks whether we do something and it is not written above, you do NOT know — say so, say you will find out, and offer the audit conversation. Confirming a service we have not listed is the single worst thing you can do here, because someone will book expecting it.\n` : ""}${questions.length ? `Work these into the conversation naturally, one at a time — never interrogate:\n${questions.map((q, i) => `${i + 1}. ${q}`).join("\n")}\n` : ""}
-Already known about this visitor (do NOT ask again): ${knownLines.length ? knownLines.join(", ") : "nothing yet"}
+${input.pageContext ? `${input.pageContext}\n\n` : ""}Already known about this visitor (do NOT ask again): ${knownLines.length ? knownLines.join(", ") : "nothing yet"}
 
 Conversation so far:
 ${transcriptText(input.messages, input.displayName)}
