@@ -40,6 +40,23 @@ import { isEnrichableCampaign } from "./apolloEnrich";
 
 export type SweepMode = "off" | "approval" | "auto";
 
+/**
+ * A rejected prospect is not work.
+ *
+ * reject/bulkReject set `sequenceStatus = "skipped"`, and are.prospects.list
+ * excludes those by default — they live in the Rejections tab, deliberately
+ * disjoint from the review queue. Every pass here must honour the same rule or
+ * it spends real budget on people the user already threw out: measured on this
+ * workspace, 163 of 252 queue rows are rejected, and 95 of them look exactly
+ * like backfill candidates.
+ *
+ * NULL is not rejected — an unset status means the prospect was never triaged,
+ * so it must not be filtered out by a bare `ne()`.
+ */
+function notRejected() {
+  return or(isNull(prospectQueue.sequenceStatus), ne(prospectQueue.sequenceStatus, "skipped"));
+}
+
 export interface SweepResult {
   attempted: number;
   /** Where the attempts landed. The backlog lives in prospect_queue, not prospects. */
@@ -144,6 +161,7 @@ async function queueCandidatesFor(workspaceId: number, limit: number, retryFaile
     ne(prospectQueue.companyDomain, ""),
     isNotNull(prospectQueue.firstName),
     isNotNull(prospectQueue.lastName),
+    notRejected(),
   ];
   // enrichedAt is the attempt marker here — prospect_queue has a real one, so
   // unlike the prospects table there is nothing to infer from a json column.
@@ -201,6 +219,7 @@ export async function resolveMissingDomains(
       or(isNull(prospectQueue.companyDomain), eq(prospectQueue.companyDomain, "")),
       isNotNull(prospectQueue.companyName),
       ne(prospectQueue.companyName, ""),
+      notRejected(),
     ))
     .orderBy(prospectQueue.id)
     .limit(Math.max(1, Math.min(500, limit)));
@@ -352,6 +371,7 @@ export async function backfillQueueCompanies(opts: {
       ne(prospectQueue.linkedinUrl, ""),
       or(isNull(prospectQueue.companyName), eq(prospectQueue.companyName, "")),
       or(isNull(prospectQueue.companyDomain), eq(prospectQueue.companyDomain, "")),
+      notRejected(),
     ))
     .orderBy(prospectQueue.id)
     .limit(cap);
@@ -455,6 +475,7 @@ export async function queueDiagnostics(workspaceId: number): Promise<{
     .where(and(
       eq(prospectQueue.workspaceId, workspaceId),
       or(isNull(prospectQueue.email), eq(prospectQueue.email, "")),
+      notRejected(),
     ));
   const live = rows.filter((r) => isEnrichableCampaign(r.campaignName));
   const has = (v: string | null) => !!(v ?? "").trim();
