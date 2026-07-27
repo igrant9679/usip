@@ -411,6 +411,23 @@ async function startServer() {
   setTimeout(runEnrichmentSweep, 15 * 60 * 1000); // stagger: 15 minutes after boot
   setInterval(runEnrichmentSweep, 6 * 60 * 60 * 1000); // every 6h; the 20h gap gates the real cadence
 
+  // LinkedIn company backfill. Separate cron from the sweep because it spends a
+  // different budget: ~100 LinkedIn lookups/day on the connected account rather
+  // than Reoon credits. Measured yield is ~30% (only some headlines name an
+  // employer), so a few hundred rows is several days of allowance — a cadence,
+  // not a task. `auto` workspaces only; the service enforces the daily cap and
+  // a >20h gap so a redeploy cannot re-spend the day's allowance.
+  const runCompanyBackfill = () => {
+    import("../services/enrichmentSweeper")
+      .then((m) => m.runCompanyBackfillAllWorkspaces())
+      .then((r) => {
+        if (r.workspaces > 0) console.log(`[CompanyBackfill] workspaces=${r.workspaces} filled=${r.filled}`);
+      })
+      .catch((e) => console.error("[CompanyBackfill] run failed:", e));
+  };
+  setTimeout(runCompanyBackfill, 18 * 60 * 1000); // stagger: 18 minutes after boot
+  setInterval(runCompanyBackfill, 6 * 60 * 60 * 1000); // every 6h; the 20h gap sets the real cadence
+
   // Nightly AI pipeline batch: midnight cron for leads above score threshold
   const scheduleNightlyBatch = () => {
     const now = new Date();

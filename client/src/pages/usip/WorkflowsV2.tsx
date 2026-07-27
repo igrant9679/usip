@@ -53,6 +53,10 @@ export default function WorkflowsV2() {
   // queued draft — enrichment writes data and sends nothing, so the only thing
   // worth gating is unattended Reoon credit spend.
   const sweepAp = trpc.prospects.sweepStatus.useQuery(undefined as any, { retry: false });
+  // Separate switch from the sweep: this one spends LinkedIn lookups (~100/day
+  // on the connected account), not Reoon credits. One control over two budgets
+  // is how someone gets surprised by a bill they did not choose.
+  const backfillAp = trpc.prospects.backfillStatus.useQuery(undefined as any, { retry: false });
 
   const setTaskAp = trpc.tasks.setAutopilotSettings.useMutation({ onSuccess: () => utils.tasks.getAutopilotSettings.invalidate() });
   const setMeetAp = trpc.meetings.setAutopilotSettings.useMutation({ onSuccess: () => utils.meetings.getAutopilotSettings.invalidate() });
@@ -71,6 +75,7 @@ export default function WorkflowsV2() {
     },
     onError: (e) => toast.error(e.message),
   });
+  const setBackfillAp = trpc.prospects.setBackfillSettings.useMutation({ onSuccess: () => utils.prospects.backfillStatus.invalidate(), onError: (e) => toast.error(e.message) });
   const setSweepAp = trpc.prospects.setSweepSettings.useMutation({ onSuccess: () => utils.prospects.sweepStatus.invalidate(), onError: (e) => toast.error(e.message) });
   const setChatAp = trpc.chatAgents.setAutopilotSettings.useMutation({ onSuccess: () => utils.chatAgents.getAutopilotSettings.invalidate(), onError: (e) => toast.error(e.message.includes("FORBIDDEN") ? "Only admins can change the Chat Agent" : e.message) });
 
@@ -98,6 +103,7 @@ export default function WorkflowsV2() {
     { key: "social", label: "Social Autopilot", icon: Share2, blurb: "Auto-invite leads → opener on accept", href: "/v2/conversations", mode: socialAp.data?.mode ?? "off", lastRunAt: socialAp.data?.lastRunAt, set: (m: string) => setSocialAp.mutate({ mode: m as any }) },
     { key: "jobChange", label: "Job Change Autopilot", icon: UserRoundCog, blurb: "Re-engage when a prospect changes jobs", href: "/v2/data-enrichment", mode: jobChangeAp.data?.mode ?? "off", lastRunAt: jobChangeAp.data?.lastRunAt, set: (m: string) => setJobChangeAp.mutate({ mode: m as any }) },
     { key: "enrichSweep", label: "Enrichment Sweep", icon: Database, blurb: "Backfill missing emails from company sites", href: "/prospects", mode: sweepAp.data?.mode ?? "off", lastRunAt: sweepAp.data?.lastRunAt, set: (m: string) => setSweepAp.mutate({ mode: m as any }) },
+    { key: "companyBackfill", label: "Company Backfill", icon: Users, blurb: "Read missing employers off LinkedIn profiles", href: "/v2/data-enrichment", mode: backfillAp.data?.mode ?? "off", lastRunAt: backfillAp.data?.lastRunAt, set: (m: string) => setBackfillAp.mutate({ mode: m as any }) },
     { key: "chat", label: "Inbound Chat Agent", icon: MessageSquare, blurb: "Qualify website visitors → book the meeting", href: "/v2/chat", mode: chatAp.data?.mode ?? "off", lastRunAt: undefined, set: (m: string) => setChatAp.mutate({ mode: m as any }) },
   ];
   const onCount = autopilots.filter((a) => a.mode !== "off").length;
@@ -111,6 +117,7 @@ export default function WorkflowsV2() {
     setJobChangeAp.mutate({ mode: mode as any });
     setChatAp.mutate({ mode: mode as any });
     setSweepAp.mutate({ mode: mode as any });
+    setBackfillAp.mutate({ mode: mode as any });
     toast.success(mode === "off" ? "All autopilots turned off" : `All autopilots set to ${MODE_LABEL[mode]}`);
   };
 
@@ -124,6 +131,7 @@ export default function WorkflowsV2() {
     setJobChangeAp.mutate({ mode: "approval" as any });
     setChatAp.mutate({ mode: "approval" as any });
     setSweepAp.mutate({ mode: "approval" as any });
+    setBackfillAp.mutate({ mode: "approval" as any });
     setEmailAutoEnabled(true);
     toast.success("Full autonomy on (Approve mode) — AI actions will queue for your review");
   };

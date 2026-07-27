@@ -2867,6 +2867,27 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0134: daily LinkedIn company backfill ─────────────────────────────────
+  // Measured before building the schedule, not after: LinkedIn withholds work
+  // history for out-of-network profiles, so the employer has to be read out of
+  // the headline, and only ~30% of headlines carry one ("CFO at Acme" yes,
+  // "Making numbers make sense!" no). Clearing a ~212-row backlog is therefore
+  // days of allowance, which is precisely why it belongs on a capped schedule
+  // rather than in one long attended run.
+  //
+  // Its own switch and its own cap because it spends a different budget from
+  // the enrichment sweep: LinkedIn lookups (~100/day on the connected account)
+  // rather than Reoon credits. Default cap 50 leaves half the day's allowance
+  // for interactive use, same reasoning as the sweep's CREDIT_FLOOR.
+  {
+    name: "0134_company_backfill.sql",
+    statements: [
+      `ALTER TABLE \`workspace_settings\` ADD COLUMN \`companyBackfillMode\` enum('off','approval','auto') NOT NULL DEFAULT 'off'`,
+      "ALTER TABLE `workspace_settings` ADD COLUMN `companyBackfillDailyCap` int NOT NULL DEFAULT 50",
+      "ALTER TABLE `workspace_settings` ADD COLUMN `companyBackfillLastRunAt` timestamp NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

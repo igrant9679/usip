@@ -1403,6 +1403,15 @@ export const workspaceSettings = mysqlTable("workspace_settings", {
   enrichmentSweepMode: mysqlEnum("enrichmentSweepMode", ["off", "approval", "auto"]).default("off").notNull(),
   enrichmentSweepDailyCap: int("enrichmentSweepDailyCap").default(50).notNull(),
   enrichmentSweepLastRunAt: timestamp("enrichmentSweepLastRunAt"),
+  // ── LinkedIn company backfill (Migration 0134) ──
+  // Separate from the sweep on purpose: it spends LinkedIn lookups (a hard
+  // ~100/day allowance on the connected account), not Reoon credits. One
+  // switch over two different budgets is how a user ends up surprised.
+  // approval = attended only (the prospects.backfillCompanies button); the
+  // cron runs `auto` workspaces only.
+  companyBackfillMode: mysqlEnum("companyBackfillMode", ["off", "approval", "auto"]).default("off").notNull(),
+  companyBackfillDailyCap: int("companyBackfillDailyCap").default(50).notNull(),
+  companyBackfillLastRunAt: timestamp("companyBackfillLastRunAt"),
   // ── Task Autopilot (Migration 0099) — the /v2/tasks autonomy engine ──
   // off      = AI never generates tasks (fully manual)
   // approval = AI drafts next-best-action tasks; a human approves before they go live

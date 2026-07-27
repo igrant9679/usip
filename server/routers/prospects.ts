@@ -1066,6 +1066,47 @@ export const prospectsRouter = router({
       });
     }),
 
+  /** Backfill schedule + how many rows are still missing a company name. */
+  backfillStatus: workspaceProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    const [s] = await db
+      .select({
+        mode: workspaceSettings.companyBackfillMode,
+        dailyCap: workspaceSettings.companyBackfillDailyCap,
+        lastRunAt: workspaceSettings.companyBackfillLastRunAt,
+      })
+      .from(workspaceSettings)
+      .where(eq(workspaceSettings.workspaceId, ctx.workspace.id))
+      .limit(1);
+    const { queueDiagnostics } = await import("../services/enrichmentSweeper");
+    const q = await queueDiagnostics(ctx.workspace.id);
+    return {
+      mode: (s?.mode ?? "off") as "off" | "approval" | "auto",
+      dailyCap: s?.dailyCap ?? 50,
+      lastRunAt: s?.lastRunAt ?? null,
+      needsCompany: q.needsDomain,
+    };
+  }),
+
+  /** Dedicated setter — keeps these off the settings.save allowlist. */
+  setBackfillSettings: workspaceProcedure
+    .input(z.object({
+      mode: z.enum(["off", "approval", "auto"]).optional(),
+      dailyCap: z.number().int().min(1).max(100).optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const set: Record<string, unknown> = {};
+      if (input.mode !== undefined) set.companyBackfillMode = input.mode;
+      if (input.dailyCap !== undefined) set.companyBackfillDailyCap = input.dailyCap;
+      if (Object.keys(set).length === 0) return { ok: true as const };
+      await db.update(workspaceSettings).set(set as never)
+        .where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
+      return { ok: true as const };
+    }),
+
   reoonBalance: workspaceProcedure.query(async ({ ctx }) => {
     try {
       const apiKey = await getReoonKey(ctx.workspace.id);

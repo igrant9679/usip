@@ -612,6 +612,67 @@ export async function sweepWorkspace(
 }
 
 /**
+ * Cron entry point for the LinkedIn company backfill.
+ *
+ * Runs `auto` workspaces only — `approval` means attended, i.e. the
+ * prospects.backfillCompanies button, exactly as with the sweep.
+ *
+ * Why a schedule at all: measured yield is ~30% (only some LinkedIn headlines
+ * name an employer), so a couple of hundred rows is several days of a ~100/day
+ * allowance. That is a cadence, not a task, and a capped daily run is the
+ * honest shape for it.
+ *
+ * Attributed to the workspace owner with admin rights, so the lookup may use
+ * any bridged LinkedIn account in the workspace pool rather than depending on
+ * whoever happened to trigger it.
+ */
+export async function runCompanyBackfillAllWorkspaces(): Promise<{ workspaces: number; filled: number }> {
+  const db = await getDb();
+  if (!db) return { workspaces: 0, filled: 0 };
+
+  const rows = await db
+    .select({
+      id: workspaces.id,
+      ownerUserId: workspaces.ownerUserId,
+      mode: workspaceSettings.companyBackfillMode,
+      cap: workspaceSettings.companyBackfillDailyCap,
+      lastRunAt: workspaceSettings.companyBackfillLastRunAt,
+    })
+    .from(workspaces)
+    .leftJoin(workspaceSettings, eq(workspaceSettings.workspaceId, workspaces.id));
+
+  let touched = 0, filled = 0;
+  for (const ws of rows) {
+    if (ws.mode !== "auto" || !ws.ownerUserId) continue;
+    // Daily means daily. The cron ticks more often so a restart cannot turn
+    // the cap into a per-boot allowance.
+    if (ws.lastRunAt && Date.now() - new Date(ws.lastRunAt).getTime() < 20 * 60 * 60 * 1000) continue;
+    try {
+      const r = await backfillQueueCompanies({
+        workspaceId: ws.id,
+        userId: ws.ownerUserId,
+        isAdmin: true,
+        limit: ws.cap ?? 50,
+      });
+      // Stamp even on a zero-fill run: without it a workspace with nothing left
+      // to do would retry every tick and burn the allowance discovering that.
+      await db.update(workspaceSettings)
+        .set({ companyBackfillLastRunAt: new Date() } as never)
+        .where(eq(workspaceSettings.workspaceId, ws.id))
+        .catch(() => {});
+      if (r.attempted > 0) {
+        touched++;
+        filled += r.filled;
+        console.log(`[CompanyBackfill] ws=${ws.id} attempted=${r.attempted} filled=${r.filled} fromHeadline=${r.fromHeadline} stopped=${r.stoppedBecause}`);
+      }
+    } catch (e) {
+      console.error(`[CompanyBackfill] workspace ${ws.id} failed:`, (e as Error).message);
+    }
+  }
+  return { workspaces: touched, filled };
+}
+
+/**
  * Cron entry point: sweep every workspace in `auto`, up to its own daily cap.
  * Workspaces in `off` or `approval` are skipped — `approval` runs only from the
  * button, which is the whole distinction between the two.
