@@ -63,7 +63,10 @@ export default function ChatLauncher({ slug, color = "#14B89A", label = "Chat wi
         <iframe
           title={label}
           src={`/c/${encodeURIComponent(slug)}?embed=1`}
-          className={`fixed bottom-[88px] right-5 max-sm:left-3 max-sm:right-3 max-sm:bottom-[84px] w-[380px] max-sm:w-auto h-[560px] max-h-[calc(100vh-116px)] max-sm:h-[calc(100vh-100px)] rounded-2xl border-0 bg-white shadow-2xl overflow-hidden z-[2147483000] ${
+          // An iframe is a replaced element: `w-auto` would resolve to its
+          // intrinsic 300px, not to left/right, so the small-screen width is
+          // explicit. See the same note in server/chatWidget.ts.
+          className={`fixed bottom-[88px] right-5 max-sm:left-3 max-sm:right-auto max-sm:bottom-[84px] w-[380px] max-sm:w-[calc(100%-24px)] h-[560px] max-h-[calc(100vh-116px)] max-sm:h-[calc(100vh-100px)] rounded-2xl border-0 bg-white shadow-2xl overflow-hidden z-[2147483000] ${
             open ? "" : "hidden"
           }`}
         />

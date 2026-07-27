@@ -37,6 +37,14 @@ describe("/v/chat.js", () => {
     expect(WIDGET_JS.trimEnd().endsWith("}catch(e){}})();")).toBe(true);
   });
 
+  it("gives the panel an explicit width on small screens", () => {
+    // Measured on a 375px viewport: `width:auto` rendered a 300px panel with a
+    // 63px gap beside it, because an iframe is a replaced element and falls back
+    // to its intrinsic width rather than to left/right.
+    expect(WIDGET_JS).not.toContain("width:auto");
+    expect(WIDGET_JS).toContain("width:calc(100% - 24px)");
+  });
+
   it("guards against being pasted twice", () => {
     expect(WIDGET_JS).toContain("window.__velocityChat");
   });

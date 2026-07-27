@@ -17,6 +17,12 @@
  *
  * 2. The iframe is created on FIRST OPEN, not on page load. Visitors who never
  *    click cost one small cached request, not a whole chat app.
+ *
+ * Sizing gotcha, found by measuring rather than reading: an iframe is a REPLACED
+ * element, so `width:auto` resolves to its intrinsic 300px default instead of to
+ * left/right, and the `right` constraint is then dropped. The mobile rule sets an
+ * explicit width for that reason — `width:auto` there looks right and renders a
+ * 300px panel with a ragged gap beside it.
  */
 import type { Express, Request, Response } from "express";
 import { eq } from "drizzle-orm";
@@ -48,7 +54,7 @@ var css='.vlc-b,.vlc-p{position:fixed;z-index:2147483000;'+side+':20px}'
 +'.vlc-b:hover{transform:scale(1.06)}'
 +'.vlc-p{bottom:88px;width:380px;height:560px;max-height:calc(100vh - 116px);background:#fff;border:0;border-radius:16px;overflow:hidden;box-shadow:0 12px 48px rgba(0,0,0,.24)}'
 +'.vlc-hidden{display:none!important}'
-+'@media(max-width:480px){.vlc-p{left:12px;right:12px;width:auto;bottom:84px;height:calc(100vh - 100px)}}';
++'@media(max-width:480px){.vlc-p{left:12px;right:auto;width:calc(100% - 24px);bottom:84px;height:calc(100vh - 100px)}}';
 var st=document.createElement('style');st.appendChild(document.createTextNode(css));document.head.appendChild(st);
 
 var frame=document.createElement('iframe');
