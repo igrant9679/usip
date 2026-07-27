@@ -139,8 +139,18 @@ export function sanitizeTurn(raw: unknown, fallbackReply: string): ChatTurn {
   const o = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
   const ex = (o.extracted && typeof o.extracted === "object" ? o.extracted : {}) as Record<string, unknown>;
   const scoreNum = Math.round(Number(o.score));
+  // Claims are scrubbed HERE so every path through the agent is covered, not
+  // just the happy one. If scrubbing empties the reply the model said nothing
+  // we can stand behind, so we say something honest instead of nothing.
+  const scrubbed = scrubUnsupportedClaims(clean(o.reply, MAX_REPLY) ?? fallbackReply);
+  if (scrubbed.removed.length) {
+    console.warn(
+      "[chatAgent] dropped unsupported claim(s):",
+      scrubbed.removed.map((r) => `${r.kind}: ${r.sentence}`).join(" | "),
+    );
+  }
   return {
-    reply: clean(o.reply, MAX_REPLY) ?? fallbackReply,
+    reply: scrubbed.text || CLAIM_FALLBACK,
     extracted: {
       name: clean(ex.name, 200),
       email: plausibleEmail(ex.email),
@@ -153,6 +163,70 @@ export function sanitizeTurn(raw: unknown, fallbackReply: string): ChatTurn {
     wantsMeeting: o.wantsMeeting === true,
   };
 }
+
+/**
+ * Sentences that make a claim we cannot stand behind.
+ *
+ * Prompt rules are a hope; this is a mechanism. Measured on the live agent AFTER
+ * the rule was added to the prompt, it still produced "we've helped nonprofits
+ * automate report compilation and data mapping to save weeks each quarter" —
+ * an unnamed client claim AND a quantified savings figure in one sentence, both
+ * explicitly forbidden by its own persona.
+ *
+ * Two families, deliberately narrow so ordinary capability talk survives:
+ *   - TRACK RECORD: past-tense/possessive experience ("we've helped", "our
+ *     clients"). Present-tense capability ("we help nonprofits automate X") is
+ *     what the agent is FOR and is left alone.
+ *   - QUANTIFIED OUTCOME: a saving attached to a number or a time unit
+ *     ("save 30%", "save weeks each quarter"). Unquantified benefit
+ *     ("free up time") is fine.
+ *
+ * Offending sentences are dropped rather than rewritten — a reply missing a
+ * sentence is recoverable; a reply inventing a track record is not.
+ */
+const CLAIM_PATTERNS: Array<{ kind: string; re: RegExp }> = [
+  {
+    kind: "track_record",
+    re: /\b(?:we(?:'ve|’ve| have)\s+(?:helped|worked\s+with|done\s+this\s+for|served|delivered)|our\s+(?:clients|customers)\b|we\s+work\s+with\s+[^.!?]*\b(?:regularly|often|all\s+the\s+time|every\s+day)\b)/i,
+  },
+  {
+    kind: "quantified_outcome",
+    re: /\b(?:sav(?:e|es|ed|ing)|reduc(?:e|es|ed)|cut(?:s|ting)?|free(?:s|d)?\s+up)\b[^.!?]{0,60}?(?:\d+\s*%|\d+\s*(?:hours?|days?|weeks?|months?|hrs?)|\b(?:hours|days|weeks|months)\b)/i,
+  },
+  { kind: "price", re: /(?:[$£€]\s?\d|\b\d+\s?(?:k|thousand)\b[^.!?]{0,30}\b(?:cost|price|fee|budget)\b)/i },
+];
+
+export interface ClaimScrubResult {
+  text: string;
+  removed: Array<{ kind: string; sentence: string }>;
+}
+
+/**
+ * Drop sentences making unsupported claims. Pure. Returns the cleaned text plus
+ * what was removed, so the caller can log WHY a reply got shorter — a silent
+ * scrub would be indistinguishable from the model simply being terse.
+ */
+export function scrubUnsupportedClaims(reply: string): ClaimScrubResult {
+  const text = String(reply ?? "");
+  if (!text.trim()) return { text, removed: [] };
+  // Keep the delimiter with its sentence so rejoining preserves punctuation.
+  const sentences = text.match(/[^.!?]+[.!?]*\s*/g) ?? [text];
+  const removed: ClaimScrubResult["removed"] = [];
+  const kept = sentences.filter((s) => {
+    const hit = CLAIM_PATTERNS.find((p) => p.re.test(s));
+    if (hit) {
+      removed.push({ kind: hit.kind, sentence: s.trim() });
+      return false;
+    }
+    return true;
+  });
+  const out = kept.join("").replace(/\s+/g, " ").trim();
+  return { text: out, removed };
+}
+
+/** Used when scrubbing removed everything the model said. */
+const CLAIM_FALLBACK =
+  "I'd rather not guess at that — the honest answer depends on your setup. The best next step is a short audit conversation where we look at your actual process. Would that be useful?";
 
 /**
  * How many times the agent has already asked this visitor for an email.
@@ -218,6 +292,21 @@ export async function runChatTurn(input: ChatTurnInput): Promise<ChatTurn> {
   const emailAsks = input.known.email ? 0 : emailAskCount(input.messages);
   const hasEmail = !!input.known.email;
 
+  /**
+   * One instruction, not two. The first version had an "ask for the email"
+   * bullet AND an "offer the meeting" bullet; measured live, the model merged
+   * them and dropped the email entirely — swinging from asking four times to
+   * never asking, which cannot book at all. The ladder below is explicit about
+   * what to do on THIS turn.
+   */
+  const emailGuidance = hasEmail
+    ? "You already have their email — never ask for it again."
+    : emailAsks === 0
+      ? `You cannot book anything without their work email; it is a hard requirement.${input.canBook ? " If they look like a fit, offer the meeting AND ask for their email in the same reply, as the way to confirm it — the ask should buy them something." : ""} Your reply MUST contain that question.`
+      : emailAsks === 1
+        ? "You have asked for their email once already. Ask again ONLY if they have shown real interest since; otherwise answer what they asked and earn it first."
+        : `You have asked for their email ${emailAsks} times and they have not given it. Do NOT ask again — asking repeatedly is the fastest way to get this chat closed. Answer what they actually asked and give them a concrete reason to keep talking.`;
+
   const prompt = `You are ${input.displayName}, an inbound sales assistant chatting with a visitor on our website. Your goal is to understand what they need and, if they are a good fit, get a sales meeting booked.
 
 ${brand ? `About us:\n${brand}\n` : ""}${input.persona ? `Additional instructions:\n${input.persona}\n` : ""}
@@ -231,13 +320,11 @@ Rules:
 - Reply in 1-3 short sentences. Conversational, never a wall of text.
 - Ask at most ONE question per reply.
 - NEVER claim experience, clients, results or a track record that is not stated in "About us" above. This includes UNNAMED claims — "we work with organisations like yours regularly" is exactly as forbidden as naming one. If asked who you have worked with or for a reference, say what you can DO and offer to walk them through the approach; do not imply a client base you have not been given.
-${emailAsks === 0
-      ? "- You need their work email before anything useful can happen — ask for it once, and give them a reason it helps THEM."
-      : `- You have ALREADY asked for their email ${emailAsks} time${emailAsks === 1 ? "" : "s"} and they have not given it. Do NOT ask again this turn. Answer what they actually asked and give them a concrete reason to keep talking. Asking repeatedly is the fastest way to get this chat closed.`}
+- ${emailGuidance}
 - ${input.canBook
       ? hasEmail
         ? "If they are a good fit, say you can find a time and set wantsMeeting to true. Do NOT invent specific times — the system will show real availability."
-        : "If they are a good fit, OFFER THE MEETING FIRST and ask for their email as the way to confirm it, in the same breath — an email request costs them something and should buy them something. Do NOT invent specific times."
+        : "Do NOT invent specific times — the system will show real availability once you have their email."
       : "Do not offer to book a time yourself; say a member of the team will follow up."}
 - NEVER invent a name, email, company or phone number. Only extract what the visitor actually said. Use null when they have not said it.
 - score = 0-100 fit for a B2B sales conversation, judged on the buying intent and context they have shown. Start low; raise it only on real evidence.

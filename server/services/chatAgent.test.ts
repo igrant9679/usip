@@ -9,6 +9,7 @@ import {
   MEETING_REQUEST_FLOOR,
   decideOffer,
   emailAskCount,
+  scrubUnsupportedClaims,
   mergeVisitor,
   plausibleEmail,
   sanitizeTurn,
@@ -189,5 +190,60 @@ describe("emailAskCount", () => {
 
   it("is empty-safe", () => {
     expect(emailAskCount([])).toBe(0);
+  });
+});
+
+describe("scrubUnsupportedClaims", () => {
+  // The sentence the LIVE agent produced after the prompt rule was added.
+  it("drops the exact claim the prompt rule failed to stop", () => {
+    const r = scrubUnsupportedClaims(
+      "Grant reporting across six funders is exactly the kind of admin work AI can transform. We've helped nonprofits automate report compilation to save weeks each quarter. Have you got a sense of what it costs you annually?",
+    );
+    expect(r.text).not.toMatch(/we've helped/i);
+    expect(r.text).toContain("Grant reporting across six funders");
+    expect(r.text).toContain("Have you got a sense");
+    expect(r.removed).toHaveLength(1);
+  });
+
+  it("catches unnamed track-record claims, which are the dangerous ones", () => {
+    expect(scrubUnsupportedClaims("We work with food banks regularly.").text).toBe("");
+    expect(scrubUnsupportedClaims("Our clients see this all the time.").text).toBe("");
+    expect(scrubUnsupportedClaims("We have worked with similar teams.").text).toBe("");
+  });
+
+  it("catches quantified outcomes with or without a digit", () => {
+    expect(scrubUnsupportedClaims("It can save 30% of admin time.").text).toBe("");
+    expect(scrubUnsupportedClaims("That saves weeks each quarter.").text).toBe("");
+    expect(scrubUnsupportedClaims("We reduce reporting by 12 hours a month.").text).toBe("");
+  });
+
+  it("leaves ordinary capability talk alone — the agent's actual job", () => {
+    const ok = "We help nonprofits use AI to automate repetitive work so your team can focus on the mission. What is taking the most time right now?";
+    expect(scrubUnsupportedClaims(ok).text).toBe(ok);
+    const ok2 = "The audit is free and it frees up time for your team.";
+    expect(scrubUnsupportedClaims(ok2).text).toBe(ok2);
+  });
+
+  it("catches a price, which the persona also forbids", () => {
+    expect(scrubUnsupportedClaims("It usually starts around $5,000.").text).toBe("");
+  });
+
+  it("reports what it removed so a shorter reply is explainable", () => {
+    const r = scrubUnsupportedClaims("Sure. Our clients love it.");
+    expect(r.removed[0].kind).toBe("track_record");
+    expect(r.removed[0].sentence).toContain("Our clients");
+  });
+
+  it("is empty-safe and keeps punctuation on the surviving sentences", () => {
+    expect(scrubUnsupportedClaims("").text).toBe("");
+    expect(scrubUnsupportedClaims("Yes. No! Maybe?").text).toBe("Yes. No! Maybe?");
+  });
+});
+
+describe("sanitizeTurn + claim scrubbing", () => {
+  it("substitutes an honest fallback when scrubbing empties the reply", () => {
+    const t = sanitizeTurn({ reply: "We've helped dozens of food banks save weeks.", score: 70 }, "fb");
+    expect(t.reply).not.toMatch(/we've helped/i);
+    expect(t.reply.length).toBeGreaterThan(20);
   });
 });
