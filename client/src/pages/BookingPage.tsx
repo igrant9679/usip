@@ -14,6 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { CalendarCheck, CheckCircle2, Clock, Loader2, ChevronLeft } from "lucide-react";
+import ChatLauncher from "@/components/ChatLauncher";
 
 export default function BookingPage() {
   const [, params] = useRoute("/b/:slug");
@@ -146,6 +147,9 @@ export default function BookingPage() {
           </div>
         )}
       </div>
+
+      {/* Hesitation on a booking page is a question nobody is there to answer. */}
+      <ChatLauncher slug={link.data?.chatSlug} />
     </div>
   );
 }

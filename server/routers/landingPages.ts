@@ -16,6 +16,7 @@ import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { getDb } from "../db";
 import { landingPages, leads, enrollments } from "../../drizzle/schema";
 import { resolveBookingUrl } from "../mergeVars";
+import { hostedPageChatSlug } from "../services/hostedChat";
 
 type FormField = { key: string; label: string; required?: boolean };
 const DEFAULT_FIELDS: FormField[] = [
@@ -175,6 +176,12 @@ export const landingPagesRouter = router({
       formFields: (Array.isArray(p.formFields) ? p.formFields : DEFAULT_FIELDS) as FormField[],
       bookingUrl: bookingUrl || null,
       name: p.name,
+      /**
+       * The workspace's hosted-page chat agent, if one is installed (0135).
+       * A visitor who reads the page but won't fill the form can still ask a
+       * question — and in `auto` mode book — without an outbound send.
+       */
+      chatSlug: await hostedPageChatSlug(p.workspaceId),
     };
   }),
 

@@ -67,8 +67,11 @@ export default function ChatAgents() {
 
   const agents = (list.data as any[]) ?? [];
   const publicUrl = form?.slug ? `${window.location.origin}/c/${form.slug}` : "";
-  const embedCode = publicUrl
-    ? `<iframe src="${publicUrl}" title="Chat" style="position:fixed;bottom:20px;right:20px;width:380px;height:560px;border:0;border-radius:16px;box-shadow:0 8px 40px rgba(0,0,0,.18);z-index:2147483000"></iframe>`
+  // A launcher bubble, not a permanently-open 380x560 iframe: the snippet has
+  // to be something a real marketing site would accept. Colour and name come
+  // from the agent at runtime, so editing the persona never means re-pasting.
+  const embedCode = form?.slug
+    ? `<script src="${window.location.origin}/v/chat.js" data-agent="${form.slug}" async></script>`
     : "";
   const patch = (k: string, v: any) => setForm((f: any) => ({ ...f, [k]: v }));
 
@@ -192,14 +195,28 @@ export default function ChatAgents() {
                   </Button>
                   <Button variant="ghost" size="sm" className="h-7 gap-1 shrink-0" disabled={form.status !== "published"} onClick={() => window.open(publicUrl, "_blank")}><ExternalLink className="size-3.5" /> Open</Button>
                 </div>
-                <Field label="Embed on your website">
+                {/* The one-click half: pages we already host for this workspace. */}
+                <div className="rounded-lg border bg-card p-3 space-y-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <Label className="text-sm">Show on my Velocity-hosted pages</Label>
+                    <Switch checked={!!form.showOnHostedPages} onCheckedChange={(v) => setField("showOnHostedPages", v)} />
+                  </div>
+                  <p className="text-[11px] text-muted-foreground">
+                    Adds the chat bubble to your landing pages (<b>/l/…</b>) and every rep's booking page (<b>/b/…</b>). No snippet, nothing to paste.
+                    {form.status !== "published" && <> Takes effect once this agent is published.</>}
+                  </p>
+                </div>
+
+                <Field label="Embed on your own website">
                   <div className="rounded-lg border bg-muted/40 p-3 space-y-2">
                     <code className="block text-[11px] leading-relaxed break-all text-muted-foreground">{embedCode}</code>
                     <Button variant="outline" size="sm" className="h-7 gap-1" onClick={() => copy(embedCode, "embed")}>
                       {copied === "embed" ? <><Check className="size-3.5" /> Copied</> : <><Code2 className="size-3.5" /> Copy snippet</>}
                     </Button>
                   </div>
-                  <p className="text-[11px] text-muted-foreground">Paste before <code>&lt;/body&gt;</code> on any page. The agent hides its own header when embedded.</p>
+                  <p className="text-[11px] text-muted-foreground">
+                    Paste before <code>&lt;/body&gt;</code> on any page. It adds a chat bubble that opens the agent — it doesn't load the chat until a visitor clicks, and it shows nothing at all while this agent is unpublished or Off.
+                  </p>
                 </Field>
               </Section>
 

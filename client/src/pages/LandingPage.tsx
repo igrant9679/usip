@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { CheckCircle2, Loader2, CalendarCheck } from "lucide-react";
+import ChatLauncher from "@/components/ChatLauncher";
 
 type Field = { key: string; label: string; required?: boolean };
 
@@ -132,6 +133,9 @@ export default function LandingPage() {
       </main>
 
       <footer className="border-t border-slate-100 py-6 text-center text-[11px] text-slate-400">Powered by Velocity</footer>
+
+      {/* The second way off this page: a visitor who won't fill the form can ask. */}
+      <ChatLauncher slug={page.data.chatSlug} color={accent} />
     </div>
   );
 }

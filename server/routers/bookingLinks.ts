@@ -23,6 +23,7 @@ import { workspaceProcedure } from "../_core/workspace";
 import { getDb } from "../db";
 import { activities, bookingLinks, calendarEvents, leads, meetings, notifications, users, type BookingLink } from "../../drizzle/schema";
 import { sendMeetingInvite } from "../services/meetingScheduler";
+import { hostedPageChatSlug } from "../services/hostedChat";
 
 /** Availability defaults + generation bounds. */
 const HORIZON_DAYS = 14; // look ahead up to 2 weeks
@@ -400,6 +401,12 @@ export const bookingLinksRouter = router({
         /** The host's availability timezone (informational; slots are ISO/UTC). */
         timezone: link.timezone ?? "UTC",
         slots,
+        /**
+         * The workspace's hosted-page chat agent, if one is installed (0135).
+         * A booking page is where hesitation shows up — "is this even for me?" —
+         * and the agent answers it and books through this same path.
+         */
+        chatSlug: await hostedPageChatSlug(link.workspaceId),
       };
     }),
 

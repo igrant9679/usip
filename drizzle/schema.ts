@@ -1591,6 +1591,12 @@ export const chatAgents = mysqlTable(
     /** Extra instructions layered on top of the built-in SDR system prompt. */
     persona: text("persona"),
     themeColor: varchar("themeColor", { length: 16 }).default("#14B89A").notNull(),
+    /**
+     * Ride along on the pages Velocity itself hosts — /l/:slug landing pages
+     * and /b/:slug booking pages (Migration 0135). The in-app half of "install";
+     * external sites paste /v/chat.js instead.
+     */
+    showOnHostedPages: boolean("showOnHostedPages").default(false).notNull(),
     /** qualifyingQuestions: string[] the agent should work through, in order. */
     qualifyingQuestions: json("qualifyingQuestions"),
     /** Score (0-100) at or above which a visitor counts as qualified. */

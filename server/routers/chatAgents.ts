@@ -70,6 +70,7 @@ const contentInput = z.object({
   greeting: z.string().min(1).max(500).optional(),
   persona: z.string().max(4000).nullable().optional(),
   themeColor: z.string().max(16).optional(),
+  showOnHostedPages: z.boolean().optional(),
   qualifyingQuestions: z.array(z.string().max(300)).max(8).nullable().optional(),
   qualifyThreshold: z.number().int().min(0).max(100).optional(),
   bookingUserId: z.number().int().positive().nullable().optional(),
@@ -113,6 +114,7 @@ export const chatAgentsRouter = router({
       greeting: input.greeting ?? "Hi! What brings you here today?",
       persona: input.persona ?? null,
       themeColor: input.themeColor ?? "#14B89A",
+      showOnHostedPages: input.showOnHostedPages ?? false,
       qualifyingQuestions: input.qualifyingQuestions ?? [
         "What are you hoping to solve?",
         "Roughly how big is your team?",

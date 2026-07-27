@@ -81,7 +81,7 @@ const ARTICLES: ArticleSeed[] = [
 
 **Before going Autonomous**, check your booking link's timezone. It defaults to UTC, so a Mon-Fri 9-17 window offers US prospects the middle of the night.
 
-**Install it** by sharing the /c/ link, or pasting the iframe snippet into your site. The same URL works as both — the agent hides its own header when embedded.
+**Install it** — this is the step that decides whether it books anything. Three ways, and you can use all three: share the /c/ link directly; turn on **Show on my Velocity-hosted pages** to put the bubble on your landing pages and every rep's booking page; or paste the one-line script into your own website before the closing body tag. The script adds a launcher bubble, does not load the chat until someone clicks it, and renders nothing at all while the agent is unpublished or Off — so turning the agent off really does remove it from your site.
 
 **What it will not do.** It never invents a name, email or company; anything it did not hear from the visitor stays empty. It cannot book without an email address. And the decision to book is not the model's — it follows the mode you set.`,
   },
@@ -1263,7 +1263,7 @@ const TOURS: TourSeed[] = [
       { title: "Your agents", bodyMarkdown: "Each agent is a separate widget with its own persona and autonomy. The counters show conversations, leads captured, and meetings booked. Click **New** to create one.", targetDataTourId: "chat-agent-list", visualTreatment: "spotlight", advanceCondition: "next_button" },
       { title: "Decide how far it goes", bodyMarkdown: "**Off** — the widget refuses to serve. **Approve** — it chats and captures the lead, but a qualified visitor becomes a task for a human. **Autonomous** — it shows your real open calendar slots and books the meeting itself. Start on Approve and read a few transcripts before going autonomous.", targetDataTourId: "chat-autonomy", visualTreatment: "spotlight", advanceCondition: "next_button" },
       { title: "Teach it who is a fit", bodyMarkdown: "Your qualifying questions get worked into the conversation naturally — one at a time, never as an interrogation. The threshold is the score at which a visitor counts as qualified. Someone who explicitly asks for a meeting is offered one from 40 regardless.", targetDataTourId: "chat-qualification", visualTreatment: "spotlight", advanceCondition: "next_button" },
-      { title: "Put it on your site", bodyMarkdown: "Share the link directly, or paste the iframe snippet at the end of any page. The agent hides its own header when embedded, so the same URL works as both.", targetDataTourId: "chat-install", visualTreatment: "spotlight", advanceCondition: "next_button" },
+      { title: "Put it where visitors are", bodyMarkdown: "An agent nobody can reach books nothing. **Show on my Velocity-hosted pages** is one click and puts the chat bubble on your landing pages and every rep's booking page. For your own website, paste the one-line script before `</body>` — it adds a bubble, loads nothing until a visitor clicks it, and shows nothing at all while this agent is unpublished or Off.", targetDataTourId: "chat-install", visualTreatment: "spotlight", advanceCondition: "next_button" },
       { title: "Read what it actually said", bodyMarkdown: "Every conversation is kept in full, with the fit score and what it produced — a lead, a booked meeting, or neither. Read these before trusting it unattended.", visualTreatment: "coach", advanceCondition: "next_button" },
     ],
   },

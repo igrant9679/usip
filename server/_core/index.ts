@@ -62,6 +62,7 @@ import { expireInvitations, sendExpiryWarningEmails } from "../inviteExpiry";
 import { registerUnipileWebhookRoutes } from "../unipileWebhook";
 import { registerVoiceWebhookRoutes } from "../voiceWebhook";
 import { registerWebsiteTrackingRoutes } from "../websiteTracking";
+import { registerChatWidgetRoutes } from "../chatWidget";
 import { registerUnsubscribeRoute } from "../unsubscribe";
 import { registerPasswordAuthRoutes } from "../passwordAuth";
 import { registerLLMStreamRoutes } from "../llmStreamRoute";
@@ -106,6 +107,7 @@ async function startServer() {
   registerScimRoutes(app);
   registerEmailTrackingRoutes(app);
   registerWebsiteTrackingRoutes(app);
+  registerChatWidgetRoutes(app);
   registerUnipileWebhookRoutes(app);
   registerVoiceWebhookRoutes(app);
   registerUnsubscribeRoute(app);

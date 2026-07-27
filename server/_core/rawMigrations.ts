@@ -2888,6 +2888,22 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0135: install the chat agent on Velocity-hosted public pages ──────────
+  // The agent has been autonomous and correct since 0130 and has booked nothing,
+  // for the dullest possible reason: it was not installed anywhere. It converts
+  // where visitors already are, and Velocity already hosts pages visitors land
+  // on — /l/:slug landing pages and /b/:slug booking pages.
+  //
+  // ONE switch on the agent, not a picker on each page. "Install my agent on
+  // the pages you host for me" is a single decision; a per-page picker would be
+  // one more place to forget, and forgetting looks identical to working.
+  {
+    name: "0135_chat_agent_hosted_pages.sql",
+    statements: [
+      "ALTER TABLE `chat_agents` ADD COLUMN `showOnHostedPages` boolean NOT NULL DEFAULT false",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------
