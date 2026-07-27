@@ -52,7 +52,9 @@ function score(entry: KnowledgeEntry, queryTerms: Set<string>): number {
   const titleTerms = new Set(terms(entry.title));
   const bodyTerms = new Set(terms(entry.body));
   let n = 0;
-  for (const q of queryTerms) {
+  // Array.from rather than iterating the Set directly — the project's tsc
+  // target rejects Set iteration without downlevelIteration.
+  for (const q of Array.from(queryTerms)) {
     if (titleTerms.has(q)) n += 2;
     else if (bodyTerms.has(q)) n += 1;
   }

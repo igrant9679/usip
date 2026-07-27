@@ -72,6 +72,8 @@ const contentInput = z.object({
   persona: z.string().max(4000).nullable().optional(),
   themeColor: z.string().max(16).optional(),
   showOnHostedPages: z.boolean().optional(),
+  followUpMode: z.enum(["off", "approval", "auto"]).optional(),
+  followUpDelayMin: z.number().int().min(5).max(1440).optional(),
   qualifyingQuestions: z.array(z.string().max(300)).max(8).nullable().optional(),
   qualifyThreshold: z.number().int().min(0).max(100).optional(),
   bookingUserId: z.number().int().positive().nullable().optional(),

@@ -63,6 +63,7 @@ import { registerUnipileWebhookRoutes } from "../unipileWebhook";
 import { registerVoiceWebhookRoutes } from "../voiceWebhook";
 import { registerWebsiteTrackingRoutes } from "../websiteTracking";
 import { registerChatWidgetRoutes } from "../chatWidget";
+import { runChatFollowUps } from "../services/chatFollowUp";
 import { registerUnsubscribeRoute } from "../unsubscribe";
 import { registerPasswordAuthRoutes } from "../passwordAuth";
 import { registerLLMStreamRoutes } from "../llmStreamRoute";
@@ -289,6 +290,27 @@ async function startServer() {
   };
   setTimeout(runAutopilot, 3 * 60 * 1000); // first run 3 minutes after boot
   setInterval(runAutopilot, 30 * 60 * 1000); // every 30 minutes
+
+  // Chat abandonment follow-up (0137): a visitor who gave an email and left
+  // without booking is the most recoverable thing the chat produces. Only acts
+  // for agents whose OWN followUpMode is approval/auto (default off), and every
+  // run logs a per-reason breakdown — a bare count of an engine that spends
+  // sends is a rumour.
+  const runChatFollowUp = () => {
+    runChatFollowUps()
+      .then((r) => {
+        if (r.agentsConsidered > 0) {
+          console.log(
+            `[ChatFollowUp] sent=${r.sent} queued=${r.queuedForApproval} suppressed=${r.suppressed} ` +
+            `failed=${r.failed} expired=${r.expired} skipped=${JSON.stringify(r.skipped)}` +
+            (r.notes.length ? ` notes=${r.notes.join("; ")}` : ""),
+          );
+        }
+      })
+      .catch((e) => console.error("[ChatFollowUp] cron run failed:", e));
+  };
+  setTimeout(runChatFollowUp, 5 * 60 * 1000); // first run 5 minutes after boot
+  setInterval(runChatFollowUp, 15 * 60 * 1000); // every 15 minutes — the delay window is per-agent
 
   // Meeting Autopilot: for every workspace with meetingAutopilotMode != 'off',
   // propose meetings (AI-drafted times + invite) for the best-fit prospects that

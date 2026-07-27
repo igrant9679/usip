@@ -2930,6 +2930,26 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0137: abandoned-conversation follow-up ────────────────────────────────
+  // A visitor who gave an email and then left is the most recoverable thing the
+  // chat produces, and until now it was simply lost.
+  //
+  // Its OWN Off/Approve/Auto switch rather than reusing the agent's `mode`:
+  // booking a meeting a visitor just asked for and emailing someone who walked
+  // away are different acts carrying different risk. Same reasoning that gave
+  // the 0132 sweep and 0134 backfill separate switches. Default off.
+  //
+  // `followUpAt` on the session is the idempotency marker — set when a follow-up
+  // is sent OR queued for approval, so no cron cadence can double-send.
+  {
+    name: "0137_chat_followup.sql",
+    statements: [
+      `ALTER TABLE \`chat_agents\` ADD COLUMN \`followUpMode\` enum('off','approval','auto') NOT NULL DEFAULT 'off'`,
+      "ALTER TABLE `chat_agents` ADD COLUMN `followUpDelayMin` int NOT NULL DEFAULT 45",
+      "ALTER TABLE `chat_sessions` ADD COLUMN `followUpAt` timestamp NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

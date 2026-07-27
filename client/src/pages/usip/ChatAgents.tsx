@@ -220,6 +220,42 @@ export default function ChatAgents() {
                 </Field>
               </Section>
 
+              {/* Abandonment follow-up (0137) — its own switch, not the agent's mode */}
+              <Section title="If they leave without booking" tourId="chat-followup">
+                <div className="flex gap-1.5">
+                  {(["off", "approval", "auto"] as const).map((m) => (
+                    <Button
+                      key={m}
+                      size="sm"
+                      variant={form.followUpMode === m ? "default" : "outline"}
+                      className="h-8 flex-1 text-[12px]"
+                      style={form.followUpMode === m ? { backgroundColor: accent } : undefined}
+                      onClick={() => setField("followUpMode", m)}
+                    >
+                      {m === "off" ? "Off" : m === "approval" ? "Draft for me" : "Send it"}
+                    </Button>
+                  ))}
+                </div>
+                <p className="text-[11px] text-muted-foreground">
+                  When a visitor gives an email and then leaves without booking, write them one follow-up referencing what they actually said.
+                  {" "}<b>Draft for me</b> puts it in your tasks to review; <b>Send it</b> sends unattended.
+                  {" "}Only conversations from the last 7 days are ever followed up, and never more than once.
+                </p>
+                {form.followUpMode !== "off" && (
+                  <Field label="Wait this long after their last message">
+                    <div className="flex items-center gap-2">
+                      <Input
+                        type="number" min={5} max={1440} className="h-9 w-28"
+                        value={form.followUpDelayMin ?? 45}
+                        onChange={(e) => patch("followUpDelayMin", Number(e.target.value) || 45)}
+                        onBlur={() => setField("followUpDelayMin", Math.min(1440, Math.max(5, Number(form.followUpDelayMin) || 45)))}
+                      />
+                      <span className="text-[12px] text-muted-foreground">minutes</span>
+                    </div>
+                  </Field>
+                )}
+              </Section>
+
               {/* What it is allowed to know (0136) */}
               <KnowledgeSection agentId={form.id} accent={accent} />
 
@@ -393,7 +429,7 @@ function KnowledgeSection({ agentId, accent }: { agentId: number; accent: string
                 onClick={() => setDraft({ id: r.id, title: r.title, body: r.body })}>Edit</Button>
               <Button variant="ghost" size="sm" className="h-7 shrink-0 text-rose-600"
                 onClick={() => confirmAction(
-                  { title: "Remove this fact?", body: "The agent will stop being able to answer questions about it.", confirmLabel: "Remove" },
+                  { title: "Remove this fact?", description: "The agent will stop being able to answer questions about it.", confirmLabel: "Remove", destructive: true },
                   () => remove.mutate({ id: r.id }),
                 )}>Remove</Button>
             </div>

@@ -1627,6 +1627,15 @@ export const chatAgents = mysqlTable(
      * external sites paste /v/chat.js instead.
      */
     showOnHostedPages: boolean("showOnHostedPages").default(false).notNull(),
+    /**
+     * Abandonment follow-up (Migration 0137) — its OWN Off/Approve/Auto switch,
+     * not the agent's `mode`. Booking a meeting a visitor asked for and emailing
+     * someone who walked away are different acts with different risk, so they
+     * get different switches (same reasoning as the 0132/0134 engines).
+     */
+    followUpMode: mysqlEnum("followUpMode", ["off", "approval", "auto"]).default("off").notNull(),
+    /** Minutes of silence before a conversation counts as abandoned. */
+    followUpDelayMin: int("followUpDelayMin").default(45).notNull(),
     /** qualifyingQuestions: string[] the agent should work through, in order. */
     qualifyingQuestions: json("qualifyingQuestions"),
     /** Score (0-100) at or above which a visitor counts as qualified. */
@@ -1677,6 +1686,12 @@ export const chatSessions = mysqlTable(
     // ── What it produced ──
     leadId: int("leadId"),
     meetingId: int("meetingId"),
+    /**
+     * Abandonment follow-up (Migration 0137). Set the moment a follow-up is
+     * SENT or QUEUED for approval — it is the idempotency marker, so a session
+     * can never be followed up twice however often the cron runs.
+     */
+    followUpAt: timestamp("followUpAt"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
