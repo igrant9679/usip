@@ -62,6 +62,128 @@ type ArticleSeed = {
 };
 
 const ARTICLES: ArticleSeed[] = [
+  // Articles for what shipped in the 0130-0134 range. Written against the
+  // measured behaviour of this workspace, not the intended behaviour.
+  {
+    slug: "website-chat-agent",
+    categorySlug: "playbooks",
+    title: "The website chat agent",
+    summary: "Qualify visitors and book meetings without sending anything.",
+    readingTimeMinutes: 3,
+    tags: ["inbound", "chat", "meetings", "autonomy"],
+    pageKey: "chat",
+    tourName: "Your Website Chat Agent",
+    bodyMarkdown: `The chat agent is the only meeting source in Velocity that sends nothing at all. A visitor lands on a page carrying the widget, the agent talks to them, and if they are a fit it captures a routed lead and — in **Autonomous** mode — offers your real calendar slots and books one.
+
+**Set it up** at *Inbound → Chat* (admin only). Give it a display name, an opening line, and the questions it should work into the conversation. The **extra instructions** field is where guardrails go: never quote a price, never promise a savings figure, do not claim named clients. Those are read on every turn.
+
+**Autonomy.** *Off* means the widget refuses to serve. *Approve* means it chats and captures the lead, but a qualified visitor becomes a high-priority task for a human instead of a booking. *Autonomous* means it shows genuine availability and books unattended. Start on Approve and read a few transcripts.
+
+**Before going Autonomous**, check your booking link's timezone. It defaults to UTC, so a Mon-Fri 9-17 window offers US prospects the middle of the night.
+
+**Install it** by sharing the /c/ link, or pasting the iframe snippet into your site. The same URL works as both — the agent hides its own header when embedded.
+
+**What it will not do.** It never invents a name, email or company; anything it did not hear from the visitor stays empty. It cannot book without an email address. And the decision to book is not the model's — it follows the mode you set.`,
+  },
+  {
+    slug: "how-email-finding-works",
+    categorySlug: "prospecting",
+    title: "How Velocity finds an email address",
+    summary: "The three-step chain, what each step costs, and where prospects get stuck.",
+    readingTimeMinutes: 4,
+    tags: ["enrichment", "email", "linkedin", "apollo"],
+    pageKey: "data-sources",
+    tourName: "Turn On Email Finding",
+    bodyMarkdown: `Finding a work address is a chain. Each step feeds the next, and a prospect stalls at whichever link is missing.
+
+**1. LinkedIn gives the employer.** Sourced prospects often arrive with a name and a LinkedIn URL and nothing else. LinkedIn withholds structured work history for people outside your account's network, so the employer usually has to be read out of the profile headline — "Chief Financial Officer at Acme Foundation". Measured on real data, roughly **30%** of headlines name an employer; the rest are slogans like "Making numbers make sense!" and yield nothing. This step spends your connected LinkedIn account's daily lookup allowance.
+
+**2. Apollo turns a company name into a domain.** This uses Apollo's organisation search and costs **no Apollo credits**. Velocity never calls Apollo's paid enrichment endpoints.
+
+**3. Velocity derives and verifies the address.** It scrapes the company site for published addresses, generates the two or three most likely patterns from the person's name and domain (first.last, flast, firstlast cover about 80% of corporate schemes), and asks Reoon which is real. This is the only step that spends verification credits.
+
+**Where people get stuck.** No company name and no LinkedIn URL means nothing can start. A first name without a surname cannot produce a pattern. And a rejected prospect is never worked at all — reject moves someone out of the queue entirely, so no budget is spent on them.
+
+**Expect losses at every hop.** A realistic end-to-end yield is well under half the prospects you start with. That is the nature of the chain, not a fault in it.`,
+  },
+  {
+    slug: "enrichment-sweep-and-backfill",
+    categorySlug: "autopilots",
+    title: "Enrichment Sweep and Company Backfill",
+    summary: "Two data engines, two budgets, two switches — and why Approve means something different here.",
+    readingTimeMinutes: 3,
+    tags: ["autonomy", "enrichment", "credits"],
+    pageKey: "workflows",
+    tourName: "The Autonomy Control Center",
+    bodyMarkdown: `Two engines in the Autonomy Control Center only fill in missing data. Neither sends anything, which changes what the controls mean.
+
+**Company Backfill** reads employers off LinkedIn profiles for prospects that have none. It spends your connected account's daily lookup allowance (around 100/day) and defaults to a cap of 50, leaving the rest for interactive use.
+
+**Enrichment Sweep** takes prospects that have a company and finds their address. It resolves any missing domains first (free), then verifies (spends Reoon credits).
+
+**Approve means attended.** For every other engine, Approve means "draft it and wait for me". For these two there is no outward action to review — the only thing worth gating is unattended spend. So Approve means *runs when you press the button*, and Autonomous means *runs daily on a cap*.
+
+**Separate switches on purpose.** They spend different budgets. One control over both is how you end up with a bill you did not choose.
+
+**Both skip rejected prospects.** Rejecting someone removes them from all of this — no lookups, no credits, no re-research.
+
+**Watch the first automatic run.** Company names are derived from headline prose. The parser refuses anything ambiguous rather than guessing, but spot-checking a few is cheap and worth doing.`,
+  },
+  {
+    slug: "meet-elsie",
+    categorySlug: "getting-started",
+    title: "Elsie, the in-app guide",
+    summary: "What the compass in the top bar does.",
+    readingTimeMinutes: 1,
+    tags: ["getting-started", "help", "tours"],
+    pageKey: "dashboard",
+    tourName: "Meet Elsie",
+    bodyMarkdown: `**Elsie** is the guide built into Velocity by LSI Media. When you open a page she has a walkthrough for, she offers it — once per page per session, never repeatedly.
+
+Accepting one starts a guided tour: the relevant control is spotlighted, a card explains it, and the tour moves between pages on its own where it needs to.
+
+**The compass in the top bar switches her on and off.** Off genuinely means off — she stops offering and stops looking anything up. The setting lives on your account, so turning her off on one machine turns her off everywhere you sign in.
+
+**Nothing is lost by dismissing a tour.** Every walkthrough stays available in the Help Center under Tours, so you can run any of them whenever you like.`,
+  },
+  {
+    slug: "multiple-workspaces",
+    categorySlug: "settings-account",
+    title: "Running multiple workspaces",
+    summary: "One workspace per client, and what does not carry across.",
+    readingTimeMinutes: 2,
+    tags: ["settings", "workspaces", "admin"],
+    pageKey: "settings",
+    tourName: "Working With Multiple Workspaces",
+    bodyMarkdown: `A workspace is a complete, separate world: its own members, prospects, mailboxes, API keys, autopilot settings and branding. Nothing crosses between them.
+
+**Switching** is the control at the top of the sidebar, which lists every workspace you belong to.
+
+**Creating one** is a super-admin action, from the same menu. You become its super admin, and it starts empty. Sample data is opt-in and off by default — a client workspace pre-filled with invented accounts is worse than an empty one, and some engines read those rows as real.
+
+**What a new workspace does not inherit** is the part that surprises people: no Apollo key, no verification key, no connected mailbox, no brand voice. Each has to be set up per workspace. That is correct when each one is a different client, but it does mean enrichment and sending will not work in a new workspace until they are configured.`,
+  },
+  {
+    slug: "meetings-without-outbound",
+    categorySlug: "playbooks",
+    title: "Getting meetings without sending anything",
+    summary: "Three inbound paths that work while campaigns are paused.",
+    readingTimeMinutes: 3,
+    tags: ["meetings", "inbound", "playbook"],
+    pageKey: "chat",
+    tourName: "Booked Without Sending",
+    bodyMarkdown: `If your outbound is paused — or you have not started it — three paths still produce booked meetings.
+
+**The website chat agent** qualifies a visitor and, in Autonomous mode, books them onto your calendar directly.
+
+**Your booking link** shows genuine open slots from your calendar. Share it, or use the bookingLink merge variable in any email so a meeting ask never renders a dead link.
+
+**Landing pages and forms** create a routed lead on submit and can auto-enroll it into a sequence. Turn on a landing page's booking button and a visitor skips the form entirely.
+
+All three land in the same place: a meeting on **Meetings** and on your real calendar, with the lead attached.
+
+**Why this matters.** Outbound needs volume, deliverability and time before it produces anything. These do not. If your campaigns are paused for any reason, this is the path that still works today.`,
+  },
   {
     slug: "welcome-to-velocity",
     categorySlug: "getting-started",
@@ -517,6 +639,87 @@ type TourSeed = {
 };
 
 const TOURS: TourSeed[] = [
+  // Onboarding variations. One route in is not enough: a rep and an admin
+  // need different first sessions, and returning users need neither.
+  {
+    name: "Meet Elsie",
+    description: "How the in-app guide works, and how to switch it off.",
+    type: "onboarding",
+    estimatedMinutes: 1,
+    pageKey: "elsie",
+    route: "/v2/home",
+    roleTags: ["sdr", "admin"],
+    steps: [
+      { title: "I'm Elsie", bodyMarkdown: "I'm the guide built into Velocity by LSI Media. When you land on a page I have a walkthrough for, I offer it once — never twice for the same page in a session.", routeTo: "/v2/home", visualTreatment: "coach", advanceCondition: "next_button" },
+      { title: "The switch is always in reach", bodyMarkdown: "The compass in the top bar turns me on and off. Off means off: I stop asking and stop looking things up, rather than just hiding the card.", targetDataTourId: "sidebar-nav", visualTreatment: "spotlight", advanceCondition: "next_button" },
+      { title: "Your choice follows you", bodyMarkdown: "Turn me off on your laptop and I stay off on your phone. The setting lives on your account, not the browser.", visualTreatment: "coach", advanceCondition: "next_button" },
+      { title: "Everything is replayable", bodyMarkdown: "Nothing here is one-shot. Every walkthrough lives in the Help Center under Tours, so dismissing one now costs you nothing later.", targetDataTourId: "help-button", visualTreatment: "pulse", advanceCondition: "next_button" },
+    ],
+  },
+  {
+    name: "Your First 15 Minutes",
+    description: "The shortest path from empty workspace to a booked meeting.",
+    type: "onboarding",
+    estimatedMinutes: 5,
+    pageKey: "first-run",
+    route: "/v2/home",
+    roleTags: ["sdr"],
+    steps: [
+      { title: "What good looks like", bodyMarkdown: "By the end of this you will have a list worth working, one sequence running, and a way for interested people to book time with you. Everything else can wait.", routeTo: "/v2/home", visualTreatment: "coach", advanceCondition: "next_button" },
+      { title: "1. Connect your mailbox and calendar", bodyMarkdown: "Nothing sends and nothing books until these are connected. It is the single most common reason a new workspace looks broken.", visualTreatment: "coach", advanceCondition: "next_button" },
+      { title: "2. Get people in", bodyMarkdown: "Find Prospects sources them, Import brings a list you already have, and the Revenue Engine can source continuously on its own. Any one of the three is enough to start.", targetDataTourId: "sidebar-nav", visualTreatment: "spotlight", advanceCondition: "next_button" },
+      { title: "3. Say who you are once", bodyMarkdown: "Brand Voice and Personas are read by every AI draft in the product. Ten minutes here changes the quality of everything downstream, and skipping it is why AI copy reads generic.", visualTreatment: "coach", advanceCondition: "next_button" },
+      { title: "4. Let people book you", bodyMarkdown: "Your booking link shows real open slots from your calendar. Set your working hours and timezone first — the default is UTC, which offers prospects the middle of your night.", visualTreatment: "coach", advanceCondition: "next_button" },
+      { title: "5. Start on Approve", bodyMarkdown: "Turn the autopilots to Approve rather than Autonomous. You see everything before it goes out, and you learn what the system proposes before trusting it unattended.", routeTo: "/v2/workflows", visualTreatment: "coach", advanceCondition: "next_button" },
+    ],
+  },
+  {
+    name: "Admin Setup Checklist",
+    description: "The workspace-level settings everything else depends on.",
+    type: "onboarding",
+    estimatedMinutes: 5,
+    pageKey: "admin-setup",
+    route: "/v2/settings/data-sources",
+    roleTags: ["admin"],
+    steps: [
+      { title: "Set up once, for everyone", bodyMarkdown: "These are workspace-level and your reps inherit them. Getting them right now saves answering the same question repeatedly later.", routeTo: "/v2/settings/data-sources", visualTreatment: "coach", advanceCondition: "next_button" },
+      { title: "Data sources", bodyMarkdown: "Apollo sources prospects and resolves company domains at no credit cost. Reoon verifies the addresses Velocity derives. Neither finds an email alone.", targetDataTourId: "settings-data-sources", visualTreatment: "spotlight", advanceCondition: "next_button" },
+      { title: "Verification is the bottleneck", bodyMarkdown: "Without a verification key the finder still collects phones and social links, but resolves no addresses at all — and it fails quietly rather than loudly.", targetDataTourId: "reoon-key-card", visualTreatment: "spotlight", advanceCondition: "next_button" },
+      { title: "Brand voice before outreach", bodyMarkdown: "Every AI-written email, chat reply and proposal reads from Brand Voice. Set it before anyone starts sending, not after you dislike the drafts.", visualTreatment: "coach", advanceCondition: "next_button" },
+      { title: "Decide the autonomy posture", bodyMarkdown: "Approve everywhere is the safe default for a new workspace. Promote engines to Autonomous one at a time, once you have seen what each proposes.", routeTo: "/v2/workflows", targetDataTourId: "autonomy-autopilots", visualTreatment: "spotlight", advanceCondition: "next_button" },
+      { title: "Workspaces are separate worlds", bodyMarkdown: "Members, mailboxes, API keys and autopilot settings do not cross between workspaces. Running one per client means configuring each one.", visualTreatment: "coach", advanceCondition: "next_button" },
+    ],
+  },
+  {
+    name: "Booked Without Sending",
+    description: "Three ways to get a meeting that need no outbound at all.",
+    type: "feature",
+    estimatedMinutes: 3,
+    pageKey: "inbound-meetings",
+    route: "/v2/chat",
+    roleTags: ["sdr", "admin"],
+    steps: [
+      { title: "Outbound is not the only path", bodyMarkdown: "Every meeting source here works while your campaigns are paused, because none of them send anything.", routeTo: "/v2/chat", visualTreatment: "coach", advanceCondition: "next_button" },
+      { title: "The chat agent", bodyMarkdown: "It qualifies a website visitor, captures a routed lead, and in Autonomous mode offers your real calendar slots and books one.", targetDataTourId: "chat-autonomy", visualTreatment: "spotlight", advanceCondition: "next_button" },
+      { title: "Your booking link", bodyMarkdown: "A shareable page showing genuine availability. Drop it into an email with the bookingLink merge variable and a prospect books without a single reply.", visualTreatment: "coach", advanceCondition: "next_button" },
+      { title: "Landing pages and forms", bodyMarkdown: "Both create a routed lead on submit, and a landing page can show a booking button so a visitor skips straight to picking a time.", routeTo: "/v2/landing-pages", visualTreatment: "coach", advanceCondition: "next_button" },
+      { title: "Where they all land", bodyMarkdown: "However a meeting arrives, it appears on Meetings and on your real calendar. There is no separate inbox to remember to check.", routeTo: "/v2/meetings", targetDataTourId: "meetings-list", visualTreatment: "spotlight", advanceCondition: "next_button" },
+    ],
+  },
+  {
+    name: "Working With Multiple Workspaces",
+    description: "Run one workspace per client without mixing them up.",
+    type: "feature",
+    estimatedMinutes: 2,
+    pageKey: "workspaces",
+    route: "/v2/home",
+    roleTags: ["admin"],
+    steps: [
+      { title: "Switching", bodyMarkdown: "The control at the top of the sidebar lists every workspace you belong to and moves between them.", routeTo: "/v2/home", targetDataTourId: "sidebar-nav", visualTreatment: "spotlight", advanceCondition: "next_button" },
+      { title: "Creating one", bodyMarkdown: "Super admins get a New workspace option in that same menu. Sample data is off by default — a client workspace full of invented accounts is worse than an empty one.", visualTreatment: "coach", advanceCondition: "next_button" },
+      { title: "Nothing is shared", bodyMarkdown: "Members, mailboxes, API keys, autopilot settings and prospects all belong to a single workspace. A new one starts genuinely empty, which is the point when each client is separate.", visualTreatment: "coach", advanceCondition: "next_button" },
+    ],
+  },
   // Full nav coverage. Pages without a spotlight anchor use coach steps
   // rather than a target that would resolve to nothing.
   {
@@ -1073,7 +1276,8 @@ const TOURS: TourSeed[] = [
     route: "/v2/settings/data-sources",
     roleTags: ["admin"],
     steps: [
-      { title: "Two halves of one pipeline", bodyMarkdown: "Apollo hands over the name, title, company and **company domain** for free. Velocity then scrapes that company site, works out the most likely address patterns, and asks Reoon which one is real. Neither half finds an email on its own.", routeTo: "/v2/settings/data-sources", visualTreatment: "coach", advanceCondition: "next_button" },
+      { title: "Three steps, not two", bodyMarkdown: "Finding an address is a chain, and each link feeds the next: LinkedIn gives the person's employer, Apollo turns that company name into a website domain, and Velocity then derives the likely address patterns and asks Reoon which one is real. A prospect stalls at whichever link is missing.", routeTo: "/v2/settings/data-sources", visualTreatment: "coach", advanceCondition: "next_button" },
+      { title: "Only the last step costs credits", bodyMarkdown: "The LinkedIn step spends from your connected account's daily lookup allowance. The domain step is free — Apollo's organisation search costs no credits. Only verification spends Reoon credits, which is why the three are controlled separately rather than behind one switch.", visualTreatment: "coach", advanceCondition: "next_button" },
       { title: "The verifier key", bodyMarkdown: "Paste your Reoon key here and hit **Test & check credits** — it reports your remaining balance, so you know whether a run will resolve anything before you start one. Without a key the finder still collects phones and social links, but every email lookup stops and no address is resolved.", targetDataTourId: "reoon-key-card", visualTreatment: "spotlight", advanceCondition: "next_button" },
       { title: "Keys are per workspace", bodyMarkdown: "These credentials belong to this workspace only. A new workspace starts with none — which is the point when you run one per client.", targetDataTourId: "settings-data-sources", visualTreatment: "pulse", advanceCondition: "next_button" },
     ],
@@ -1089,7 +1293,9 @@ const TOURS: TourSeed[] = [
     steps: [
       { title: "Everything autonomous, in one place", bodyMarkdown: "Each engine here runs on its own. This screen is where you decide how much rope each one gets.", routeTo: "/v2/workflows", visualTreatment: "coach", advanceCondition: "next_button" },
       { title: "Off, Approve, Autonomous", bodyMarkdown: "Every engine takes the same three settings. **Off** does nothing. **Approve** does the work but leaves the last step to a human. **Autonomous** runs hands-off. The honest way to adopt these is Approve first — watch what each one proposes for a few days, then promote the ones you agree with.", targetDataTourId: "autonomy-autopilots", visualTreatment: "spotlight", advanceCondition: "next_button" },
-      { title: "Enrichment Sweep is different", bodyMarkdown: "Most engines send or act on your behalf. This one only fills in missing data, so **Approve** means it runs when you press the button, rather than queuing a draft for review. The only thing being gated is unattended credit spend.", targetDataTourId: "autonomy-autopilots", visualTreatment: "pulse", advanceCondition: "next_button" },
+      { title: "Two rows mean something different", bodyMarkdown: "Most engines here send or act on your behalf. **Enrichment Sweep** and **Company Backfill** only fill in missing data, so for those two **Approve** means it runs when you press the button, rather than queuing a draft for review. The thing being gated is unattended spend, not an outward action.", targetDataTourId: "autonomy-autopilots", visualTreatment: "pulse", advanceCondition: "next_button" },
+      { title: "They spend different budgets", bodyMarkdown: "Company Backfill draws on your LinkedIn account's daily lookup allowance. Enrichment Sweep spends email-verification credits. They have separate switches and separate caps on purpose — one control over two budgets is how you get a bill you did not choose.", targetDataTourId: "autonomy-autopilots", visualTreatment: "spotlight", advanceCondition: "next_button" },
+      { title: "Run one now", bodyMarkdown: "When the sweep is on, a card appears here showing how many prospects are waiting, how many still need a company domain, and whether a verification key is set. The button runs one batch, so you can watch what it does before leaving it autonomous.", visualTreatment: "coach", advanceCondition: "next_button" },
       { title: "Or turn the whole stack on", bodyMarkdown: "This sets every engine to **Approve** at once — the safe setting. Nothing goes out without you seeing it first.", targetDataTourId: "autonomy-turn-on-all", visualTreatment: "arrow", advanceCondition: "next_button" },
     ],
   },

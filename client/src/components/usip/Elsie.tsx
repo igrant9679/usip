@@ -162,6 +162,8 @@ const ROUTE_PAGE_KEYS: Array<[string, string]> = [
   ["/v2/analytics", "analytics"],
   ["/v2/chat", "chat"],
   ["/v2/settings/data-sources", "data-sources"],
+  ["/v2/settings", "admin-setup"],
+
   ["/v2/workflows", "workflows"],
   ["/workflows", "workflows"],
   ["/are", "are"],
