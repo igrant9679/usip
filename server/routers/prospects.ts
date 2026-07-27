@@ -1047,6 +1047,25 @@ export const prospectsRouter = router({
       return sweepWorkspace(ctx.workspace.id, { limit: input.limit, retryFailed: input.retryFailed, resolveDomains: input.resolveDomains });
     }),
 
+  /**
+   * Fill missing company names on ARE queue prospects from LinkedIn.
+   *
+   * Separate from runSweep on purpose: this spends LinkedIn lookups (own hard
+   * daily cap, via the user's connected account), not Reoon credits.
+   */
+  backfillCompanies: workspaceProcedure
+    .input(z.object({ limit: z.number().int().min(1).max(100).default(25) }))
+    .mutation(async ({ ctx, input }) => {
+      const { backfillQueueCompanies } = await import("../services/enrichmentSweeper");
+      const isAdmin = ctx.member.role === "admin" || ctx.member.role === "super_admin";
+      return backfillQueueCompanies({
+        workspaceId: ctx.workspace.id,
+        userId: ctx.user.id,
+        isAdmin,
+        limit: input.limit,
+      });
+    }),
+
   reoonBalance: workspaceProcedure.query(async ({ ctx }) => {
     try {
       const apiKey = await getReoonKey(ctx.workspace.id);

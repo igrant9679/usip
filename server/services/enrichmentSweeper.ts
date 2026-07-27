@@ -13,14 +13,21 @@
  * implementation of "find this person's address" would drift from the one the
  * ARE engine uses.
  *
- * Two passes, because measuring the live workspace showed the second one alone
- * does nothing: of 234 sourced prospects with no email, only 4 had a company
- * domain. So a sweep first resolves missing domains, then finds emails.
+ * THREE passes, each feeding the next, because measuring the live workspace
+ * showed every one of them was load-bearing:
  *
- * Cost: the domain pass calls Apollo's ORGANIZATION search — **zero Apollo
- * credits**, same free tier as people search, and never the paid /people/match
- * path. The email pass costs Reoon credits (quick pre-filter, then power
- * verification on plausible patterns only).
+ *   LinkedIn → company name   (backfillQueueCompanies — most sourced rows have
+ *                              a LinkedIn URL and nothing else usable)
+ *   company name → domain     (resolveMissingDomains — only 4 of 234 no-email
+ *                              prospects had a domain)
+ *   name + domain → email     (the scraper + Reoon finder)
+ *
+ * Cost differs per pass, which is why they are separately controlled. The
+ * domain pass uses Apollo ORGANIZATION search — **zero Apollo credits**, and
+ * never the paid /people/match path. The email pass spends Reoon credits. The
+ * LinkedIn pass spends from a separate hard daily cap on the user's own
+ * connected account, so it is NOT folded into sweepWorkspace: quietly draining
+ * that inside a run the user thinks is about email would be a surprise.
  */
 import { and, eq, isNotNull, isNull, ne, or } from "drizzle-orm";
 import { areCampaigns, prospectQueue, prospects, workspaceSettings, workspaces } from "../../drizzle/schema";
@@ -224,6 +231,87 @@ export async function resolveMissingDomains(
     }
   }
   return { attempted, resolved };
+}
+
+/**
+ * Fill missing company names on ARE queue rows from their LinkedIn profile.
+ *
+ * This is the pass that unblocks everything else. Measured on the live
+ * workspace, most sourced prospects carry a LinkedIn URL and NOTHING else
+ * usable — no company name, so no domain can be resolved, so no address can be
+ * derived. Every other pass is downstream of this one.
+ *
+ * The existing linkedinEnrichment router cannot do this: it takes `prospects`
+ * ids and writes to the `prospects` table, while the ARE backlog lives in
+ * `prospect_queue`. Same table split that made the first sweeper find nothing.
+ *
+ * Deliberately NOT folded into sweepWorkspace. LinkedIn lookups draw on a
+ * separate, hard daily cap (~100/day on the connected account) and go out
+ * through the user's own LinkedIn session; quietly spending that inside a run
+ * the user thinks is about email verification would be a surprise. It is its
+ * own explicit operation.
+ *
+ * Stops immediately on rate_limited rather than grinding through the cap.
+ * Never throws.
+ */
+export async function backfillQueueCompanies(opts: {
+  workspaceId: number;
+  userId: number;
+  isAdmin: boolean;
+  limit?: number;
+}): Promise<{ attempted: number; filled: number; withDomain: number; stoppedBecause: "done" | "cap" | "rate_limited" | "no_candidates" }> {
+  const db = await getDb();
+  if (!db) return { attempted: 0, filled: 0, withDomain: 0, stoppedBecause: "no_candidates" };
+  const cap = Math.max(1, Math.min(100, opts.limit ?? 25));
+
+  const rows = await db
+    .select({ id: prospectQueue.id, linkedinUrl: prospectQueue.linkedinUrl, campaignName: areCampaigns.name })
+    .from(prospectQueue)
+    .innerJoin(areCampaigns, eq(prospectQueue.campaignId, areCampaigns.id))
+    .where(and(
+      eq(prospectQueue.workspaceId, opts.workspaceId),
+      isNotNull(prospectQueue.linkedinUrl),
+      ne(prospectQueue.linkedinUrl, ""),
+      or(isNull(prospectQueue.companyName), eq(prospectQueue.companyName, "")),
+      or(isNull(prospectQueue.companyDomain), eq(prospectQueue.companyDomain, "")),
+    ))
+    .orderBy(prospectQueue.id)
+    .limit(cap);
+
+  const live = rows.filter((r) => isEnrichableCampaign(r.campaignName));
+  if (live.length === 0) return { attempted: 0, filled: 0, withDomain: 0, stoppedBecause: "no_candidates" };
+
+  const { retrieveLinkedInProfileByUrl } = await import("./linkedinEnrichment/unipileProfile");
+  let attempted = 0, filled = 0, withDomain = 0;
+  let stoppedBecause: "done" | "cap" | "rate_limited" | "no_candidates" = "done";
+
+  for (const r of live) {
+    if (attempted >= cap) { stoppedBecause = "cap"; break; }
+    attempted++;
+    try {
+      const out = await retrieveLinkedInProfileByUrl({
+        workspaceId: opts.workspaceId,
+        userId: opts.userId,
+        isAdmin: opts.isAdmin,
+        linkedinUrl: r.linkedinUrl ?? "",
+      });
+      if (out.status === "rate_limited") { stoppedBecause = "rate_limited"; break; }
+      const company = out.profile?.currentCompanyName ?? null;
+      const domain = out.profile?.currentCompanyDomain ?? null;
+      if (!company && !domain) continue;
+      // Clear enrichedAt for the same reason the domain pass does: the earlier
+      // failure happened because these fields were missing, so it says nothing
+      // about whether the finder can succeed now that they are not.
+      const patch: Record<string, unknown> = { enrichedAt: null, enrichmentStatus: "pending" };
+      if (company) patch.companyName = company.slice(0, 200);
+      if (domain) { patch.companyDomain = domain.slice(0, 200); withDomain++; }
+      await db.update(prospectQueue).set(patch as never).where(eq(prospectQueue.id, r.id));
+      filled++;
+    } catch (e) {
+      console.error(`[EnrichmentSweep] LinkedIn backfill for queue ${r.id} failed:`, (e as Error).message);
+    }
+  }
+  return { attempted, filled, withDomain, stoppedBecause };
 }
 
 /**
