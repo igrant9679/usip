@@ -1085,7 +1085,9 @@ export const prospectsRouter = router({
       mode: (s?.mode ?? "off") as "off" | "approval" | "auto",
       dailyCap: s?.dailyCap ?? 50,
       lastRunAt: s?.lastRunAt ?? null,
-      needsCompany: q.needsDomain,
+      // The backfill's real candidate set, not needsDomain — a row can have a
+      // company and still lack a domain, so the two counts are not the same.
+      needsCompany: q.needsCompanyWithLinkedIn,
     };
   }),
 

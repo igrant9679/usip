@@ -431,13 +431,22 @@ export async function queueDiagnostics(workspaceId: number): Promise<{
   withDomain: number;
   /** No email AND no domain — needs domain resolution before it can be worked. */
   needsDomain: number;
+  /**
+   * No company name AND no domain, but a LinkedIn URL to read one from — the
+   * backfill's actual candidate set. Distinct from needsDomain: a row can have
+   * a company and still lack a domain, and reporting one as the other
+   * misstates how much work is left by a wide margin.
+   */
+  needsCompanyWithLinkedIn: number;
   alreadyAttempted: number;
 }> {
   const db = await getDb();
-  if (!db) return { noEmailTotal: 0, withDomain: 0, needsDomain: 0, alreadyAttempted: 0 };
+  if (!db) return { noEmailTotal: 0, withDomain: 0, needsDomain: 0, needsCompanyWithLinkedIn: 0, alreadyAttempted: 0 };
   const rows = await db
     .select({
       domain: prospectQueue.companyDomain,
+      companyName: prospectQueue.companyName,
+      linkedinUrl: prospectQueue.linkedinUrl,
       enrichedAt: prospectQueue.enrichedAt,
       campaignName: areCampaigns.name,
     })
@@ -448,11 +457,12 @@ export async function queueDiagnostics(workspaceId: number): Promise<{
       or(isNull(prospectQueue.email), eq(prospectQueue.email, "")),
     ));
   const live = rows.filter((r) => isEnrichableCampaign(r.campaignName));
-  const hasDomain = (d: string | null) => !!(d ?? "").trim();
+  const has = (v: string | null) => !!(v ?? "").trim();
   return {
     noEmailTotal: live.length,
-    withDomain: live.filter((r) => hasDomain(r.domain)).length,
-    needsDomain: live.filter((r) => !hasDomain(r.domain)).length,
+    withDomain: live.filter((r) => has(r.domain)).length,
+    needsDomain: live.filter((r) => !has(r.domain)).length,
+    needsCompanyWithLinkedIn: live.filter((r) => !has(r.companyName) && !has(r.domain) && has(r.linkedinUrl)).length,
     alreadyAttempted: live.filter((r) => !!r.enrichedAt).length,
   };
 }
