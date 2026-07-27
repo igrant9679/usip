@@ -17,6 +17,7 @@ import { and, eq, gt, isNotNull, lte } from "drizzle-orm";
 import { getDb } from "./db";
 import { loginHistory, users, workspaceMembers, workspaces } from "../drizzle/schema";
 import { sendSystemEmail } from "./emailDelivery";
+import { appBaseUrl as publicAppOrigin } from "./appUrl";
 
 export async function expireInvitations(): Promise<void> {
   const db = await getDb();
@@ -95,10 +96,9 @@ export async function sendExpiryWarningEmails(): Promise<void> {
       : 48;
     const recipientName = member.userName ?? member.userEmail.split("@")[0];
     const workspaceName = member.workspaceName ?? "USIP";
-    // MANUS_APP_URL is set via webdev_request_secrets to the deployed app URL
-    // (e.g. https://usipsales-8xkycm4e.manus.space). Falls back to VITE_OAUTH_PORTAL_URL
-    // only if not configured — admins should set MANUS_APP_URL in Secrets settings.
-    const appOrigin = (process.env.MANUS_APP_URL ?? process.env.VITE_OAUTH_PORTAL_URL ?? "https://manus.im").replace(/\/+$/, "");
+    // The ONE public origin (server/appUrl.ts). The old chain fell through to
+    // the identity provider, so invite links pointed at a domain that 404s.
+    const appOrigin = publicAppOrigin();
     const inviteUrl = member.inviteToken
       ? `${appOrigin}/invite/accept?token=${member.inviteToken}`
       : appOrigin;

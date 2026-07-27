@@ -47,14 +47,10 @@ import { repProcedure, workspaceProcedure } from "../_core/workspace";
 import { isSuppressed, makeUnsubscribeUrl } from "../unsubscribe";
 import { assertSendAllowed } from "../sendLimits";
 import { ensureCustomerForWonOpp } from "../services/wonToCustomer";
+import { appBaseUrl as publicAppOrigin } from "../appUrl";
 
-function getAppBaseUrl(): string {
-  return (
-    process.env.MANUS_APP_URL ||
-    process.env.VITE_FRONTEND_FORGE_API_URL ||
-    "https://getvelocityai.app"
-  ).replace(/\/$/, "");
-}
+/** The ONE public origin — see server/appUrl.ts. */
+const getAppBaseUrl = publicAppOrigin;
 
 function unsubscribeFooterHtml(unsubscribeUrl: string): string {
   return `<p style="margin:32px 0 0;color:#9ca3af;font-size:11px;text-align:center;line-height:1.5">

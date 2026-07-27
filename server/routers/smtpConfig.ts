@@ -28,6 +28,7 @@ import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { router } from "../_core/trpc";
 import { buildMergeContextFromDb, resolveMergeVars, textToHtml, injectTracking, resolveBookingUrl, renderSequenceOptOut } from "../mergeVars";
 import { isEmailSuppressed } from "./emailSuppressions";
+import { appBaseUrl as publicAppOrigin } from "../appUrl";
 
 /* ─── AES-256-GCM helpers ─────────────────────────────────────────────── */
 export function getEncKey(): Buffer {
@@ -373,9 +374,10 @@ export const smtpConfigRouter = router({
           if (!draft.trackingToken) {
             await db.update(emailDrafts).set({ trackingToken: token }).where(eq(emailDrafts.id, draft.id));
           }
-          const appBaseUrl = process.env.VITE_OAUTH_PORTAL_URL
-            ? new URL(process.env.VITE_OAUTH_PORTAL_URL).origin
-            : "http://localhost:3000";
+          // The ONE public origin (server/appUrl.ts). Previously the identity
+          // provider's URL, which made the open pixel AND the RFC 8058
+          // one-click unsubscribe link 404 for every recipient.
+          const appBaseUrl = publicAppOrigin();
           let htmlBody = injectTracking(textToHtml(resolvedBody), token, appBaseUrl, {
             open: openTracking,
             click: clickTracking,

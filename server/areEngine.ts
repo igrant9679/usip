@@ -60,6 +60,7 @@ import { injectTracking } from "./mergeVars";
 import { resolveBookingUrl } from "./mergeVars";
 import { ARE_DEFAULT_SOURCES, normalizeSources } from "@shared/areSources";
 import { apolloPulledToday, apolloSearchPeople, getApolloDailyCap } from "./services/apollo";
+import { appBaseUrl as publicAppOrigin } from "./appUrl";
 
 /* ─── Per-tick bounds (keep LLM cost + wall-time predictable) ───────────── */
 /** Max prospects enriched per engine cycle. Enrichment runs ONE AT A TIME
@@ -701,9 +702,10 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
         // resolves to this exact campaign + step + variant, which is what the
         // A/B and step metrics need — a per-prospect token could not.
         const trackingToken = randomUUID().replace(/-/g, "");
-        const appBaseUrl = process.env.VITE_OAUTH_PORTAL_URL
-          ? new URL(process.env.VITE_OAUTH_PORTAL_URL).origin
-          : "http://localhost:3000";
+        // The ONE public origin (server/appUrl.ts). This used to read
+        // VITE_OAUTH_PORTAL_URL — the identity provider — so every pixel we
+        // sent pointed at manus.im and recorded nothing.
+        const appBaseUrl = publicAppOrigin();
         // Open pixel only — links are NOT click-wrapped here. Cold outbound is
         // deliverability-sensitive and rewriting every URL to a tracking domain
         // is a well-known spam signal; the open pixel is the cheaper trade.

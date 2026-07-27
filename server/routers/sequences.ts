@@ -12,13 +12,8 @@ import { bumpCampaignCounter } from "../campaignCounters";
 import { assertSendAllowed } from "../sendLimits";
 
 /** App base URL for outbound footer links. Same env precedence as Unipile webhook URLs. */
-function getAppBaseUrl(): string {
-  return (
-    process.env.MANUS_APP_URL ||
-    process.env.VITE_FRONTEND_FORGE_API_URL ||
-    "https://getvelocityai.app"
-  ).replace(/\/$/, "");
-}
+/** The ONE public origin — see server/appUrl.ts. */
+const getAppBaseUrl = publicAppOrigin;
 
 /** Footer block appended to outbound HTML — single unsubscribe link, muted styling. */
 function unsubscribeFooterHtml(unsubscribeUrl: string): string {
@@ -33,6 +28,7 @@ function unsubscribeFooterText(unsubscribeUrl: string): string {
 }
 import { router } from "../_core/trpc";
 import { adminWsProcedure, managerProcedure, repProcedure, roleRank, workspaceProcedure } from "../_core/workspace";
+import { appBaseUrl as publicAppOrigin } from "../appUrl";
 
 /** Minimal HTML-escaper (duplicated from crm.ts — separate router). */
 function escapeHtml(s: string): string {

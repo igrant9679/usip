@@ -35,6 +35,7 @@ import { checkPermission, getDb } from "../db";
 import { adminWsProcedure, roleRank, workspaceProcedure } from "../_core/workspace";
 import { publicProcedure, protectedProcedure, router } from "../_core/trpc";
 import { recordAudit } from "../audit";
+import { appBaseUrl as publicAppOrigin } from "../appUrl";
 
 const ROLE_ENUM = z.enum(["super_admin", "admin", "manager", "rep"]);
 const DEFAULT_NOTIFY_POLICY = {
@@ -385,7 +386,7 @@ export const teamRouter = router({
       // Build the activation link once — used by both the email and the
       // optional returnLink response. Falls back to the configured origin only
       // when the caller didn't pass one (the UI always passes window.origin).
-      const appOrigin = input.origin ?? process.env.VITE_OAUTH_PORTAL_URL ?? "https://manus.im";
+      const appOrigin = input.origin ?? publicAppOrigin();
       const inviteUrl = `${appOrigin}/invite/accept?token=${inviteToken}`;
 
       // Send invitation email via workspace SMTP (Email Delivery settings),
@@ -885,7 +886,7 @@ export const teamRouter = router({
       // Resend invitation email via workspace SMTP (Email Delivery settings)
       try {
         const { sendSystemEmail } = await import("../emailDelivery");
-        const appOrigin = input.origin ?? process.env.VITE_OAUTH_PORTAL_URL ?? "https://manus.im";
+        const appOrigin = input.origin ?? publicAppOrigin();
         const resendUrl = `${appOrigin}/invite/accept?token=${newToken}`;
         const recipientName = row.name ?? row.email?.split("@")[0];
         await sendSystemEmail(ctx.workspace.id, {
@@ -1018,7 +1019,7 @@ export const teamRouter = router({
       // Send password-setup email
       try {
         const { sendSystemEmail } = await import("../emailDelivery");
-        const appOrigin = input.origin ?? process.env.MANUS_APP_URL ?? process.env.VITE_OAUTH_PORTAL_URL ?? "https://manus.im";
+        const appOrigin = input.origin ?? publicAppOrigin();
         const setupUrl = `${appOrigin}/invite/accept?token=${newToken}`;
         const recipientName = row.name ?? row.email?.split("@")[0];
         await sendSystemEmail(ctx.workspace.id, {

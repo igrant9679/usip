@@ -18,6 +18,7 @@
  */
 
 import { and, eq } from "drizzle-orm";
+import { appBaseUrl } from "./appUrl";
 import { getDb } from "./db";
 import { contacts, accounts, leads, prospects, bookingLinks, users } from "../drizzle/schema";
 
@@ -50,15 +51,9 @@ export type MergeContext = {
 };
 
 /** App base URL for building public links (booking, tracking). */
-export function appBaseUrl(): string {
-  try {
-    return process.env.VITE_OAUTH_PORTAL_URL
-      ? new URL(process.env.VITE_OAUTH_PORTAL_URL).origin
-      : "http://localhost:3000";
-  } catch {
-    return "http://localhost:3000";
-  }
-}
+// The public origin lives in ONE place now — see server/appUrl.ts for why.
+// Imported (not just re-exported) because resolveBookingUrl defaults to it.
+export { appBaseUrl };
 
 /**
  * Resolve a rep's self-serve booking URL for {{bookingLink}}, lazily
