@@ -1562,6 +1562,36 @@ export const landingPages = mysqlTable(
 export type LandingPage = typeof landingPages.$inferSelect;
 
 /* ──────────────────────────────────────────────────────────────────────────
+   Chat agent knowledge (Migration 0136) — what the agent is allowed to KNOW.
+
+   Measured on the live agent: asked things its persona did not cover, it
+   invented — "we've helped nonprofits … save weeks each quarter". The claims
+   scrubber stops it saying that, but restriction alone leaves it unable to
+   answer. These rows are the other half: real facts it can ground an answer in,
+   so "I don't know" is reserved for things genuinely not written down here.
+   ────────────────────────────────────────────────────────────────────────── */
+export const chatAgentKnowledge = mysqlTable(
+  "chat_agent_knowledge",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    agentId: int("agentId").notNull(),
+    /** The question or topic, e.g. "What happens on the audit call?" */
+    title: varchar("title", { length: 240 }).notNull(),
+    /** The answer, in the agent's own words. Plain text. */
+    body: text("body").notNull(),
+    enabled: boolean("enabled").default(true).notNull(),
+    sortOrder: int("sortOrder").default(0).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    byAgent: index("ix_cak_agent").on(t.agentId, t.enabled),
+  }),
+);
+export type ChatAgentKnowledge = typeof chatAgentKnowledge.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
    Inbound Chat Agent (Migration 0130) — Apollo "Chat" parity.
 
    An AI agent that talks to website visitors at /c/:slug (standalone page or

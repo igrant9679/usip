@@ -25,13 +25,14 @@ import { router, publicProcedure } from "../_core/trpc";
 import { adminWsProcedure } from "../_core/workspace";
 import { getDb } from "../db";
 import {
-  activities, bookingLinks, chatAgents, chatSessions, enrollments, leads, notifications, tasks,
+  activities, bookingLinks, chatAgentKnowledge, chatAgents, chatSessions, enrollments, leads, notifications, tasks,
 } from "../../drizzle/schema";
 import { bookSlotForLink, openSlotsForLink } from "./bookingLinks";
 import {
   decideOffer, mergeVisitor, runChatTurn,
   type ChatMessage, type VisitorFacts,
 } from "../services/chatAgent";
+import { formatKnowledge, selectKnowledge } from "../services/chatKnowledge";
 
 /** How many slots the widget offers. A short list converts; a wall of times doesn't. */
 const SLOTS_SHOWN = 6;
@@ -150,8 +151,78 @@ export const chatAgentsRouter = router({
     // Orphaned transcripts would linger as untraceable rows; drop them with the agent.
     await db.delete(chatSessions)
       .where(and(eq(chatSessions.agentId, input.id), eq(chatSessions.workspaceId, ctx.workspace.id)));
+    // Same for its knowledge (0136) — otherwise a later agent reusing the id
+    // would silently inherit another agent's facts.
+    await db.delete(chatAgentKnowledge)
+      .where(and(eq(chatAgentKnowledge.agentId, input.id), eq(chatAgentKnowledge.workspaceId, ctx.workspace.id)));
     return { ok: true as const };
   }),
+
+  /* ───────────────────── Knowledge (Migration 0136) ────────────────────── */
+
+  knowledge: adminWsProcedure
+    .input(z.object({ agentId: z.number() }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) return [];
+      return db.select().from(chatAgentKnowledge)
+        .where(and(
+          eq(chatAgentKnowledge.agentId, input.agentId),
+          eq(chatAgentKnowledge.workspaceId, ctx.workspace.id),
+        ))
+        .orderBy(chatAgentKnowledge.sortOrder, chatAgentKnowledge.id);
+    }),
+
+  /** Create or update one fact. Omit `id` to create. */
+  knowledgeSave: adminWsProcedure
+    .input(z.object({
+      id: z.number().optional(),
+      agentId: z.number(),
+      title: z.string().min(1).max(240),
+      body: z.string().min(1).max(8000),
+      enabled: z.boolean().optional(),
+      sortOrder: z.number().int().min(0).max(9999).optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      if (input.id) {
+        await db.update(chatAgentKnowledge)
+          .set({
+            title: input.title,
+            body: input.body,
+            enabled: input.enabled ?? true,
+            sortOrder: input.sortOrder ?? 0,
+          } as never)
+          .where(and(
+            eq(chatAgentKnowledge.id, input.id),
+            eq(chatAgentKnowledge.workspaceId, ctx.workspace.id),
+          ));
+        return { id: input.id };
+      }
+      const r = await db.insert(chatAgentKnowledge).values({
+        workspaceId: ctx.workspace.id,
+        agentId: input.agentId,
+        title: input.title,
+        body: input.body,
+        enabled: input.enabled ?? true,
+        sortOrder: input.sortOrder ?? 0,
+      } as never);
+      return { id: Number((r as any)[0]?.insertId ?? 0) || 0 };
+    }),
+
+  knowledgeRemove: adminWsProcedure
+    .input(z.object({ id: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      await db.delete(chatAgentKnowledge)
+        .where(and(
+          eq(chatAgentKnowledge.id, input.id),
+          eq(chatAgentKnowledge.workspaceId, ctx.workspace.id),
+        ));
+      return { ok: true as const };
+    }),
 
   /** Transcripts for one agent (most recent first). */
   sessions: adminWsProcedure
@@ -275,6 +346,21 @@ export const chatAgentsRouter = router({
         company: session.visitorCompany, phone: session.visitorPhone,
       };
 
+      // Facts the agent may answer from (0136), ranked against what the visitor
+      // just asked. Best-effort: an agent with no knowledge behaves exactly as
+      // it did before, it just has less to go on.
+      let knowledge = "";
+      try {
+        const rows = await db.select({
+          id: chatAgentKnowledge.id,
+          title: chatAgentKnowledge.title,
+          body: chatAgentKnowledge.body,
+          enabled: chatAgentKnowledge.enabled,
+          sortOrder: chatAgentKnowledge.sortOrder,
+        }).from(chatAgentKnowledge).where(eq(chatAgentKnowledge.agentId, agent.id));
+        knowledge = formatKnowledge(selectKnowledge(rows, input.message));
+      } catch { /* knowledge is an improvement, never a prerequisite */ }
+
       const turn = await runChatTurn({
         workspaceId: agent.workspaceId,
         displayName: agent.displayName,
@@ -283,6 +369,7 @@ export const chatAgentsRouter = router({
         messages,
         known,
         canBook: !!link,
+        knowledge,
       });
 
       const visitor = mergeVisitor(known, turn.extracted);

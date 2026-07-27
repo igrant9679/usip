@@ -220,6 +220,9 @@ export default function ChatAgents() {
                 </Field>
               </Section>
 
+              {/* What it is allowed to know (0136) */}
+              <KnowledgeSection agentId={form.id} accent={accent} />
+
               {/* Persona */}
               <Section title="Persona">
                 <Field label="Agent name (shown to visitors)"><Input value={form.displayName ?? ""} onChange={(e) => patch("displayName", e.target.value)} /></Field>
@@ -341,6 +344,88 @@ export default function ChatAgents() {
         </div>
       </div>
     </Shell>
+  );
+}
+
+/**
+ * The facts the agent may answer from (migration 0136).
+ *
+ * This exists because of what the live agent did without it: asked anything its
+ * persona didn't cover, it invented — including a client claim and a savings
+ * figure its own persona forbade. The claim scrubber stops it SAYING that;
+ * these entries are what let it answer instead of just refusing.
+ */
+function KnowledgeSection({ agentId, accent }: { agentId: number; accent: string }) {
+  const utils = trpc.useUtils();
+  const list = trpc.chatAgents.knowledge.useQuery({ agentId }, { enabled: !!agentId });
+  const save = trpc.chatAgents.knowledgeSave.useMutation({
+    onSuccess: () => { utils.chatAgents.knowledge.invalidate(); setDraft(null); toast.success("Saved"); },
+    onError: (e: any) => toast.error(e?.message ?? "Failed"),
+  });
+  const remove = trpc.chatAgents.knowledgeRemove.useMutation({
+    onSuccess: () => { utils.chatAgents.knowledge.invalidate(); toast.success("Removed"); },
+    onError: (e: any) => toast.error(e?.message ?? "Failed"),
+  });
+
+  const [draft, setDraft] = useState<{ id?: number; title: string; body: string } | null>(null);
+  const rows = (list.data as any[]) ?? [];
+
+  return (
+    <Section title="What it knows" tourId="chat-knowledge">
+      <p className="text-[11px] text-muted-foreground">
+        The only specifics the agent may state. Anything not written here it will say it doesn't know, rather than guess — that is deliberate.
+      </p>
+
+      <div className="space-y-2">
+        {rows.length === 0 && !draft && (
+          <p className="text-[12px] text-muted-foreground italic">
+            Nothing yet. Without facts the agent can only talk in generalities.
+          </p>
+        )}
+        {rows.map((r) => (
+          <div key={r.id} className="rounded-lg border bg-card p-3 space-y-1">
+            <div className="flex items-start gap-2">
+              <div className="min-w-0 flex-1">
+                <div className="text-[13px] font-medium">{r.title}</div>
+                <div className="text-[12px] text-muted-foreground whitespace-pre-wrap">{r.body}</div>
+              </div>
+              <Button variant="ghost" size="sm" className="h-7 shrink-0"
+                onClick={() => setDraft({ id: r.id, title: r.title, body: r.body })}>Edit</Button>
+              <Button variant="ghost" size="sm" className="h-7 shrink-0 text-rose-600"
+                onClick={() => confirmAction(
+                  { title: "Remove this fact?", body: "The agent will stop being able to answer questions about it.", confirmLabel: "Remove" },
+                  () => remove.mutate({ id: r.id }),
+                )}>Remove</Button>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {draft ? (
+        <div className="rounded-lg border bg-muted/40 p-3 space-y-2">
+          <Field label="Question or topic">
+            <Input value={draft.title} placeholder="What happens on the audit call?"
+              onChange={(e) => setDraft({ ...draft, title: e.target.value })} />
+          </Field>
+          <Field label="Answer — in the agent's own words">
+            <Textarea rows={3} value={draft.body} placeholder="We walk through your current process and map what is automatable. No commitment."
+              onChange={(e) => setDraft({ ...draft, body: e.target.value })} />
+          </Field>
+          <div className="flex gap-2">
+            <Button size="sm" className="h-8 text-white" style={{ backgroundColor: accent }}
+              disabled={!draft.title.trim() || !draft.body.trim() || save.isPending}
+              onClick={() => save.mutate({ id: draft.id, agentId, title: draft.title.trim(), body: draft.body.trim(), sortOrder: rows.length })}>
+              Save
+            </Button>
+            <Button size="sm" variant="ghost" className="h-8" onClick={() => setDraft(null)}>Cancel</Button>
+          </div>
+        </div>
+      ) : (
+        <Button size="sm" variant="outline" className="h-8" onClick={() => setDraft({ title: "", body: "" })}>
+          Add a fact
+        </Button>
+      )}
+    </Section>
   );
 }
 

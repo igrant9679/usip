@@ -263,6 +263,11 @@ export interface ChatTurnInput {
   known: Partial<VisitorFacts>;
   /** True when this agent is allowed to actually book, so the model can say so. */
   canBook: boolean;
+  /**
+   * Facts this agent may answer from (migration 0136), already selected and
+   * rendered for this turn. Empty string when the workspace has written none.
+   */
+  knowledge?: string;
 }
 
 /**
@@ -310,7 +315,7 @@ export async function runChatTurn(input: ChatTurnInput): Promise<ChatTurn> {
   const prompt = `You are ${input.displayName}, an inbound sales assistant chatting with a visitor on our website. Your goal is to understand what they need and, if they are a good fit, get a sales meeting booked.
 
 ${brand ? `About us:\n${brand}\n` : ""}${input.persona ? `Additional instructions:\n${input.persona}\n` : ""}
-${questions.length ? `Work these into the conversation naturally, one at a time — never interrogate:\n${questions.map((q, i) => `${i + 1}. ${q}`).join("\n")}\n` : ""}
+${input.knowledge ? `Facts you may answer from. These are the ONLY specifics you are allowed to state — if the answer is not here, say plainly that you do not know and offer to find out, rather than guessing:\n${input.knowledge}\n` : ""}${questions.length ? `Work these into the conversation naturally, one at a time — never interrogate:\n${questions.map((q, i) => `${i + 1}. ${q}`).join("\n")}\n` : ""}
 Already known about this visitor (do NOT ask again): ${knownLines.length ? knownLines.join(", ") : "nothing yet"}
 
 Conversation so far:

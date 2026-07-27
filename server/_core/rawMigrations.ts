@@ -2904,6 +2904,32 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0136: what the chat agent is allowed to KNOW ──────────────────────────
+  // Measured, not assumed: asked anything its persona did not cover, the live
+  // agent invented — including an unnamed client claim and a savings figure its
+  // own persona forbade. scrubUnsupportedClaims stops it SAYING that, but
+  // restriction alone just leaves it unable to answer. These rows are the other
+  // half — real facts to ground an answer in, so "I don't know" is reserved for
+  // things genuinely not written down.
+  {
+    name: "0136_chat_agent_knowledge.sql",
+    statements: [
+      `CREATE TABLE IF NOT EXISTS \`chat_agent_knowledge\` (
+        \`id\` int NOT NULL AUTO_INCREMENT,
+        \`workspaceId\` int NOT NULL,
+        \`agentId\` int NOT NULL,
+        \`title\` varchar(240) NOT NULL,
+        \`body\` text NOT NULL,
+        \`enabled\` boolean NOT NULL DEFAULT true,
+        \`sortOrder\` int NOT NULL DEFAULT 0,
+        \`createdAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        \`updatedAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (\`id\`),
+        KEY \`ix_cak_agent\` (\`agentId\`, \`enabled\`)
+      )`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------
