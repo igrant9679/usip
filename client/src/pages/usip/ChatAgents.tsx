@@ -220,6 +220,9 @@ export default function ChatAgents() {
                 </Field>
               </Section>
 
+              {/* Funnel (measurement) */}
+              <FunnelSection />
+
               {/* Abandonment follow-up (0137) — its own switch, not the agent's mode */}
               <Section title="If they leave without booking" tourId="chat-followup">
                 <div className="flex gap-1.5">
@@ -380,6 +383,71 @@ export default function ChatAgents() {
         </div>
       </div>
     </Shell>
+  );
+}
+
+/**
+ * The chat's funnel. Every stage is a strict subset of the one above, which is
+ * what makes a drop-off meaningful.
+ *
+ * Rates are shown against the RIGHT denominator, not the flattering one: email
+ * capture is measured against engaged sessions (a visitor who typed nothing
+ * never had the chance), and booking against qualified (the agent is not
+ * supposed to book unqualified traffic). Under 20 sessions everything renders
+ * muted with an asterisk — the house rule for thin data.
+ */
+function FunnelSection() {
+  const f = trpc.chatAgents.funnel.useQuery(undefined, { staleTime: 60_000 });
+  const d = f.data as any;
+  if (!d) return null;
+
+  const thin = d.sessions < 20;
+  const stages = [
+    { label: "Conversations", value: d.sessions, rate: null as number | null },
+    { label: "Actually talked", value: d.engaged, rate: d.engagedRate },
+    { label: "Gave an email", value: d.emailCaptured, rate: d.emailRate },
+    { label: "Qualified", value: d.qualified, rate: d.qualifiedRate },
+    { label: "Booked", value: d.meetings, rate: d.meetingRate },
+  ];
+
+  return (
+    <Section title="How it's doing" tourId="chat-funnel">
+      {d.sessions === 0 ? (
+        <p className="text-[12px] text-muted-foreground italic">
+          No conversations yet. Nothing here will mean anything until visitors reach the widget.
+        </p>
+      ) : (
+        <>
+          <div className="rounded-lg border bg-card divide-y">
+            {stages.map((s) => (
+              <div key={s.label} className="flex items-center justify-between px-3 py-2">
+                <span className="text-[13px]">{s.label}</span>
+                <span className="flex items-baseline gap-2">
+                  <span className="text-[13px] font-semibold tabular-nums">{s.value}</span>
+                  {s.rate !== null && (
+                    <span className={`text-[11px] tabular-nums ${thin ? "text-muted-foreground/60" : "text-muted-foreground"}`}>
+                      {s.rate}%{thin ? "*" : ""}
+                    </span>
+                  )}
+                </span>
+              </div>
+            ))}
+          </div>
+          <p className="text-[11px] text-muted-foreground">
+            {d.biggestDropStage !== "none" && (
+              <>Biggest drop-off: <b>{d.biggestDropStage}</b> ({d.biggestDropCount} lost).{" "}</>
+            )}
+            {d.emailCaptured > 0 && <>Median messages before an email: <b>{d.medianMessagesToEmail}</b>.{" "}</>}
+            {d.followUpsActioned > 0 && <>{d.followUpsActioned} abandoned {d.followUpsActioned === 1 ? "conversation" : "conversations"} followed up.</>}
+          </p>
+          {thin && (
+            <p className="text-[11px] text-muted-foreground/70">
+              * Under 20 conversations these rates are noise, not signal. Shown so you can watch them move, not to act on.
+            </p>
+          )}
+        </>
+      )}
+    </Section>
   );
 }
 

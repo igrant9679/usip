@@ -40,6 +40,7 @@ import {
   areAbVariants,
   areExecutionQueue,
   areSignalLog,
+  chatSessions,
   emailDrafts,
   emailReplies,
   opportunities,
@@ -799,4 +800,110 @@ export async function getAbVariantStats(
 
   out.sort((a, b) => a.stepIndex - b.stepIndex || a.variantKey.localeCompare(b.variantKey));
   return out;
+}
+
+/* ─── Inbound chat funnel ───────────────────────────────────────────────── */
+
+/**
+ * The chat's own funnel, derived entirely from chat_sessions rows.
+ *
+ * Every stage is a strict subset of the one above it, which is what makes the
+ * drop-offs meaningful: you cannot have a lead without an email, and the agent
+ * cannot book without one either. `emailCaptured` is therefore the gate the
+ * whole feature turns on, and it is the number to look at first.
+ *
+ * Nothing here is denormalised. The agent's own sessionCount/leadCount columns
+ * exist but are incremented at write time and can drift; these are counted from
+ * the rows themselves so this can never disagree with the transcript list.
+ */
+export interface ChatFunnelStats {
+  sessions: number;
+  /** Said enough to be worth counting — more than the opening greeting. */
+  engaged: number;
+  emailCaptured: number;
+  qualified: number;
+  leads: number;
+  meetings: number;
+  /** Abandoned conversations the follow-up engine has acted on (0137). */
+  followUpsActioned: number;
+  /** Conversion of the stage above, in percent. */
+  engagedRate: number;
+  emailRate: number;
+  qualifiedRate: number;
+  meetingRate: number;
+  /** Median messages in a session that produced an email — how long it takes. */
+  medianMessagesToEmail: number;
+  /** The stage losing the most people, in absolute terms. */
+  biggestDropStage: "engagement" | "email" | "qualification" | "booking" | "none";
+  biggestDropCount: number;
+}
+
+/** Sessions with only the seeded greeting are not conversations. */
+const CHAT_ENGAGED_MIN_MESSAGES = 3;
+
+function median(values: number[]): number {
+  if (!values.length) return 0;
+  const s = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(s.length / 2);
+  return s.length % 2 ? s[mid] : Math.round((s[mid - 1] + s[mid]) / 2);
+}
+
+export async function getChatFunnelStats(workspaceId: number): Promise<ChatFunnelStats> {
+  const empty: ChatFunnelStats = {
+    sessions: 0, engaged: 0, emailCaptured: 0, qualified: 0, leads: 0, meetings: 0,
+    followUpsActioned: 0, engagedRate: 0, emailRate: 0, qualifiedRate: 0, meetingRate: 0,
+    medianMessagesToEmail: 0, biggestDropStage: "none", biggestDropCount: 0,
+  };
+  const db = await getDb();
+  if (!db) return empty;
+
+  const rows = await db
+    .select({
+      messageCount: chatSessions.messageCount,
+      visitorEmail: chatSessions.visitorEmail,
+      qualified: chatSessions.qualified,
+      leadId: chatSessions.leadId,
+      meetingId: chatSessions.meetingId,
+      followUpAt: chatSessions.followUpAt,
+    })
+    .from(chatSessions)
+    .where(eq(chatSessions.workspaceId, workspaceId));
+
+  if (!rows.length) return empty;
+
+  const sessions = rows.length;
+  const engagedRows = rows.filter((r) => (r.messageCount ?? 0) >= CHAT_ENGAGED_MIN_MESSAGES);
+  const withEmail = engagedRows.filter((r) => !!r.visitorEmail);
+  const qualified = withEmail.filter((r) => !!r.qualified);
+  const meetings = rows.filter((r) => !!r.meetingId);
+
+  const stats: ChatFunnelStats = {
+    sessions,
+    engaged: engagedRows.length,
+    emailCaptured: withEmail.length,
+    qualified: qualified.length,
+    leads: rows.filter((r) => !!r.leadId).length,
+    meetings: meetings.length,
+    followUpsActioned: rows.filter((r) => !!r.followUpAt).length,
+    engagedRate: rate(engagedRows.length, sessions),
+    emailRate: rate(withEmail.length, engagedRows.length),
+    qualifiedRate: rate(qualified.length, withEmail.length),
+    meetingRate: rate(meetings.length, qualified.length),
+    medianMessagesToEmail: median(withEmail.map((r) => r.messageCount ?? 0)),
+    biggestDropStage: "none",
+    biggestDropCount: 0,
+  };
+
+  const drops: Array<[ChatFunnelStats["biggestDropStage"], number]> = [
+    ["engagement", sessions - engagedRows.length],
+    ["email", engagedRows.length - withEmail.length],
+    ["qualification", withEmail.length - qualified.length],
+    ["booking", qualified.length - meetings.length],
+  ];
+  drops.sort((a, b) => b[1] - a[1]);
+  if (drops[0][1] > 0) {
+    stats.biggestDropStage = drops[0][0];
+    stats.biggestDropCount = drops[0][1];
+  }
+  return stats;
 }

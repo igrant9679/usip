@@ -434,8 +434,19 @@ describe("runner wiring", () => {
   it("registers every analyzer module", async () => {
     const { ANALYZERS } = await import("./services/optimization/runner");
     expect(ANALYZERS.map((a) => a.module).sort()).toEqual(
-      ["crm", "sdr_coaching", "sequences", "sourcing", "voice"],
+      ["crm", "messaging", "sdr_coaching", "sequences", "sourcing", "voice"],
     );
+  });
+
+  /**
+   * Every module an analyzer claims must exist in the `module` column's enum,
+   * or the proposal fails on INSERT at runtime rather than at compile time —
+   * the `as never` trap this codebase keeps rediscovering.
+   */
+  it("only claims modules the recommendations enum can store", async () => {
+    const { ANALYZERS } = await import("./services/optimization/runner");
+    const allowed = ["sequences", "messaging", "sourcing", "voice", "crm", "icp", "sdr_coaching"];
+    for (const a of ANALYZERS) expect(allowed).toContain(a.module);
   });
 
   // Importing the whole appRouter pulls in every router in the app, which takes

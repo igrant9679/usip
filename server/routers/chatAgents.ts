@@ -34,6 +34,7 @@ import {
 } from "../services/chatAgent";
 import { formatKnowledge, selectKnowledge } from "../services/chatKnowledge";
 import { describePageContext } from "../services/chatPageContext";
+import { getChatFunnelStats } from "../services/performanceMetrics";
 
 /** How many slots the widget offers. A short list converts; a wall of times doesn't. */
 const SLOTS_SHOWN = 6;
@@ -159,6 +160,14 @@ export const chatAgentsRouter = router({
     await db.delete(chatAgentKnowledge)
       .where(and(eq(chatAgentKnowledge.agentId, input.id), eq(chatAgentKnowledge.workspaceId, ctx.workspace.id)));
     return { ok: true as const };
+  }),
+
+  /**
+   * The chat's own funnel. Read from `performanceMetrics` — the ONE place
+   * metrics are computed — so this can never disagree with any other surface.
+   */
+  funnel: adminWsProcedure.query(async ({ ctx }) => {
+    return getChatFunnelStats(ctx.workspace.id);
   }),
 
   /* ───────────────────── Knowledge (Migration 0136) ────────────────────── */

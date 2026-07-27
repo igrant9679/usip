@@ -23,6 +23,7 @@ import { sdrAnalyzer } from "./sdrAnalyzer";
 import { sequenceAnalyzer } from "./sequenceAnalyzer";
 import { sourceAnalyzer } from "./sourceAnalyzer";
 import { voiceAnalyzer } from "./voiceAnalyzer";
+import { chatAnalyzer } from "./chatAnalyzer";
 import type { Analyzer, Proposal } from "./types";
 
 /** Registered analyzers. Adding a module = adding it to this list. */
@@ -32,6 +33,7 @@ export const ANALYZERS: Analyzer[] = [
   crmAnalyzer,
   sdrAnalyzer,
   voiceAnalyzer,
+  chatAnalyzer,
 ];
 
 /** Statuses that block an identical new proposal. */
