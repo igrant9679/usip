@@ -23,7 +23,7 @@ import {
 } from "@/components/ui/select";
 import {
   Workflow, ListTodo, CalendarClock, MessageSquare, KanbanSquare, Bot, Zap, Sparkles, Rocket,
-  ExternalLink, Play, Pause, Check, X, Activity, GitBranch, Users, Mail, Share2, UserRoundCog, Database,
+  ExternalLink, Play, Pause, Check, X, Activity, GitBranch, Users, Mail, Share2, UserRoundCog, Database, Loader2,
 } from "lucide-react";
 
 function fmtWhen(d?: string | Date | null): string {
@@ -60,6 +60,17 @@ export default function WorkflowsV2() {
   const setDealAp = trpc.deals.setAutopilotSettings.useMutation({ onSuccess: () => utils.deals.getAutopilotSettings.invalidate() });
   const setSocialAp = trpc.unipile.setSocialAutopilotSettings.useMutation({ onSuccess: () => utils.unipile.getSocialAutopilotSettings.invalidate(), onError: (e) => toast.error(e.message.includes("FORBIDDEN") ? "Only admins can change Social Autopilot" : e.message) });
   const setJobChangeAp = trpc.linkedinEnrichment.setJobChangeSettings.useMutation({ onSuccess: () => utils.linkedinEnrichment.getJobChangeSettings.invalidate(), onError: (e) => toast.error(e.message.includes("FORBIDDEN") ? "Only admins can change Job Change Autopilot" : e.message) });
+  const runSweep = trpc.prospects.runSweep.useMutation({
+    onSuccess: (r: any) => {
+      utils.prospects.sweepStatus.invalidate();
+      const why = r?.stoppedBecause === "no_key" ? "no Reoon key configured"
+        : r?.stoppedBecause === "no_credits" ? "Reoon credits ran low"
+        : r?.stoppedBecause === "no_candidates" ? "nothing was waiting"
+        : r?.stoppedBecause === "cap" ? "hit the batch cap" : "finished the batch";
+      toast.success(`Swept ${r?.attempted ?? 0} — found ${r?.emailsFound ?? 0} email${r?.emailsFound === 1 ? "" : "s"} (${why})`);
+    },
+    onError: (e) => toast.error(e.message),
+  });
   const setSweepAp = trpc.prospects.setSweepSettings.useMutation({ onSuccess: () => utils.prospects.sweepStatus.invalidate(), onError: (e) => toast.error(e.message) });
   const setChatAp = trpc.chatAgents.setAutopilotSettings.useMutation({ onSuccess: () => utils.chatAgents.getAutopilotSettings.invalidate(), onError: (e) => toast.error(e.message.includes("FORBIDDEN") ? "Only admins can change the Chat Agent" : e.message) });
 
@@ -203,6 +214,32 @@ export default function WorkflowsV2() {
                 </div>
               ))}
             </div>
+            {/* Enrichment Sweep needs an attended-run button: its "Approve" mode
+                means "runs when you press this", so without a button that mode
+                could never do anything at all. */}
+            {(sweepAp.data as any) && (sweepAp.data as any).mode !== "off" && (
+              <div className="rounded-xl border bg-card p-3 shadow-sm flex flex-wrap items-center gap-3 mt-3">
+                <Database className="size-4 shrink-0 text-muted-foreground" />
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-medium">Run an enrichment sweep now</div>
+                  <div className="text-[11px] text-muted-foreground">
+                    {(sweepAp.data as any).candidates} ready to verify
+                    {(sweepAp.data as any).queue?.needsDomain ? ` · ${(sweepAp.data as any).queue.needsDomain} need a company domain first (free to resolve)` : ""}
+                    {!(sweepAp.data as any).reoonConfigured ? " · no Reoon key — nothing can be verified" : ""}
+                  </div>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="shrink-0 gap-1.5"
+                  disabled={runSweep.isPending || !(sweepAp.data as any).reoonConfigured}
+                  onClick={() => runSweep.mutate({ limit: 25 })}
+                >
+                  {runSweep.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Play className="size-3.5" />}
+                  {runSweep.isPending ? "Sweeping…" : "Sweep 25"}
+                </Button>
+              </div>
+            )}
             <div className="rounded-xl border bg-card p-3 shadow-sm flex items-center gap-3 mt-3">
               <span className="shrink-0 size-9 rounded-full flex items-center justify-center" style={{ backgroundColor: (emailAuto.data as any)?.aiAutoSendEnabled ? "#7c3aed1f" : "hsl(var(--muted))", color: (emailAuto.data as any)?.aiAutoSendEnabled ? "#7c3aed" : undefined }}>
                 {(emailAuto.data as any)?.aiAutoSendEnabled ? <Zap className="size-4" /> : <Mail className="size-4" />}

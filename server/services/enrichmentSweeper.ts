@@ -38,6 +38,9 @@ export interface SweepResult {
   /** Where the attempts landed. The backlog lives in prospect_queue, not prospects. */
   fromQueue: number;
   fromProspects: number;
+  /** Domain pre-pass. Free (Apollo org search), and usually the pass that matters. */
+  domainsAttempted: number;
+  domainsResolved: number;
   emailsFound: number;
   creditsQuick: number;
   creditsPower: number;
@@ -47,7 +50,8 @@ export interface SweepResult {
 
 /** A run that did nothing, shaped so callers never special-case null. */
 const emptyResult = (stoppedBecause: SweepResult["stoppedBecause"]): SweepResult => ({
-  attempted: 0, fromQueue: 0, fromProspects: 0, emailsFound: 0, creditsQuick: 0, creditsPower: 0, stoppedBecause,
+  attempted: 0, fromQueue: 0, fromProspects: 0, domainsAttempted: 0, domainsResolved: 0,
+  emailsFound: 0, creditsQuick: 0, creditsPower: 0, stoppedBecause,
 });
 
 /**
@@ -167,8 +171,11 @@ async function queueCandidatesFor(workspaceId: number, limit: number, retryFaile
  * **zero Apollo credits**, the same free tier as people search. This does not
  * touch the paid /people/match path, which is permanently off the table.
  *
- * Writes the domain and nothing else — the email pass runs separately, so a
- * resolved domain is durable even if verification later fails or runs dry.
+ * Writes the domain AND clears the stale attempt marker. Those two belong
+ * together: a row attempted at sourcing time failed precisely because it had no
+ * domain, so once one is found the old failure says nothing about whether the
+ * finder could succeed. Leaving enrichedAt set would permanently exclude the
+ * rows this pass just repaired.
  */
 export async function resolveMissingDomains(
   workspaceId: number,
@@ -201,8 +208,14 @@ export async function resolveMissingDomains(
     try {
       const out = await apolloResolveDomain(workspaceId, r.companyName ?? "");
       if (out.domain) {
+        // Clearing enrichedAt is the point, not a detail. These rows were
+        // attempted at SOURCING time, before they had a domain, and failed for
+        // exactly that reason — so the attempt marker records "we tried" while
+        // saying nothing about whether it could have worked. Leaving it set
+        // permanently excludes the rows this pass just repaired, which is what
+        // made the first real run sweep 22 domains and verify none of them.
         await db.update(prospectQueue)
-          .set({ companyDomain: out.domain } as never)
+          .set({ companyDomain: out.domain, enrichedAt: null, enrichmentStatus: "pending" } as never)
           .where(eq(prospectQueue.id, r.id));
         resolved++;
       }
@@ -286,11 +299,12 @@ export async function sweepWorkspace(
   // Domain pre-pass. Costs no Apollo credits and no Reoon credits, and without
   // it almost every sourced prospect is unworkable — so it runs first, and its
   // results are visible to the candidate query immediately below.
+  let domains = { attempted: 0, resolved: 0 };
   if (opts.resolveDomains !== false) {
     try {
-      const d = await resolveMissingDomains(workspaceId, cap);
-      if (d.attempted > 0) {
-        console.log(`[EnrichmentSweep] ws=${workspaceId} domains attempted=${d.attempted} resolved=${d.resolved}`);
+      domains = await resolveMissingDomains(workspaceId, cap);
+      if (domains.attempted > 0) {
+        console.log(`[EnrichmentSweep] ws=${workspaceId} domains attempted=${domains.attempted} resolved=${domains.resolved}`);
       }
     } catch (e) {
       console.error("[EnrichmentSweep] domain pre-pass failed:", (e as Error).message);
@@ -302,7 +316,9 @@ export async function sweepWorkspace(
     queueCandidatesFor(workspaceId, cap, retry),
     candidatesFor(workspaceId, cap, retry),
   ]);
-  if (rows.length === 0 && queueRows.length === 0) return emptyResult("no_candidates");
+  if (rows.length === 0 && queueRows.length === 0) {
+    return { ...emptyResult("no_candidates"), domainsAttempted: domains.attempted, domainsResolved: domains.resolved };
+  }
 
   // One balance read up front, then decremented locally. Re-reading per
   // prospect would add a network round trip to every single lookup.
@@ -315,7 +331,11 @@ export async function sweepWorkspace(
     return emptyResult("no_credits");
   }
 
-  const result: SweepResult = { ...emptyResult("done") };
+  const result: SweepResult = {
+    ...emptyResult("done"),
+    domainsAttempted: domains.attempted,
+    domainsResolved: domains.resolved,
+  };
 
   // ── ARE queue rows ──
   // resolveVerifiedEmail is the SAME resolver the ARE engine calls at sourcing
