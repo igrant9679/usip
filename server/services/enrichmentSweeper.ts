@@ -324,7 +324,20 @@ export async function backfillQueueCompanies(opts: {
       if (!company && !domain) {
         if (out.profile) {
           noCompanyOnProfile++;
-          if (samples.length < 3) samples.push(`profile returned but no employer: ${out.profile.fullName ?? "?"}`.slice(0, 200));
+          // Include the headline and how much of the profile came back. A
+          // headline like "Executive Director at Acme Foundation" carries the
+          // employer even when current_company and work_experience are empty,
+          // which is the difference between "LinkedIn will not show us this"
+          // and "we are not reading what it did show us".
+          if (samples.length < 3) {
+            const pr = out.profile as unknown as { fullName?: string | null; currentTitle?: string | null; experience?: unknown[]; connectionDegree?: string | null };
+            samples.push(JSON.stringify({
+              name: pr.fullName ?? null,
+              headline: pr.currentTitle ?? null,
+              experienceEntries: Array.isArray(pr.experience) ? pr.experience.length : 0,
+              degree: pr.connectionDegree ?? null,
+            }).slice(0, 300));
+          }
         }
         continue;
       }
