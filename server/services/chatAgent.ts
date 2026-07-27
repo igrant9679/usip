@@ -154,6 +154,21 @@ export function sanitizeTurn(raw: unknown, fallbackReply: string): ChatTurn {
   };
 }
 
+/**
+ * How many times the agent has already asked this visitor for an email.
+ *
+ * The prompt has always said "ask only once per conversation" and the model has
+ * always ignored it — measured on the live agent, it asked four turns running,
+ * including immediately after declining to answer a question. A stateless prompt
+ * re-decides every turn, so "only once" has to be COUNTED and fed back in, not
+ * requested. Pure so it can be tested without a model.
+ */
+export function emailAskCount(messages: ChatMessage[]): number {
+  return (messages ?? []).filter(
+    (m) => m?.role === "agent" && /\be-?mail\b/i.test(m.text ?? "") && (m.text ?? "").includes("?"),
+  ).length;
+}
+
 /** Render the transcript for the prompt, most recent turns only. */
 export function transcriptText(messages: ChatMessage[], displayName: string): string {
   return messages
@@ -199,6 +214,10 @@ export async function runChatTurn(input: ChatTurnInput): Promise<ChatTurn> {
     input.known.phone ? `phone: ${input.known.phone}` : null,
   ].filter(Boolean);
 
+  // Counted, not requested — see emailAskCount.
+  const emailAsks = input.known.email ? 0 : emailAskCount(input.messages);
+  const hasEmail = !!input.known.email;
+
   const prompt = `You are ${input.displayName}, an inbound sales assistant chatting with a visitor on our website. Your goal is to understand what they need and, if they are a good fit, get a sales meeting booked.
 
 ${brand ? `About us:\n${brand}\n` : ""}${input.persona ? `Additional instructions:\n${input.persona}\n` : ""}
@@ -211,9 +230,14 @@ ${transcriptText(input.messages, input.displayName)}
 Rules:
 - Reply in 1-3 short sentences. Conversational, never a wall of text.
 - Ask at most ONE question per reply.
-- You need their work email before anything useful can happen — ask for it early, but only once per conversation.
+- NEVER claim experience, clients, results or a track record that is not stated in "About us" above. This includes UNNAMED claims — "we work with organisations like yours regularly" is exactly as forbidden as naming one. If asked who you have worked with or for a reference, say what you can DO and offer to walk them through the approach; do not imply a client base you have not been given.
+${emailAsks === 0
+      ? "- You need their work email before anything useful can happen — ask for it once, and give them a reason it helps THEM."
+      : `- You have ALREADY asked for their email ${emailAsks} time${emailAsks === 1 ? "" : "s"} and they have not given it. Do NOT ask again this turn. Answer what they actually asked and give them a concrete reason to keep talking. Asking repeatedly is the fastest way to get this chat closed.`}
 - ${input.canBook
-      ? "If they are a good fit and you have their email, say you can find a time and set wantsMeeting to true. Do NOT invent specific times — the system will show real availability."
+      ? hasEmail
+        ? "If they are a good fit, say you can find a time and set wantsMeeting to true. Do NOT invent specific times — the system will show real availability."
+        : "If they are a good fit, OFFER THE MEETING FIRST and ask for their email as the way to confirm it, in the same breath — an email request costs them something and should buy them something. Do NOT invent specific times."
       : "Do not offer to book a time yourself; say a member of the team will follow up."}
 - NEVER invent a name, email, company or phone number. Only extract what the visitor actually said. Use null when they have not said it.
 - score = 0-100 fit for a B2B sales conversation, judged on the buying intent and context they have shown. Start low; raise it only on real evidence.

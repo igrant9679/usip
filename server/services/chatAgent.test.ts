@@ -8,6 +8,7 @@ import { describe, it, expect } from "vitest";
 import {
   MEETING_REQUEST_FLOOR,
   decideOffer,
+  emailAskCount,
   mergeVisitor,
   plausibleEmail,
   sanitizeTurn,
@@ -147,5 +148,46 @@ describe("transcriptText", () => {
     const lines = transcriptText(many, "Ada").split("\n");
     expect(lines).toHaveLength(20);
     expect(lines[lines.length - 1]).toBe("Visitor: m39");
+  });
+});
+
+/**
+ * Measured on the live agent: the prompt said "ask only once per conversation"
+ * and it asked four turns running. A stateless prompt re-decides every turn, so
+ * the count has to be computed and fed back in.
+ */
+describe("emailAskCount", () => {
+  const at = "2026-07-27T00:00:00.000Z";
+  const agent = (text: string) => ({ role: "agent" as const, text, at });
+  const visitor = (text: string) => ({ role: "visitor" as const, text, at });
+
+  it("counts the agent's email questions, not the visitor's messages", () => {
+    expect(emailAskCount([
+      agent("What brings you here?"),
+      visitor("my email is a@b.com, what do you do?"),
+      agent("What's your work email?"),
+    ])).toBe(1);
+  });
+
+  it("counts each repeat — this is the behaviour being suppressed", () => {
+    expect(emailAskCount([
+      agent("What's the best email to reach you at?"),
+      visitor("how much does it cost?"),
+      agent("Pricing depends on scope. What's your work email so I can set that up?"),
+      visitor("who else have you worked with?"),
+      agent("We can walk you through it. What's the best email to reach you?"),
+    ])).toBe(3);
+  });
+
+  it("does not count a statement that merely mentions email", () => {
+    expect(emailAskCount([agent("I'll send that to your email once we're set up.")])).toBe(0);
+  });
+
+  it("matches the hyphenated spelling", () => {
+    expect(emailAskCount([agent("Can I grab your e-mail?")])).toBe(1);
+  });
+
+  it("is empty-safe", () => {
+    expect(emailAskCount([])).toBe(0);
   });
 });
