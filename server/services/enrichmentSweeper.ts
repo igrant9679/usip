@@ -234,6 +234,63 @@ export async function resolveMissingDomains(
 }
 
 /**
+ * Pull an employer out of a LinkedIn headline.
+ *
+ * Needed because LinkedIn withholds structured work history for people outside
+ * the connected account's network — measured on this workspace, third-degree
+ * profiles come back with `experienceEntries: 0` and no `current_company`,
+ * while the headline reads "Chief Financial Officer at George Industries". The
+ * employer was always there; we were reading the headline for the title and
+ * discarding the rest.
+ *
+ * Deliberately conservative. This writes into a CRM field that downstream
+ * passes then resolve to a domain and mail, so a wrong answer is worse than no
+ * answer: anything long, sentence-like, or matching a known idiom ("at scale",
+ * "at large") is rejected rather than guessed at.
+ */
+const HEADLINE_NON_COMPANIES = new Set([
+  "large", "scale", "heart", "home", "work", "times", "last", "will", "present", "night", "once", "best",
+]);
+
+export function companyFromHeadline(headline: string | null | undefined): string | null {
+  const h = (headline ?? "").trim();
+  if (!h) return null;
+  // First " at " / " @ " only. A headline can chain roles ("CFO at X | Advisor
+  // at Y"); the first is the current one people lead with.
+  const m = h.match(/\s(?:at|@)\s+(.+)$/i);
+  if (!m) return null;
+  let tail = m[1];
+  // Headlines pile on segments after a separator — cut at the first one.
+  // Comma is NOT a separator: "American Wood Fibers, Inc." is one company.
+  for (const sep of ["|", "•", "·", "—", "–", "\n"]) {
+    const i = tail.indexOf(sep);
+    if (i > 0) tail = tail.slice(0, i);
+  }
+  // Strip trailing separators but NOT a trailing period — "American Wood
+  // Fibers, Inc." ends in one and it is part of the name.
+  const name = tail.trim().replace(/[\s,;:|•·—–-]+$/, "").trim();
+  if (!name) return null;
+  if (HEADLINE_NON_COMPANIES.has(name.toLowerCase())) return null;
+  // Company names are short. Six words covers "The Bill and Melinda Gates
+  // Foundation"; ten was loose enough to accept "every stage of their journey
+  // grow their impact and reach" out of a marketing headline.
+  if (name.length > 120 || name.split(/\s+/).length > 6) return null;
+  // Prose continues in lower case; names do not. eBay and iRobot start lower
+  // but capitalise inside the first word, so allow that shape specifically.
+  //
+  // Case is tested with toLowerCase/toUpperCase rather than a \p{Lu} class
+  // because this project's regex target predates unicode property escapes —
+  // and this way caseless scripts (CJK) pass instead of being rejected as
+  // "not capitalised", which a plain [A-Z] check would get wrong.
+  const first = name.split(/\s+/)[0] ?? "";
+  const c = first.charAt(0);
+  const startsUpperOrCaseless = c !== c.toLowerCase() || c === c.toUpperCase();
+  const hasInnerCapital = first.slice(1).split("").some((ch) => ch !== ch.toLowerCase());
+  if (!startsUpperOrCaseless && !hasInnerCapital) return null;
+  return name;
+}
+
+/**
  * Fill missing company names on ARE queue rows from their LinkedIn profile.
  *
  * This is the pass that unblocks everything else. Measured on the live
@@ -274,12 +331,14 @@ export async function backfillQueueCompanies(opts: {
   byStatus: Record<string, number>;
   /** Lookup succeeded but the profile carried no current employer. */
   noCompanyOnProfile: number;
+  /** Company recovered from the headline because LinkedIn hid the structured fields. */
+  fromHeadline: number;
   /** A few real vendor messages, for when the counts alone are not enough. */
   samples: string[];
   stoppedBecause: "done" | "cap" | "rate_limited" | "no_candidates";
 }> {
   const db = await getDb();
-  const empty = { attempted: 0, filled: 0, withDomain: 0, byStatus: {} as Record<string, number>, noCompanyOnProfile: 0, samples: [] as string[] };
+  const empty = { attempted: 0, filled: 0, withDomain: 0, byStatus: {} as Record<string, number>, noCompanyOnProfile: 0, fromHeadline: 0, samples: [] as string[] };
   if (!db) return { ...empty, stoppedBecause: "no_candidates" as const };
   const cap = Math.max(1, Math.min(100, opts.limit ?? 25));
 
@@ -301,7 +360,7 @@ export async function backfillQueueCompanies(opts: {
   if (live.length === 0) return { ...empty, stoppedBecause: "no_candidates" as const };
 
   const { retrieveLinkedInProfileByUrl } = await import("./linkedinEnrichment/unipileProfile");
-  let attempted = 0, filled = 0, withDomain = 0, noCompanyOnProfile = 0;
+  let attempted = 0, filled = 0, withDomain = 0, noCompanyOnProfile = 0, fromHeadline = 0;
   const byStatus: Record<string, number> = {};
   const samples: string[] = [];
   let stoppedBecause: "done" | "cap" | "rate_limited" | "no_candidates" = "done";
@@ -319,8 +378,10 @@ export async function backfillQueueCompanies(opts: {
       byStatus[out.status] = (byStatus[out.status] ?? 0) + 1;
       if (samples.length < 3 && out.status !== "enriched" && out.message) samples.push(`${out.status}: ${out.message}`.slice(0, 200));
       if (out.status === "rate_limited") { stoppedBecause = "rate_limited"; break; }
-      const company = out.profile?.currentCompanyName ?? null;
+      const headlineCompany = companyFromHeadline((out.profile as unknown as { currentTitle?: string | null })?.currentTitle);
+      const company = out.profile?.currentCompanyName ?? headlineCompany;
       const domain = out.profile?.currentCompanyDomain ?? null;
+      if (!out.profile?.currentCompanyName && headlineCompany) fromHeadline++;
       if (!company && !domain) {
         if (out.profile) {
           noCompanyOnProfile++;
@@ -353,7 +414,7 @@ export async function backfillQueueCompanies(opts: {
       console.error(`[EnrichmentSweep] LinkedIn backfill for queue ${r.id} failed:`, (e as Error).message);
     }
   }
-  return { attempted, filled, withDomain, byStatus, noCompanyOnProfile, samples, stoppedBecause };
+  return { attempted, filled, withDomain, byStatus, noCompanyOnProfile, fromHeadline, samples, stoppedBecause };
 }
 
 /**
