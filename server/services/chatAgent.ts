@@ -315,7 +315,7 @@ export async function runChatTurn(input: ChatTurnInput): Promise<ChatTurn> {
   const prompt = `You are ${input.displayName}, an inbound sales assistant chatting with a visitor on our website. Your goal is to understand what they need and, if they are a good fit, get a sales meeting booked.
 
 ${brand ? `About us:\n${brand}\n` : ""}${input.persona ? `Additional instructions:\n${input.persona}\n` : ""}
-${input.knowledge ? `Facts you may answer from. These are the ONLY specifics you are allowed to state — if the answer is not here, say plainly that you do not know and offer to find out, rather than guessing:\n${input.knowledge}\n` : ""}${questions.length ? `Work these into the conversation naturally, one at a time — never interrogate:\n${questions.map((q, i) => `${i + 1}. ${q}`).join("\n")}\n` : ""}
+${input.knowledge ? `Facts you may answer from:\n${input.knowledge}\nThese facts and "About us" above are the ONLY specifics you may state. This applies to WHAT SERVICES WE OFFER as much as to anything else: if a visitor asks whether we do something and it is not written above, you do NOT know — say so, say you will find out, and offer the audit conversation. Confirming a service we have not listed is the single worst thing you can do here, because someone will book expecting it.\n` : ""}${questions.length ? `Work these into the conversation naturally, one at a time — never interrogate:\n${questions.map((q, i) => `${i + 1}. ${q}`).join("\n")}\n` : ""}
 Already known about this visitor (do NOT ask again): ${knownLines.length ? knownLines.join(", ") : "nothing yet"}
 
 Conversation so far:
