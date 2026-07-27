@@ -253,15 +253,34 @@ export async function resolveMissingDomains(
  *
  * Stops immediately on rate_limited rather than grinding through the cap.
  * Never throws.
+ *
+ * Returns a per-status breakdown, not just a filled count. The first live run
+ * attempted 25, filled 0, and consumed 25 of a 100/day LinkedIn allowance while
+ * saying nothing about why — "we called and got nothing" and "we never really
+ * called" are completely different problems, and a bare counter cannot tell
+ * them apart. `noCompanyOnProfile` in particular separates a vendor/lookup
+ * failure from a profile that genuinely carries no current employer.
  */
 export async function backfillQueueCompanies(opts: {
   workspaceId: number;
   userId: number;
   isAdmin: boolean;
   limit?: number;
-}): Promise<{ attempted: number; filled: number; withDomain: number; stoppedBecause: "done" | "cap" | "rate_limited" | "no_candidates" }> {
+}): Promise<{
+  attempted: number;
+  filled: number;
+  withDomain: number;
+  /** Outcome status → count, straight from RetrieveOutcome. */
+  byStatus: Record<string, number>;
+  /** Lookup succeeded but the profile carried no current employer. */
+  noCompanyOnProfile: number;
+  /** A few real vendor messages, for when the counts alone are not enough. */
+  samples: string[];
+  stoppedBecause: "done" | "cap" | "rate_limited" | "no_candidates";
+}> {
   const db = await getDb();
-  if (!db) return { attempted: 0, filled: 0, withDomain: 0, stoppedBecause: "no_candidates" };
+  const empty = { attempted: 0, filled: 0, withDomain: 0, byStatus: {} as Record<string, number>, noCompanyOnProfile: 0, samples: [] as string[] };
+  if (!db) return { ...empty, stoppedBecause: "no_candidates" as const };
   const cap = Math.max(1, Math.min(100, opts.limit ?? 25));
 
   const rows = await db
@@ -279,10 +298,12 @@ export async function backfillQueueCompanies(opts: {
     .limit(cap);
 
   const live = rows.filter((r) => isEnrichableCampaign(r.campaignName));
-  if (live.length === 0) return { attempted: 0, filled: 0, withDomain: 0, stoppedBecause: "no_candidates" };
+  if (live.length === 0) return { ...empty, stoppedBecause: "no_candidates" as const };
 
   const { retrieveLinkedInProfileByUrl } = await import("./linkedinEnrichment/unipileProfile");
-  let attempted = 0, filled = 0, withDomain = 0;
+  let attempted = 0, filled = 0, withDomain = 0, noCompanyOnProfile = 0;
+  const byStatus: Record<string, number> = {};
+  const samples: string[] = [];
   let stoppedBecause: "done" | "cap" | "rate_limited" | "no_candidates" = "done";
 
   for (const r of live) {
@@ -295,10 +316,18 @@ export async function backfillQueueCompanies(opts: {
         isAdmin: opts.isAdmin,
         linkedinUrl: r.linkedinUrl ?? "",
       });
+      byStatus[out.status] = (byStatus[out.status] ?? 0) + 1;
+      if (samples.length < 3 && out.status !== "enriched" && out.message) samples.push(`${out.status}: ${out.message}`.slice(0, 200));
       if (out.status === "rate_limited") { stoppedBecause = "rate_limited"; break; }
       const company = out.profile?.currentCompanyName ?? null;
       const domain = out.profile?.currentCompanyDomain ?? null;
-      if (!company && !domain) continue;
+      if (!company && !domain) {
+        if (out.profile) {
+          noCompanyOnProfile++;
+          if (samples.length < 3) samples.push(`profile returned but no employer: ${out.profile.fullName ?? "?"}`.slice(0, 200));
+        }
+        continue;
+      }
       // Clear enrichedAt for the same reason the domain pass does: the earlier
       // failure happened because these fields were missing, so it says nothing
       // about whether the finder can succeed now that they are not.
@@ -311,7 +340,7 @@ export async function backfillQueueCompanies(opts: {
       console.error(`[EnrichmentSweep] LinkedIn backfill for queue ${r.id} failed:`, (e as Error).message);
     }
   }
-  return { attempted, filled, withDomain, stoppedBecause };
+  return { attempted, filled, withDomain, byStatus, noCompanyOnProfile, samples, stoppedBecause };
 }
 
 /**
