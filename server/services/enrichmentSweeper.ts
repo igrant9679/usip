@@ -30,7 +30,7 @@
  * that inside a run the user thinks is about email would be a surprise.
  */
 import { and, eq, isNotNull, isNull, ne, or } from "drizzle-orm";
-import { areCampaigns, prospectQueue, prospects, workspaceSettings, workspaces } from "../../drizzle/schema";
+import { areCampaigns, notifications, prospectQueue, prospects, workspaceSettings, workspaces } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { lookupContactInfo, resolveVerifiedEmail } from "./scraper";
 import { getReoonKey, reoonCheckBalance } from "./reoon";
@@ -250,6 +250,28 @@ export async function resolveMissingDomains(
     }
   }
   return { attempted, resolved };
+}
+
+/**
+ * Tell the owner what an unattended run actually did.
+ *
+ * These engines spend a real budget on a schedule with nobody watching. An
+ * engine that reports only to the server log is accountable to whoever reads
+ * logs, which is nobody — the first sign of trouble would be a drained
+ * allowance and no explanation. Best-effort: a failed notification must never
+ * fail the run it is describing.
+ */
+async function notifyOwner(workspaceId: number, userId: number | null, title: string, body: string): Promise<void> {
+  if (!userId) return;
+  try {
+    const db = await getDb();
+    if (!db) return;
+    await db.insert(notifications).values({
+      workspaceId, userId, kind: "system", title, body: body.slice(0, 1000),
+    } as never);
+  } catch (e) {
+    console.error("[EnrichmentSweep] notify failed:", (e as Error).message);
+  }
 }
 
 /**
@@ -691,10 +713,22 @@ export async function runCompanyBackfillAllWorkspaces(): Promise<{ workspaces: n
         .set({ companyBackfillLastRunAt: new Date() } as never)
         .where(eq(workspaceSettings.workspaceId, ws.id))
         .catch(() => {});
-      if (r.attempted > 0) {
+      if (r.attempted > 0 || r.stoppedBecause === "rate_limited") {
         touched++;
         filled += r.filled;
         console.log(`[CompanyBackfill] ws=${ws.id} attempted=${r.attempted} filled=${r.filled} fromHeadline=${r.fromHeadline} stopped=${r.stoppedBecause}`);
+        const left = await queueDiagnostics(ws.id).then((q) => q.needsCompanyWithLinkedIn).catch(() => null);
+        const why = r.stoppedBecause === "rate_limited"
+          ? " Stopped early — the LinkedIn daily lookup limit was reached."
+          : r.stoppedBecause === "cap" ? " Stopped at the daily cap." : "";
+        await notifyOwner(
+          ws.id, ws.ownerUserId,
+          `Company Backfill: filled ${r.filled} of ${r.attempted}`,
+          `Read ${r.attempted} LinkedIn profile${r.attempted === 1 ? "" : "s"} and found an employer for ${r.filled}.`
+          + (r.noCompanyOnProfile > 0 ? ` ${r.noCompanyOnProfile} had no employer to read — most LinkedIn headlines are slogans rather than "Title at Company".` : "")
+          + (left !== null ? ` ${left} prospect${left === 1 ? "" : "s"} still need a company name.` : "")
+          + why,
+        );
       }
     } catch (e) {
       console.error(`[CompanyBackfill] workspace ${ws.id} failed:`, (e as Error).message);
@@ -726,10 +760,19 @@ export async function runEnrichmentSweepAllWorkspaces(): Promise<{ swept: number
     if (ws.lastRunAt && Date.now() - new Date(ws.lastRunAt).getTime() < 20 * 60 * 60 * 1000) continue;
     try {
       const r = await sweepWorkspace(ws.id, { limit: ws.cap ?? 50 });
-      if (r.attempted > 0) {
+      if (r.attempted > 0 || r.domainsResolved > 0) {
         swept++;
         emailsFound += r.emailsFound;
         console.log(`[EnrichmentSweep] ws=${ws.id} attempted=${r.attempted} found=${r.emailsFound} stopped=${r.stoppedBecause}`);
+        const [owner] = await db.select({ id: workspaces.ownerUserId }).from(workspaces).where(eq(workspaces.id, ws.id));
+        await notifyOwner(
+          ws.id, owner?.id ?? null,
+          `Enrichment Sweep: ${r.emailsFound} email${r.emailsFound === 1 ? "" : "s"} found`,
+          `Checked ${r.attempted} prospect${r.attempted === 1 ? "" : "s"} and resolved ${r.emailsFound} address${r.emailsFound === 1 ? "" : "es"}.`
+          + (r.domainsResolved > 0 ? ` Also resolved ${r.domainsResolved} company domain${r.domainsResolved === 1 ? "" : "s"} at no cost.` : "")
+          + (r.creditsPower > 0 ? ` Spent ${r.creditsPower} verification credit${r.creditsPower === 1 ? "" : "s"}.` : "")
+          + (r.stoppedBecause === "no_credits" ? " Stopped early — verification credits ran low." : ""),
+        );
       }
     } catch (e) {
       console.error(`[EnrichmentSweep] workspace ${ws.id} failed:`, (e as Error).message);
