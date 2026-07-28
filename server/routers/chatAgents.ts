@@ -29,7 +29,7 @@ import {
 } from "../../drizzle/schema";
 import { bookSlotForLink, openSlotsForLink } from "./bookingLinks";
 import {
-  decideOffer, mergeVisitor, runChatTurn, wantsHuman,
+  decideOffer, emailAskCount, handoffLine, mergeVisitor, runChatTurn, wantsHuman,
   type ChatMessage, type VisitorFacts,
 } from "../services/chatAgent";
 import { formatKnowledge, selectKnowledge } from "../services/chatKnowledge";
@@ -462,11 +462,13 @@ export const chatAgentsRouter = router({
           const reason: HandoffReason = asked ? "requested" : "agent_stuck";
           await handoffToRep(agent, session.token, visitor, turn.summary, leadId, reason);
           handoffAt = new Date();
-          // Without an email nobody can reach them, so the promise has to come
-          // with the ask that makes it keepable.
-          reply = visitor.email
-            ? `${reply}\n\nI've asked a colleague to pick this up — they'll be in touch shortly.`
-            : `${reply}\n\nI've asked a colleague to pick this up. What's the best email for them to reach you on?`;
+          // Without an email nobody can reach them, so the promise comes with
+          // the ask that makes it keepable — unless the model just asked, in
+          // which case appending it again asks twice in four lines.
+          reply = `${reply}\n\n${handoffLine({
+            hasEmail: !!visitor.email,
+            replyAsksForEmail: emailAskCount([{ role: "agent", text: reply, at: new Date().toISOString() }]) > 0,
+          })}`;
           // A handoff supersedes a slot list: offering times while promising a
           // person is two different answers to the same question.
           slots = [];

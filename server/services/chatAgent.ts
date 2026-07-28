@@ -270,6 +270,21 @@ export function wantsHuman(text: string): boolean {
 }
 
 /**
+ * The line appended to a reply when a handoff fires.
+ *
+ * Measured live: the model's own reply already ended with "I'll just need your
+ * work email", and appending the ask again produced a message that asked twice
+ * in four lines. The promise is always worth stating; the question is only
+ * worth adding when nobody has asked it yet — and only when we actually lack an
+ * address, because otherwise the promise is one we cannot keep.
+ */
+export function handoffLine(opts: { hasEmail: boolean; replyAsksForEmail: boolean }): string {
+  return opts.hasEmail || opts.replyAsksForEmail
+    ? "I've asked a colleague to pick this up — they'll be in touch shortly."
+    : "I've asked a colleague to pick this up. What's the best email for them to reach you on?";
+}
+
+/**
  * First plausible email address appearing anywhere in free text.
  *
  * `known` is built from the SESSION row, which is only updated AFTER a turn is

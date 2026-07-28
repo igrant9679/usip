@@ -10,6 +10,7 @@ import {
   decideOffer,
   emailAskCount,
   emailInText,
+  handoffLine,
   wantsHuman,
   scrubUnsupportedClaims,
   mergeVisitor,
@@ -338,5 +339,25 @@ describe("sanitizeTurn needsHuman", () => {
     expect(sanitizeTurn({ needsHuman: 1 }, "f").needsHuman).toBe(false);
     expect(sanitizeTurn({ needsHuman: true }, "f").needsHuman).toBe(true);
     expect(sanitizeTurn({}, "f").needsHuman).toBe(false);
+  });
+});
+
+describe("handoffLine", () => {
+  it("only promises when we can already reach them", () => {
+    expect(handoffLine({ hasEmail: true, replyAsksForEmail: false }))
+      .toBe("I've asked a colleague to pick this up — they'll be in touch shortly.");
+  });
+
+  it("asks for an email when we have none — the promise must be keepable", () => {
+    expect(handoffLine({ hasEmail: false, replyAsksForEmail: false })).toMatch(/best email/);
+  });
+
+  /**
+   * Measured live: the model's reply already ended with "I'll just need your
+   * work email", and appending the ask produced a message asking twice in four
+   * lines.
+   */
+  it("does not ask again when the reply already did", () => {
+    expect(handoffLine({ hasEmail: false, replyAsksForEmail: true })).not.toMatch(/best email/);
   });
 });
