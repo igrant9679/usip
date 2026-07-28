@@ -1692,6 +1692,14 @@ export const chatSessions = mysqlTable(
      * can never be followed up twice however often the cron runs.
      */
     followUpAt: timestamp("followUpAt"),
+    /**
+     * Mid-chat escalation to a person (Migration 0139). Set once, on the turn
+     * the handoff fires — the idempotency marker, so a visitor who keeps asking
+     * for a human does not mint a task per message.
+     */
+    handoffAt: timestamp("handoffAt"),
+    /** "requested" (the visitor asked) or "agent_stuck" (it could not help). */
+    handoffReason: varchar("handoffReason", { length: 40 }),
     // ── Where they were when they started talking (Migration 0138) ──
     /** Page the widget was embedded on. The agent's only situational awareness. */
     pageUrl: varchar("pageUrl", { length: 1000 }),

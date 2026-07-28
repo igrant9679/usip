@@ -10,6 +10,7 @@ import {
   decideOffer,
   emailAskCount,
   emailInText,
+  wantsHuman,
   scrubUnsupportedClaims,
   mergeVisitor,
   plausibleEmail,
@@ -278,5 +279,64 @@ describe("emailInText", () => {
   it("returns null when there is no address", () => {
     expect(emailInText("let me discuss internally and come back to you")).toBeNull();
     expect(emailInText("")).toBeNull();
+  });
+});
+
+/**
+ * Escalation is deterministic on purpose: a visitor who has decided they want a
+ * human has stopped wanting the bot's opinion, so this must not depend on the
+ * model agreeing. False positives are expensive in the other direction — each
+ * one mints a task for a rep and promises the visitor a call.
+ */
+describe("wantsHuman", () => {
+  it("catches the direct asks", () => {
+    for (const t of [
+      "can I talk to a human?",
+      "I'd like to speak with someone",
+      "please connect me to a real person",
+      "get me a human",
+      "put me through to an agent",
+      "can I speak to a representative",
+      "is there a real person I can talk to",
+      "are you a bot?",
+      "is this a chatbot",
+      "I'd rather talk to a person",
+    ]) {
+      expect(wantsHuman(t), t).toBe(true);
+    }
+  });
+
+  it("does not fire on ordinary conversation", () => {
+    for (const t of [
+      "we run a food bank network",
+      "grant reporting is eating us alive",
+      "someone told me about you",
+      "that's a real problem for us",
+      "what does your team do?",
+      "I need to discuss internally first",
+      "how much does it cost?",
+      "",
+    ]) {
+      expect(wantsHuman(t), t).toBe(false);
+    }
+  });
+
+  /** "Human resources" is a department, not a request for a human. */
+  it("is not fooled by human resources", () => {
+    expect(wantsHuman("our human resources team handles that")).toBe(false);
+    expect(wantsHuman("I work in human resources")).toBe(false);
+  });
+
+  it("still fires when HR is mentioned alongside a genuine ask", () => {
+    expect(wantsHuman("human resources sent me — can I speak to a person?")).toBe(true);
+  });
+});
+
+describe("sanitizeTurn needsHuman", () => {
+  it("only treats a literal true as needing a human", () => {
+    expect(sanitizeTurn({ needsHuman: "yes" }, "f").needsHuman).toBe(false);
+    expect(sanitizeTurn({ needsHuman: 1 }, "f").needsHuman).toBe(false);
+    expect(sanitizeTurn({ needsHuman: true }, "f").needsHuman).toBe(true);
+    expect(sanitizeTurn({}, "f").needsHuman).toBe(false);
   });
 });

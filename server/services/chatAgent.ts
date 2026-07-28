@@ -47,6 +47,12 @@ export interface ChatTurn {
   summary: string | null;
   /** The model's opinion that it's time to talk times. Advisory only. */
   wantsMeeting: boolean;
+  /**
+   * The model saying it cannot help — the SECOND handoff trigger (0139). The
+   * first, an explicit request for a person, is detected deterministically by
+   * `wantsHuman` and never depends on this.
+   */
+  needsHuman: boolean;
 }
 
 /** What the server should actually do next, given the agent's autonomy mode. */
@@ -161,6 +167,7 @@ export function sanitizeTurn(raw: unknown, fallbackReply: string): ChatTurn {
     intent: clean(o.intent, 240),
     summary: clean(o.summary, 1000),
     wantsMeeting: o.wantsMeeting === true,
+    needsHuman: o.needsHuman === true,
   };
 }
 
@@ -229,6 +236,40 @@ const CLAIM_FALLBACK =
   "I'd rather not guess at that — the honest answer depends on your setup. The best next step is a short audit conversation where we look at your actual process. Would that be useful?";
 
 /**
+ * Is the visitor asking to speak to a person?
+ *
+ * Deterministic on purpose. Escalation is the one thing that must not depend on
+ * the model agreeing it is warranted — a visitor who has decided they want a
+ * human has already stopped wanting the bot's opinion, and a model that talks
+ * itself out of escalating is the exact failure this prevents.
+ *
+ * Narrow by design. False positives are expensive in the other direction: every
+ * one mints a task for a rep and tells a visitor to expect a call. "Human
+ * resources", "is someone there?" as an opener, and "a real problem" must all
+ * stay negative, so the patterns require a request VERB near a person NOUN.
+ */
+const HUMAN_NOUN = "(?:human|person|someone|somebody|agent|rep(?:resentative)?|advisor|adviser|consultant|team)";
+const HUMAN_PATTERNS: RegExp[] = [
+  // "talk/speak/chat to a human", "can I speak with someone"
+  new RegExp(`\\b(?:talk|speak|chat|connect|deal)\\s+(?:to|with)\\s+(?:a|an|the|your|some)?\\s*(?:real\\s+|actual\\s+|live\\s+)?${HUMAN_NOUN}\\b`, "i"),
+  // "get me a human", "put me through to someone", "connect me to a real person"
+  new RegExp(`\\b(?:get|put|pass|transfer|hand|connect|direct|link)\\s+me\\s+(?:on\\s+)?(?:to|through\\s+to|over\\s+to|with)?\\s*(?:a|an|the)?\\s*(?:real\\s+|actual\\s+|live\\s+)?${HUMAN_NOUN}\\b`, "i"),
+  // "is there a real person", "are you a bot/robot/AI?"
+  new RegExp(`\\b(?:is|are)\\s+(?:there|this|you)\\s+(?:a|an)?\\s*(?:real\\s+)?(?:${HUMAN_NOUN}|bot|robot|ai|chatbot)\\b`, "i"),
+  // "I want/need to speak to a human" is covered above; this catches the bare
+  // "I'd rather talk to a person" / "just give me a human".
+  new RegExp(`\\b(?:rather|just|please)\\s+(?:\\w+\\s+){0,3}${HUMAN_NOUN}\\b`, "i"),
+];
+
+export function wantsHuman(text: string): boolean {
+  const t = String(text ?? "");
+  if (!t.trim()) return false;
+  // "human resources" is a department, not a request.
+  const cleaned = t.replace(/\bhuman\s+resources\b/gi, " ");
+  return HUMAN_PATTERNS.some((re) => re.test(cleaned));
+}
+
+/**
  * First plausible email address appearing anywhere in free text.
  *
  * `known` is built from the SESSION row, which is only updated AFTER a turn is
@@ -288,6 +329,8 @@ export interface ChatTurnInput {
    * zero, and the only thing that stops it pitching on a careers page.
    */
   pageContext?: string;
+  /** True once a person has been asked to pick this up (0139). */
+  handedOff?: boolean;
 }
 
 /**
@@ -356,6 +399,9 @@ Rules:
         ? "If they are a good fit, say you can find a time and set wantsMeeting to true. Do NOT invent specific times — the system will show real availability."
         : "Do NOT invent specific times — the system will show real availability once you have their email."
       : "Do not offer to book a time yourself; say a member of the team will follow up."}
+- ${input.handedOff
+      ? "A colleague has ALREADY been asked to pick this up. Do not offer to book, and do not repeat the promise — say what you can, briefly, and let them wait for the person."
+      : "Set needsHuman true when you genuinely cannot help — a question outside what you were told, a complaint, or anything where guessing would be worse than waiting. Being unable to answer is not a failure; pretending is."}
 - NEVER invent a name, email, company or phone number. Only extract what the visitor actually said. Use null when they have not said it.
 - score = 0-100 fit for a B2B sales conversation, judged on the buying intent and context they have shown. Start low; raise it only on real evidence.
 
@@ -366,7 +412,8 @@ Return JSON:
   "score": <integer 0-100>,
   "intent": "<short phrase: what they want>",
   "summary": "<one sentence a rep could read before the call>",
-  "wantsMeeting": <true|false>
+  "wantsMeeting": <true|false>,
+  "needsHuman": <true ONLY if you genuinely cannot help and a person should take over, else false>
 }`;
 
   try {
@@ -392,6 +439,7 @@ Return JSON:
             intent: { type: "string" },
             summary: { type: "string" },
             wantsMeeting: { type: "boolean" },
+            needsHuman: { type: "boolean" },
           },
           required: ["reply", "score", "wantsMeeting"],
         },

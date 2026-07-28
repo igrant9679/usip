@@ -342,6 +342,13 @@ export default function ChatAgents() {
                               <span className="font-medium truncate">{s.visitorName || s.visitorEmail || "Anonymous visitor"}</span>
                               {s.visitorCompany && <span className="text-muted-foreground truncate hidden sm:inline">· {s.visitorCompany}</span>}
                               <span className="flex-1" />
+                              {/* A handoff outranks the other badges: it means a
+                                  person owes this visitor a reply. */}
+                              {s.handoffAt && (
+                                <span className="text-[9px] px-1.5 py-0.5 rounded-full font-medium bg-rose-100 text-rose-700">
+                                  {s.handoffReason === "requested" ? "asked for a human" : "needs a human"}
+                                </span>
+                              )}
                               {s.meetingId ? (
                                 <span className="text-[9px] px-1.5 py-0.5 rounded-full font-medium bg-emerald-100 text-emerald-700">booked</span>
                               ) : s.status === "qualified" ? (

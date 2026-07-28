@@ -2967,6 +2967,27 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0139: mid-chat handoff to a person ────────────────────────────────────
+  // The agent could already hand a QUALIFIED visitor to a rep in approval mode.
+  // What it could not do was react to "can I speak to someone?" — it kept
+  // answering as a bot, which is the fastest way to lose a person who has
+  // already decided they want a human.
+  //
+  // Deliberately NOT behind an autonomy switch. `auto` means "books without
+  // asking", not "never escalates", so an explicit request for a human is
+  // honoured in every mode. Adding a switch here would let a workspace turn off
+  // the one thing a frustrated visitor is actually asking for.
+  //
+  // handoffAt is the idempotency marker: a visitor who asks three times gets
+  // one task, not three.
+  {
+    name: "0139_chat_handoff.sql",
+    statements: [
+      "ALTER TABLE `chat_sessions` ADD COLUMN `handoffAt` timestamp NULL",
+      "ALTER TABLE `chat_sessions` ADD COLUMN `handoffReason` varchar(40) NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

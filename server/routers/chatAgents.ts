@@ -29,7 +29,7 @@ import {
 } from "../../drizzle/schema";
 import { bookSlotForLink, openSlotsForLink } from "./bookingLinks";
 import {
-  decideOffer, mergeVisitor, runChatTurn,
+  decideOffer, mergeVisitor, runChatTurn, wantsHuman,
   type ChatMessage, type VisitorFacts,
 } from "../services/chatAgent";
 import { formatKnowledge, selectKnowledge } from "../services/chatKnowledge";
@@ -389,6 +389,7 @@ export const chatAgentsRouter = router({
         known,
         canBook: !!link,
         knowledge,
+        handedOff: !!session.handoffAt,
         pageContext: describePageContext({
           pageUrl: session.pageUrl ?? input.pageUrl ?? null,
           pageTitle: session.pageTitle ?? input.pageTitle ?? null,
@@ -442,7 +443,34 @@ export const chatAgentsRouter = router({
       // guard every later turn of the same conversation would mint another
       // task and another notification for the same visitor.
       if (effective === "handoff" && session.status !== "qualified") {
-        await handoffToRep(agent, session.token, visitor, turn.summary, leadId);
+        await handoffToRep(agent, session.token, visitor, turn.summary, leadId, "qualified");
+      }
+
+      /**
+       * Mid-chat escalation (0139), independent of autonomy mode.
+       *
+       * An explicit request wins over the model's opinion and over `auto`:
+       * "auto" means it books without asking, not that it refuses to fetch a
+       * person. `handoffAt` makes this fire once — a visitor who asks three
+       * times gets one task, not three.
+       */
+      let handoffAt = session.handoffAt ?? null;
+      if (!handoffAt) {
+        const asked = wantsHuman(input.message);
+        const stuck = turn.needsHuman;
+        if (asked || stuck) {
+          const reason: HandoffReason = asked ? "requested" : "agent_stuck";
+          await handoffToRep(agent, session.token, visitor, turn.summary, leadId, reason);
+          handoffAt = new Date();
+          // Without an email nobody can reach them, so the promise has to come
+          // with the ask that makes it keepable.
+          reply = visitor.email
+            ? `${reply}\n\nI've asked a colleague to pick this up — they'll be in touch shortly.`
+            : `${reply}\n\nI've asked a colleague to pick this up. What's the best email for them to reach you on?`;
+          // A handoff supersedes a slot list: offering times while promising a
+          // person is two different answers to the same question.
+          slots = [];
+        }
       }
 
       const qualified = turn.score >= agent.qualifyThreshold;
@@ -459,6 +487,8 @@ export const chatAgentsRouter = router({
         intent: turn.intent,
         aiSummary: turn.summary,
         leadId,
+        handoffAt,
+        handoffReason: handoffAt ? (session.handoffReason ?? (wantsHuman(input.message) ? "requested" : "agent_stuck")) : null,
         status: session.status === "booked" ? "booked" : qualified ? "qualified" : "active",
       } as never).where(eq(chatSessions.id, session.id));
 
@@ -610,23 +640,46 @@ async function createLeadForSession(
  * A task (not just a notification) so it shows up in the same queue as every
  * other piece of work and can't be dismissed into nothing.
  */
+export type HandoffReason = "qualified" | "requested" | "agent_stuck";
+
+/** How each reason reads to the rep picking the task up. */
+const HANDOFF_COPY: Record<HandoffReason, { title: (who: string) => string; why: string }> = {
+  qualified: {
+    title: (who) => `Qualified website chat: ${who}`,
+    why: "Reach out — the agent did not book (Approve mode).",
+  },
+  requested: {
+    title: (who) => `${who} asked to speak to a person`,
+    why: "They asked for a human directly. Treat this as time-sensitive — they have already stopped wanting the bot.",
+  },
+  agent_stuck: {
+    title: (who) => `Website chat needs a person: ${who}`,
+    why: "The agent could not answer and said so rather than guessing. Worth checking whether this belongs in its knowledge.",
+  },
+};
+
 async function handoffToRep(
   agent: typeof chatAgents.$inferSelect,
   token: string,
   visitor: VisitorFacts,
   summary: string | null,
   leadId: number | null,
+  reason: HandoffReason = "qualified",
 ): Promise<void> {
   const db = await getDb();
   if (!db) return;
   const ownerUserId = agent.bookingUserId ?? agent.createdByUserId ?? null;
   const who = visitor.name || visitor.email || "A website visitor";
+  const copy = HANDOFF_COPY[reason] ?? HANDOFF_COPY.qualified;
+  // No email means the rep has no way to reach them — say so in the task rather
+  // than letting someone discover it after they open it.
+  const reachable = visitor.email ? `Email: ${visitor.email}` : "Email: — (NOT REACHABLE — reply in the chat)";
 
   try {
     await db.insert(tasks).values({
       workspaceId: agent.workspaceId,
-      title: `Follow up: ${who} (website chat)`.slice(0, 240),
-      description: `${summary ?? "Qualified on the website chat."}\n\nEmail: ${visitor.email ?? "—"}\nCompany: ${visitor.company ?? "—"}\nTranscript: /v2/chat?session=${token}`,
+      title: `${copy.title(who)}`.slice(0, 240),
+      description: `${summary ?? "Website chat."}\n\n${reachable}\nCompany: ${visitor.company ?? "—"}\nTranscript: /v2/chat?session=${token}`,
       type: "follow_up",
       priority: "high",
       status: "open",
@@ -634,7 +687,7 @@ async function handoffToRep(
       relatedType: leadId ? "lead" : null,
       relatedId: leadId,
       source: "ai",
-      aiReasoning: `The "${agent.name}" chat agent qualified this visitor. Agent is in Approve mode, so booking was left to a human.`,
+      aiReasoning: `The "${agent.name}" chat agent handed off (${reason}). ${copy.why}`,
     } as never);
   } catch (e) {
     console.error("[chatAgents] handoff task failed:", (e as Error).message);
@@ -646,8 +699,8 @@ async function handoffToRep(
         workspaceId: agent.workspaceId,
         userId: ownerUserId,
         kind: "system",
-        title: `Qualified website chat: ${who}`,
-        body: `${summary ?? "A visitor qualified on the website chat."} Reach out — the agent did not book (Approve mode).`,
+        title: copy.title(who).slice(0, 240),
+        body: `${summary ?? "A visitor needs attention on the website chat."} ${copy.why}`,
       } as never);
     } catch { /* best-effort */ }
   }
