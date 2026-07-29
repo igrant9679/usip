@@ -401,6 +401,41 @@ export const activitiesRouter = router({
       }
       return { ok: true, mentioned };
     }),
+
+  /**
+   * Remove one activity from a record's timeline.
+   *
+   * The RecordDrawer timeline has always shown a delete control for each
+   * activity; it called `activities.delete`, which did not exist. tRPC builds
+   * procedure paths at runtime, so it type-errored but compiled, and every
+   * confirmed delete returned NOT_FOUND to the user.
+   *
+   * Audited, unlike the neighbouring logCall/logMeeting/addNote writes: those
+   * record that something happened, and this erases that record. A timeline a
+   * rep can quietly edit is worth less than one they cannot.
+   */
+  delete: repProcedure
+    .input(z.object({ id: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [row] = await db
+        .select({ id: activities.id, type: activities.type, relatedType: activities.relatedType, relatedId: activities.relatedId })
+        .from(activities)
+        .where(and(eq(activities.id, input.id), eq(activities.workspaceId, ctx.workspace.id)))
+        .limit(1);
+      if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "That activity no longer exists." });
+      await db.delete(activities).where(and(eq(activities.id, input.id), eq(activities.workspaceId, ctx.workspace.id)));
+      await recordAudit({
+        workspaceId: ctx.workspace.id,
+        actorUserId: ctx.user.id,
+        action: "delete",
+        entityType: "activity",
+        entityId: input.id,
+        before: { type: row.type, relatedType: row.relatedType, relatedId: row.relatedId },
+      });
+      return { ok: true };
+    }),
 });
 
 /* ─── Attachments (S3 via storagePut) ────────────────────────────────── */

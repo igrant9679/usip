@@ -1519,171 +1519,6 @@ export const teamRouter = router({
       notifPrefs: (row?.notifPrefs as Record<string, boolean> | null) ?? DEFAULT_PREFS,
     };
   }),
-});
-/* ─── Danger Zone ───────────────────────────────────────────────────────── */
-
-export const dangerZoneRouter = router({
-  /**
-   * Report whether specific physical tables still exist in the live database,
-   * with an exact row count for any that do.
-   *
-   * Why this exists: rawMigrations.ts SWALLOWS a failed migration — it logs
-   * "[RawMigrations] FAILED <name>" and continues to the next one, so the app
-   * boots perfectly whether or not a migration actually applied. That makes
-   * schema/prod drift invisible from outside (a recurring problem in this
-   * repo). This proc is the read path that makes a DDL migration verifiable,
-   * and lets you see what a table holds BEFORE dropping it.
-   *
-   * Safety: admin-only, read-only, and every table name is validated against
-   * /^[a-z0-9_]+$/ before it can reach the COUNT(*) — no injection surface.
-   */
-  tableStatus: adminWsProcedure
-    .input(z.object({ tables: z.array(z.string().regex(/^[a-z0-9_]+$/)).min(1).max(25) }))
-    .query(async ({ input }) => {
-      const db = await getDb();
-      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      const out: Array<{ table: string; exists: boolean; rows: number | null }> = [];
-      for (const t of input.tables) {
-        // Defence in depth — the zod regex already guarantees this shape.
-        if (!/^[a-z0-9_]+$/.test(t)) continue;
-        const [existsRows] = (await db.execute(
-          sql`SELECT COUNT(*) AS n FROM information_schema.TABLES
-              WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ${t}`,
-        )) as unknown as [Array<{ n: number }>];
-        const exists = Number(existsRows?.[0]?.n ?? 0) > 0;
-        let rows: number | null = null;
-        if (exists) {
-          const [cnt] = (await db.execute(
-            sql.raw(`SELECT COUNT(*) AS n FROM \`${t}\``),
-          )) as unknown as [Array<{ n: number }>];
-          rows = Number(cnt?.[0]?.n ?? 0);
-        }
-        out.push({ table: t, exists, rows });
-      }
-      return out;
-    }),
-
-  /**
-   * Soft-archive the workspace: stamps `workspaces.archivedAt` and audits who
-   * did it. Super-admin only.
-   *
-   * It does NOTHING ELSE, and this docstring used to claim otherwise ("the
-   * workspace is hidden from workspace switcher"). It is not: `workspace.list`
-   * has no archivedAt filter, `resolveWorkspace` never reads the column, and
-   * NOTHING in the codebase does — every autopilot selects workspaces by mode
-   * from workspace_settings without joining workspaces, so an archived
-   * workspace keeps sending, spending and creating records exactly as before.
-   *
-   * Enforcement is deliberately not switched on: there is no un-archive
-   * procedure, so making this bite would be a one-way lockout. The Settings
-   * copy is already accurate about the limitation — see the note there. If
-   * enforcement is ever added, add un-archive in the same change.
-   */
-  archiveWorkspace: adminWsProcedure.mutation(async ({ ctx }) => {
-    const db = await getDb();
-    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    // Only super_admin can archive
-    if (ctx.member.role !== "super_admin") {
-      throw new TRPCError({ code: "FORBIDDEN", message: "Only super admins can archive a workspace" });
-    }
-    const { workspaces } = await import("../../drizzle/schema");
-    await db.update(workspaces).set({ archivedAt: new Date() }).where(eq(workspaces.id, ctx.workspace.id));
-    await recordAudit({
-      workspaceId: ctx.workspace.id,
-      actorUserId: ctx.user.id,
-      action: "update",
-      entityType: "workspace",
-      entityId: ctx.workspace.id,
-      after: { archived: true },
-    });
-    return { ok: true };
-  }),
-
-  /**
-   * Transfer workspace ownership to another active super_admin member.
-   * The current owner's role is not changed; the new owner's ownerUserId is set.
-   */
-  transferOwnership: adminWsProcedure
-    .input(z.object({ newOwnerUserId: z.number().int() }))
-    .mutation(async ({ ctx, input }) => {
-      const db = await getDb();
-      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      if (ctx.member.role !== "super_admin") {
-        throw new TRPCError({ code: "FORBIDDEN", message: "Only super admins can transfer ownership" });
-      }
-      if (input.newOwnerUserId === ctx.user.id) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "You are already the owner" });
-      }
-      // Verify new owner is an active member
-      const [newOwnerMember] = await db.select().from(workspaceMembers)
-        .where(and(eq(workspaceMembers.workspaceId, ctx.workspace.id), eq(workspaceMembers.userId, input.newOwnerUserId)));
-      if (!newOwnerMember) throw new TRPCError({ code: "NOT_FOUND", message: "New owner is not a workspace member" });
-      if (newOwnerMember.deactivatedAt) throw new TRPCError({ code: "BAD_REQUEST", message: "New owner is deactivated" });
-
-      const { workspaces } = await import("../../drizzle/schema");
-      await db.update(workspaces).set({ ownerUserId: input.newOwnerUserId }).where(eq(workspaces.id, ctx.workspace.id));
-      // Ensure new owner has super_admin role
-      await db.update(workspaceMembers).set({ role: "super_admin" }).where(eq(workspaceMembers.id, newOwnerMember.id));
-
-      await recordAudit({
-        workspaceId: ctx.workspace.id,
-        actorUserId: ctx.user.id,
-        action: "update",
-        entityType: "workspace",
-        entityId: ctx.workspace.id,
-        after: { ownerTransferredTo: input.newOwnerUserId },
-      });
-      return { ok: true };
-    }),
-
-  /**
-   * Export workspace data as a JSON summary.
-   * Returns counts and a sample of each entity type.
-   * Full export (CSV per entity) would require streaming — this returns a JSON blob.
-   */
-  exportData: adminWsProcedure.mutation(async ({ ctx }) => {
-    const db = await getDb();
-    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    // Role guard: super_admin only (existing), plus per-member permission override
-    if (ctx.member.role !== "super_admin") {
-      throw new TRPCError({ code: "FORBIDDEN", message: "Only super admins can export workspace data" });
-    }
-    await checkPermission(ctx, "export_data");
-
-    const { contacts, leads, accounts, opportunities, customers, tasks: tasksTable } = await import("../../drizzle/schema");
-
-    const [contactCount] = await db.select({ c: count() }).from(contacts).where(eq(contacts.workspaceId, ctx.workspace.id));
-    const [leadCount] = await db.select({ c: count() }).from(leads).where(eq(leads.workspaceId, ctx.workspace.id));
-    const [accountCount] = await db.select({ c: count() }).from(accounts).where(eq(accounts.workspaceId, ctx.workspace.id));
-    const [oppCount] = await db.select({ c: count() }).from(opportunities).where(eq(opportunities.workspaceId, ctx.workspace.id));
-    const [customerCount] = await db.select({ c: count() }).from(customers).where(eq(customers.workspaceId, ctx.workspace.id));
-    const [taskCount] = await db.select({ c: count() }).from(tasksTable).where(eq(tasksTable.workspaceId, ctx.workspace.id));
-
-    const exportData = {
-      exportedAt: new Date().toISOString(),
-      workspaceId: ctx.workspace.id,
-      workspaceName: ctx.workspace.name,
-      summary: {
-        contacts: Number(contactCount?.c ?? 0),
-        leads: Number(leadCount?.c ?? 0),
-        accounts: Number(accountCount?.c ?? 0),
-        opportunities: Number(oppCount?.c ?? 0),
-        customers: Number(customerCount?.c ?? 0),
-        tasks: Number(taskCount?.c ?? 0),
-      },
-    };
-
-    await recordAudit({
-      workspaceId: ctx.workspace.id,
-      actorUserId: ctx.user.id,
-      action: "create",
-      entityType: "data_export",
-      entityId: ctx.workspace.id,
-      after: exportData.summary,
-    });
-
-    return exportData;
-  }),
 
   /**
    * Update editable fields for a team member.
@@ -1851,4 +1686,169 @@ export const dangerZoneRouter = router({
 
       return rows;
     }),
+});
+/* ─── Danger Zone ───────────────────────────────────────────────────────── */
+
+export const dangerZoneRouter = router({
+  /**
+   * Report whether specific physical tables still exist in the live database,
+   * with an exact row count for any that do.
+   *
+   * Why this exists: rawMigrations.ts SWALLOWS a failed migration — it logs
+   * "[RawMigrations] FAILED <name>" and continues to the next one, so the app
+   * boots perfectly whether or not a migration actually applied. That makes
+   * schema/prod drift invisible from outside (a recurring problem in this
+   * repo). This proc is the read path that makes a DDL migration verifiable,
+   * and lets you see what a table holds BEFORE dropping it.
+   *
+   * Safety: admin-only, read-only, and every table name is validated against
+   * /^[a-z0-9_]+$/ before it can reach the COUNT(*) — no injection surface.
+   */
+  tableStatus: adminWsProcedure
+    .input(z.object({ tables: z.array(z.string().regex(/^[a-z0-9_]+$/)).min(1).max(25) }))
+    .query(async ({ input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const out: Array<{ table: string; exists: boolean; rows: number | null }> = [];
+      for (const t of input.tables) {
+        // Defence in depth — the zod regex already guarantees this shape.
+        if (!/^[a-z0-9_]+$/.test(t)) continue;
+        const [existsRows] = (await db.execute(
+          sql`SELECT COUNT(*) AS n FROM information_schema.TABLES
+              WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ${t}`,
+        )) as unknown as [Array<{ n: number }>];
+        const exists = Number(existsRows?.[0]?.n ?? 0) > 0;
+        let rows: number | null = null;
+        if (exists) {
+          const [cnt] = (await db.execute(
+            sql.raw(`SELECT COUNT(*) AS n FROM \`${t}\``),
+          )) as unknown as [Array<{ n: number }>];
+          rows = Number(cnt?.[0]?.n ?? 0);
+        }
+        out.push({ table: t, exists, rows });
+      }
+      return out;
+    }),
+
+  /**
+   * Soft-archive the workspace: stamps `workspaces.archivedAt` and audits who
+   * did it. Super-admin only.
+   *
+   * It does NOTHING ELSE, and this docstring used to claim otherwise ("the
+   * workspace is hidden from workspace switcher"). It is not: `workspace.list`
+   * has no archivedAt filter, `resolveWorkspace` never reads the column, and
+   * NOTHING in the codebase does — every autopilot selects workspaces by mode
+   * from workspace_settings without joining workspaces, so an archived
+   * workspace keeps sending, spending and creating records exactly as before.
+   *
+   * Enforcement is deliberately not switched on: there is no un-archive
+   * procedure, so making this bite would be a one-way lockout. The Settings
+   * copy is already accurate about the limitation — see the note there. If
+   * enforcement is ever added, add un-archive in the same change.
+   */
+  archiveWorkspace: adminWsProcedure.mutation(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    // Only super_admin can archive
+    if (ctx.member.role !== "super_admin") {
+      throw new TRPCError({ code: "FORBIDDEN", message: "Only super admins can archive a workspace" });
+    }
+    const { workspaces } = await import("../../drizzle/schema");
+    await db.update(workspaces).set({ archivedAt: new Date() }).where(eq(workspaces.id, ctx.workspace.id));
+    await recordAudit({
+      workspaceId: ctx.workspace.id,
+      actorUserId: ctx.user.id,
+      action: "update",
+      entityType: "workspace",
+      entityId: ctx.workspace.id,
+      after: { archived: true },
+    });
+    return { ok: true };
+  }),
+
+  /**
+   * Transfer workspace ownership to another active super_admin member.
+   * The current owner's role is not changed; the new owner's ownerUserId is set.
+   */
+  transferOwnership: adminWsProcedure
+    .input(z.object({ newOwnerUserId: z.number().int() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      if (ctx.member.role !== "super_admin") {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Only super admins can transfer ownership" });
+      }
+      if (input.newOwnerUserId === ctx.user.id) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "You are already the owner" });
+      }
+      // Verify new owner is an active member
+      const [newOwnerMember] = await db.select().from(workspaceMembers)
+        .where(and(eq(workspaceMembers.workspaceId, ctx.workspace.id), eq(workspaceMembers.userId, input.newOwnerUserId)));
+      if (!newOwnerMember) throw new TRPCError({ code: "NOT_FOUND", message: "New owner is not a workspace member" });
+      if (newOwnerMember.deactivatedAt) throw new TRPCError({ code: "BAD_REQUEST", message: "New owner is deactivated" });
+
+      const { workspaces } = await import("../../drizzle/schema");
+      await db.update(workspaces).set({ ownerUserId: input.newOwnerUserId }).where(eq(workspaces.id, ctx.workspace.id));
+      // Ensure new owner has super_admin role
+      await db.update(workspaceMembers).set({ role: "super_admin" }).where(eq(workspaceMembers.id, newOwnerMember.id));
+
+      await recordAudit({
+        workspaceId: ctx.workspace.id,
+        actorUserId: ctx.user.id,
+        action: "update",
+        entityType: "workspace",
+        entityId: ctx.workspace.id,
+        after: { ownerTransferredTo: input.newOwnerUserId },
+      });
+      return { ok: true };
+    }),
+
+  /**
+   * Export workspace data as a JSON summary.
+   * Returns counts and a sample of each entity type.
+   * Full export (CSV per entity) would require streaming — this returns a JSON blob.
+   */
+  exportData: adminWsProcedure.mutation(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    // Role guard: super_admin only (existing), plus per-member permission override
+    if (ctx.member.role !== "super_admin") {
+      throw new TRPCError({ code: "FORBIDDEN", message: "Only super admins can export workspace data" });
+    }
+    await checkPermission(ctx, "export_data");
+
+    const { contacts, leads, accounts, opportunities, customers, tasks: tasksTable } = await import("../../drizzle/schema");
+
+    const [contactCount] = await db.select({ c: count() }).from(contacts).where(eq(contacts.workspaceId, ctx.workspace.id));
+    const [leadCount] = await db.select({ c: count() }).from(leads).where(eq(leads.workspaceId, ctx.workspace.id));
+    const [accountCount] = await db.select({ c: count() }).from(accounts).where(eq(accounts.workspaceId, ctx.workspace.id));
+    const [oppCount] = await db.select({ c: count() }).from(opportunities).where(eq(opportunities.workspaceId, ctx.workspace.id));
+    const [customerCount] = await db.select({ c: count() }).from(customers).where(eq(customers.workspaceId, ctx.workspace.id));
+    const [taskCount] = await db.select({ c: count() }).from(tasksTable).where(eq(tasksTable.workspaceId, ctx.workspace.id));
+
+    const exportData = {
+      exportedAt: new Date().toISOString(),
+      workspaceId: ctx.workspace.id,
+      workspaceName: ctx.workspace.name,
+      summary: {
+        contacts: Number(contactCount?.c ?? 0),
+        leads: Number(leadCount?.c ?? 0),
+        accounts: Number(accountCount?.c ?? 0),
+        opportunities: Number(oppCount?.c ?? 0),
+        customers: Number(customerCount?.c ?? 0),
+        tasks: Number(taskCount?.c ?? 0),
+      },
+    };
+
+    await recordAudit({
+      workspaceId: ctx.workspace.id,
+      actorUserId: ctx.user.id,
+      action: "create",
+      entityType: "data_export",
+      entityId: ctx.workspace.id,
+      after: exportData.summary,
+    });
+
+    return exportData;
+  }),
 });

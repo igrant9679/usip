@@ -340,6 +340,37 @@ export const emailTemplatesRouter = router({
       return { ok: true };
     }),
 
+  /**
+   * Permanently remove a template. Distinct from `archive` on purpose — the
+   * editor offers "Archive" (recoverable, still reachable under the archived
+   * filter) while the list offers a trash control whose confirmation promises
+   * "permanently deleted. This cannot be undone." Repointing that control at
+   * archive would have been the smaller change and would have made its own
+   * confirmation text a lie.
+   *
+   * Safe to hard-delete: `templateId` on a sequence step is optional
+   * PROVENANCE carried in the steps JSON, not a foreign key — the step already
+   * holds its own copy of the subject and body, so nothing is orphaned.
+   *
+   * managerProcedure, matching `archive`: whoever may retire a shared template
+   * may also remove one.
+   */
+  delete: managerProcedure
+    .input(z.object({ id: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      await db
+        .delete(emailTemplates)
+        .where(
+          and(
+            eq(emailTemplates.id, input.id),
+            eq(emailTemplates.workspaceId, ctx.workspace.id),
+          ),
+        );
+      return { ok: true };
+    }),
+
   setVisibility: repProcedure
     .input(z.object({ id: z.number(), visibility: z.enum(["private", "team"]) }))
     .mutation(async ({ ctx, input }) => {

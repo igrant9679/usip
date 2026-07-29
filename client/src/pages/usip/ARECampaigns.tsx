@@ -168,9 +168,14 @@ export default function ARECampaigns() {
   const [showCreate, setShowCreate] = useState(false);
 
   // ARE Settings → "Default Scraper Sources" is the workspace default for new
-  // campaigns. That was previously only a claim in the description text — the
-  // wizard hardcoded its own list and never read this. Now it does.
-  const { data: wsSettings } = trpc.admin.getSettings.useQuery();
+  // campaigns. This read is the thing that makes that description true — and it
+  // was itself dead until 2026-07-29: it called `trpc.admin.getSettings`, and
+  // there is no `admin` router (it mounts as `settings`). tRPC builds paths at
+  // runtime, so it compiled, 404'd, and silently fell through to the hardcoded
+  // list — exactly the state the comment claimed to have fixed.
+  // Same procedure ARESettings.tsx reads and invalidates on save, so changing
+  // the default there is reflected here rather than in a second opinion.
+  const { data: wsSettings } = trpc.settings.getAreSettings.useQuery();
   const defaultSources = useMemo(() => {
     const saved = ((wsSettings as any)?.areScraperSources ?? null) as Record<string, boolean> | null;
     if (!saved) return [...ARE_DEFAULT_SOURCES];
