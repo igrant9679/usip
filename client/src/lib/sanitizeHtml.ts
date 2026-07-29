@@ -2,8 +2,11 @@
  * sanitizeEmailHtml — neutralise untrusted HTML before rendering it via
  * dangerouslySetInnerHTML (inbound emails, AI/template draft bodies).
  *
- * Dependency-free on purpose: the repo uses pnpm with a frozen lockfile and
- * there's no local toolchain to regenerate it, so we can't add DOMPurify.
+ * Dependency-free. NOTE: the original reason given for this — "no local
+ * toolchain to regenerate the lockfile" — is no longer true, so if this file
+ * ever needs to grow further, prefer adopting DOMPurify over extending a
+ * hand-rolled sanitiser. Hand-rolled HTML sanitisers leak; this one already
+ * did (see normaliseUrl below).
  * This runs in the browser (DOMParser) and strips the active-content vectors:
  *   - dangerous elements (script/iframe/object/embed/link/meta/base/form/svg/…)
  *   - <style> tags (they leak global CSS into the app, not just the email)
@@ -40,6 +43,8 @@ const BLOCKED_TAGS = new Set([
   "TEMPLATE",
 ]);
 
+import { isScriptUrl, isDisallowedDataUrl } from "@shared/urlSafety";
+
 const URL_ATTRS = new Set(["href", "src", "xlink:href", "action", "formaction", "background", "poster"]);
 
 export function sanitizeEmailHtml(html: string | null | undefined): string {
@@ -72,10 +77,9 @@ export function sanitizeEmailHtml(html: string | null | undefined): string {
       }
       // URL-bearing attributes: kill script-y schemes; allow data: only for img src.
       if (URL_ATTRS.has(name)) {
-        const v = value.trim();
-        if (/^(javascript|vbscript):/i.test(v)) {
-          el.removeAttribute(attr.name);
-        } else if (/^data:/i.test(v) && !(name === "src" && el.tagName === "IMG" && /^data:image\//i.test(v))) {
+        // Normalised, not raw — see normaliseUrl. `data:text/html` is treated as
+        // a script URL because it executes in a navigated context.
+        if (isScriptUrl(value) || isDisallowedDataUrl(value, el.tagName, name)) {
           el.removeAttribute(attr.name);
         }
       }
