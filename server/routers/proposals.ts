@@ -26,6 +26,7 @@ import {
 } from "../../drizzle/schema";
 import { createEmailAdapter } from "../emailAdapter";
 import { getDb } from "../db";
+import { appUrl } from "../appUrl";
 import { invokeLLM } from "../_core/llm";
 import { publicProcedure, router } from "../_core/trpc";
 import {
@@ -1362,7 +1363,7 @@ Reason: ${input.reason}`,
           const html = `<p>Hi ${proposal.clientName ?? "there"},</p>
 <p>Great news — your extension request has been approved. The proposal <strong>${proposal.title}</strong> is now valid until <strong>${newDate.toLocaleDateString()}</strong>.</p>
 ${input.note ? `<p>${input.note}</p>` : ""}
-${proposal.shareToken ? `<p><a href="${process.env.MANUS_APP_URL ?? ""}/p/${proposal.shareToken}">View proposal &rarr;</a></p>` : ""}
+${proposal.shareToken ? `<p><a href="${appUrl(`/p/${proposal.shareToken}`)}">View proposal &rarr;</a></p>` : ""}
 <p>Best regards,<br/>${ctx.user.name ?? "The team"}</p>`;
           if (sendingAcc) {
             const adapter = createEmailAdapter(sendingAcc);

@@ -15,6 +15,7 @@
 import type { Express, Request, Response } from "express";
 import { eq, sql } from "drizzle-orm";
 import { getDb } from "./db";
+import { appUrl } from "./appUrl";
 import { emailDrafts, emailTrackingEvents } from "../drizzle/schema";
 
 // 1×1 transparent GIF (43 bytes)
@@ -590,7 +591,13 @@ export function registerEmailTrackingRoutes(app: Express) {
           const expDate = new Date(rp.expiresAt!);
           const daysLeft = Math.ceil((expDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
           const countdownText = daysLeft <= 1 ? "today" : `in ${daysLeft} day${daysLeft === 1 ? "" : "s"}`;
-          const shareUrl = `${process.env.MANUS_APP_URL ?? ""}/p/${rp.shareToken}`;
+          // appUrl(), not a raw env read: with MANUS_APP_URL unset this built
+          // `href="/p/<token>"` — a RELATIVE url inside an email, which no mail
+          // client can resolve — and with the stale value it built a manus.im
+          // link that 404s. Same bug the appUrl consolidation fixed elsewhere;
+          // these two proposal links were missed because they are the only
+          // public URLs built outside the sequence/tracking paths.
+          const shareUrl = appUrl(`/p/${rp.shareToken}`);
           // Brand the reminder with the proposal's own workspace, never a
           // hardcoded tenant name (multi-company requirement).
           const [wsRow] = await db

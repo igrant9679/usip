@@ -11,6 +11,7 @@
 import { and, eq, ne } from "drizzle-orm";
 import { savedReports } from "../../drizzle/schema";
 import { getDb } from "../db";
+import { appUrl } from "../appUrl";
 import { sendSystemEmail } from "../emailDelivery";
 import { runSpec, type ReportSpec } from "../routers/reports";
 
@@ -85,7 +86,7 @@ export function renderReportHtml(name: string, result: Awaited<ReturnType<typeof
     ${renderChartHtml(result)}
     <table style="border-collapse:collapse;width:100%"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>
     ${more}
-    <p style="margin-top:16px;font-size:12px"><a href="https://getvelocityai.app/reports" style="color:#4f46e5">Open Reports in Velocity →</a></p>
+    <p style="margin-top:16px;font-size:12px"><a href="${appUrl("/reports")}" style="color:#4f46e5">Open Reports in Velocity →</a></p>
   </div>`;
 }
 

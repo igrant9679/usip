@@ -65,3 +65,60 @@ describe("appBaseUrl", () => {
     expect(appUrl("b/rep-1")).toBe("https://app.example.com/b/rep-1");
   });
 });
+
+/**
+ * Source-level guard against the manus.im bug returning a THIRD time.
+ *
+ * History: half the codebase built public URLs from a raw `MANUS_APP_URL` read.
+ * The consolidation onto appUrl() fixed the sequence, tracking, unsubscribe and
+ * invite paths — and missed the two proposal share links, which sat in email
+ * bodies sent to customers. With the env var unset those rendered
+ * `href="/p/<token>"`: a relative URL inside an email, unresolvable by any mail
+ * client. Nothing failed loudly; the links simply went nowhere.
+ *
+ * Unit-testing appBaseUrl() could never have caught that, because the broken
+ * code never called it. So this asserts over the SOURCE instead: no file may
+ * interpolate a bare app-URL env var straight into a string. Webhook callback
+ * URLs handed to vendors are exempt — they are machine-to-machine and carry
+ * their own fallback chain.
+ */
+import { readdirSync, readFileSync, statSync } from "fs";
+import { join } from "path";
+
+function serverFiles(dir: string): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir)) {
+    const full = join(dir, entry);
+    if (statSync(full).isDirectory()) out.push(...serverFiles(full));
+    else if (full.endsWith(".ts") && !full.endsWith(".test.ts")) out.push(full);
+  }
+  return out;
+}
+
+describe("no public URL is built outside appUrl()", () => {
+  /** Vendor webhook targets, not links a human ever clicks. */
+  const EXEMPT = ["unipile.ts", "voiceWebhook.ts", "appUrl.ts"];
+
+  it("never interpolates a bare app-URL env var into a string", () => {
+    const offenders: string[] = [];
+    for (const file of serverFiles("server")) {
+      if (EXEMPT.some((e) => file.endsWith(e))) continue;
+      const src = readFileSync(file, "utf8");
+      // `${process.env.MANUS_APP_URL ...}` inside a template literal is the
+      // exact shape that shipped broken links twice.
+      const re = /\$\{\s*process\.env\.(MANUS_APP_URL|PUBLIC_APP_URL|VITE_OAUTH_PORTAL_URL)/g;
+      for (const m of src.matchAll(re)) offenders.push(`${file}: ${m[0]}`);
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it("never hardcodes the production domain in server source", () => {
+    const offenders: string[] = [];
+    for (const file of serverFiles("server")) {
+      if (file.endsWith("appUrl.ts")) continue; // the one legitimate home
+      const src = readFileSync(file, "utf8");
+      if (src.includes("https://getvelocityai.app")) offenders.push(file);
+    }
+    expect(offenders).toEqual([]);
+  });
+});
