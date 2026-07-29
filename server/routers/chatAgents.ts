@@ -359,6 +359,35 @@ export const chatAgentsRouter = router({
       return { ok: true as const };
     }),
 
+  /* ── Abandonment follow-up, as its own Control Center row ──
+     `followUpMode` is a SEPARATE switch from the agent's `mode` (see 0137), and
+     it was missing from the Autonomy Control Center entirely — so "All: Off"
+     left it running. In `auto` this engine SENDS EMAIL, which makes it exactly
+     the thing a global off switch must reach. Same aggregate shape as the mode
+     pair above: read the most permissive agent, write to all. */
+  getFollowUpSettings: adminWsProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) return { mode: "off" as const, agentCount: 0 };
+    const rows = await db.select({ followUpMode: chatAgents.followUpMode })
+      .from(chatAgents).where(eq(chatAgents.workspaceId, ctx.workspace.id));
+    const rank = { off: 0, approval: 1, auto: 2 } as const;
+    let mode: "off" | "approval" | "auto" = "off";
+    for (const r of rows) {
+      if (rank[r.followUpMode as keyof typeof rank] > rank[mode]) mode = r.followUpMode as typeof mode;
+    }
+    return { mode, agentCount: rows.length };
+  }),
+
+  setFollowUpSettings: adminWsProcedure
+    .input(z.object({ mode: z.enum(["off", "approval", "auto"]) }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      await db.update(chatAgents).set({ followUpMode: input.mode } as never)
+        .where(eq(chatAgents.workspaceId, ctx.workspace.id));
+      return { ok: true as const };
+    }),
+
   /* ──────────────────────────── Public surface ────────────────────────── */
 
   /** PUBLIC: the widget's boot payload for a PUBLISHED, non-off agent. */

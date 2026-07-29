@@ -76,6 +76,14 @@ export default function WorkflowsV2() {
     onError: (e) => toast.error(e.message),
   });
   const setBackfillAp = trpc.prospects.setBackfillSettings.useMutation({ onSuccess: () => utils.prospects.backfillStatus.invalidate(), onError: (e) => toast.error(e.message) });
+  // Two engines were missing from this screen entirely, so "All: Off" left them
+  // running. Optimisation defaults to `approval` (i.e. ON) and in `auto` edits
+  // your sequences; chat follow-up in `auto` SENDS EMAIL. A global off switch
+  // that misses either is worse than no global switch, because it is believed.
+  const optAp = trpc.optimization.getSettings.useQuery(undefined as any, { retry: false });
+  const setOptAp = trpc.optimization.setSettings.useMutation({ onSuccess: () => utils.optimization.getSettings.invalidate(), onError: (e) => toast.error(e.message) });
+  const chatFollowAp = trpc.chatAgents.getFollowUpSettings.useQuery(undefined as any, { retry: false });
+  const setChatFollowAp = trpc.chatAgents.setFollowUpSettings.useMutation({ onSuccess: () => utils.chatAgents.getFollowUpSettings.invalidate(), onError: (e) => toast.error(e.message) });
   const setSweepAp = trpc.prospects.setSweepSettings.useMutation({ onSuccess: () => utils.prospects.sweepStatus.invalidate(), onError: (e) => toast.error(e.message) });
   const setChatAp = trpc.chatAgents.setAutopilotSettings.useMutation({ onSuccess: () => utils.chatAgents.getAutopilotSettings.invalidate(), onError: (e) => toast.error(e.message.includes("FORBIDDEN") ? "Only admins can change the Chat Agent" : e.message) });
 
@@ -105,6 +113,8 @@ export default function WorkflowsV2() {
     { key: "enrichSweep", label: "Enrichment Sweep", icon: Database, blurb: "Backfill missing emails from company sites", href: "/prospects", mode: sweepAp.data?.mode ?? "off", lastRunAt: sweepAp.data?.lastRunAt, set: (m: string) => setSweepAp.mutate({ mode: m as any }) },
     { key: "companyBackfill", label: "Company Backfill", icon: Users, blurb: "Read missing employers off LinkedIn profiles", href: "/v2/data-enrichment", mode: backfillAp.data?.mode ?? "off", lastRunAt: backfillAp.data?.lastRunAt, set: (m: string) => setBackfillAp.mutate({ mode: m as any }) },
     { key: "chat", label: "Inbound Chat Agent", icon: MessageSquare, blurb: "Qualify website visitors → book the meeting", href: "/v2/chat", mode: chatAp.data?.mode ?? "off", lastRunAt: undefined, set: (m: string) => setChatAp.mutate({ mode: m as any }) },
+    { key: "chatFollowUp", label: "Chat Follow-up", icon: Mail, blurb: "Email visitors who left the chat without booking", href: "/v2/chat", mode: chatFollowAp.data?.mode ?? "off", lastRunAt: undefined, set: (m: string) => setChatFollowAp.mutate({ mode: m as any }) },
+    { key: "optimization", label: "Continuous Optimisation", icon: Zap, blurb: "Measure what works and tune sequences", href: "/are/performance", mode: optAp.data?.mode ?? "off", lastRunAt: (optAp.data as any)?.lastRunAt, set: (m: string) => setOptAp.mutate({ mode: m as any }) },
   ];
   const onCount = autopilots.filter((a) => a.mode !== "off").length;
 
@@ -118,6 +128,8 @@ export default function WorkflowsV2() {
     setChatAp.mutate({ mode: mode as any });
     setSweepAp.mutate({ mode: mode as any });
     setBackfillAp.mutate({ mode: mode as any });
+    setChatFollowAp.mutate({ mode: mode as any });
+    setOptAp.mutate({ mode: mode as any });
     toast.success(mode === "off" ? "All autopilots turned off" : `All autopilots set to ${MODE_LABEL[mode]}`);
   };
 
@@ -132,6 +144,8 @@ export default function WorkflowsV2() {
     setChatAp.mutate({ mode: "approval" as any });
     setSweepAp.mutate({ mode: "approval" as any });
     setBackfillAp.mutate({ mode: "approval" as any });
+    setChatFollowAp.mutate({ mode: "approval" as any });
+    setOptAp.mutate({ mode: "approval" as any });
     setEmailAutoEnabled(true);
     toast.success("Full autonomy on (Approve mode) — AI actions will queue for your review");
   };
