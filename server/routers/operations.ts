@@ -38,6 +38,24 @@ import { adminWsProcedure, managerProcedure, repProcedure, workspaceProcedure } 
 import { storagePut } from "../storage";
 import { buildTransporter, decrypt } from "./smtpConfig";
 import { evalConditions, executeRuleActions } from "../services/workflowEngine";
+import crypto from "crypto";
+
+/**
+ * SCIM bearer token. This authenticates `/api/scim/v2` (see scimHttp.ts), which
+ * is PUBLIC and can create, replace and delete users — so the token is a
+ * directory-provisioning credential, not an identifier.
+ *
+ * It used to be `"scim_" + Math.random().toString(36).slice(2, 16) +
+ * Math.random().toString(36).slice(2, 8)`. Math.random is V8's xorshift128+: the
+ * problem is not only that the result is short, it is that the generator's
+ * internal state can be recovered from a few observed outputs, after which
+ * subsequent tokens are predictable. Every other secret in this codebase
+ * (invite tokens, invite links, password-setup links, proposal share tokens)
+ * already used crypto.randomBytes(32) — this was the one that did not.
+ */
+function newScimBearerToken(): string {
+  return "scim_" + crypto.randomBytes(32).toString("hex");
+}
 
 // Re-exported for backward-compatible importers (leadScoring, tests) — the
 // canonical definition now lives in services/workflowEngine (no import cycle).
@@ -1476,7 +1494,7 @@ export const scimRouter = router({
   createProvider: adminWsProcedure.input(z.object({ name: z.string().min(1) })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    const token = "scim_" + Math.random().toString(36).slice(2, 16) + Math.random().toString(36).slice(2, 8);
+    const token = newScimBearerToken();
     await db.insert(scimProviders).values({ ...input, workspaceId: ctx.workspace.id, bearerToken: token, enabled: true });
     return { ok: true, bearerToken: token };
   }),
@@ -1491,7 +1509,7 @@ export const scimRouter = router({
   rotateToken: adminWsProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    const token = "scim_" + Math.random().toString(36).slice(2, 16) + Math.random().toString(36).slice(2, 8);
+    const token = newScimBearerToken();
     await db.update(scimProviders).set({ bearerToken: token }).where(and(eq(scimProviders.id, input.id), eq(scimProviders.workspaceId, ctx.workspace.id)));
     return { ok: true, bearerToken: token };
   }),
