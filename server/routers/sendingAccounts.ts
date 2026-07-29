@@ -17,6 +17,7 @@ import {
 import { router } from "../_core/trpc";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { buildTransporter } from "./smtpConfig";
+import { encryptSecret, tryDecryptSecret } from "../_core/crypto";
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -60,8 +61,18 @@ export async function testSmtpConnection(params: {
   smtpPassword?: string | null;
   sesRegion?: string | null;
   oauthAccessToken?: string | null;
+  /** Decrypted SendGrid key. Only read when provider === "sendgrid". */
+  sendgridApiKey?: string | null;
 }): Promise<{ ok: boolean; error?: string }> {
   const { provider } = params;
+
+  // SendGrid has no SMTP socket to open — the meaningful check is whether the
+  // key authenticates AND carries Mail Send scope. A key that passes a naive
+  // "is it valid" test but cannot send fails on the first real campaign.
+  if (provider === "sendgrid") {
+    const { verifySendGridKey } = await import("../services/sendgrid");
+    return verifySendGridKey(params.sendgridApiKey ?? "");
+  }
 
   if (provider === "outlook_oauth" || provider === "google_oauth") {
     if (!params.oauthAccessToken) {
@@ -169,7 +180,7 @@ export function pickAccountFromPool(
 
 const AccountCreateInput = z.object({
   name: z.string().min(1).max(120),
-  provider: z.enum(["outlook_oauth", "amazon_ses", "generic_smtp", "google_oauth"]),
+  provider: z.enum(["outlook_oauth", "amazon_ses", "generic_smtp", "google_oauth", "sendgrid"]),
   fromEmail: z.string().email(),
   fromName: z.string().max(120).optional(),
   replyTo: z.string().email().optional(),
@@ -183,6 +194,12 @@ const AccountCreateInput = z.object({
   smtpUsername: z.string().max(255).optional(),
   smtpPassword: z.string().optional(),
   sesRegion: z.string().max(32).optional(),
+  /**
+   * SendGrid API key, plaintext in transit and ENCRYPTED at rest (0140).
+   * Blank on an edit means "keep the stored key" — the UI never receives the
+   * existing one back, so it cannot echo it and has nothing to resubmit.
+   */
+  sendgridApiKey: z.string().max(500).optional(),
   imapHost: z.string().max(255).optional(),
   imapPort: z.number().int().min(1).max(65535).optional(),
   imapSecure: z.boolean().optional(),
@@ -262,8 +279,12 @@ export const sendingAccountsRouter = router({
         : [];
 
     const statsMap = new Map(stats.map((s) => [s.accountId, s]));
-    return accounts.map((a) => ({
+    return accounts.map(({ sendgridApiKeyEnc, ...a }) => ({
       ...a,
+      // The key never leaves the server, not even as ciphertext. The UI only
+      // needs to know whether one is set, so it can say "leave blank to keep
+      // the current key" instead of implying the field is empty.
+      hasSendgridKey: !!sendgridApiKeyEnc,
       sentToday: statsMap.get(a.id)?.sentCount ?? 0,
       bouncedToday: statsMap.get(a.id)?.bounceCount ?? 0,
       remainingToday: a.dailySendLimit - (statsMap.get(a.id)?.sentCount ?? 0),
@@ -296,8 +317,10 @@ export const sendingAccountsRouter = router({
             eq(sendingAccountDailyStats.date, today),
           ),
         );
+      const { sendgridApiKeyEnc, ...safe } = account;
       return {
-        ...account,
+        ...safe,
+        hasSendgridKey: !!sendgridApiKeyEnc,
         sentToday: stat?.sentCount ?? 0,
         bouncedToday: stat?.bounceCount ?? 0,
         remainingToday: account.dailySendLimit - (stat?.sentCount ?? 0),
@@ -311,9 +334,14 @@ export const sendingAccountsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // `sendgridApiKey` is an INPUT field, not a column. It has to be split out
+      // and mapped to the encrypted column — spreading it straight through would
+      // write a column that does not exist, which fails at runtime, not compile.
+      const { sendgridApiKey, ...cols } = input;
       const [result] = await db.insert(sendingAccounts).values({
         workspaceId: ctx.workspace.id,
-        ...input,
+        ...cols,
+        ...(sendgridApiKey?.trim() ? { sendgridApiKeyEnc: encryptSecret(sendgridApiKey.trim()) } : {}),
         connectionStatus: "untested",
       });
       return { id: (result as any).insertId as number };
@@ -324,10 +352,17 @@ export const sendingAccountsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      const { id, ...rest } = input;
+      const { id, sendgridApiKey, ...rest } = input;
+      const patch: Record<string, unknown> = { ...rest };
+      // A BLANK key means "keep the stored one", not "clear it". The UI never
+      // receives the existing key back (it cannot — only the ciphertext is
+      // stored), so an empty field is the absence of a change. Without this,
+      // saving any other field would silently wipe the key and every campaign
+      // send would start failing with no visible cause.
+      if (sendgridApiKey?.trim()) patch.sendgridApiKeyEnc = encryptSecret(sendgridApiKey.trim());
       await db
         .update(sendingAccounts)
-        .set(rest)
+        .set(patch as never)
         .where(
           and(
             eq(sendingAccounts.id, id),
@@ -466,17 +501,33 @@ export const sendingAccountsRouter = router({
     .input(
       z.object({
         editId: z.number().int().optional(),
-        provider: z.enum(["outlook_oauth", "amazon_ses", "generic_smtp", "google_oauth"]),
+        provider: z.enum(["outlook_oauth", "amazon_ses", "generic_smtp", "google_oauth", "sendgrid"]),
         smtpHost: z.string().optional(),
         smtpPort: z.number().int().optional(),
         smtpUsername: z.string().optional(),
         smtpPassword: z.string().optional(),
         sesRegion: z.string().optional(),
+        sendgridApiKey: z.string().max(500).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
       let smtpPassword = input.smtpPassword;
+      let sendgridApiKey = input.sendgridApiKey;
       let oauthAccessToken: string | null | undefined;
+      // Testing a SAVED SendGrid account without retyping the key: fall back to
+      // the stored one, same as the SMTP password below.
+      if (input.editId && input.provider === "sendgrid" && !sendgridApiKey) {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const [existing] = await db
+          .select({ enc: sendingAccounts.sendgridApiKeyEnc })
+          .from(sendingAccounts)
+          .where(and(
+            eq(sendingAccounts.id, input.editId),
+            eq(sendingAccounts.workspaceId, ctx.workspace.id),
+          ));
+        if (existing) sendgridApiKey = tryDecryptSecret(existing.enc) || undefined;
+      }
       // For an existing account being edited, fall back to the stored
       // password / OAuth token when the form left those fields blank.
       if (input.editId && (!smtpPassword || input.provider === "outlook_oauth")) {
@@ -504,6 +555,7 @@ export const sendingAccountsRouter = router({
         smtpPassword: smtpPassword ?? null,
         sesRegion: input.sesRegion ?? null,
         oauthAccessToken: oauthAccessToken ?? null,
+        sendgridApiKey: sendgridApiKey ?? null,
       });
     }),
 
@@ -531,6 +583,7 @@ export const sendingAccountsRouter = router({
         smtpPassword: account.smtpPassword,
         sesRegion: account.sesRegion,
         oauthAccessToken: account.oauthAccessToken,
+        sendgridApiKey: tryDecryptSecret(account.sendgridApiKeyEnc),
       });
 
       await db

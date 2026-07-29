@@ -45,7 +45,7 @@ import {
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type Provider = "outlook_oauth" | "amazon_ses" | "generic_smtp";
+type Provider = "outlook_oauth" | "amazon_ses" | "generic_smtp" | "sendgrid";
 type WarmupStatus = "not_started" | "in_progress" | "complete";
 type ConnectionStatus = "connected" | "error" | "untested";
 type ReputationTier = "excellent" | "good" | "fair" | "poor";
@@ -64,6 +64,8 @@ interface AccountForm {
   smtpUsername: string;
   smtpPassword: string;
   sesRegion: string;
+  /** SendGrid API key. Blank on an edit means "keep the stored key". */
+  sendgridApiKey: string;
   imapHost: string;
   imapPort: string;
   imapSecure: boolean;
@@ -87,6 +89,7 @@ const defaultForm: AccountForm = {
   smtpUsername: "",
   smtpPassword: "",
   sesRegion: "us-east-1",
+  sendgridApiKey: "",
   imapHost: "",
   imapPort: "993",
   imapSecure: true,
@@ -101,6 +104,8 @@ const IMAP_DEFAULTS: Record<Provider, { host: string; port: string }> = {
   outlook_oauth: { host: "outlook.office365.com", port: "993" },
   amazon_ses: { host: "", port: "993" },
   generic_smtp: { host: "", port: "993" },
+  // Send-only: there is no inbox to point IMAP at.
+  sendgrid: { host: "", port: "993" },
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -109,18 +114,21 @@ const PROVIDER_LABELS: Record<Provider, string> = {
   outlook_oauth: "Outlook / M365 (OAuth)",
   amazon_ses: "Amazon SES",
   generic_smtp: "Generic SMTP",
+  sendgrid: "SendGrid (API)",
 };
 
 const PROVIDER_ICONS: Record<Provider, string> = {
   outlook_oauth: "O",
   amazon_ses: "A",
   generic_smtp: "S",
+  sendgrid: "G",
 };
 
 const PROVIDER_COLORS: Record<Provider, string> = {
   outlook_oauth: "bg-blue-100 text-blue-700",
   amazon_ses: "bg-orange-100 text-orange-700",
   generic_smtp: "bg-zinc-100 text-zinc-700",
+  sendgrid: "bg-sky-100 text-sky-700",
 };
 
 function ConnectionBadge({ status }: { status: ConnectionStatus }) {
@@ -219,6 +227,7 @@ function AccountFormDialog({
         smtpUsername: a.smtpUsername ?? "",
         smtpPassword: "", // never pre-fill secrets
         sesRegion: a.sesRegion ?? "us-east-1",
+        sendgridApiKey: "", // never pre-fill secrets — blank means "keep the stored key"
         imapHost: a.imapHost ?? "",
         imapPort: a.imapPort ? String(a.imapPort) : "993",
         imapSecure: a.imapSecure ?? true,
@@ -304,6 +313,7 @@ function AccountFormDialog({
       smtpUsername: form.smtpUsername || undefined,
       smtpPassword: form.smtpPassword || undefined,
       sesRegion: form.sesRegion || undefined,
+      sendgridApiKey: form.sendgridApiKey || undefined,
       imapHost: form.imapHost || undefined,
       imapPort: form.imapPort ? parseInt(form.imapPort) : undefined,
       imapSecure: form.imapSecure,
@@ -322,6 +332,7 @@ function AccountFormDialog({
   const isOAuth = form.provider === "outlook_oauth";
   const isSES = form.provider === "amazon_ses";
   const isSMTP = form.provider === "generic_smtp";
+  const isSendGrid = form.provider === "sendgrid";
   const isBusy = createMutation.isPending || updateMutation.isPending || existingAccount.isLoading;
 
   return (
@@ -418,6 +429,36 @@ function AccountFormDialog({
                     value={form.oauthRefreshToken}
                     onChange={(e) => set("oauthRefreshToken", e.target.value)}
                   />
+                </div>
+              </div>
+            )}
+
+            {/* SendGrid — API key only. No host, no port, no inbox. */}
+            {isSendGrid && (
+              <div className="space-y-3 border rounded-lg p-3 bg-muted/30">
+                <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">SendGrid</p>
+                <div className="space-y-1.5">
+                  <Label>API key</Label>
+                  <Input
+                    type="password"
+                    placeholder={editId ? "••••••• (leave blank to keep the current key)" : "SG.xxxxxxxx"}
+                    value={form.sendgridApiKey}
+                    onChange={(e) => set("sendgridApiKey", e.target.value)}
+                  />
+                  <p className="text-[11px] text-muted-foreground">
+                    Needs <b>Mail Send</b> permission, and the From address below must be a
+                    verified sender in SendGrid. Test connection checks both.
+                  </p>
+                </div>
+                {/* The one thing a workspace must understand before choosing this
+                    provider. An API key has no mailbox, so nothing polls for
+                    replies — saying so here beats discovering it mid-campaign. */}
+                <div className="rounded-md border border-amber-300/60 bg-amber-50 dark:bg-amber-950/20 p-2.5">
+                  <p className="text-[11px] text-amber-900 dark:text-amber-200">
+                    <b>Replies won't appear in Velocity.</b> SendGrid sends only — there's no
+                    inbox behind an API key. Replies go to your <b>Reply-To</b> address, so set it
+                    to a mailbox you've connected separately if you want to see them.
+                  </p>
                 </div>
               </div>
             )}
@@ -632,6 +673,7 @@ function AccountFormDialog({
                 smtpUsername: form.smtpUsername || undefined,
                 smtpPassword: form.smtpPassword || undefined,
                 sesRegion: form.sesRegion || undefined,
+                sendgridApiKey: form.sendgridApiKey || undefined,
               });
             }}
             disabled={
@@ -642,7 +684,9 @@ function AccountFormDialog({
             title={
               form.provider === "outlook_oauth"
                 ? "OAuth accounts are verified during the Microsoft sign-in flow"
-                : "Open a real SMTP connection with these credentials"
+                : isSendGrid
+                  ? "Check the API key authenticates and has Mail Send permission"
+                  : "Open a real SMTP connection with these credentials"
             }
           >
             {testConfigMutation.isPending ? (

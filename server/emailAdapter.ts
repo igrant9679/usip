@@ -80,6 +80,13 @@ export interface SendEmailInput {
   replyToThreadId?: string;
   fromName?: string;
   fromEmail: string;
+  /**
+   * Reply-To. `sendCampaignEmailViaPool` has always passed this — through an
+   * `as any` cast, which is why the interface never listed it. Declared now
+   * because the SendGrid adapter genuinely depends on it: with no inbox behind
+   * an API key, Reply-To is the ONLY way a reply reaches a human.
+   */
+  replyTo?: string;
   /** Base64-encoded file attachments */
   attachments?: Array<{ filename: string; contentType: string; content: string }>;
   /**
@@ -281,9 +288,86 @@ export class ImapSmtpAdapter implements EmailAdapter {
   }
 }
 
+/* ─── SendGrid Adapter (Migration 0140) — SEND ONLY ──────────────────────── */
+
+/**
+ * A SendGrid API key can send mail and nothing else: there is no mailbox behind
+ * it to read. Rather than pretend, this adapter splits the interface in two.
+ *
+ *  - LISTING reads (`listThreads`, `searchThreads`, `listFolders`) return EMPTY.
+ *    These get polled by reply detection and inbox UI across every account; an
+ *    empty inbox is the literal truth here, and throwing on a poll would fill
+ *    the logs with an error that is really a fact about the provider.
+ *  - PER-MESSAGE operations THROW. They can only be reached with a message id,
+ *    and no listing here ever yields one, so arriving with one means a genuine
+ *    bug upstream — a silent no-op would hide it.
+ *
+ * The consequence a workspace must understand: replies to a SendGrid campaign
+ * land at the account's Reply-To and are invisible to Velocity unless that
+ * address is a mailbox connected separately. The Settings card says this.
+ */
+const SEND_ONLY = "This is a SendGrid sending account — it can send mail but has no inbox to read. Connect the Reply-To address as a mailbox to see replies.";
+
+export class SendGridAdapter implements EmailAdapter {
+  private account: SendingAccount;
+  constructor(account: SendingAccount) {
+    this.account = account;
+  }
+
+  async sendEmail(input: SendEmailInput): Promise<{ messageId: string; threadId?: string }> {
+    const { sendViaSendGrid } = await import("./services/sendgrid");
+    const { tryDecryptSecret } = await import("./_core/crypto");
+    const apiKey = tryDecryptSecret((this.account as any).sendgridApiKeyEnc);
+    if (!apiKey) throw new Error("No SendGrid API key is configured for this sending account.");
+
+    const res = await sendViaSendGrid(apiKey, {
+      to: input.to,
+      subject: input.subject,
+      html: input.bodyHtml,
+      text: input.bodyText,
+      fromEmail: input.fromEmail || this.account.fromEmail,
+      fromName: input.fromName ?? this.account.fromName,
+      replyTo: input.replyTo ?? this.account.replyTo,
+    });
+    // Throw rather than return a sentinel: the pool sender counts a resolved
+    // sendEmail as a delivered send and increments the daily quota on it.
+    if (!res.ok) throw new Error(res.reason ?? "SendGrid send failed");
+    return { messageId: res.messageId ?? "" };
+  }
+
+  async listThreads(): Promise<{ threads: EmailThread[]; nextPageToken?: string }> {
+    return { threads: [] };
+  }
+  async searchThreads(): Promise<{ threads: EmailThread[] }> {
+    return { threads: [] };
+  }
+  async listFolders(): Promise<EmailFolder[]> {
+    return [];
+  }
+  async getThread(): Promise<EmailMessage[]> {
+    throw new Error(SEND_ONLY);
+  }
+  async getAttachment(): Promise<{ data: Buffer; contentType: string; filename: string }> {
+    throw new Error(SEND_ONLY);
+  }
+  async markRead(): Promise<void> {
+    throw new Error(SEND_ONLY);
+  }
+  async moveToTrash(): Promise<void> {
+    throw new Error(SEND_ONLY);
+  }
+  async moveToFolder(): Promise<void> {
+    throw new Error(SEND_ONLY);
+  }
+}
+
 /* ─── Factory ────────────────────────────────────────────────────────────── */
 
 export function createEmailAdapter(account: SendingAccount): EmailAdapter {
+  // Checked before the Unipile bridge: a SendGrid account never has a
+  // unipileAccountId, but ordering this first makes the send-only path
+  // unambiguous rather than dependent on another column being empty.
+  if (account.provider === "sendgrid") return new SendGridAdapter(account);
   // Bridged Unipile-managed accounts are detected by the unipileAccountId
   // column being set (regardless of the legacy provider value, in case this
   // row was migrated from a stub `outlook_oauth` provider).

@@ -2603,6 +2603,12 @@ export const sendingAccounts = mysqlTable(
       "amazon_ses",
       "generic_smtp",
       "google_oauth",
+      /**
+       * SendGrid Web API v3 (Migration 0140). SEND-ONLY: an API key has no
+       * inbox behind it, so replies come back to `replyTo` and are only visible
+       * if that address is a mailbox connected separately. See SendGridAdapter.
+       */
+      "sendgrid",
     ]).notNull(),
     fromEmail: varchar("fromEmail", { length: 320 }).notNull(),
     fromName: varchar("fromName", { length: 120 }),
@@ -2619,6 +2625,12 @@ export const sendingAccounts = mysqlTable(
     smtpUsername: varchar("smtpUsername", { length: 255 }),
     smtpPassword: text("smtpPassword"),
     sesRegion: varchar("sesRegion", { length: 32 }),
+    /**
+     * SendGrid API key, ENCRYPTED with _core/crypto (Migration 0140) — the same
+     * BYOK pattern as the Apollo, Reoon and xAI keys. Note `smtpPassword` above
+     * is plaintext; that is pre-existing and not the precedent to copy.
+     */
+    sendgridApiKeyEnc: text("sendgridApiKeyEnc"),
     /* IMAP fields (for reading inbox: Mailpool own SMTP/IMAP, generic IMAP) */
     imapHost: varchar("imapHost", { length: 255 }),
     imapPort: int("imapPort").default(993),

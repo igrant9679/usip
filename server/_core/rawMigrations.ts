@@ -2988,6 +2988,28 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0140: SendGrid as a first-class sending account ───────────────────────
+  // SendGrid belongs on `sending_accounts`, NOT on `smtp_configs`. Campaign
+  // sends go through sendCampaignEmailViaPool → the sending-account pool;
+  // smtp_configs is only the fallback when a workspace has no accounts at all.
+  // Putting it on the wrong table would build something that never touches a
+  // campaign — the exact dead-wiring failure this codebase keeps producing.
+  //
+  // The key is stored ENCRYPTED via _core/crypto (the Apollo/Reoon/xAI BYOK
+  // pattern). Note `smtpPassword` on this same table is plaintext — that is
+  // pre-existing and deliberately not the precedent followed here.
+  //
+  // MODIFY (not ADD) on the enum: it must list every existing value or the
+  // column loses them. Written idempotently like every other migration, since
+  // rawMigrations swallows failures and re-runs are normal.
+  {
+    name: "0140_sendgrid_sending_account.sql",
+    statements: [
+      "ALTER TABLE `sending_accounts` MODIFY COLUMN `provider` ENUM('outlook_oauth','amazon_ses','generic_smtp','google_oauth','sendgrid') NOT NULL",
+      "ALTER TABLE `sending_accounts` ADD COLUMN `sendgridApiKeyEnc` text NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------
