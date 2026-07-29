@@ -3,38 +3,30 @@ import { Switch } from "@/components/ui/switch";
 import { ConfirmButton, Field, fmtDate, FormDialog, Section, SelectField, StatusPill } from "@/components/usip/Common";
 import { EmptyState, PageHeader, QueryError, Shell, TableSkeleton } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
+import { CONDITION_OPS, isDeadTrigger, LIVE_TRIGGERS } from "@shared/workflowTriggers";
 import { Play, Plus, Save, Trash2, Workflow, GitBranch, Sparkles } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
 /**
- * Only triggers with a real dispatch site in the engine belong here — see the
- * header of server/services/workflowEngine.ts for the site of each. A trigger
- * offered without one saves fine, shows as active, and never fires.
+ * Trigger and operator vocabularies both come from @shared/workflowTriggers, so
+ * this page, the engine and the AI rule generator cannot drift apart again —
+ * they had, and the generator was advertising a trigger this page already knew
+ * was dead. Only triggers with a real dispatch site are offered; see the header
+ * of server/services/workflowEngine.ts for the site of each.
  *
- * Removed for exactly that reason: `nps_submitted` (nothing submits an NPS
- * score — it's a column edited like any other, so use "record is updated"),
- * `field_equals` (that's a CONDITION, not an event — add it in the Conditions
- * section below), and `schedule` (a cron rule with no record context;
- * "deal is stuck" already covers the case it was seeded for).
+ * Three were retired for exactly that reason, and are still recognised on old
+ * saved rules (flagged "never fires" on the row rather than left looking
+ * healthy): `nps_submitted` (nothing submits an NPS score — it is a column
+ * edited like any other, so use "record is updated"), `field_equals` (that is a
+ * CONDITION, not an event — add it in the Conditions section below), and
+ * `schedule` (a cron rule with no record context; "deal is stuck" already
+ * covers the case it was seeded for).
  */
-const TRIGGERS = [
-  ["record_created", "When a record is created"],
-  ["record_updated", "When a record is updated"],
-  ["stage_changed", "When opportunity stage changes"],
-  ["task_overdue", "When a task becomes overdue"],
-  ["signal_received", "When a buying signal fires"],
-  ["deal_stuck", "When a deal is stuck in a stage"],
-] as const;
+const TRIGGERS = LIVE_TRIGGERS.map((t) => [t.id, t.label] as const);
 
-/** Triggers that exist on old saved rules but can never fire. Shown as a
- *  warning on the rule row instead of letting it look healthy. */
-const DEAD_TRIGGERS = new Set(["nps_submitted", "field_equals", "schedule"]);
-
-const OPS = [
-  ["eq", "equals"], ["neq", "not equal"], ["gt", "greater than"], ["lt", "less than"],
-  ["gte", "≥"], ["lte", "≤"], ["contains", "contains"], ["in", "in list"],
-] as const;
+/** Comparators the engine's evalConditions actually implements. */
+const OPS = CONDITION_OPS.map((o) => [o.id, o.label] as const);
 
 const FIELDS = [
   "stage", "value", "winProb", "ownerId", "industry", "region", "leadGrade", "healthScore", "renewalDate", "npsScore",
@@ -141,8 +133,8 @@ export default function Workflows() {
                       </span>
                     </div>
                     <div className="text-xs text-muted-foreground mt-0.5 flex items-center gap-1.5 flex-wrap">
-                      <StatusPill tone={DEAD_TRIGGERS.has(r.triggerType) ? "muted" : "info"}>{r.triggerType}</StatusPill>
-                      {DEAD_TRIGGERS.has(r.triggerType) && (
+                      <StatusPill tone={isDeadTrigger(r.triggerType) ? "muted" : "info"}>{r.triggerType}</StatusPill>
+                      {isDeadTrigger(r.triggerType) && (
                         <span title="This trigger has no dispatcher — the rule will never fire. Edit it and pick another trigger.">
                           <StatusPill tone="warning">never fires</StatusPill>
                         </span>

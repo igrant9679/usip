@@ -21,6 +21,46 @@ describe("workflow rule conditions (evalConditions)", () => {
     expect(evalConditions({ all: [{ field: "industry", op: "contains", value: "tech" }] }, { industry: "Healthcare" })).toBe(false);
   });
 
+  /**
+   * The condition editor offered "in list" from the day it was written while
+   * this switch had no case for it, so it fell to `default: return false`.
+   * Every rule using it evaluated false forever — inside an `all` group that
+   * means the rule never fires, with no error anywhere to say so. The tests
+   * covered eq/gt/lt/contains, i.e. exactly the operators that worked, which
+   * is why the suite stayed green the whole time.
+   */
+  describe("in (the operator that silently never matched)", () => {
+    it("matches a value present in an array", () => {
+      const spec = { all: [{ field: "stage", op: "in", value: ["proposal", "negotiation"] }] };
+      expect(evalConditions(spec, { stage: "negotiation" })).toBe(true);
+      expect(evalConditions(spec, { stage: "discovery" })).toBe(false);
+    });
+
+    it("accepts the comma-separated STRING the editor actually saves", () => {
+      // Cond.value is typed `string` in Workflows.tsx — a user types this by hand.
+      const spec = { all: [{ field: "stage", op: "in", value: "proposal, negotiation" }] };
+      expect(evalConditions(spec, { stage: "negotiation" })).toBe(true);
+      expect(evalConditions(spec, { stage: "closed" })).toBe(false);
+    });
+
+    it("compares numeric payloads against a hand-typed list", () => {
+      const spec = { all: [{ field: "leadGrade", op: "in", value: "1,2,3" }] };
+      expect(evalConditions(spec, { leadGrade: 2 })).toBe(true);
+      expect(evalConditions(spec, { leadGrade: 9 })).toBe(false);
+    });
+
+    it("does not match on a missing payload field", () => {
+      const spec = { all: [{ field: "stage", op: "in", value: ["proposal"] }] };
+      expect(evalConditions(spec, {})).toBe(false);
+    });
+
+    it("still rejects a genuinely unknown operator", () => {
+      // The default branch must keep failing closed — that behaviour was right,
+      // it was the missing `in` case that made it wrong here.
+      expect(evalConditions({ all: [{ field: "stage", op: "sounds_like", value: "won" }] }, { stage: "won" })).toBe(false);
+    });
+  });
+
   it("AND-combines under .all (all must match)", () => {
     const all = [
       { field: "stage", op: "eq", value: "won" },

@@ -20,6 +20,7 @@
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, inArray, isNull, lt, sql } from "drizzle-orm";
 import { z } from "zod";
+import { LIVE_TRIGGER_IDS } from "@shared/workflowTriggers";
 import {
   accounts,
   aiWorkflowSuggestions,
@@ -405,8 +406,8 @@ Existing workflow rules: ${existingRules.map((r) => `"${r.name}" (trigger: ${r.t
 Pipeline stage counts: ${oppCounts.map((o) => `${o.stage}: ${o.count}`).join(", ")}
 
 Rules are trigger → conditions → actions. Only use these VALID values (anything else is ignored by the engine):
-- triggerType: "record_created" (a new lead — payload has entity:"lead" + lead fields like company/title/source), "stage_changed" (an opportunity moved — payload has stage/fromStage/value/isWon/isLost), "signal_received" (an intent signal — for a job change set triggerConfig.signal:"job_change"; payload has name/oldCompany/newCompany), "deal_stuck", "schedule".
-- conditions: array of { "field": <a payload field>, "op": "eq|neq|gt|gte|lt|lte|contains", "value": <value> }. Empty array = always.
+- triggerType: "record_created" (a new lead — payload has entity:"lead" + lead fields like company/title/source), "record_updated" (a record changed), "stage_changed" (an opportunity moved — payload has stage/fromStage/value/isWon/isLost), "task_overdue" (a task passed its due date), "signal_received" (an intent signal — for a job change set triggerConfig.signal:"job_change"; payload has name/oldCompany/newCompany), "deal_stuck" (a deal sat too long in one stage).
+- conditions: array of { "field": <a payload field>, "op": "eq|neq|gt|gte|lt|lte|contains|in", "value": <value> }. Empty array = always. For "in", pass an array of values.
 - actions[].type: "create_task" (params: title, priority:"low|normal|high|urgent", dueInDays, type:"follow_up|call|manual_email"), "notify" (params: title, message), "post_slack" (params: message), "notify_teams" (params: message), "webhook" (params: url).
 
 Make the 3 suggestions distinct from existing rules and target real meeting-booking pain points (e.g. re-engage on a job change, alert an owner when a deal reaches negotiation, task a rep on a new inbound lead).`;
@@ -434,7 +435,7 @@ Make the 3 suggestions distinct from existing rules and target real meeting-book
                   properties: {
                     title: { type: "string" },
                     description: { type: "string" },
-                    triggerType: { type: "string", enum: ["record_created", "stage_changed", "signal_received", "deal_stuck", "schedule"] },
+                    triggerType: { type: "string", enum: [...LIVE_TRIGGER_IDS] },
                     triggerConfig: { type: "object", additionalProperties: true },
                     conditions: { type: "array", items: { type: "object", additionalProperties: true } },
                     actions: { type: "array", items: { type: "object", additionalProperties: true } },
@@ -518,8 +519,17 @@ Make the 3 suggestions distinct from existing rules and target real meeting-book
         .where(and(eq(aiWorkflowSuggestions.id, input.id), eq(aiWorkflowSuggestions.workspaceId, ctx.workspace.id)));
       if (!sug) throw new TRPCError({ code: "NOT_FOUND" });
 
-      const validTriggers = ["record_created","record_updated","stage_changed","task_overdue","nps_submitted","signal_received","field_equals","schedule","deal_stuck"] as const;
-      const triggerType = validTriggers.includes(sug.triggerType as any) ? sug.triggerType as typeof validTriggers[number] : "record_created";
+      /**
+       * Only triggers something actually DISPATCHES. The old list here accepted
+       * nps_submitted, field_equals and schedule, none of which any code fires,
+       * so an accepted suggestion could save cleanly and never run — and then
+       * be greyed out as dead on the page that created it. Anything not live
+       * falls back to record_created rather than being stored as a rule that
+       * cannot happen.
+       */
+      const triggerType = (LIVE_TRIGGER_IDS as readonly string[]).includes(sug.triggerType)
+        ? (sug.triggerType as (typeof LIVE_TRIGGER_IDS)[number])
+        : "record_created";
 
       const [newRule] = await db.insert(workflowRules).values({
         workspaceId: ctx.workspace.id,

@@ -61,6 +61,27 @@ export function evalConditions(
       case "lt": return Number(a) < Number(b);
       case "lte": return Number(a) <= Number(b);
       case "contains": return String(a ?? "").toLowerCase().includes(String(b).toLowerCase());
+      /**
+       * The condition editor has offered "in list" since it was written, and
+       * this switch had no case for it — so it fell to `default: return false`
+       * and every rule using it evaluated false forever. In an `all` group that
+       * means the rule never fires, with no error and nothing in the UI to
+       * suggest anything is wrong. seed.ts's "Flag stalled deals" sample rule
+       * uses it too.
+       *
+       * Two shapes reach here and both must work: the editor stores `value` as
+       * a STRING (a user types "proposal, negotiation"), while seed.ts and the
+       * AI generator store a real array. Compared as trimmed strings because
+       * the payload side is frequently a number (stage ids, scores) against a
+       * list typed by hand.
+       */
+      case "in": {
+        const list = Array.isArray(b)
+          ? b
+          : String(b ?? "").split(",");
+        const needle = String(a ?? "").trim();
+        return list.some((v) => String(v ?? "").trim() === needle);
+      }
       default: return false;
     }
   };
