@@ -1,7 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { and, count, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { z } from "zod";
-import { accounts, activities, campaigns, contacts, emailDrafts, emailReplies, enrollments, leads, prospects, senderPoolMembers, sendingAccounts, sequenceAbVariants, sequenceEdges, sequenceNodes, sequences, unipileAccounts, users, workspaceMembers, workspaces, workspaceSettings } from "../../drizzle/schema";
+import { accounts, activities, campaigns, chatAgents, contacts, emailDrafts, emailReplies, enrollments, forms, landingPages, leads, prospects, segmentSequenceRules, senderPoolMembers, sendingAccounts, sequenceAbVariants, sequenceEdges, sequenceNodes, sequences, unipileAccounts, users, workspaceMembers, workspaces, workspaceSettings } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
 import { checkPermission, getDb } from "../db";
 import { createEmailAdapter } from "../emailAdapter";
@@ -696,6 +696,32 @@ export const sequencesRouter = router({
     await db
       .delete(sequenceNodes)
       .where(and(eq(sequenceNodes.sequenceId, input.id), wsCond(sequenceNodes.workspaceId)));
+    /**
+     * Clear the INBOUND pointers too.
+     *
+     * The cascade above removed the rows that belong to this sequence. These
+     * are the rows that merely POINT at it — a form, a landing page or a chat
+     * agent configured to auto-enrol whatever it captures. Deleting the
+     * sequence used to leave those pointing at a tombstone, and none of them
+     * checks the target exists before enrolling: the chat agent inserts an
+     * enrollment with `sequenceId: agent.autoEnrollSequenceId` directly. The
+     * next visitor to convert therefore recreated exactly the orphan this
+     * cascade was written to prevent — `processEnrollments` tripping over
+     * `if (!seq)` every tick — just through a different door, and on the one
+     * path that runs unattended.
+     *
+     * Segment rules cannot be nulled (sequenceId is NOT NULL) and a rule with
+     * no target is not a rule, so those are deleted outright.
+     */
+    await db.update(forms).set({ autoEnrollSequenceId: null } as never)
+      .where(and(eq(forms.autoEnrollSequenceId, input.id), wsCond(forms.workspaceId)));
+    await db.update(landingPages).set({ autoEnrollSequenceId: null } as never)
+      .where(and(eq(landingPages.autoEnrollSequenceId, input.id), wsCond(landingPages.workspaceId)));
+    await db.update(chatAgents).set({ autoEnrollSequenceId: null } as never)
+      .where(and(eq(chatAgents.autoEnrollSequenceId, input.id), wsCond(chatAgents.workspaceId)));
+    await db.delete(segmentSequenceRules)
+      .where(and(eq(segmentSequenceRules.sequenceId, input.id), wsCond(segmentSequenceRules.workspaceId)));
+
     await db
       .delete(sequences)
       .where(and(eq(sequences.id, input.id), eq(sequences.workspaceId, ctx.workspace.id)));
