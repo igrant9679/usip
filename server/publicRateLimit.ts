@@ -1,5 +1,6 @@
 /**
- * Rate limiting for the UNAUTHENTICATED, LLM-backed public endpoints.
+ * Rate limiting for the UNAUTHENTICATED public endpoints — two ceilings, for
+ * two different costs: model spend, and abuse of the public write paths.
  *
  * `chatAgents.send` is reachable by anyone: no session, no login, just the
  * agent slug — which is published in the widget script on every page carrying
@@ -41,6 +42,28 @@ const ipKey = (req: Request) =>
  */
 const METERED_PUBLIC_PROCEDURES = ["chatAgents.send"];
 
+/**
+ * Public procedures that WRITE, and whose abuse costs something other than
+ * model spend. No login, no token, just the public slug:
+ *
+ *  - `bookingLinks.book` creates a meeting AND emails a calendar invite to an
+ *    address the caller supplies. That is both calendar vandalism (a rep's
+ *    horizon filled with junk) and a mail amplifier pointed at strangers.
+ *    Slot re-validation bounds it to genuinely open times, so it is not
+ *    unlimited — but "only as many junk meetings as you have free slots" is
+ *    not a control.
+ *  - `forms.submit` / `landingPages.submit` mint leads. Unbounded, they fill
+ *    the CRM with rubbish the autonomous engines then act on.
+ *
+ * A separate, tighter ceiling from the LLM one: a person books once and
+ * submits a form once. Ten a minute is already far past human.
+ */
+const PUBLIC_WRITE_PROCEDURES = [
+  "bookingLinks.book",
+  "forms.submit",
+  "landingPages.submit",
+];
+
 export const publicLlmLimiter = rateLimit({
   windowMs: 60_000,
   max: 20,
@@ -56,9 +79,28 @@ export const publicLlmLimiter = rateLimit({
   skip: () => process.env.NODE_ENV === "test",
 });
 
-/** True when this tRPC request targets a metered public procedure. */
+export const publicWriteLimiter = rateLimit({
+  windowMs: 60_000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: ipKey,
+  handler: (_req: Request, res: Response) => {
+    res.status(429).json({
+      error: { message: "Too many submissions from this address — please wait a moment.", code: -32029 },
+    });
+  },
+  skip: () => process.env.NODE_ENV === "test",
+});
+
+/** True when this tRPC request targets a public procedure that costs model spend. */
 export function isMeteredPublicPath(path: string): boolean {
   return METERED_PUBLIC_PROCEDURES.some((p) => path.includes(p));
+}
+
+/** True when this tRPC request targets a public procedure that WRITES. */
+export function isPublicWritePath(path: string): boolean {
+  return PUBLIC_WRITE_PROCEDURES.some((p) => path.includes(p));
 }
 
 /**
@@ -67,7 +109,10 @@ export function isMeteredPublicPath(path: string): boolean {
  */
 export function registerPublicRateLimits(app: Express): void {
   app.use("/api/trpc", (req: Request, res: Response, next: NextFunction) => {
-    if (isMeteredPublicPath(req.path ?? "")) return publicLlmLimiter(req, res, next);
+    const path = req.path ?? "";
+    // Model spend first: it is the tighter concern and the higher ceiling.
+    if (isMeteredPublicPath(path)) return publicLlmLimiter(req, res, next);
+    if (isPublicWritePath(path)) return publicWriteLimiter(req, res, next);
     return next();
   });
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { isMeteredPublicPath } from "./publicRateLimit";
+import { isMeteredPublicPath, isPublicWritePath } from "./publicRateLimit";
 
 /**
  * This predicate decides who gets throttled. Both directions are dangerous:
@@ -37,5 +37,37 @@ describe("isMeteredPublicPath", () => {
 
   it("handles an empty path rather than throwing", () => {
     expect(isMeteredPublicPath("")).toBe(false);
+  });
+});
+
+/**
+ * The write ceiling covers a different cost: `bookingLinks.book` emails a
+ * calendar invite to a caller-supplied address and occupies a real slot, and
+ * the two submit paths mint leads the autonomous engines then act on.
+ */
+describe("isPublicWritePath", () => {
+  it("covers every unauthenticated write", () => {
+    expect(isPublicWritePath("/bookingLinks.book")).toBe(true);
+    expect(isPublicWritePath("/forms.submit")).toBe(true);
+    expect(isPublicWritePath("/landingPages.submit")).toBe(true);
+  });
+
+  /** Reads are how a visitor loads the page at all — never throttle those. */
+  it("leaves the public READ paths alone", () => {
+    expect(isPublicWritePath("/bookingLinks.getPublic")).toBe(false);
+    expect(isPublicWritePath("/forms.getByPublicId")).toBe(false);
+    expect(isPublicWritePath("/landingPages.getBySlug")).toBe(false);
+  });
+
+  it("does not touch authenticated traffic", () => {
+    expect(isPublicWritePath("/leads.list")).toBe(false);
+    expect(isPublicWritePath("/sequences.bulkEnroll")).toBe(false);
+  });
+
+  /** The two ceilings must not overlap, or the wrong limit silently applies. */
+  it("is disjoint from the metered LLM set", () => {
+    for (const p of ["/chatAgents.send", "/bookingLinks.book", "/forms.submit", "/landingPages.submit"]) {
+      expect(isMeteredPublicPath(p) && isPublicWritePath(p)).toBe(false);
+    }
   });
 });
