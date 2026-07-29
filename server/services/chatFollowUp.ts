@@ -284,6 +284,24 @@ export async function runChatFollowUps(): Promise<FollowUpRunResult> {
           if (!draft) { out.failed += 1; continue; }
 
           if (agent.followUpMode === "auto") {
+            /**
+             * CLAIM THE ROW BEFORE SENDING.
+             *
+             * This used to mark `followUpAt` immediately AFTER a successful
+             * send, which left a window the whole idempotency story depends on
+             * not existing: if the marker write failed — a connection blip, a
+             * deadlock, a timeout — the mail was already gone and the row was
+             * still unmarked, so the next run 15 minutes later selected it and
+             * emailed the same person a second time. The per-session catch
+             * below would record that only as `failed`.
+             *
+             * Claiming first makes this AT-MOST-once. That is the right trade
+             * for outbound: a duplicate email to a prospect who already walked
+             * away is worse than never sending one, and a failed send is
+             * already treated as non-fatal everywhere else in this engine.
+             */
+            await db.update(chatSessions).set({ followUpAt: now } as never)
+              .where(eq(chatSessions.id, s.id));
             // No `as never` here on purpose: SendEmailOptions requires `html`,
             // and the cast is exactly what would hide that until runtime.
             const res = await sendWorkspaceEmail(agent.workspaceId, {
@@ -297,8 +315,6 @@ export async function runChatFollowUps(): Promise<FollowUpRunResult> {
               out.notes.push(`send failed: ${res.reason ?? "unknown"}`);
               continue;
             }
-            await db.update(chatSessions).set({ followUpAt: now } as never)
-              .where(eq(chatSessions.id, s.id));
             // activities.relatedType/relatedId are BOTH NOT NULL, so an
             // activity is only meaningful once the chat produced a lead.
             const leadId = (s as any).leadId ?? null;
@@ -318,6 +334,13 @@ export async function runChatFollowUps(): Promise<FollowUpRunResult> {
             // approval — a human reviews the draft before anything is sent.
             const ownerId = agent.bookingUserId ?? agent.createdByUserId ?? null;
             const leadId = (s as any).leadId ?? null;
+            // Claim before creating the task, for the same reason as the auto
+            // branch above: a marker written afterwards can fail and leave the
+            // row eligible, and the next run would mint a SECOND review task
+            // for one visitor. Nothing has been sent here, so the cost of a
+            // claimed-but-failed row is one missing task, not a duplicate email.
+            await db.update(chatSessions).set({ followUpAt: now } as never)
+              .where(eq(chatSessions.id, s.id));
             await db.insert(tasks).values({
               workspaceId: agent.workspaceId,
               title: `Follow up: ${(s as any).visitorName || email} left chat without booking`,
@@ -337,8 +360,6 @@ export async function runChatFollowUps(): Promise<FollowUpRunResult> {
                 body: `${(s as any).visitorName || email} left without booking. A draft is waiting.`,
               } as never).catch(() => {});
             }
-            await db.update(chatSessions).set({ followUpAt: now } as never)
-              .where(eq(chatSessions.id, s.id));
             out.queuedForApproval += 1;
           }
         } catch (e) {

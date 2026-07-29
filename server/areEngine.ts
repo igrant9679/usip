@@ -714,6 +714,33 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
           click: false,
         });
 
+        /**
+         * CLAIM THE ROW BEFORE SENDING — this is cold outbound, so a duplicate
+         * is a reputation cost, not an inconvenience.
+         *
+         * The status used to be written only AFTER the send returned. If that
+         * write failed (connection blip, deadlock) the mail was already gone
+         * while the row stayed `scheduled`, and the next dispatch tick picked
+         * it up and emailed the same prospect again. The surrounding try/catch
+         * aborts the whole dispatch loop on such an error, so the row was
+         * guaranteed to still be pending.
+         *
+         * Pre-marking as `failed` with a reason that is deliberately NOT one of
+         * the two auto-healable ones ("Prospect has no email address" / "Pool
+         * send failed:…") means an interrupted send settles as a visible
+         * failure nobody retries automatically, rather than as a silent resend.
+         * A clean failure below overwrites this with the real reason, which IS
+         * healable, so genuine retries keep working exactly as before.
+         */
+        await db
+          .update(areExecutionQueue)
+          .set({
+            status: "failed",
+            failureReason: "Dispatch interrupted — send state unknown",
+            executedAt: new Date(),
+          })
+          .where(eq(areExecutionQueue.id, step.id));
+
         const sendRes = await sendCampaignEmailViaPool(wsId, {
           to: p.email,
           subject,
