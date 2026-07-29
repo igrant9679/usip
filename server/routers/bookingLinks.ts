@@ -17,7 +17,7 @@
  */
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { and, eq, gte, lte } from "drizzle-orm";
+import { and, eq, gte, lte, sql } from "drizzle-orm";
 import { router, publicProcedure } from "../_core/trpc";
 import { workspaceProcedure } from "../_core/workspace";
 import { getDb } from "../db";
@@ -273,8 +273,12 @@ export async function bookSlotForLink(link: BookingLink, opts: BookSlotOpts) {
     console.error("[bookingLinks] sendMeetingInvite failed:", (e as Error).message);
   }
 
+  // Atomic in SQL. `link.bookingCount + 1` computed in JS is a lost update: the
+  // count comes from a row read before the booking, and two prospects booking
+  // the same rep concurrently both read N and both write N+1, recording two
+  // meetings as one. Same shape as the sendingAccountDailyStats fix in 72aa576.
   await db.update(bookingLinks)
-    .set({ bookingCount: (link.bookingCount ?? 0) + 1 } as never)
+    .set({ bookingCount: sql`${bookingLinks.bookingCount} + 1` } as never)
     .where(eq(bookingLinks.id, link.id));
 
   // Notify the rep + log a timeline activity so a self-booked meeting never
