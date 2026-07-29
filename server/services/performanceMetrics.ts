@@ -848,6 +848,42 @@ function median(values: number[]): number {
   return s.length % 2 ? s[mid] : Math.round((s[mid - 1] + s[mid]) / 2);
 }
 
+/** The minimum a row needs to be placed in the funnel. */
+export interface ChatFunnelRow {
+  messageCount?: number | null;
+  visitorEmail?: string | null;
+  qualified?: boolean | null;
+  meetingId?: number | null;
+}
+
+/**
+ * Split rows into the funnel's stages. Pure and exported so the SUBSET
+ * INVARIANT can be tested against the real implementation.
+ *
+ * Every stage is a strict subset of the one above it. That property is the
+ * whole reason a drop-off between two of them means anything, and the UI says
+ * so in as many words — so it has to be structural, not argued. The previous
+ * version was argued, and wrong: `meetings` was computed over ALL rows while
+ * the stages above it narrowed, and the old test asserted the invariant against
+ * a REIMPLEMENTATION of this logic rather than against this logic, so it passed.
+ *
+ * A booking carries its row up the whole chain rather than being counted beside
+ * it, because a booked-but-unqualified session is a DESIGNED outcome: a visitor
+ * who explicitly asks for a meeting books from MEETING_REQUEST_FLOOR (40) even
+ * when the qualify threshold is 60. Two of those rendered a booking rate above
+ * 100% and a negative drop-off.
+ */
+export function chatFunnelStages<T extends ChatFunnelRow>(rows: T[]): {
+  engaged: T[]; withEmail: T[]; qualified: T[]; meetings: T[];
+} {
+  const all = rows ?? [];
+  const booked = (r: T) => !!r.meetingId;
+  const engaged = all.filter((r) => (r.messageCount ?? 0) >= CHAT_ENGAGED_MIN_MESSAGES || booked(r));
+  const withEmail = engaged.filter((r) => !!r.visitorEmail || booked(r));
+  const qualified = withEmail.filter((r) => !!r.qualified || booked(r));
+  return { engaged, withEmail, qualified, meetings: qualified.filter(booked) };
+}
+
 export async function getChatFunnelStats(workspaceId: number): Promise<ChatFunnelStats> {
   const empty: ChatFunnelStats = {
     sessions: 0, engaged: 0, emailCaptured: 0, qualified: 0, leads: 0, meetings: 0,
@@ -872,10 +908,7 @@ export async function getChatFunnelStats(workspaceId: number): Promise<ChatFunne
   if (!rows.length) return empty;
 
   const sessions = rows.length;
-  const engagedRows = rows.filter((r) => (r.messageCount ?? 0) >= CHAT_ENGAGED_MIN_MESSAGES);
-  const withEmail = engagedRows.filter((r) => !!r.visitorEmail);
-  const qualified = withEmail.filter((r) => !!r.qualified);
-  const meetings = rows.filter((r) => !!r.meetingId);
+  const { engaged: engagedRows, withEmail, qualified, meetings } = chatFunnelStages(rows);
 
   const stats: ChatFunnelStats = {
     sessions,

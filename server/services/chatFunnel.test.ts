@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { rate } from "./performanceMetrics";
+import { chatFunnelStages, rate } from "./performanceMetrics";
 
 /**
  * getChatFunnelStats is a DB query, so what is tested here is the arithmetic it
@@ -28,6 +28,75 @@ describe("chat funnel arithmetic", () => {
 
   it("is 100 when every session converts", () => {
     expect(rate(7, 7)).toBe(100);
+  });
+});
+
+/**
+ * The subset invariant, tested against the REAL implementation.
+ *
+ * This is the gap that let the bug through: the drop-off picker below is a
+ * reproduction, and the stage split used to be one too — so the test asserted
+ * the invariant on a copy that happened to hold it while the shipped code did
+ * not. Anything claiming a funnel property must import the funnel.
+ */
+describe("chat funnel stages", () => {
+  const row = (o: Partial<Parameters<typeof chatFunnelStages>[0][number]>) => ({
+    messageCount: 6, visitorEmail: "a@b.com", qualified: true, meetingId: null, ...o,
+  });
+
+  it("keeps every stage a strict subset of the one above", () => {
+    const rows = [
+      row({}),
+      row({ messageCount: 1, visitorEmail: null, qualified: false }),
+      row({ qualified: false }),
+      row({ visitorEmail: null, qualified: false }),
+      row({ meetingId: 7 }),
+    ];
+    const s = chatFunnelStages(rows);
+    expect(s.engaged.length).toBeLessThanOrEqual(rows.length);
+    expect(s.withEmail.length).toBeLessThanOrEqual(s.engaged.length);
+    expect(s.qualified.length).toBeLessThanOrEqual(s.withEmail.length);
+    expect(s.meetings.length).toBeLessThanOrEqual(s.qualified.length);
+    for (const r of s.meetings) expect(s.qualified).toContain(r);
+    for (const r of s.qualified) expect(s.withEmail).toContain(r);
+    for (const r of s.withEmail) expect(s.engaged).toContain(r);
+  });
+
+  /**
+   * The case that broke it. A visitor who explicitly asks for a meeting books
+   * from MEETING_REQUEST_FLOOR (40) even when the qualify threshold is 60, so a
+   * booked-but-unqualified session is a designed outcome, not a corruption.
+   * Counted outside `qualified` it produced a booking rate above 100%.
+   */
+  it("counts a booked-but-unqualified session inside qualified, not beside it", () => {
+    const s = chatFunnelStages([
+      row({ qualified: false, meetingId: 1 }),
+      row({ qualified: false, meetingId: 2 }),
+      row({ qualified: true }),
+    ]);
+    expect(s.qualified.length).toBe(3);
+    expect(s.meetings.length).toBe(2);
+    expect(rate(s.meetings.length, s.qualified.length)).toBeLessThanOrEqual(100);
+  });
+
+  /** A booking is proof of every earlier stage, even a one-line conversation. */
+  it("carries a booking up the whole chain", () => {
+    const s = chatFunnelStages([row({ messageCount: 1, visitorEmail: null, qualified: false, meetingId: 9 })]);
+    expect(s.engaged.length).toBe(1);
+    expect(s.withEmail.length).toBe(1);
+    expect(s.qualified.length).toBe(1);
+    expect(s.meetings.length).toBe(1);
+  });
+
+  it("counts an unengaged visitor out at the first stage", () => {
+    const s = chatFunnelStages([row({ messageCount: 1, visitorEmail: null, qualified: false })]);
+    expect(s.engaged).toHaveLength(0);
+    expect(s.meetings).toHaveLength(0);
+  });
+
+  it("returns empty stages for no rows rather than throwing", () => {
+    const s = chatFunnelStages([]);
+    expect(s).toEqual({ engaged: [], withEmail: [], qualified: [], meetings: [] });
   });
 });
 

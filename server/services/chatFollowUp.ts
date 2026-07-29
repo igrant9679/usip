@@ -62,6 +62,13 @@ export type SkipReason =
   | "eligible"
   | "no_email"
   | "already_booked"
+  /**
+   * Structurally ZERO in `runChatFollowUps` — the query that feeds it already
+   * filters `followUpAt IS NULL`, so a row carrying one never reaches here. The
+   * rule stays because it is the real eligibility contract for any other caller
+   * of this pure function, but do NOT read a zero in the run log as evidence
+   * that nothing was double-sent: this engine cannot observe that case.
+   */
   | "already_followed_up"
   | "too_recent"
   | "too_old"
@@ -233,6 +240,9 @@ export async function runChatFollowUps(): Promise<FollowUpRunResult> {
         messageCount: chatSessions.messageCount,
         messages: chatSessions.messages,
         leadId: chatSessions.leadId,
+      // `followUpAt IS NULL` is what keeps this bounded — an agent's transcript
+      // history only grows, and this runs every 15 minutes. The cost is that
+      // `already_followed_up` can never be counted; see the note on SkipReason.
       }).from(chatSessions).where(
         and(eq(chatSessions.agentId, agent.id), isNull(chatSessions.followUpAt)),
       );
