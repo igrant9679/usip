@@ -185,18 +185,53 @@ export default function ARECampaigns() {
     return picked.length > 0 ? picked : [...ARE_DEFAULT_SOURCES];
   }, [wsSettings]);
 
+  /**
+   * The REST of the ARE Settings "defaults for new campaigns" block. Sources
+   * above were wired on 2026-07-29; their five siblings were not, and the
+   * settings page states plainly that "New campaigns will inherit this autonomy
+   * mode", "will have these channels pre-selected" and "inherit this sequence
+   * structure". None of that was true — the wizard hardcoded its own values and
+   * never read any of them, so the whole block was write-only: saved, echoed
+   * back on the settings page, and applied nowhere.
+   *
+   * The autonomy one mattered most. The column defaults to `batch_approval` and
+   * the wizard hardcoded `"full"`, so a workspace that deliberately chose
+   * review_release still got new campaigns created FULLY AUTONOMOUS. A safety
+   * setting that silently inverts is worse than no setting.
+   *
+   * Fallbacks below are exactly the values the wizard used to hardcode, so a
+   * workspace that has never opened ARE Settings behaves as before.
+   */
+  const wsDefaults = useMemo(() => {
+    const s = (wsSettings ?? {}) as Record<string, any>;
+    const channels = (s.areDefaultChannels ?? null) as Record<string, boolean> | null;
+    return {
+      autonomyMode: (s.areDefaultAutonomyMode ?? "full") as "full" | "batch_approval" | "review_release",
+      dailySendCap: Number(s.areDefaultDailySendCap ?? 50) || 50,
+      autoApproveThreshold: s.areDefaultAutoApproveThreshold ?? 60,
+      channelsEnabled: {
+        email: channels?.email ?? true,
+        linkedin: channels?.linkedin ?? false,
+        sms: channels?.sms ?? false,
+        voice: channels?.voice ?? false,
+      },
+      sequenceTemplate: (s.areDefaultSequenceTemplate ?? "standard_7step") as string,
+      signalToOpportunityEnabled: Boolean(s.areDefaultSignalToOpportunity ?? false),
+    };
+  }, [wsSettings]);
+
   const [step, setStep] = useState(1);
   const TOTAL_STEPS = 4;
   const blankForm = () => ({
     name: "",
     description: "",
-    autonomyMode: "full" as "full" | "batch_approval" | "review_release",
+    autonomyMode: wsDefaults.autonomyMode,
     goalType: "reply" as "meeting_booked" | "reply" | "opportunity_created",
     targetProspectCount: 100,
-    dailySendCap: 50,
-    autoApproveThreshold: 60,
+    dailySendCap: wsDefaults.dailySendCap,
+    autoApproveThreshold: wsDefaults.autoApproveThreshold,
     prospectSources: [...defaultSources] as string[],
-    channelsEnabled: { email: true, linkedin: false, sms: false, voice: false },
+    channelsEnabled: { ...wsDefaults.channelsEnabled },
     // Per-campaign targeting (stored as icpOverrides on save)
     targetTitles: [] as string[],
     targetIndustries: [] as string[],
@@ -287,6 +322,12 @@ export default function ARECampaigns() {
       autoApproveThreshold: form.autoApproveThreshold,
       prospectSources: form.prospectSources,
       channelsEnabled: form.channelsEnabled,
+      // The wizard has no field for these two, so they come straight from the
+      // workspace defaults. Without them the settings page's "New campaigns
+      // inherit this sequence structure" was simply false — the server's own
+      // zod default won every time.
+      sequenceTemplate: wsDefaults.sequenceTemplate,
+      signalToOpportunityEnabled: wsDefaults.signalToOpportunityEnabled,
       icpOverrides,
       launch,
     });
