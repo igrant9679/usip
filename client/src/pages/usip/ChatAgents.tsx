@@ -9,7 +9,7 @@
  * The mode selector here is the real control; the Autonomy Control Center's
  * single "Inbound Chat" row is a bulk shortcut over the same field.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
@@ -41,6 +41,11 @@ export default function ChatAgents() {
   const detail = trpc.chatAgents.get.useQuery({ id: selectedId! }, { enabled: isAdmin && !!selectedId, retry: false });
   const seqQ = trpc.sequences.list.useQuery(undefined as any, { enabled: isAdmin, retry: false });
   const sequences = ((seqQ.data as any[]) ?? []).filter((s) => s.status !== "archived");
+  // Whose calendar the agent books and who owns every handoff task. Until now
+  // this had no control at all — it was fixed at create time to whoever clicked
+  // "New", and the whole booking path depends on it.
+  const membersQ = trpc.workspace.members.useQuery(undefined, { enabled: isAdmin });
+  const members = (membersQ.data as any[]) ?? [];
   const sessionsQ = trpc.chatAgents.sessions.useQuery({ agentId: selectedId!, limit: 50 } as any, { enabled: isAdmin && !!selectedId, retry: false });
   const sessions = (sessionsQ.data as any[]) ?? [];
 
@@ -64,6 +69,23 @@ export default function ChatAgents() {
   useEffect(() => {
     if (detail.data) setForm({ ...detail.data, qualifyingQuestions: detail.data.qualifyingQuestions ?? [] });
   }, [detail.data]);
+
+  /**
+   * Transcript deep link. Every handoff task says `/v2/chat?session=<token>`;
+   * a rep opening that task needs the conversation they were handed, not an
+   * empty builder. Resolves the token to its agent, selects it, and expands the
+   * transcript.
+   */
+  const deepToken = useMemo(() => new URLSearchParams(window.location.search).get("session") ?? "", []);
+  const deepQ = trpc.chatAgents.sessionByToken.useQuery(
+    { token: deepToken },
+    { enabled: isAdmin && !!deepToken, retry: false },
+  );
+  useEffect(() => {
+    if (!deepQ.data) return;
+    setSelectedId(deepQ.data.agentId);
+    setOpenSession(deepQ.data.id);
+  }, [deepQ.data]);
 
   const agents = (list.data as any[]) ?? [];
   const publicUrl = form?.slug ? `${window.location.origin}/c/${form.slug}` : "";
@@ -178,9 +200,23 @@ export default function ChatAgents() {
                     </button>
                   ))}
                 </div>
-                {form.mode === "auto" && form.status === "published" && (
+                <Field label="Whose calendar it books">
+                  <select className="h-9 w-full rounded-md border bg-background px-2 text-sm"
+                    value={form.bookingUserId ?? ""}
+                    onChange={(e) => setField("bookingUserId", e.target.value ? Number(e.target.value) : null)}>
+                    <option value="">Nobody — the agent cannot book</option>
+                    {members.map((m) => (
+                      <option key={m.id} value={m.id}>{m.name || m.email}</option>
+                    ))}
+                  </select>
                   <p className="text-[11px] text-muted-foreground">
-                    Qualified visitors will see your real open slots and book them. Make sure your booking link at <b>/b/…</b> has the working hours you want.
+                    This rep's <b>/b/…</b> availability is what visitors are offered, and every handoff task lands on them.
+                    {" "}Check their booking page has the right working hours <b>and time zone</b> — an unset zone means UTC, which offers US prospects 4am.
+                  </p>
+                </Field>
+                {form.mode === "auto" && form.status === "published" && !form.bookingUserId && (
+                  <p className="text-[11px] text-amber-600">
+                    This agent is autonomous and published but has nobody's calendar to book. Qualified visitors will be handed to a person instead.
                   </p>
                 )}
               </Section>
