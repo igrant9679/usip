@@ -66,6 +66,7 @@ import { registerChatWidgetRoutes } from "../chatWidget";
 import { runChatFollowUps } from "../services/chatFollowUp";
 import { registerUnsubscribeRoute } from "../unsubscribe";
 import { registerPasswordAuthRoutes } from "../passwordAuth";
+import { registerPublicRateLimits } from "../publicRateLimit";
 import { registerLLMStreamRoutes } from "../llmStreamRoute";
 import { registerProposalsStreamRoutes } from "../proposalsStreamRoute";
 import { registerEmailBuilderStreamRoutes } from "../emailBuilderStreamRoute";
@@ -118,6 +119,9 @@ async function startServer() {
   registerEmailBuilderStreamRoutes(app);
   registerAccountBriefsStreamRoutes(app);
   registerMailboxStreamRoutes(app);
+  // Rate-limit the unauthenticated LLM-backed procedures BEFORE tRPC sees
+  // them. Everything else passes straight through.
+  registerPublicRateLimits(app);
   // tRPC API
   app.use(
     "/api/trpc",
