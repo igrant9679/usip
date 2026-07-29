@@ -33,6 +33,7 @@ import {
 import { getDb } from "../db";
 import { invokeLLM } from "../_core/llm";
 import { listUserPosts, reactToPost, sendLinkedInInvitation, sendMessage } from "../lib/unipile";
+import { utcDayStart } from "@shared/timeWindows";
 
 interface NewRelationPayload {
   account_id?: string;
@@ -188,8 +189,9 @@ export async function handleNewRelation(payload: NewRelationPayload): Promise<st
 
   // Auto mode: enforce the per-workspace daily send cap.
   const cap = ws?.cap ?? 50;
-  const since = new Date();
-  since.setHours(0, 0, 0, 0);
+  // UTC — LinkedIn sends are the account-risk path; the window must not move
+  // with the host timezone. See shared/timeWindows.ts.
+  const since = utcDayStart();
   const [{ n }] = await db
     .select({ n: sql<number>`count(*)` })
     .from(unipileMessages)
@@ -322,8 +324,9 @@ export async function runSocialAutopilotInvitesForWorkspace(
   if (mode === "off") return out;
 
   const cap = Math.min(ws?.cap ?? INVITE_HARD_CAP, INVITE_HARD_CAP);
-  const since = new Date();
-  since.setHours(0, 0, 0, 0);
+  // UTC — LinkedIn sends are the account-risk path; the window must not move
+  // with the host timezone. See shared/timeWindows.ts.
+  const since = utcDayStart();
   const [{ n: sentToday }] = await db
     .select({ n: sql<number>`count(*)` })
     .from(unipileInvites)

@@ -29,6 +29,7 @@ function unsubscribeFooterText(unsubscribeUrl: string): string {
 import { router } from "../_core/trpc";
 import { adminWsProcedure, managerProcedure, repProcedure, roleRank, workspaceProcedure } from "../_core/workspace";
 import { appBaseUrl as publicAppOrigin } from "../appUrl";
+import { utcDayStart } from "@shared/timeWindows";
 
 /** Minimal HTML-escaper (duplicated from crm.ts — separate router). */
 function escapeHtml(s: string): string {
@@ -157,8 +158,10 @@ async function pickAccountForSequenceDraft(
     if (accountRows.length === 0) return null;
 
     // Today's send count per account (drafts sent today with that account).
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
+    // UTC, matching emailDelivery/sendingAccounts. These two paths measure the
+    // SAME per-account daily limit, and a local-midnight window here made them
+    // disagree about which sends counted on any non-UTC host.
+    const todayStart = utcDayStart();
     const sentTodayRows = await db
       .select({
         accountId: emailDrafts.sendingAccountId,

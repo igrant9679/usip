@@ -39,6 +39,7 @@ import { areScrapeJobs, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { tryDecryptSecret } from "../_core/crypto";
 import { normalizeDomain } from "./scraper/domain";
+import { utcDayStart } from "@shared/timeWindows";
 
 const APOLLO_BASE = "https://api.apollo.io/api/v1";
 const DEFAULT_DAILY_PULL_CAP = 50;
@@ -76,8 +77,8 @@ export async function getApolloDailyCap(workspaceId: number): Promise<number> {
 export async function apolloPulledToday(workspaceId: number): Promise<number> {
   const db = await getDb();
   if (!db) return 0;
-  const midnight = new Date();
-  midnight.setHours(0, 0, 0, 0);
+  // UTC: this gates a paid daily credit cap.
+  const midnight = utcDayStart();
   const [row] = await db
     .select({ total: sql<number>`COALESCE(SUM(${areScrapeJobs.resultCount}), 0)` })
     .from(areScrapeJobs)

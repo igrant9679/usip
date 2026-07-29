@@ -27,14 +27,15 @@ import { and, eq, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { emailDrafts, sendingAccounts, workspaceSettings } from "../drizzle/schema";
 import { getDb } from "./db";
+import { utcDayStart } from "@shared/timeWindows";
 
 /** Conservative workspace-wide cap when no per-workspace override is set. */
 const DEFAULT_WORKSPACE_DAILY_CAP = 100;
 
 function todayStart(): Date {
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  return d;
+  // UTC — see shared/timeWindows.ts. A send cap must not roll over at an hour
+  // that depends on the host's timezone.
+  return utcDayStart();
 }
 
 /** Count drafts dispatched today by a single sending account. */
