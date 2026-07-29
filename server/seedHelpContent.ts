@@ -83,7 +83,45 @@ const ARTICLES: ArticleSeed[] = [
 
 **Install it** — this is the step that decides whether it books anything. Three ways, and you can use all three: share the /c/ link directly; turn on **Show on my Velocity-hosted pages** to put the bubble on your landing pages and every rep's booking page; or paste the one-line script into your own website before the closing body tag. The script adds a launcher bubble, does not load the chat until someone clicks it, and renders nothing at all while the agent is unpublished or Off — so turning the agent off really does remove it from your site.
 
+**What it knows.** The agent may only state facts you have written down. Add them under *What it knows* — one per question, in your own words. This is the single most important thing you can do for answer quality: given nothing, a model fills the silence with plausible invention, and it will confidently confirm services you do not offer. Anything not written there, it says it does not know and offers to find out. Cover your service list, what happens on a first call, and how pricing works.
+
+**If they leave without booking.** A visitor who gave an email and then vanished is the most recoverable thing the chat produces. Its own switch — *Off / Draft for me / Send it* — writes them one follow-up referencing what they actually said. Deliberately separate from the agent's own autonomy: booking a meeting someone asked for and emailing someone who walked away are different acts. Only conversations from the last 7 days are ever followed up, and never more than once.
+
+**Asking for a person.** If a visitor asks to speak to a human, the agent stops selling and raises a high-priority task for the rep, with the transcript attached. This is not behind a switch: "Autonomous" means it books without asking, not that it refuses to fetch a person.
+
+**It knows which page they are on.** The opening line differs on a pricing page and a careers page, and on a careers page it deliberately will not push for a meeting.
+
+**Reading transcripts.** Every conversation is listed under the agent with its score and outcome. Open one to see exactly what was said — this is the fastest way to judge whether it is ready for Autonomous. You can delete any transcript; the lead or meeting it produced is kept.
+
 **What it will not do.** It never invents a name, email or company; anything it did not hear from the visitor stays empty. It cannot book without an email address. And the decision to book is not the model's — it follows the mode you set.`,
+  },
+  {
+    slug: "sendgrid-campaigns",
+    categorySlug: "sequences-email",
+    title: "Sending campaigns through SendGrid",
+    summary: "When to use it, how to set it up, and the one thing it cannot do.",
+    readingTimeMinutes: 3,
+    tags: ["sendgrid", "sending", "campaigns", "deliverability"],
+    pageKey: "sending-accounts",
+    bodyMarkdown: `SendGrid is an alternative to sending through a mailbox. Instead of connecting an inbox, you paste an API key and Velocity posts your campaign email to SendGrid, which delivers it.
+
+**Set it up** at *Settings → Mailboxes → SendGrid*, or from the full form at *Engage → Sending Accounts*. You need three things: the **From address**, which must already be a verified sender inside SendGrid; a **Reply-To**; and an **API key** with **Mail Send** permission. Press **Test key** — it checks both that the key works and that it is allowed to send, because a key that authenticates but lacks that permission looks fine right up until your first campaign fails.
+
+Once saved it joins the same sending pool as your mailboxes, so sequences and campaigns can use it immediately with no further wiring.
+
+## The one thing it cannot do
+
+**Replies will not appear in Velocity.** An API key has no inbox behind it — there is nothing for Velocity to read. Replies go to whatever you set as **Reply-To**, and you will only see them in Velocity if that address is a mailbox you have connected separately.
+
+This is inherent to sending by API, not a gap in Velocity. Plan for it: set Reply-To to a real mailbox, and connect that mailbox under *Settings → Mailboxes*. Otherwise the reply-detection, thread views and "what's working" numbers will all under-report, because the replies are landing somewhere Velocity cannot see.
+
+## When to use it instead of a mailbox
+
+**Use SendGrid** for volume, when you want sending separated from anyone's personal inbox, or when your host blocks outbound SMTP.
+
+**Use a connected mailbox** when replies matter more than volume — which, for cold outreach that is meant to start conversations, is most of the time. A mailbox gives you reply detection for free.
+
+**Changing the key later:** leave the API key field blank and your existing key is kept. You never see the stored key again — Velocity encrypts it and does not hand it back, even to an admin.`,
   },
   {
     slug: "how-email-finding-works",
@@ -187,13 +225,45 @@ All three land in the same place: a meeting on **Meetings** and on your real cal
   {
     slug: "welcome-to-velocity",
     categorySlug: "getting-started",
-    title: "Welcome to Velocity",
-    summary: "What Velocity is and how an SDR's day flows through it.",
-    readingTimeMinutes: 2,
-    tags: ["getting-started", "overview", "sdr"],
+    title: "Start here: how Velocity actually works",
+    summary: "The one idea the whole product rests on, and what to do in your first hour.",
+    readingTimeMinutes: 4,
+    tags: ["getting-started", "overview", "orientation"],
     pageKey: "dashboard",
     tourName: "Getting Started",
-    bodyMarkdown: `Velocity is your unified revenue workspace — prospecting, CRM, sequences, meetings, calls, and inbox in one place, so you never tab-hop between tools. As an SDR you'll spend most of your day in three areas: **Prospects/Find Prospects** (build your list), **Sequences & Conversations** (run outreach and handle replies), and **Pipeline/Contacts** (track what's working). The left sidebar starts with your personal quick links (Home, AI Assistant, Inbox, My Mailbox, My Calendar), then groups the work: *Prospect and enrich* (People, Companies, Find Prospects), *Engage* (Sequences, Emails, Calls, Tasks, Social), *Win deals* (Leads, Deals, Meetings, Conversations), *Customer success*, *Revenue Engine* (ARE), *Automation and analytics*, and *Inbound*. Much of the busywork can run on **Autopilot** — see "The Autonomy Control Center" for the Off / Approve / Auto switches. Start each day on **Home** for your numbers, then move into prospecting. New here? Run the **Getting Started** guided tour (Help Center → Tours) for a 3-minute walkthrough.`,
+    bodyMarkdown: `Velocity has one job: **get sales meetings booked**. Everything else — the contact database, the sequences, the scoring — exists to feed that. If you only understand one thing, make it this page.
+
+## Meetings arrive five ways
+
+Each one is an independent engine. You do not need all five, and most people should start with one.
+
+1. **The website chat agent** talks to visitors on your site and books them straight into a rep's calendar. It sends no email at all, so there is nothing to warm up and no deliverability risk. **This is the cheapest one to switch on.**
+2. **Booking links** (/b/your-name) let someone pick a slot themselves. Also inbound, also no sending.
+3. **Sequences** are multi-step email follow-ups to people you already have.
+4. **Campaigns (the Autonomous Revenue Engine)** find new prospects, write to them, and work replies. This is the one that spends real sending reputation — leave it until the rest works.
+5. **Meeting Autopilot** proposes and sends invites to prospects who look ready.
+
+## The one control that matters: Off / Approve / Autonomous
+
+Every engine has the same three-way switch, and they all live on one screen — **Automation → Autonomy Control Center**.
+
+- **Off** — nothing happens.
+- **Approve** — the AI does the work and then *stops*. It arrives as a task for you to read. Nothing is sent, nobody is contacted.
+- **Autonomous** — it acts on its own and tells you afterwards.
+
+**Approve is the setting to learn on.** It is not a half-measure — it is a dry run against your real data, showing you exactly what the AI would have said, with no way for it to reach a customer. Read a few of those tasks. When you find yourself approving everything unchanged, switch that engine to Autonomous.
+
+## Your first hour
+
+1. **Connect a mailbox** — *Settings → Mailboxes*. Without one, nothing can send.
+2. **Turn everything to Approve** — Autonomy Control Center, "All: Approve". Now the AI starts showing its work.
+3. **Set up the chat agent** — *Inbound → Chat*. Give it a persona, add a few facts under **What it knows**, publish it, and switch on "Show on my Velocity-hosted pages". You now have a meeting source that costs nothing to run.
+4. **Import or find some contacts** — *Import contacts* for a CSV, or *Find Prospects* to search.
+5. **Leave campaigns off** until you have watched the rest for a few days.
+
+## When you are lost
+
+**Hover anything.** Every item in the sidebar explains itself on hover, and the ⓘ icons next to settings explain that specific field. **Elsie** (top bar) runs guided tours of whatever page you are on. This Help Center has articles for every area, and **Ask AI** searches them in plain English.`,
   },
   {
     slug: "navigating-the-app",
