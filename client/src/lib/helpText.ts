@@ -36,31 +36,31 @@ export interface HelpEntry {
 export const NAV_HELP: Record<string, HelpEntry> = {
   // ── Overview ──
   "/v2/home": { body: "Your starting point: what needs attention today, and how the pipeline moved this week.", article: "navigating-the-app" },
-  "/v2/ai-assistant": { body: "Ask questions about your own data in plain English — \"which deals slipped this month?\" — instead of building a report.", article: "ask-the-ai-assistant" },
-  "/inbox": { body: "Notifications from the autonomous engines: what they did, and anything waiting on your approval.", article: "your-inbox" },
-  "/mailbox": { body: "Your connected email inbox, inside Velocity. Replies from prospects land here.", article: "your-mailbox" },
-  "/calendar": { body: "Your meetings, including any the AI booked for you.", article: "your-calendar" },
+  "/v2/ai-assistant": { body: "Ask questions about your own data in plain English — \"which deals slipped this month?\" — instead of building a report." },
+  "/inbox": { body: "Notifications from the autonomous engines: what they did, and anything waiting on your approval." },
+  "/mailbox": { body: "Your connected email inbox, inside Velocity. Replies from prospects land here." },
+  "/calendar": { body: "Your meetings, including any the AI booked for you." },
 
   // ── Prospect and enrich ──
   "/v2/people": { body: "Every person you've imported or sourced. The contact database the rest of the app draws on.", article: "leads-contacts-accounts" },
-  "/v2/companies": { body: "The organisations behind your contacts, with the enrichment data found for each.", article: "companies" },
-  "/v2/lists": { body: "Hand-picked groups of contacts you want to work as a set.", article: "lists" },
+  "/v2/companies": { body: "The organisations behind your contacts, with the enrichment data found for each.", article: "leads-contacts-accounts" },
+  "/v2/lists": { body: "Hand-picked groups of contacts you want to work as a set." },
   "/find-prospects": { body: "Search for new people who match your ideal customer, and add them to the queue.", article: "find-prospects-discovery" },
   "/v2/data-enrichment": { body: "Fill in missing details — company, job title, email — on contacts you already have.", article: "how-email-finding-works" },
-  "/data-health": { body: "What's missing or wrong across your data, and what that's costing you in reach.", article: "data-health" },
+  "/data-health": { body: "What's missing or wrong across your data, and what that's costing you in reach." },
   "/import": { body: "Bring contacts in from a CSV file.", article: "import-prospects-csv" },
   "/leads": { body: "Inbound people who haven't been qualified yet — from the chat agent, booking pages and forms.", article: "leads-contacts-accounts" },
 
   // ── Engage ──
   "/v2/sequences": { body: "Multi-step email follow-ups that run on a schedule so you don't have to chase manually.", article: "build-a-sequence" },
   "/campaigns": { body: "Outbound sending campaigns, with their own audience and sending accounts.", article: "are-tuning-campaign" },
-  "/segments": { body: "Saved filters over your contacts that stay up to date as data changes.", article: "segments" },
+  "/segments": { body: "Saved filters over your contacts that stay up to date as data changes." },
   "/sending-accounts": { body: "The mailboxes and services that actually send your email, with per-account daily limits.", article: "email-sending-preferences" },
   "/email-builder": { body: "Design reusable email templates and snippets.", article: "email-builder-templates" },
   "/unified-inbox": { body: "Every reply across all your sending accounts in one thread list.", article: "unified-inbox" },
   "/v2/emails": { body: "Individual emails sent and drafted, including anything awaiting your approval.", article: "email-drafts-sending" },
   "/v2/calls": { body: "Call logs and outcomes, including AI voice-agent calls.", article: "calls-page" },
-  "/v2/tasks": { body: "Your to-do queue. AI-proposed tasks land here for approval before they become real work.", article: "autopilots" },
+  "/v2/tasks": { body: "Your to-do queue. AI-proposed tasks land here for approval before they become real work.", article: "autonomy-control-center" },
   "/social": { body: "LinkedIn outreach — connection requests, messages and replies.", article: "linkedin-social-outreach" },
 
   // ── Inbound (no outbound send required) ──
@@ -75,13 +75,35 @@ export const NAV_HELP: Record<string, HelpEntry> = {
   // ── Customers ──
   "/v2/pipeline": { body: "Your deals, by stage.", article: "managing-pipeline" },
   "/v2/opportunities": { body: "Individual deals with their value, stage and history.", article: "opportunities-deep-dive" },
-  "/v2/meetings": { body: "Booked meetings and the AI's meeting preparation.", article: "meetings-calls" },
-  "/v2/customers": { body: "Accounts that have already bought.", article: "customers" },
-  "/v2/renewals": { body: "Contracts coming up for renewal.", article: "renewals" },
+  "/v2/meetings": { body: "Booked meetings and the AI's meeting preparation.", article: "meeting-autopilot-reminders" },
+  "/v2/customers": { body: "Accounts that have already bought." },
+  "/v2/renewals": { body: "Contracts coming up for renewal." },
+
+  "/v2/deals": { body: "Open deals and what stage each is at.", article: "managing-pipeline" },
+  "/v2/conversations": { body: "Ongoing back-and-forth with prospects, and the AI's suggested replies.", article: "conversations-autopilot" },
+  "/pipeline-alerts": { body: "Warnings about deals going quiet or slipping their close date." },
+  "/proposals": { body: "Quotes and proposals you've sent, and whether they've been opened." },
+  "/products": { body: "Your product and pricing catalogue, used when building a quote." },
+
+  // ── Automation and analytics ──
+  "/ai-pipeline": { body: "What the AI engines have queued, are working on, and have finished." },
+  "/brand-voice": { body: "How the AI should sound when it writes as you. Every AI-written email and chat reply reads from this." },
+  "/personas": { body: "The types of buyer you sell to. Used to tailor messaging and to score fit." },
+  "/workflows": { body: "If-this-then-that rules over CRM events — e.g. when a prospect changes job, start a sequence.", article: "workflow-rules" },
+  "/lead-scoring": { body: "The rules that decide a lead's 0-100 score, so the best ones surface first.", article: "understanding-scores-badges" },
+  "/lead-routing": { body: "Who a new lead gets assigned to, and on what basis." },
+  "/v2/analytics": { body: "Trends over time — sending volume, reply rates, pipeline created." },
+  "/reports": { body: "Build your own report over any records in the system.", article: "reports-builder" },
+  "/dashboards": { body: "Saved charts and numbers you want to check regularly." },
+  "/mindmaps": { body: "Visual account maps — who reports to whom inside a target company." },
+
+  // ── Inbound ──
+  "/v2/website-visitors": { body: "Companies that visited your site, identified where possible, before anyone fills a form." },
+  "/v2/forms": { body: "Embeddable forms that create a lead when someone submits them.", article: "landing-pages-web-forms" },
 
   // ── Support ──
   "/v2/deliverability": { body: "Whether your email is reaching inboxes rather than spam folders.", article: "mailbox-warmup" },
-  "/help": { body: "Guides and walkthroughs. Start here if you're unsure where to begin.", article: "getting-started" },
+  "/help": { body: "Guides and walkthroughs. Start here if you're unsure where to begin.", article: "welcome-to-velocity" },
 };
 
 /**
