@@ -67,6 +67,7 @@ import { runChatFollowUps } from "../services/chatFollowUp";
 import { registerUnsubscribeRoute } from "../unsubscribe";
 import { registerPasswordAuthRoutes } from "../passwordAuth";
 import { registerPublicRateLimits } from "../publicRateLimit";
+import { guardOverlap } from "./cronGuard";
 import { reportSecretHealth } from "./secretHealth";
 import { registerLLMStreamRoutes } from "../llmStreamRoute";
 import { registerProposalsStreamRoutes } from "../proposalsStreamRoute";
@@ -202,7 +203,9 @@ async function startServer() {
   setInterval(runVerifyJobs, 2 * 60 * 1000);
 
   // Sequence execution engine: process active enrollments every 5 minutes
-  const runSequenceEngine = () => {
+  // Guarded like ARE: this tick sends, and an overrun would let two passes
+  // dispatch the same drafts and spend the same per-mailbox daily allowance.
+  const runSequenceEngine = guardOverlap("SequenceEngine", () =>
     processEnrollments()
       .catch((e) => console.error("[SequenceEngine] cron run failed:", e))
       .then(() =>
@@ -220,8 +223,8 @@ async function startServer() {
           }
         }),
       )
-      .catch((e) => console.error("[autoSend] cron run failed:", e));
-  };
+      .catch((e) => console.error("[autoSend] cron run failed:", e)),
+  );
   setTimeout(runSequenceEngine, 60_000); // first run after 60s
   setInterval(runSequenceEngine, 5 * 60 * 1000); // every 5 minutes
 
@@ -252,11 +255,11 @@ async function startServer() {
 
   // ARE engine: drive every active Autonomous Revenue Engine campaign through
   // enrich → screen → sequence → enroll → dispatch → counters, every 10 min.
-  const runAre = () => {
-    runAreEngine().catch((e) =>
-      console.error("[AreEngine] cron run failed:", e)
-    );
-  };
+  // Guarded: a tick does serial LLM enrichment, sequence generation and web
+  // scraping, which regularly outlasts the 3-minute interval. Two overlapping
+  // ticks would each read the same "sent today" count and each dispatch up to
+  // the same remaining cap — spending the daily send budget twice.
+  const runAre = guardOverlap("AreEngine", () => runAreEngine());
   setTimeout(runAre, 30_000); // first run 30s after boot (so a freshly-launched campaign sees activity fast)
   setInterval(runAre, 3 * 60 * 1000); // every 3 minutes — feels continuous to the user while still giving each tick room to finish
 
@@ -302,7 +305,7 @@ async function startServer() {
   // for agents whose OWN followUpMode is approval/auto (default off), and every
   // run logs a per-reason breakdown — a bare count of an engine that spends
   // sends is a rumour.
-  const runChatFollowUp = () => {
+  const runChatFollowUp = guardOverlap("ChatFollowUp", () =>
     runChatFollowUps()
       .then((r) => {
         if (r.agentsConsidered > 0) {
@@ -313,8 +316,7 @@ async function startServer() {
           );
         }
       })
-      .catch((e) => console.error("[ChatFollowUp] cron run failed:", e));
-  };
+  );
   setTimeout(runChatFollowUp, 5 * 60 * 1000); // first run 5 minutes after boot
   setInterval(runChatFollowUp, 15 * 60 * 1000); // every 15 minutes — the delay window is per-agent
 
