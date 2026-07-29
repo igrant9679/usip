@@ -123,9 +123,9 @@ export default function MeetingsV2() {
     },
     onError: (e) => toast.error(e.message),
   });
-  const dismiss = trpc.meetings.dismissProposal.useMutation({ onSuccess: invalidateAll });
-  const complete = trpc.meetings.complete.useMutation({ onSuccess: invalidateAll });
-  const cancel = trpc.meetings.cancel.useMutation({ onSuccess: invalidateAll });
+  const dismiss = trpc.meetings.dismissProposal.useMutation({ onSuccess: invalidateAll, onError: (e) => toast.error(e.message) });
+  const complete = trpc.meetings.complete.useMutation({ onSuccess: invalidateAll, onError: (e) => toast.error(e.message) });
+  const cancel = trpc.meetings.cancel.useMutation({ onSuccess: invalidateAll, onError: (e) => toast.error(e.message) });
   const create = trpc.meetings.create.useMutation({
     onSuccess: () => { invalidateAll(); toast.success("Meeting created"); setNewOpen(false); },
     onError: (e) => toast.error(e.message),

@@ -14,6 +14,7 @@ import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { toast } from "sonner";
 import {
   Phone, Check, Link as LinkIcon, CalendarClock, AlertTriangle, PhoneOff,
   AudioLines, PhoneIncoming, PhoneOutgoing, ChevronDown, Settings2,
@@ -195,7 +196,7 @@ export default function Calls() {
   const utils = trpc.useUtils();
 
   const { data, isLoading, error, refetch } = trpc.tasks.list.useQuery({});
-  const setStatus = trpc.tasks.setStatus.useMutation({ onSuccess: () => utils.tasks.list.invalidate() });
+  const setStatus = trpc.tasks.setStatus.useMutation({ onSuccess: () => utils.tasks.list.invalidate(), onError: (e) => toast.error(e.message) });
 
   const calls = useMemo(() => ((data ?? []) as Task[]).filter((t) => (t.type ?? "").toLowerCase() === "call"), [data]);
 

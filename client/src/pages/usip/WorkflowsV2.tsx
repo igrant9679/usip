@@ -165,7 +165,7 @@ export default function WorkflowsV2() {
   const suggestions = trpc.workflowsAi.listSuggestions.useQuery(undefined as any, { retry: false });
   const genSuggestions = trpc.workflowsAi.generateSuggestions.useMutation({ onSuccess: () => { utils.workflowsAi.listSuggestions.invalidate(); toast.success("AI generated new workflow ideas"); }, onError: (e) => toast.error(e.message) });
   const applySuggestion = trpc.workflowsAi.applySuggestion.useMutation({ onSuccess: () => { utils.workflowsAi.listSuggestions.invalidate(); utils.workflows.list.invalidate(); toast.success("Workflow created"); }, onError: (e) => toast.error(e.message) });
-  const dismissSuggestion = trpc.workflowsAi.dismissSuggestion.useMutation({ onSuccess: () => utils.workflowsAi.listSuggestions.invalidate() });
+  const dismissSuggestion = trpc.workflowsAi.dismissSuggestion.useMutation({ onSuccess: () => utils.workflowsAi.listSuggestions.invalidate(), onError: (e) => toast.error(e.message) });
 
   // ── Segment auto-enroll rules ──
   const segRules = trpc.segmentRules.list.useQuery(undefined as any, { retry: false });

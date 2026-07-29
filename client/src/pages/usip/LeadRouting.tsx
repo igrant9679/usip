@@ -46,8 +46,8 @@ export default function LeadRouting() {
   const { data: members } = trpc.workspace.members.useQuery();
   const [editing, setEditing] = useState<Rule | null>(null);
 
-  const remove = trpc.leadRouting.remove.useMutation({ onSuccess: () => { utils.leadRouting.list.invalidate(); toast.success("Rule deleted"); } });
-  const reorder = trpc.leadRouting.reorder.useMutation({ onSuccess: () => utils.leadRouting.list.invalidate() });
+  const remove = trpc.leadRouting.remove.useMutation({ onSuccess: () => { utils.leadRouting.list.invalidate(); toast.success("Rule deleted"); }, onError: (e) => toast.error(e.message) });
+  const reorder = trpc.leadRouting.reorder.useMutation({ onSuccess: () => utils.leadRouting.list.invalidate(), onError: (e) => toast.error(e.message) });
 
   const move = (idx: number, dir: -1 | 1) => {
     if (!rules) return;
@@ -143,7 +143,7 @@ export default function LeadRouting() {
 function RuleEditor({ rule, members, onClose, onSaved }: { rule: Rule | null; members: Array<{ id: number; name: string | null; email: string | null }>; onClose: () => void; onSaved: () => void }) {
   const [draft, setDraft] = useState<Rule | null>(rule);
   useEffect(() => setDraft(rule), [rule]);
-  const save = trpc.leadRouting.save.useMutation({ onSuccess: () => { toast.success("Rule saved"); onSaved(); } });
+  const save = trpc.leadRouting.save.useMutation({ onSuccess: () => { toast.success("Rule saved"); onSaved(); }, onError: (e) => toast.error(e.message) });
   const conds = useMemo(() => draft?.conditions?.all ?? [], [draft]);
   if (!draft) return null;
 

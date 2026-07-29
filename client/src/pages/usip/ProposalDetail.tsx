@@ -450,7 +450,7 @@ function ContentTab({ proposal, sections, onRefetch }: { proposal: any; sections
 
   const currentContent = editContent ?? sectionMap[activeSection] ?? "";
 
-  const saveRevision = trpc.proposals.saveRevision.useMutation();
+  const saveRevision = trpc.proposals.saveRevision.useMutation({ onError: (e) => toast.error(e.message) });
   const updateSection = trpc.proposals.updateSection.useMutation({
     onSuccess: () => {
       toast.success("Section saved");
@@ -1140,7 +1140,7 @@ function ScoreSparkline({ proposalId }: { proposalId: number }) {
     { proposalId },
     { enabled: !!current && proposalId > 0 },
   );
-  const snapshotMutation = trpc.proposals.snapshotScore.useMutation();
+  const snapshotMutation = trpc.proposals.snapshotScore.useMutation({ onError: (e) => toast.error(e.message) });
 
   // Auto-snapshot once per day (if no entry today)
   const today = new Date().toDateString();

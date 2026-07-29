@@ -13,9 +13,9 @@ export default function QBRs() {
   const cMap = new Map((customers ?? []).map((c: any) => [c.id, c]));
   const [open, setOpen] = useState(false);
   const [completeFor, setCompleteFor] = useState<number | null>(null);
-  const schedule = trpc.cs.scheduleQbr.useMutation({ onSuccess: () => { utils.cs.listQbrs.invalidate(); setOpen(false); toast.success("QBR scheduled"); } });
-  const genPrep = trpc.cs.generateQbrPrep.useMutation({ onSuccess: () => { utils.cs.listQbrs.invalidate(); toast.success("AI prep generated"); } });
-  const complete = trpc.cs.completeQbr.useMutation({ onSuccess: () => { utils.cs.listQbrs.invalidate(); setCompleteFor(null); toast.success("QBR completed"); } });
+  const schedule = trpc.cs.scheduleQbr.useMutation({ onSuccess: () => { utils.cs.listQbrs.invalidate(); setOpen(false); toast.success("QBR scheduled"); }, onError: (e) => toast.error(e.message) });
+  const genPrep = trpc.cs.generateQbrPrep.useMutation({ onSuccess: () => { utils.cs.listQbrs.invalidate(); toast.success("AI prep generated"); }, onError: (e) => toast.error(e.message) });
+  const complete = trpc.cs.completeQbr.useMutation({ onSuccess: () => { utils.cs.listQbrs.invalidate(); setCompleteFor(null); toast.success("QBR completed"); }, onError: (e) => toast.error(e.message) });
 
   return (
     <Shell title="QBRs">

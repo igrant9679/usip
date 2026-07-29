@@ -66,10 +66,10 @@ export default function Workflows() {
     onError: (e: any) => toast.error(e.message),
   });
   const runs = trpc.workflows.runs.useQuery({ ruleId: selected ?? undefined });
-  const create = trpc.workflows.create.useMutation({ onSuccess: () => { utils.workflows.list.invalidate(); setOpenNew(false); toast.success("Rule created"); } });
-  const update = trpc.workflows.update.useMutation({ onSuccess: () => { utils.workflows.list.invalidate(); toast.success("Rule saved"); } });
-  const toggle = trpc.workflows.toggle.useMutation({ onSuccess: () => utils.workflows.list.invalidate() });
-  const test = trpc.workflows.testFire.useMutation({ onSuccess: () => { utils.workflows.runs.invalidate(); utils.workflows.list.invalidate(); toast.success("Rule fired (1 simulated run)"); } });
+  const create = trpc.workflows.create.useMutation({ onSuccess: () => { utils.workflows.list.invalidate(); setOpenNew(false); toast.success("Rule created"); }, onError: (e) => toast.error(e.message) });
+  const update = trpc.workflows.update.useMutation({ onSuccess: () => { utils.workflows.list.invalidate(); toast.success("Rule saved"); }, onError: (e) => toast.error(e.message) });
+  const toggle = trpc.workflows.toggle.useMutation({ onSuccess: () => utils.workflows.list.invalidate(), onError: (e) => toast.error(e.message) });
+  const test = trpc.workflows.testFire.useMutation({ onSuccess: () => { utils.workflows.runs.invalidate(); utils.workflows.list.invalidate(); toast.success("Rule fired (1 simulated run)"); }, onError: (e) => toast.error(e.message) });
   const removeRule = trpc.workflows.delete.useMutation({
     onSuccess: (_d, vars) => {
       utils.workflows.list.invalidate();

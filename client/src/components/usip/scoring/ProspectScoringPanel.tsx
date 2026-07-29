@@ -12,6 +12,7 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { RefreshCw, TrendingUp, TrendingDown, Minus } from "lucide-react";
 import { ScoreBadge, type Rating, type ObjectType } from "./ScoreBadge";
+import { toast } from "sonner";
 
 const RANK: Record<string, number> = { super_admin: 4, admin: 3, manager: 2, rep: 1 };
 
@@ -44,6 +45,7 @@ export function ProspectScoringPanel({ objectType, objectId }: { objectType: Obj
       utils.scoring.getHistory.invalidate({ objectType, objectId });
       utils.scoring.scoreMap.invalidate();
     },
+    onError: (e) => toast.error(e.message),
   });
 
   const fit = result.data?.fit as any;

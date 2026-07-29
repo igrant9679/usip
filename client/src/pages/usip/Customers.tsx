@@ -18,8 +18,8 @@ export default function Customers() {
   const { data: kpis } = trpc.cs.kpis.useQuery();
   const detail = trpc.cs.get.useQuery({ id: selected! }, { enabled: !!selected });
   const amendments = trpc.cs.listAmendments.useQuery({ customerId: selected! }, { enabled: !!selected });
-  const submitNps = trpc.cs.submitNps.useMutation({ onSuccess: () => { utils.cs.list.invalidate(); utils.cs.get.invalidate({ id: selected! }); toast.success("NPS recorded"); } });
-  const updateHealth = trpc.cs.updateHealthComponents.useMutation({ onSuccess: () => { utils.cs.list.invalidate(); utils.cs.get.invalidate({ id: selected! }); } });
+  const submitNps = trpc.cs.submitNps.useMutation({ onSuccess: () => { utils.cs.list.invalidate(); utils.cs.get.invalidate({ id: selected! }); toast.success("NPS recorded"); }, onError: (e) => toast.error(e.message) });
+  const updateHealth = trpc.cs.updateHealthComponents.useMutation({ onSuccess: () => { utils.cs.list.invalidate(); utils.cs.get.invalidate({ id: selected! }); }, onError: (e) => toast.error(e.message) });
   const [amendOpen, setAmendOpen] = useState(false);
   const [drawer, setDrawer] = useState<{ id: number; name: string } | null>(null);
 
@@ -28,7 +28,7 @@ export default function Customers() {
     if (s < 65) return { tier: "medium", tone: "warning" };
     return { tier: "low", tone: "success" };
   };
-  const addAmendment = trpc.cs.addAmendment.useMutation({ onSuccess: () => { utils.cs.listAmendments.invalidate({ customerId: selected! }); utils.cs.list.invalidate(); setAmendOpen(false); toast.success("Amendment added"); } });
+  const addAmendment = trpc.cs.addAmendment.useMutation({ onSuccess: () => { utils.cs.listAmendments.invalidate({ customerId: selected! }); utils.cs.list.invalidate(); setAmendOpen(false); toast.success("Amendment added"); }, onError: (e) => toast.error(e.message) });
   const removeCustomer = trpc.cs.delete.useMutation({
     onSuccess: (_d, vars) => {
       utils.cs.list.invalidate();

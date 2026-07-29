@@ -145,17 +145,18 @@ export default function TasksV2() {
     },
     onError: (e) => toast.error(e.message),
   });
-  const approveDraft = trpc.tasks.approveDraft.useMutation({ onSuccess: invalidateAll });
-  const dismissDraft = trpc.tasks.dismissDraft.useMutation({ onSuccess: invalidateAll });
+  const approveDraft = trpc.tasks.approveDraft.useMutation({ onSuccess: invalidateAll, onError: (e) => toast.error(e.message) });
+  const dismissDraft = trpc.tasks.dismissDraft.useMutation({ onSuccess: invalidateAll, onError: (e) => toast.error(e.message) });
   const approveAll = trpc.tasks.approveAllDrafts.useMutation({
     onSuccess: (r) => { invalidateAll(); toast.success(`Approved ${r.approved} task${r.approved === 1 ? "" : "s"}`); },
+    onError: (e) => toast.error(e.message),
   });
-  const complete = trpc.tasks.complete.useMutation({ onSuccess: invalidateAll });
+  const complete = trpc.tasks.complete.useMutation({ onSuccess: invalidateAll, onError: (e) => toast.error(e.message) });
   const remove = trpc.tasks.delete.useMutation({
     onSuccess: () => { invalidateAll(); toast.success("Task deleted"); },
     onError: (e: any) => toast.error(e?.message ?? "Could not delete the task"),
   });
-  const snooze = trpc.tasks.snooze.useMutation({ onSuccess: invalidateAll });
+  const snooze = trpc.tasks.snooze.useMutation({ onSuccess: invalidateAll, onError: (e) => toast.error(e.message) });
   const create = trpc.tasks.create.useMutation({
     onSuccess: () => { invalidateAll(); toast.success("Task created"); setNewOpen(false); },
     onError: (e) => toast.error(e.message),

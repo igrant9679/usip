@@ -68,8 +68,8 @@ export default function Quotes() {
   const [oppId, setOppId] = useState<string>("");
   const [lis, setLis] = useState<LineItem[]>([{ name: "", quantity: 1, unitPrice: 0, discountPct: 0 }]);
 
-  const create = trpc.quotes.create.useMutation({ onSuccess: () => { utils.quotes.list.invalidate(); setOpenNew(false); setLis([{ name: "", quantity: 1, unitPrice: 0, discountPct: 0 }]); toast.success("Quote created"); } });
-  const genPdf = trpc.quotes.generatePdf.useMutation({ onSuccess: (r) => { utils.quotes.list.invalidate(); window.open(r.url, "_blank"); } });
+  const create = trpc.quotes.create.useMutation({ onSuccess: () => { utils.quotes.list.invalidate(); setOpenNew(false); setLis([{ name: "", quantity: 1, unitPrice: 0, discountPct: 0 }]); toast.success("Quote created"); }, onError: (e) => toast.error(e.message) });
+  const genPdf = trpc.quotes.generatePdf.useMutation({ onSuccess: (r) => { utils.quotes.list.invalidate(); window.open(r.url, "_blank"); }, onError: (e) => toast.error(e.message) });
   const send = trpc.quotes.send.useMutation({ onSuccess: () => { utils.quotes.list.invalidate(); toast.success("Sent"); }, onError: (e) => toast.error(e.message) });
   const setStatus = trpc.quotes.setStatus.useMutation({ onSuccess: () => utils.quotes.list.invalidate(), onError: (e) => toast.error(e.message) });
   const del = trpc.quotes.delete.useMutation({ onSuccess: () => { utils.quotes.list.invalidate(); toast.success("Quote deleted"); }, onError: (e) => toast.error(e.message) });

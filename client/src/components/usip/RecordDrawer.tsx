@@ -28,7 +28,7 @@ const DISPOSITIONS = [
 function LeadScorePanel({ leadId }: { leadId: number }) {
   const utils = trpc.useUtils();
   const { data: bd, isLoading } = trpc.leadScoring.breakdown.useQuery({ leadId });
-  const recompute = trpc.leadScoring.recompute.useMutation({ onSuccess: () => { utils.leadScoring.breakdown.invalidate({ leadId }); utils.leads.list.invalidate(); toast.success("Re-scored"); } });
+  const recompute = trpc.leadScoring.recompute.useMutation({ onSuccess: () => { utils.leadScoring.breakdown.invalidate({ leadId }); utils.leads.list.invalidate(); toast.success("Re-scored"); }, onError: (e) => toast.error(e.message) });
   const [openSec, setOpenSec] = useState<"firmo" | "behav" | "ai" | null>("firmo");
   if (isLoading || !bd) return <div className="text-sm text-muted-foreground py-6 flex items-center gap-2"><Loader2 className="size-3 animate-spin" /> Loading score…</div>;
   const tier = bd.tier as string;
@@ -103,9 +103,11 @@ function OppIntelligencePanel({ opportunityId }: { opportunityId: number }) {
   });
   const addCoOwner = trpc.oppIntelligence.addCoOwner.useMutation({
     onSuccess: () => utils.oppIntelligence.getCoOwners.invalidate({ opportunityId }),
+    onError: (e) => toast.error(e.message),
   });
   const removeCoOwner = trpc.oppIntelligence.removeCoOwner.useMutation({
     onSuccess: () => utils.oppIntelligence.getCoOwners.invalidate({ opportunityId }),
+    onError: (e) => toast.error(e.message),
   });
   const [section, setSection] = useState<"nba" | "signals" | "actions" | "email" | "history" | "owners">("nba");
 
@@ -751,20 +753,20 @@ export function RecordDrawer({
     if (relatedType === "opportunity") utils.opportunities.getTimeline.invalidate({ id: relatedId });
   };
 
-  const logCall = trpc.activities.logCall.useMutation({ onSuccess: () => { refresh(); toast.success("Call logged"); setTab("timeline"); } });
-  const logMeeting = trpc.activities.logMeeting.useMutation({ onSuccess: () => { refresh(); toast.success("Meeting logged"); setTab("timeline"); } });
-  const addNote = trpc.activities.addNote.useMutation({ onSuccess: () => { refresh(); toast.success("Note added"); setTab("timeline"); } });
-  const upload = trpc.attachments.upload.useMutation({ onSuccess: () => { refresh(); toast.success("File attached"); } });
-  const delAtt = trpc.attachments.delete.useMutation({ onSuccess: () => refresh() });
+  const logCall = trpc.activities.logCall.useMutation({ onSuccess: () => { refresh(); toast.success("Call logged"); setTab("timeline"); }, onError: (e) => toast.error(e.message) });
+  const logMeeting = trpc.activities.logMeeting.useMutation({ onSuccess: () => { refresh(); toast.success("Meeting logged"); setTab("timeline"); }, onError: (e) => toast.error(e.message) });
+  const addNote = trpc.activities.addNote.useMutation({ onSuccess: () => { refresh(); toast.success("Note added"); setTab("timeline"); }, onError: (e) => toast.error(e.message) });
+  const upload = trpc.attachments.upload.useMutation({ onSuccess: () => { refresh(); toast.success("File attached"); }, onError: (e) => toast.error(e.message) });
+  const delAtt = trpc.attachments.delete.useMutation({ onSuccess: () => refresh(), onError: (e) => toast.error(e.message) });
   const delActivity = trpc.activities.delete.useMutation({
     onSuccess: () => { refresh(); toast.success("Activity deleted"); },
     onError: (e) => toast.error(e.message),
   });
   // Entity-level delete — routes to the right router based on relatedType.
-  const delContact = trpc.contacts.delete.useMutation();
-  const delAccount = trpc.accounts.delete.useMutation();
-  const delLead = trpc.leads.delete.useMutation();
-  const delOpp = trpc.opportunities.delete.useMutation();
+  const delContact = trpc.contacts.delete.useMutation({ onError: (e) => toast.error(e.message) });
+  const delAccount = trpc.accounts.delete.useMutation({ onError: (e) => toast.error(e.message) });
+  const delLead = trpc.leads.delete.useMutation({ onError: (e) => toast.error(e.message) });
+  const delOpp = trpc.opportunities.delete.useMutation({ onError: (e) => toast.error(e.message) });
   // Confirmation is handled by <ConfirmButton> (an in-app AlertDialog), NOT
   // window.confirm — the native dialog blocks the renderer thread, which makes
   // the whole app unresponsive until it's dismissed and is unstyleable.

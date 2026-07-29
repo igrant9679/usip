@@ -625,6 +625,7 @@ function TemplateList({ onOpen }: { onOpen: (id: number) => void }) {
   const utils = trpc.useUtils();
   const createMutation = trpc.emailTemplates.create.useMutation({
     onSuccess: (data) => onOpen(data.id),
+    onError: (e) => toast.error(e.message),
   });
   const deleteMutation = trpc.emailTemplates.delete.useMutation({
     onSuccess: () => {
@@ -990,9 +991,11 @@ function Builder({ templateId }: { templateId: number }) {
   const saveMutation = trpc.emailTemplates.save.useMutation();
   const archiveMutation = trpc.emailTemplates.archive.useMutation({
     onSuccess: () => { toast.success("Template archived"); navigate("/email-builder"); },
+    onError: (e) => toast.error(e.message),
   });
   const duplicateMutation = trpc.emailTemplates.duplicate.useMutation({
     onSuccess: (data) => { toast.success("Duplicated"); navigate(`/email-builder/${data.id}`); },
+    onError: (e) => toast.error(e.message),
   });
   // Publish / unpublish — flips status between draft <-> active. The
   // sequence-canvas template picker only shows non-archived templates

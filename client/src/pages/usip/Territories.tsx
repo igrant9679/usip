@@ -14,12 +14,13 @@ export default function Territories() {
   const { data: members } = trpc.team.list.useQuery();
   const [open, setOpen] = useState(false);
   const [ruleOpen, setRuleOpen] = useState(false);
-  const create = trpc.territories.create.useMutation({ onSuccess: () => { utils.territories.list.invalidate(); setOpen(false); toast.success("Territory created"); } });
-  const del = trpc.territories.delete.useMutation({ onSuccess: () => utils.territories.list.invalidate() });
+  const create = trpc.territories.create.useMutation({ onSuccess: () => { utils.territories.list.invalidate(); setOpen(false); toast.success("Territory created"); }, onError: (e) => toast.error(e.message) });
+  const del = trpc.territories.delete.useMutation({ onSuccess: () => utils.territories.list.invalidate(), onError: (e) => toast.error(e.message) });
   const createRule = trpc.crmTerritoryRules.create.useMutation({
     onSuccess: () => { utils.crmTerritoryRules.list.invalidate(); setRuleOpen(false); toast.success("Rule created"); },
+    onError: (e) => toast.error(e.message),
   });
-  const delRule = trpc.crmTerritoryRules.delete.useMutation({ onSuccess: () => utils.crmTerritoryRules.list.invalidate() });
+  const delRule = trpc.crmTerritoryRules.delete.useMutation({ onSuccess: () => utils.crmTerritoryRules.list.invalidate(), onError: (e) => toast.error(e.message) });
 
   return (
     <Shell title="Territories">

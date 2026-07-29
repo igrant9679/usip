@@ -374,9 +374,12 @@ export function TourEngineProvider({ children }: { children: React.ReactNode }) 
   const rafRef = useRef<number>(0);
   const [, navigate] = useLocation();
 
-  const completeMut = trpc.tours.completeTour.useMutation();
-  const skipMut = trpc.tours.skipTour.useMutation();
-  const advanceMut = trpc.tours.advanceStep.useMutation();
+  // Tour progress writes are deliberately silent. The worst case if one fails is
+  // that a tour offers itself again later; an error toast fired mid-tour would
+  // land on top of the spotlight and break the very walkthrough it interrupts.
+  const completeMut = trpc.tours.completeTour.useMutation({ meta: { silentError: true } });
+  const skipMut = trpc.tours.skipTour.useMutation({ meta: { silentError: true } });
+  const advanceMut = trpc.tours.advanceStep.useMutation({ meta: { silentError: true } });
 
   /**
    * Navigate to a step's routeTo path if it differs from the current URL,

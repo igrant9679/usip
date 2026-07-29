@@ -13,6 +13,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { trpc } from "../../lib/trpc";
 import { useTourEngine, type Tour } from "./TourEngine";
+import { toast } from "sonner";
 
 /* ─── helpers ────────────────────────────────────────────────────────────── */
 
@@ -54,7 +55,9 @@ function SearchTab({ pageKey }: { pageKey: string }) {
     { enabled: debouncedQuery.length < 2 },
   );
 
-  const logClick = trpc.helpCenter.logSearchClick.useMutation();
+  // Search telemetry. Nothing the reader did depends on it landing, and a toast
+  // over the help drawer would interrupt the thing they opened it to read.
+  const logClick = trpc.helpCenter.logSearchClick.useMutation({ meta: { silentError: true } });
 
   const displayItems = debouncedQuery.length >= 2 ? results : pageArticles;
 
@@ -126,8 +129,8 @@ function AskAITab({ pageKey }: { pageKey: string }) {
   const [isLoading, setIsLoading] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  const startConv = trpc.helpCenter.startConversation.useMutation();
-  const askAI = trpc.helpCenter.askAI.useMutation();
+  const startConv = trpc.helpCenter.startConversation.useMutation({ onError: (e) => toast.error(e.message) });
+  const askAI = trpc.helpCenter.askAI.useMutation({ onError: (e) => toast.error(e.message) });
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });

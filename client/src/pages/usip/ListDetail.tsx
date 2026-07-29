@@ -20,6 +20,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
+import { toast } from "sonner";
 import {
   Dialog,
   DialogContent,
@@ -81,9 +82,10 @@ export default function ListDetail() {
   const isCompanies = list?.entityType === "companies";
   const { enrichList, running: enriching } = useEnrichJob();
 
-  const removeMut = trpc.recordLists.removeMember.useMutation({ onSuccess: () => { utils.recordLists.members.invalidate({ id }); utils.recordLists.list.invalidate(); } });
+  const removeMut = trpc.recordLists.removeMember.useMutation({ onSuccess: () => { utils.recordLists.members.invalidate({ id }); utils.recordLists.list.invalidate(); }, onError: (e) => toast.error(e.message) });
   const addMut = trpc.recordLists.addMembers.useMutation({
     onSuccess: () => { utils.recordLists.members.invalidate({ id }); utils.recordLists.list.invalidate(); setAddOpen(false); setPicked(new Set()); },
+    onError: (e) => toast.error(e.message),
   });
 
   const [search, setSearch] = useState("");

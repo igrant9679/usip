@@ -13,6 +13,7 @@ import { Shell, useAccentColor } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Sparkles, Send, Loader2, RotateCcw, BookOpen } from "lucide-react";
+import { toast } from "sonner";
 
 type Message = { role: "user" | "assistant"; body: string; citedArticleIds?: number[]; confidence?: number };
 
@@ -31,8 +32,8 @@ export default function AIAssistant() {
   const [isLoading, setIsLoading] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  const startConv = trpc.helpCenter.startConversation.useMutation();
-  const askAI = trpc.helpCenter.askAI.useMutation();
+  const startConv = trpc.helpCenter.startConversation.useMutation({ onError: (e) => toast.error(e.message) });
+  const askAI = trpc.helpCenter.askAI.useMutation({ onError: (e) => toast.error(e.message) });
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });

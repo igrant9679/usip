@@ -62,7 +62,7 @@ function ActivitiesTab({ entityType, entityId }: { entityType: CrmEntityType; en
   const { data, isLoading } = trpc.activities.list.useQuery({ relatedType: entityType, relatedId: entityId });
   const [callOpen, setCallOpen] = useState(false);
   const invalidate = () => utils.activities.list.invalidate({ relatedType: entityType, relatedId: entityId });
-  const logCall = trpc.activities.logCall.useMutation({ onSuccess: () => { invalidate(); setCallOpen(false); toast.success("Call logged"); } });
+  const logCall = trpc.activities.logCall.useMutation({ onSuccess: () => { invalidate(); setCallOpen(false); toast.success("Call logged"); }, onError: (e) => toast.error(e.message) });
 
   return (
     <div className="space-y-3">
@@ -146,9 +146,9 @@ function NotesTab({ entityType, entityId }: { entityType: CrmEntityType; entityI
   const { data, isLoading } = trpc.crmNotes.list.useQuery({ entityType, entityId });
   const [draft, setDraft] = useState("");
   const invalidate = () => utils.crmNotes.list.invalidate({ entityType, entityId });
-  const create = trpc.crmNotes.create.useMutation({ onSuccess: () => { setDraft(""); invalidate(); } });
-  const update = trpc.crmNotes.update.useMutation({ onSuccess: invalidate });
-  const del = trpc.crmNotes.delete.useMutation({ onSuccess: invalidate });
+  const create = trpc.crmNotes.create.useMutation({ onSuccess: () => { setDraft(""); invalidate(); }, onError: (e) => toast.error(e.message) });
+  const update = trpc.crmNotes.update.useMutation({ onSuccess: invalidate, onError: (e) => toast.error(e.message) });
+  const del = trpc.crmNotes.delete.useMutation({ onSuccess: invalidate, onError: (e) => toast.error(e.message) });
 
   return (
     <div className="space-y-3">
@@ -200,6 +200,7 @@ function FilesTab({ entityType, entityId }: { entityType: CrmEntityType; entityI
   });
   const del = trpc.attachments.delete.useMutation({
     onSuccess: () => utils.attachments.list.invalidate({ relatedType: entityType, relatedId: entityId }),
+    onError: (e) => toast.error(e.message),
   });
 
   const onPick = async (e: React.ChangeEvent<HTMLInputElement>) => {

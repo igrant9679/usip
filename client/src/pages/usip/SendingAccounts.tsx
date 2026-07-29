@@ -720,6 +720,7 @@ function AccountCard({ account, onEdit }: { account: any; onEdit: (id: number) =
         toast.error(r.error ?? "Connection failed");
       }
     },
+    onError: (e) => toast.error(e.message),
   });
 
   const toggleMutation = trpc.sendingAccounts.toggleEnabled.useMutation({

@@ -16,6 +16,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { toast } from "sonner";
 import {
   DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem,
 } from "@/components/ui/dropdown-menu";
@@ -72,8 +73,8 @@ export default function SequenceEditor() {
   const seqQ = trpc.sequences.get.useQuery({ id }, { enabled: Number.isFinite(id) });
   const seq = seqQ.data as any;
 
-  const updateSteps = trpc.sequences.updateSteps.useMutation({ onSuccess: () => { utils.sequences.get.invalidate({ id }); utils.sequences.list.invalidate(); } });
-  const updateMeta = trpc.sequences.update.useMutation({ onSuccess: () => { utils.sequences.get.invalidate({ id }); utils.sequences.list.invalidate(); } });
+  const updateSteps = trpc.sequences.updateSteps.useMutation({ onSuccess: () => { utils.sequences.get.invalidate({ id }); utils.sequences.list.invalidate(); }, onError: (e) => toast.error(e.message) });
+  const updateMeta = trpc.sequences.update.useMutation({ onSuccess: () => { utils.sequences.get.invalidate({ id }); utils.sequences.list.invalidate(); }, onError: (e) => toast.error(e.message) });
 
   const [tab, setTab] = useState<Tab>("Editor");
   const [steps, setSteps] = useState<Step[]>([]);

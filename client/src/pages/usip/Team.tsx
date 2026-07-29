@@ -215,6 +215,7 @@ export default function Team() {
       utils.team.list.invalidate();
       toast.success("Reactivated");
     },
+    onError: (e) => toast.error(e.message),
   });
   const del = trpc.team.delete.useMutation({
     onSuccess: (res) => {

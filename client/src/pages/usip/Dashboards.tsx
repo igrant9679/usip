@@ -336,6 +336,7 @@ export default function Dashboards() {
   /* ─── Mutations ─────────────────────────────────────────────────────────── */
   const create = trpc.dashboards.create.useMutation({
     onSuccess: (r) => { utils.dashboards.list.invalidate(); setSelected(r.id); setOpenNew(false); },
+    onError: (e) => toast.error(e.message),
   });
   const rename = trpc.dashboards.rename.useMutation({
     onSuccess: () => { utils.dashboards.list.invalidate(); utils.dashboards.get.invalidate(); setOpenRename(false); toast.success("Dashboard renamed"); },
@@ -343,22 +344,28 @@ export default function Dashboards() {
   });
   const delDash = trpc.dashboards.delete.useMutation({
     onSuccess: () => { utils.dashboards.list.invalidate(); setSelected(null); setCustomizeMode(false); },
+    onError: (e) => toast.error(e.message),
   });
   const addW = trpc.dashboards.addWidget.useMutation({
     onSuccess: () => { utils.dashboards.get.invalidate(); setOpenWidget(false); toast.success("Widget added"); },
+    onError: (e) => toast.error(e.message),
   });
   const delW = trpc.dashboards.deleteWidget.useMutation({
     onSuccess: () => utils.dashboards.get.invalidate(),
+    onError: (e) => toast.error(e.message),
   });
-  const saveLayout = trpc.dashboards.saveLayout.useMutation();
+  const saveLayout = trpc.dashboards.saveLayout.useMutation({ onError: (e) => toast.error(e.message) });
   const createSched = trpc.dashboards.createSchedule.useMutation({
     onSuccess: () => { utils.dashboards.listSchedules.invalidate(); setOpenSched(false); },
+    onError: (e) => toast.error(e.message),
   });
   const sendNow = trpc.dashboards.sendScheduleNow.useMutation({
     onSuccess: () => { utils.dashboards.listSchedules.invalidate(); toast.success("Sent (stub)"); },
+    onError: (e) => toast.error(e.message),
   });
   const delSched = trpc.dashboards.deleteSchedule.useMutation({
     onSuccess: () => utils.dashboards.listSchedules.invalidate(),
+    onError: (e) => toast.error(e.message),
   });
 
   /* ─── Derived ───────────────────────────────────────────────────────────── */

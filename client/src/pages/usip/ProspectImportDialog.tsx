@@ -95,7 +95,7 @@ export function ProspectImportDialog({
     onError: (e) => toast.error(e.message),
   });
 
-  const discard = trpc.prospectImports.discard.useMutation();
+  const discard = trpc.prospectImports.discard.useMutation({ onError: (e) => toast.error(e.message) });
 
   const reset = () => {
     if (preview && step === "preview") {

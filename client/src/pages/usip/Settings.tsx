@@ -505,7 +505,9 @@ function MyProfileTab({ workspaceSignature }: { workspaceSignature: string }) {
 /** Per-user appearance: light/dark mode + colour theme (synced to the account). */
 function AppearanceSection() {
   const { theme, toggleTheme, palette, setPalette } = useTheme();
-  const saveAppearance = trpc.profile.updateMyAppearance.useMutation();
+  // Best-effort account sync: the theme has already changed locally, so a
+  // failed write costs this device's preference, not the interaction.
+  const saveAppearance = trpc.profile.updateMyAppearance.useMutation({ meta: { silentError: true } });
   const pick = (id: typeof palette) => {
     setPalette(id);
     saveAppearance.mutate({ themePalette: id }); // best-effort account sync

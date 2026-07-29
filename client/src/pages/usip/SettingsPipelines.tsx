@@ -38,17 +38,18 @@ export default function SettingsPipelines() {
 
   const createPipeline = trpc.crmPipelines.createPipeline.useMutation({
     onSuccess: ({ id }) => { invalidateAll(); setSelectedId(id); setNewOpen(false); toast.success("Pipeline created"); },
+    onError: (e) => toast.error(e.message),
   });
-  const renamePipeline = trpc.crmPipelines.renamePipeline.useMutation({ onSuccess: () => { invalidateAll(); toast.success("Renamed"); } });
-  const setDefault = trpc.crmPipelines.setDefault.useMutation({ onSuccess: () => { invalidateAll(); toast.success("Default updated"); } });
+  const renamePipeline = trpc.crmPipelines.renamePipeline.useMutation({ onSuccess: () => { invalidateAll(); toast.success("Renamed"); }, onError: (e) => toast.error(e.message) });
+  const setDefault = trpc.crmPipelines.setDefault.useMutation({ onSuccess: () => { invalidateAll(); toast.success("Default updated"); }, onError: (e) => toast.error(e.message) });
   const deletePipeline = trpc.crmPipelines.deletePipeline.useMutation({
     onSuccess: () => { invalidateAll(); setSelectedId(null); toast.success("Deleted"); },
     onError: (e) => toast.error(e.message),
   });
-  const createStage = trpc.crmPipelines.createStage.useMutation({ onSuccess: () => invalidateAll() });
-  const updateStage = trpc.crmPipelines.updateStage.useMutation({ onSuccess: () => invalidateAll() });
-  const deleteStage = trpc.crmPipelines.deleteStage.useMutation({ onSuccess: () => invalidateAll() });
-  const reorderStages = trpc.crmPipelines.reorderStages.useMutation({ onSuccess: () => invalidateAll() });
+  const createStage = trpc.crmPipelines.createStage.useMutation({ onSuccess: () => invalidateAll(), onError: (e) => toast.error(e.message) });
+  const updateStage = trpc.crmPipelines.updateStage.useMutation({ onSuccess: () => invalidateAll(), onError: (e) => toast.error(e.message) });
+  const deleteStage = trpc.crmPipelines.deleteStage.useMutation({ onSuccess: () => invalidateAll(), onError: (e) => toast.error(e.message) });
+  const reorderStages = trpc.crmPipelines.reorderStages.useMutation({ onSuccess: () => invalidateAll(), onError: (e) => toast.error(e.message) });
 
   const [newOpen, setNewOpen] = useState(false);
   const [newStageOpen, setNewStageOpen] = useState(false);

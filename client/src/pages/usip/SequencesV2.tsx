@@ -124,6 +124,7 @@ export default function SequencesV2() {
       setChoiceOpen(false); setTplOpen(false); setCreateOpen(false); setNewName(""); setNewDesc("");
       if (res?.id) setLocation(`/v2/sequences/${res.id}`);
     },
+    onError: (e) => toast.error(e.message),
   });
 
   // ── Team template library (multi-user): admins publish, reps fork ──
@@ -140,6 +141,7 @@ export default function SequencesV2() {
   });
   const unpublishMut = trpc.sequences.unpublishTemplate.useMutation({
     onSuccess: () => { utils.sequences.list.invalidate(); utils.sequences.listTemplates.invalidate(); toast.success("Removed from templates"); },
+    onError: (e) => toast.error(e.message),
   });
   // Assign-to-rep (managers+): team member list + the assign mutation.
   const isManager = !!current?.role && ["manager", "admin", "super_admin"].includes(current.role);

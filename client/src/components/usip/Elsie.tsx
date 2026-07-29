@@ -189,7 +189,7 @@ export function ElsieToggle() {
   const [enabled, setEnabled] = useElsieEnabled();
   // Best-effort account sync: the local state flips immediately either way, so
   // a failed write costs this device's session rather than the interaction.
-  const save = trpc.profile.updateMyAppearance.useMutation();
+  const save = trpc.profile.updateMyAppearance.useMutation({ meta: { silentError: true } });
   const toggle = () => {
     const next = !enabled;
     setEnabled(next);

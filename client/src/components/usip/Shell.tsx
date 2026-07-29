@@ -935,7 +935,9 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
 /** Topbar colour-palette picker — swatch grid backed by ThemeContext (persisted). */
 function PalettePicker() {
   const { palette, setPalette } = useTheme();
-  const saveAppearance = trpc.profile.updateMyAppearance.useMutation();
+  // Best-effort account sync: the swatch has already changed locally, so a
+  // failed write costs this device's preference, not the interaction.
+  const saveAppearance = trpc.profile.updateMyAppearance.useMutation({ meta: { silentError: true } });
   const pick = (id: typeof palette) => {
     setPalette(id);
     saveAppearance.mutate({ themePalette: id }); // best-effort account sync
@@ -987,7 +989,7 @@ export function PageHeader({ title, description: defaultDescription, pageKey, ic
     { pageKey: pageKey ?? "" },
     { enabled: !!pageKey }
   );
-  const updateDesc = trpc.pageDescriptions.update.useMutation();
+  const updateDesc = trpc.pageDescriptions.update.useMutation({ onError: (e) => toast.error(e.message) });
 
   const resolvedDescription = dbDesc?.description ?? defaultDescription;
 

@@ -99,10 +99,11 @@ export function RelatedTasks({ entityType, entityId }: { entityType: string; ent
   const { data: tasks } = trpc.tasks.list.useQuery({ relatedType: entityType, relatedId: entityId });
   const { data: members } = trpc.team.list.useQuery();
   const memberOpts = useMemo(() => (members ?? []).map((m: any) => ({ userId: m.userId as number, name: m.name as string | null })), [members]);
-  const setStatus = trpc.tasks.setStatus.useMutation({ onSuccess: () => utils.tasks.list.invalidate({ relatedType: entityType, relatedId: entityId }) });
+  const setStatus = trpc.tasks.setStatus.useMutation({ onSuccess: () => utils.tasks.list.invalidate({ relatedType: entityType, relatedId: entityId }), onError: (e) => toast.error(e.message) });
   const [open, setOpen] = useState(false);
   const create = trpc.tasks.create.useMutation({
     onSuccess: () => { utils.tasks.list.invalidate({ relatedType: entityType, relatedId: entityId }); setOpen(false); toast.success("Task created"); },
+    onError: (e) => toast.error(e.message),
   });
   return (
     <Card><CardContent className="pt-4">
@@ -167,9 +168,10 @@ export default function Tasks() {
   const buckets = useMemo(() => bucketize(filtered), [filtered]);
   const done = filtered.filter((t) => t.status === "done");
 
-  const setStatus = trpc.tasks.setStatus.useMutation({ onSuccess: () => utils.tasks.list.invalidate() });
+  const setStatus = trpc.tasks.setStatus.useMutation({ onSuccess: () => utils.tasks.list.invalidate(), onError: (e) => toast.error(e.message) });
   const create = trpc.tasks.create.useMutation({
     onSuccess: () => { utils.tasks.list.invalidate(); setOpen(false); toast.success("Task created"); },
+    onError: (e) => toast.error(e.message),
   });
 
   const visible: TaskRow[] =

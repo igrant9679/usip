@@ -474,6 +474,7 @@ function ReplyDialog({ reply, onClose, onChanged }: { reply: Reply | null; onClo
   });
   const markHandled = trpc.conversations.markHandled.useMutation({
     onSuccess: () => { onChanged(); toast.success("Marked handled"); onClose(); },
+    onError: (e) => toast.error(e.message),
   });
   const [replyText, setReplyText] = useState(reply?.suggestedReply ?? "");
   const draftReply = trpc.conversations.draftReply.useMutation({

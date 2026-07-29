@@ -225,6 +225,7 @@ export default function UnifiedInbox() {
   // unsupported providers just keep their badge until read natively.
   const markRead = trpc.unipile.setChatRead.useMutation({
     onSuccess: () => refetchInbox(),
+    meta: { silentError: true },
   });
   const openChat = (chat: ChatItem) => {
     setSelectedChat(chat);

@@ -53,8 +53,10 @@ export default function Inbox() {
   const utils = trpc.useUtils();
   const [filter, setFilter] = useState<FilterKind>("all");
   const { data } = trpc.notifications.list.useQuery();
-  const markAll = trpc.notifications.markAllRead.useMutation({ onSuccess: () => utils.notifications.invalidate() });
-  const markRead = trpc.notifications.markRead.useMutation({ onSuccess: () => utils.notifications.invalidate() });
+  // Read-state only. The invalidate on success is what corrects the badge, so a
+  // failure self-heals on the next load and is not worth a toast.
+  const markAll = trpc.notifications.markAllRead.useMutation({ onSuccess: () => utils.notifications.invalidate(), meta: { silentError: true } });
+  const markRead = trpc.notifications.markRead.useMutation({ onSuccess: () => utils.notifications.invalidate(), meta: { silentError: true } });
 
   const filtered = (data ?? []).filter((n) => {
     if (filter === "all") return true;

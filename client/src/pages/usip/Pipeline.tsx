@@ -507,6 +507,7 @@ export default function Pipeline() {
 
   const create = trpc.opportunities.create.useMutation({
     onSuccess: () => { utils.opportunities.board.invalidate(); setAddOpen(false); toast.success("Opportunity created"); },
+    onError: (e) => toast.error(e.message),
   });
 
   // Filter opps to the selected pipeline. Legacy opps with NULL pipelineId

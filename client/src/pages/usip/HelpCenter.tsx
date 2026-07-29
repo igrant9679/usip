@@ -88,7 +88,9 @@ function BrowseTab() {
 
   const displayArticles = debouncedQuery.length >= 2 ? articles : allArticles;
 
-  const logClick = trpc.helpCenter.logSearchClick.useMutation();
+  // Search telemetry. Nothing the reader did depends on it landing, so a failed
+  // write must not put an error in front of someone looking for help.
+  const logClick = trpc.helpCenter.logSearchClick.useMutation({ meta: { silentError: true } });
 
   return (
     <div className="flex flex-col gap-6">
@@ -196,8 +198,8 @@ function AskAITab() {
   const [isLoading, setIsLoading] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  const startConv = trpc.helpCenter.startConversation.useMutation();
-  const askAI = trpc.helpCenter.askAI.useMutation();
+  const startConv = trpc.helpCenter.startConversation.useMutation({ onError: (e) => toast.error(e.message) });
+  const askAI = trpc.helpCenter.askAI.useMutation({ onError: (e) => toast.error(e.message) });
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });

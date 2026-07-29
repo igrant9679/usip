@@ -15,6 +15,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { confirmAction } from "@/components/usip/Common";
+import { toast } from "sonner";
 import {
   Dialog,
   DialogContent,
@@ -142,8 +143,9 @@ export default function Lists() {
 
   const createMut = trpc.recordLists.create.useMutation({
     onSuccess: (res: any) => { utils.recordLists.list.invalidate(); setCreateOpen(false); setNewName(""); if (res?.id) setLocation(`/v2/lists/${res.id}`); },
+    onError: (e) => toast.error(e.message),
   });
-  const deleteMut = trpc.recordLists.delete.useMutation({ onSuccess: () => utils.recordLists.list.invalidate() });
+  const deleteMut = trpc.recordLists.delete.useMutation({ onSuccess: () => utils.recordLists.list.invalidate(), onError: (e) => toast.error(e.message) });
 
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState("modified");
