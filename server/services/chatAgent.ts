@@ -284,6 +284,33 @@ export function handoffLine(opts: { hasEmail: boolean; replyAsksForEmail: boolea
     : "I've asked a colleague to pick this up. What's the best email for them to reach you on?";
 }
 
+/** Why a person was pulled into a conversation. */
+export type HandoffReason = "qualified" | "requested" | "agent_stuck";
+
+/**
+ * Which handoff reason — if any — this turn fires, in precedence order.
+ *
+ * An explicit request outranks the model's own admission that it is stuck,
+ * which outranks merely having qualified: the first is the visitor telling us
+ * what they want, the second is the agent's opinion, the third is a scoring
+ * threshold. Pure and tested because the ORDER is the whole content — the
+ * reason chosen here decides which copy a rep reads and how urgent the task
+ * claims to be.
+ *
+ * Returning null means no person is needed this turn. The caller is responsible
+ * for firing this at most once per session; `handoffAt` is that marker.
+ */
+export function handoffReasonFor(opts: {
+  askedForHuman: boolean;
+  needsHuman: boolean;
+  qualifiedHandoff: boolean;
+}): HandoffReason | null {
+  if (opts.askedForHuman) return "requested";
+  if (opts.needsHuman) return "agent_stuck";
+  if (opts.qualifiedHandoff) return "qualified";
+  return null;
+}
+
 /**
  * First plausible email address appearing anywhere in free text.
  *

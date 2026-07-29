@@ -11,6 +11,7 @@ import {
   emailAskCount,
   emailInText,
   handoffLine,
+  handoffReasonFor,
   wantsHuman,
   scrubUnsupportedClaims,
   mergeVisitor,
@@ -359,5 +360,42 @@ describe("handoffLine", () => {
    */
   it("does not ask again when the reply already did", () => {
     expect(handoffLine({ hasEmail: false, replyAsksForEmail: true })).not.toMatch(/best email/);
+  });
+});
+
+/**
+ * The precedence between handoff reasons.
+ *
+ * The ORDER is the entire content of this function: the reason it picks decides
+ * which copy a rep reads and how urgent the task claims to be. It replaced an
+ * inline chain in the router that was guarded by `session.status !== "qualified"`
+ * — a field recomputed from the current turn's score on every turn, so a visitor
+ * whose score dipped below the threshold and rose again minted a second task and
+ * a second notification for the same conversation. `handoffAt` is the marker now.
+ */
+describe("handoffReasonFor", () => {
+  it("returns null when nobody needs a person", () => {
+    expect(handoffReasonFor({ askedForHuman: false, needsHuman: false, qualifiedHandoff: false })).toBeNull();
+  });
+
+  it("names each reason on its own", () => {
+    expect(handoffReasonFor({ askedForHuman: true, needsHuman: false, qualifiedHandoff: false })).toBe("requested");
+    expect(handoffReasonFor({ askedForHuman: false, needsHuman: true, qualifiedHandoff: false })).toBe("agent_stuck");
+    expect(handoffReasonFor({ askedForHuman: false, needsHuman: false, qualifiedHandoff: true })).toBe("qualified");
+  });
+
+  /** The visitor saying what they want outranks the model's opinion of it. */
+  it("prefers an explicit request over the model admitting it is stuck", () => {
+    expect(handoffReasonFor({ askedForHuman: true, needsHuman: true, qualifiedHandoff: false })).toBe("requested");
+  });
+
+  /** A threshold is the weakest of the three signals, so it loses to both. */
+  it("prefers either live signal over merely having qualified", () => {
+    expect(handoffReasonFor({ askedForHuman: true, needsHuman: false, qualifiedHandoff: true })).toBe("requested");
+    expect(handoffReasonFor({ askedForHuman: false, needsHuman: true, qualifiedHandoff: true })).toBe("agent_stuck");
+  });
+
+  it("still names a reason when every signal fires at once", () => {
+    expect(handoffReasonFor({ askedForHuman: true, needsHuman: true, qualifiedHandoff: true })).toBe("requested");
   });
 });

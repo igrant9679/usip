@@ -29,10 +29,11 @@ import {
 } from "../../drizzle/schema";
 import { bookSlotForLink, openSlotsForLink } from "./bookingLinks";
 import {
-  decideOffer, emailAskCount, handoffLine, mergeVisitor, runChatTurn, wantsHuman,
-  type ChatMessage, type VisitorFacts,
+  decideOffer, emailAskCount, handoffLine, handoffReasonFor, mergeVisitor, runChatTurn, wantsHuman,
+  type ChatMessage, type HandoffReason, type VisitorFacts,
 } from "../services/chatAgent";
 import { formatKnowledge, selectKnowledge } from "../services/chatKnowledge";
+import { appUrl } from "../appUrl";
 import { describePageContext } from "../services/chatPageContext";
 import { getChatFunnelStats } from "../services/performanceMetrics";
 
@@ -90,9 +91,39 @@ export const chatAgentsRouter = router({
   list: adminWsProcedure.query(async ({ ctx }) => {
     const db = await getDb();
     if (!db) return [];
-    return db.select().from(chatAgents)
+    const rows = await db.select().from(chatAgents)
       .where(eq(chatAgents.workspaceId, ctx.workspace.id))
       .orderBy(desc(chatAgents.updatedAt));
+
+    /**
+     * Counts DERIVED from session rows, overriding the stored
+     * sessionCount/leadCount/meetingCount columns.
+     *
+     * Those columns are incremented at write time and every increment is
+     * best-effort (`.catch(() => {})`), and `leadCount` misses leads created by
+     * the booking path entirely. The sidebar showing them sat on the same screen
+     * as "How it's doing", which counts from these rows — two different sums for
+     * the same thing, one page apart. Metrics come from the rows.
+     */
+    const counts = await db.select({
+      agentId: chatSessions.agentId,
+      sessions: sql<number>`count(*)`,
+      leads: sql<number>`count(distinct ${chatSessions.leadId})`,
+      meetings: sql<number>`count(distinct ${chatSessions.meetingId})`,
+    }).from(chatSessions)
+      .where(eq(chatSessions.workspaceId, ctx.workspace.id))
+      .groupBy(chatSessions.agentId);
+    const byAgent = new Map(counts.map((c) => [c.agentId, c]));
+
+    return rows.map((a) => {
+      const c = byAgent.get(a.id);
+      return {
+        ...a,
+        sessionCount: Number(c?.sessions ?? 0),
+        leadCount: Number(c?.leads ?? 0),
+        meetingCount: Number(c?.meetings ?? 0),
+      };
+    });
   }),
 
   get: adminWsProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {
@@ -198,6 +229,12 @@ export const chatAgentsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // `agentId` is caller-supplied and agent ids are small integers. The other
+      // half of the same seam as the scoped read in `send`: without this an admin
+      // of one workspace can attach facts to another workspace's live agent.
+      const [owner] = await db.select({ id: chatAgents.id }).from(chatAgents)
+        .where(and(eq(chatAgents.id, input.agentId), eq(chatAgents.workspaceId, ctx.workspace.id)));
+      if (!owner) throw new TRPCError({ code: "NOT_FOUND", message: "Unknown chat agent." });
       if (input.id) {
         await db.update(chatAgentKnowledge)
           .set({
@@ -234,6 +271,28 @@ export const chatAgentsRouter = router({
           eq(chatAgentKnowledge.workspaceId, ctx.workspace.id),
         ));
       return { ok: true as const };
+    }),
+
+  /**
+   * Resolve a transcript deep link to the agent + session it points at.
+   *
+   * Every handoff task description carries `/v2/chat?session=<token>`; without
+   * this the rep who opens that task lands on the builder with no agent selected
+   * and no way to find the conversation they were handed.
+   */
+  sessionByToken: adminWsProcedure
+    .input(z.object({ token: z.string().min(1).max(64) }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) return null;
+      const [row] = await db
+        .select({ id: chatSessions.id, agentId: chatSessions.agentId })
+        .from(chatSessions)
+        .where(and(
+          eq(chatSessions.token, input.token),
+          eq(chatSessions.workspaceId, ctx.workspace.id),
+        ));
+      return row ?? null;
     }),
 
   /** Transcripts for one agent (most recent first). */
@@ -376,7 +435,15 @@ export const chatAgentsRouter = router({
           body: chatAgentKnowledge.body,
           enabled: chatAgentKnowledge.enabled,
           sortOrder: chatAgentKnowledge.sortOrder,
-        }).from(chatAgentKnowledge).where(eq(chatAgentKnowledge.agentId, agent.id));
+        }).from(chatAgentKnowledge).where(and(
+          eq(chatAgentKnowledge.agentId, agent.id),
+          // Scope by workspace as well as agent. Every other query on this table
+          // already does, and this one is the PUBLIC read — without it a row
+          // written against another workspace's agent id is served to strangers
+          // as fact, while staying invisible to the admin who owns this agent
+          // (their list, edit and delete all filter on workspaceId).
+          eq(chatAgentKnowledge.workspaceId, agent.workspaceId),
+        ));
         knowledge = formatKnowledge(selectKnowledge(rows, input.message));
       } catch { /* knowledge is an improvement, never a prerequisite */ }
 
@@ -439,39 +506,49 @@ export const chatAgentsRouter = router({
           reply = `${reply}\n\nI don't have open times in front of me right now — someone from the team will reach out shortly to find one.`;
         }
       }
-      // Fire the handoff on the TRANSITION into qualified only. Without this
-      // guard every later turn of the same conversation would mint another
-      // task and another notification for the same visitor.
-      if (effective === "handoff" && session.status !== "qualified") {
-        await handoffToRep(agent, session.token, visitor, turn.summary, leadId, "qualified");
-      }
-
       /**
-       * Mid-chat escalation (0139), independent of autonomy mode.
+       * Handoff to a person — ONE decision, ONE durable marker, at most one task.
        *
-       * An explicit request wins over the model's opinion and over `auto`:
-       * "auto" means it books without asking, not that it refuses to fetch a
-       * person. `handoffAt` makes this fire once — a visitor who asks three
-       * times gets one task, not three.
+       * Both routes land here: the `approval`-mode qualified handoff (and the
+       * no-availability fallback above), and the mid-chat escalation of 0139,
+       * which is independent of autonomy mode — "auto" means it books without
+       * asking, not that it refuses to fetch a person.
+       *
+       * `handoffAt` is the marker for both. The qualified route used to guard on
+       * `session.status !== "qualified"`, which cannot work: `status` is
+       * recomputed from THIS turn's score on every turn, so a visitor whose score
+       * dipped below the threshold and rose again minted a second task and a
+       * second notification. A marker has to be write-once — the same reason
+       * `followUpAt` is one.
        */
       let handoffAt = session.handoffAt ?? null;
+      let handoffReason = (session.handoffReason as HandoffReason | null) ?? null;
       if (!handoffAt) {
-        const asked = wantsHuman(input.message);
-        const stuck = turn.needsHuman;
-        if (asked || stuck) {
-          const reason: HandoffReason = asked ? "requested" : "agent_stuck";
+        const reason = handoffReasonFor({
+          askedForHuman: wantsHuman(input.message),
+          needsHuman: turn.needsHuman,
+          qualifiedHandoff: effective === "handoff",
+        });
+        if (reason) {
           await handoffToRep(agent, session.token, visitor, turn.summary, leadId, reason);
           handoffAt = new Date();
-          // Without an email nobody can reach them, so the promise comes with
-          // the ask that makes it keepable — unless the model just asked, in
-          // which case appending it again asks twice in four lines.
-          reply = `${reply}\n\n${handoffLine({
-            hasEmail: !!visitor.email,
-            replyAsksForEmail: emailAskCount([{ role: "agent", text: reply, at: new Date().toISOString() }]) > 0,
-          })}`;
-          // A handoff supersedes a slot list: offering times while promising a
-          // person is two different answers to the same question.
-          slots = [];
+          handoffReason = reason;
+          // "qualified" promises the visitor nothing — the agent keeps talking
+          // and a rep picks it up out of band (and the no-availability fallback
+          // has already said so in its own words). The other two reasons are a
+          // direct answer to something the visitor just asked, so they say so.
+          if (reason !== "qualified") {
+            // Without an email nobody can reach them, so the promise comes with
+            // the ask that makes it keepable — unless the model just asked, in
+            // which case appending it again asks twice in four lines.
+            reply = `${reply}\n\n${handoffLine({
+              hasEmail: !!visitor.email,
+              replyAsksForEmail: emailAskCount([{ role: "agent", text: reply, at: new Date().toISOString() }]) > 0,
+            })}`;
+            // A handoff supersedes a slot list: offering times while promising a
+            // person is two different answers to the same question.
+            slots = [];
+          }
         }
       }
 
@@ -490,7 +567,7 @@ export const chatAgentsRouter = router({
         aiSummary: turn.summary,
         leadId,
         handoffAt,
-        handoffReason: handoffAt ? (session.handoffReason ?? (wantsHuman(input.message) ? "requested" : "agent_stuck")) : null,
+        handoffReason,
         status: session.status === "booked" ? "booked" : qualified ? "qualified" : "active",
       } as never).where(eq(chatSessions.id, session.id));
 
@@ -638,13 +715,12 @@ async function createLeadForSession(
 }
 
 /**
- * `approval` mode: a qualified visitor becomes a rep's problem, not a booking.
- * A task (not just a notification) so it shows up in the same queue as every
- * other piece of work and can't be dismissed into nothing.
+ * A handoff makes the visitor a rep's problem: a TASK, not just a notification,
+ * so it lands in the same queue as every other piece of work and can't be
+ * dismissed into nothing.
+ *
+ * How each reason reads to the rep picking it up.
  */
-export type HandoffReason = "qualified" | "requested" | "agent_stuck";
-
-/** How each reason reads to the rep picking the task up. */
 const HANDOFF_COPY: Record<HandoffReason, { title: (who: string) => string; why: string }> = {
   qualified: {
     title: (who) => `Qualified website chat: ${who}`,
@@ -681,7 +757,7 @@ async function handoffToRep(
     await db.insert(tasks).values({
       workspaceId: agent.workspaceId,
       title: `${copy.title(who)}`.slice(0, 240),
-      description: `${summary ?? "Website chat."}\n\n${reachable}\nCompany: ${visitor.company ?? "—"}\nTranscript: /v2/chat?session=${token}`,
+      description: `${summary ?? "Website chat."}\n\n${reachable}\nCompany: ${visitor.company ?? "—"}\nTranscript: ${appUrl(`/v2/chat?session=${token}`)}`,
       type: "follow_up",
       priority: "high",
       status: "open",
