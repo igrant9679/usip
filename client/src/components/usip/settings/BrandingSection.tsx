@@ -7,7 +7,8 @@
  *   - Company profile → workspace_settings.company* (settings.save, migration 0125)
  *   - Brand voice     → brand_voice_profiles (brandVoice.save)
  *   - Personas        → link-out to the full /personas editor
- *   - Social accounts → honest "coming soon" placeholder (to be added)
+ *   - Social accounts → real card linking to its own section (the "coming soon"
+ *     placeholder this once described is long gone; see SocialAccountsSection)
  *
  * The brand colour now actually drives the app (Shell applies brandPrimary as
  * the default palette), the logo now renders (Shell), and the company profile +
