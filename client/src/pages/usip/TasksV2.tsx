@@ -34,8 +34,9 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Phone, Mail, CalendarClock, Link2, ListTodo, Repeat, Database, Sparkles, Check, Clock,
-  AlertTriangle, Plus, Zap, MoreHorizontal, X, Bot, CheckCheck, Inbox,
+  AlertTriangle, Plus, Zap, MoreHorizontal, X, Bot, CheckCheck, Inbox, Trash2,
 } from "lucide-react";
+import { confirmAction } from "@/components/usip/Common";
 
 type Task = {
   id: number;
@@ -150,6 +151,10 @@ export default function TasksV2() {
     onSuccess: (r) => { invalidateAll(); toast.success(`Approved ${r.approved} task${r.approved === 1 ? "" : "s"}`); },
   });
   const complete = trpc.tasks.complete.useMutation({ onSuccess: invalidateAll });
+  const remove = trpc.tasks.delete.useMutation({
+    onSuccess: () => { invalidateAll(); toast.success("Task deleted"); },
+    onError: (e: any) => toast.error(e?.message ?? "Could not delete the task"),
+  });
   const snooze = trpc.tasks.snooze.useMutation({ onSuccess: invalidateAll });
   const create = trpc.tasks.create.useMutation({
     onSuccess: () => { invalidateAll(); toast.success("Task created"); setNewOpen(false); },
@@ -249,6 +254,24 @@ export default function TasksV2() {
             <DropdownMenuItem onClick={() => snooze.mutate({ id: t.id, snoozedUntil: plusDays(1) })}>Tomorrow</DropdownMenuItem>
             <DropdownMenuItem onClick={() => snooze.mutate({ id: t.id, snoozedUntil: plusDays(3) })}>In 3 days</DropdownMenuItem>
             <DropdownMenuItem onClick={() => snooze.mutate({ id: t.id, snoozedUntil: plusDays(7) })}>Next week</DropdownMenuItem>
+            <DropdownMenuSeparator />
+            {/* tasks.delete has existed since the router was written and nothing
+                ever called it. Completing a task that should not exist leaves it
+                in the done pile skewing every count that reads it. */}
+            <DropdownMenuItem
+              className="text-rose-600 focus:text-rose-600"
+              onClick={() => confirmAction(
+                {
+                  title: "Delete this task?",
+                  description: `"${t.title}" will be permanently deleted. Use Complete instead if the work actually happened — deleting removes it from your history.`,
+                  confirmLabel: "Delete",
+                  destructive: true,
+                },
+                () => remove.mutate({ id: t.id }),
+              )}
+            >
+              <Trash2 className="size-3.5 mr-2" /> Delete task
+            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>

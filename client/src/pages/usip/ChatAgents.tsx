@@ -57,6 +57,10 @@ export default function ChatAgents() {
     onSuccess: () => { utils.chatAgents.list.invalidate(); utils.chatAgents.get.invalidate(); toast.success("Saved"); },
     onError: (e: any) => toast.error(e?.message ?? "Save failed"),
   });
+  const removeSession = trpc.chatAgents.sessionRemove.useMutation({
+    onSuccess: () => { utils.chatAgents.sessions.invalidate(); utils.chatAgents.funnel.invalidate(); utils.chatAgents.list.invalidate(); toast.success("Transcript deleted"); },
+    onError: (e: any) => toast.error(e?.message ?? "Could not delete the transcript"),
+  });
   const remove = trpc.chatAgents.remove.useMutation({
     onSuccess: () => { utils.chatAgents.list.invalidate(); setSelectedId(null); toast.success("Deleted"); },
     onError: (e: any) => toast.error(e?.message ?? "Failed"),
@@ -402,6 +406,20 @@ export default function ChatAgents() {
                                   <span className="text-muted-foreground">{m.text}</span>
                                 </div>
                               ))}
+                              <div className="pt-1.5">
+                                <Button variant="ghost" size="sm" className="h-7 gap-1 text-rose-600 text-[11px]"
+                                  onClick={() => confirmAction(
+                                    {
+                                      title: "Delete this transcript?",
+                                      description: "The conversation is permanently deleted. Any lead or meeting it produced is kept — those are real CRM records.",
+                                      confirmLabel: "Delete",
+                                      destructive: true,
+                                    },
+                                    () => removeSession.mutate({ id: s.id }),
+                                  )}>
+                                  <Trash2 className="size-3.5" /> Delete transcript
+                                </Button>
+                              </div>
                             </div>
                           )}
                         </div>

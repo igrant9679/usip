@@ -274,6 +274,31 @@ export const chatAgentsRouter = router({
     }),
 
   /**
+   * Delete ONE transcript.
+   *
+   * Until now the only way to remove a conversation was to delete the agent that
+   * owned it, which is not a real option for a live agent — so test transcripts
+   * accumulated in prod with no way to clear them. Scoped by workspace like every
+   * other mutation here.
+   *
+   * Deliberately does NOT touch the lead or meeting the conversation produced:
+   * those are real CRM records that outlive their source, and cascading into them
+   * would make deleting a transcript quietly destructive.
+   */
+  sessionRemove: adminWsProcedure
+    .input(z.object({ id: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      await db.delete(chatSessions)
+        .where(and(
+          eq(chatSessions.id, input.id),
+          eq(chatSessions.workspaceId, ctx.workspace.id),
+        ));
+      return { ok: true as const };
+    }),
+
+  /**
    * Resolve a transcript deep link to the agent + session it points at.
    *
    * Every handoff task description carries `/v2/chat?session=<token>`; without
