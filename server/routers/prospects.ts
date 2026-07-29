@@ -16,7 +16,7 @@ import { z } from "zod";
 import { and, asc, desc, eq, inArray, isNotNull, isNull, like, or, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { router } from "../_core/trpc";
-import { workspaceProcedure } from "../_core/workspace";
+import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { getDb } from "../db";
 import { contacts, leads, prospects, scoreResults, scoreModels, workspaceSettings } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
@@ -1000,7 +1000,13 @@ export const prospectsRouter = router({
   }),
 
   /** Dedicated setter — keeps these columns off the settings.save allowlist. */
-  setSweepSettings: workspaceProcedure
+  /**
+   * Admin-gated: this switch spends REOON CREDITS unattended. Every other
+   * autonomy control on the Autonomy Control Center is adminWsProcedure — these
+   * two were workspaceProcedure with no role check of any kind, so any rep could
+   * turn on unattended spend against the workspace's BYOK key.
+   */
+  setSweepSettings: adminWsProcedure
     .input(z.object({
       mode: z.enum(["off", "approval", "auto"]).optional(),
       dailyCap: z.number().int().min(1).max(500).optional(),
@@ -1092,7 +1098,13 @@ export const prospectsRouter = router({
   }),
 
   /** Dedicated setter — keeps these off the settings.save allowlist. */
-  setBackfillSettings: workspaceProcedure
+  /**
+   * Admin-gated for the same reason, and a sharper one: this spends the
+   * connected LinkedIn account's daily lookup allowance (~100/day). Burning
+   * that does not just cost money, it risks the account the whole social and
+   * enrichment surface depends on.
+   */
+  setBackfillSettings: adminWsProcedure
     .input(z.object({
       mode: z.enum(["off", "approval", "auto"]).optional(),
       dailyCap: z.number().int().min(1).max(100).optional(),

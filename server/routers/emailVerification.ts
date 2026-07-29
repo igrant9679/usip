@@ -6,7 +6,7 @@ import { z } from "zod";
 import { and, desc, eq, gt, inArray, isNotNull, lt, or, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { router } from "../_core/trpc";
-import { workspaceProcedure } from "../_core/workspace";
+import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { getDb } from "../db";
 import {
   contacts,
@@ -447,7 +447,8 @@ export const emailVerificationRouter = router({
   }),
 
   /** Save auto re-verify settings */
-  saveReverifySettings: workspaceProcedure
+  /** Admin-gated: sets a workspace-wide schedule that spends Reoon credits. */
+  saveReverifySettings: adminWsProcedure
     .input(
       z.object({
         reverifyIntervalDays: z.number().nullable(), // null = disabled
