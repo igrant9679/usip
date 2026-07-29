@@ -65,9 +65,9 @@ export async function checkDealAging(): Promise<{ rulesChecked: number; dealsMat
     const minDays = cfg.days ?? 7;
     const targetStage = cfg.stage ?? null;
 
-    const [settings] = await db.select().from(workspaceSettings)
-      .where(eq(workspaceSettings.workspaceId, rule.workspaceId));
-
+    // (The workspace-settings read that used to sit here fed the local Slack /
+    // Teams branches. executeRuleActions loads those webhooks itself, so this
+    // was a per-rule SELECT whose result nothing read.)
     const stuckDeals = await db.select({
       id: opportunities.id,
       name: opportunities.name,
@@ -83,38 +83,50 @@ export async function checkDealAging(): Promise<{ rulesChecked: number; dealsMat
       ));
 
     for (const deal of stuckDeals) {
-      const errors: string[] = [];
-      for (const action of (rule.actions as Array<{ type: string; params: Record<string, any> }>)) {
-        if (action.type === "notify_slack" || action.type === "post_slack") {
-          const webhookUrl = (action.params?.webhookUrl as string) || (settings as any)?.slackWebhookUrl;
-          if (webhookUrl) {
-            try {
-              const resp = await fetch(webhookUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: `⚠️ Deal stuck: *${deal.name}* has been in stage *${deal.stage}* for ${deal.daysInStage} day(s). Rule: ${rule.name}` }), signal: AbortSignal.timeout(10_000) });
-              if (!resp.ok) errors.push(`Slack webhook returned ${resp.status}`);
-            } catch (e: any) { errors.push(`Slack webhook failed: ${e?.message}`) }
-          }
-        } else if (action.type === "notify_teams") {
-          const webhookUrl = (action.params?.webhookUrl as string) || (settings as any)?.teamsWebhookUrl;
-          if (webhookUrl) {
-            try {
-              const resp = await fetch(webhookUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: `⚠️ Deal stuck: **${deal.name}** has been in stage **${deal.stage}** for ${deal.daysInStage} day(s). Rule: ${rule.name}` }), signal: AbortSignal.timeout(10_000) });
-              if (!resp.ok) errors.push(`Teams webhook returned ${resp.status}`);
-            } catch (e: any) { errors.push(`Teams webhook failed: ${e?.message}`) }
-          }
-        } else if (action.type === "create_notification") {
-          await db.insert(notifications).values({
-            workspaceId: rule.workspaceId,
-            userId: deal.ownerId ?? 0,
-            kind: "deal_stuck",
-            title: `Deal stuck: ${deal.name}`,
-            body: `${deal.name} has been in stage "${deal.stage}" for ${deal.daysInStage} day(s). (Rule: ${rule.name})`,
-          });
-        }
-        actionsTriggered++;
-      }
+      /**
+       * Runs through the SHARED dispatcher rather than a local copy. The local
+       * one handled four action types — post_slack, notify_teams, and two names
+       * (notify_slack, create_notification) the builder never emits — so a
+       * deal_stuck rule using any of create_task, notify_user, enroll_sequence,
+       * update_field, send_email_draft or webhook did nothing at all. Worse, it
+       * did nothing QUIETLY: no branch matched, `errors` stayed empty, and the
+       * workflow_run below was written with status "success". Six of the eight
+       * actions the UI offers were dead on this trigger.
+       *
+       * That is the same defect workflowEngine's header records fixing in
+       * runAction ("it used to return null, i.e. report success while doing
+       * nothing") — fixed there, missed here, because the two dispatchers were
+       * separate copies. testFire below already called executeRuleActions; only
+       * the two deal_stuck paths still had their own.
+       *
+       * `create_notification` disappears with the local copy, which also
+       * removes a latent runtime failure: it inserted kind "deal_stuck", which
+       * is NOT in the notifications kind enum (mention, task_assigned, task_due,
+       * deal_won, deal_lost, renewal_due, churn_risk, approval_request,
+       * workflow_fired, system, email_reply, are_event). MySQL rejects an
+       * out-of-enum value in strict mode. The shared handler uses
+       * "workflow_fired", which is in it.
+       */
+      const errors = await executeRuleActions(rule.workspaceId, rule, {
+        payload: {
+          entity: "opportunity",
+          id: deal.id,
+          name: deal.name,
+          stage: deal.stage,
+          daysInStage: deal.daysInStage,
+          ruleName: rule.name,
+        },
+        relatedType: "opportunity",
+        relatedId: deal.id,
+        ownerUserId: deal.ownerId ?? null,
+      });
+      actionsTriggered += Array.isArray(rule.actions) ? (rule.actions as unknown[]).length : 0;
       await db.insert(workflowRuns).values({
         workspaceId: rule.workspaceId, ruleId: rule.id, triggeredBy: "deal_stuck_nightly",
-        status: errors.length === 0 ? "success" : "error",
+        // workflowRuns.status enum is success|failed|skipped — "error" fails the
+        // INSERT, so the one run that had something to report was the one that
+        // could not be logged. Same fix already applied to testFire below.
+        status: errors.length === 0 ? "success" : "failed",
         actionsRun: rule.actions,
         errorMessage: errors.length > 0 ? errors.join("; ") : null,
       });
@@ -259,10 +271,7 @@ export const workflowsRouter = router({
 
       if (rules.length === 0) return { fired: 0, details: [] };
 
-      // Fetch workspace settings for Slack/Teams webhooks
-      const [settings] = await db.select().from(workspaceSettings)
-        .where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
-
+      // (Slack/Teams webhook settings are loaded by executeRuleActions now.)
       const details: Array<{ ruleId: number; ruleName: string; dealId: number; dealName: string; daysInStage: number }> = [];
       let totalFired = 0;
 
@@ -287,47 +296,28 @@ export const workflowsRouter = router({
           ));
 
         for (const deal of stuckDeals) {
-          const errors: string[] = [];
-          const payload = {
-            event: "deal_stuck",
-            deal: { id: deal.id, name: deal.name, stage: deal.stage, daysInStage: deal.daysInStage },
-            rule: { id: rule.id, name: rule.name },
-            workspace: ctx.workspace.id,
-          };
-
-          // Execute each action
-          for (const action of (rule.actions as Array<{ type: string; params: Record<string, any> }>)) {
-            if (action.type === "notify_slack" || action.type === "post_slack") {
-              const webhookUrl = (action.params?.webhookUrl as string) || (settings as any)?.slackWebhookUrl;
-              if (webhookUrl) {
-                try {
-                  const resp = await fetch(webhookUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: `⚠️ Deal stuck: *${deal.name}* has been in stage *${deal.stage}* for ${deal.daysInStage} day(s). Rule: ${rule.name}` }), signal: AbortSignal.timeout(10_000) });
-                  if (!resp.ok) errors.push(`Slack webhook returned ${resp.status}`);
-                } catch (e: any) { errors.push(`Slack webhook failed: ${e?.message}`) }
-              }
-            } else if (action.type === "notify_teams") {
-              const webhookUrl = (action.params?.webhookUrl as string) || (settings as any)?.teamsWebhookUrl;
-              if (webhookUrl) {
-                try {
-                  const resp = await fetch(webhookUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: `⚠️ Deal stuck: **${deal.name}** has been in stage **${deal.stage}** for ${deal.daysInStage} day(s). Rule: ${rule.name}` }), signal: AbortSignal.timeout(10_000) });
-                  if (!resp.ok) errors.push(`Teams webhook returned ${resp.status}`);
-                } catch (e: any) { errors.push(`Teams webhook failed: ${e?.message}`) }
-              }
-            } else if (action.type === "create_notification") {
-              await db.insert(notifications).values({
-                workspaceId: ctx.workspace.id,
-                userId: deal.ownerId ?? ctx.user.id,
-                kind: "deal_stuck",
-                title: `Deal stuck: ${deal.name}`,
-                body: `${deal.name} has been in stage "${deal.stage}" for ${deal.daysInStage} day(s). (Rule: ${rule.name})`,
-              });
-            }
-          }
+          // Shared dispatcher — see checkDealAging above for why the local copy
+          // that used to live here was wrong (six of the eight builder actions
+          // did nothing, and the run was still logged "success").
+          const errors = await executeRuleActions(ctx.workspace.id, rule, {
+            payload: {
+              entity: "opportunity",
+              id: deal.id,
+              name: deal.name,
+              stage: deal.stage,
+              daysInStage: deal.daysInStage,
+              ruleName: rule.name,
+            },
+            relatedType: "opportunity",
+            relatedId: deal.id,
+            ownerUserId: deal.ownerId ?? ctx.user.id,
+          });
 
           // Log the workflow run
           await db.insert(workflowRuns).values({
             workspaceId: ctx.workspace.id, ruleId: rule.id, triggeredBy: "deal_stuck_check",
-            status: errors.length === 0 ? "success" : "error",
+            // enum is success|failed|skipped — see checkDealAging above.
+            status: errors.length === 0 ? "success" : "failed",
             actionsRun: rule.actions,
             errorMessage: errors.length > 0 ? errors.join("; ") : null,
           });

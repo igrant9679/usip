@@ -131,3 +131,93 @@ describe("condition operator vocabulary", () => {
     expect(read("client/src/pages/usip/Workflows.tsx")).toContain("CONDITION_OPS");
   });
 });
+
+describe("workflow action dispatch", () => {
+  /** The action-type ids the rule builder offers, read from its own source. */
+  function offeredActionTypes(): string[] {
+    const src = read("client/src/pages/usip/Workflows.tsx");
+    const block = src.match(/const ACTION_TYPES = \[([\s\S]*?)\] as const;/);
+    if (!block) throw new Error("ACTION_TYPES not found in Workflows.tsx");
+    return [...block[1].matchAll(/\["([a-z_]+)",/g)].map((m) => m[1]);
+  }
+
+  it("every action the builder offers has a handler in workflowEngine", () => {
+    const engine = read("server/services/workflowEngine.ts");
+    const missing = offeredActionTypes().filter((t) => !new RegExp(`case "${t}":`).test(engine));
+    expect(
+      missing,
+      missing.length
+        ? `\n\nAction type(s) offered by the rule builder with no handler in\n` +
+            `workflowEngine.runAction: ${missing.join(", ")}. runAction returns an error\n` +
+            `string for unknown types, so the rule is at least logged as failed — but the\n` +
+            `user picked an action that can never happen.\n`
+        : undefined,
+    ).toEqual([]);
+  });
+
+  /**
+   * deal_stuck used to run its actions through a SECOND dispatcher that lived
+   * in operations.ts and understood four action types, two of which the builder
+   * never emits. Six of the eight builder actions did nothing on that trigger,
+   * silently, and the run was still logged "success" because no branch had set
+   * an error. One dispatcher or this happens again.
+   */
+  it("operations.ts does not re-implement action dispatch", () => {
+    const src = read("server/routers/operations.ts");
+    const localBranches = [...src.matchAll(/action\.type === "([a-z_]+)"/g)].map((m) => m[1]);
+    expect(
+      localBranches,
+      localBranches.length
+        ? `\n\noperations.ts is branching on action.type again (${[...new Set(localBranches)].join(", ")}).\n` +
+            `Route rule actions through executeRuleActions() instead — a second dispatcher\n` +
+            `drifts from the builder and fails silently.\n`
+        : undefined,
+    ).toEqual([]);
+    expect(src).toContain("executeRuleActions");
+  });
+
+  it("nothing writes an out-of-enum workflowRuns.status", () => {
+    // enum is success | failed | skipped. "error" fails the INSERT outright, so
+    // the only run worth logging — one that had errors — was the one that could
+    // not be written. Two of the three call sites had it; the third carried a
+    // comment explaining the bug it had already been fixed for.
+    const files = ["server/routers/operations.ts", "server/services/workflowEngine.ts"];
+    const allowed = new Set(["success", "failed", "skipped"]);
+    const bad: string[] = [];
+    for (const f of files) {
+      const src = read(f);
+      for (const m of src.matchAll(/insert\(workflowRuns\)[\s\S]{0,400}?status:\s*([^,\n]+)/g)) {
+        for (const lit of m[1].matchAll(/"([a-z_]+)"/g)) {
+          if (!allowed.has(lit[1])) bad.push(`${f}: "${lit[1]}"`);
+        }
+      }
+    }
+    expect(
+      bad,
+      bad.length ? `\n\nworkflowRuns.status must be success|failed|skipped:\n  ${bad.join("\n  ")}\n` : undefined,
+    ).toEqual([]);
+  });
+
+  it("nothing writes an out-of-enum notifications.kind", () => {
+    // The removed create_notification branch inserted kind "deal_stuck", which
+    // is not in the enum — a runtime-only failure of exactly the `as never`
+    // class. Parsed from the schema so the list cannot go stale here.
+    const schema = read("drizzle/schema.ts");
+    const enumBlock = schema.match(/kind: mysqlEnum\("kind",\s*\[([\s\S]*?)\]/);
+    const allowed = new Set([...enumBlock![1].matchAll(/"([a-z_]+)"/g)].map((m) => m[1]));
+    const files = ["server/routers/operations.ts", "server/services/workflowEngine.ts"];
+    const bad: string[] = [];
+    for (const f of files) {
+      const src = read(f);
+      for (const m of src.matchAll(/insert\(notifications\)[\s\S]{0,300}?kind:\s*"([a-z_]+)"/g)) {
+        if (!allowed.has(m[1])) bad.push(`${f}: "${m[1]}"`);
+      }
+    }
+    expect(
+      bad,
+      bad.length
+        ? `\n\nnotifications.kind must be one of: ${[...allowed].join(", ")}\n  ${bad.join("\n  ")}\n`
+        : undefined,
+    ).toEqual([]);
+  });
+});
