@@ -12,9 +12,11 @@
  *  - **A real <button>.** Keyboard users get it on Tab, screen readers announce
  *    it, and — the part a div would break — tapping works on touch, where
  *    "hover" does not exist at all.
- *  - **A delay before opening.** Tooltips that fire instantly turn a glance
- *    across the screen into a strobe. Lingering is the "I'm not sure" signal;
- *    that's what we respond to.
+ *  - **Timing is set ONCE, at the app root.** These used to declare a nested
+ *    TooltipProvider each, which silently defeated Radix's shared hover state:
+ *    every item re-waited the full delay, so scanning down the sidebar — the
+ *    main way someone learns this app — stuttered at every row. The single
+ *    provider in App.tsx delays the first tooltip and shows the rest instantly.
  *  - **`type="button"`.** Inside a form — which is where most of these live —
  *    the default `submit` would save the form on click.
  */
@@ -22,11 +24,8 @@ import type { ReactNode } from "react";
 import { HelpCircle } from "lucide-react";
 import { Link } from "wouter";
 import { cn } from "@/lib/utils";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { FIELD_HELP, type HelpEntry } from "@/lib/helpText";
-
-/** Long enough not to fire on a glance, short enough not to feel broken. */
-const OPEN_DELAY_MS = 350;
 
 export function HelpTip({
   id,
@@ -54,8 +53,7 @@ export function HelpTip({
   const slug = article ?? entry.article;
 
   return (
-    <TooltipProvider delayDuration={OPEN_DELAY_MS}>
-      <Tooltip>
+    <Tooltip>
         <TooltipTrigger asChild>
           {children ?? (
             <button
@@ -86,8 +84,7 @@ export function HelpTip({
             </Link>
           )}
         </TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
+    </Tooltip>
   );
 }
 
@@ -109,13 +106,11 @@ export function HelpHover({
 }) {
   if (!body) return <>{children}</>;
   return (
-    <TooltipProvider delayDuration={OPEN_DELAY_MS}>
-      <Tooltip>
-        <TooltipTrigger asChild>{children}</TooltipTrigger>
-        <TooltipContent side={side} className="max-w-[260px] text-[12px] leading-relaxed">
-          {body}
-        </TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
+    <Tooltip>
+      <TooltipTrigger asChild>{children}</TooltipTrigger>
+      <TooltipContent side={side} className="max-w-[260px] text-[12px] leading-relaxed">
+        {body}
+      </TooltipContent>
+    </Tooltip>
   );
 }

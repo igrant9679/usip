@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { HelpTip } from "@/components/usip/HelpTip";
 import {
   Select,
   SelectContent,
@@ -396,7 +397,7 @@ function AccountFormDialog({
 
             {/* Reply-to */}
             <div className="space-y-1.5">
-              <Label>Reply-to <span className="text-muted-foreground text-xs">(optional)</span></Label>
+              <Label className="inline-flex items-center gap-1.5">Reply-to <span className="text-muted-foreground text-xs">(optional)</span><HelpTip id="sending.replyTo" /></Label>
               <Input
                 type="email"
                 placeholder="replies@company.com"
@@ -616,7 +617,7 @@ function AccountFormDialog({
             {/* Limits */}
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <Label>Daily send limit</Label>
+                <Label className="inline-flex items-center gap-1.5">Daily send limit<HelpTip id="sending.dailyLimit" /></Label>
                 <Input
                   type="number"
                   placeholder="500"

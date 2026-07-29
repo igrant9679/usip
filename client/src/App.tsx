@@ -486,7 +486,15 @@ function App() {
   return (
     <ErrorBoundary>
       <ThemeProvider defaultTheme="light" switchable={true}>
-        <TooltipProvider>
+        {/* One provider for the whole app so Radix can share hover state.
+            delayDuration: a tooltip that fires on every glance is a strobe;
+            lingering is the "I'm not sure" signal worth answering.
+            skipDelayDuration: once one HAS opened, the next shows instantly —
+            which is what makes scanning down the sidebar to learn the app feel
+            fluid instead of making you wait at every single item.
+            Components needing instant tooltips (the collapsed icon rail) still
+            declare their own nested provider and override this. */}
+        <TooltipProvider delayDuration={300} skipDelayDuration={400}>
           <TourEngineProvider>
             {/* Backs useConfirm() — the in-app replacement for native confirm() */}
             <ConfirmProvider>
