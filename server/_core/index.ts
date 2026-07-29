@@ -255,10 +255,12 @@ async function startServer() {
 
   // ARE engine: drive every active Autonomous Revenue Engine campaign through
   // enrich → screen → sequence → enroll → dispatch → counters, every 10 min.
-  // Guarded: a tick does serial LLM enrichment, sequence generation and web
-  // scraping, which regularly outlasts the 3-minute interval. Two overlapping
-  // ticks would each read the same "sent today" count and each dispatch up to
-  // the same remaining cap — spending the daily send budget twice.
+  // NOTE: runAreEngine ALREADY self-guards — it keeps its own `engineRunning`
+  // flag and returns early with "previous tick still running". This wrapper is
+  // therefore belt-and-braces for ARE, kept only so every scheduled sender is
+  // guarded by the same visible mechanism rather than each relying on a private
+  // flag a future refactor could drop. The engines that genuinely had NO guard
+  // are the sequence engine and chat follow-up, below.
   const runAre = guardOverlap("AreEngine", () => runAreEngine());
   setTimeout(runAre, 30_000); // first run 30s after boot (so a freshly-launched campaign sees activity fast)
   setInterval(runAre, 3 * 60 * 1000); // every 3 minutes — feels continuous to the user while still giving each tick room to finish

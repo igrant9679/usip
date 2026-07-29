@@ -69,8 +69,22 @@ import { appBaseUrl as publicAppOrigin } from "./appUrl";
  *  drains steadily over multiple ticks instead of stalling dispatch for other
  *  work. */
 const ENRICH_PER_TICK = 5;
-const SEQUENCE_PER_TICK = 3;
-const ENROLL_PER_TICK = 10;
+/**
+ * ⚠️ These two are PER CAMPAIGN, not per tick — they are applied inside
+ * tickCampaign(), which runs once for every ACTIVE campaign. Only
+ * ENRICH_PER_TICK above is genuinely global (enrichPendingGlobally runs once,
+ * before the campaign loop).
+ *
+ * So the LLM work in a tick scales with the number of active campaigns: four
+ * campaigns means twelve sequence generations and forty enrolments, not three
+ * and ten. The names said otherwise, which is exactly the wrong thing to
+ * believe while tuning them or reasoning about how long a tick takes.
+ *
+ * Left per-campaign deliberately — making them global would silently starve
+ * later campaigns in the loop, which is a product decision, not a cleanup.
+ */
+const SEQUENCE_PER_CAMPAIGN_TICK = 3;
+const ENROLL_PER_CAMPAIGN_TICK = 10;
 /** icpMatchScore below this is auto-screened out even in human-approval modes. */
 const AUTO_REJECT_FLOOR = 30;
 /** Fallback approve line for `full` autonomy when autoApproveThreshold is null. */
@@ -431,7 +445,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
           sql`${prospectIntelligence.generatedSequence} IS NULL`,
         ),
       )
-      .limit(SEQUENCE_PER_TICK);
+      .limit(SEQUENCE_PER_CAMPAIGN_TICK);
     if (needSequence.length > 0) {
       const settled = await Promise.allSettled(
         needSequence.map((p) => runSequenceAgent(p.id, wsId, campId)),
@@ -467,7 +481,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
           sql`${prospectIntelligence.generatedSequence} IS NOT NULL`,
         ),
       )
-      .limit(ENROLL_PER_TICK);
+      .limit(ENROLL_PER_CAMPAIGN_TICK);
 
     for (const row of rows) {
       // Idempotency — if execution rows already exist, just sync the status.
