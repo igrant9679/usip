@@ -1564,9 +1564,20 @@ export const dangerZoneRouter = router({
     }),
 
   /**
-   * Soft-archive the workspace. Sets archivedAt = now.
-   * Only the workspace owner (super_admin) can archive.
-   * After archiving, the workspace is hidden from workspace switcher.
+   * Soft-archive the workspace: stamps `workspaces.archivedAt` and audits who
+   * did it. Super-admin only.
+   *
+   * It does NOTHING ELSE, and this docstring used to claim otherwise ("the
+   * workspace is hidden from workspace switcher"). It is not: `workspace.list`
+   * has no archivedAt filter, `resolveWorkspace` never reads the column, and
+   * NOTHING in the codebase does — every autopilot selects workspaces by mode
+   * from workspace_settings without joining workspaces, so an archived
+   * workspace keeps sending, spending and creating records exactly as before.
+   *
+   * Enforcement is deliberately not switched on: there is no un-archive
+   * procedure, so making this bite would be a one-way lockout. The Settings
+   * copy is already accurate about the limitation — see the note there. If
+   * enforcement is ever added, add un-archive in the same change.
    */
   archiveWorkspace: adminWsProcedure.mutation(async ({ ctx }) => {
     const db = await getDb();

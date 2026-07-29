@@ -13,7 +13,7 @@
  *   approval — AI classifies replies + suggests actions; a human applies them.
  *   auto     — AI classifies AND executes the per-class action automatically.
  */
-import { and, desc, eq, gte, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, gte, isNotNull, isNull, sql } from "drizzle-orm";
 import { emailReplies, emailSuppressions, tasks, unipileMessages, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { invokeLLM } from "../_core/llm";
@@ -404,8 +404,31 @@ export async function runConversationAutopilotForWorkspace(
   const db = await getDb();
   if (!db) return { classified: 0, actioned: 0 };
 
+  /**
+   * `draftId IS NOT NULL` is NOT optional here.
+   *
+   * email_replies is not "replies to our outbound" — inboundReplyPoller inserts
+   * a row for EVERY inbound message in the connected mailbox and sets
+   * `draftId: matchedDraft?.id ?? null`, so an unmatched row is ordinary
+   * private correspondence. On this workspace that is ~62,000 rows of the
+   * owner's Outlook inbox against zero genuine campaign replies.
+   *
+   * Unscoped, ordered by receivedAt DESC, this fed the newest PRIVATE emails
+   * into classifyReply — sending their contents to a model — and in `auto`
+   * mode applyReplyAction then created meetings and CRM records from personal
+   * mail. Approval mode is not a safeguard against the first half: it gates the
+   * ACTION, not the classification, so the model still saw the message.
+   *
+   * The invariant is documented and this was the one place that mattered most:
+   * every query over this table must scope to rows that answer something we
+   * actually sent.
+   */
   const rows = await db.select().from(emailReplies)
-    .where(and(eq(emailReplies.workspaceId, workspaceId), isNull(emailReplies.classifiedAt)))
+    .where(and(
+      eq(emailReplies.workspaceId, workspaceId),
+      isNull(emailReplies.classifiedAt),
+      isNotNull(emailReplies.draftId),
+    ))
     .orderBy(desc(emailReplies.receivedAt))
     .limit(limit);
 
