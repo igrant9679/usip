@@ -199,6 +199,19 @@ export default function WorkflowsV2() {
             <Button data-tour-id="autonomy-turn-on-all" size="sm" className="shrink-0 gap-1.5" onClick={turnOnFullAutonomy}><Rocket className="size-3.5" /> Turn on full autonomy</Button>
           </div>
 
+          {/* What Off / Approve / Autonomous actually mean. This is the concept
+              the entire product rests on and the one nobody guesses right the
+              first time, so it is spelled out once, here, next to the controls
+              that use it — not left to a help article nobody opens mid-task. */}
+          <div className="rounded-xl border bg-muted/30 px-4 py-3">
+            <div className="text-[12px] font-medium mb-1.5">What the three settings mean</div>
+            <ul className="text-[12px] text-muted-foreground space-y-1">
+              <li><b className="text-foreground">Off</b> — nothing happens. Safe while you're still looking around.</li>
+              <li><b className="text-foreground">Approve</b> — the AI does the work but stops before anything leaves the building. It arrives as a task for you to review. <b>Start here:</b> it shows you exactly what it would have done, at no risk.</li>
+              <li><b className="text-foreground">Autonomous</b> — it acts on its own and tells you afterwards. Turn this on once Approve has been producing work you'd have sent anyway.</li>
+            </ul>
+          </div>
+
           {/* Autopilots */}
           <Section icon={Bot} title="Autopilots">
             <div data-tour-id="autonomy-autopilots" className="grid grid-cols-1 md:grid-cols-2 gap-3">

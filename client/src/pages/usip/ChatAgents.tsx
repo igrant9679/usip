@@ -20,6 +20,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { confirmAction } from "@/components/usip/Common";
+import { HelpTip } from "@/components/usip/HelpTip";
 import {
   MessageSquare, Plus, Trash2, Copy, ExternalLink, Check, Globe, Loader2, Users, CalendarCheck, Code2,
 } from "lucide-react";
@@ -194,7 +195,7 @@ export default function ChatAgents() {
               </div>
 
               {/* Autonomy — the thing that decides whether it books */}
-              <Section title="Autonomy" tourId="chat-autonomy">
+              <Section title="Autonomy" tourId="chat-autonomy" help="autonomy.mode">
                 <div className="grid gap-2">
                   {MODES.map((m) => (
                     <button key={m.value} type="button" onClick={() => setField("mode", m.value)}
@@ -204,7 +205,7 @@ export default function ChatAgents() {
                     </button>
                   ))}
                 </div>
-                <Field label="Whose calendar it books">
+                <Field label="Whose calendar it books" help="chat.bookingUser">
                   <select className="h-9 w-full rounded-md border bg-background px-2 text-sm"
                     value={form.bookingUserId ?? ""}
                     onChange={(e) => setField("bookingUserId", e.target.value ? Number(e.target.value) : null)}>
@@ -264,7 +265,7 @@ export default function ChatAgents() {
               <FunnelSection />
 
               {/* Abandonment follow-up (0137) — its own switch, not the agent's mode */}
-              <Section title="If they leave without booking" tourId="chat-followup">
+              <Section title="If they leave without booking" tourId="chat-followup" help="chat.followUp">
                 <div className="flex gap-1.5">
                   {(["off", "approval", "auto"] as const).map((m) => (
                     <Button
@@ -337,7 +338,7 @@ export default function ChatAgents() {
                     )}
                   </div>
                 </Field>
-                <Field label={`Qualified at score ${form.qualifyThreshold ?? 60} and above`}>
+                <Field label={`Qualified at score ${form.qualifyThreshold ?? 60} and above`} help="chat.qualifyThreshold">
                   <input type="range" min={0} max={100} step={5} value={form.qualifyThreshold ?? 60}
                     onChange={(e) => patch("qualifyThreshold", Number(e.target.value))} className="w-full" />
                   <p className="text-[11px] text-muted-foreground">Lower captures more meetings and more noise. A visitor who explicitly asks for a meeting is offered one from 40 regardless.</p>
@@ -536,7 +537,7 @@ function KnowledgeSection({ agentId, accent }: { agentId: number; accent: string
   const rows = (list.data as any[]) ?? [];
 
   return (
-    <Section title="What it knows" tourId="chat-knowledge">
+    <Section title="What it knows" tourId="chat-knowledge" help="chat.knowledge">
       <p className="text-[11px] text-muted-foreground">
         The only specifics the agent may state. Anything not written here it will say it doesn't know, rather than guess — that is deliberate.
       </p>
@@ -594,18 +595,24 @@ function KnowledgeSection({ agentId, accent }: { agentId: number; accent: string
   );
 }
 
-function Section({ title, children, tourId }: { title: string; children: React.ReactNode; tourId?: string }) {
+function Section({ title, children, tourId, help }: { title: string; children: React.ReactNode; tourId?: string; help?: string }) {
   return (
     <div className="space-y-3" data-tour-id={tourId}>
-      <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{title}</h3>
+      <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground inline-flex items-center gap-1.5">
+        {title}
+        {help && <HelpTip id={help} />}
+      </h3>
       {children}
     </div>
   );
 }
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({ label, children, help }: { label: string; children: React.ReactNode; help?: string }) {
   return (
     <div className="space-y-1.5">
-      <Label className="text-[13px]">{label}</Label>
+      <Label className="text-[13px] inline-flex items-center gap-1.5">
+        {label}
+        {help && <HelpTip id={help} />}
+      </Label>
       {children}
     </div>
   );

@@ -4,6 +4,8 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
+import { HelpHover } from "@/components/usip/HelpTip";
+import { navHelpFor } from "@/lib/helpText";
 import {
   Activity,
   Bell,
@@ -641,9 +643,13 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
       (isDark
         ? (l.darkColor ?? legacy?.d ?? opts?.darkColor)
         : (l.color ?? legacy?.c ?? opts?.color)) ?? accentColor;
+    // Hover help for EVERY nav item, from one registry. This is the single
+    // choke point through which every sidebar link renders, so orientation
+    // copy is added in lib/helpText.ts and never here.
+    const help = navHelpFor(l.href);
     return (
+      <HelpHover key={`${l.href}-${l.label}`} body={help?.body} side="right">
       <Link
-        key={`${l.href}-${l.label}`}
         href={l.href}
         className={cn(
           "flex items-center gap-2.5 rounded-md px-3 py-2 text-[13px] transition-colors",
@@ -665,6 +671,7 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
         )}
         {l.trailingChevron && <ChevronRight className="size-4 shrink-0 opacity-60" />}
       </Link>
+      </HelpHover>
     );
   };
 
