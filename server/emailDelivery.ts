@@ -17,7 +17,7 @@
  *   if (!result.ok) console.warn("Email not sent:", result.reason);
  */
 
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import {
   sendingAccounts,
   smtpConfigs,
@@ -109,11 +109,19 @@ export async function sendCampaignEmailViaPool(
     // 2. Today's per-account usage.
     const today = new Date().toISOString().slice(0, 10);
     const ids = accounts.map((a) => a.id);
+    // SUM, not the first row: there is no unique key on (accountId, date), so
+    // two sends racing on the first send of a day can both insert and leave two
+    // rows. Reading one of them undercounts usage for the rest of that day, and
+    // this number is what enforces the mailbox's daily limit.
     const stats = await db
-      .select({ accountId: sendingAccountDailyStats.accountId, sent: sendingAccountDailyStats.sentCount })
+      .select({
+        accountId: sendingAccountDailyStats.accountId,
+        sent: sql<number>`COALESCE(SUM(${sendingAccountDailyStats.sentCount}), 0)`,
+      })
       .from(sendingAccountDailyStats)
-      .where(and(inArray(sendingAccountDailyStats.accountId, ids), eq(sendingAccountDailyStats.date, today)));
-    const usedMap = new Map(stats.map((s) => [s.accountId, s.sent]));
+      .where(and(inArray(sendingAccountDailyStats.accountId, ids), eq(sendingAccountDailyStats.date, today)))
+      .groupBy(sendingAccountDailyStats.accountId);
+    const usedMap = new Map(stats.map((s) => [s.accountId, Number(s.sent) || 0]));
 
     // 3. Eligible = under daily limit; pick the least-used (balances + rotates).
     const eligible = accounts
@@ -145,8 +153,12 @@ export async function sendCampaignEmailViaPool(
       .where(and(eq(sendingAccountDailyStats.accountId, chosen.id), eq(sendingAccountDailyStats.date, today)))
       .limit(1);
     if (existing) {
+      // Atomic in SQL. `existing.sentCount + 1` computed in JS is a lost-update
+      // race: two concurrent sends both read 5 and both write 6, so two sends
+      // are recorded as one and the account quietly runs past its daily limit —
+      // which is the one thing this counter exists to prevent.
       await db.update(sendingAccountDailyStats)
-        .set({ sentCount: existing.sentCount + 1 })
+        .set({ sentCount: sql`${sendingAccountDailyStats.sentCount} + 1` } as never)
         .where(eq(sendingAccountDailyStats.id, existing.id));
     } else {
       await db.insert(sendingAccountDailyStats)

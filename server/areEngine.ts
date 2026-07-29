@@ -32,7 +32,7 @@
  * Per-campaign and per-phase try/catch so one failure never blocks the rest.
  */
 import { createHash } from "node:crypto";
-import { and, desc, eq, inArray, isNotNull, like, lte, notInArray, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, like, lte, notInArray, or, sql } from "drizzle-orm";
 import { getDb } from "./db";
 import {
   areCampaigns,
@@ -543,6 +543,21 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
     const emailEnabled = channels.email !== false; // null/undefined ⇒ enabled
 
     // Respect dailySendCap — count sends already made today for this campaign.
+    //
+    // "Today" is the UTC day, computed here rather than in SQL. This used to be
+    // `DATE(executedAt) = CURDATE()`, which resolves in the DATABASE SERVER's
+    // timezone — a setting nothing in this app pins (`drizzle(DATABASE_URL)`
+    // passes no timezone). Every other send budget in the codebase uses
+    // `todayUtc()`, so on a non-UTC database the campaign cap and the
+    // per-account limits would roll over at different hours and disagree about
+    // which sends counted. Whether that bites depends on a server setting no
+    // one here controls, which is not a property a spend limit should have.
+    //
+    // A range comparison is also sargable: `DATE(col) = …` wraps the column in
+    // a function and cannot use an index, so the old form scanned every row for
+    // the campaign on every tick.
+    const startOfUtcDay = new Date();
+    startOfUtcDay.setUTCHours(0, 0, 0, 0);
     const [sentToday] = await db
       .select({ n: sql<number>`count(*)` })
       .from(areExecutionQueue)
@@ -550,7 +565,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
         and(
           eq(areExecutionQueue.campaignId, campId),
           eq(areExecutionQueue.status, "sent"),
-          sql`DATE(${areExecutionQueue.executedAt}) = CURDATE()`,
+          gte(areExecutionQueue.executedAt, startOfUtcDay),
         ),
       );
     const remaining = Math.max(0, campaign.dailySendCap - Number(sentToday?.n ?? 0));
