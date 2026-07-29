@@ -1274,6 +1274,23 @@ export const leadsRouter = router({
         userSignature.length > 0 ? userSignature : (wsSettings?.emailSignature ?? "").trim();
       const bodyMentionsSignatureToken = /\{\{\s*signature\s*\}\}/i.test(input.body);
 
+      // {{senderTitle}} / {{senderCompany}} — same omission that was fixed for
+      // the CONTACT send path a few hundred lines above and in sequences.ts, and
+      // missed here. renderMergeFields returns `hit ?? match`, so an absent key
+      // is emitted VERBATIM: a prospect received the literal "{{senderCompany}}".
+      // Two of the Email Builder's starter templates bake that token into their
+      // footer, so it did not need anyone to type it.
+      const [adHocSenderMember] = await db
+        .select({ title: workspaceMembers.title })
+        .from(workspaceMembers)
+        .where(
+          and(
+            eq(workspaceMembers.workspaceId, ctx.workspace.id),
+            eq(workspaceMembers.userId, ctx.user.id),
+          ),
+        )
+        .limit(1);
+
       // Merge fields (leads carry their own company string — no join).
       const mergeVars: Record<string, string> = {
         firstName: lead.firstName ?? "",
@@ -1285,6 +1302,8 @@ export const leadsRouter = router({
         accountName: lead.company ?? "",
         senderName,
         senderEmail,
+        senderTitle: adHocSenderMember?.title ?? "",
+        senderCompany: ctx.workspace.name ?? "",
         signature: workspaceSignature,
       };
       const renderedSubject = renderMergeFields(input.subject, mergeVars);

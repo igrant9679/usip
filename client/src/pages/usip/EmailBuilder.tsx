@@ -957,7 +957,16 @@ const STARTER_TEMPLATES: { id: string; label: string; description: string; block
       { type: "text", props: { content: "<p><strong>Industry Insight</strong><br>Share a relevant tip or insight for your audience.</p>", fontSize: 14, color: "#1a1a1a" }, sortOrder: 3 },
       { type: "divider", props: { color: "#e5e7eb", thickness: 1, style: "solid" }, sortOrder: 4 },
       { type: "text", props: { content: "<p><strong>Coming Up</strong><br>Let readers know what to expect next month.</p>", fontSize: 14, color: "#1a1a1a" }, sortOrder: 5 },
-      { type: "footer", props: { content: "© 2025 {{senderCompany}}. You're receiving this because you opted in.<br><a href='{{unsubscribeUrl}}'>Unsubscribe</a>", bgColor: "#f9fafb", textColor: "#6b7280", unsubscribeUrl: "" }, sortOrder: 6 },
+      // No {{unsubscribeUrl}} token here. It is not in ANY send path's merge map
+      // (crm.ts, sequences.ts, areEngine.ts), and renderMergeFields emits an
+      // unmatched token verbatim — so this shipped a footer containing
+      // <a href="{{unsubscribeUrl}}">, a literally broken Unsubscribe link, in
+      // the one place a recipient is most likely to click. Every send path
+      // already appends its own opt-out footer built from a real token
+      // (unsubscribeFooterHtml), and the footer block has a first-class
+      // `unsubscribeUrl` prop the compiler turns into a link when set — two
+      // working mechanisms this token was duplicating badly.
+      { type: "footer", props: { content: "© 2025 {{senderCompany}}. You're receiving this because you opted in.", bgColor: "#f9fafb", textColor: "#6b7280", unsubscribeUrl: "" }, sortOrder: 6 },
     ],
   },
   {
