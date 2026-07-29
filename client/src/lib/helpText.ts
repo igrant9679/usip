@@ -45,6 +45,8 @@ export const NAV_HELP: Record<string, HelpEntry> = {
   "/v2/people": { body: "Every person you've imported or sourced. The contact database the rest of the app draws on.", article: "leads-contacts-accounts" },
   "/v2/companies": { body: "The organisations behind your contacts, with the enrichment data found for each.", article: "leads-contacts-accounts" },
   "/v2/lists": { body: "Hand-picked groups of contacts you want to work as a set." },
+  "/v2/saved-people": { body: "People you saved from a prospect search, before deciding whether to work them." },
+  "/v2/saved-companies": { body: "Companies you saved from a search, ready to pull contacts from." },
   "/find-prospects": { body: "Search for new people who match your ideal customer, and add them to the queue.", article: "find-prospects-discovery" },
   "/v2/data-enrichment": { body: "Fill in missing details — company, job title, email — on contacts you already have.", article: "how-email-finding-works" },
   "/data-health": { body: "What's missing or wrong across your data, and what that's costing you in reach." },
@@ -73,11 +75,20 @@ export const NAV_HELP: Record<string, HelpEntry> = {
   "/are/performance": { body: "What's actually working — reply and meeting rates by sequence step and by prospect source.", article: "are-overview" },
 
   // ── Customers ──
+  // NOTE ON KEYS: these must be the href the SIDEBAR renders, because
+  // navHelpFor() is only called from renderNavLink in Shell.tsx and matches
+  // exactly. "/v2/customers" and "/v2/renewals" were authored with a /v2/
+  // prefix the sidebar does not use, so the copy existed, the links existed,
+  // and the two never met — the tip could not appear on either page.
+  // /v2/pipeline and /v2/opportunities below have NO sidebar link at all (both
+  // are reached via a SubNav), so those entries are inert. Kept because the
+  // copy is good and costs nothing; do not assume they display.
   "/v2/pipeline": { body: "Your deals, by stage.", article: "managing-pipeline" },
   "/v2/opportunities": { body: "Individual deals with their value, stage and history.", article: "opportunities-deep-dive" },
   "/v2/meetings": { body: "Booked meetings and the AI's meeting preparation.", article: "meeting-autopilot-reminders" },
-  "/v2/customers": { body: "Accounts that have already bought." },
-  "/v2/renewals": { body: "Contracts coming up for renewal." },
+  "/customers": { body: "Accounts that have already bought, with health scores and renewal dates." },
+  "/renewals": { body: "Contracts coming up for renewal, and which are at risk of churning." },
+  "/qbrs": { body: "Quarterly business reviews: the AI drafts the prep, you run the meeting." },
 
   "/v2/deals": { body: "Open deals and what stage each is at.", article: "managing-pipeline" },
   "/v2/conversations": { body: "Ongoing back-and-forth with prospects, and the AI's suggested replies.", article: "conversations-autopilot" },
@@ -104,6 +115,7 @@ export const NAV_HELP: Record<string, HelpEntry> = {
   // ── Support ──
   "/v2/deliverability": { body: "Whether your email is reaching inboxes rather than spam folders.", article: "mailbox-warmup" },
   "/help": { body: "Guides and walkthroughs. Start here if you're unsure where to begin.", article: "welcome-to-velocity" },
+  "/settings": { body: "Workspace setup: mailboxes, sending, branding, team and data sources. Most one-time configuration lives here." },
 };
 
 /**
