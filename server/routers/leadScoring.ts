@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
   accounts,
@@ -84,12 +84,30 @@ async function aggregateBehavior(workspaceId: number, leadId: number) {
   const clicks = sentDrafts.reduce((n, d) => n + (d.clickCount ?? 0), 0);
   const bounces = drafts.filter((d) => d.bouncedAt != null).length;
 
-  // Replies come from the emailReplies table the inbound poller writes, not
-  // from pattern-matching the outbound draft's own prompt text.
+  /**
+   * Replies come from the emailReplies table the inbound poller writes, not from
+   * pattern-matching the outbound draft's own prompt text.
+   *
+   * `draftId IS NOT NULL` is load-bearing. inboundReplyPoller inserts a row for
+   * EVERY inbound message and sets `leadId` from a bare address match
+   * (`leads.email = fromEmail`, poller line ~266) — with no requirement that we
+   * ever sent that person anything. Scoping on leadId alone therefore counted
+   * ordinary private correspondence from anyone who happens to be a lead as a
+   * reply to outreach, and a reply is the strongest positive signal in this
+   * score. On this workspace that is ~62,000 inbound rows against zero genuine
+   * campaign replies.
+   *
+   * Same table and same omission as the Conversation Autopilot bug fixed in
+   * `aecfbbe`; that pass scoped the classifier and missed this consumer.
+   */
   const replyRows = await db
     .select({ receivedAt: emailReplies.receivedAt })
     .from(emailReplies)
-    .where(and(eq(emailReplies.workspaceId, workspaceId), eq(emailReplies.leadId, leadId)));
+    .where(and(
+      eq(emailReplies.workspaceId, workspaceId),
+      eq(emailReplies.leadId, leadId),
+      isNotNull(emailReplies.draftId),
+    ));
   const replies = replyRows.length;
 
   // Activity-row signals (calls/meetings count as engagement, replies as a stronger signal).
