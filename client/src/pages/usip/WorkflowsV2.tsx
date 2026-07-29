@@ -58,10 +58,15 @@ export default function WorkflowsV2() {
   // is how someone gets surprised by a bill they did not choose.
   const backfillAp = trpc.prospects.backfillStatus.useQuery(undefined as any, { retry: false });
 
-  const setTaskAp = trpc.tasks.setAutopilotSettings.useMutation({ onSuccess: () => utils.tasks.getAutopilotSettings.invalidate() });
-  const setMeetAp = trpc.meetings.setAutopilotSettings.useMutation({ onSuccess: () => utils.meetings.getAutopilotSettings.invalidate() });
-  const setConvAp = trpc.conversations.setAutopilotSettings.useMutation({ onSuccess: () => utils.conversations.getAutopilotSettings.invalidate() });
-  const setDealAp = trpc.deals.setAutopilotSettings.useMutation({ onSuccess: () => utils.deals.getAutopilotSettings.invalidate() });
+  // All nine setters are adminWsProcedure. These four used to declare no
+  // onError, so a rep flipping them got a silent FORBIDDEN: the dropdown
+  // snapped back with no explanation while the other five said plainly that
+  // only admins may change them. Same failure, two different experiences, on
+  // the one screen new users are told to start from.
+  const setTaskAp = trpc.tasks.setAutopilotSettings.useMutation({ onSuccess: () => utils.tasks.getAutopilotSettings.invalidate(), onError: (e) => toast.error(e.message.includes("FORBIDDEN") ? "Only admins can change Task Autopilot" : e.message) });
+  const setMeetAp = trpc.meetings.setAutopilotSettings.useMutation({ onSuccess: () => utils.meetings.getAutopilotSettings.invalidate(), onError: (e) => toast.error(e.message.includes("FORBIDDEN") ? "Only admins can change Meeting Autopilot" : e.message) });
+  const setConvAp = trpc.conversations.setAutopilotSettings.useMutation({ onSuccess: () => utils.conversations.getAutopilotSettings.invalidate(), onError: (e) => toast.error(e.message.includes("FORBIDDEN") ? "Only admins can change Conversation Autopilot" : e.message) });
+  const setDealAp = trpc.deals.setAutopilotSettings.useMutation({ onSuccess: () => utils.deals.getAutopilotSettings.invalidate(), onError: (e) => toast.error(e.message.includes("FORBIDDEN") ? "Only admins can change Deal Autopilot" : e.message) });
   const setSocialAp = trpc.unipile.setSocialAutopilotSettings.useMutation({ onSuccess: () => utils.unipile.getSocialAutopilotSettings.invalidate(), onError: (e) => toast.error(e.message.includes("FORBIDDEN") ? "Only admins can change Social Autopilot" : e.message) });
   const setJobChangeAp = trpc.linkedinEnrichment.setJobChangeSettings.useMutation({ onSuccess: () => utils.linkedinEnrichment.getJobChangeSettings.invalidate(), onError: (e) => toast.error(e.message.includes("FORBIDDEN") ? "Only admins can change Job Change Autopilot" : e.message) });
   const runSweep = trpc.prospects.runSweep.useMutation({
