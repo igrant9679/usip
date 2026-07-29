@@ -58,6 +58,27 @@ async function resolveWorkspace(userId: number, headerVal?: string) {
 }
 
 /**
+ * How stale `lastActiveAt` may get before we refresh it. Every authenticated
+ * request passes through here, so writing unconditionally would mean one UPDATE
+ * per request; at 5 minutes it is at most one write per active user per 5 min
+ * and the Team page is still accurate to within that.
+ */
+export const LAST_ACTIVE_REFRESH_MS = 5 * 60 * 1000;
+
+/** Pure, so the throttle is testable without a database. */
+export function shouldRefreshLastActive(
+  lastActiveAt: Date | null | undefined,
+  nowMs: number,
+  refreshMs = LAST_ACTIVE_REFRESH_MS,
+): boolean {
+  if (!lastActiveAt) return true;
+  const t = lastActiveAt instanceof Date ? lastActiveAt.getTime() : new Date(lastActiveAt).getTime();
+  if (!Number.isFinite(t)) return true;
+  // A clock skew or a future timestamp shouldn't wedge it permanently stale.
+  return nowMs - t >= refreshMs || t > nowMs;
+}
+
+/**
  * `workspaceProcedure` is the workhorse. Every CRUD and read operation
  * uses it so that `ctx.workspace` and `ctx.member` are always present.
  */
@@ -65,6 +86,34 @@ export const workspaceProcedure = protectedProcedure.use(async ({ ctx, next }) =
   const headerVal = ctx.req.headers["x-workspace-id"];
   const headerStr = Array.isArray(headerVal) ? headerVal[0] : headerVal;
   const { workspace, member } = await resolveWorkspace(ctx.user.id, headerStr);
+
+  /**
+   * Touch `workspace_members.lastActiveAt`.
+   *
+   * The Team page has always rendered a "Last active" column for every member.
+   * Nothing in the codebase ever wrote this column — its only other references
+   * were the schema declaration, the SELECT in team.list, and a doc comment on
+   * that router advertising "(Members + deactivated + lastActive)". So the
+   * column read "—" for every member, permanently, and a manager could
+   * reasonably read that as "nobody has logged in".
+   *
+   * Done here because this middleware is the one choke point every
+   * authenticated request already passes through, and it ALREADY selects the
+   * whole member row — so the throttle check costs nothing extra. Fire-and-
+   * forget: presence tracking must never fail or slow the request it observes.
+   */
+  if (shouldRefreshLastActive(member.lastActiveAt as Date | null, Date.now())) {
+    const db = await getDb();
+    if (db) {
+      void db
+        .update(workspaceMembers)
+        .set({ lastActiveAt: new Date() })
+        .where(eq(workspaceMembers.id, member.id))
+        .catch((e: unknown) => {
+          console.warn("[workspace] lastActiveAt touch failed:", (e as Error).message);
+        });
+    }
+  }
   // Stash workspaceId in async-local storage so downstream code (notably
   // invokeLLM) can pick up the active workspace without threading it through.
   return runWithRequestContext(
