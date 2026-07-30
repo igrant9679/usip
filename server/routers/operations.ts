@@ -41,6 +41,8 @@ import { evalConditions, executeRuleActions } from "../services/workflowEngine";
 // One arithmetic rule for quote money, shared with the client's preview so the
 // number the user approves is the number stored. See shared/quoteTotals.ts.
 import { centsToDecimal, computeQuoteTotals, formatMoney } from "@shared/quoteTotals";
+import { zonedDowHour } from "@shared/availability";
+import { getWorkspaceTimezone } from "../services/workspaceTimezone";
 import crypto from "crypto";
 
 /**
@@ -1060,12 +1062,18 @@ async function resolveWidgetData(
     if (filters.dateFrom) actConds.push(sql`${activities.occurredAt} >= ${new Date(filters.dateFrom)}`);
     if (filters.dateTo) actConds.push(sql`${activities.occurredAt} <= ${new Date(filters.dateTo)}`);
     const acts = await db.select().from(activities).where(and(...actConds));
-    // Build 7×24 grid
+    // Build 7×24 grid, bucketed in the WORKSPACE's timezone.
+    //
+    // This was `getDay()` / `getHours()` — the container's clock, which is UTC in
+    // production. So a "best time to reach people" heatmap plotted UTC hours
+    // under local labels: a rep reading a 14:00 peak was looking at 10am their
+    // own time, and every activity between 19:00 and midnight Eastern was
+    // attributed to the NEXT DAY's column.
+    const tz = await getWorkspaceTimezone(workspaceId);
     const grid: number[][] = Array.from({ length: 7 }, () => Array(24).fill(0));
     for (const a of acts) {
-      const day = a.occurredAt.getDay();
-      const hour = a.occurredAt.getHours();
-      grid[day]![hour]++;
+      const { dow, hour } = zonedDowHour(a.occurredAt, tz);
+      grid[dow]![hour]++;
     }
     const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
     const series = grid.flatMap((row, d) => row.map((count, h) => ({ day: days[d]!, hour: h, count })));

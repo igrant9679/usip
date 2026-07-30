@@ -25,37 +25,69 @@ import { getDb } from "../db";
 import { invokeLLM } from "../_core/llm";
 import { createCalendarAdapter } from "../calendarAdapter";
 import { attributeMeetingBookingToAre } from "../routers/are/execution";
+// One slot generator + one timezone rule, shared with the booking link. See
+// shared/availability.ts for why this cannot import them from bookingLinks.ts.
+import { formatInZone, generateSlots, safeTimezone } from "@shared/availability";
+import { getWorkspaceTimezone } from "./workspaceTimezone";
+
+// Every offerable time derives from the workspace's configured zone rather than
+// the host's clock — the container runs on UTC, which is a deployment detail, not
+// a property of the person being offered the slot.
+// getWorkspaceTimezone lives in services/workspaceTimezone.ts, shared with the
+// Tasks "due today" counter and the activity heatmap, which had the same bug.
 
 export type MeetingAutopilotMode = "off" | "approval" | "auto";
 
 const ACTIVE_MEETING_STATUSES = ["proposed", "invited", "scheduled"];
 const ROLE_PRIORITY: Record<string, number> = { super_admin: 0, admin: 1, manager: 2, rep: 3 };
 
-/** Generate up to `count` business-hour slots (10:00 / 14:00 local) that don't overlap busy events. */
-function computeSlots(busy: { startAt: Date | string | null; endAt: Date | string | null }[], count: number, durationMin: number): string[] {
+/**
+ * Business-hour slots that don't overlap busy events, in the WORKSPACE's
+ * timezone.
+ *
+ * ⚠️ This used to read "business-hour slots (10:00 / 14:00 local)" and build them
+ * with `setHours()` + `getDay()`. Local means the Node process's timezone, which
+ * in production is UTC — so the meeting autopilot proposed 10:00 and 14:00 UTC,
+ * i.e. **6am and 10am to an Eastern prospect**, and decided "is this a weekend?"
+ * in UTC as well. That is the identical defect SESSION_STATUS records for the
+ * booking link ("It was UTC, which offered prospects 4am ET"), fixed there and
+ * missed here — in the path that mails a stranger a proposal.
+ *
+ * Now one generator for both (@shared/availability), given a 9–17 window in the
+ * workspace's zone and a 24h minimum notice, sampled hourly so a 2-slot proposal
+ * still lands mid-morning and mid-afternoon rather than back-to-back at 09:00.
+ */
+export function computeSlots(
+  busy: { startAt: Date | string | null; endAt: Date | string | null }[],
+  count: number,
+  durationMin: number,
+  timezone: string,
+): string[] {
   const ranges = busy
     .filter((b) => b.startAt && b.endAt)
-    .map((b) => [new Date(b.startAt as any).getTime(), new Date(b.endAt as any).getTime()] as [number, number]);
-  const overlaps = (s: number, e: number) => ranges.some(([bs, be]) => s < be && e > bs);
-  const nowMs = Date.now();
-  const slots: string[] = [];
-  let day = new Date();
-  day.setDate(day.getDate() + 1); // start tomorrow
-  let guard = 0;
-  while (slots.length < count && guard < 21) {
-    guard++;
-    const dow = day.getDay();
-    if (dow !== 0 && dow !== 6) {
-      for (const hour of [10, 14]) {
-        if (slots.length >= count) break;
-        const s = new Date(day); s.setHours(hour, 0, 0, 0);
-        const e = new Date(s.getTime() + durationMin * 60000);
-        if (s.getTime() > nowMs && !overlaps(s.getTime(), e.getTime())) slots.push(s.toISOString());
-      }
-    }
-    day = new Date(day.getTime() + 86400000);
-  }
-  return slots;
+    .map((b) => ({ startAt: new Date(b.startAt as any), endAt: new Date(b.endAt as any) }));
+  const all = generateSlots(ranges, 60, Date.now(), {
+    timezone,
+    startHour: 9,
+    endHour: 18,
+    // A proposal that lands in someone's inbox tonight must not offer 9am
+    // tomorrow: the meeting is negotiated by email, not booked on the spot.
+    leadMs: 24 * 60 * 60 * 1000,
+    maxSlots: 200,
+  });
+  // Prefer 10:00 and 14:00 in the rep's own zone, the two times the old code
+  // aimed at — then fall back to anything else in the window so a busy calendar
+  // still yields a proposal.
+  const zone = safeTimezone(timezone);
+  const hourIn = (iso: string) =>
+    Number(new Intl.DateTimeFormat("en-US", { timeZone: zone, hour: "2-digit", hour12: false })
+      .format(new Date(iso)).replace(/\D/g, "")) % 24;
+  const preferred = all.filter((s) => hourIn(s) === 10 || hourIn(s) === 14);
+  const rest = all.filter((s) => !preferred.includes(s));
+  const picked = [...preferred, ...rest].slice(0, count);
+  // A slot list must be chronological — the LLM is told to reference these in
+  // order and the first one is what `sendMeetingInvite` books by default.
+  return picked.sort();
 }
 
 interface ProspectLike {
@@ -105,7 +137,12 @@ export async function createMeetingProposal(workspaceId: number, target: Meeting
         lte(calendarEvents.startAt, to),
       ));
   }
-  const slots = computeSlots(busy, 3, durationMin);
+  // The workspace's own timezone (workspace_settings.timezone, default "UTC").
+  // Settings.tsx describes it as "used for scheduling, reporting, and activity
+  // timestamps" and until now NOTHING read it — a saved setting enforced by
+  // nothing, on the screen that promises it governs scheduling.
+  const workspaceTz = await getWorkspaceTimezone(workspaceId);
+  const slots = computeSlots(busy, 3, durationMin, workspaceTz);
   const name = target.name || "there";
   const firstName = target.firstName || name.split(" ")[0] || "there";
 
@@ -113,7 +150,7 @@ export async function createMeetingProposal(workspaceId: number, target: Meeting
 
 Attendee: ${name}${target.descriptor ? ` — ${target.descriptor}` : ""}${target.company ? ` at ${target.company}` : ""}
 Duration: ${durationMin} minutes
-Candidate times (already chosen — reference them, do not invent new ones): ${slots.map((s) => new Date(s).toLocaleString()).join("; ") || "to be proposed"}
+Candidate times (already chosen — reference them exactly as written, including the timezone, and do not invent new ones): ${slots.map((s) => formatInZone(s, workspaceTz)).join("; ") || "to be proposed"}
 
 Return: {
   "title": "<short meeting title, e.g. 'Velocity <> Acme intro'>",

@@ -8,6 +8,8 @@ import { storagePut } from "../storage";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, repProcedure, workspaceProcedure } from "../_core/workspace";
 import { generateTasksForWorkspace } from "../services/taskAutopilot";
+import { endOfZonedDay } from "@shared/availability";
+import { getWorkspaceTimezone } from "../services/workspaceTimezone";
 
 const TASK_TYPES = ["call", "email", "meeting", "linkedin", "todo", "follow_up", "social_touch", "manual_email", "meeting_prep", "crm_update", "generic_action"] as const;
 const TASK_STATUSES = ["open", "done", "cancelled", "in_progress", "snoozed", "draft"] as const;
@@ -196,7 +198,12 @@ export const tasksRouter = router({
     if (!db) return { open: 0, dueToday: 0, overdue: 0, completed: 0, draftsPending: 0, snoozed: 0, aiOpen: 0 };
     const rows = await db.select({ status: tasks.status, dueAt: tasks.dueAt, source: tasks.source }).from(tasks).where(eq(tasks.workspaceId, ctx.workspace.id));
     const now = Date.now();
-    const endOfToday = new Date(); endOfToday.setHours(23, 59, 59, 999);
+    // "Today" as the WORKSPACE reads it. This was `setHours(23,59,59,999)` on a
+    // bare Date — the container's day, i.e. UTC — so a task due at 8pm Eastern
+    // fell into tomorrow and the Tasks header undercounted "due today" every
+    // evening. workspace_settings.timezone is the setting Settings promises
+    // governs "activity timestamps"; see services/workspaceTimezone.ts.
+    const endOfToday = new Date(endOfZonedDay(await getWorkspaceTimezone(ctx.workspace.id), now));
     const s = { open: 0, dueToday: 0, overdue: 0, completed: 0, draftsPending: 0, snoozed: 0, aiOpen: 0 };
     for (const r of rows) {
       if (r.status === "done") s.completed++;

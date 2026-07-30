@@ -24,103 +24,30 @@ import { getDb } from "../db";
 import { activities, bookingLinks, calendarEvents, leads, meetings, notifications, users, type BookingLink } from "../../drizzle/schema";
 import { sendMeetingInvite } from "../services/meetingScheduler";
 import { hostedPageChatSlug } from "../services/hostedChat";
+import {
+  DEFAULT_HORIZON_DAYS, DEFAULT_WORK_DAYS, formatInZone, generateSlots, isValidTimezone,
+} from "@shared/availability";
 
-/** Availability defaults + generation bounds. */
-const HORIZON_DAYS = 14; // look ahead up to 2 weeks
-const MAX_SLOTS = 40;
-const DEFAULT_WORK_DAYS = [1, 2, 3, 4, 5]; // Mon–Fri (JS weekday numbers)
+/**
+ * Availability bounds. The generator's own defaults live in
+ * @shared/availability; HORIZON_DAYS is kept here because the busy-events query
+ * below must span exactly the window the generator will consider.
+ */
+const HORIZON_DAYS = DEFAULT_HORIZON_DAYS;
 
 function slugify(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
 }
 
-/** Is this a resolvable IANA timezone on this runtime? */
-export function isValidTimezone(tz: string): boolean {
-  try {
-    new Intl.DateTimeFormat("en-US", { timeZone: tz });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/** Offset (ms) of `tz` from UTC at the given instant (DST-aware, via Intl). */
-function tzOffsetMs(tz: string, utcMs: number): number {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit",
-    hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
-  }).formatToParts(new Date(utcMs));
-  const get = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? 0);
-  const asUtc = Date.UTC(get("year"), get("month") - 1, get("day"), get("hour") % 24, get("minute"), get("second"));
-  return asUtc - utcMs;
-}
-
-/** UTC instant for the wall-clock time (y, m, d, minutes-past-midnight) in `tz`. */
-function wallTimeToUtcMs(tz: string, y: number, m: number, d: number, minutes: number): number {
-  const naive = Date.UTC(y, m - 1, d) + minutes * 60000;
-  // Two-pass correction handles DST transitions at the boundary.
-  let utc = naive - tzOffsetMs(tz, naive);
-  utc = naive - tzOffsetMs(tz, utc);
-  return utc;
-}
-
-/** The (y, m, d, weekday) of the given instant, in `tz`. */
-function localDateOf(tz: string, utcMs: number): { y: number; m: number; d: number; dow: number } {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit", weekday: "short",
-  }).formatToParts(new Date(utcMs));
-  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
-  const DOW: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
-  return { y: Number(get("year")), m: Number(get("month")), d: Number(get("day")), dow: DOW[get("weekday")] ?? 1 };
-}
-
-export interface AvailabilityOpts {
-  /** IANA timezone the window is defined in. Null/undefined = UTC. */
-  timezone?: string | null;
-  startHour?: number;
-  endHour?: number;
-  /** JS weekday numbers (0=Sun … 6=Sat) that are bookable. */
-  workDays?: number[];
-}
-
-/**
- * Generate open ISO slots from the rep's working-hours window (defined in
- * THEIR timezone, DST-aware) minus busy events. Pure over its inputs
- * (busy list + now + opts) so it's easy to reason about and test.
+/*
+ * The timezone primitives and the slot generator moved to
+ * @shared/availability so meetingScheduler can use the SAME ones. It could not
+ * import them from here: this router imports sendMeetingInvite from that
+ * service, so the dependency only runs one way. Re-exported because
+ * chatAgents.ts and the tests reach for them through this module.
  */
-export function generateSlots(
-  busy: Array<{ startAt: Date; endAt: Date }>,
-  durationMin: number,
-  nowMs: number,
-  opts: AvailabilityOpts = {},
-): string[] {
-  const tz = opts.timezone && isValidTimezone(opts.timezone) ? opts.timezone : "UTC";
-  const startHour = Math.min(23, Math.max(0, opts.startHour ?? 9));
-  const endHour = Math.min(24, Math.max(startHour + 1, opts.endHour ?? 17));
-  const workDays = opts.workDays?.length ? opts.workDays : DEFAULT_WORK_DAYS;
-
-  const slots: string[] = [];
-  const leadMs = 60 * 60 * 1000; // require ≥1h lead time
-  const today = localDateOf(tz, nowMs);
-
-  for (let d = 0; d < HORIZON_DAYS && slots.length < MAX_SLOTS; d++) {
-    // Advance the LOCAL calendar date by d days (proleptic arithmetic is safe
-    // here; the tz conversion happens in wallTimeToUtcMs per slot).
-    const dayUtcNoon = Date.UTC(today.y, today.m - 1, today.d + d, 12);
-    const local = localDateOf(tz, dayUtcNoon);
-    if (!workDays.includes(local.dow)) continue;
-    for (let mins = startHour * 60; mins + durationMin <= endHour * 60; mins += durationMin) {
-      const startMs = wallTimeToUtcMs(tz, local.y, local.m, local.d, mins);
-      const start = new Date(startMs);
-      const end = new Date(startMs + durationMin * 60000);
-      if (startMs < nowMs + leadMs) continue;
-      const overlaps = busy.some((b) => start < b.endAt && end > b.startAt);
-      if (!overlaps) slots.push(start.toISOString());
-      if (slots.length >= MAX_SLOTS) break;
-    }
-  }
-  return slots;
-}
+export { isValidTimezone, generateSlots };
+export type { AvailabilityOpts } from "@shared/availability";
 
 /** Parse the stored comma-separated workDays column into weekday numbers. */
 export function parseWorkDays(s: string | null | undefined): number[] {
@@ -283,7 +210,11 @@ export async function bookSlotForLink(link: BookingLink, opts: BookSlotOpts) {
 
   // Notify the rep + log a timeline activity so a self-booked meeting never
   // goes unseen — critical when no calendar is connected (no provider invite).
-  const whenLabel = `${start.toISOString().slice(0, 16).replace("T", " ")} UTC`;
+  // In the LINK's own timezone, with the zone named. It was
+  // `start.toISOString()` + " UTC" — honest, but it made a rep in New York read
+  // 13:00 for a 9am meeting they had just been booked into, on the notification
+  // whose whole job is telling them when to show up.
+  const whenLabel = formatInZone(start, link.timezone ?? "UTC");
   try {
     await db.insert(notifications).values({
       workspaceId: link.workspaceId,
