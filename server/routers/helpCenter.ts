@@ -116,7 +116,8 @@ export const helpCenterRouter = router({
       const [article] = await db.select().from(helpArticles).where(and(...conditions)).limit(1);
       if (!article) throw new TRPCError({ code: "NOT_FOUND" });
       // Increment view count
-      await db.update(helpArticles).set({ viewCount: sql`${helpArticles.viewCount} + 1` }).where(eq(helpArticles.id, article.id));
+      await db.update(helpArticles).set({ viewCount: sql`${helpArticles.viewCount} + 1` })
+        .where(and(eq(helpArticles.id, article.id), eq(helpArticles.workspaceId, ctx.workspace.id)));
       return article;
     }),
 
@@ -232,17 +233,35 @@ export const helpCenterRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const db = await requireDb();
+      // ⚠️ This had NO ownership check of any kind: `articleId` went straight into
+      // a feedback row and into a counter bump, so a caller could rate — and skew
+      // the helpful/not-helpful counts of — any workspace's article by id. Every
+      // other write to helpArticles in this file is workspace-scoped (see the
+      // update at the bottom of the admin section); this one was missed.
+      const [owned] = await db
+        .select({ id: helpArticles.id })
+        .from(helpArticles)
+        .where(and(eq(helpArticles.id, input.articleId), eq(helpArticles.workspaceId, ctx.workspace.id)))
+        .limit(1);
+      if (!owned) throw new TRPCError({ code: "NOT_FOUND", message: "Article not found" });
       await db.insert(helpArticleFeedback).values({
-        articleId: input.articleId,
+        articleId: owned.id,
         userId: ctx.user.id,
         helpful: input.helpful,
         comment: input.comment,
       });
-      // Update counts
+      // Update counts. The WHERE is written out at each statement rather than
+      // hoisted into a `const scoped = ...`: a where clause behind a variable is
+      // invisible to the tenant-scope scanner in server/tenantScope.test.ts,
+      // which reads the argument text. Hoisting it here would have made the very
+      // statement this fix is about unguardable — verified by reintroducing the
+      // bug and watching the guard stay green.
       if (input.helpful) {
-        await db.update(helpArticles).set({ helpfulCount: sql`${helpArticles.helpfulCount} + 1` }).where(eq(helpArticles.id, input.articleId));
+        await db.update(helpArticles).set({ helpfulCount: sql`${helpArticles.helpfulCount} + 1` })
+          .where(and(eq(helpArticles.id, owned.id), eq(helpArticles.workspaceId, ctx.workspace.id)));
       } else {
-        await db.update(helpArticles).set({ notHelpfulCount: sql`${helpArticles.notHelpfulCount} + 1` }).where(eq(helpArticles.id, input.articleId));
+        await db.update(helpArticles).set({ notHelpfulCount: sql`${helpArticles.notHelpfulCount} + 1` })
+          .where(and(eq(helpArticles.id, owned.id), eq(helpArticles.workspaceId, ctx.workspace.id)));
       }
     }),
 

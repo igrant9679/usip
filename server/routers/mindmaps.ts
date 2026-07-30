@@ -177,7 +177,7 @@ const mindmapsRouter = router({
       await db
         .update(mindmaps)
         .set({ updatedAt: new Date() })
-        .where(eq(mindmaps.id, input.id));
+        .where(and(eq(mindmaps.id, input.id), eq(mindmaps.workspaceId, wsId)));
     }),
 
   // ---------------------------------------------------------------------------

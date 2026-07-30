@@ -91,7 +91,7 @@ export const optimizationRouter = router({
         await db
           .update(optimizationRecommendations)
           .set({ status: "approved" as never, appliedByUserId: ctx.user.id })
-          .where(eq(optimizationRecommendations.id, input.id));
+          .where(and(eq(optimizationRecommendations.id, input.id), eq(optimizationRecommendations.workspaceId, ctx.workspace.id)));
         return {
           ok: true as const,
           applied: false as const,
@@ -181,7 +181,7 @@ export const optimizationRouter = router({
           dismissedAt: new Date(),
           dismissedByUserId: ctx.user.id,
         })
-        .where(eq(optimizationRecommendations.id, input.id));
+        .where(and(eq(optimizationRecommendations.id, input.id), eq(optimizationRecommendations.workspaceId, ctx.workspace.id)));
       return { ok: true as const };
     }),
 
@@ -198,7 +198,7 @@ export const optimizationRouter = router({
       await db
         .update(optimizationRecommendations)
         .set({ status: "pending" as never, dismissedAt: null, dismissedByUserId: null })
-        .where(eq(optimizationRecommendations.id, input.id));
+        .where(and(eq(optimizationRecommendations.id, input.id), eq(optimizationRecommendations.workspaceId, ctx.workspace.id)));
       return { ok: true as const };
     }),
 

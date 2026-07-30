@@ -63,31 +63,65 @@ interface Site {
   line: number;
 }
 
-/** `.delete(table).where(...)` — the chain may wrap across lines. */
-const DELETE_RE = /\.delete\((\w+)\)\s*\n?\s*\.where\(([\s\S]{0,300}?)\)\s*;/g;
-
-function collectSites(): { sites: Site[]; files: number; statements: number } {
+/**
+ * Statement finder for both kinds.
+ *
+ * The WHERE is extracted by BALANCING PARENS from `.where(`, not by regex: an
+ * update's `.set({...})` nests braces and parens, and a bounded regex silently
+ * captured the wrong text. Updates additionally require a `.set(` in the same
+ * statement — without that, `createHash().update(x).digest()` matches, which is
+ * exactly what 8 of the first 530 "update" hits turned out to be.
+ */
+function collectSites(
+  kind: "delete" | "update",
+  opts: { wherelessOnly?: boolean } = {},
+): { sites: Site[]; files: number; statements: number } {
   const files = sourceFiles(join(ROOT, "server"));
   const sites: Site[] = [];
   let statements = 0;
+  const call = `.${kind}(`;
   for (const f of files) {
     const rel = f.slice(ROOT.length + 1).split(sep).join("/");
     const raw = readFileSync(f, "utf8");
     const src = stripComments(raw);
     const nth = new Map<string, number>();
-    for (const m of src.matchAll(DELETE_RE)) {
+    // Doubled escapes: this is a TEMPLATE LITERAL, where `\.` collapses to `.`
+    // and `\w` to `w`. Getting that wrong made the pattern `.delete((w+))`,
+    // which matched nothing at all — and a scanner that finds nothing looks
+    // exactly like a codebase with no problem. The floor assertions below are
+    // what caught it.
+    for (const m of src.matchAll(new RegExp(`\\.${kind}\\((\\w+)\\)`, "g"))) {
       const table = m[1];
-      const where = m[2].split(/\s+/).join(" ").trim();
+      const semi = src.indexOf(";", m.index! + m[0].length);
+      const stmt = src.slice(m.index! + m[0].length, semi > 0 ? semi : m.index! + 1500).slice(0, 2500);
+      if (kind === "update" && !stmt.includes(".set(")) continue; // not a Drizzle update
       statements++;
       const n = (nth.get(table) ?? 0) + 1;
       nth.set(table, n);
-      // Only statements a caller can steer are interesting: a cleanup keyed on a
-      // constant or an internal id cannot be aimed at another tenant.
-      if (!/input\.\w+|\bctx\.user\.id\b/.test(where)) continue;
-      if (/workspaceId/.test(where)) continue;
       let idx = -1;
-      for (let k = 0; k < n; k++) idx = raw.indexOf(`.delete(${table})`, idx + 1);
-      const line = idx >= 0 ? raw.slice(0, idx).split("\n").length : 0;
+      for (let k = 0; k < n; k++) idx = raw.indexOf(`${call}${table})`, idx + 1);
+      const line = idx >= 0 ? raw.slice(0, idx).split(String.fromCharCode(10)).length : 0;
+
+      const wAt = stmt.indexOf(".where(");
+      if (wAt < 0) {
+        if (opts.wherelessOnly) sites.push({ key: `${rel}::${table}::<no where>`, rel, table, where: "<no where>", line });
+        continue;
+      }
+      if (opts.wherelessOnly) continue;
+      let depth = 0, end = -1;
+      for (let i = wAt + ".where".length; i < stmt.length; i++) {
+        if (stmt[i] === "(") depth++;
+        else if (stmt[i] === ")" && --depth === 0) { end = i; break; }
+      }
+      if (end < 0) continue;
+      const where = stmt.slice(wAt + ".where(".length, end).split(/\s+/).join(" ").trim();
+      // Only statements a caller can steer are interesting: one keyed on a
+      // constant or an internal id cannot be aimed at another tenant.
+      if (!/input\.\w+/.test(where)) continue;
+      if (/workspaceId/.test(where)) continue;
+      // `ctx.user.id` is session-derived, not caller input — a per-user boundary
+      // (e.g. "my own profile row") is a boundary.
+      if (/ctx\.user\.id/.test(where)) continue;
       sites.push({ key: `${rel}::${table}::${where}`, rel, table, where, line });
     }
   }
@@ -114,7 +148,7 @@ const ALLOWED: Record<string, string> = {
 };
 
 describe("no destructive statement can be aimed at another tenant", () => {
-  const { sites, files, statements } = collectSites();
+  const { sites, files, statements } = collectSites("delete");
 
   it("finds source and statements to scan (guards the scanner itself)", () => {
     // Three separate scans in this repo have returned ~0 hits and looked like a
@@ -189,5 +223,187 @@ describe("no destructive statement can be aimed at another tenant", () => {
       expect(check, `${table}: ownership check must precede the delete`).toBeGreaterThan(-1);
       expect(at).toBeGreaterThan(check);
     }
+  });
+});
+
+/* ─── UPDATE: the same rule, one ratchet behind ──────────────────────────── */
+
+/**
+ * An UPDATE aimed at another tenant rewrites instead of deleting — same class,
+ * same blast radius. Scanned the same 223 files:
+ *
+ *   • **522 Drizzle update statements** (of 530 raw `.update(` matches — the
+ *     other 8 are `createHash().update()`, which is why this scan requires a
+ *     `.set(` in the same statement).
+ *   • **0 with no WHERE at all.** Worth stating plainly: there is no
+ *     update-every-row bug in this codebase.
+ *   • 67 caller-steerable with no workspaceId. 11 of those are keyed on
+ *     `ctx.user.id`, which is a session-derived per-user boundary rather than
+ *     caller input, so the rule below does not count them.
+ *   • **ONE real bug: `helpCenter.rate` had no ownership check of any kind** —
+ *     `articleId` went straight into a feedback row and a counter bump, so a
+ *     caller could skew the helpful/not-helpful counts of any workspace's
+ *     article. Every other write to help_articles in that file is scoped.
+ *
+ * The remaining sites are protected by a workspace-scoped ownership select
+ * earlier in the same procedure. Ten of them were read individually and are now
+ * scoped on the statement too — the standard opportunityIntelligence.ts already
+ * sets for itself: "workspaceId on the UPDATE so a concurrent / crafted call
+ * can't mutate a different workspace's opportunity even if the prior SELECT was
+ * OK."
+ *
+ * ⚠️ THE LIST BELOW IS A RATCHET, NOT A CERTIFICATE. These entries were
+ * classified by TRIAGE — the enclosing procedure contains a workspace-scoped
+ * check — and were NOT each read line by line. They are recorded so that a NEW
+ * unscoped update fails immediately, and so the remainder can be burned down
+ * deliberately instead of being rediscovered. Do not add to it: scope the
+ * statement instead.
+ */
+const UPDATE_BASELINE: string[] = [
+  "server/routers/admin.ts::workspaceMembers::eq(workspaceMembers.id, input.memberId)",
+  "server/routers/admin.ts::workspaceMembers::eq(workspaceMembers.id, input.memberId)",
+  "server/routers/admin.ts::workspaceMembers::eq(workspaceMembers.id, input.memberId)",
+  "server/routers/admin.ts::workspaceMembers::eq(workspaceMembers.id, input.memberId)",
+  "server/routers/admin.ts::workspaceMembers::eq(workspaceMembers.id, input.memberId)",
+  "server/routers/admin.ts::workspaceMembers::eq(workspaceMembers.id, input.memberId)",
+  "server/routers/aiPipeline.ts::emailDrafts::eq(emailDrafts.id, input.draftId)",
+  "server/routers/aiPipeline.ts::emailDrafts::eq(emailDrafts.id, input.draftId)",
+  "server/routers/are/icp.ts::icpProfiles::eq(icpProfiles.id, input.id)",
+  "server/routers/are/prospects.ts::prospectIntelligence::eq(prospectIntelligence.prospectQueueId, input.prospectId)",
+  "server/routers/are/prospects.ts::prospectQueue::eq(prospectQueue.id, input.prospectId)",
+  "server/routers/calendar.ts::calendarAccounts::eq(calendarAccounts.id, input.accountId)",
+  "server/routers/calendar.ts::calendarEvents::eq(calendarEvents.id, input.dbId)",
+  "server/routers/calendar.ts::calendarEvents::eq(calendarEvents.id, input.eventId)",
+  "server/routers/crm.ts::contacts::eq(contacts.id, input.id)",
+  "server/routers/crm.ts::opportunities::eq(opportunities.id, input.id)",
+  "server/routers/crm.ts::opportunities::eq(opportunities.id, input.id)",
+  "server/routers/cs.ts::customers::eq(customers.id, input.id)",
+  "server/routers/cs.ts::customers::eq(customers.id, input.id)",
+  "server/routers/customFields.ts::accounts::eq(accounts.id, input.entityId)",
+  "server/routers/customFields.ts::contacts::eq(contacts.id, input.entityId)",
+  "server/routers/customFields.ts::leads::eq(leads.id, input.entityId)",
+  "server/routers/customFields.ts::opportunities::eq(opportunities.id, input.entityId)",
+  "server/routers/emailVerification.ts::contacts::eq(contacts.id, input.contactId)",
+  "server/routers/helpCenter.ts::aiHelpConversations::eq(aiHelpConversations.id, input.conversationId)",
+  "server/routers/mailbox.ts::unipileEmailsCache::and( eq(unipileEmailsCache.unipileAccountId, acc.unipileAccountId), eq(unipileEmailsCache.emailId, input.messageId), ),",
+  "server/routers/operations.ts::campaigns::eq(campaigns.id, input.campaignId)",
+  "server/routers/opportunityIntelligence.ts::stageApprovals::eq(stageApprovals.id, input.approvalId)",
+  "server/routers/proposals.ts::proposalMilestones::eq(proposalMilestones.id, input.id)",
+  "server/routers/proposals.ts::proposals::eq(proposals.id, input.id)",
+  "server/routers/proposals.ts::proposals::eq(proposals.id, input.id)",
+  "server/routers/proposals.ts::proposals::eq(proposals.id, input.id)",
+  "server/routers/proposals.ts::proposals::eq(proposals.id, input.id)",
+  "server/routers/proposals.ts::proposals::eq(proposals.id, input.id)",
+  "server/routers/proposals.ts::proposals::eq(proposals.id, input.id)",
+  "server/routers/proposals.ts::proposals::eq(proposals.id, input.proposalId)",
+  "server/routers/proposals.ts::proposals::eq(proposals.id, input.proposalId)",
+  "server/routers/prospects.ts::prospects::eq(prospects.id, input.prospectId)",
+  "server/routers/reports.ts::savedReports::eq(savedReports.id, input.id)",
+  "server/routers/reports.ts::savedReports::eq(savedReports.id, input.id)",
+  "server/routers/savedSections.ts::emailSavedSections::eq(emailSavedSections.id, input.id)",
+  "server/routers/segments.ts::audienceSegments::eq(audienceSegments.id, input.segmentId)",
+  "server/routers/sendingAccounts.ts::senderPools::eq(senderPools.id, input.poolId)",
+  "server/routers/sendingAccounts.ts::sendingAccounts::eq(sendingAccounts.id, input.id)",
+  "server/routers/subjectAB.ts::subjectVariants::eq(subjectVariants.id, input.variantId)",
+];
+
+describe("no UPDATE can be aimed at another tenant", () => {
+  const { sites, files, statements } = collectSites("update");
+
+  it("finds source and statements to scan (guards the scanner itself)", () => {
+    expect(files).toBeGreaterThan(150);
+    // 522 today. A floor well under that still catches a scan that silently
+    // stops matching — which is how three scans in this repo reported a clean
+    // codebase while being broken.
+    expect(statements).toBeGreaterThan(400);
+  });
+
+  it("no Drizzle update runs without a WHERE clause", () => {
+    // An update with no where rewrites every row in the table, in every
+    // workspace, and reports success.
+    const whereless = collectSites("update", { wherelessOnly: true }).sites;
+    expect(whereless.map((s) => `${s.rel}:${s.line} update(${s.table})`)).toEqual([]);
+  });
+
+  it("every caller-steerable update is scoped, or in the recorded baseline", () => {
+    const baseline = new Set(UPDATE_BASELINE);
+    const offenders = sites
+      .filter((s) => !baseline.has(s.key))
+      .map((s) => `${s.rel}:${s.line} update(${s.table}) — where: ${s.where}`);
+    expect(
+      offenders,
+      offenders.length
+        ? `
+
+Update(s) keyed on caller input with no workspace filter:
+  ${offenders.join("\n  ")}
+
+` +
+            `Add eq(<table>.workspaceId, ctx.workspace.id) to the WHERE — even when a
+` +
+            `check above it already passed. A prior SELECT does not protect a later
+` +
+            `statement from a crafted or concurrent call, and this is how one
+` +
+            `unchecked rate() ended up writing to any workspace's article.
+` +
+            `Do NOT add to UPDATE_BASELINE: it records what was already there.
+`
+        : undefined,
+    ).toEqual([]);
+  });
+
+  it("no destructive statement hides its WHERE behind a variable", () => {
+    // This scan reads the ARGUMENT TEXT of .where(), so `.where(scoped)` is
+    // invisible to it — the clause could be anything. Found the hard way: the
+    // helpCenter fix in this very commit first hoisted its clause into a
+    // `const scoped = ...`, and reintroducing the bug then left the guard GREEN.
+    // A statement the guard cannot read is not a statement the guard protects,
+    // so the few that exist must be named here.
+    const ALIASED_OK: Record<string, string> = {
+      "server/routers/are/prospects.ts::areExecutionQueue":
+        "queueWhere is built immediately above with eq(workspaceId, ctx.workspace.id) as its first term and is used by the count and the update together — hoisting is what keeps those two in agreement.",
+    };
+    const offenders: string[] = [];
+    for (const f of sourceFiles(join(ROOT, "server"))) {
+      const rel = f.slice(ROOT.length + 1).split(sep).join("/");
+      const src = stripComments(readFileSync(f, "utf8"));
+      // No `;` between the call and its .where — without that the window runs
+      // past the end of the statement and pairs a delete with a LATER
+      // statement's clause. It reported two such phantoms on its first run
+      // (voiceAgents.remove and an ARE update), both of which write their
+      // clause out in full.
+      for (const m of src.matchAll(/\.(delete|update)\((\w+)\)([^;]{0,600}?)\.where\(([A-Za-z_$][\w$]*)\)/g)) {
+        const [, kind, table, mid, arg] = m;
+        if (kind === "update" && !mid.includes(".set(")) continue;
+        if (`${rel}::${table}` in ALIASED_OK) continue;
+        offenders.push(`${rel} ${kind}(${table}).where(${arg})`);
+      }
+    }
+    expect(
+      offenders,
+      offenders.length
+        ? `\n\nWHERE clause hidden behind a variable — this guard cannot read it:\n  ${offenders.join("\n  ")}\n\n` +
+            `Write the clause out at the statement, or name it in ALIASED_OK with the\n` +
+            `reason. An unreadable statement silently passes every check above.\n`
+        : undefined,
+    ).toEqual([]);
+  });
+
+  it("the baseline only shrinks", () => {
+    const live = new Set(sites.map((s) => s.key));
+    const stale = UPDATE_BASELINE.filter((k) => !live.has(k));
+    expect(
+      stale,
+      stale.length
+        ? `
+
+${stale.length} baseline entr(y/ies) no longer match — good news if you scoped them.
+` +
+            `Delete these lines so the list keeps shrinking:
+  ${stale.join("\n  ")}
+`
+        : undefined,
+    ).toEqual([]);
   });
 });

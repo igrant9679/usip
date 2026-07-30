@@ -229,7 +229,7 @@ export const opportunityIntelligenceRouter = router({
       await db
         .update(opportunities)
         .set({ winProb: Math.round(result.winProbability ?? opp.winProb) })
-        .where(eq(opportunities.id, input.opportunityId));
+        .where(and(eq(opportunities.id, input.opportunityId), eq(opportunities.workspaceId, ctx.workspace.id)));
 
       return result;
     }),

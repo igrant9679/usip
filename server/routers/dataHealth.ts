@@ -103,13 +103,13 @@ export const dataHealthRouter = router({
         }
       }
       if (Object.keys(patch).length > 0) {
-        await db.update(contacts).set(patch).where(eq(contacts.id, input.primaryId));
+        await db.update(contacts).set(patch).where(and(eq(contacts.id, input.primaryId), eq(contacts.workspaceId, wsId)));
       }
 
       // Re-point FK references from secondary → primary
-      await db.update(activities).set({ relatedId: input.primaryId }).where(and(eq(activities.relatedType, "contact"), eq(activities.relatedId, input.secondaryId)));
-      await db.update(emailDrafts).set({ toContactId: input.primaryId }).where(eq(emailDrafts.toContactId, input.secondaryId));
-      await db.update(enrollments).set({ contactId: input.primaryId }).where(eq(enrollments.contactId, input.secondaryId));
+      await db.update(activities).set({ relatedId: input.primaryId }).where(and(eq(activities.relatedType, "contact"), eq(activities.relatedId, input.secondaryId), eq(activities.workspaceId, wsId)));
+      await db.update(emailDrafts).set({ toContactId: input.primaryId }).where(and(eq(emailDrafts.toContactId, input.secondaryId), eq(emailDrafts.workspaceId, wsId)));
+      await db.update(enrollments).set({ contactId: input.primaryId }).where(and(eq(enrollments.contactId, input.secondaryId), eq(enrollments.workspaceId, wsId)));
       // For opportunity contact roles, delete the secondary's role if primary already has one on the same opp
       const secRoles = await db.select().from(opportunityContactRoles).where(and(eq(opportunityContactRoles.contactId, input.secondaryId), eq(opportunityContactRoles.workspaceId, wsId)));
       for (const role of secRoles) {
