@@ -727,6 +727,25 @@ export const emailDrafts = mysqlTable(
     sendingAccountId: int("sendingAccountId"),
     /** Zero-based step index this draft was generated for. NULL for ad-hoc / non-sequence drafts. */
     stepIndex: int("stepIndex"),
+    /**
+     * Migration 0141 — which sequence_ab_variants row supplied this draft's copy.
+     *
+     * Without it, A/B was unmeasurable: `sequenceAbVariants.openCount` and
+     * `replyCount` had no way to be attributed, stayed permanently 0, and
+     * autoPromoteAbWinners consequently promoted the first variant by array
+     * order (fixed to decline instead, in 899ca52). NULL for every draft that
+     * did not come from a variant, which is most of them.
+     */
+    abVariantId: int("abVariantId"),
+    /**
+     * Migration 0141 — set the FIRST time a reply is attributed to this draft.
+     *
+     * Exists so variant replyCount counts one reply per draft. inboundReplyPoller
+     * inserts a row per inbound message, so a thread with four messages would
+     * otherwise count four replies against one send and produce a reply rate
+     * above 100%.
+     */
+    firstReplyAt: timestamp("firstReplyAt"),
     trackingToken: varchar("trackingToken", { length: 64 }), // unique token for open/click tracking
     openCount: int("openCount").default(0).notNull(),
     clickCount: int("clickCount").default(0).notNull(),

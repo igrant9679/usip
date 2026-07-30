@@ -530,9 +530,13 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
             sequenceId: enrollment.sequenceId,
             enrollmentId: enrollment.id,
             stepIndex,
+            // Migration 0141. Without this the variant's openCount/replyCount
+            // could never be attributed, which is why A/B promotion had no
+            // signal to work from. NULL when the step has no variants.
+            abVariantId: chosenVariantId,
             status: "pending_review",
             aiGenerated: false,
-          });
+          } as never);
           // Insert succeeded — NOW bump the chosen variant's sent count.
           // If we'd done this before the insert and the insert threw, the
           // variant counter would have over-counted relative to actual

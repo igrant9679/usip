@@ -27,7 +27,7 @@ import {
   sequences,
   prospectQueue,
 } from "../drizzle/schema";
-import { eq, and, or, desc, inArray, isNull } from "drizzle-orm";
+import { eq, and, or, desc, inArray, isNull, sql } from "drizzle-orm";
 import { decryptField } from "./emailAdapter";
 import { bumpCampaignCounter } from "./campaignCounters";
 import { processSignal } from "./routers/are/execution";
@@ -412,6 +412,38 @@ export async function processInboundReply(data: InboundReplyData) {
       matchedDraft.sequenceId,
       "totalReplied",
     );
+  }
+
+  /**
+   * 6b. Attribute the reply to its A/B variant (migration 0141).
+   *
+   * ONE reply per draft, gated on `firstReplyAt`. This function runs per inbound
+   * MESSAGE, so a four-message thread against a single send would otherwise
+   * count four replies and produce a variant reply rate above 100%.
+   *
+   * The gate is a conditional UPDATE rather than a read-then-write: the poller
+   * can process two messages from the same thread in one pass, and
+   * `WHERE firstReplyAt IS NULL` makes the claim atomic, so only the update that
+   * actually set the marker goes on to bump the counter. Same claim-before-act
+   * shape as the duplicate-send fix in 1d9428e.
+   */
+  if (matchedDraft?.id && matchedDraft?.abVariantId) {
+    try {
+      const claim = await db
+        .update(emailDrafts)
+        .set({ firstReplyAt: new Date() } as never)
+        .where(and(eq(emailDrafts.id, matchedDraft.id), isNull(emailDrafts.firstReplyAt)));
+      const claimed = Number((claim as any)?.[0]?.affectedRows ?? (claim as any)?.affectedRows ?? 0);
+      if (claimed > 0) {
+        const { sequenceAbVariants } = await import("../drizzle/schema");
+        await db
+          .update(sequenceAbVariants)
+          .set({ replyCount: sql`${sequenceAbVariants.replyCount} + 1` } as never)
+          .where(eq(sequenceAbVariants.id, matchedDraft.abVariantId));
+      }
+    } catch (e) {
+      console.warn("[InboundPoller] variant reply attribution failed:", (e as Error).message);
+    }
   }
 
   // 7. Log an activity. Write to the contact/lead, AND mirror to every

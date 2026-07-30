@@ -3010,6 +3010,29 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  {
+    /**
+     * A/B attribution. `sequence_ab_variants.openCount` / `replyCount` were
+     * written by nothing and could not be: a draft recorded its stepIndex but
+     * not WHICH VARIANT supplied its copy, so an open or a reply had no variant
+     * to be counted against. Both stayed 0, which made autoPromoteAbWinners
+     * score every variant equally and promote the first one by array order.
+     *
+     * `abVariantId` closes that gap. `firstReplyAt` exists so replyCount counts
+     * one reply per draft — inboundReplyPoller inserts a row per inbound
+     * message, so a four-message thread would otherwise report a reply rate
+     * over 100%.
+     *
+     * Index on abVariantId because the aggregation reads drafts by variant.
+     */
+    name: "0141_ab_variant_attribution.sql",
+    statements: [
+      "ALTER TABLE `email_drafts` ADD COLUMN `abVariantId` int NULL",
+      "ALTER TABLE `email_drafts` ADD COLUMN `firstReplyAt` timestamp NULL",
+      "CREATE INDEX `ix_ed_ab_variant` ON `email_drafts` (`abVariantId`)",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------
