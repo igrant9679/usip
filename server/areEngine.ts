@@ -59,6 +59,9 @@ import { sendWorkspaceEmail, sendCampaignEmailViaPool } from "./emailDelivery";
 import { injectTracking } from "./mergeVars";
 import { resolveBookingUrl } from "./mergeVars";
 import { ARE_DEFAULT_SOURCES, normalizeSources } from "@shared/areSources";
+// One rule for a step's index + variant key, shared with the A/B metadata
+// upsert in routers/are/prospects.ts — see shared/areSequenceSteps.ts.
+import { normalizeSequence } from "@shared/areSequenceSteps";
 import { apolloPulledToday, apolloSearchPeople, getApolloDailyCap } from "./services/apollo";
 import { appBaseUrl as publicAppOrigin } from "./appUrl";
 
@@ -134,53 +137,6 @@ function textToHtml(text: string): string {
     .split(/\n{2,}/)
     .map((para) => `<p>${para.replace(/\n/g, "<br>")}</p>`)
     .join("\n");
-}
-
-interface NormalizedStep {
-  stepIndex: number;
-  channel: "email" | "linkedin" | "sms" | "voice";
-  subject: string;
-  body: string;
-  variantKey: string;
-  /** Cumulative day offset from enrollment for scheduling. */
-  dayOffset: number;
-}
-
-/**
- * Normalise a stored generatedSequence into schedulable steps. Handles both
- * the engine/agent shape ({stepIndex, day, channel, subject, body, variantKey})
- * and the older seed shape ({step, waitDays, channel, subject}).
- */
-function normalizeSequence(raw: unknown): NormalizedStep[] {
-  if (!Array.isArray(raw)) return [];
-  const validChannels = ["email", "linkedin", "sms", "voice"];
-  let cumulativeDay = 0;
-  return raw.map((s, i) => {
-    const step = (s ?? {}) as Record<string, unknown>;
-    const ch = String(step.channel ?? "email").toLowerCase();
-    const channel = (validChannels.includes(ch) ? ch : "email") as NormalizedStep["channel"];
-    // `day` is a cumulative offset; `waitDays` is a gap from the previous step.
-    let dayOffset: number;
-    if (typeof step.day === "number") {
-      dayOffset = step.day;
-    } else {
-      cumulativeDay += typeof step.waitDays === "number" ? step.waitDays : i === 0 ? 0 : 2;
-      dayOffset = cumulativeDay;
-    }
-    return {
-      stepIndex:
-        typeof step.stepIndex === "number"
-          ? step.stepIndex
-          : typeof step.step === "number"
-            ? step.step
-            : i,
-      channel,
-      subject: String(step.subject ?? ""),
-      body: String(step.body ?? ""),
-      variantKey: String(step.variantKey ?? "A"),
-      dayOffset: Math.max(0, dayOffset),
-    };
-  });
 }
 
 /** Serialize an unknown thrown value into a JSON-friendly details object

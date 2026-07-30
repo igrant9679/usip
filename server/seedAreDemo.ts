@@ -212,7 +212,16 @@ export async function seedAreDemoForAllWorkspaces(): Promise<void> {
         );
       }
 
-      // ── A/B Variants tab (2 steps × A/B, nonzero so reply-rate shows) ──
+      // ── Step-performance tab (2 steps × A/B) ──
+      // ⚠️ The sentCount/openCount/replyCount/meetingCount below no longer show
+      // up anywhere: those columns are DEAD (5b848e6 / execution.ts) and the tab
+      // now DERIVES every number from are_execution_queue + are_signal_log,
+      // which this seeder does not write. So these four rows render at 0 sends
+      // and 0%, not the "nonzero so reply-rate shows" this comment used to
+      // claim. Left as data rather than "fixed" by seeding fake dispatched sends
+      // — fabricated queue rows would flow into the workspace-wide performance
+      // surfaces as real outbound, which is a worse lie than an empty demo tab.
+      // Whether the demo campaign is still worth seeding is the owner's call.
       await db.insert(areAbVariants).values([
         { workspaceId: ws.id, campaignId, stepIndex: 0, variantKey: "A", hookType: "personalisation", subjectLine: "Quick idea for {{company}}'s RevOps", bodyPreview: "Noticed you're consolidating your stack — most teams we work with…", sentCount: 120, openCount: 71, replyCount: 9, meetingCount: 2, isWinner: true, promotedAt: new Date(Date.now() - 2 * 86_400_000) },
         { workspaceId: ws.id, campaignId, stepIndex: 0, variantKey: "B", hookType: "trigger_event", subjectLine: "Congrats on the raise — one thought", bodyPreview: "Saw the funding news. Teams at your stage usually hit pipeline visibility…", sentCount: 118, openCount: 63, replyCount: 5, meetingCount: 1, isWinner: false },

@@ -47,6 +47,7 @@ import {
   prospectQueue,
   voiceCalls,
 } from "../../drizzle/schema";
+import { normalizeVariantKey } from "@shared/variantKeys";
 
 /** Percentage (0-100, one decimal) guarded against a zero denominator. */
 export function rate(numerator: number, denominator: number): number {
@@ -673,7 +674,11 @@ export function computeVariantCells(
   const lastByProspect = new Map<number, { step: number; v: string; at: number }>();
   for (const s of sends) {
     const step = Number(s.stepIndex ?? 0);
-    const v = String(s.variantKey ?? "A");
+    // Normalised, not just defaulted: `variantKey` was an unconstrained string
+    // an LLM supplied for the whole life of this feature, so historical rows
+    // can carry anything. An unrecognised key must fold into A rather than
+    // render as a second "variant" splitting the sample — shared/variantKeys.ts.
+    const v = normalizeVariantKey(s.variantKey);
     bump(variantCellKey(step, v), "sent");
     // Only sends carrying a pixel can ever report an open; counting pre-0129
     // sends in the denominator would understate the open rate forever.
@@ -765,15 +770,18 @@ export async function getAbVariantStats(
       eq(areAbVariants.workspaceId, workspaceId),
       eq(areAbVariants.campaignId, campaignId),
     ));
+  // Both sides of this join normalise the key the same way — a stored row whose
+  // key or step index disagrees with the sends does not merely fail to label
+  // them, it mints an extra cell here and the tab shows one variant twice.
+  const storedKey = (r: typeof stored[number]) =>
+    cellKey(Number(r.stepIndex), normalizeVariantKey(r.variantKey));
   for (const row of stored) {
     // Surface a defined variant even before its first send, so a freshly
-    // generated A/B pair appears at 0 sends instead of vanishing.
-    const k = cellKey(Number(row.stepIndex), String(row.variantKey));
+    // generated variant appears at 0 sends instead of vanishing.
+    const k = storedKey(row);
     if (!cells.has(k)) cells.set(k, { sent: 0, replies: 0, meetings: 0, opens: 0, trackable: 0 });
   }
-  const metaMap = new Map(
-    stored.map((r) => [cellKey(Number(r.stepIndex), String(r.variantKey)), r]),
-  );
+  const metaMap = new Map(stored.map((r) => [storedKey(r), r]));
 
   const out: AbVariantStats[] = [...cells.entries()].map(([k, c]) => {
     const [stepStr, variantKey] = k.split(":");

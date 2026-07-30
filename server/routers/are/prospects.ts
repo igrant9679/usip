@@ -15,8 +15,19 @@
  * SEQUENCE AGENT — for each enriched prospect:
  *   1. Generates a personalised multi-step outreach sequence
  *   2. Self-evaluates quality on 4 dimensions (specificity/clarity/brevity/CTA)
- *   3. If score < 28/40, automatically rewrites until threshold met (max 3 attempts)
- *   4. Generates A/B variant with different hook type
+ *   3. Records that score as a FLAG (a low score shows a Review badge; it does
+ *      not trigger a rewrite — see personalizeForProspect)
+ *   4. Records the opener as the campaign's A/B variant A, for the A/B tab's
+ *      subject/hook labels
+ *
+ * ⚠️ There is NO A/B EXPERIMENT here, despite the tab's name. Nothing in this
+ * file — or anywhere else — ever produces a variant B: every prospect gets one
+ * uniquely personalised sequence, so there is no shared copy to test and no
+ * split to assign. The tab measures per-step performance with a variant label
+ * that is always "A". Header item 4 used to read "Generates A/B variant with
+ * different hook type", which it never did. Building a real experiment needs a
+ * variant-assignment mechanism (see shared/variantKeys.ts) and is a product
+ * decision, not something to infer.
  */
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, ne, sql } from "drizzle-orm";
@@ -43,6 +54,10 @@ import { workspaceProcedure } from "../../_core/workspace";
 import { resolveVerifiedEmail } from "../../services/scraper";
 import { apolloResolveDomain } from "../../services/apollo";
 import { buildBrandContext } from "../../services/brandContext";
+// The A/B metadata row must be keyed by the same step index + variant key the
+// execution queue uses, so both sides read one rule. See shared/variantKeys.ts.
+import { stepIndexOf } from "@shared/areSequenceSteps";
+import { DEFAULT_VARIANT_KEY, normalizeVariantKey } from "@shared/variantKeys";
 
 /* ─── ICP Match Scorer ───────────────────────────────────────────────────── */
 
@@ -574,6 +589,30 @@ export async function generateCampaignTemplate(
 }
 
 /**
+ * The hook the personalizer actually leads with, and what KIND of hook it is.
+ *
+ * One definition, called twice on purpose: the writer picks the hook and the
+ * A/B tab labels it, and those two must not be able to disagree. The variant
+ * upsert used to hardcode `hookType: "personalisation"` for every row, so a
+ * card built on a funding trigger or a pain signal was labelled as a
+ * personalisation hook — a displayed field with no relationship to the copy
+ * beside it.
+ */
+export function primaryHookOf(
+  intel: typeof prospectIntelligence.$inferSelect,
+): { hook: string; hookType: string } {
+  const hooks = (intel.personalisationHooks as Array<{ hook?: string; hookType?: string }> | null) ?? [];
+  const triggerEvents = (intel.triggerEvents as Array<{ type?: string; description?: string }> | null) ?? [];
+  const painSignals = (intel.painSignals as Array<{ signal?: string; evidence?: string }> | null) ?? [];
+  // Truthy checks, not `??`: an empty-string hook is not a hook, and it would
+  // otherwise be interpolated into the prompt as a blank "Primary hook" section.
+  if (hooks[0]?.hook) return { hook: hooks[0].hook, hookType: hooks[0].hookType || "personalisation" };
+  if (triggerEvents[0]?.description) return { hook: triggerEvents[0].description, hookType: "trigger_event" };
+  if (painSignals[0]?.signal) return { hook: painSignals[0].signal, hookType: "pain_signal" };
+  return { hook: "your company's growth", hookType: "generic" };
+}
+
+/**
  * Personalize a prospect's sequence using the campaign template + their
  * enrichment dossier. One LLM call, no retries. The eval pass that
  * follows records a quality score but doesn't trigger a regenerate.
@@ -586,10 +625,8 @@ async function personalizeForProspect(
 ): Promise<Array<{ stepIndex: number; day: number; channel: string; subject: string; body: string; variantKey: string }>> {
   if (template.steps.length === 0) return [];
 
-  const hooks = (intel.personalisationHooks as Array<{ hook: string; source: string; hookType: string }>) ?? [];
-  const triggerEvents = (intel.triggerEvents as Array<{ type: string; description: string }>) ?? [];
   const painSignals = (intel.painSignals as Array<{ signal: string; evidence: string }>) ?? [];
-  const primaryHook = hooks[0]?.hook ?? triggerEvents[0]?.description ?? painSignals[0]?.signal ?? "your company's growth";
+  const { hook: primaryHook } = primaryHookOf(intel);
 
   const customInstructions = (campaign.sequencePrompt ?? "").trim();
   const subjectGuidance = (campaign.promptSubject ?? "").trim();
@@ -639,9 +676,13 @@ async function personalizeForProspect(
                   channel: { type: "string" },
                   subject: { type: "string" },
                   body: { type: "string" },
-                  variantKey: { type: "string" },
+                  // No variantKey: the model used to be REQUIRED to return one
+                  // with nothing in either prompt explaining what it was, and
+                  // whatever it invented became the A/B tab's group-by key.
+                  // A variant label is assigned by code or not at all —
+                  // shared/variantKeys.ts.
                 },
-                required: ["stepIndex", "day", "channel", "subject", "body", "variantKey"],
+                required: ["stepIndex", "day", "channel", "subject", "body"],
                 additionalProperties: false,
               },
             },
@@ -664,7 +705,10 @@ async function personalizeForProspect(
     if (signature && channel === "email" && !body.includes(signature)) {
       body = `${body.trimEnd()}\n\n${signature}`;
     }
-    return { ...s, body, variantKey: s.variantKey ?? "A" };
+    // The only variant that exists. Assigned here rather than accepted from the
+    // model, and normalised again at the read in shared/areSequenceSteps.ts so
+    // sequences generated before this still fold into the same cell.
+    return { ...s, body, variantKey: DEFAULT_VARIANT_KEY };
   });
 }
 
@@ -820,22 +864,37 @@ export async function runSequenceAgent(
       sequenceRewriteCount: 0,
     }).where(eq(prospectIntelligence.prospectQueueId, prospectId));
 
-    // Refresh A/B Variants — opener-only (variant A). Campaign-level
-    // upsert so the tab picks up the new opener on next query.
-    if (steps.length > 0) {
+    // Refresh A/B Variants — opener-only (variant A, the only one that exists).
+    // Campaign-level upsert so the tab picks up the new opener on next query;
+    // subject/body are therefore the MOST RECENTLY generated prospect's copy,
+    // shown as an example, while `sent` aggregates every prospect's sends.
+    //
+    // stepIndex comes from the STEP, via the same rule the execution queue uses
+    // (shared/areSequenceSteps.ts). It was hardcoded to 1 while the queue keyed
+    // the opener at 0, and getAbVariantStats joins the two on
+    // `${stepIndex}:${variantKey}` — so this row never reached the cell holding
+    // the sends, and instead minted a phantom cell one step along at 0 sends.
+    const opener = steps[0];
+    if (opener) {
+      // Clamped to the column widths (hookType varchar(64), subjectLine
+      // varchar(240)): hookType can carry an LLM-authored value from the enrich
+      // agent's hooks, and an over-long string fails this INSERT at RUNTIME
+      // only — tsc and esbuild both pass it.
+      const { hookType } = primaryHookOf(intel);
+      const subjectLine = String(opener.subject ?? "").substring(0, 240);
+      const bodyPreview = String(opener.body ?? "").substring(0, 300);
       await db.insert(areAbVariants).values({
         workspaceId,
         campaignId,
-        stepIndex: 1,
-        variantKey: "A",
-        hookType: "personalisation",
-        subjectLine: steps[0]?.subject ?? "",
-        bodyPreview: String(steps[0]?.body ?? "").substring(0, 300),
+        stepIndex: stepIndexOf(opener, 0),
+        variantKey: normalizeVariantKey(opener.variantKey),
+        hookType: hookType.substring(0, 64),
+        subjectLine,
+        bodyPreview,
       }).onDuplicateKeyUpdate({
-        set: {
-          subjectLine: steps[0]?.subject ?? "",
-          bodyPreview: String(steps[0]?.body ?? "").substring(0, 300),
-        },
+        // hookType too: it is a label for the copy in the same row, so leaving
+        // it stale would describe the previous prospect's hook.
+        set: { hookType: hookType.substring(0, 64), subjectLine, bodyPreview },
       });
     }
 
@@ -1252,7 +1311,10 @@ export const prospectsRouter = router({
             messageContent: {
               subject: updatedStep.subject,
               body: updatedStep.body,
-              variantKey: (updatedStep as { variantKey?: string }).variantKey ?? "A",
+              // Same normalisation as the engine's own write, so editing a step
+              // cannot move its sends into a different A/B cell than the one
+              // the scheduled row was already counted in.
+              variantKey: normalizeVariantKey((updatedStep as { variantKey?: unknown }).variantKey),
             },
           })
           .where(queueWhere);

@@ -1,7 +1,11 @@
 /**
  * ARE Campaign Detail — Enhanced
  *
- * Tabs: Overview · Prospects · Scraper · A/B Variants · Signal Feed
+ * Tabs: Overview · Prospects · Scraper · Step performance · Signal Feed
+ *
+ * "Step performance" was labelled "A/B Variants" and described a two-variant
+ * experiment that has never existed — see the tab body and
+ * server/areAbVariantWiring.test.ts.
  *
  * Key improvements:
  *   - PageHeader with breadcrumb, status badge, and pause/activate CTA
@@ -225,7 +229,7 @@ function IcpRing({ score }: { score: number }) {
 
 /* ─── Single source of truth for cross-tab invalidation ───────────────
  *
- * Every campaign tab (Prospects, Sequences, A/B Variants, Logs, Scraper)
+ * Every campaign tab (Prospects, Sequences, Step performance, Logs, Scraper)
  * reads from the same underlying prospect_queue + prospect_intelligence
  * + are_ab_variants + are_engine_logs rows. Any state-change mutation
  * (approve, enrich, skip, generate, edit, cancel, pause, resume) must
@@ -245,8 +249,8 @@ function useCampaignSync(campaignId: number) {
       // Per-prospect data
       utils.are.prospects.list.invalidate();
       utils.are.prospects.listSequences.invalidate({ campaignId });
-      // A/B Variants tab (was never being invalidated — root cause of
-      // "A/B tab out of sync" report)
+      // Step-performance tab (was never being invalidated — root cause of
+      // the "A/B tab out of sync" report)
       utils.are.prospects.getAbVariants.invalidate({ campaignId });
       // Logs tab
       utils.are.engine.getLogs.invalidate({ campaignId });
@@ -1308,7 +1312,12 @@ function SequenceDrawer({ row, onClose, refetch }: { row: any; onClose: () => vo
           <div className="text-sm text-muted-foreground italic text-center py-6">No sequence generated yet.</div>
         ) : (
           steps.map((s: any, idx: number) => {
-            const labelIdx = s.stepIndex ?? s.step ?? idx;
+            // +1 for display: step indices are 0-based everywhere in the data,
+            // and the rest of the app labels them 1-based (AREPerformance,
+            // Campaigns). This page showed the opener as "Step 0" while the
+            // step-performance tab beside it showed the same step as "Step 1"
+            // — one page, two numbering schemes for one step.
+            const labelIdx = (s.stepIndex ?? s.step ?? idx) + 1;
             const day = typeof s.day === "number" ? s.day : typeof s.waitDays === "number" ? s.waitDays : null;
             const body = String(s.body ?? "");
             return (
@@ -1853,8 +1862,11 @@ export default function ARECampaignDetail() {
             <TabsTrigger value="sequences" className="text-xs gap-1.5">
               <ListOrdered className="size-3.5" /> Sequences
             </TabsTrigger>
+            {/* Not "A/B Variants": nothing produces a variant B. Every prospect
+                gets uniquely personalised copy, so there is no shared message to
+                test — what this tab measures is per-step send performance. */}
             <TabsTrigger value="ab" className="text-xs gap-1.5">
-              <Sparkles className="size-3.5" /> A/B Variants
+              <Sparkles className="size-3.5" /> Step performance
               {(abVariants?.length ?? 0) > 0 && (
                 <span className="ml-1 text-[10px] bg-primary/20 text-primary rounded-full px-1.5 py-0.5 font-medium">
                   {abVariants?.length}
@@ -2162,18 +2174,23 @@ export default function ARECampaignDetail() {
             </div>
           </TabsContent>
 
-          {/* ── A/B Variants tab ── */}
+          {/* ── Step performance tab (tab id stays "ab") ── */}
           <TabsContent value="ab" className="mt-4">
             {!abVariants || abVariants.length === 0 ? (
               <EmptyState
                 icon={Sparkles}
-                title="No A/B variants yet"
-                description="Generate sequences for prospects to see variant performance here. The Sequence Agent automatically creates two variants per step."
+                title="No step performance yet"
+                description="Generate sequences for prospects, then dispatch them — each step's sends, opens, replies and meetings appear here."
               />
             ) : (
               <div className="space-y-4">
+                {/* This used to claim "two variants per step: Variant A uses a
+                    personalisation hook, Variant B uses a trigger event hook".
+                    Nothing has ever produced a variant B, so the page described
+                    an experiment that was not running — and a reader compares
+                    the two labels it was promised. */}
                 <p className="text-sm text-muted-foreground">
-                  The Sequence Agent generates two variants per step: <strong>Variant A</strong> uses a personalisation hook, <strong>Variant B</strong> uses a trigger event hook. Performance updates as messages are sent.
+                  The engine writes uniquely personalised copy for every prospect, so it produces a single variant (<strong>A</strong>) per step — there is no shared message to split-test, and a second variant only ever appears on the seeded <strong>[Demo]</strong> campaign. These cards show how each <strong>step</strong> performed, counted from real dispatches; the subject and preview are the most recently generated prospect's opener, shown as an example of that step's copy.
                 </p>
                 <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
                   {abVariants.map((v) => {
@@ -2189,7 +2206,9 @@ export default function ARECampaignDetail() {
                             <Badge variant="outline" className={`text-[10px] px-2 py-0.5 border font-bold ${isA ? "border-emerald-500/30 text-emerald-600 bg-emerald-500/10" : "border-blue-500/30 text-blue-600 bg-blue-500/10"}`}>
                               Variant {v.variantKey}
                             </Badge>
-                            <span className="text-xs text-muted-foreground">Step {v.stepIndex}</span>
+                            {/* 1-based for display, matching AREPerformance's
+                                step table and the sequence viewer above. */}
+                            <span className="text-xs text-muted-foreground">Step {v.stepIndex + 1}</span>
                             {v.hookType && (
                               <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 ml-auto capitalize">
                                 {v.hookType.replace(/_/g, " ")}
