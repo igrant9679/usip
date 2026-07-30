@@ -93,10 +93,37 @@ async function suppressIfNew(workspaceId: number, email: string): Promise<boolea
 }
 
 /** True if this email is currently suppressed for the given workspace. */
+/**
+ * The ONE normalisation for a suppression address, on reads AND writes.
+ *
+ * The suppression list had four writers and two readers, normalising four
+ * different ways:
+ *   unsubscribe.ts          trim + lowercase   (this file — the strict one)
+ *   emailSuppressions.ts    lowercase only
+ *   emailTracking.ts        RAW `event.email`  (bounce / spam-complaint webhooks)
+ *   replyClassifier.ts      RAW `reply.fromEmail`
+ * and the two readers disagreed too: isSuppressed trimmed, isEmailSuppressed
+ * did not.
+ *
+ * Case is survivable — the column inherits MySQL 8's default
+ * utf8mb4_0900_ai_ci, which is case-insensitive. Whitespace is NOT: that
+ * collation is NO PAD, so a stored or queried address carrying a stray space
+ * simply fails to match. A raw webhook or an inbound From header is exactly
+ * where such a value comes from, and the cost of a miss here is mailing someone
+ * who asked not to be mailed — a compliance failure, not a cosmetic one.
+ *
+ * So: normalise identically everywhere, and stop relying on a collation detail
+ * to cover for it.
+ */
+export function normalizeSuppressionEmail(email: string | null | undefined): string {
+  return (email ?? "").trim().toLowerCase();
+}
+
 export async function isSuppressed(workspaceId: number, email: string): Promise<boolean> {
   const db = await getDb();
   if (!db) return false;
-  const lower = email.trim().toLowerCase();
+  const lower = normalizeSuppressionEmail(email);
+  if (!lower) return false;
   const [row] = await db
     .select({ id: emailSuppressions.id })
     .from(emailSuppressions)

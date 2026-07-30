@@ -21,6 +21,7 @@ import { createMeetingProposal } from "./meetingScheduler";
 import { sendWorkspaceEmail } from "../emailDelivery";
 import { resolveBookingUrl } from "../mergeVars";
 import { sendMessage } from "../lib/unipile";
+import { normalizeSuppressionEmail } from "../unsubscribe";
 
 export const REPLY_CLASSES = [
   "willing_to_meet",
@@ -236,7 +237,8 @@ export async function applyReplyAction(workspaceId: number, reply: any, byUser: 
         if (!existing) {
           await db.insert(emailSuppressions).values({
             workspaceId,
-            email: reply.fromEmail,
+            // Raw inbound From header — normalise before storing.
+            email: normalizeSuppressionEmail(reply.fromEmail),
             reason: "unsubscribe",
             draftId: reply.draftId ?? null,
             contactId: reply.contactId ?? null,

@@ -12,6 +12,7 @@ import { z } from "zod";
 import { emailSuppressions, contacts, prospects } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
+import { isSuppressed, normalizeSuppressionEmail } from "../unsubscribe";
 
 export const emailSuppressionsRouter = {
   /** List all suppressions for the workspace */
@@ -55,12 +56,14 @@ export const emailSuppressionsRouter = {
         .where(
           and(
             eq(emailSuppressions.workspaceId, ctx.workspace.id),
-            inArray(emailSuppressions.email, input.emails)
+            // Normalised: the stored side is normalised on write, so the query
+            // side must match or a padded address reports as not-suppressed.
+            inArray(emailSuppressions.email, input.emails.map(normalizeSuppressionEmail))
           )
         );
-      const suppressed = new Set(rows.map((r) => r.email.toLowerCase()));
+      const suppressed = new Set(rows.map((r) => normalizeSuppressionEmail(r.email)));
       return {
-        suppressed: input.emails.filter((e) => suppressed.has(e.toLowerCase())),
+        suppressed: input.emails.filter((e) => suppressed.has(normalizeSuppressionEmail(e))),
         details: rows,
       };
     }),
@@ -85,7 +88,7 @@ export const emailSuppressionsRouter = {
         .limit(1);
       await db.insert(emailSuppressions).ignore().values({
         workspaceId: ctx.workspace.id,
-        email: input.email.toLowerCase(),
+        email: normalizeSuppressionEmail(input.email),
         reason: input.reason,
         contactId: contact?.id,
         notes: input.notes,
@@ -134,10 +137,10 @@ export const emailSuppressionsRouter = {
         .where(
           and(
             eq(emailSuppressions.workspaceId, ctx.workspace.id),
-            eq(emailSuppressions.email, input.email.toLowerCase()),
+            eq(emailSuppressions.email, normalizeSuppressionEmail(input.email)),
           )
         );
-      return { ok: true, email: input.email.toLowerCase() };
+      return { ok: true, email: normalizeSuppressionEmail(input.email) };
     }),
 
   /**
@@ -175,20 +178,13 @@ export const emailSuppressionsRouter = {
  * Standalone helper — check if an email is suppressed for a given workspace.
  * Used by smtpConfig.sendDraft before calling transporter.sendMail.
  */
+/**
+ * Delegates to isSuppressed in unsubscribe.ts so there is ONE implementation.
+ * These two had drifted: this one lowercased without trimming, which on a NO PAD
+ * collation means a stored-or-queried address with a stray space never matched.
+ */
 export async function isEmailSuppressed(workspaceId: number, email: string): Promise<boolean> {
-  const db = await getDb();
-  if (!db) return false;
-  const [row] = await db
-    .select({ id: emailSuppressions.id })
-    .from(emailSuppressions)
-    .where(
-      and(
-        eq(emailSuppressions.workspaceId, workspaceId),
-        eq(emailSuppressions.email, email.toLowerCase())
-      )
-    )
-    .limit(1);
-  return !!row;
+  return isSuppressed(workspaceId, email);
 }
 
 /**

@@ -17,6 +17,7 @@ import { eq, sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { appUrl } from "./appUrl";
 import { emailDrafts, emailTrackingEvents } from "../drizzle/schema";
+import { normalizeSuppressionEmail } from "./unsubscribe";
 
 // 1×1 transparent GIF (43 bytes)
 const TRACKING_PIXEL = Buffer.from(
@@ -1122,13 +1123,13 @@ export function parseBouncePayload(provider: BounceProvider, body: unknown): Bou
     if (eventType === "failed") {
       const severity = (data["severity"] as string) ?? "permanent";
       events.push({
-        email: recipient.toLowerCase(),
+        email: normalizeSuppressionEmail(recipient),
         bounceType: severity === "permanent" ? "hard" : "soft",
         message: (data["delivery-status"] as Record<string, string>)?.["message"] ?? undefined,
         timestamp: data["timestamp"] ? new Date((data["timestamp"] as number) * 1000) : new Date(),
       });
     } else if (eventType === "complained") {
-      events.push({ email: recipient.toLowerCase(), bounceType: "spam", timestamp: new Date() });
+      events.push({ email: normalizeSuppressionEmail(recipient), bounceType: "spam", timestamp: new Date() });
     }
   } else if (provider === "sendgrid") {
     const arr = Array.isArray(body) ? body : [body];
@@ -1283,7 +1284,9 @@ export async function processBounceEvent(
     if (existing.length === 0) {
       await db.insert(emailSuppressions).values({
         workspaceId,
-        email: event.email,
+        // Raw webhook value — normalise, or a bounce/complaint for
+        // " user@host " is written in a form no reader can match.
+        email: normalizeSuppressionEmail(event.email),
         reason: suppressionReason,
         draftId: draft?.id ?? null,
         notes: event.message?.slice(0, 512) ?? null,
