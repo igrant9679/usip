@@ -19,12 +19,10 @@ import { getDb } from "../../db";
 import { parseLlmJson } from "./llmJson";
 import { invokeLLM } from "../../_core/llm";
 import { router } from "../../_core/trpc";
-import { workspaceProcedure } from "../../_core/workspace";
+import { workspaceProcedure, isAdminRole } from "../../_core/workspace";
 import { searchLinkedInProfiles } from "../../services/linkedinLookup";
 
-function isAdminRole(role: string): boolean {
-  return role === "admin" || role === "super_admin";
-}
+// isAdminRole comes from _core/workspace.ts — one rank map for the repo.
 
 /**
  * Real LinkedIn people search via Unipile (replaces the old fabricating

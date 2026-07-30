@@ -14,7 +14,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router } from "../_core/trpc";
-import { workspaceProcedure, adminWsProcedure } from "../_core/workspace";
+import { workspaceProcedure, adminWsProcedure, isAdminRole, requireMinRole } from "../_core/workspace";
 import { getDb } from "../db";
 import { activities, tasks, workspaceSettings } from "../../drizzle/schema";
 import { reengageProspectManually } from "../services/linkedinEnrichment/jobChangeReengagement";
@@ -59,12 +59,9 @@ const enrichOptions = z.object({
   scheduleDailyMonitoring: z.boolean().optional(),
 }).optional();
 
-const RANK: Record<string, number> = { super_admin: 4, admin: 3, manager: 2, rep: 1 };
-const isAdminRole = (role: string) => RANK[role] >= RANK.admin;
+// One rank map — _core/workspace.ts.
 function requireRole(role: string, min: "manager" | "admin") {
-  if ((RANK[role] ?? 0) < RANK[min]) {
-    throw new TRPCError({ code: "FORBIDDEN", message: "You don't have permission to run LinkedIn enrichment." });
-  }
+  requireMinRole(role, min, "You don't have permission to run LinkedIn enrichment.");
 }
 
 async function emitActivity(opts: {

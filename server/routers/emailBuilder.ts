@@ -24,10 +24,11 @@ import {
 import { router } from "../_core/trpc";
 import { invokeLLM } from "../_core/llm";
 import { buildBrandContext } from "../services/brandContext";
+import { rankOf } from "../_core/workspace";
 
 /** manager+ see/edit all shared assets; reps are limited to team-visible + their own. */
 function isManagerPlus(role: string): boolean {
-  return role === "manager" || role === "admin" || role === "super_admin";
+  return rankOf(role) >= rankOf("manager");
 }
 
 /* ─── Merge-tag resolver ─────────────────────────────────────────────────── */

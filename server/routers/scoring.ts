@@ -13,7 +13,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router } from "../_core/trpc";
-import { workspaceProcedure } from "../_core/workspace";
+import { workspaceProcedure, requireMinRole } from "../_core/workspace";
 import { recordAudit } from "../audit";
 import {
   listScoreModels, loadModelBundle, createScoreModel, updateScoreModel,
@@ -33,11 +33,9 @@ import { and, desc, eq } from "drizzle-orm";
 import { getDb } from "../db";
 import { priorityScoreResults, scoreResults } from "../../drizzle/schema";
 
-const RANK: Record<string, number> = { super_admin: 4, admin: 3, manager: 2, rep: 1 };
+// One rank map — _core/workspace.ts.
 function requireRole(role: string, min: "manager" | "admin") {
-  if ((RANK[role] ?? 0) < RANK[min]) {
-    throw new TRPCError({ code: "FORBIDDEN", message: "You don't have permission to manage scoring." });
-  }
+  requireMinRole(role, min, "You don't have permission to manage scoring.");
 }
 
 const objectType = z.enum(["person", "company"]);

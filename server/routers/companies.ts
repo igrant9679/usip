@@ -10,7 +10,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router } from "../_core/trpc";
-import { workspaceProcedure } from "../_core/workspace";
+import { workspaceProcedure, requireMinRole} from "../_core/workspace";
 import { getDb } from "../db";
 import { and, eq } from "drizzle-orm";
 import { accounts, globalOrganizations, prospects } from "../../drizzle/schema";
@@ -29,9 +29,9 @@ import { enrichCompany, bulkEnrichCompanies } from "../services/company/enrichme
 import { updateCompanyLogo, clearCompanyLogo, setCompanyLogoStatus } from "../services/company/logoService";
 import { findDuplicateAccounts, mergeAccounts } from "../services/company/mergeService";
 
-const RANK: Record<string, number> = { super_admin: 4, admin: 3, manager: 2, rep: 1 };
+// One rank map — _core/workspace.ts. Four routers had their own copy.
 function requireRole(role: string, min: "manager" | "admin") {
-  if ((RANK[role] ?? 0) < RANK[min]) throw new TRPCError({ code: "FORBIDDEN", message: "You don't have permission for this company action." });
+  requireMinRole(role, min, "You don't have permission for this company action.");
 }
 
 const filters = z.object({

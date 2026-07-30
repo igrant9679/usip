@@ -29,6 +29,7 @@ import { attributeMeetingBookingToAre } from "../routers/are/execution";
 // shared/availability.ts for why this cannot import them from bookingLinks.ts.
 import { formatInZone, generateSlots, safeTimezone } from "@shared/availability";
 import { getWorkspaceTimezone } from "./workspaceTimezone";
+import { rankOf } from "../_core/workspace";
 
 // Every offerable time derives from the workspace's configured zone rather than
 // the host's clock — the container runs on UTC, which is a deployment detail, not
@@ -39,7 +40,9 @@ import { getWorkspaceTimezone } from "./workspaceTimezone";
 export type MeetingAutopilotMode = "off" | "approval" | "auto";
 
 const ACTIVE_MEETING_STATUSES = ["proposed", "invited", "scheduled"];
-const ROLE_PRIORITY: Record<string, number> = { super_admin: 0, admin: 1, manager: 2, rep: 3 };
+// Highest privilege first, derived from the one rank map (_core/workspace.ts).
+// This file had the hierarchy written out BACKWARDS as its own constant — a
+// second place to update, inverted, and easy to miss.
 
 /**
  * Business-hour slots that don't overlap busy events, in the WORKSPACE's
@@ -322,7 +325,7 @@ async function pickWorkspaceOwner(db: any, workspaceId: number): Promise<number 
   const members = await db.select({ userId: workspaceMembers.userId, role: workspaceMembers.role })
     .from(workspaceMembers).where(eq(workspaceMembers.workspaceId, workspaceId));
   if (!members.length) return null;
-  members.sort((a: any, b: any) => (ROLE_PRIORITY[a.role] ?? 9) - (ROLE_PRIORITY[b.role] ?? 9));
+  members.sort((a: any, b: any) => rankOf(b.role) - rankOf(a.role));
   return members[0]?.userId ?? null;
 }
 

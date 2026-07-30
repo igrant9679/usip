@@ -17,7 +17,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router } from "../_core/trpc";
-import { workspaceProcedure } from "../_core/workspace";
+import { workspaceProcedure, isAdminRole } from "../_core/workspace";
 import { getDb } from "../db";
 import { prospects } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
@@ -29,9 +29,7 @@ import {
 } from "../services/linkedinLookup";
 import { buildScrapedProspectValues } from "../services/prospectFromSource";
 
-function isAdminRole(role: string): boolean {
-  return role === "admin" || role === "super_admin";
-}
+// isAdminRole comes from _core/workspace.ts — one rank map for the repo.
 
 export const linkedinFinderRouter = router({
   /** Bridged LinkedIn accounts the caller can route lookups through. */
