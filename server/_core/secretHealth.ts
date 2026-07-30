@@ -1,6 +1,12 @@
 /**
  * Startup check for secrets that silently degrade instead of failing.
  *
+ * Two shapes of degradation are reported here. The first is a hardcoded
+ * fallback KEY (below). The second is a gate that FAILS OPEN when its variable
+ * is absent — `SCHEDULED_TASK_SECRET`, which leaves the /api/scheduled cron
+ * endpoints reachable by anyone. Different mechanism, same symptom: the
+ * deployment looks configured and is not.
+ *
  * Three files predate `_core/crypto.ts` and substitute a HARDCODED LITERAL when
  * `JWT_SECRET` is unset, rather than refusing to run:
  *
@@ -41,6 +47,26 @@ const DEGRADING_SECRETS: Array<{ env: string; protects: string[] }> = [
       "encryption of BYOK API keys — Apollo, Reoon, xAI, SendGrid (_core/crypto.ts)",
     ],
   },
+  /**
+   * Not a hardcoded-literal fallback like the two above — this one degrades by
+   * ABSENCE. `requireScheduledSecret` lets the request through when the
+   * variable is unset, because the external scheduler is the only trigger for
+   * two of the three /api/scheduled endpoints and demanding a secret nobody
+   * configured would stop the client follow-up mail rather than protect it.
+   *
+   * The consequence of leaving it unset is that anyone who can spell the URL
+   * can run those crons: mail to clients, tasks across every workspace, and an
+   * LLM call per workspace. Same category — quietly weaker than it looks — so
+   * it is reported in the same place.
+   */
+  {
+    env: "SCHEDULED_TASK_SECRET",
+    protects: [
+      "the /api/scheduled/* cron endpoints — proposal-followup (mails clients, " +
+        "auto-expires proposals), icp-regen (one LLM call per workspace), " +
+        "rejection-digest — which stay open to anonymous callers while it is unset",
+    ],
+  },
 ];
 
 export interface SecretWarning {
@@ -60,6 +86,7 @@ export function findSecretWarnings(env: NodeJS.ProcessEnv = process.env): Secret
   const out: SecretWarning[] = [];
   if (!env.JWT_SECRET) out.push(DEGRADING_SECRETS[0]);
   if (!env.ENCRYPTION_KEY && !env.JWT_SECRET) out.push(DEGRADING_SECRETS[1]);
+  if (!env.SCHEDULED_TASK_SECRET) out.push(DEGRADING_SECRETS[2]);
   return out;
 }
 
@@ -75,7 +102,11 @@ export function reportSecretHealth(env: NodeJS.ProcessEnv = process.env): void {
       w.protects.join("; ") + ".",
     );
   }
-  if (production) {
+  // The re-encryption advice applies only to the two KEY variables. Printing it
+  // for a missing SCHEDULED_TASK_SECRET would tell an operator to reconnect
+  // every mailbox over a cron endpoint, which is how a warning gets ignored.
+  const encryptionAffected = warnings.some((w) => w.env === "JWT_SECRET" || w.env === "ENCRYPTION_KEY");
+  if (production && encryptionAffected) {
     console.error(
       "[SecretHealth] Set these on the host and redeploy. Anything already encrypted " +
       "was written with the public fallback key — rotate the secret AND reconnect mailboxes.",

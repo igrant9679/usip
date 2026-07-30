@@ -104,10 +104,43 @@ export function isPublicWritePath(path: string): boolean {
 }
 
 /**
- * Mount BEFORE the tRPC middleware. A pass-through for everything else, so
- * signed-in users are unaffected.
+ * The `/api/scheduled/*` cron endpoints.
+ *
+ * `requireScheduledSecret` gates them, but it FAILS OPEN when
+ * SCHEDULED_TASK_SECRET is unset — deliberately, because the external
+ * scheduler is the only trigger for two of the three. While it is unset this
+ * ceiling is the only thing standing between an anonymous caller and a run
+ * that mails clients and walks every workspace.
+ *
+ * A real scheduler hits these once a day. Ten a minute leaves that untouched.
+ */
+export const scheduledTaskLimiter = rateLimit({
+  windowMs: 60_000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: ipKey,
+  handler: (_req: Request, res: Response) => {
+    res.status(429).json({ ok: false, error: "Too many scheduled-task calls from this address." });
+  },
+  skip: () => process.env.NODE_ENV === "test",
+});
+
+/**
+ * Mount BEFORE the tRPC middleware AND before the route handlers being limited.
+ *
+ * ⚠️ Express runs middleware in REGISTRATION order. This used to be called at
+ * index.ts:127, after registerEmailTrackingRoutes at :112 — fine while it only
+ * touched /api/trpc (mounted later still), but a limiter registered after
+ * `app.post("/api/scheduled/...")` never runs at all. It would have looked
+ * mounted, reported nothing, and limited nothing: dead middleware, the same
+ * shape as the dead wiring swept out of this repo already. The call site moved
+ * up with the routes, and `_core/index.test.ts` fails if it drifts back down.
  */
 export function registerPublicRateLimits(app: Express): void {
+  app.use("/api/scheduled", (req: Request, res: Response, next: NextFunction) =>
+    scheduledTaskLimiter(req, res, next),
+  );
   app.use("/api/trpc", (req: Request, res: Response, next: NextFunction) => {
     const path = req.path ?? "";
     // Model spend first: it is the tighter concern and the higher ceiling.

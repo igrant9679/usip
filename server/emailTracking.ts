@@ -18,6 +18,7 @@ import { getDb } from "./db";
 import { appUrl } from "./appUrl";
 import { emailDrafts, emailTrackingEvents } from "../drizzle/schema";
 import { normalizeSuppressionEmail } from "./unsubscribe";
+import { requireScheduledSecret } from "./scheduledTaskAuth";
 
 // 1×1 transparent GIF (43 bytes)
 const TRACKING_PIXEL = Buffer.from(
@@ -475,6 +476,11 @@ export function registerEmailTrackingRoutes(app: Express) {
   ─────────────────────────────────────────────────────────────────────────── */
   app.post("/api/scheduled/proposal-followup", async (req: any, res: any) => {
     try {
+      // Gate FIRST, before any DB work. This endpoint runs across every
+      // workspace: it creates tasks, MAILS CLIENTS an expiry reminder, and
+      // flips proposals to not_accepted. Its icp-regen sibling was gated on
+      // this same secret; this one and rejection-digest were left open.
+      if (!requireScheduledSecret(req, res, "proposal-followup")) return;
       const db = await getDb();
       if (!db) return res.status(503).json({ ok: false, error: "DB unavailable" });
 
@@ -939,17 +945,12 @@ export function registerEmailTrackingRoutes(app: Express) {
   app.post("/api/scheduled/icp-regen", async (req: any, res: any) => {
     try {
       // This endpoint triggers an LLM call per workspace and was completely
-      // unauthenticated — anyone could run up the bill. Now gated on a shared
-      // secret when SCHEDULED_TASK_SECRET is configured. The internal daily
+      // unauthenticated — anyone could run up the bill. The internal daily
       // cron (index.ts → runIcpInferenceAllWorkspaces) is the primary trigger;
-      // this stays for external schedulers.
-      const secret = process.env.SCHEDULED_TASK_SECRET;
-      if (secret) {
-        const provided = String(req.headers["x-scheduled-secret"] ?? "");
-        if (provided !== secret) {
-          return res.status(401).json({ ok: false, error: "Unauthorized" });
-        }
-      }
+      // this stays for external schedulers. The check itself now lives in
+      // scheduledTaskAuth so its two siblings share it instead of going
+      // without — the inline copy that used to sit here was the only one.
+      if (!requireScheduledSecret(req, res, "icp-regen")) return;
       const db = await getDb();
       if (!db) return res.status(503).json({ ok: false, error: "DB unavailable" });
       const { workspaces } = await import("../drizzle/schema");
@@ -985,6 +986,10 @@ export function registerEmailTrackingRoutes(app: Express) {
   ----------------------------------------------------------------- */
   app.post("/api/scheduled/rejection-digest", async (req: any, res: any) => {
     try {
+      // Gate FIRST. Walks every active campaign in every workspace and
+      // notifies each owner, with no dedupe marker of its own — so unlike its
+      // siblings, repeat calls repeat the whole digest.
+      if (!requireScheduledSecret(req, res, "rejection-digest")) return;
       const db = await getDb();
       if (!db) return res.status(503).json({ ok: false, error: "DB unavailable" });
       const {
@@ -1050,15 +1055,21 @@ export function registerEmailTrackingRoutes(app: Express) {
           ].map(escape).join(","));
           const csvContent = [headers.join(","), ...rows].join("\n");
 
-          // Determine recipient — campaign owner or workspace owner
+          // Determine recipient — campaign owner or workspace owner.
+          // `workspaces.ownerId` does not exist; the column is `ownerUserId`,
+          // as every other read of it in this file already has it. Drizzle
+          // resolved the typo to `undefined` and threw when the select was
+          // built, so the fallback for a campaign with no owner — the only
+          // reason this branch exists — crashed the digest for that campaign.
+          // Runtime-only, and tsc had been flagging it among ~500 others.
           let recipientUserId = campaign.ownerUserId;
           if (!recipientUserId) {
             const [ws] = await db
-              .select({ ownerId: workspacesT.ownerId })
+              .select({ ownerUserId: workspacesT.ownerUserId })
               .from(workspacesT)
               .where(eqR(workspacesT.id, campaign.workspaceId))
               .limit(1);
-            recipientUserId = ws?.ownerId ?? null;
+            recipientUserId = ws?.ownerUserId ?? null;
           }
 
           // Write in-app notification with CSV inline

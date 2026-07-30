@@ -106,6 +106,11 @@ async function startServer() {
   // can HMAC the exact payload — JSON.stringify(req.body) is not byte-stable.
   app.use(express.json({ limit: "50mb", verify: (req, _res, buf) => { (req as unknown as { rawBody?: Buffer }).rawBody = buf; } }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
+  // Rate limits go on BEFORE the routes they cover — Express runs middleware in
+  // registration order, so a limiter mounted after `app.post("/api/scheduled/…")`
+  // would never run. This sat below registerEmailTrackingRoutes while it only
+  // covered /api/trpc (mounted later still); it does not any more.
+  registerPublicRateLimits(app);
   registerStorageProxy(app);
   registerOAuthRoutes(app);
   registerScimRoutes(app);
@@ -121,10 +126,7 @@ async function startServer() {
   registerEmailBuilderStreamRoutes(app);
   registerAccountBriefsStreamRoutes(app);
   registerMailboxStreamRoutes(app);
-  // Rate-limit the unauthenticated LLM-backed procedures BEFORE tRPC sees
-  // them. Everything else passes straight through.
   reportSecretHealth();
-  registerPublicRateLimits(app);
   // tRPC API
   app.use(
     "/api/trpc",

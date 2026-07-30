@@ -387,10 +387,19 @@ describe("ICP autonomous loop", () => {
     expect(src).toContain("runIcpInferenceAllWorkspaces");
   });
 
+  /**
+   * This assertion used to read `expect(src).toContain("SCHEDULED_TASK_SECRET")`
+   * against the whole of emailTracking.ts. One gated endpoint satisfied it
+   * forever while its two ungated siblings sat in the same file — which is
+   * precisely what happened, for as long as this test was "passing".
+   *
+   * The per-endpoint version lives in scheduledEndpointAuth.test.ts. What is
+   * left here is the narrow claim this describe block is actually about.
+   */
   it("the scheduled icp-regen endpoint checks a shared secret", async () => {
     const src = await import("node:fs").then((fs) => fs.readFileSync("server/emailTracking.ts", "utf8"));
     // It triggers an LLM call per workspace; it must not stay open to anyone.
-    expect(src).toContain("SCHEDULED_TASK_SECRET");
+    expect(src).toMatch(/requireScheduledSecret\(req, res, "icp-regen"\)/);
   });
 });
 
