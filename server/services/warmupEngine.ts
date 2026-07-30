@@ -15,19 +15,26 @@
  * networks. Deliverability benefit comes from steady authenticated sending
  * volume between real mailboxes.
  *
- * Cron: runs ~every 30 min from _core/index.ts. Each tick sends at most a
- * small slice of the day's target per account, only during 07:00–19:00 UTC.
+ * Cron: runs ~every 30 min from _core/index.ts (overlap-guarded). Each tick
+ * sends at most a small slice of the day's target per account, only during
+ * 07:00–19:00 IN THE WORKSPACE'S OWN TIMEZONE.
  */
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { sendingAccounts } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { buildTransporter } from "../routers/smtpConfig";
+import { utcDayStart } from "@shared/timeWindows";
+import { zonedDowHour } from "@shared/availability";
+import { getWorkspaceTimezone } from "./workspaceTimezone";
 
 const RAMP_START = 2; // day-1 emails
 const RAMP_STEP = 2; // added per day
 const RAMP_CAP = 40; // max/day
 const WARMUP_DAYS = 28; // then complete
 const MAX_PER_TICK = 4; // spread the day's budget across ticks
+/** Working-hours window, in the WORKSPACE's timezone (not the container's). */
+const WINDOW_START_HOUR = 7;
+const WINDOW_END_HOUR = 19;
 
 /** Human-looking subject/body pairs — intentionally boring business chatter. */
 const TOPICS: Array<{ s: string; b: string[] }> = [
@@ -45,14 +52,34 @@ function utcDateStr(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
-function dayTarget(startedAt: Date, now: Date): number {
-  const day = Math.max(1, Math.floor((now.getTime() - startedAt.getTime()) / 86_400_000) + 1);
-  return Math.min(RAMP_START + (day - 1) * RAMP_STEP, RAMP_CAP);
-}
-
+/**
+ * Which day of the ramp we are on, counted in UTC CALENDAR days.
+ *
+ * ⚠️ This used to be `floor((now - startedAt) / 86_400_000) + 1` — a rolling
+ * 24-hour window from whenever the engine first picked the account up. The daily
+ * counter beside it (`warmupTodayDate`) has always been a UTC calendar day, so
+ * the same cap was measured against TWO DIFFERENT CLOCKS:
+ *
+ *   account first seen 18:00 UTC → day 1, target 2, sends 2
+ *   00:00 UTC          → warmupTodayDate rolls over, warmupSentToday resets to 0
+ *   00:00–18:00 UTC    → the rolling clock still says day 1, so target is still 2
+ *                        ⇒ another 2 sends. Day 1 delivers 4, not 2.
+ *
+ * Same shape as the cadence sweep's finding (fa246a5): one budget, two
+ * boundaries. The ramp is a rate limit, so it must advance on the same boundary
+ * the counter resets on — utcDayStart from @shared/timeWindows, the repo's one
+ * definition of a UTC day.
+ */
 export function warmupDayNumber(startedAt: Date | null | undefined, now = new Date()): number | null {
   if (!startedAt) return null;
-  return Math.max(1, Math.floor((now.getTime() - new Date(startedAt).getTime()) / 86_400_000) + 1);
+  const from = utcDayStart(new Date(startedAt).getTime()).getTime();
+  const to = utcDayStart(now.getTime()).getTime();
+  return Math.max(1, Math.round((to - from) / 86_400_000) + 1);
+}
+
+export function dayTarget(startedAt: Date, now: Date): number {
+  const day = warmupDayNumber(startedAt, now) ?? 1;
+  return Math.min(RAMP_START + (day - 1) * RAMP_STEP, RAMP_CAP);
 }
 
 /** One engine tick. Exported for the cron in _core/index.ts. */
@@ -60,8 +87,6 @@ export async function runWarmupEngine(): Promise<void> {
   const db = await getDb();
   if (!db) return;
   const now = new Date();
-  const hour = now.getUTCHours();
-  if (hour < 7 || hour >= 19) return; // only send in a plausible working window
 
   const candidates = await db
     .select()
@@ -83,8 +108,23 @@ export async function runWarmupEngine(): Promise<void> {
       eq(sendingAccounts.connectionStatus, "connected"),
     ));
 
+  // Working-hours check, per WORKSPACE rather than per process.
+  //
+  // ⚠️ This was a single `now.getUTCHours() < 7 || >= 19` gate at the top of the
+  // tick, commented "a plausible working window". Plausible in whose timezone?
+  // The container runs on UTC, so for an Eastern mailbox that window is
+  // 03:00–15:00 local: warmup mail arriving at 3am from a business address is
+  // the opposite of the "looks organic to receiving providers" this file's own
+  // header claims. workspace_settings.timezone is now read (see
+  // services/workspaceTimezone.ts), so the window can mean what it says.
+  const tzByWorkspace = new Map<number, string>();
+  for (const wsId of wsIds) tzByWorkspace.set(wsId, await getWorkspaceTimezone(wsId));
+
   for (const acct of candidates) {
     try {
+      const tz = tzByWorkspace.get(acct.workspaceId) ?? "UTC";
+      const localHour = zonedDowHour(now, tz).hour;
+      if (localHour < WINDOW_START_HOUR || localHour >= WINDOW_END_HOUR) continue;
       if (!acct.smtpHost || !acct.smtpUsername || !acct.smtpPassword) continue; // no creds → nothing honest to do
 
       // First pickup: stamp the ramp start.
@@ -138,14 +178,25 @@ export async function runWarmupEngine(): Promise<void> {
       }
 
       if (sent > 0) {
+        // Incremented in SQL, not in JS. `sentToday` and `warmupTotalSent` come
+        // from a row read at the top of this tick, so `x + sent` is a lost
+        // update the moment two ticks overlap — and this engine had no overlap
+        // guard until now. Same fix as sendingAccountDailyStats (72aa576),
+        // bookingLinks.bookingCount (9bb4f3d) and sequenceAbVariants (899ca52).
+        //
+        // warmupSentToday resets rather than accumulates when the UTC date has
+        // rolled, which is why it cannot be a bare `+ sent`: on a new day the
+        // stored value belongs to yesterday.
         await db
           .update(sendingAccounts)
           .set({
-            warmupSentToday: sentToday + sent,
+            warmupSentToday: acct.warmupTodayDate === today
+              ? sql`${sendingAccounts.warmupSentToday} + ${sent}`
+              : sent,
             warmupTodayDate: today,
-            warmupTotalSent: (acct.warmupTotalSent ?? 0) + sent,
+            warmupTotalSent: sql`${sendingAccounts.warmupTotalSent} + ${sent}`,
             warmupLastSentAt: now,
-          })
+          } as never)
           .where(eq(sendingAccounts.id, acct.id));
       }
     } catch (e) {

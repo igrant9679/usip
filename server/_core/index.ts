@@ -239,9 +239,13 @@ async function startServer() {
 
   // Mailbox warmup engine: ramped peer-to-peer sends for accounts with the
   // warmup toggle on (see services/warmupEngine.ts for the honest scope).
-  const runWarmup = () => {
-    runWarmupEngine().catch((e: unknown) => console.error("[Warmup] tick failed:", e));
-  };
+  // Guarded like every other interval engine. It was the ONE that sends real
+  // SMTP mail on a timer without overlap protection: a tick does up to 4
+  // serial sends per account, and a slow or hanging SMTP host pushes it past
+  // the 30-minute interval. Two overlapping ticks each read the same
+  // warmupSentToday and each send up to the same remaining budget, which spends
+  // a ramp designed to protect sender reputation twice.
+  const runWarmup = guardOverlap("Warmup", () => runWarmupEngine());
   setTimeout(runWarmup, 120_000); // first tick 2 min after boot
   setInterval(runWarmup, 30 * 60 * 1000); // every 30 minutes
 
