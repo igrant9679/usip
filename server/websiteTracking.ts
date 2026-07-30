@@ -16,6 +16,7 @@ import type { Express, Request, Response } from "express";
 import { and, eq, gte, sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { activities, contacts, leads, tasks, websiteVisits, workspaces } from "../drizzle/schema";
+import { pageIntent } from "@shared/pageIntent";
 
 const TRACKER_JS = `(function(){try{
 var s=document.currentScript||(function(){var e=document.getElementsByTagName('script');return e[e.length-1];})();
@@ -29,12 +30,14 @@ slug:ws,visitorId:vid,path:location.pathname+location.search,referrer:document.r
 })}).catch(function(){});
 }catch(e){}})();`;
 
-function classifyIntent(path: string): "low" | "medium" | "high" {
-  const p = path.toLowerCase();
-  if (/(pricing|demo|contact|book|trial|get-started|buy|checkout)/.test(p)) return "high";
-  if (/(product|features|solutions|case-stud|customers|integrations)/.test(p)) return "medium";
-  return "low";
-}
+/*
+ * `classifyIntent` lived here with its own patterns while chatPageContext.ts
+ * carried a second copy under a comment claiming the two mirrored each other.
+ * They did not: this one had no NON_BUYER band at all, so `/blog/pricing-guide`
+ * scored HIGH and `/careers/product-manager` scored MEDIUM — and a HIGH visit by
+ * a known contact SPAWNS A TASK for the record owner, so a blog reader
+ * interrupted a rep. One definition now: @shared/pageIntent.
+ */
 
 /** Parse a `vid` param of the form "c123" (contact) or "l456" (lead), or a bare number (lead). */
 function parseVid(vid: string): { contactId: number | null; leadId: number | null } {
@@ -81,7 +84,7 @@ export function registerWebsiteTrackingRoutes(app: Express): void {
       if (!ws) return;
 
       const { contactId, leadId } = parseVid(String(b.vid ?? ""));
-      const intent = classifyIntent(path);
+      const intent = pageIntent(path);
 
       await db.insert(websiteVisits).values({
         workspaceId: ws.id,

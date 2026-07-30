@@ -12,40 +12,16 @@
  * prompt, not just a band.
  */
 
-export type PageIntent = "high" | "medium" | "low";
-
-/** Path patterns, highest intent first. Order matters: first match wins. */
-const HIGH = /(pricing|demo|contact|book|trial|get-started|quote|consultation|audit)/;
-const MEDIUM = /(product|service|feature|solution|case-stud|customer|integration|how-it-works|work)/;
-/** Pages that mean the visitor is NOT a buyer — do not sell to these. */
-const NON_BUYER = /(careers?|jobs?|hiring|team|about|press|privacy|terms|blog\/|news)/;
-
-export function pageIntent(url: string): PageIntent {
-  const path = pathOf(url);
-  if (!path) return "low";
-  if (NON_BUYER.test(path)) return "low";
-  if (HIGH.test(path)) return "high";
-  if (MEDIUM.test(path)) return "medium";
-  return "low";
-}
-
-/** Lowercased path + query of a URL, or "" if it cannot be parsed. */
-export function pathOf(url: string): string {
-  const raw = String(url ?? "").trim();
-  if (!raw) return "";
-  try {
-    const u = new URL(raw, "https://placeholder.invalid");
-    return `${u.pathname}${u.search}`.toLowerCase();
-  } catch {
-    return raw.toLowerCase();
-  }
-}
-
-/** True when the visitor is on a page that says "not a customer". */
-export function isNonBuyerPage(url: string): boolean {
-  const path = pathOf(url);
-  return !!path && NON_BUYER.test(path);
-}
+/**
+ * The classifier moved to @shared/pageIntent — websiteTracking.ts had its own
+ * copy, this file's header claimed the two "deliberately mirror" each other, and
+ * they had drifted: tracking knew nothing of NON_BUYER, so `/blog/pricing-x`
+ * scored HIGH there and spawned a follow-up task for a rep. Re-exported because
+ * chatAgent.ts and the tests reach for these through this module.
+ */
+import { isNonBuyerPage, pageIntent, pathOf } from "@shared/pageIntent";
+export { pageIntent, pathOf, isNonBuyerPage };
+export type { PageIntent } from "@shared/pageIntent";
 
 export interface PageContext {
   pageUrl?: string | null;
