@@ -11,27 +11,20 @@ import {
   contacts,
 } from "../../drizzle/schema";
 import { parseCSVText } from "../services/csv";
+import { CONTACT_IMPORT_FIELDS } from "@shared/importFields";
 
 /* ─── Field definitions ─────────────────────────────────────────────────── */
 
-export const SYSTEM_FIELDS = [
-  { key: "firstName", label: "First Name", required: true },
-  { key: "lastName", label: "Last Name", required: true },
-  { key: "email", label: "Email", required: false },
-  { key: "phone", label: "Phone", required: false },
-  { key: "title", label: "Job Title", required: false },
-  { key: "company", label: "Company", required: false },
-  { key: "city", label: "City", required: false },
-  { key: "seniority", label: "Seniority", required: false },
-  { key: "linkedinUrl", label: "LinkedIn URL", required: false },
-  { key: "website", label: "Website", required: false },
-  { key: "industry", label: "Industry", required: false },
-  { key: "country", label: "Country", required: false },
-  { key: "state", label: "State / Region", required: false },
-  { key: "tags", label: "Tags (comma-separated)", required: false },
-] as const;
+/**
+ * One list, shared with the mapping UI — see shared/importFields.ts. This file
+ * used to declare its own 14 fields while ImportContacts.tsx declared 13 under a
+ * comment claiming it mirrored them. The extra one was `tags`, which nothing
+ * writes: `contacts` has no tags column, so a mapping to it was accepted and
+ * silently discarded.
+ */
+export const SYSTEM_FIELDS = CONTACT_IMPORT_FIELDS;
 
-export type SystemFieldKey = (typeof SYSTEM_FIELDS)[number]["key"];
+export type SystemFieldKey = string;
 
 /* ─── Helpers ───────────────────────────────────────────────────────────── */
 
@@ -72,6 +65,97 @@ function mapRowToContact(
  * this workspace's 1,520 contacts has email = null, so `existingEmails` was an
  * empty set and no import could ever detect an already-existing contact.
  */
+/**
+ * Classify one mapped row exactly once, so the preview and the import cannot
+ * disagree about it.
+ *
+ * They disagreed three ways, all of them the shape the comments in both this
+ * file and ImportContacts.tsx explicitly worry about ("the preview would promise
+ * one thing and the import do another"):
+ *
+ *   1. **Order.** `validateRows` checked duplicates BEFORE the required-name
+ *      check and returned early, so a row that was both a duplicate and missing
+ *      a last name counted as a duplicate in the preview and an error in the
+ *      import.
+ *   2. **The phone check only existed in the preview.** A row rejected on screen
+ *      as "Invalid phone format" was then IMPORTED — the one divergence that
+ *      wrote data the user had been told would be excluded.
+ *   3. **`skipDuplicates` never reached the preview.** With the toggle off the
+ *      import creates duplicate contacts, while the preview still reported them
+ *      as duplicates, i.e. as rows that would not be created.
+ *
+ * `isDuplicate` is reported independently of `status` on purpose: with
+ * skipDuplicates off a duplicate row is still going to be imported, and the
+ * summary should say both things rather than pick one.
+ */
+export type ImportRowClass = {
+  status: "ok" | "error" | "duplicate";
+  reason: string;
+  isDuplicate: boolean;
+  /** Lowercased email, when this row has a valid one — the caller records it. */
+  emailKey: string | null;
+  /** name+company identity, when derivable — the caller records it. */
+  nameKey: string | null;
+};
+
+export function classifyImportRow(
+  mapped: Record<string, string>,
+  opts: {
+    existingEmails: Set<string>;
+    seenEmails: Set<string>;
+    existingNameKeys: Set<string>;
+    seenNameKeys: Set<string>;
+    matchOnNameCompany: boolean;
+    skipDuplicates: boolean;
+  },
+): ImportRowClass {
+  const errors: string[] = [];
+  if (!mapped.firstName?.trim()) errors.push("Missing First Name");
+  if (!mapped.lastName?.trim()) errors.push("Missing Last Name");
+  if (mapped.email && !isValidEmail(mapped.email)) {
+    errors.push(`Invalid email format: ${mapped.email}`);
+  }
+  if (mapped.phone && !isValidPhone(mapped.phone)) {
+    errors.push(`Invalid phone format: ${mapped.phone}`);
+  }
+  if (errors.length > 0) {
+    return { status: "error", reason: errors.join("; "), isDuplicate: false, emailKey: null, nameKey: null };
+  }
+
+  const emailKey = mapped.email ? mapped.email.toLowerCase() : null;
+  const nameKey = nameCompanyKey(mapped.firstName, mapped.lastName, mapped.company);
+
+  if (emailKey) {
+    const dup = opts.existingEmails.has(emailKey) || opts.seenEmails.has(emailKey);
+    if (dup) {
+      return {
+        status: opts.skipDuplicates ? "duplicate" : "ok",
+        reason: "Duplicate email",
+        isDuplicate: true,
+        emailKey,
+        nameKey,
+      };
+    }
+    return { status: "ok", reason: "", isDuplicate: false, emailKey, nameKey };
+  }
+
+  // No email: email dedup is structurally blind to this row. Fall back to
+  // name+company only when the user opted in.
+  if (nameKey && opts.matchOnNameCompany) {
+    const dup = opts.existingNameKeys.has(nameKey) || opts.seenNameKeys.has(nameKey);
+    if (dup) {
+      return {
+        status: opts.skipDuplicates ? "duplicate" : "ok",
+        reason: "Duplicate name + company",
+        isDuplicate: true,
+        emailKey,
+        nameKey,
+      };
+    }
+  }
+  return { status: "ok", reason: "", isDuplicate: false, emailKey, nameKey };
+}
+
 export function nameCompanyKey(
   firstName?: string | null,
   lastName?: string | null,
@@ -125,6 +209,12 @@ export const importsRouter = router({
         fieldMapping: z.record(z.string(), z.string().nullable()),
         /** Opt-in name+company matching for rows with no email. Default OFF. */
         matchOnNameCompany: z.boolean().default(false),
+        /**
+         * MUST match what commit is called with. The preview used to compute its
+         * counts as though duplicates were always skipped, so with the toggle off
+         * it reported rows as duplicates that the import then created.
+         */
+        skipDuplicates: z.boolean().default(true),
       }),
     )
     .mutation(async ({ input, ctx }) => {
@@ -181,54 +271,34 @@ export const importsRouter = router({
       rows.forEach((row, idx) => {
         const mapped = mapRowToContact(row, input.fieldMapping as Record<string, string | null>);
         const rowIndex = idx + 1;
-        const errors: string[] = [];
+        // ONE classifier, shared with commit — see classifyImportRow for the
+        // three ways these two used to disagree.
+        const verdict = classifyImportRow(mapped, {
+          existingEmails,
+          seenEmails,
+          existingNameKeys,
+          seenNameKeys,
+          matchOnNameCompany: input.matchOnNameCompany,
+          skipDuplicates: input.skipDuplicates,
+        });
 
-        // Required field checks
-        if (!mapped.firstName?.trim()) errors.push("Missing First Name");
-        if (!mapped.lastName?.trim()) errors.push("Missing Last Name");
-
-        // Email validation
-        if (mapped.email) {
-          if (!isValidEmail(mapped.email)) {
-            errors.push(`Invalid email format: ${mapped.email}`);
-          } else {
-            const emailLower = mapped.email.toLowerCase();
-            if (existingEmails.has(emailLower)) {
-              duplicateRows.push(rowIndex);
-              return;
-            }
-            if (seenEmails.has(emailLower)) {
-              duplicateRows.push(rowIndex);
-              return;
-            }
-            seenEmails.add(emailLower);
-          }
-        } else {
-          // No email on this row: email dedup cannot see it at all. Fall back to
-          // name+company only when the user opted in.
+        if (!mapped.email) {
           noEmailRows++;
-          const key = nameCompanyKey(mapped.firstName, mapped.lastName, mapped.company);
-          if (!key) {
-            unmatchableRows++;
-          } else if (input.matchOnNameCompany) {
-            if (existingNameKeys.has(key) || seenNameKeys.has(key)) {
-              duplicateRows.push(rowIndex);
-              return;
-            }
-            seenNameKeys.add(key);
-          }
+          if (!verdict.nameKey) unmatchableRows++;
         }
 
-        // Phone validation
-        if (mapped.phone && !isValidPhone(mapped.phone)) {
-          errors.push(`Invalid phone format: ${mapped.phone}`);
+        if (verdict.status === "error") {
+          errorRows.push({ rowIndex, reason: verdict.reason });
+          return;
         }
+        if (verdict.isDuplicate) duplicateRows.push(rowIndex);
+        if (verdict.status === "duplicate") return;
 
-        if (errors.length > 0) {
-          errorRows.push({ rowIndex, reason: errors.join("; ") });
-        } else {
-          validRows.push(rowIndex);
-        }
+        // Record this row's identity so later rows in the same file dedupe
+        // against it, exactly as commit does.
+        if (verdict.emailKey) seenEmails.add(verdict.emailKey);
+        else if (verdict.nameKey && input.matchOnNameCompany) seenNameKeys.add(verdict.nameKey);
+        validRows.push(rowIndex);
       });
 
       return {
@@ -238,6 +308,8 @@ export const importsRouter = router({
         errorCount: errorRows.length,
         errorRows: errorRows.slice(0, 200), // return first 200 errors
         canImport: validRows.length > 0,
+        /** Echoed back so the summary can state which rule produced these counts. */
+        skipDuplicates: input.skipDuplicates,
         /**
          * Rows with no email. Surfaced so the summary can never imply that
          * duplicate detection ran on rows it structurally cannot see.
@@ -264,12 +336,18 @@ export const importsRouter = router({
          * thing and the import do another.
          */
         matchOnNameCompany: z.boolean().default(false),
+        /**
+         * `sequenceId` and `segmentId` used to be accepted here, stored on the
+         * import record, and acted on by NOTHING — no enrolment, no segment
+         * membership. The UI never sent them, so nobody was misled, but an input
+         * an importer silently ignores is the next silent failure waiting for a
+         * caller. Removed rather than implemented: enrolling a freshly imported
+         * list into a sequence is a send decision, not an import detail.
+         */
         postImportActions: z
           .object({
             tag: z.string().optional(),
             ownerUserId: z.number().optional(),
-            sequenceId: z.number().optional(),
-            segmentId: z.number().optional(),
           })
           .optional(),
       }),
@@ -342,41 +420,38 @@ export const importsRouter = router({
         const rowIndex = idx + 1;
         const mapped = mapRowToContact(row, input.fieldMapping as Record<string, string | null>);
 
-        const errors: string[] = [];
-        if (!mapped.firstName?.trim()) errors.push("Missing First Name");
-        if (!mapped.lastName?.trim()) errors.push("Missing Last Name");
-        if (mapped.email && !isValidEmail(mapped.email)) errors.push("Invalid email");
+        // ONE classifier, shared with validateRows. It applies the required-field,
+        // email AND phone checks in the same order for both, so the preview's
+        // counts describe this loop rather than approximating it.
+        const verdict = classifyImportRow(mapped, {
+          existingEmails,
+          seenEmails,
+          existingNameKeys,
+          seenNameKeys,
+          matchOnNameCompany: input.matchOnNameCompany,
+          skipDuplicates: input.skipDuplicates,
+        });
 
-        if (errors.length > 0) {
-          importRowValues.push({ importId, rowIndex, rowData: row, mappedData: mapped, status: "error", errorReason: errors.join("; ") });
+        if (!mapped.email) noEmailRows++;
+
+        if (verdict.status === "error") {
+          importRowValues.push({ importId, rowIndex, rowData: row, mappedData: mapped, status: "error", errorReason: verdict.reason });
           errorRows++;
           continue;
         }
-
-        if (mapped.email) {
-          const emailLower = mapped.email.toLowerCase();
-          if ((existingEmails.has(emailLower) || seenEmails.has(emailLower)) && input.skipDuplicates) {
-            importRowValues.push({ importId, rowIndex, rowData: row, mappedData: mapped, status: "duplicate", errorReason: "Duplicate email" });
-            skippedRows++;
-            continue;
-          }
-          seenEmails.add(emailLower);
-          existingEmails.add(emailLower);
-        } else {
-          // No email — email dedup is blind to this row. Use name+company only
-          // if the user opted in; otherwise it imports as-is (and the summary
-          // reports it under noEmailCount so that is never a silent outcome).
-          noEmailRows++;
-          const key = nameCompanyKey(mapped.firstName, mapped.lastName, mapped.company);
-          if (key && input.matchOnNameCompany) {
-            if ((existingNameKeys.has(key) || seenNameKeys.has(key)) && input.skipDuplicates) {
-              importRowValues.push({ importId, rowIndex, rowData: row, mappedData: mapped, status: "duplicate", errorReason: "Duplicate name + company" });
-              skippedRows++;
-              continue;
-            }
-            seenNameKeys.add(key);
-            existingNameKeys.add(key);
-          }
+        if (verdict.status === "duplicate") {
+          importRowValues.push({ importId, rowIndex, rowData: row, mappedData: mapped, status: "duplicate", errorReason: verdict.reason });
+          skippedRows++;
+          continue;
+        }
+        // Record this row's identity so later rows in the same file dedupe
+        // against it. Both sets are updated for the same reason the preview does.
+        if (verdict.emailKey) {
+          seenEmails.add(verdict.emailKey);
+          existingEmails.add(verdict.emailKey);
+        } else if (verdict.nameKey && input.matchOnNameCompany) {
+          seenNameKeys.add(verdict.nameKey);
+          existingNameKeys.add(verdict.nameKey);
         }
         toInsert.push({ rowIndex, row, mapped });
       }

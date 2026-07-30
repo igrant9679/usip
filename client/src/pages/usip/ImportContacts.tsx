@@ -27,23 +27,14 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { Link } from "wouter";
+import { CONTACT_IMPORT_FIELDS } from "@shared/importFields";
 
-/* ─── System fields definition (mirrors backend SYSTEM_FIELDS) ──────────── */
-const SYSTEM_FIELDS = [
-  { key: "firstName", label: "First Name", required: true },
-  { key: "lastName", label: "Last Name", required: true },
-  { key: "email", label: "Email", required: false },
-  { key: "phone", label: "Phone", required: false },
-  { key: "title", label: "Job Title", required: false },
-  { key: "company", label: "Company", required: false },
-  { key: "linkedinUrl", label: "LinkedIn URL", required: false },
-  { key: "website", label: "Website", required: false },
-  { key: "industry", label: "Industry", required: false },
-  { key: "city", label: "City", required: false },
-  { key: "state", label: "State / Region", required: false },
-  { key: "country", label: "Country", required: false },
-  { key: "seniority", label: "Seniority", required: false },
-];
+/* ─── System fields ──────────────────────────────────────────────────────────
+ * Imported, not mirrored. This file used to declare its own copy under a comment
+ * claiming it "mirrors backend SYSTEM_FIELDS" — it had 13 entries to the
+ * server's 14, in a different order, and the order decides which field a header
+ * auto-maps to. See shared/importFields.ts. */
+const SYSTEM_FIELDS = CONTACT_IMPORT_FIELDS;
 
 /* ─── Step indicator ────────────────────────────────────────────────────── */
 const STEPS = [
@@ -202,13 +193,16 @@ export default function ImportContacts() {
   // `override` lets the name+company toggle re-validate immediately with its new
   // value, rather than waiting a render for state to settle (which would show
   // counts from the previous setting).
-  async function handleValidate(override?: { matchOnNameCompany?: boolean }) {
+  async function handleValidate(override?: { matchOnNameCompany?: boolean; skipDuplicates?: boolean }) {
     try {
       const result = await validateRowsMutation.mutateAsync({
         csvText,
         filename,
         fieldMapping,
         matchOnNameCompany: override?.matchOnNameCompany ?? matchOnNameCompany,
+        // Both dedupe settings must reach the preview, or its counts describe a
+        // different import than the one the button performs.
+        skipDuplicates: override?.skipDuplicates ?? skipDuplicates,
       } as any);
       setValidCount(result.validCount);
       setDuplicateCount(result.duplicateCount);
@@ -413,7 +407,10 @@ export default function ImportContacts() {
                   <ArrowLeft className="h-4 w-4" /> Back
                 </Button>
                 <Button
-                  onClick={handleValidate}
+                  // Not `onClick={handleValidate}`: that hands the MouseEvent in
+                  // as `override`, so every field of it reads undefined and the
+                  // function works only because each one falls back to state.
+                  onClick={() => void handleValidate()}
                   disabled={validateRowsMutation.isPending}
                   className="gap-2"
                 >
@@ -464,9 +461,13 @@ export default function ImportContacts() {
                         {matchOnNameCompany ? " by email, or by name + company" : " by email"}
                       </p>
                     </div>
+                    {/* Re-validate on change, like the name+company toggle: the
+                        counts above are computed WITH this setting, so leaving it
+                        out left "Valid" and "Duplicates found" describing an
+                        import the button would no longer perform. */}
                     <Switch
                       checked={skipDuplicates}
-                      onCheckedChange={setSkipDuplicates}
+                      onCheckedChange={(v) => { setSkipDuplicates(v); void handleValidate({ skipDuplicates: v }); }}
                     />
                   </div>
                 )}
@@ -535,8 +536,14 @@ export default function ImportContacts() {
 
                 <Separator />
 
+                {/* The old copy promised "easy filtering later". There is no
+                    contact tag to filter on: `contacts` has no tags column (only
+                    leads and help articles do), the label is written to
+                    customFields.importTag, and nothing in the app reads that key.
+                    Saying what it actually does instead of implying a feature
+                    that does not exist. */}
                 <div className="space-y-2">
-                  <Label htmlFor="tag">Tag imported contacts (optional)</Label>
+                  <Label htmlFor="tag">Label this import (optional)</Label>
                   <Input
                     id="tag"
                     placeholder="e.g. Q2-2026-import, tradeshow-leads"
@@ -545,7 +552,9 @@ export default function ImportContacts() {
                     className="max-w-xs"
                   />
                   <p className="text-xs text-muted-foreground">
-                    Adds a tag to all imported contacts for easy filtering later.
+                    Recorded on each contact as import provenance, alongside this import's
+                    id. Contacts have no tag field to filter on yet — the import history
+                    below is where you find a batch again.
                   </p>
                 </div>
               </CardContent>
@@ -603,7 +612,7 @@ export default function ImportContacts() {
                 </div>
                 {tag && (
                   <div className="flex justify-between text-sm">
-                    <span className="text-muted-foreground">Tag</span>
+                    <span className="text-muted-foreground">Import label</span>
                     <Badge variant="outline">{tag}</Badge>
                   </div>
                 )}
