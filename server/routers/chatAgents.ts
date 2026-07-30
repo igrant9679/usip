@@ -753,14 +753,22 @@ async function createLeadForSession(
 
   if (leadId && agent.autoEnrollSequenceId) {
     try {
-      await db.insert(enrollments).values({
-        workspaceId: agent.workspaceId,
-        sequenceId: agent.autoEnrollSequenceId,
-        leadId,
-        status: "active",
-        currentStep: 0,
-        nextActionAt: new Date(),
-      } as never);
+      // A returning visitor starts a NEW session and this function inserts a new
+      // lead, so dedupe on the email rather than the lead id — otherwise someone
+      // who chats twice receives the whole sequence twice.
+      const { hasActiveEnrollmentForEmail } = await import("../services/enrollmentDedupe");
+      if (await hasActiveEnrollmentForEmail(db, agent.workspaceId, agent.autoEnrollSequenceId, visitor.email)) {
+        console.log(`[chatAgents] ${visitor.email} already active in sequence ${agent.autoEnrollSequenceId} — not re-enrolling`);
+      } else {
+        await db.insert(enrollments).values({
+          workspaceId: agent.workspaceId,
+          sequenceId: agent.autoEnrollSequenceId,
+          leadId,
+          status: "active",
+          currentStep: 0,
+          nextActionAt: new Date(),
+        } as never);
+      }
     } catch (e) {
       console.error("[chatAgents] enroll failed:", (e as Error).message);
     }

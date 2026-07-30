@@ -229,14 +229,21 @@ export const landingPagesRouter = router({
 
         if (leadId && page.autoEnrollSequenceId) {
           try {
-            await db.insert(enrollments).values({
-              workspaceId: page.workspaceId,
-              sequenceId: page.autoEnrollSequenceId,
-              leadId,
-              status: "active",
-              currentStep: 0,
-              nextActionAt: new Date(),
-            } as never);
+            // New lead per submit (above), so dedupe on email — a repeat
+            // submitter would otherwise get the whole sequence twice.
+            const { hasActiveEnrollmentForEmail } = await import("../services/enrollmentDedupe");
+            if (await hasActiveEnrollmentForEmail(db, page.workspaceId, page.autoEnrollSequenceId, email)) {
+              console.log(`[landingPages.submit] ${email} already active in sequence ${page.autoEnrollSequenceId} — not re-enrolling`);
+            } else {
+              await db.insert(enrollments).values({
+                workspaceId: page.workspaceId,
+                sequenceId: page.autoEnrollSequenceId,
+                leadId,
+                status: "active",
+                currentStep: 0,
+                nextActionAt: new Date(),
+              } as never);
+            }
           } catch (e) { console.error("[landingPages.submit] enroll failed:", e); }
         }
       }

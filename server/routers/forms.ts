@@ -186,14 +186,23 @@ export const formsRouter = router({
 
         if (leadId && form.autoEnrollSequenceId) {
           try {
-            await db.insert(enrollments).values({
-              workspaceId: form.workspaceId,
-              sequenceId: form.autoEnrollSequenceId,
-              leadId,
-              status: "active",
-              currentStep: 0,
-              nextActionAt: new Date(),
-            } as never);
+            // Every submit inserts a NEW lead above, so a repeat submitter would
+            // otherwise collect one active enrollment per submission and receive
+            // every step of the sequence that many times. Keyed on email, not
+            // leadId, for exactly that reason.
+            const { hasActiveEnrollmentForEmail } = await import("../services/enrollmentDedupe");
+            if (await hasActiveEnrollmentForEmail(db, form.workspaceId, form.autoEnrollSequenceId, email)) {
+              console.log(`[FormSubmit] ${email} already active in sequence ${form.autoEnrollSequenceId} — not re-enrolling`);
+            } else {
+              await db.insert(enrollments).values({
+                workspaceId: form.workspaceId,
+                sequenceId: form.autoEnrollSequenceId,
+                leadId,
+                status: "active",
+                currentStep: 0,
+                nextActionAt: new Date(),
+              } as never);
+            }
           } catch (e) { console.error("[FormSubmit] enroll failed:", e); }
         }
       }
