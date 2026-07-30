@@ -30,6 +30,7 @@ import { router } from "../_core/trpc";
 import { adminWsProcedure, managerProcedure, repProcedure, roleRank, workspaceProcedure } from "../_core/workspace";
 import { appBaseUrl as publicAppOrigin } from "../appUrl";
 import { utcDayStart } from "@shared/timeWindows";
+import { getSequenceAbVariantStats } from "../services/performanceMetrics";
 
 /** Minimal HTML-escaper (duplicated from crm.ts — separate router). */
 function escapeHtml(s: string): string {
@@ -2072,7 +2073,34 @@ export const sequenceAbRouter = router({
         eq(sequenceAbVariants.sequenceId, input.sequenceId),
       ];
       if (input.stepIndex !== undefined) conds.push(eq(sequenceAbVariants.stepIndex, input.stepIndex));
-      return db.select().from(sequenceAbVariants).where(and(...conds)).orderBy(sequenceAbVariants.stepIndex, sequenceAbVariants.variantLabel);
+      const rows = await db.select().from(sequenceAbVariants).where(and(...conds)).orderBy(sequenceAbVariants.stepIndex, sequenceAbVariants.variantLabel);
+
+      /**
+       * Overlay DERIVED performance over the stored counter columns.
+       *
+       * sentCount / openCount / replyCount on this table are dead columns, the
+       * same decision the ARE side already made for are_ab_variants ("the A/B
+       * tab rendered permanent 0% bars for months"). The real numbers come from
+       * email_drafts via migration 0141's abVariantId / firstReplyAt, computed in
+       * performanceMetrics — the one place metrics are computed, so this screen
+       * cannot disagree with the promotion logic that reads the same function.
+       *
+       * Derived `sent` also counts drafts that actually SENT, where the old
+       * counter was bumped when a draft was created and a pending_review draft
+       * may never send.
+       */
+      const stats = await getSequenceAbVariantStats(ctx.workspace.id, input.sequenceId);
+      return rows.map((r) => {
+        const st = stats.get(r.id);
+        return {
+          ...r,
+          sentCount: st?.sent ?? 0,
+          openCount: st?.opens ?? 0,
+          replyCount: st?.replies ?? 0,
+          openRate: st?.openRate ?? 0,
+          replyRate: st?.replyRate ?? 0,
+        };
+      });
     }),
 
   /** Create a new A/B variant for a step */
@@ -2270,9 +2298,25 @@ export async function checkAndPromoteAbVariants(): Promise<{ promoted: number }>
   }
   let promoted = 0;
   for (const [, group] of groups) {
-    // Skip if any variant in the group hasn't reached its min-sends threshold
-    const allMeetThreshold = group.every(v => v.sentCount >= v.minSendsForPromotion);
-    if (!allMeetThreshold || group.length < 2) continue;
+    if (group.length < 2) continue;
+    /**
+     * Stats are DERIVED from email_drafts (migration 0141), not read from the
+     * counter columns. See getSequenceAbVariantStats for why: the ARE side of
+     * this same feature already treats its counters as dead columns and computes
+     * on read, and performanceMetrics is the one place metrics are computed.
+     *
+     * It also makes the threshold honest. sentCount was bumped when a draft was
+     * CREATED, but a draft is pending_review and may never send — a suppressed
+     * recipient being the obvious case — so the gate could open on sends that
+     * never happened.
+     */
+    const stats = await getSequenceAbVariantStats(group[0].workspaceId, group[0].sequenceId);
+    const statFor = (v: { id: number }) =>
+      stats.get(v.id) ?? { variantId: v.id, sent: 0, opens: 0, replies: 0, openRate: 0, replyRate: 0 };
+    const allMeetThreshold = group.every(
+      (v: { id: number; minSendsForPromotion: number }) => statFor(v).sent >= v.minSendsForPromotion,
+    );
+    if (!allMeetThreshold) continue;
     // Check if a winner already exists for this group
     const [existing] = await db.select({ id: sequenceAbVariants.id })
       .from(sequenceAbVariants)
@@ -2306,9 +2350,10 @@ export async function checkAndPromoteAbVariants(): Promise<{ promoted: number }>
      * Wiring real attribution needs a variant reference on emailDrafts, i.e. a
      * migration; that is the user's call, not something to infer here.
      */
-    const hasSignal = group.some(
-      (v: { replyCount: number; openCount: number }) => v.replyCount > 0 || v.openCount > 0,
-    );
+    const hasSignal = group.some((v: { id: number }) => {
+      const st = statFor(v);
+      return st.replies > 0 || st.opens > 0;
+    });
     if (!hasSignal) {
       console.warn(
         `[SequenceAB] sequence ${group[0].sequenceId} step ${group[0].stepIndex}: ` +
@@ -2320,11 +2365,11 @@ export async function checkAndPromoteAbVariants(): Promise<{ promoted: number }>
     }
 
     // Find the variant with the highest reply rate (open rate as tiebreaker)
-    const winner = group.reduce((best, v) => {
-      const score = v.sentCount > 0 ? (v.replyCount / v.sentCount) * 100 + (v.openCount / v.sentCount) * 10 : 0;
-      const bestScore = best.sentCount > 0 ? (best.replyCount / best.sentCount) * 100 + (best.openCount / best.sentCount) * 10 : 0;
-      return score > bestScore ? v : best;
-    });
+    const scoreOf = (v: { id: number }) => {
+      const st = statFor(v);
+      return st.replyRate * 100 + st.openRate * 10;
+    };
+    const winner = group.reduce((best, v) => (scoreOf(v) > scoreOf(best) ? v : best));
     // Clear all winner flags for this step then set the winner
     await db.update(sequenceAbVariants)
       .set({ isWinner: false, promotedAt: null })

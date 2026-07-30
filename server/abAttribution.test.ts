@@ -1,18 +1,26 @@
 /**
- * Migration 0141 — A/B attribution.
+ * Migration 0141 — A/B attribution, DERIVED not counted.
  *
  * `sequence_ab_variants.openCount` / `replyCount` were written by nothing and
  * COULD NOT BE: a draft recorded its stepIndex but not which VARIANT supplied
  * its copy, so an open or a reply had no variant to count against. Both stayed
  * permanently 0, which made autoPromoteAbWinners score every variant identically
- * and promote the first one by array order (made to decline instead in 899ca52).
+ * and promote the first by array order (made to decline instead in 899ca52).
  *
- * 0141 adds `email_drafts.abVariantId` to close the attribution gap, and
- * `email_drafts.firstReplyAt` so replyCount counts one reply per draft rather
- * than one per inbound message.
+ * 0141 adds `email_drafts.abVariantId` and `email_drafts.firstReplyAt` — SOURCE
+ * ROWS, not counters. Performance is computed on read by
+ * performanceMetrics.getSequenceAbVariantStats.
  *
- * The last test here is the one that would have caught the original bug: it
- * asserts each counter has a writer at all.
+ * The counters were briefly written instead, earlier in this same session, and
+ * that was the wrong call: the ARE side of this identical feature already treats
+ * its counters as dead columns ("the A/B tab rendered permanent 0% bars for
+ * months"), performanceMetrics' header states the rule — everything DERIVED from
+ * source rows, do not add denormalised counters — and this repo has already moved
+ * sidebar counters off write-time columns for the same reason. Two mechanisms for
+ * one number is the "two screens disagree" bug this codebase keeps producing.
+ *
+ * Deriving also fixes what a counter could not: it counted drafts CREATED, and a
+ * pending_review draft may never send.
  */
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
@@ -25,8 +33,6 @@ const stripComments = (s: string) =>
 
 describe("migration 0141 is declared in both places", () => {
   it("rawMigrations has the 0141 block", () => {
-    // The repo convention: every migration goes in BOTH drizzle/schema.ts AND
-    // rawMigrations.ts. rawMigrations is what actually runs against prod.
     const src = read("server/_core/rawMigrations.ts");
     expect(src).toContain("0141_ab_variant_attribution.sql");
     expect(src).toMatch(/ALTER TABLE `email_drafts` ADD COLUMN `abVariantId` int NULL/);
@@ -43,111 +49,127 @@ describe("migration 0141 is declared in both places", () => {
   });
 });
 
-describe("the engine records which variant it used", () => {
-  const src = stripComments(read("server/sequenceEngine.ts"));
-
-  it("writes abVariantId onto the draft", () => {
-    expect(src).toMatch(/abVariantId: chosenVariantId/);
-  });
-
-  it("writes it in the SAME insert as the draft, not a follow-up update", () => {
-    // A second statement could fail independently and leave an unattributable
-    // draft — the attribution would then be silently incomplete, which is the
-    // failure mode this migration exists to end.
+describe("the source rows get written", () => {
+  it("the engine records abVariantId in the SAME insert as the draft", () => {
+    // A follow-up UPDATE could fail on its own and leave an unattributable
+    // draft — silently incomplete attribution is the failure 0141 exists to end.
+    const src = stripComments(read("server/sequenceEngine.ts"));
     const insert = src.slice(src.indexOf("insert(emailDrafts).values"));
     expect(insert.slice(0, 600)).toMatch(/abVariantId: chosenVariantId/);
   });
-});
 
-describe("open attribution counts unique opens", () => {
-  const src = stripComments(read("server/emailTracking.ts"));
-
-  it("bumps the variant openCount atomically", () => {
-    expect(src).toMatch(/sequenceAbVariants\.openCount\} \+ 1/);
+  it("the poller claims firstReplyAt atomically", () => {
+    // Runs per inbound MESSAGE, so a four-message thread must not read as four
+    // replies. `WHERE firstReplyAt IS NULL` makes the claim atomic when two
+    // messages from one thread land in the same pass (shape from 1d9428e).
+    const src = stripComments(read("server/inboundReplyPoller.ts"));
+    expect(src).toMatch(/isNull\(emailDrafts\.firstReplyAt\)/);
+    expect(src).toMatch(/firstReplyAt: new Date\(\)/);
   });
 
-  it("only counts the FIRST open of a draft", () => {
-    /**
-     * The draft's own openCount deliberately counts every hit — this file's
-     * header says raw curiosity is preserved. A variant RATE needs one open per
-     * recipient, or one enthusiastic re-opener outweighs ten different people
-     * and openCount/sentCount can exceed 100%.
-     */
-    expect(src).toMatch(/draft\.abVariantId && \(draft\.openCount \?\? 0\) === 0/);
-  });
-
-  it("selects the columns it needs to make that decision", () => {
-    // Reading abVariantId/openCount off a projection that never selected them
-    // yields undefined, and the guard above would then never fire.
-    //
-    // Anchored on CODE, not a comment: the first version searched for the
-    // "Look up the draft by tracking token" comment, which stripComments had
-    // already removed, so indexOf returned -1 and the slice was meaningless.
-    const selIdx = src.indexOf("emailDrafts.trackingToken, token");
-    expect(selIdx).toBeGreaterThan(-1);
-    const sel = src.slice(Math.max(0, selIdx - 500), selIdx + 100);
+  it("the open handler selects abVariantId and openCount", () => {
+    // Anchored on CODE, not a comment — an earlier version of this test anchored
+    // on a `//` comment that stripComments had already removed, so indexOf
+    // returned -1 and the assertion was meaningless.
+    const src = stripComments(read("server/emailTracking.ts"));
+    const idx = src.indexOf("emailDrafts.trackingToken, token");
+    expect(idx).toBeGreaterThan(-1);
+    const sel = src.slice(Math.max(0, idx - 500), idx + 100);
     expect(sel).toMatch(/abVariantId: emailDrafts\.abVariantId/);
     expect(sel).toMatch(/openCount: emailDrafts\.openCount/);
   });
 });
 
-describe("reply attribution counts one reply per draft", () => {
-  const src = stripComments(read("server/inboundReplyPoller.ts"));
-
-  it("claims firstReplyAt before bumping, atomically", () => {
-    // This function runs per inbound MESSAGE. A four-message thread against one
-    // send would otherwise count four replies. `WHERE firstReplyAt IS NULL`
-    // makes the claim atomic so only one caller proceeds — same
-    // claim-before-act shape as the duplicate-send fix in 1d9428e.
-    expect(src).toMatch(/isNull\(emailDrafts\.firstReplyAt\)/);
-    expect(src).toMatch(/firstReplyAt: new Date\(\)/);
-  });
-
-  it("bumps replyCount only when the claim succeeded", () => {
-    const block = src.slice(src.indexOf("isNull(emailDrafts.firstReplyAt)"));
-    expect(block.slice(0, 600)).toMatch(/claimed > 0/);
-    expect(block.slice(0, 600)).toMatch(/sequenceAbVariants\.replyCount\} \+ 1/);
-  });
-
-  it("imports sql, which a bundler would not catch", () => {
-    expect(read("server/inboundReplyPoller.ts")).toMatch(
-      /import \{[^}]*\bsql\b[^}]*\} from "drizzle-orm"/,
-    );
-  });
-});
-
-describe("every A/B counter has a writer", () => {
+describe("no counter is maintained alongside the derivation", () => {
   /**
-   * THE GUARD THAT WOULD HAVE CAUGHT THE ORIGINAL BUG.
-   *
-   * sentCount had a writer; openCount and replyCount had none, for as long as
-   * the feature existed. Nothing failed — the promotion just scored everything 0
-   * and picked by array order. A counter that is read but never written is
-   * invisible unless something asserts the write exists.
+   * The point of the rework. Two mechanisms for one number is exactly how the
+   * ARE A/B tab ended up showing 0% bars for months while a counter column sat
+   * next to it, and how sidebar counters drifted from their row-derived funnel.
    */
-  const COUNTERS = ["sentCount", "openCount", "replyCount"] as const;
   const WRITERS = [
     "server/sequenceEngine.ts",
     "server/emailTracking.ts",
     "server/inboundReplyPoller.ts",
   ];
 
-  it("finds source to scan (guards the scanner itself)", () => {
-    expect(WRITERS.every((f) => read(f).length > 0)).toBe(true);
-  });
-
-  for (const counter of COUNTERS) {
-    it(`sequenceAbVariants.${counter} is incremented somewhere`, () => {
-      const found = WRITERS.some((f) =>
+  for (const counter of ["sentCount", "openCount", "replyCount"] as const) {
+    it(`nothing increments sequenceAbVariants.${counter}`, () => {
+      const offenders = WRITERS.filter((f) =>
         new RegExp(`sequenceAbVariants\\.${counter}\\} \\+ 1`).test(stripComments(read(f))),
       );
       expect(
-        found,
-        `\n\nNothing increments sequenceAbVariants.${counter}. autoPromoteAbWinners\n` +
-          `divides by sentCount and ranks on openCount/replyCount, so an unwritten\n` +
-          `counter makes every variant score identically and the "winner" becomes\n` +
-          `whichever happens to be first in the array.\n`,
-      ).toBe(true);
+        offenders,
+        offenders.length
+          ? `\n\n${offenders.join(", ")} increments sequenceAbVariants.${counter}.\n` +
+              `Those columns are dead — performance is derived by\n` +
+              `performanceMetrics.getSequenceAbVariantStats. Maintaining a counter too\n` +
+              `gives two answers to one question, which is how the ARE A/B tab showed 0%\n` +
+              `bars for months.\n`
+          : undefined,
+      ).toEqual([]);
     });
   }
+});
+
+describe("performance is derived from source rows", () => {
+  const src = stripComments(read("server/services/performanceMetrics.ts"));
+
+  it("getSequenceAbVariantStats exists and reads email_drafts", () => {
+    expect(src).toMatch(/export async function getSequenceAbVariantStats/);
+    const fn = src.slice(src.indexOf("export async function getSequenceAbVariantStats"));
+    expect(fn.slice(0, 1400)).toMatch(/\.from\(emailDrafts\)/);
+    expect(fn.slice(0, 1400)).toMatch(/isNotNull\(emailDrafts\.abVariantId\)/);
+  });
+
+  it("counts only drafts that actually SENT", () => {
+    // The old counter was bumped at draft creation, so it credited sends that
+    // never happened — a suppressed recipient's draft being the obvious case.
+    const fn = src.slice(src.indexOf("export async function getSequenceAbVariantStats"));
+    expect(fn.slice(0, 1400)).toMatch(/status\} = 'sent'/);
+  });
+
+  it("counts drafts opened at least once, not raw pixel hits", () => {
+    // Mail privacy proxies prefetch images, so summing openCount overstates
+    // interest while "was it opened at all" stays meaningful. Same rule the ARE
+    // version documents.
+    const fn = src.slice(src.indexOf("export async function getSequenceAbVariantStats"));
+    expect(fn.slice(0, 1400)).toMatch(/openCount\} > 0/);
+  });
+
+  it("counts one reply per draft via firstReplyAt", () => {
+    const fn = src.slice(src.indexOf("export async function getSequenceAbVariantStats"));
+    expect(fn.slice(0, 1400)).toMatch(/firstReplyAt\} IS NOT NULL/);
+  });
+});
+
+describe("both readers use the one derivation", () => {
+  const src = stripComments(read("server/routers/sequences.ts"));
+
+  it("autoPromoteAbWinners scores from derived stats", () => {
+    expect(src).toMatch(/getSequenceAbVariantStats\(/);
+    // Anchored on a string unique to the PROMOTION call. An earlier version
+    // anchored on "const stats = await getSequenceAbVariantStats", which matches
+    // the `list` proc first — so the slice examined the wrong function entirely
+    // and the assertion failed for a reason that had nothing to do with the code.
+    const promote = src.slice(src.indexOf("group[0].workspaceId, group[0].sequenceId"));
+    expect(promote.slice(0, 1500)).toMatch(/statFor\(v\)\.sent >= v\.minSendsForPromotion/);
+    expect(promote.slice(0, 1500)).toMatch(/st\.replies > 0 \|\| st\.opens > 0/);
+  });
+
+  it("the promotion no longer reads the counter columns", () => {
+    const promote = src.slice(src.indexOf("group[0].workspaceId, group[0].sequenceId"));
+    expect(promote.slice(0, 1500)).not.toMatch(/v\.replyCount/);
+    expect(promote.slice(0, 1500)).not.toMatch(/v\.sentCount/);
+  });
+
+  it("sequenceAb.list overlays the same derived numbers", () => {
+    // So the A/B tab and the promotion decision cannot disagree — they read one
+    // function. performanceMetrics is the ONE place metrics are computed.
+    // sequences.ts has several `list: workspaceProcedure` procs, so anchor on the
+    // overlay itself rather than the first one indexOf happens to find.
+    expect(src).toMatch(/getSequenceAbVariantStats\(ctx\.workspace\.id, input\.sequenceId\)/);
+    expect(src).toMatch(/sentCount: st\?\.sent \?\? 0/);
+    expect(src).toMatch(/openCount: st\?\.opens \?\? 0/);
+    expect(src).toMatch(/replyCount: st\?\.replies \?\? 0/);
+  });
 });

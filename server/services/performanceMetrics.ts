@@ -802,6 +802,83 @@ export async function getAbVariantStats(
   return out;
 }
 
+/* ─── Sequence A/B variant performance ──────────────────────────────────── */
+
+export interface SequenceAbVariantStats {
+  variantId: number;
+  sent: number;
+  /** Distinct messages opened at least once — NOT raw pixel hits. */
+  opens: number;
+  replies: number;
+  openRate: number;
+  replyRate: number;
+}
+
+/**
+ * Sequence A/B performance, DERIVED from email_drafts (migration 0141's
+ * `abVariantId` / `firstReplyAt`) rather than read from the counter columns.
+ *
+ * Written to correct a decision I made an hour earlier in the same session.
+ * `sequence_ab_variants.openCount` / `replyCount` were dead columns, so 0141
+ * added the attribution column AND started writing the counters. The ARE side of
+ * the identical feature had already gone the other way, and its comment explains
+ * why: nothing ever wrote `are_ab_variants`' counters, "the A/B tab rendered
+ * permanent 0% bars for months", and those are now dead columns with performance
+ * computed on read. performanceMetrics' own header states the rule — everything
+ * is DERIVED from source rows, do not add denormalised counters — and this repo
+ * has already moved sidebar counters off write-time columns for the same reason.
+ * Maintaining counters would have been a third opinion about the same numbers.
+ *
+ * Deriving also fixes something the counters could not. The engine bumped
+ * sentCount when it CREATED a draft, but a draft is `pending_review` and may
+ * never send — suppressed recipients being the obvious case. `sent` here counts
+ * drafts that actually reached status 'sent', so the denominator is real.
+ *
+ * `opens` counts drafts opened at least once rather than summing openCount, for
+ * the reason the ARE version gives: mail privacy proxies prefetch images, so a
+ * hit count overstates interest while "was it opened at all" stays meaningful.
+ */
+export async function getSequenceAbVariantStats(
+  workspaceId: number,
+  sequenceId: number,
+): Promise<Map<number, SequenceAbVariantStats>> {
+  const out = new Map<number, SequenceAbVariantStats>();
+  const db = await getDb();
+  if (!db) return out;
+
+  const rows = await db
+    .select({
+      variantId: emailDrafts.abVariantId,
+      sent: sql<number>`SUM(CASE WHEN ${emailDrafts.status} = 'sent' THEN 1 ELSE 0 END)`,
+      opens: sql<number>`SUM(CASE WHEN ${emailDrafts.status} = 'sent' AND ${emailDrafts.openCount} > 0 THEN 1 ELSE 0 END)`,
+      replies: sql<number>`SUM(CASE WHEN ${emailDrafts.firstReplyAt} IS NOT NULL THEN 1 ELSE 0 END)`,
+    })
+    .from(emailDrafts)
+    .where(and(
+      eq(emailDrafts.workspaceId, workspaceId),
+      eq(emailDrafts.sequenceId, sequenceId),
+      isNotNull(emailDrafts.abVariantId),
+    ))
+    .groupBy(emailDrafts.abVariantId);
+
+  for (const r of rows) {
+    const id = Number(r.variantId);
+    if (!Number.isFinite(id)) continue;
+    const sent = Number(r.sent ?? 0);
+    const opens = Number(r.opens ?? 0);
+    const replies = Number(r.replies ?? 0);
+    out.set(id, {
+      variantId: id,
+      sent,
+      opens,
+      replies,
+      openRate: sent > 0 ? (opens / sent) * 100 : 0,
+      replyRate: sent > 0 ? (replies / sent) * 100 : 0,
+    });
+  }
+  return out;
+}
+
 /* ─── Inbound chat funnel ───────────────────────────────────────────────── */
 
 /**

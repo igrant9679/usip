@@ -140,29 +140,18 @@ export function registerEmailTrackingRoutes(app: Express) {
         .where(eq(emailDrafts.id, draft.id));
 
       /**
-       * Attribute the open to its A/B variant (migration 0141).
+       * No A/B counter is bumped here. sequence_ab_variants' counters are dead
+       * columns, matching the decision already made for are_ab_variants on the
+       * ARE side of this feature. Variant performance is DERIVED on read by
+       * performanceMetrics.getSequenceAbVariantStats, which counts drafts opened
+       * at least once — the same "distinct messages opened, not raw pixel hits"
+       * rule the ARE version uses, because mail privacy proxies prefetch images.
        *
-       * UNIQUE opens only — bumped when the draft's previous openCount was 0.
-       * The draft's own openCount deliberately counts every hit ("raw curiosity
-       * is preserved", per this file's header), but a variant rate wants one
-       * open per recipient: otherwise one enthusiastic reader re-opening ten
-       * times outweighs ten different people, and openCount/sentCount can
-       * exceed 100%.
-       *
-       * Atomic increment, and best-effort — a tracking pixel must still return
-       * its image if the aggregation fails.
+       * The two writes above (openCount on the draft, plus abVariantId written at
+       * draft creation in migration 0141) are the source rows that derivation
+       * reads. Keeping a counter here as well would be a second opinion about the
+       * same number.
        */
-      if (draft.abVariantId && (draft.openCount ?? 0) === 0) {
-        try {
-          const { sequenceAbVariants } = await import("../drizzle/schema");
-          await db
-            .update(sequenceAbVariants)
-            .set({ openCount: sql`${sequenceAbVariants.openCount} + 1` } as never)
-            .where(eq(sequenceAbVariants.id, draft.abVariantId));
-        } catch (e) {
-          console.warn("[EmailTracking] variant open attribution failed:", (e as Error).message);
-        }
-      }
     } catch (e) {
       console.error("[EmailTracking] open event failed:", e);
     }

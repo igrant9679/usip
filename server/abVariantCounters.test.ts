@@ -71,8 +71,9 @@ describe("autoPromoteAbWinners declines without signal", () => {
   const src = stripComments(read("server/routers/sequences.ts"));
 
   it("checks for a non-zero open or reply count before promoting", () => {
+    // Reads DERIVED stats now, not the counter columns — see abAttribution.test.ts.
     expect(src).toMatch(/hasSignal/);
-    expect(src).toMatch(/v\.replyCount > 0 \|\| v\.openCount > 0/);
+    expect(src).toMatch(/st\.replies > 0 \|\| st\.opens > 0/);
   });
 
   it("skips the group rather than promoting a default", () => {
@@ -88,25 +89,20 @@ describe("autoPromoteAbWinners declines without signal", () => {
   });
 });
 
-describe("variant sentCount is incremented atomically", () => {
-  it("uses a SQL expression, not a JS read-modify-write", () => {
+describe("variant sentCount is no longer a maintained counter", () => {
+  it("the engine does not increment it at all", () => {
     /**
-     * `chosenVariantCount + 1` computed in JS was a lost update, and not a rare
-     * one: the variant list is selected fresh per enrollment, so two enrollments
-     * in the SAME tick that pick the same variant both read N and both write
-     * N+1. Third instance of this shape today after sendingAccountDailyStats
-     * (72aa576) and bookingLinks (9bb4f3d).
+     * It briefly did — an atomic SQL increment replacing a JS read-modify-write
+     * lost update — before the whole counter approach was reverted in favour of
+     * deriving from email_drafts. Both versions were wrong for the same deeper
+     * reason: the bump ran at draft CREATION, and a pending_review draft may
+     * never send, so it credited sends that did not happen AND gated
+     * minSendsForPromotion on them.
      *
-     * It matters beyond the number: sentCount gates minSendsForPromotion, so an
-     * undercount also delays the promotion decision.
+     * See server/abAttribution.test.ts for the derived design.
      */
     const src = stripComments(read("server/sequenceEngine.ts"));
-    expect(src).toMatch(/sentCount: sql`\$\{sequenceAbVariants\.sentCount\} \+ 1`/);
     expect(src).not.toMatch(/sentCount: chosenVariantCount \+ 1/);
-  });
-
-  it("imports sql, which a bundler would not catch", () => {
-    const src = read("server/sequenceEngine.ts");
-    expect(src).toMatch(/import \{[^}]*\bsql\b[^}]*\} from "drizzle-orm"/);
+    expect(src).not.toMatch(/sentCount: sql`\$\{sequenceAbVariants\.sentCount\} \+ 1`/);
   });
 });

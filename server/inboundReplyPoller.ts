@@ -415,34 +415,31 @@ export async function processInboundReply(data: InboundReplyData) {
   }
 
   /**
-   * 6b. Attribute the reply to its A/B variant (migration 0141).
+   * 6b. Mark the FIRST reply on the matched draft (migration 0141).
    *
-   * ONE reply per draft, gated on `firstReplyAt`. This function runs per inbound
-   * MESSAGE, so a four-message thread against a single send would otherwise
-   * count four replies and produce a variant reply rate above 100%.
+   * This is the source row A/B measurement reads:
+   * performanceMetrics.getSequenceAbVariantStats counts drafts whose firstReplyAt
+   * is set, rather than a counter maintained here. sequence_ab_variants'
+   * replyCount is a dead column, matching the ARE side of the same feature.
    *
-   * The gate is a conditional UPDATE rather than a read-then-write: the poller
-   * can process two messages from the same thread in one pass, and
-   * `WHERE firstReplyAt IS NULL` makes the claim atomic, so only the update that
-   * actually set the marker goes on to bump the counter. Same claim-before-act
-   * shape as the duplicate-send fix in 1d9428e.
+   * Still a conditional UPDATE rather than read-then-write. This function runs
+   * per inbound MESSAGE, so a four-message thread must not read as four replies,
+   * and `WHERE firstReplyAt IS NULL` makes the claim atomic when two messages
+   * from one thread land in the same pass — the claim-before-act shape from
+   * 1d9428e.
+   *
+   * Set for every matched draft, not only A/B ones: "when did this send first get
+   * a reply" is worth recording either way, and it costs one UPDATE that only
+   * ever fires once per draft.
    */
-  if (matchedDraft?.id && matchedDraft?.abVariantId) {
+  if (matchedDraft?.id) {
     try {
-      const claim = await db
+      await db
         .update(emailDrafts)
         .set({ firstReplyAt: new Date() } as never)
         .where(and(eq(emailDrafts.id, matchedDraft.id), isNull(emailDrafts.firstReplyAt)));
-      const claimed = Number((claim as any)?.[0]?.affectedRows ?? (claim as any)?.affectedRows ?? 0);
-      if (claimed > 0) {
-        const { sequenceAbVariants } = await import("../drizzle/schema");
-        await db
-          .update(sequenceAbVariants)
-          .set({ replyCount: sql`${sequenceAbVariants.replyCount} + 1` } as never)
-          .where(eq(sequenceAbVariants.id, matchedDraft.abVariantId));
-      }
     } catch (e) {
-      console.warn("[InboundPoller] variant reply attribution failed:", (e as Error).message);
+      console.warn("[InboundPoller] firstReplyAt claim failed:", (e as Error).message);
     }
   }
 

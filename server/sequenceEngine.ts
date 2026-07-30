@@ -537,28 +537,21 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
             status: "pending_review",
             aiGenerated: false,
           } as never);
-          // Insert succeeded — NOW bump the chosen variant's sent count.
-          // If we'd done this before the insert and the insert threw, the
-          // variant counter would have over-counted relative to actual
-          // drafts created.
-          if (chosenVariantId !== null) {
-            /**
-             * Atomic in SQL. `chosenVariantCount + 1` computed in JS was a lost
-             * update, and not a rare one: the variant list is selected fresh per
-             * enrollment, so two enrollments in the SAME tick that pick the same
-             * variant both read N and both write N+1. With any real volume that
-             * is the normal case, not an edge case.
-             *
-             * It matters beyond the number being wrong. sentCount gates
-             * `minSendsForPromotion`, so an undercount also delays or skews the
-             * A/B promotion decision. Third instance of this shape today, after
-             * sendingAccountDailyStats (72aa576) and bookingLinks (9bb4f3d).
-             */
-            await db
-              .update(sequenceAbVariants)
-              .set({ sentCount: sql`${sequenceAbVariants.sentCount} + 1` } as never)
-              .where(eq(sequenceAbVariants.id, chosenVariantId));
-          }
+          /**
+           * No sentCount bump. sequence_ab_variants' counters are dead columns —
+           * variant performance is DERIVED from email_drafts by
+           * performanceMetrics.getSequenceAbVariantStats, which counts drafts that
+           * reached status 'sent'.
+           *
+           * Deriving is strictly better than a counter here, not merely tidier:
+           * this code runs at draft CREATION, and a `pending_review` draft may
+           * never send — a suppressed recipient being the obvious case, which the
+           * guard a few lines above now skips outright. The old counter therefore
+           * credited sends that never happened, and it gates
+           * `minSendsForPromotion`, so it could open the promotion threshold on
+           * mail nobody received. `abVariantId` on the draft above is the source
+           * row that makes the derivation possible.
+           */
           } // end if (hasContent)
         }
 
