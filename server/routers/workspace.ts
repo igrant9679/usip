@@ -11,6 +11,7 @@ import {
 } from "../db";
 import { eq } from "drizzle-orm";
 import { workspaces, workspaceSettings, brandVoiceProfiles } from "../../drizzle/schema";
+import { slugify } from "@shared/slugify";
 
 export const workspaceRouter = router({
   /**
@@ -62,7 +63,7 @@ export const workspaceRouter = router({
 
       // slug is UNIQUE — derive from the name, then add entropy. Retry rather
       // than trusting one draw, so two workspaces named the same never collide.
-      const base = input.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "workspace";
+      const base = slugify(input.name, 40) || "workspace"; // workspace slugs cap at 40
       let workspaceId = 0;
       let slug = "";
       for (let attempt = 0; attempt < 5 && !workspaceId; attempt++) {

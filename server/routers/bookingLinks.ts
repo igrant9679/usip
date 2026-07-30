@@ -27,6 +27,7 @@ import { hostedPageChatSlug } from "../services/hostedChat";
 import {
   DEFAULT_HORIZON_DAYS, DEFAULT_WORK_DAYS, formatInZone, generateSlots, isValidTimezone,
 } from "@shared/availability";
+import { slugify } from "@shared/slugify";
 
 /**
  * Availability bounds. The generator's own defaults live in
@@ -35,9 +36,7 @@ import {
  */
 const HORIZON_DAYS = DEFAULT_HORIZON_DAYS;
 
-function slugify(s: string): string {
-  return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
-}
+// slugify comes from @shared/slugify — one rule for every public URL.
 
 /*
  * The timezone primitives and the slot generator moved to

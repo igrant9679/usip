@@ -36,15 +36,14 @@ import { formatKnowledge, selectKnowledge } from "../services/chatKnowledge";
 import { appUrl } from "../appUrl";
 import { describePageContext } from "../services/chatPageContext";
 import { getChatFunnelStats } from "../services/performanceMetrics";
+import { slugify } from "@shared/slugify";
 
 /** How many slots the widget offers. A short list converts; a wall of times doesn't. */
 const SLOTS_SHOWN = 6;
 /** Hard cap on turns per session — a public LLM endpoint needs a ceiling. */
 const MAX_MESSAGES = 60;
 
-function slugify(s: string): string {
-  return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
-}
+// slugify comes from @shared/slugify — one rule for every public URL.
 
 function messagesOf(row: { messages: unknown }): ChatMessage[] {
   return Array.isArray(row.messages) ? (row.messages as ChatMessage[]) : [];

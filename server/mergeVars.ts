@@ -22,6 +22,7 @@ import { appBaseUrl } from "./appUrl";
 import { getDb } from "./db";
 import { contacts, accounts, leads, prospects, bookingLinks, users } from "../drizzle/schema";
 import { escapeHtml } from "@shared/escapeHtml";
+import { slugify } from "@shared/slugify";
 
 export type MergeContext = {
   contact?: {
@@ -77,7 +78,10 @@ export async function resolveBookingUrl(
       .where(and(eq(bookingLinks.workspaceId, workspaceId), eq(bookingLinks.userId, userId)));
     if (!link) {
       const [u] = await db.select({ name: users.name }).from(users).where(eq(users.id, userId));
-      const base = (u?.name ?? `rep-${userId}`).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || `rep-${userId}`;
+      // Same rule as bookingLinks.ts, which MINTS this slug — an inline copy
+      // here meant {{bookingLink}} could resolve to a URL the booking router
+      // would never have generated.
+      const base = slugify(u?.name ?? `rep-${userId}`) || `rep-${userId}`;
       const slug = `${base}-${userId}`.slice(0, 80);
       await db.insert(bookingLinks).values({ workspaceId, userId, slug, title: "Book a meeting" } as never);
       [link] = await db

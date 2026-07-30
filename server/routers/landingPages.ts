@@ -17,6 +17,7 @@ import { getDb } from "../db";
 import { landingPages, leads, enrollments } from "../../drizzle/schema";
 import { resolveBookingUrl } from "../mergeVars";
 import { hostedPageChatSlug } from "../services/hostedChat";
+import { slugify } from "@shared/slugify";
 
 type FormField = { key: string; label: string; required?: boolean };
 const DEFAULT_FIELDS: FormField[] = [
@@ -28,9 +29,7 @@ const DEFAULT_FIELDS: FormField[] = [
 const sectionSchema = z.object({ heading: z.string().max(200), body: z.string().max(4000) });
 const fieldSchema = z.object({ key: z.string().max(40), label: z.string().max(120), required: z.boolean().optional() });
 
-function slugify(s: string): string {
-  return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
-}
+// slugify comes from @shared/slugify — one rule for every public URL.
 function str(v: unknown, max: number): string | null {
   if (typeof v !== "string") return null;
   const t = v.trim();
