@@ -14,10 +14,9 @@ import { getDb } from "../db";
 import { appUrl } from "../appUrl";
 import { sendSystemEmail } from "../emailDelivery";
 import { runSpec, type ReportSpec } from "../routers/reports";
+import { escapeHtml } from "@shared/escapeHtml";
 
-function esc(s: unknown): string {
-  return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
+const esc = escapeHtml; // one escaper — @shared/escapeHtml
 
 const CHART_PALETTE = ["#0EA5E9", "#8B5CF6", "#F59E0B", "#10B981", "#EC4899", "#06B6D4", "#F43F5E", "#84CC16", "#6366F1"];
 

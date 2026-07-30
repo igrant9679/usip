@@ -24,6 +24,7 @@ import { eq, and, isNotNull } from "drizzle-orm";
 import { createEmailAdapter } from "../emailAdapter";
 import { invokeLLM } from "../_core/llm";
 import { assertSendAllowed } from "../sendLimits";
+import { escapeHtml } from "@shared/escapeHtml";
 
 /**
  * Append the rep's email signature to outbound HTML / text if it isn't
@@ -66,8 +67,7 @@ async function appendSignature(
   if (bodyHtml.includes(sig) || (bodyText && bodyText.includes(sig))) {
     return { bodyHtml, bodyText };
   }
-  const escape = (s: string) =>
-    s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const escape = escapeHtml; // one escaper — @shared/escapeHtml
   const sigHtml = sig.split("\n").map(escape).join("<br>");
   return {
     bodyHtml: `${bodyHtml}<div style="margin-top:18px;color:#555;line-height:1.4">${sigHtml}</div>`,

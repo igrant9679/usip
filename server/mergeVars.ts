@@ -21,6 +21,7 @@ import { and, eq } from "drizzle-orm";
 import { appBaseUrl } from "./appUrl";
 import { getDb } from "./db";
 import { contacts, accounts, leads, prospects, bookingLinks, users } from "../drizzle/schema";
+import { escapeHtml } from "@shared/escapeHtml";
 
 export type MergeContext = {
   contact?: {
@@ -210,11 +211,7 @@ export function injectTracking(
  */
 export function textToHtml(text: string): string {
   // Escape HTML special chars first
-  const escaped = text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+  const escaped = escapeHtml(text);
 
   // Render Markdown links [label](url) AND bare URLs in a single pass so a URL
   // inside a Markdown link isn't double-wrapped. The Markdown alternative is
@@ -250,8 +247,7 @@ export function renderSequenceOptOut(
       ? `mailto:${opts.senderEmail}?subject=Unsubscribe`
       : null;
 
-  const esc = (s: string) =>
-    s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  const esc = escapeHtml; // one escaper — @shared/escapeHtml
   const marker = /<%\s*([\s\S]*?)\s*%>/;
 
   // Plain text: drop the <% %> markers, keep the label; append the URL when it

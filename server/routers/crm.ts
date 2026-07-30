@@ -51,6 +51,7 @@ import { appBaseUrl as publicAppOrigin } from "../appUrl";
 // One arithmetic rule for line-item money, shared with quotes. See
 // shared/quoteTotals.ts — a deal line and a quote line do the same sum.
 import { centsToDecimal, computeQuoteTotals, toCents } from "@shared/quoteTotals";
+import { escapeHtml as sharedEscapeHtml } from "@shared/escapeHtml";
 
 /** The ONE public origin — see server/appUrl.ts. */
 const getAppBaseUrl = publicAppOrigin;
@@ -66,14 +67,11 @@ function unsubscribeFooterText(unsubscribeUrl: string): string {
 }
 
 /** Minimal HTML-escaper for wrapping plain-text bodies into a simple HTML mail. */
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
+// One escaper for the whole codebase — @shared/escapeHtml. Five copies existed
+// and two of them did not escape `"`; the weakest was the one interpolating
+// into HTML attributes. escapeHtmlWithLinks below still layers link handling
+// on top of it.
+const escapeHtml = sharedEscapeHtml;
 
 /**
  * Escape HTML, then turn URLs into proper <a href> anchors.

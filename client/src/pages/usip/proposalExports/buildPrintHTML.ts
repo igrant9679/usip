@@ -1,3 +1,4 @@
+import { escapeHtml } from "@shared/escapeHtml";
 /**
  * Proposal PDF export — print-ready HTML generator.
  *
@@ -77,11 +78,11 @@ const DEFAULTS = {
   logoUrl: "",
 };
 
-const esc = (s: unknown): string =>
-  String(s ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+// One escaper (@shared/escapeHtml). This copy did not escape `"` while line ~371
+// interpolates into src="…" and alt="…" — an org name or logo URL with a quote
+// closed the attribute and everything after it parsed as more attributes, in the
+// document a customer receives.
+const esc = escapeHtml;
 
 const fmtDate = (d: string | Date | null | undefined): string => {
   if (!d) return "";

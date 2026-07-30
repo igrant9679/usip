@@ -22,6 +22,7 @@ import { sendWorkspaceEmail } from "../emailDelivery";
 import { resolveBookingUrl } from "../mergeVars";
 import { sendMessage } from "../lib/unipile";
 import { normalizeSuppressionEmail } from "../unsubscribe";
+import { escapeHtml } from "@shared/escapeHtml";
 
 export const REPLY_CLASSES = [
   "willing_to_meet",
@@ -48,9 +49,7 @@ function truncate(s: string | null | undefined, n: number): string {
   return t.length > n ? t.slice(0, n) + "…" : t;
 }
 
-function escHtml(s: string): string {
-  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-}
+const escHtml = escapeHtml; // one escaper — @shared/escapeHtml
 
 /** Classify a single reply and persist the classification. Returns it (or null). */
 export async function classifyReply(workspaceId: number, reply: any): Promise<ReplyClassification | null> {

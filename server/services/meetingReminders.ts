@@ -17,6 +17,7 @@ import { getDb } from "../db";
 import { meetings } from "../../drizzle/schema";
 import { sendWorkspaceEmail } from "../emailDelivery";
 import { resolveBookingUrl } from "../mergeVars";
+import { escapeHtml } from "@shared/escapeHtml";
 
 const REMINDER_STATUSES = ["scheduled", "invited"];
 
@@ -28,9 +29,7 @@ function fmtWhen(d: Date): string {
   }) + " UTC";
 }
 
-function esc(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-}
+const esc = escapeHtml; // one escaper — @shared/escapeHtml
 
 /**
  * Send due pre-meeting reminders across all workspaces. Returns how many were

@@ -64,6 +64,7 @@ import { ARE_DEFAULT_SOURCES, normalizeSources } from "@shared/areSources";
 import { normalizeSequence } from "@shared/areSequenceSteps";
 import { apolloPulledToday, apolloSearchPeople, getApolloDailyCap } from "./services/apollo";
 import { appBaseUrl as publicAppOrigin } from "./appUrl";
+import { escapeHtml } from "@shared/escapeHtml";
 
 /* ─── Per-tick bounds (keep LLM cost + wall-time predictable) ───────────── */
 /** Max prospects enriched per engine cycle. Enrichment runs ONE AT A TIME
@@ -122,10 +123,11 @@ function applyMerge(text: string, p: Prospect, bookingUrl = ""): string {
 
 /** Plain-text outreach body → minimal HTML for the email send. */
 function textToHtml(text: string): string {
-  const esc = String(text ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+  // escapeHtml, not a local 3-char chain: the link pass below emits
+  // `<a href="${mdUrl}">`, so a URL carrying a double quote closed the attribute
+  // and everything after it parsed as more attributes — in outreach HTML that
+  // goes to a prospect.
+  const esc = escapeHtml(text);
   // Render Markdown links [label](url) AND bare URLs in one pass (no double-wrap),
   // so a {{bookingLink}} CTA — or any link — is actually clickable.
   const linked = esc.replace(

@@ -31,16 +31,12 @@ import { adminWsProcedure, managerProcedure, repProcedure, roleRank, workspacePr
 import { appBaseUrl as publicAppOrigin } from "../appUrl";
 import { utcDayStart } from "@shared/timeWindows";
 import { getSequenceAbVariantStats } from "../services/performanceMetrics";
+import { escapeHtml as sharedEscapeHtml } from "@shared/escapeHtml";
 
-/** Minimal HTML-escaper (duplicated from crm.ts — separate router). */
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
+/** One escaper for the whole codebase — @shared/escapeHtml. The comment here
+ *  used to read "duplicated from crm.ts — separate router", and duplication is
+ *  how two of the nine copies ended up without a quote escape. */
+const escapeHtml = sharedEscapeHtml;
 
 /** Same anchor wrapper used in crm.ts for click-tracking. */
 function escapeHtmlWithLinks(s: string): string {
