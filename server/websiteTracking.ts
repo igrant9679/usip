@@ -39,6 +39,36 @@ slug:ws,visitorId:vid,path:location.pathname+location.search,referrer:document.r
  * interrupted a rep. One definition now: @shared/pageIntent.
  */
 
+/**
+ * Confirm a claimed visitor identity actually belongs to the tracked workspace.
+ *
+ * Returns the ids that check out and nulls the ones that do not. Never throws:
+ * a tracking beacon that starts failing is worse than one that records an
+ * anonymous view.
+ */
+async function verifyVisitorIdentity(
+  db: any,
+  workspaceId: number,
+  claimed: { contactId: number | null; leadId: number | null },
+): Promise<{ contactId: number | null; leadId: number | null }> {
+  const out = { contactId: null as number | null, leadId: null as number | null };
+  try {
+    if (claimed.contactId) {
+      const [row] = await db.select({ id: contacts.id }).from(contacts)
+        .where(and(eq(contacts.id, claimed.contactId), eq(contacts.workspaceId, workspaceId))).limit(1);
+      if (row) out.contactId = row.id;
+    }
+    if (claimed.leadId) {
+      const [row] = await db.select({ id: leads.id }).from(leads)
+        .where(and(eq(leads.id, claimed.leadId), eq(leads.workspaceId, workspaceId))).limit(1);
+      if (row) out.leadId = row.id;
+    }
+  } catch {
+    return { contactId: null, leadId: null };
+  }
+  return out;
+}
+
 /** Parse a `vid` param of the form "c123" (contact) or "l456" (lead), or a bare number (lead). */
 function parseVid(vid: string): { contactId: number | null; leadId: number | null } {
   const out = { contactId: null as number | null, leadId: null as number | null };
@@ -83,7 +113,19 @@ export function registerWebsiteTrackingRoutes(app: Express): void {
       const [ws] = await db.select({ id: workspaces.id }).from(workspaces).where(eq(workspaces.slug, slug)).limit(1);
       if (!ws) return;
 
-      const { contactId, leadId } = parseVid(String(b.vid ?? ""));
+      // ⚠️ `vid` arrives on a PUBLIC, unauthenticated beacon and used to be
+      // trusted as-is. Any caller could POST slug=<workspace> with vid=c<id>
+      // naming ANOTHER workspace's contact: the visit was stored attributed to
+      // that foreign record, the Website Visitors page then joined it by id and
+      // rendered their NAME AND COMPANY, and a high-intent visit spawned a task
+      // pointing at their record id. Cross-tenant disclosure through a beacon
+      // anyone can call.
+      //
+      // Verified against the tracked workspace here; an id that does not belong
+      // to it is dropped and the visit is recorded ANONYMOUSLY rather than
+      // rejected — the beacon must stay silent and keep counting page views.
+      const claimed = parseVid(String(b.vid ?? ""));
+      const { contactId, leadId } = await verifyVisitorIdentity(db, ws.id, claimed);
       const intent = pageIntent(path);
 
       await db.insert(websiteVisits).values({

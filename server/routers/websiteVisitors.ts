@@ -54,8 +54,13 @@ export const websiteVisitorsRouter = router({
           leadCompany: leads.company,
         })
         .from(websiteVisits)
-        .leftJoin(contacts, eq(contacts.id, websiteVisits.contactId))
-        .leftJoin(leads, eq(leads.id, websiteVisits.leadId))
+        // Both joins carry the workspace term. The visit rows are scoped, but
+        // the JOINED record was matched by id alone — and until the write-side
+        // check landed those ids came straight off a public beacon, so another
+        // tenant's contact name and company rendered here. Scoped at the read
+        // too, so rows already stored with a foreign id cannot resolve.
+        .leftJoin(contacts, and(eq(contacts.id, websiteVisits.contactId), eq(contacts.workspaceId, ctx.workspace.id)))
+        .leftJoin(leads, and(eq(leads.id, websiteVisits.leadId), eq(leads.workspaceId, ctx.workspace.id)))
         .where(and(
           eq(websiteVisits.workspaceId, ctx.workspace.id),
           or(isNotNull(websiteVisits.contactId), isNotNull(websiteVisits.leadId)),
