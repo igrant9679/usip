@@ -12,10 +12,7 @@
  * tRPC router file.
  */
 import type { Express, Request, Response } from "express";
-import { and, eq } from "drizzle-orm";
-import { workspaceMembers } from "../drizzle/schema";
-import { getDb } from "./db";
-import { sdk } from "./_core/sdk";
+import { resolveStreamAuth } from "./_core/streamHelpers";
 import { streamLLM } from "./_core/llmStream";
 
 type Instruction = "rewrite" | "shorten" | "lengthen" | "make_formal" | "make_casual";
@@ -36,45 +33,11 @@ export function registerEmailBuilderStreamRoutes(app: Express) {
   app.post(
     "/api/email-builder/rewrite/stream",
     async (req: Request, res: Response) => {
-      // ── Auth ────────────────────────────────────────────────────────────
-      let userId: number;
-      try {
-        const user = await sdk.authenticateRequest(req);
-        userId = user.id;
-      } catch {
-        res.status(401).json({ error: "Unauthorized" });
-        return;
-      }
-
-      // ── Workspace ───────────────────────────────────────────────────────
-      const headerVal = req.headers["x-workspace-id"];
-      const headerStr = Array.isArray(headerVal) ? headerVal[0] : headerVal;
-      const workspaceId = headerStr ? Number(headerStr) : NaN;
-      if (!Number.isFinite(workspaceId)) {
-        res.status(400).json({ error: "x-workspace-id header required" });
-        return;
-      }
-
-      const db = await getDb();
-      if (!db) {
-        res.status(500).json({ error: "Database unavailable" });
-        return;
-      }
-
-      const [member] = await db
-        .select({ workspaceId: workspaceMembers.workspaceId })
-        .from(workspaceMembers)
-        .where(
-          and(
-            eq(workspaceMembers.userId, userId),
-            eq(workspaceMembers.workspaceId, workspaceId),
-          ),
-        )
-        .limit(1);
-      if (!member) {
-        res.status(403).json({ error: "Not a member of that workspace" });
-        return;
-      }
+      // ── Auth + workspace ────────────────────────────────────────────────
+      // One rule for all five streaming routes — see resolveStreamAuth.
+      const auth = await resolveStreamAuth(req, res);
+      if (!auth) return;
+      const { workspaceId } = auth;
 
       // ── Validate body ───────────────────────────────────────────────────
       const body = (req.body ?? {}) as { content?: unknown; instruction?: unknown; tone?: unknown };

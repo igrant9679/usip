@@ -2,7 +2,8 @@
  * SSE endpoint for streaming LLM completions.
  *
  *   POST /api/llm/stream
- *     Headers: x-workspace-id (required for BYOK to apply)
+ *     Headers: x-workspace-id (REQUIRED — 400 without it; the caller must be a
+ *              member of that workspace, and it selects the BYOK credentials)
  *     Body: same shape as InvokeParams (messages, provider?, model?, ...)
  *     Returns: text/event-stream
  *
@@ -15,51 +16,23 @@
  * provider call via AbortController.
  */
 import type { Express, Request, Response } from "express";
-import { and, eq } from "drizzle-orm";
-import { workspaceMembers } from "../drizzle/schema";
-import { getDb } from "./db";
-import { sdk } from "./_core/sdk";
+import { resolveStreamAuth } from "./_core/streamHelpers";
 import { streamLLM } from "./_core/llmStream";
 import type { InvokeParams } from "./_core/llm";
 
 export function registerLLMStreamRoutes(app: Express) {
   app.post("/api/llm/stream", async (req: Request, res: Response) => {
-    // ── Auth ──────────────────────────────────────────────────────────────
-    let userId: number;
-    try {
-      const user = await sdk.authenticateRequest(req);
-      userId = user.id;
-    } catch {
-      res.status(401).json({ error: "Unauthorized" });
-      return;
-    }
-
-    // ── Workspace check ───────────────────────────────────────────────────
-    const headerVal = req.headers["x-workspace-id"];
-    const headerStr = Array.isArray(headerVal) ? headerVal[0] : headerVal;
-    const workspaceId = headerStr ? Number(headerStr) : NaN;
-
-    if (Number.isFinite(workspaceId)) {
-      const db = await getDb();
-      if (!db) {
-        res.status(500).json({ error: "Database unavailable" });
-        return;
-      }
-      const [member] = await db
-        .select({ workspaceId: workspaceMembers.workspaceId })
-        .from(workspaceMembers)
-        .where(
-          and(
-            eq(workspaceMembers.userId, userId),
-            eq(workspaceMembers.workspaceId, workspaceId),
-          ),
-        )
-        .limit(1);
-      if (!member) {
-        res.status(403).json({ error: "Not a member of that workspace" });
-        return;
-      }
-    }
+    // ── Auth + workspace ──────────────────────────────────────────────────
+    // One rule, shared with runSSEStream — see resolveStreamAuth. The copy
+    // that lived here wrapped the membership check in
+    // `if (Number.isFinite(workspaceId))`, so a request that simply omitted
+    // the header skipped the check AND arrived at streamLLM with
+    // workspaceId: undefined, which is the signal to ignore the workspace's
+    // BYOK credentials and bill the platform key. Any authenticated user
+    // could drive arbitrary provider/model/messages that way.
+    const auth = await resolveStreamAuth(req, res);
+    if (!auth) return;
+    const { workspaceId } = auth;
 
     // ── Validate body ─────────────────────────────────────────────────────
     const body = (req.body ?? {}) as Partial<InvokeParams>;
@@ -68,10 +41,13 @@ export function registerLLMStreamRoutes(app: Express) {
       return;
     }
 
+    // The whole body is forwarded on purpose: unlike the four routes built on
+    // runSSEStream, this one is the generic passthrough and carries tools /
+    // outputSchema / responseFormat straight to the provider.
     const params: InvokeParams = {
       ...body,
       messages: body.messages,
-      workspaceId: Number.isFinite(workspaceId) ? workspaceId : undefined,
+      workspaceId,
     };
 
     // ── SSE headers ───────────────────────────────────────────────────────

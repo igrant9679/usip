@@ -63,15 +63,31 @@ export type StreamHandlerOptions = {
   onComplete?(ctx: StreamHandlerContext, content: string): Promise<void>;
 };
 
+/** What every streaming route needs resolved before it may do anything. */
+export interface StreamAuth {
+  userId: number;
+  workspaceId: number;
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>;
+}
+
 /**
- * Run a full SSE-streamed LLM response. This is the only function streaming
- * routes need to call — they declare what to do via the options hooks.
+ * Authenticate an SSE request and resolve the workspace it acts in.
+ *
+ * Returns null when the request is refused, having ALREADY written the
+ * response — callers must return immediately.
+ *
+ * ⚠️ This is a separate export because `/api/llm/stream` cannot use
+ * `runSSEStream` (it forwards the whole InvokeParams body — tools,
+ * outputSchema, responseFormat — which BuildMessagesResult does not carry, and
+ * narrowing a generic endpoint's contract is not a thing to do as a side
+ * effect of an auth fix). It had its own copy of the rule, and the copy had
+ * drifted: the membership check was wrapped in `if (Number.isFinite(workspaceId))`,
+ * so omitting the header skipped it entirely and streamed on the platform key
+ * with no workspace scope — an authenticated but unscoped LLM proxy, billed
+ * past the workspace's own BYOK credentials. Four routes required the header;
+ * the fifth treated it as optional. One rule now, in one place.
  */
-export async function runSSEStream(
-  req: Request,
-  res: Response,
-  opts: StreamHandlerOptions,
-): Promise<void> {
+export async function resolveStreamAuth(req: Request, res: Response): Promise<StreamAuth | null> {
   // ── Auth ──────────────────────────────────────────────────────────────
   let userId: number;
   try {
@@ -79,7 +95,7 @@ export async function runSSEStream(
     userId = user.id;
   } catch {
     res.status(401).json({ error: "Unauthorized" });
-    return;
+    return null;
   }
 
   // ── Workspace ─────────────────────────────────────────────────────────
@@ -88,13 +104,13 @@ export async function runSSEStream(
   const workspaceId = headerStr ? Number(headerStr) : NaN;
   if (!Number.isFinite(workspaceId)) {
     res.status(400).json({ error: "x-workspace-id header required" });
-    return;
+    return null;
   }
 
   const db = await getDb();
   if (!db) {
     res.status(500).json({ error: "Database unavailable" });
-    return;
+    return null;
   }
 
   const [member] = await db
@@ -109,8 +125,24 @@ export async function runSSEStream(
     .limit(1);
   if (!member) {
     res.status(403).json({ error: "Not a member of that workspace" });
-    return;
+    return null;
   }
+
+  return { userId, workspaceId, db };
+}
+
+/**
+ * Run a full SSE-streamed LLM response. This is the only function streaming
+ * routes need to call — they declare what to do via the options hooks.
+ */
+export async function runSSEStream(
+  req: Request,
+  res: Response,
+  opts: StreamHandlerOptions,
+): Promise<void> {
+  const auth = await resolveStreamAuth(req, res);
+  if (!auth) return;
+  const { userId, workspaceId, db } = auth;
 
   // ── Build messages (caller's hook) ────────────────────────────────────
   let built: BuildMessagesResult;
