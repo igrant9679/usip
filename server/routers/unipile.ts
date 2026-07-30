@@ -171,7 +171,10 @@ export const unipileRouter = router({
 
       await db
         .delete(unipileAccounts)
-        .where(eq(unipileAccounts.unipileAccountId, input.unipileAccountId));
+        .where(and(
+          eq(unipileAccounts.unipileAccountId, input.unipileAccountId),
+          eq(unipileAccounts.workspaceId, ctx.workspace.id),
+        ));
 
       return { success: true };
     }),

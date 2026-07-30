@@ -144,8 +144,15 @@ describe("computeSlots (meeting autopilot)", () => {
 
 /**
  * Files allowed to derive a time from the host clock, with the reason. Explicit,
- * not heuristic. `setHours`/`getDay` read the process timezone — a deployment
- * detail — so they may never decide a time somebody is offered.
+ * not heuristic. `setHours`/`getDay`/`getHours` read the process timezone — a
+ * deployment detail — so they may never decide a time somebody is offered, nor
+ * label a figure somebody reads.
+ *
+ * `getMonth`/`getDate`/`getMinutes` are deliberately NOT banned: 24 sites use
+ * them for ordinary date arithmetic (`d.setDate(d.getDate() + 1)`), and a rule
+ * that flags two dozen correct call sites is a rule someone switches off. Same
+ * judgement as secretRandomness.test.ts, which bans Math.random() for secrets
+ * rather than banning the call.
  */
 const HOST_CLOCK_ALLOWED: Record<string, string> = {
   "server/emailTracking.ts":
@@ -176,17 +183,17 @@ describe("no offerable time comes from the host clock", () => {
     expect(files.length).toBeGreaterThan(50);
   });
 
-  it("nothing schedules with setHours() or getDay()", () => {
+  it("nothing schedules or buckets with setHours(), getDay() or getHours()", () => {
     const offenders: string[] = [];
     for (const f of files) {
       const rel = f.slice(ROOT.length + 1).split(sep).join("/");
       if (rel in HOST_CLOCK_ALLOWED) continue;
       const raw = readFileSync(f, "utf8");
       const src = stripComments(raw);
-      if (!/\.setHours\(|\.getDay\(\)/.test(src)) continue;
+      if (!/\.setHours\(|\.getDay\(\)|\.getHours\(\)/.test(src)) continue;
       // Report from RAW source: line numbers taken from comment-stripped text
       // are wrong, because stripping block comments removes their newlines.
-      const m = raw.match(/\.setHours\(|\.getDay\(\)/);
+      const m = raw.match(/\.setHours\(|\.getDay\(\)|\.getHours\(\)/);
       const line = m?.index !== undefined ? raw.slice(0, m.index).split("\n").length : 0;
       offenders.push(`${rel}:${line}`);
     }
@@ -203,7 +210,7 @@ describe("no offerable time comes from the host clock", () => {
 
   it("the allowlist has no stale entries", () => {
     const stale = Object.keys(HOST_CLOCK_ALLOWED).filter(
-      (rel) => !/\.setHours\(|\.getDay\(\)/.test(stripComments(read(rel))),
+      (rel) => !/\.setHours\(|\.getDay\(\)|\.getHours\(\)/.test(stripComments(read(rel))),
     );
     expect(stale).toEqual([]);
   });

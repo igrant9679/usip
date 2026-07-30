@@ -232,7 +232,10 @@ export const savedSectionsRouter = router({
 
       await db
         .delete(emailSavedSections)
-        .where(eq(emailSavedSections.id, input.id));
+        .where(and(
+          eq(emailSavedSections.id, input.id),
+          eq(emailSavedSections.workspaceId, ctx.workspace.id),
+        ));
 
       return { success: true };
     }),

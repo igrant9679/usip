@@ -1646,7 +1646,10 @@ export const prospectsRouter = router({
       if (note.userId !== ctx.user.id && ctx.user.role !== "admin") {
         throw new TRPCError({ code: "FORBIDDEN", message: "Only the note author or an admin can delete notes." });
       }
-      await db.delete(prospectNotes).where(eq(prospectNotes.id, input.noteId));
+      await db.delete(prospectNotes).where(and(
+        eq(prospectNotes.id, input.noteId),
+        eq(prospectNotes.workspaceId, ctx.workspace.id),
+      ));
       return { success: true };
     }),
 

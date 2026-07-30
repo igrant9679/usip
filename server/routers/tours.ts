@@ -170,8 +170,19 @@ export const toursRouter = router({
     .input(z.object({ id: z.number() }))
     .mutation(async ({ ctx, input }) => {
       const db = await requireDb();
-      await db.delete(tourSteps).where(eq(tourSteps.tourId, input.id));
-      await db.delete(tours).where(and(eq(tours.id, input.id), eq(tours.workspaceId, ctx.workspace.id)));
+      // ⚠️ The step delete ran FIRST, keyed on a caller-supplied tourId with no
+      // workspace filter and no ownership check — so any admin could strip every
+      // step off ANY workspace's tour by id, while the `tours` delete beside it
+      // (correctly scoped) matched nothing and the call reported success.
+      // tour_steps has no workspaceId, so the verified parent is the only scope.
+      const [owned] = await db
+        .select({ id: tours.id })
+        .from(tours)
+        .where(and(eq(tours.id, input.id), eq(tours.workspaceId, ctx.workspace.id)))
+        .limit(1);
+      if (!owned) throw new TRPCError({ code: "NOT_FOUND", message: "Tour not found" });
+      await db.delete(tourSteps).where(eq(tourSteps.tourId, owned.id));
+      await db.delete(tours).where(and(eq(tours.id, owned.id), eq(tours.workspaceId, ctx.workspace.id)));
     }),
 
   /* ── Progress ───────────────────────────────────────────────────────────── */
@@ -444,8 +455,19 @@ export const toursRouter = router({
     .input(z.object({ id: z.number() }))
     .mutation(async ({ ctx, input }) => {
       const db = await requireDb();
-      await db.delete(tourSteps).where(eq(tourSteps.tourId, input.id));
-      await db.delete(tours).where(and(eq(tours.id, input.id), eq(tours.workspaceId, ctx.workspace.id)));
+      // ⚠️ The step delete ran FIRST, keyed on a caller-supplied tourId with no
+      // workspace filter and no ownership check — so any admin could strip every
+      // step off ANY workspace's tour by id, while the `tours` delete beside it
+      // (correctly scoped) matched nothing and the call reported success.
+      // tour_steps has no workspaceId, so the verified parent is the only scope.
+      const [owned] = await db
+        .select({ id: tours.id })
+        .from(tours)
+        .where(and(eq(tours.id, input.id), eq(tours.workspaceId, ctx.workspace.id)))
+        .limit(1);
+      if (!owned) throw new TRPCError({ code: "NOT_FOUND", message: "Tour not found" });
+      await db.delete(tourSteps).where(eq(tourSteps.tourId, owned.id));
+      await db.delete(tours).where(and(eq(tours.id, owned.id), eq(tours.workspaceId, ctx.workspace.id)));
       return { ok: true };
     }),
 });

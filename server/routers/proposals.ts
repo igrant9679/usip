@@ -472,9 +472,16 @@ export const proposalsRouter = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
       await getProposalOrThrow(db, input.proposalId, ctx.workspace.id);
+      // ⚠️ Tied to the proposal that was just verified. `milestoneId` is its own
+      // caller-supplied id, so on its own it reached any workspace's milestone —
+      // and proposal_milestones has no workspaceId column, which makes the parent
+      // the ONLY possible scope rather than a redundant one.
       await db
         .delete(proposalMilestones)
-        .where(eq(proposalMilestones.id, input.milestoneId));
+        .where(and(
+          eq(proposalMilestones.id, input.milestoneId),
+          eq(proposalMilestones.proposalId, input.proposalId),
+        ));
       return { ok: true };
     }),
 
@@ -803,7 +810,7 @@ export const proposalsRouter = router({
       await db.delete(proposalMilestones).where(eq(proposalMilestones.proposalId, input.id));
       await db.delete(proposalSections).where(eq(proposalSections.proposalId, input.id));
       await db.delete(proposalFeedback).where(eq(proposalFeedback.proposalId, input.id));
-      await db.delete(proposals).where(eq(proposals.id, input.id));
+      await db.delete(proposals).where(and(eq(proposals.id, input.id), eq(proposals.workspaceId, ctx.workspace.id)));
       return { ok: true };
     }),
 

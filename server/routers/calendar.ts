@@ -124,8 +124,16 @@ export const calendarRouter = router({
       if (acc.userId !== ctx.user.id) throw new TRPCError({ code: "FORBIDDEN" });
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      await db.delete(calendarEvents).where(eq(calendarEvents.calendarAccountId, input.accountId));
-      await db.delete(calendarAccounts).where(eq(calendarAccounts.id, input.accountId));
+      // Scoped by workspace as well as account: `acc` was verified above, but a
+      // statement that defends itself survives a future caller who forgets to.
+      await db.delete(calendarEvents).where(and(
+        eq(calendarEvents.calendarAccountId, acc.id),
+        eq(calendarEvents.workspaceId, ctx.workspace.id),
+      ));
+      await db.delete(calendarAccounts).where(and(
+        eq(calendarAccounts.id, acc.id),
+        eq(calendarAccounts.workspaceId, ctx.workspace.id),
+      ));
       return { ok: true };
     }),
 
@@ -281,7 +289,15 @@ export const calendarRouter = router({
       await adapter.deleteEvent(input.calendarId, input.externalId);
       if (input.dbId) {
         const db = await getDb();
-        if (db) await db.delete(calendarEvents).where(eq(calendarEvents.id, input.dbId));
+        // ⚠️ `dbId` is a SECOND caller-supplied id with no relationship to the
+        // account verified above: passing your own accountId alongside another
+        // workspace's event id deleted their row. Verify-parent-then-delete-child
+        // is only a check when the child is tied to that parent.
+        if (db) await db.delete(calendarEvents).where(and(
+          eq(calendarEvents.id, input.dbId),
+          eq(calendarEvents.workspaceId, ctx.workspace.id),
+          eq(calendarEvents.calendarAccountId, acc.id),
+        ));
       }
       return { ok: true };
     }),

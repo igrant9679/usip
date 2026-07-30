@@ -293,13 +293,14 @@ describe("no dialog silently discards what the user typed", () => {
 
 /* ─── 5. No destructive write may leave its workspace ────────────────────── */
 
-/**
- * Deletes allowed to run without a workspace filter, with the reason. Explicit,
- * not heuristic — a test that infers "this one looks fine" using the same
- * reasoning that wrote the code agrees with itself by construction.
+/*
+ * The "no delete keyed on a bare caller-supplied id" guard used to live here,
+ * scoped to this one router. It is now server-wide in tenantScope.test.ts —
+ * where, run over all 223 files, it found four more instances. Two guards for
+ * one rule is the drift this repo keeps fixing, so this copy is gone rather
+ * than duplicated; the quote-specific assertion below stays because it is
+ * about the ORDER of the ownership check, not the scope.
  */
-const UNSCOPED_DELETE_ALLOWED: Record<string, string> = {};
-
 describe("quote deletes cannot reach another tenant", () => {
   it("the line-item delete is workspace-scoped and ownership-checked", () => {
     const src = stripComments(read("server/routers/operations.ts"));
@@ -312,57 +313,7 @@ describe("quote deletes cannot reach another tenant", () => {
     const destroy = block.indexOf("delete(quoteLineItems)");
     expect(check).toBeGreaterThan(-1);
     expect(destroy).toBeGreaterThan(check);
-    // And the delete itself must be scoped, not merely preceded by a check.
     const deleteStmt = block.slice(destroy, destroy + 260);
     expect(deleteStmt).toMatch(/quoteLineItems\.workspaceId/);
-  });
-
-  it("no delete in the operations router is scoped by a bare caller-supplied id", () => {
-    // The bug: `delete(quoteLineItems).where(eq(quoteLineItems.quoteId, input.id))`
-    // ran FIRST and had no workspace filter, so any authenticated user could
-    // strip every line item off ANY workspace's quote by id — and the call
-    // returned ok:true, because the quote delete beside it was scoped and simply
-    // matched nothing.
-    const rel = "server/routers/operations.ts";
-    const raw = read(rel);
-    const src = stripComments(raw);
-    const offenders: string[] = [];
-    const seenPerTable = new Map<string, number>();
-    const re = /\.delete\((\w+)\)\s*\.where\(([\s\S]{0,240}?)\)\s*;/g;
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(src))) {
-      const [, table, where] = m;
-      // Which occurrence of this table's delete we are on, so the line number
-      // below picks the right one when a table is deleted from twice.
-      const nth = (seenPerTable.get(table) ?? 0) + 1;
-      seenPerTable.set(table, nth);
-      if (!/input\.\w+|ctx\.user\.id/.test(where)) continue;
-      if (/workspaceId/.test(where)) continue;
-      if (rel in UNSCOPED_DELETE_ALLOWED) continue;
-      // Decide on the stripped source, REPORT from the raw source. Stripping
-      // block comments removes their newlines, so a line number taken from the
-      // stripped text points somewhere else entirely — this guard's first run
-      // blamed line 600 (a select) for a delete on line 670.
-      let idx = -1;
-      for (let k = 0; k < nth; k++) idx = raw.indexOf(`.delete(${table})`, idx + 1);
-      const line = idx >= 0 ? raw.slice(0, idx).split("\n").length : 0;
-      offenders.push(`${rel}:${line} delete(${table})`);
-    }
-    expect(
-      offenders,
-      offenders.length
-        ? `\n\nDestructive statement(s) keyed on a caller-supplied id with no workspace filter:\n  ${offenders.join("\n  ")}\n\n` +
-            `Verify ownership first AND scope the statement. A tenant boundary that\n` +
-            `depends on the caller passing their own id is not a boundary.\n`
-        : undefined,
-    ).toEqual([]);
-  });
-
-  it("the allowlist has no stale entries", () => {
-    const stale = Object.keys(UNSCOPED_DELETE_ALLOWED).filter((rel) => {
-      const src = stripComments(read(rel));
-      return !/\.delete\(/.test(src);
-    });
-    expect(stale).toEqual([]);
   });
 });
