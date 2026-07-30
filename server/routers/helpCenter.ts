@@ -417,7 +417,13 @@ ${articleContext}`;
       await db
         .update(aiHelpConversations)
         .set({ lastMessageAt: new Date() })
-        .where(eq(aiHelpConversations.id, input.conversationId));
+        // The conversation is verified as this USER's above (a per-user boundary,
+        // narrower than the workspace); workspaceId added so the statement
+        // defends itself rather than relying on that check staying put.
+        .where(and(
+          eq(aiHelpConversations.id, input.conversationId),
+          eq(aiHelpConversations.workspaceId, ctx.workspace.id),
+        ));
 
       return {
         messageId: (msgRes as any).insertId as number,

@@ -314,7 +314,7 @@ export const reportsRouter = router({
         if (!existing) throw new TRPCError({ code: "NOT_FOUND" });
         await db.update(savedReports)
           .set({ name: input.name, object: input.spec.object, config: input.spec })
-          .where(eq(savedReports.id, input.id));
+          .where(and(eq(savedReports.id, input.id), eq(savedReports.workspaceId, ctx.workspace.id)));
         return { id: input.id };
       }
       const r = await db.insert(savedReports).values({
@@ -350,7 +350,7 @@ export const reportsRouter = router({
       if (!r) throw new TRPCError({ code: "NOT_FOUND" });
       await db.update(savedReports)
         .set({ scheduleFreq: input.freq, scheduleRecipients: input.recipients.trim() || null })
-        .where(eq(savedReports.id, input.id));
+        .where(and(eq(savedReports.id, input.id), eq(savedReports.workspaceId, ctx.workspace.id)));
       return { ok: true };
     }),
 

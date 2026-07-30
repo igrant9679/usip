@@ -245,67 +245,30 @@ describe("no destructive statement can be aimed at another tenant", () => {
  *     caller could skew the helpful/not-helpful counts of any workspace's
  *     article. Every other write to help_articles in that file is scoped.
  *
- * The remaining sites are protected by a workspace-scoped ownership select
- * earlier in the same procedure. Ten of them were read individually and are now
- * scoped on the statement too — the standard opportunityIntelligence.ts already
- * sets for itself: "workspaceId on the UPDATE so a concurrent / crafted call
- * can't mutate a different workspace's opportunity even if the prior SELECT was
- * OK."
+ * The other 45 were first recorded as a ratchet — triaged as "a workspace-scoped
+ * check exists earlier in the procedure", not read line by line. THAT LIST IS
+ * NOW BURNED DOWN: all 45 carry the workspaceId term on the statement itself,
+ * which is the standard opportunityIntelligence.ts already set for itself
+ * ("workspaceId on the UPDATE so a concurrent / crafted call can't mutate a
+ * different workspace's opportunity even if the prior SELECT was OK").
  *
- * ⚠️ THE LIST BELOW IS A RATCHET, NOT A CERTIFICATE. These entries were
- * classified by TRIAGE — the enclosing procedure contains a workspace-scoped
- * check — and were NOT each read line by line. They are recorded so that a NEW
- * unscoped update fails immediately, and so the remainder can be burned down
- * deliberately instead of being rediscovered. Do not add to it: scope the
- * statement instead.
+ * Burning it down found a SECOND real bug that triage had missed:
+ * `proposals.upsertMilestone` verifies the proposal and then updates the
+ * milestone by `input.id` alone — the same defect as deleteMilestone, in the
+ * upsert. tsc is what surfaced it: proposal_milestones has no workspaceId
+ * column, so the mechanical rewrite did not compile, which is the only reason
+ * anyone looked at that line. It is now keyed on its verified parent, and it is
+ * the ONE entry left below.
+ *
+ * The rule matches the delete guard: scope the statement, or earn an entry here
+ * with the reason. An entry is only available to a table that genuinely has no
+ * workspaceId column.
  */
-const UPDATE_BASELINE: string[] = [
-  "server/routers/admin.ts::workspaceMembers::eq(workspaceMembers.id, input.memberId)",
-  "server/routers/admin.ts::workspaceMembers::eq(workspaceMembers.id, input.memberId)",
-  "server/routers/admin.ts::workspaceMembers::eq(workspaceMembers.id, input.memberId)",
-  "server/routers/admin.ts::workspaceMembers::eq(workspaceMembers.id, input.memberId)",
-  "server/routers/admin.ts::workspaceMembers::eq(workspaceMembers.id, input.memberId)",
-  "server/routers/admin.ts::workspaceMembers::eq(workspaceMembers.id, input.memberId)",
-  "server/routers/aiPipeline.ts::emailDrafts::eq(emailDrafts.id, input.draftId)",
-  "server/routers/aiPipeline.ts::emailDrafts::eq(emailDrafts.id, input.draftId)",
-  "server/routers/are/icp.ts::icpProfiles::eq(icpProfiles.id, input.id)",
-  "server/routers/are/prospects.ts::prospectIntelligence::eq(prospectIntelligence.prospectQueueId, input.prospectId)",
-  "server/routers/are/prospects.ts::prospectQueue::eq(prospectQueue.id, input.prospectId)",
-  "server/routers/calendar.ts::calendarAccounts::eq(calendarAccounts.id, input.accountId)",
-  "server/routers/calendar.ts::calendarEvents::eq(calendarEvents.id, input.dbId)",
-  "server/routers/calendar.ts::calendarEvents::eq(calendarEvents.id, input.eventId)",
-  "server/routers/crm.ts::contacts::eq(contacts.id, input.id)",
-  "server/routers/crm.ts::opportunities::eq(opportunities.id, input.id)",
-  "server/routers/crm.ts::opportunities::eq(opportunities.id, input.id)",
-  "server/routers/cs.ts::customers::eq(customers.id, input.id)",
-  "server/routers/cs.ts::customers::eq(customers.id, input.id)",
-  "server/routers/customFields.ts::accounts::eq(accounts.id, input.entityId)",
-  "server/routers/customFields.ts::contacts::eq(contacts.id, input.entityId)",
-  "server/routers/customFields.ts::leads::eq(leads.id, input.entityId)",
-  "server/routers/customFields.ts::opportunities::eq(opportunities.id, input.entityId)",
-  "server/routers/emailVerification.ts::contacts::eq(contacts.id, input.contactId)",
-  "server/routers/helpCenter.ts::aiHelpConversations::eq(aiHelpConversations.id, input.conversationId)",
-  "server/routers/mailbox.ts::unipileEmailsCache::and( eq(unipileEmailsCache.unipileAccountId, acc.unipileAccountId), eq(unipileEmailsCache.emailId, input.messageId), ),",
-  "server/routers/operations.ts::campaigns::eq(campaigns.id, input.campaignId)",
-  "server/routers/opportunityIntelligence.ts::stageApprovals::eq(stageApprovals.id, input.approvalId)",
-  "server/routers/proposals.ts::proposalMilestones::eq(proposalMilestones.id, input.id)",
-  "server/routers/proposals.ts::proposals::eq(proposals.id, input.id)",
-  "server/routers/proposals.ts::proposals::eq(proposals.id, input.id)",
-  "server/routers/proposals.ts::proposals::eq(proposals.id, input.id)",
-  "server/routers/proposals.ts::proposals::eq(proposals.id, input.id)",
-  "server/routers/proposals.ts::proposals::eq(proposals.id, input.id)",
-  "server/routers/proposals.ts::proposals::eq(proposals.id, input.id)",
-  "server/routers/proposals.ts::proposals::eq(proposals.id, input.proposalId)",
-  "server/routers/proposals.ts::proposals::eq(proposals.id, input.proposalId)",
-  "server/routers/prospects.ts::prospects::eq(prospects.id, input.prospectId)",
-  "server/routers/reports.ts::savedReports::eq(savedReports.id, input.id)",
-  "server/routers/reports.ts::savedReports::eq(savedReports.id, input.id)",
-  "server/routers/savedSections.ts::emailSavedSections::eq(emailSavedSections.id, input.id)",
-  "server/routers/segments.ts::audienceSegments::eq(audienceSegments.id, input.segmentId)",
-  "server/routers/sendingAccounts.ts::senderPools::eq(senderPools.id, input.poolId)",
-  "server/routers/sendingAccounts.ts::sendingAccounts::eq(sendingAccounts.id, input.id)",
-  "server/routers/subjectAB.ts::subjectVariants::eq(subjectVariants.id, input.variantId)",
-];
+const UPDATE_BASELINE: Record<string, string> = {
+  "server/routers/proposals.ts::proposalMilestones::and(eq(proposalMilestones.id, input.id), eq(proposalMilestones.proposalId, input.proposalId))":
+    "upsertMilestone - getProposalOrThrow(proposalId, workspace) above and the milestone is tied to that proposal. proposal_milestones has no workspaceId column, so the parent is the only available scope.",
+};
+
 
 describe("no UPDATE can be aimed at another tenant", () => {
   const { sites, files, statements } = collectSites("update");
@@ -326,7 +289,7 @@ describe("no UPDATE can be aimed at another tenant", () => {
   });
 
   it("every caller-steerable update is scoped, or in the recorded baseline", () => {
-    const baseline = new Set(UPDATE_BASELINE);
+    const baseline = new Set(Object.keys(UPDATE_BASELINE));
     const offenders = sites
       .filter((s) => !baseline.has(s.key))
       .map((s) => `${s.rel}:${s.line} update(${s.table}) — where: ${s.where}`);
@@ -347,7 +310,8 @@ Update(s) keyed on caller input with no workspace filter:
 ` +
             `unchecked rate() ended up writing to any workspace's article.
 ` +
-            `Do NOT add to UPDATE_BASELINE: it records what was already there.
+            `If the table has no workspaceId column, key the statement on its verified
+parent and add an entry to UPDATE_BASELINE with the reason.
 `
         : undefined,
     ).toEqual([]);
@@ -392,7 +356,7 @@ Update(s) keyed on caller input with no workspace filter:
 
   it("the baseline only shrinks", () => {
     const live = new Set(sites.map((s) => s.key));
-    const stale = UPDATE_BASELINE.filter((k) => !live.has(k));
+    const stale = Object.keys(UPDATE_BASELINE).filter((k) => !live.has(k));
     expect(
       stale,
       stale.length

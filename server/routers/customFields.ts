@@ -157,13 +157,13 @@ export const customFieldsRouter = router({
       const merged = { ...existing, ...input.values };
 
       if (input.entityType === "lead") {
-        await db.update(leads).set({ customFields: merged }).where(eq(leads.id, input.entityId));
+        await db.update(leads).set({ customFields: merged }).where(and(eq(leads.id, input.entityId), eq(leads.workspaceId, ctx.workspace.id)));
       } else if (input.entityType === "contact") {
-        await db.update(contacts).set({ customFields: merged }).where(eq(contacts.id, input.entityId));
+        await db.update(contacts).set({ customFields: merged }).where(and(eq(contacts.id, input.entityId), eq(contacts.workspaceId, ctx.workspace.id)));
       } else if (input.entityType === "account") {
-        await db.update(accounts).set({ customFields: merged }).where(eq(accounts.id, input.entityId));
+        await db.update(accounts).set({ customFields: merged }).where(and(eq(accounts.id, input.entityId), eq(accounts.workspaceId, ctx.workspace.id)));
       } else if (input.entityType === "opportunity") {
-        await db.update(opportunities).set({ customFields: merged }).where(eq(opportunities.id, input.entityId));
+        await db.update(opportunities).set({ customFields: merged }).where(and(eq(opportunities.id, input.entityId), eq(opportunities.workspaceId, ctx.workspace.id)));
       }
 
       return { ok: true };

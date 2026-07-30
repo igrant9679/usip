@@ -372,6 +372,9 @@ export const mailboxRouter = router({
             and(
               eq(unipileEmailsCache.unipileAccountId, acc.unipileAccountId),
               eq(unipileEmailsCache.emailId, input.messageId),
+              // `acc` is verified by getAccount(accountId, workspace) above; the
+              // workspace term is on the statement so it holds on its own.
+              eq(unipileEmailsCache.workspaceId, ctx.workspace.id),
             ),
           );
       };

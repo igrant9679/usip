@@ -171,7 +171,7 @@ export const subjectABRouter = router({
         .where(and(eq(subjectVariants.emailDraftId, input.emailDraftId), eq(subjectVariants.workspaceId, ctx.workspace.id)));
 
       // Set this one as selected
-      await db.update(subjectVariants).set({ isSelected: true }).where(eq(subjectVariants.id, input.variantId));
+      await db.update(subjectVariants).set({ isSelected: true }).where(and(eq(subjectVariants.id, input.variantId), eq(subjectVariants.workspaceId, ctx.workspace.id)));
 
       // Apply subject to draft
       await db

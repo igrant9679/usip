@@ -594,7 +594,7 @@ export const sendingAccountsRouter = router({
           lastTestError: result.error ?? null,
           reputationTier: reputationTierFromRate(parseFloat(account.bounceRate ?? "0")),
         })
-        .where(eq(sendingAccounts.id, input.id));
+        .where(and(eq(sendingAccounts.id, input.id), eq(sendingAccounts.workspaceId, ctx.workspace.id)));
 
       return result;
     }),
@@ -1049,7 +1049,7 @@ export const senderPoolsRouter = router({
       await db
         .update(senderPools)
         .set({ lastUsedIndex: result.newLastUsedIndex })
-        .where(eq(senderPools.id, input.poolId));
+        .where(and(eq(senderPools.id, input.poolId), eq(senderPools.workspaceId, ctx.workspace.id)));
 
       return { accountId: result.accountId, reason: "ok" };
     }),

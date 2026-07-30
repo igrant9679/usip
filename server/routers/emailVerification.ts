@@ -284,7 +284,7 @@ export const emailVerificationRouter = router({
           emailVerifiedAt: new Date(),
           emailVerificationData: result,
         })
-        .where(eq(contacts.id, input.contactId));
+        .where(and(eq(contacts.id, input.contactId), eq(contacts.workspaceId, ctx.workspace.id)));
 
       return { status: usipStatus, badge: VERIFICATION_BADGE[usipStatus], raw: result };
     }),

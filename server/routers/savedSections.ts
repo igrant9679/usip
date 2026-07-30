@@ -190,7 +190,7 @@ export const savedSectionsRouter = router({
       await db
         .update(emailSavedSections)
         .set(updateData)
-        .where(eq(emailSavedSections.id, input.id));
+        .where(and(eq(emailSavedSections.id, input.id), eq(emailSavedSections.workspaceId, ctx.workspace.id)));
 
       const [updated] = await db
         .select()

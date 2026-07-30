@@ -629,7 +629,7 @@ export const campaignsRouter = router({
       const existing: number[] = Array.isArray(c.audienceIds) ? (c.audienceIds as number[]) : [];
       const newIds = [...(input.contactIds ?? []), ...(input.leadIds ?? [])];
       const merged = Array.from(new Set([...existing, ...newIds]));
-      await db.update(campaigns).set({ audienceType: "contacts", audienceIds: merged }).where(eq(campaigns.id, input.campaignId));
+      await db.update(campaigns).set({ audienceType: "contacts", audienceIds: merged }).where(and(eq(campaigns.id, input.campaignId), eq(campaigns.workspaceId, ctx.workspace.id)));
       return { added: merged.length - existing.length, total: merged.length };
     }),
 });

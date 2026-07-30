@@ -696,7 +696,7 @@ export const prospectsRouter = router({
       await db
         .update(prospects)
         .set({ linkedContactId: contactId! })
-        .where(eq(prospects.id, input.prospectId));
+        .where(and(eq(prospects.id, input.prospectId), eq(prospects.workspaceId, ctx.workspace.id)));
 
       await recordAudit({
         workspaceId: ctx.workspace.id,

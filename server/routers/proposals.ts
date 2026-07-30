@@ -378,7 +378,7 @@ export const proposalsRouter = router({
       const patch: Record<string, unknown> = { status: input.status };
       if (input.status === "sent") patch.sentAt = new Date();
       if (input.status === "accepted") patch.acceptedAt = new Date();
-      await db.update(proposals).set(patch).where(eq(proposals.id, input.id));
+      await db.update(proposals).set(patch).where(and(eq(proposals.id, input.id), eq(proposals.workspaceId, ctx.workspace.id)));
       await logProposalActivity(db, {
         workspaceId: ctx.workspace.id,
         proposalId: input.id,
@@ -457,7 +457,12 @@ export const proposalsRouter = router({
         await db
           .update(proposalMilestones)
           .set(values)
-          .where(eq(proposalMilestones.id, input.id));
+          // Tied to the proposal verified by getProposalOrThrow above. `input.id`
+          // is its own caller-supplied id, so on its own it reached any
+          // workspace's milestone — the same defect as deleteMilestone, in the
+          // upsert. proposal_milestones has no workspaceId column, so the parent
+          // is the only available scope (tsc is what caught the difference).
+          .where(and(eq(proposalMilestones.id, input.id), eq(proposalMilestones.proposalId, input.proposalId)));
         return { id: input.id };
       } else {
         const [r] = await db.insert(proposalMilestones).values(values);
@@ -493,7 +498,7 @@ export const proposalsRouter = router({
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
       await getProposalOrThrow(db, input.id, ctx.workspace.id);
       const token = generateShareToken();
-      await db.update(proposals).set({ shareToken: token }).where(eq(proposals.id, input.id));
+      await db.update(proposals).set({ shareToken: token }).where(and(eq(proposals.id, input.id), eq(proposals.workspaceId, ctx.workspace.id)));
       return { token };
     }),
 
@@ -603,7 +608,7 @@ export const proposalsRouter = router({
       let token = proposal.shareToken;
       if (!token) {
         token = generateShareToken();
-        await db.update(proposals).set({ shareToken: token }).where(eq(proposals.id, input.id));
+        await db.update(proposals).set({ shareToken: token }).where(and(eq(proposals.id, input.id), eq(proposals.workspaceId, ctx.workspace.id)));
       }
 
       const shareUrl = `${input.origin}/p/${token}`;
@@ -692,7 +697,7 @@ export const proposalsRouter = router({
       await db
         .update(proposals)
         .set({ status: "sent", sentAt: new Date() })
-        .where(eq(proposals.id, input.id));
+        .where(and(eq(proposals.id, input.id), eq(proposals.workspaceId, ctx.workspace.id)));
 
       const deliveryNote = emailOk
         ? `Email sent to ${proposal.clientEmail}${senderEmail ? ` from ${senderEmail}` : ""}`
@@ -723,7 +728,7 @@ export const proposalsRouter = router({
       await db
         .update(proposals)
         .set({ status: "accepted", acceptedAt: new Date() })
-        .where(eq(proposals.id, input.id));
+        .where(and(eq(proposals.id, input.id), eq(proposals.workspaceId, ctx.workspace.id)));
       // Create follow-up task
       const taskTitle = `Follow up: ${proposal.title} — accepted by ${proposal.clientName}`;
       const taskResult = await db.insert(tasks).values({
@@ -786,7 +791,7 @@ export const proposalsRouter = router({
             await db
               .update(proposals)
               .set({ linkedOpportunityId: opportunityId })
-              .where(eq(proposals.id, input.id));
+              .where(and(eq(proposals.id, input.id), eq(proposals.workspaceId, ctx.workspace.id)));
           }
         }
       }
@@ -1073,7 +1078,7 @@ Write 2-4 paragraphs of professional proposal content for this section. Be speci
       await db
         .update(proposals)
         .set({ linkedOpportunityId: input.opportunityId })
-        .where(eq(proposals.id, input.proposalId));
+        .where(and(eq(proposals.id, input.proposalId), eq(proposals.workspaceId, ctx.workspace.id)));
       return { ok: true };
     }),
   /**
@@ -1348,7 +1353,7 @@ Reason: ${input.reason}`,
       await db
         .update(proposals)
         .set({ expiresAt: newDate, updatedAt: new Date() })
-        .where(eq(proposals.id, input.proposalId));
+        .where(and(eq(proposals.id, input.proposalId), eq(proposals.workspaceId, ctx.workspace.id)));
       // Log activity
       await logProposalActivity(db, {
         workspaceId: ctx.workspace.id,

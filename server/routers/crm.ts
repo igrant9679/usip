@@ -934,7 +934,7 @@ Return a JSON object with ONLY the fields you can reasonably suggest from this i
       }
 
       if (Object.keys(patch).length > 0) {
-        await db.update(contacts).set(patch).where(eq(contacts.id, input.id));
+        await db.update(contacts).set(patch).where(and(eq(contacts.id, input.id), eq(contacts.workspaceId, ctx.workspace.id)));
         await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "contact", entityId: input.id, before: contact, after: patch });
       }
 
@@ -1493,7 +1493,7 @@ export const opportunitiesRouter = router({
     }
     if (isWon) winProb = 100;
     if (isLost) winProb = 0;
-    await db.update(opportunities).set({ stage: input.stage, winProb, daysInStage: 0 }).where(eq(opportunities.id, input.id));
+    await db.update(opportunities).set({ stage: input.stage, winProb, daysInStage: 0 }).where(and(eq(opportunities.id, input.id), eq(opportunities.workspaceId, ctx.workspace.id)));
     // Record the transition for the Stage history tab. Non-fatal on insert
     // failure — the row update is what users see; history is auxiliary.
     try {
@@ -1588,7 +1588,7 @@ export const opportunitiesRouter = router({
     const patch: any = { ...input.patch };
     if (patch.value !== undefined) patch.value = String(patch.value);
     if (patch.closeDate && typeof patch.closeDate === "string") patch.closeDate = new Date(patch.closeDate);
-    await db.update(opportunities).set(patch).where(eq(opportunities.id, input.id));
+    await db.update(opportunities).set(patch).where(and(eq(opportunities.id, input.id), eq(opportunities.workspaceId, ctx.workspace.id)));
     await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "opportunity", entityId: input.id, before, after: input.patch });
     return { ok: true };
   }),

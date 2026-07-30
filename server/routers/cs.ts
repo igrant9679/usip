@@ -68,7 +68,7 @@ export const csRouter = router({
       const [c] = await db.select().from(customers).where(and(eq(customers.id, input.id), eq(customers.workspaceId, ctx.workspace.id)));
       if (!c) throw new TRPCError({ code: "NOT_FOUND" });
       const { score, tier } = calcHealth({ usageScore: input.usage, engagementScore: input.engagement, supportScore: input.support, npsScore: c.npsScore });
-      await db.update(customers).set({ usageScore: input.usage, engagementScore: input.engagement, supportScore: input.support, healthScore: score, healthTier: tier }).where(eq(customers.id, input.id));
+      await db.update(customers).set({ usageScore: input.usage, engagementScore: input.engagement, supportScore: input.support, healthScore: score, healthTier: tier }).where(and(eq(customers.id, input.id), eq(customers.workspaceId, ctx.workspace.id)));
       return { score, tier };
     }),
 
@@ -80,7 +80,7 @@ export const csRouter = router({
     const hist: Array<{ month: number; score: number }> = Array.isArray(c.npsHistory) ? (c.npsHistory as any) : [];
     hist.push({ month: hist.length, score: input.score });
     const { score, tier } = calcHealth({ usageScore: c.usageScore, engagementScore: c.engagementScore, supportScore: c.supportScore, npsScore: input.score });
-    await db.update(customers).set({ npsScore: input.score, npsHistory: hist.slice(-12), healthScore: score, healthTier: tier }).where(eq(customers.id, input.id));
+    await db.update(customers).set({ npsScore: input.score, npsHistory: hist.slice(-12), healthScore: score, healthTier: tier }).where(and(eq(customers.id, input.id), eq(customers.workspaceId, ctx.workspace.id)));
     return { score, tier };
   }),
 

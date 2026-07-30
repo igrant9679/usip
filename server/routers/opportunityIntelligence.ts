@@ -291,7 +291,7 @@ export const opportunityIntelligenceRouter = router({
       await db
         .update(stageApprovals)
         .set({ status: input.approved ? "approved" : "rejected", approverUserId: ctx.user.id, reviewNote: input.reviewNote ?? null })
-        .where(eq(stageApprovals.id, input.approvalId));
+        .where(and(eq(stageApprovals.id, input.approvalId), eq(stageApprovals.workspaceId, ctx.workspace.id)));
 
       if (input.approved) {
         // Apply stage change

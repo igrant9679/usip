@@ -464,7 +464,7 @@ export const teamRouter = router({
       await db
         .update(workspaceMembers)
         .set({ role: input.role })
-        .where(eq(workspaceMembers.id, input.memberId));
+        .where(and(eq(workspaceMembers.id, input.memberId), eq(workspaceMembers.workspaceId, ctx.workspace.id)));
       await recordAudit({
         workspaceId: ctx.workspace.id,
         actorUserId: ctx.user.id,
@@ -548,7 +548,7 @@ export const teamRouter = router({
       await db
         .update(workspaceMembers)
         .set({ deactivatedAt: new Date() })
-        .where(eq(workspaceMembers.id, input.memberId));
+        .where(and(eq(workspaceMembers.id, input.memberId), eq(workspaceMembers.workspaceId, ctx.workspace.id)));
 
       await recordAudit({
         workspaceId: ctx.workspace.id,
@@ -877,7 +877,7 @@ export const teamRouter = router({
         : null;
       await db.update(workspaceMembers)
         .set({ inviteToken: newToken, inviteExpiresAt: newExpiresAt })
-        .where(eq(workspaceMembers.id, input.memberId));
+        .where(and(eq(workspaceMembers.id, input.memberId), eq(workspaceMembers.workspaceId, ctx.workspace.id)));
       // Revive an expired invite back to pending so the UI shows it correctly
       // and the fresh token/expiry actually mean something.
       if (row.loginMethod === "expired_invite") {
@@ -949,7 +949,7 @@ export const teamRouter = router({
       if (!row.inviteToken) return { ok: true, alreadyClear: true };
       await db.update(workspaceMembers)
         .set({ inviteToken: null, inviteExpiresAt: null })
-        .where(eq(workspaceMembers.id, input.memberId));
+        .where(and(eq(workspaceMembers.id, input.memberId), eq(workspaceMembers.workspaceId, ctx.workspace.id)));
       await recordAudit({
         workspaceId: ctx.workspace.id,
         actorUserId: ctx.user.id,
@@ -1015,7 +1015,7 @@ export const teamRouter = router({
         : null;
       await db.update(workspaceMembers)
         .set({ inviteToken: newToken, inviteExpiresAt: newExpiresAt3 })
-        .where(eq(workspaceMembers.id, input.memberId));
+        .where(and(eq(workspaceMembers.id, input.memberId), eq(workspaceMembers.workspaceId, ctx.workspace.id)));
       // Send password-setup email
       try {
         const { sendSystemEmail } = await import("../emailDelivery");
@@ -1094,7 +1094,7 @@ export const teamRouter = router({
         const expiresAt = expiryDays > 0 ? new Date(now.getTime() + expiryDays * 86400_000) : null;
         await db.update(workspaceMembers)
           .set({ inviteToken: token, inviteExpiresAt: expiresAt })
-          .where(eq(workspaceMembers.id, input.memberId));
+          .where(and(eq(workspaceMembers.id, input.memberId), eq(workspaceMembers.workspaceId, ctx.workspace.id)));
         // Revive an expired invite to pending so a freshly-issued link works.
         if (row.loginMethod === "expired_invite") {
           await db.update(users).set({ loginMethod: "invite" }).where(eq(users.id, row.userId));

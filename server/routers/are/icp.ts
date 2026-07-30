@@ -528,7 +528,7 @@ export const icpRouter = router({
       if (target.isActive) return { success: true, message: "Already active." };
       // Deactivate all versions, then activate the target
       await db.update(icpProfiles).set({ isActive: false }).where(eq(icpProfiles.workspaceId, ctx.workspace.id));
-      await db.update(icpProfiles).set({ isActive: true }).where(eq(icpProfiles.id, input.id));
+      await db.update(icpProfiles).set({ isActive: true }).where(and(eq(icpProfiles.id, input.id), eq(icpProfiles.workspaceId, ctx.workspace.id)));
       await areNotify({
         workspaceId: ctx.workspace.id,
         eventType: "icp_updated",

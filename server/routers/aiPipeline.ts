@@ -453,7 +453,7 @@ export const aiPipelineRouter = router({
           body: input.body ?? draft.body,
           reviewedByUserId: ctx.user.id,
         })
-        .where(eq(emailDrafts.id, input.draftId));
+        .where(and(eq(emailDrafts.id, input.draftId), eq(emailDrafts.workspaceId, ctx.workspace.id)));
       return { ok: true };
     }),
 
@@ -559,7 +559,7 @@ export const aiPipelineRouter = router({
       await db
         .update(emailDrafts)
         .set({ subject: newSubject, body: newBody, status: "ai_pending_review" as any })
-        .where(eq(emailDrafts.id, input.draftId));
+        .where(and(eq(emailDrafts.id, input.draftId), eq(emailDrafts.workspaceId, ctx.workspace.id)));
 
       return { subject: newSubject, body: newBody };
     }),

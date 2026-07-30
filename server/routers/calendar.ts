@@ -269,7 +269,7 @@ export const calendarRouter = router({
             attendees: result.attendees,
             relatedType: input.relatedType,
             relatedId: input.relatedId,
-          }).where(eq(calendarEvents.id, input.dbId));
+          }).where(and(eq(calendarEvents.id, input.dbId), eq(calendarEvents.workspaceId, ctx.workspace.id)));
         }
       }
       return result;
@@ -333,7 +333,7 @@ export const calendarRouter = router({
         }
         upserted++;
       }
-      await db.update(calendarAccounts).set({ lastSyncAt: new Date(), lastSyncError: null }).where(eq(calendarAccounts.id, input.accountId));
+      await db.update(calendarAccounts).set({ lastSyncAt: new Date(), lastSyncError: null }).where(and(eq(calendarAccounts.id, input.accountId), eq(calendarAccounts.workspaceId, ctx.workspace.id)));
       return { synced: upserted };
     }),
 
@@ -392,7 +392,7 @@ Be concise and professional. Use markdown formatting.`;
 
       // Save summary to calendarEvents row
       await db.update(calendarEvents).set({ aiSummary: summary, aiSummarizedAt: new Date() })
-        .where(eq(calendarEvents.id, input.eventId));
+        .where(and(eq(calendarEvents.id, input.eventId), eq(calendarEvents.workspaceId, ctx.workspace.id)));
 
       // Save as a meeting activity record linked to the related entity (or the event itself)
       const relatedType = event.relatedType ?? "opportunity";

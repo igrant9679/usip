@@ -1288,7 +1288,7 @@ export const prospectsRouter = router({
       };
       const updated = steps.map((s, i) => (i === targetIdx ? updatedStep : s));
       await db.update(prospectIntelligence).set({ generatedSequence: updated })
-        .where(eq(prospectIntelligence.prospectQueueId, input.prospectId));
+        .where(and(eq(prospectIntelligence.prospectQueueId, input.prospectId), eq(prospectIntelligence.workspaceId, ctx.workspace.id)));
 
       // Push the edit into any not-yet-sent execution queue rows so the
       // dispatcher uses the edited content. Only `scheduled` rows are
@@ -1785,7 +1785,7 @@ export const prospectsRouter = router({
         sequenceStatus: newStatus,
         rejectedAt: newStatus === "pending" ? null : prospect.rejectedAt,
         rejectionReason: newStatus === "pending" ? null : prospect.rejectionReason,
-      }).where(eq(prospectQueue.id, input.prospectId));
+      }).where(and(eq(prospectQueue.id, input.prospectId), eq(prospectQueue.workspaceId, ctx.workspace.id)));
       return { newScore: match.score, newStatus, breakdown: match.breakdown };
     }),
 

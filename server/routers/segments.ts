@@ -227,7 +227,7 @@ export const segmentsRouter = router({
       const allContacts = await db.select().from(contacts).where(eq(contacts.workspaceId, ctx.workspace.id));
       const count = allContacts.filter((c) => evaluateRules(c as Record<string, any>, updatedRules, (seg.matchType ?? "all") as "all" | "any")).length;
       await db.update(audienceSegments).set({ rules: updatedRules, contactCount: count, lastEvaluatedAt: new Date() })
-        .where(eq(audienceSegments.id, input.segmentId));
+        .where(and(eq(audienceSegments.id, input.segmentId), eq(audienceSegments.workspaceId, ctx.workspace.id)));
       return { added: newRules.length, total: count };
     }),
 
