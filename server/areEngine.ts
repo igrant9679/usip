@@ -65,6 +65,7 @@ import { normalizeSequence } from "@shared/areSequenceSteps";
 import { apolloPulledToday, apolloSearchPeople, getApolloDailyCap } from "./services/apollo";
 import { appBaseUrl as publicAppOrigin } from "./appUrl";
 import { escapeHtml } from "@shared/escapeHtml";
+import { buildMergeLookup, parseMergeToken, resolveMergeName } from "@shared/mergeKeys";
 
 /* ─── Per-tick bounds (keep LLM cost + wall-time predictable) ───────────── */
 /** Max prospects enriched per engine cycle. Enrichment runs ONE AT A TIME
@@ -110,15 +111,35 @@ export interface AreEngineResult {
 
 /* ─── Helpers ───────────────────────────────────────────────────────────── */
 
-/** Resolve {{merge tags}} in an outreach body against the real prospect. */
-function applyMerge(text: string, p: Prospect, bookingUrl = ""): string {
-  return String(text ?? "")
-    .replace(/\{\{\s*firstName\s*\}\}/gi, p.firstName ?? "there")
-    .replace(/\{\{\s*lastName\s*\}\}/gi, p.lastName ?? "")
-    .replace(/\{\{\s*(company|companyName)\s*\}\}/gi, p.companyName ?? "your company")
-    .replace(/\{\{\s*title\s*\}\}/gi, p.title ?? "")
-    .replace(/\{\{\s*bookingLink\s*\}\}/gi, bookingUrl)
-    .replace(/\{\{[^}]+\}\}/g, ""); // strip any unresolved tags
+/**
+ * Resolve {{merge tags}} in an outreach body against the real prospect.
+ *
+ * Matching is @shared/mergeKeys, the same rule as every other substitution
+ * path. The literal `firstName`/`lastName` regexes this used to carry were
+ * case-insensitive but not separator-tolerant, so `{{first_name}}` — which the
+ * sibling renderers resolve — fell through to the strip pass below and left a
+ * hole in the sentence. This body is written by an LLM and mailed to a stranger
+ * without a human in the loop, so it is the worst of the four places to
+ * disagree about what a token means.
+ *
+ * The STRIP policy on unresolved tags is kept: it is the one implementation
+ * that cannot leak braces to a prospect, and that is deliberate.
+ */
+export function applyMerge(text: string, p: Prospect, bookingUrl = ""): string {
+  const lookup = buildMergeLookup(Object.entries({
+    firstName: p.firstName ?? "there",
+    lastName: p.lastName ?? "",
+    company: p.companyName ?? "your company",
+    companyName: p.companyName ?? "your company",
+    title: p.title ?? "",
+    bookingLink: bookingUrl,
+  }));
+  return String(text ?? "").replace(/\{\{([^}]+)\}\}/g, (_match, inner: string) => {
+    const { name, fallback } = parseMergeToken(inner);
+    const hit = name ? resolveMergeName(lookup, name) : undefined;
+    if (hit === undefined) return ""; // strip unresolved tags
+    return hit || fallback || hit;
+  });
 }
 
 /** Plain-text outreach body → minimal HTML for the email send. */

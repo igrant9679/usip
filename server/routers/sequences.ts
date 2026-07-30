@@ -32,6 +32,7 @@ import { appBaseUrl as publicAppOrigin } from "../appUrl";
 import { utcDayStart } from "@shared/timeWindows";
 import { getSequenceAbVariantStats } from "../services/performanceMetrics";
 import { escapeHtml as sharedEscapeHtml } from "@shared/escapeHtml";
+import { renderMergeFields } from "../mergeVars";
 
 /** One escaper for the whole codebase — @shared/escapeHtml. The comment here
  *  used to read "duplicated from crm.ts — separate router", and duplication is
@@ -220,20 +221,13 @@ async function pickAccountForSequenceDraft(
   return null;
 }
 
-/** Merge-field renderer (same forgiving matcher as crm.ts). */
-function renderMergeFields(template: string, vars: Record<string, string | null | undefined>): string {
-  if (!template) return template;
-  const norm = (s: string) => s.toLowerCase().replace(/[_\s]/g, "");
-  const lookup = new Map<string, string>();
-  for (const [k, v] of Object.entries(vars)) {
-    if (v == null) continue;
-    lookup.set(norm(k), v);
-  }
-  return template.replace(/\{\{\s*([a-zA-Z0-9_\s]+?)\s*\}\}/g, (match, name: string) => {
-    const hit = lookup.get(norm(name));
-    return hit ?? match;
-  });
-}
+/**
+ * One merge-field renderer — `renderMergeFields` from ../mergeVars.
+ *
+ * The copy that lived here said "same forgiving matcher as crm.ts", which was
+ * true of the two of them and false of the third implementation on the send
+ * path they both feed.
+ */
 
 /**
  * `enabled: false` retires a step: the engine skips it without sending (see

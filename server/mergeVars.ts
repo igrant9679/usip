@@ -23,6 +23,7 @@ import { getDb } from "./db";
 import { contacts, accounts, leads, prospects, bookingLinks, users } from "../drizzle/schema";
 import { escapeHtml } from "@shared/escapeHtml";
 import { slugify } from "@shared/slugify";
+import { buildMergeLookup, parseMergeToken, resolveMergeName } from "@shared/mergeKeys";
 
 export type MergeContext = {
   contact?: {
@@ -148,15 +149,22 @@ function buildVarMap(ctx: MergeContext): Map<string, string> {
  * - {{firstName}} → resolved value or empty string
  * - {{firstName|Friend}} → resolved value or "Friend" if empty
  * - Unknown variables are left as-is
+ *
+ * Key matching is @shared/mergeKeys — exact spelling first, then the canonical
+ * form. This used to be a bare `varMap.get(varName)`, i.e. case-SENSITIVE with
+ * no separator tolerance, while the crm/sequences renderer two directories away
+ * resolved `{{FirstName}}` and `{{first_name}}` happily. Same template, two
+ * send paths, two different emails — and on this path the loser is a literal
+ * `{{first_name}}` in a prospect's inbox.
  */
 export function resolveMergeVars(text: string, ctx: MergeContext): string {
-  const varMap = buildVarMap(ctx);
+  const lookup = buildMergeLookup(buildVarMap(ctx));
 
   return text.replace(/\{\{([^}]+)\}\}/g, (match, inner: string) => {
-    const [varName, fallback] = inner.split("|").map((s) => s.trim());
-    if (!varName) return match;
+    const { name, fallback } = parseMergeToken(inner);
+    if (!name) return match;
 
-    const resolved = varMap.get(varName);
+    const resolved = resolveMergeName(lookup, name);
     if (resolved !== undefined) {
       // Use fallback if resolved value is empty and fallback is provided
       return resolved || fallback || resolved;
@@ -164,6 +172,38 @@ export function resolveMergeVars(text: string, ctx: MergeContext): string {
 
     // Unknown variable — leave as-is so reviewers can spot it
     return match;
+  });
+}
+
+/**
+ * Replace `{{merge_field}}` tokens with per-recipient values, from a flat map.
+ *
+ * The forgiving sibling of `resolveMergeVars`: same matching rule and same
+ * leave-unknown-tokens-verbatim policy, but takes the variables directly
+ * instead of building them from a MergeContext.
+ *
+ * ONE copy. crm.ts and sequences.ts each carried a byte-identical private
+ * version — the second one's own comment said "same forgiving matcher as
+ * crm.ts", which is true right up until someone edits one of them. Neither
+ * supported the `{{name|fallback}}` syntax that mergeVars has always
+ * documented, so that token reached recipients with its braces intact.
+ *
+ * Operates on the raw string, so call this BEFORE HTML-wrapping the body.
+ */
+export function renderMergeFields(
+  template: string,
+  vars: Record<string, string | null | undefined>,
+): string {
+  if (!template) return template;
+  const lookup = buildMergeLookup(Object.entries(vars));
+  // `[^}]` rather than the old `[a-zA-Z0-9_\s]`: the narrow class could not
+  // match a `|`, so the fallback form never even entered the replacer.
+  return template.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (match, inner: string) => {
+    const { name, fallback } = parseMergeToken(inner);
+    if (!name) return match;
+    const hit = resolveMergeName(lookup, name);
+    if (hit === undefined) return match;
+    return hit || fallback || hit;
   });
 }
 

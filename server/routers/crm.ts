@@ -52,6 +52,7 @@ import { appBaseUrl as publicAppOrigin } from "../appUrl";
 // shared/quoteTotals.ts — a deal line and a quote line do the same sum.
 import { centsToDecimal, computeQuoteTotals, toCents } from "@shared/quoteTotals";
 import { escapeHtml as sharedEscapeHtml } from "@shared/escapeHtml";
+import { renderMergeFields } from "../mergeVars";
 
 /** The ONE public origin — see server/appUrl.ts. */
 const getAppBaseUrl = publicAppOrigin;
@@ -124,29 +125,13 @@ function escapeHtmlWithLinks(s: string): string {
 }
 
 /**
- * Replace `{{merge_field}}` tokens with per-recipient values.
+ * One merge-field renderer — `renderMergeFields` from ../mergeVars.
  *
- * Token matching is case-insensitive and tolerant of common variants
- * (firstName / first_name / FirstName all map to the same value).
- * Unknown tokens are left as-is rather than blanking out — that way a
- * user typo is visible instead of silently producing weird output.
- *
- * Operates on the raw string, so call this BEFORE HTML-wrapping the body.
+ * This file and routers/sequences.ts each carried a byte-identical private
+ * copy, and both matched keys by a rule that the mergeVars implementation on
+ * the draft/bulk send path did not share. Four substitution implementations,
+ * three different answers to "does {{first_name}} resolve?".
  */
-function renderMergeFields(template: string, vars: Record<string, string | null | undefined>): string {
-  if (!template) return template;
-  // Normalize lookup keys to lowercase + strip underscores for forgiving matches.
-  const norm = (s: string) => s.toLowerCase().replace(/[_\s]/g, "");
-  const lookup = new Map<string, string>();
-  for (const [k, v] of Object.entries(vars)) {
-    if (v == null) continue;
-    lookup.set(norm(k), v);
-  }
-  return template.replace(/\{\{\s*([a-zA-Z0-9_\s]+?)\s*\}\}/g, (match, name: string) => {
-    const hit = lookup.get(norm(name));
-    return hit ?? match;
-  });
-}
 
 /* ──────────────────────────────────────────────────────────────────────── */
 
