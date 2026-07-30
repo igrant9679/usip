@@ -2282,6 +2282,43 @@ export async function checkAndPromoteAbVariants(): Promise<{ promoted: number }>
         eq(sequenceAbVariants.isWinner, true),
       ));
     if (existing) continue; // already promoted
+    /**
+     * REFUSE TO PROMOTE WITHOUT SIGNAL.
+     *
+     * `sequenceAbVariants.openCount` and `replyCount` are written by NOTHING in
+     * this codebase — only `sentCount` is, by the engine at draft creation.
+     * emailTracking (opens/clicks) and inboundReplyPoller (replies) never touch
+     * this table, and they could not: `emailDrafts` carries `stepIndex` but no
+     * reference to the variant it used, so an open or a reply cannot be
+     * attributed to one.
+     *
+     * With both counters permanently 0, the score below is 0 for every variant,
+     * `score > bestScore` is never true, and reduce() returns its seed — so this
+     * promoted `group[0]`, the first variant BY ARRAY ORDER, then set isWinner
+     * which makes the `existing` check above skip the group forever. An A/B test
+     * that silently locks in an arbitrary variant and reports it as a winner is
+     * worse than no A/B test: it stops the experiment AND misinforms.
+     *
+     * So it now declines rather than guessing, matching how the optimisation
+     * analyzers behave on thin data — they stay silent, and the notes are
+     * explicit that the gates matter more than the rules.
+     *
+     * Wiring real attribution needs a variant reference on emailDrafts, i.e. a
+     * migration; that is the user's call, not something to infer here.
+     */
+    const hasSignal = group.some(
+      (v: { replyCount: number; openCount: number }) => v.replyCount > 0 || v.openCount > 0,
+    );
+    if (!hasSignal) {
+      console.warn(
+        `[SequenceAB] sequence ${group[0].sequenceId} step ${group[0].stepIndex}: ` +
+        `${group.length} variants past the send threshold but every openCount and ` +
+        `replyCount is 0 — nothing writes them (emailDrafts has no variant link). ` +
+        `Declining to promote a winner rather than picking the first variant.`,
+      );
+      continue;
+    }
+
     // Find the variant with the highest reply rate (open rate as tiebreaker)
     const winner = group.reduce((best, v) => {
       const score = v.sentCount > 0 ? (v.replyCount / v.sentCount) * 100 + (v.openCount / v.sentCount) * 10 : 0;

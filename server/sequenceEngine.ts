@@ -13,7 +13,7 @@
  *     daily email cap (100 by default) before creating drafts.
  */
 
-import { and, eq, isNull, lte, or } from "drizzle-orm";
+import { and, eq, isNull, lte, or, sql } from "drizzle-orm";
 import {
   activities,
   contacts,
@@ -537,10 +537,22 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
           // If we'd done this before the insert and the insert threw, the
           // variant counter would have over-counted relative to actual
           // drafts created.
-          if (chosenVariantId !== null && chosenVariantCount !== null) {
+          if (chosenVariantId !== null) {
+            /**
+             * Atomic in SQL. `chosenVariantCount + 1` computed in JS was a lost
+             * update, and not a rare one: the variant list is selected fresh per
+             * enrollment, so two enrollments in the SAME tick that pick the same
+             * variant both read N and both write N+1. With any real volume that
+             * is the normal case, not an edge case.
+             *
+             * It matters beyond the number being wrong. sentCount gates
+             * `minSendsForPromotion`, so an undercount also delays or skews the
+             * A/B promotion decision. Third instance of this shape today, after
+             * sendingAccountDailyStats (72aa576) and bookingLinks (9bb4f3d).
+             */
             await db
               .update(sequenceAbVariants)
-              .set({ sentCount: chosenVariantCount + 1 })
+              .set({ sentCount: sql`${sequenceAbVariants.sentCount} + 1` } as never)
               .where(eq(sequenceAbVariants.id, chosenVariantId));
           }
           } // end if (hasContent)
