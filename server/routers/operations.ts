@@ -38,6 +38,9 @@ import { adminWsProcedure, managerProcedure, repProcedure, workspaceProcedure } 
 import { storagePut } from "../storage";
 import { buildTransporter, decrypt } from "./smtpConfig";
 import { evalConditions, executeRuleActions } from "../services/workflowEngine";
+// One arithmetic rule for quote money, shared with the client's preview so the
+// number the user approves is the number stored. See shared/quoteTotals.ts.
+import { centsToDecimal, computeQuoteTotals, formatMoney } from "@shared/quoteTotals";
 import crypto from "crypto";
 
 /**
@@ -161,17 +164,14 @@ export async function checkDealAging(): Promise<{ rulesChecked: number; dealsMat
 
 /* ----- Pure helpers (exported for tests) ----- */
 
-export function computeQuoteTotals(
-  lineItems: Array<{ quantity: number; unitPrice: number; discountPct: number }>,
-) {
-  const subtotal = lineItems.reduce((s, li) => s + li.quantity * li.unitPrice, 0);
-  const discount = lineItems.reduce(
-    (s, li) => s + li.quantity * li.unitPrice * (li.discountPct / 100),
-    0,
-  );
-  const total = subtotal - discount;
-  return { subtotal, discount, total };
-}
+/**
+ * `computeQuoteTotals` used to live here, exported "for tests" with ZERO
+ * production callers while `quotes.create` and `Quotes.tsx` each reimplemented
+ * the same formula. Two suites asserted against this copy, so the arithmetic
+ * that actually priced a customer's quote was untested and reported green.
+ * It now lives in @shared/quoteTotals, in integer cents, and every caller —
+ * server, client and tests — uses that one.
+ */
 
 export function canLaunchCampaign(checklist: Array<{ done: boolean; label: string }>): boolean {
   return checklist.every((x) => x.done);
@@ -667,8 +667,19 @@ export const dashboardsRouter = router({
   delete: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    await db.delete(dashboardWidgets).where(eq(dashboardWidgets.dashboardId, input.id));
-    await db.delete(dashboards).where(and(eq(dashboards.id, input.id), eq(dashboards.workspaceId, ctx.workspace.id)));
+    // ⚠️ Same defect the quote delete had, found by the same guard: the widget
+    // delete was keyed on a caller-supplied dashboardId with NO workspace
+    // filter, so any rep could wipe every widget off ANY workspace's dashboard
+    // by id — returning ok:true, because the `dashboards` delete beside it IS
+    // scoped and simply matched nothing. The role gate above was considered;
+    // the tenant boundary was not. `deleteWidget`, two procedures down, has
+    // always scoped by workspaceId.
+    const [d] = await db.select({ id: dashboards.id }).from(dashboards)
+      .where(and(eq(dashboards.id, input.id), eq(dashboards.workspaceId, ctx.workspace.id)));
+    if (!d) throw new TRPCError({ code: "NOT_FOUND", message: "Dashboard not found" });
+    await db.delete(dashboardWidgets)
+      .where(and(eq(dashboardWidgets.dashboardId, d.id), eq(dashboardWidgets.workspaceId, ctx.workspace.id)));
+    await db.delete(dashboards).where(and(eq(dashboards.id, d.id), eq(dashboards.workspaceId, ctx.workspace.id)));
     return { ok: true };
   }),
 
@@ -1274,10 +1285,18 @@ export const quotesRouter = router({
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
 
-    const subtotal = input.lineItems.reduce((s, li) => s + li.quantity * li.unitPrice, 0);
-    const discountTotal = input.lineItems.reduce((s, li) => s + li.quantity * li.unitPrice * (li.discountPct / 100), 0);
-    const taxTotal = 0;
-    const total = subtotal - discountTotal + taxTotal;
+    // opportunityId is caller-controlled. Verified before anything is attached
+    // to it — the same check crm.addLineItem already makes, for the same reason:
+    // without it a quote in this workspace can be bound to another tenant's
+    // opportunity id, and the pipeline value it prices belongs to neither.
+    const [opp] = await db.select({ id: opportunities.id }).from(opportunities)
+      .where(and(eq(opportunities.id, input.opportunityId), eq(opportunities.workspaceId, ctx.workspace.id)));
+    if (!opp) throw new TRPCError({ code: "NOT_FOUND", message: "Opportunity not found" });
+
+    // One arithmetic rule, in integer cents — @shared/quoteTotals. Every figure
+    // below is DERIVED from the rounded line figures, so the PDF's rows sum to
+    // its total instead of usually summing to it.
+    const totals = computeQuoteTotals(input.lineItems);
     const num = `Q-${Date.now()}`;
 
     const r = await db.insert(quotes).values({
@@ -1286,27 +1305,34 @@ export const quotesRouter = router({
       quoteNumber: num,
       status: "draft",
       expiresAt: new Date(Date.now() + input.expiresInDays * 86400000),
-      subtotal: String(subtotal),
-      discountTotal: String(discountTotal),
-      taxTotal: String(taxTotal),
-      total: String(total),
+      subtotal: centsToDecimal(totals.subtotalCents),
+      discountTotal: centsToDecimal(totals.discountTotalCents),
+      taxTotal: centsToDecimal(totals.taxTotalCents),
+      total: centsToDecimal(totals.totalCents),
       notes: input.notes,
       terms: input.terms,
       createdByUserId: ctx.user.id,
     });
     const id = Number((r as any)[0]?.insertId ?? 0);
 
-    for (const li of input.lineItems) {
+    // Indexed loop, not .entries(): this tsconfig has no downlevelIteration, so
+    // an iterator here adds a TS2802 to a 479-error baseline nobody can read.
+    for (let i = 0; i < input.lineItems.length; i++) {
+      const li = input.lineItems[i];
+      const line = totals.lines[i];
       await db.insert(quoteLineItems).values({
         workspaceId: ctx.workspace.id,
         quoteId: id,
         productId: li.productId ?? null,
         name: li.name,
         description: li.description,
-        quantity: li.quantity,
-        unitPrice: String(li.unitPrice),
+        quantity: line.quantity,
+        // The ROUNDED unit price, so the printed row multiplies out. Storing the
+        // raw input let the column round it to 2dp while lineTotal was computed
+        // from the unrounded value — unit 0.13 × qty 4 beside a line of 0.50.
+        unitPrice: centsToDecimal(line.unitPriceCents),
         discountPct: String(li.discountPct),
-        lineTotal: String(li.quantity * li.unitPrice * (1 - li.discountPct / 100)),
+        lineTotal: centsToDecimal(line.lineTotalCents),
       });
     }
     return { id, quoteNumber: num };
@@ -1361,9 +1387,12 @@ export const quotesRouter = router({
         }
         const rowH = Math.max(20, doc.y - y);
         doc.text(String(li.quantity), colX.qty, y, { width: 50, align: "right" });
-        doc.text(`$${Number(li.unitPrice).toLocaleString()}`, colX.unit, y, { width: 60, align: "right" });
+        // formatMoney, not toLocaleString(): its default maximumFractionDigits
+        // is 3 and minimumFractionDigits 0, so a line of 1234.5 printed as
+        // "$1,234.5" and 1234 as "$1,234" on a document a customer signs.
+        doc.text(formatMoney(li.unitPrice), colX.unit, y, { width: 60, align: "right" });
         doc.text(`${Number(li.discountPct).toFixed(1)}%`, colX.disc, y, { width: 50, align: "right" });
-        doc.font("Helvetica-Bold").text(`$${Number(li.lineTotal).toLocaleString()}`, colX.total, y, { width: 54, align: "right" });
+        doc.font("Helvetica-Bold").text(formatMoney(li.lineTotal), colX.total, y, { width: 54, align: "right" });
         doc.font("Helvetica");
         y += rowH + 4;
         doc.strokeColor("#eee").lineWidth(0.5).moveTo(48, y - 2).lineTo(564, y - 2).stroke();
@@ -1380,12 +1409,15 @@ export const quotesRouter = router({
         doc.text(value, valX, ty, { width: valW, align: "right" });
         doc.moveDown(0.3);
       };
-      totalsRow("Subtotal", `$${Number(q.subtotal).toLocaleString()}`);
-      totalsRow("Discount", `−$${Number(q.discountTotal).toLocaleString()}`);
-      totalsRow("Tax", `$${Number(q.taxTotal).toLocaleString()}`);
+      totalsRow("Subtotal", formatMoney(q.subtotal));
+      totalsRow("Discount", `−${formatMoney(q.discountTotal)}`);
+      // Always $0.00: quotes.create has no tax input, so this row is decoration.
+      // Left in place rather than removed — a quote with no tax line reads as
+      // "tax not considered", and adding a real tax field is a product decision.
+      totalsRow("Tax", formatMoney(q.taxTotal));
       doc.strokeColor("#0F1F1B").lineWidth(1.5).moveTo(labelX, doc.y).lineTo(564, doc.y).stroke();
       doc.moveDown(0.3);
-      totalsRow("Total", `$${Number(q.total).toLocaleString()}`, true);
+      totalsRow("Total", formatMoney(q.total), true);
 
       // Notes & Terms
       if (q.notes) {
@@ -1423,8 +1455,20 @@ export const quotesRouter = router({
   delete: workspaceProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    await db.delete(quoteLineItems).where(eq(quoteLineItems.quoteId, input.id));
-    await db.delete(quotes).where(and(eq(quotes.id, input.id), eq(quotes.workspaceId, ctx.workspace.id)));
+    // ⚠️ The line-item delete used to run FIRST and was scoped by quoteId ALONE.
+    // `id` is caller-controlled, so any authenticated user could strip every
+    // line item off ANY workspace's quote by id — the quote row survived
+    // (that statement IS workspace-scoped and simply matched nothing), leaving
+    // another tenant a signed-off total with no lines behind it. Cross-tenant
+    // destructive write, and it reported `ok: true`.
+    const [q] = await db.select({ id: quotes.id }).from(quotes)
+      .where(and(eq(quotes.id, input.id), eq(quotes.workspaceId, ctx.workspace.id)));
+    if (!q) throw new TRPCError({ code: "NOT_FOUND", message: "Quote not found" });
+    // Scoped by workspace as well as quote — belt and braces, so a future caller
+    // that forgets the ownership check above still cannot reach another tenant.
+    await db.delete(quoteLineItems)
+      .where(and(eq(quoteLineItems.quoteId, q.id), eq(quoteLineItems.workspaceId, ctx.workspace.id)));
+    await db.delete(quotes).where(and(eq(quotes.id, q.id), eq(quotes.workspaceId, ctx.workspace.id)));
     return { ok: true };
   }),
 });

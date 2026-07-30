@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { evalConditions, canLaunchCampaign, computeQuoteTotals } from "./routers/operations";
+import { evalConditions, canLaunchCampaign } from "./routers/operations";
+import { computeQuoteTotals } from "../shared/quoteTotals";
 
 describe("workflow rule conditions (evalConditions)", () => {
   it("returns true when no conditions set", () => {
@@ -91,20 +92,25 @@ describe("canLaunchCampaign", () => {
 });
 
 describe("computeQuoteTotals", () => {
+  // Now imported from @shared/quoteTotals — the function quotes.create and the
+  // Quotes dialog actually use. This suite previously asserted against a copy in
+  // operations.ts that had zero production callers, so it passed regardless of
+  // what the shipped arithmetic did. Exact integer cents, not toBeCloseTo:
+  // "close enough" is not a property money maths may have.
   it("computes subtotal, discount, and total correctly", () => {
     const t = computeQuoteTotals([
       { quantity: 12, unitPrice: 8500, discountPct: 0 },   // 102000 line, no discount
       { quantity: 1, unitPrice: 14000, discountPct: 5 },   // 14000 - 5% = 13300
     ]);
-    expect(t.subtotal).toBeCloseTo(116000, 2);
-    expect(t.discount).toBeCloseTo(700, 2);
-    expect(t.total).toBeCloseTo(115300, 2);
+    expect(t.subtotalCents).toBe(116000_00);
+    expect(t.discountTotalCents).toBe(700_00);
+    expect(t.totalCents).toBe(115300_00);
   });
 
   it("treats empty input as zero totals", () => {
     const t = computeQuoteTotals([]);
-    expect(t.subtotal).toBe(0);
-    expect(t.discount).toBe(0);
-    expect(t.total).toBe(0);
+    expect(t.subtotalCents).toBe(0);
+    expect(t.discountTotalCents).toBe(0);
+    expect(t.totalCents).toBe(0);
   });
 });

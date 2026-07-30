@@ -48,6 +48,9 @@ import { isSuppressed, makeUnsubscribeUrl } from "../unsubscribe";
 import { assertSendAllowed } from "../sendLimits";
 import { ensureCustomerForWonOpp } from "../services/wonToCustomer";
 import { appBaseUrl as publicAppOrigin } from "../appUrl";
+// One arithmetic rule for line-item money, shared with quotes. See
+// shared/quoteTotals.ts — a deal line and a quote line do the same sum.
+import { centsToDecimal, computeQuoteTotals, toCents } from "@shared/quoteTotals";
 
 /** The ONE public origin — see server/appUrl.ts. */
 const getAppBaseUrl = publicAppOrigin;
@@ -1651,20 +1654,26 @@ export const opportunitiesRouter = router({
       const [opp] = await db.select({ id: opportunities.id }).from(opportunities)
         .where(and(eq(opportunities.id, input.opportunityId), eq(opportunities.workspaceId, ctx.workspace.id)));
       if (!opp) throw new TRPCError({ code: "NOT_FOUND", message: "Opportunity not found" });
-      const lineTotal = input.quantity * input.unitPrice * (1 - input.discountPct / 100);
+      // Same arithmetic rule as a quote line — @shared/quoteTotals, in integer
+      // cents. This was a fourth copy of the formula: it stored `unitPrice`
+      // rounded by the DECIMAL(14,2) column while computing `lineTotal` from the
+      // unrounded input, so a line could fail to multiply out, and the sum below
+      // then became the opportunity's value.
+      const [line] = computeQuoteTotals([input]).lines;
       await db.insert(dealLineItems).values({
         workspaceId: ctx.workspace.id,
         opportunityId: input.opportunityId,
         productId: input.productId,
-        quantity: input.quantity,
-        unitPrice: String(input.unitPrice),
+        quantity: line.quantity,
+        unitPrice: centsToDecimal(line.unitPriceCents),
         discountPct: String(input.discountPct),
-        lineTotal: String(lineTotal),
+        lineTotal: centsToDecimal(line.lineTotalCents),
       });
-      // Update opp value to sum of line items (workspace-scoped)
+      // Update opp value to sum of line items (workspace-scoped). Summed in
+      // cents so N lines cannot drift the pipeline figure by N half-cents.
       const items = await db.select().from(dealLineItems).where(and(eq(dealLineItems.opportunityId, input.opportunityId), eq(dealLineItems.workspaceId, ctx.workspace.id)));
-      const total = items.reduce((s, i) => s + Number(i.lineTotal), 0);
-      await db.update(opportunities).set({ value: String(total) }).where(and(eq(opportunities.id, input.opportunityId), eq(opportunities.workspaceId, ctx.workspace.id)));
+      const totalCents = items.reduce((s, i) => s + toCents(Number(i.lineTotal)), 0);
+      await db.update(opportunities).set({ value: centsToDecimal(totalCents) }).where(and(eq(opportunities.id, input.opportunityId), eq(opportunities.workspaceId, ctx.workspace.id)));
       return { ok: true };
     }),
 
@@ -1673,10 +1682,10 @@ export const opportunitiesRouter = router({
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     await db.delete(dealLineItems).where(and(eq(dealLineItems.id, input.id), eq(dealLineItems.workspaceId, ctx.workspace.id)));
     const items = await db.select().from(dealLineItems).where(and(eq(dealLineItems.opportunityId, input.opportunityId), eq(dealLineItems.workspaceId, ctx.workspace.id)));
-    const total = items.reduce((s, i) => s + Number(i.lineTotal), 0);
+    const totalCents = items.reduce((s, i) => s + toCents(Number(i.lineTotal)), 0);
     // Workspace-scoped: opportunityId is caller-controlled, so an unscoped
     // update could rewrite another tenant's opportunity value.
-    await db.update(opportunities).set({ value: String(total) }).where(and(eq(opportunities.id, input.opportunityId), eq(opportunities.workspaceId, ctx.workspace.id)));
+    await db.update(opportunities).set({ value: centsToDecimal(totalCents) }).where(and(eq(opportunities.id, input.opportunityId), eq(opportunities.workspaceId, ctx.workspace.id)));
     return { ok: true };
   }),
 

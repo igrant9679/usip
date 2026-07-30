@@ -34,14 +34,16 @@ describe("USIP — health score computation", () => {
 
 describe("USIP — quote totals", () => {
   it("computes subtotal, discount, and total correctly", async () => {
-    const { computeQuoteTotals } = await import("./routers/operations");
+    // @shared/quoteTotals — the one quotes.create writes from. This used to
+    // import a dead copy from routers/operations.
+    const { computeQuoteTotals } = await import("../shared/quoteTotals");
     const totals = computeQuoteTotals([
       { quantity: 2, unitPrice: 1000, discountPct: 10 },
       { quantity: 5, unitPrice: 200, discountPct: 0 },
     ]);
-    expect(totals.subtotal).toBe(3000);
-    expect(totals.discount).toBe(200);
-    expect(totals.total).toBe(2800);
+    expect(totals.subtotalCents).toBe(3000_00);
+    expect(totals.discountTotalCents).toBe(200_00);
+    expect(totals.totalCents).toBe(2800_00);
   });
 });
 

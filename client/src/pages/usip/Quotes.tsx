@@ -1,5 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { ConfirmButton, Field, fmt$, fmtDate, FormDialog, Section, SelectField, StatusPill, TextareaField } from "@/components/usip/Common";
+import { computeQuoteTotals, formatMoney, formatMoneyCents } from "@shared/quoteTotals";
 import { EmptyState, PageHeader, QueryError, Shell, TableSkeleton } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import { ExternalLink, FileText, Plus, Send, Trash2, Receipt, Sparkles, ChevronDown, ChevronUp } from "lucide-react";
@@ -74,9 +75,10 @@ export default function Quotes() {
   const setStatus = trpc.quotes.setStatus.useMutation({ onSuccess: () => utils.quotes.list.invalidate(), onError: (e) => toast.error(e.message) });
   const del = trpc.quotes.delete.useMutation({ onSuccess: () => { utils.quotes.list.invalidate(); toast.success("Quote deleted"); }, onError: (e) => toast.error(e.message) });
 
-  const subtotal = lis.reduce((s, li) => s + li.quantity * li.unitPrice, 0);
-  const discount = lis.reduce((s, li) => s + li.quantity * li.unitPrice * (li.discountPct / 100), 0);
-  const total = subtotal - discount;
+  // The same function the server uses to WRITE these columns (@shared/quoteTotals).
+  // This preview used to reimplement the formula in floats, so the figure the
+  // user approved was computed by different code than the figure stored.
+  const totals = computeQuoteTotals(lis);
 
   const updLi = (i: number, p: Partial<LineItem>) => setLis((arr) => arr.map((x, k) => (k === i ? { ...x, ...p } : x)));
 
@@ -101,7 +103,7 @@ export default function Quotes() {
                         <div className="font-medium truncate" title={o?.name ?? "—"}>{o?.name ?? "—"}</div>
                       </div>
                       <StatusPill tone={q.status === "accepted" ? "success" : q.status === "sent" ? "info" : q.status === "rejected" || q.status === "expired" ? "danger" : "muted"}>{q.status}</StatusPill>
-                      <div className="ml-auto font-mono tabular-nums whitespace-nowrap shrink-0">{fmt$(Number(q.total))}</div>
+                      <div className="ml-auto font-mono tabular-nums whitespace-nowrap shrink-0">{formatMoney(q.total)}</div>
                       <div className="text-xs text-muted-foreground whitespace-nowrap shrink-0">{fmtDate(q.expiresAt)}</div>
                       <div className="flex gap-1">
                         {!q.pdfUrl && <Button size="sm" variant="ghost" onClick={() => genPdf.mutate({ id: q.id })}>Generate</Button>}
@@ -113,7 +115,16 @@ export default function Quotes() {
                             <Button size="sm" variant="ghost" onClick={() => setStatus.mutate({ id: q.id, status: "rejected" })}>Reject</Button>
                           </>
                         )}
-                        <Button size="sm" variant="ghost" onClick={() => del.mutate({ id: q.id })}><Trash2 className="size-3.5" /></Button>
+                        {/* Confirmed: this deletes the quote AND every line item.
+                            It was a bare one-click delete sitting beside a Send
+                            button that DOES confirm — and Send is the reversible
+                            one of the two. */}
+                        <ConfirmButton size="sm" variant="ghost" ariaLabel="Delete quote"
+                          title={`Delete quote ${q.quoteNumber}?`}
+                          description="The quote and all of its line items are permanently deleted. Any PDF already sent to the customer stays valid."
+                          confirmLabel="Delete" onConfirm={() => del.mutate({ id: q.id })}>
+                          <Trash2 className="size-3.5" />
+                        </ConfirmButton>
                       </div>
                     </div>
                     {/* AI pricing recommendation */}
@@ -128,10 +139,22 @@ export default function Quotes() {
 
       <FormDialog open={openNew} onOpenChange={setOpenNew} title="New quote" submitLabel="Create"
         isPending={create.isPending}
-        onSubmit={() => {
+        onSubmit={(form) => {
           if (!oppId) { toast.error("Pick an opportunity"); return; }
           if (lis.some((li) => !li.name.trim())) { toast.error("Each line item needs a name"); return; }
-          create.mutate({ opportunityId: Number(oppId), expiresInDays: 30, lineItems: lis });
+          // FormDialog hands its FormData to onSubmit. This callback took no
+          // argument, so the Notes and Terms the user typed were DISCARDED —
+          // silently, on the terms of a document a customer signs. The column,
+          // the input and the PDF section all existed; only this line was missing.
+          const notes = String(form.get("notes") ?? "").trim();
+          const terms = String(form.get("terms") ?? "").trim();
+          create.mutate({
+            opportunityId: Number(oppId),
+            expiresInDays: 30,
+            lineItems: lis,
+            notes: notes || undefined,
+            terms: terms || undefined,
+          });
         }}>
         <div className="space-y-1">
           <label className="text-sm font-medium">Opportunity</label>
@@ -165,9 +188,11 @@ export default function Quotes() {
           </ul>
           <Button type="button" size="sm" variant="outline" className="mt-2" onClick={() => setLis((arr) => [...arr, { name: "", quantity: 1, unitPrice: 0, discountPct: 0 }])}>+ Line item</Button>
           <div className="mt-3 text-sm font-mono tabular-nums flex justify-end flex-wrap gap-4">
-            <div>Subtotal: {fmt$(subtotal)}</div>
-            <div>Discount: −{fmt$(discount)}</div>
-            <div className="font-bold">Total: {fmt$(total)}</div>
+            {/* formatMoneyCents, not fmt$: money on a quote always shows cents.
+                fmt$ is toLocaleString(), which renders 1234.5 as "$1,234.5". */}
+            <div>Subtotal: {formatMoneyCents(totals.subtotalCents)}</div>
+            <div>Discount: −{formatMoneyCents(totals.discountTotalCents)}</div>
+            <div className="font-bold">Total: {formatMoneyCents(totals.totalCents)}</div>
           </div>
         </div>
         <TextareaField name="notes" label="Notes" rows={2} />
