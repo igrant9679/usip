@@ -1275,7 +1275,10 @@ export async function processBounceEvent(
       .where(
         and(
           eq(emailSuppressions.workspaceId, workspaceId),
-          eq(emailSuppressions.email, event.email),
+          // Must use the SAME normalisation as the insert below, or the check
+          // looks for a form that is never stored: it would miss every time and
+          // insert a duplicate row on every repeat bounce for that address.
+          eq(emailSuppressions.email, normalizeSuppressionEmail(event.email)),
           eq(emailSuppressions.reason, suppressionReason)
         )
       )

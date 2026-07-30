@@ -45,6 +45,12 @@ vi.mock("../drizzle/schema", () => ({
   // enrollments). Absent before because no test exercised that path.
   sequenceAbVariants: { sequenceId: "sequenceId", stepIndex: "stepIndex", id: "id" },
   prospects: { id: "id", email: "email" },
+  // Needed by the pre-draft suppression check (unsubscribe.isSuppressed).
+  // Omitting a table the engine touches does not fail loudly: the reference is
+  // `undefined`, dereferencing a column throws, the engine's own try/catch
+  // swallows it, and the enrollment is silently skipped — which surfaced as an
+  // unrelated assertion about advancing, not as an error.
+  emailSuppressions: { id: "id", workspaceId: "workspaceId", email: "email", reason: "reason" },
 }));
 
 vi.mock("drizzle-orm", () => ({
@@ -184,6 +190,10 @@ describe("Sequence Execution Engine", () => {
       mockSelect.mockReturnValueOnce(makeSelectChain([sequence]));     // sequence
       mockSelect.mockReturnValueOnce(makeSelectChain([{ email: "a@b.com" }])); // contact
       mockSelect.mockReturnValueOnce(makeSelectChain([]));             // ab variants
+      // The engine now checks the suppression list before creating a draft
+      // (unsubscribe.isSuppressed shares this mocked db). Empty = not suppressed,
+      // so this test still exercises the empty-BODY path it was written for.
+      mockSelect.mockReturnValueOnce(makeSelectChain([]));             // suppression lookup
 
       const insertValues = vi.fn().mockResolvedValue(undefined);
       mockInsert.mockReturnValue({ values: insertValues });

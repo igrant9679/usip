@@ -31,6 +31,7 @@ import {
 import { sendLinkedInInvitation, sendMessage } from "./lib/unipile";
 import { getDb } from "./db";
 import { invokeLLM } from "./_core/llm";
+import { isSuppressed } from "./unsubscribe";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -483,7 +484,37 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
             );
           }
 
-          if (hasContent) {
+          /**
+           * Second reason to skip the draft: the recipient is suppressed.
+           *
+           * Nothing in this engine checked, and a bounce does not touch
+           * enrollments — handleBounceEvent marks the draft, writes a
+           * suppression row, and stops. So a hard-bounced or unsubscribed
+           * recipient stayed actively enrolled and the engine minted a fresh
+           * `pending_review` draft for every remaining step, once per tick.
+           *
+           * No mail escaped: every send path DOES check suppression. What went
+           * wrong was quieter — the review queue filled with unsendable drafts,
+           * and `sequenceAbVariants.sentCount` is bumped at DRAFT CREATION, so
+           * variant denominators counted sends that could never happen and
+           * understated the winning variant.
+           *
+           * Skips the STEP and advances, exactly like the empty-body guard above,
+           * rather than exiting the whole enrollment. An email opt-out must not
+           * cancel this sequence's `task` steps (a rep's phone call) or its
+           * LinkedIn steps — those are different channels and the person did not
+           * opt out of them. areEngine checks suppression at both enrolment and
+           * dispatch; this brings the same discipline here without overreaching.
+           */
+          const suppressed = await isSuppressed(enrollment.workspaceId, toEmail);
+          if (suppressed) {
+            console.log(
+              `[SequenceEngine] sequence ${enrollment.sequenceId} step ${stepIndex}: ` +
+              `${toEmail} is suppressed — draft SKIPPED for enrollment ${enrollment.id}.`,
+            );
+          }
+
+          if (hasContent && !suppressed) {
           // Create email draft for review.
           // stepIndex captures which sequence step this draft was generated
           // for, since enrollment.currentStep will advance before the draft

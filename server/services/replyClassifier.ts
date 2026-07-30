@@ -231,7 +231,10 @@ export async function applyReplyAction(workspaceId: number, reply: any, byUser: 
         const [existing] = await db.select({ id: emailSuppressions.id }).from(emailSuppressions)
           .where(and(
             eq(emailSuppressions.workspaceId, workspaceId),
-            eq(emailSuppressions.email, reply.fromEmail),
+            // Same normalisation as the insert below — a check against the raw
+            // From header looks for a form that is never stored, so it misses
+            // and re-inserts on every subsequent opt-out reply.
+            eq(emailSuppressions.email, normalizeSuppressionEmail(reply.fromEmail)),
             eq(emailSuppressions.reason, "unsubscribe"),
           ));
         if (!existing) {
