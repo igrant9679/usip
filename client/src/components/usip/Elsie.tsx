@@ -27,6 +27,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
+import { useAuth } from "@/_core/hooks/useAuth";
 import { useTourEngine, type Tour } from "./TourEngine";
 import { Compass, X } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -234,7 +235,19 @@ export function ElsieController() {
   // A fresh page is a fresh offer; the same page is not.
   useEffect(() => { setDismissed(false); }, [pageKey]);
 
-  const canAsk = enabled && !!pageKey && !activeTour && !dismissed && !offered.current.has(pageKey);
+  /**
+   * Elsie renders OUTSIDE AuthGate, so it also mounts on the sign-in page —
+   * where `pageKeyForRoute("/")` returns "dashboard" and this used to fire
+   * `tours.getRecommended`, a workspaceProcedure. Logged out that throws
+   * UNAUTHED_ERR_MSG, which the query-cache subscriber in main.tsx turned into
+   * a navigation to "/" — the page already showing. Hence the sign-in flicker.
+   *
+   * main.tsx no longer reloads the page it is on, so the loop cannot recur;
+   * this stops the pointless 401 on every signed-out page load as well. There
+   * are no tours to recommend to someone with no session.
+   */
+  const { user } = useAuth();
+  const canAsk = !!user && enabled && !!pageKey && !activeTour && !dismissed && !offered.current.has(pageKey);
 
   const rec = trpc.tours.getRecommended.useQuery(
     { pageKey: pageKey ?? undefined },

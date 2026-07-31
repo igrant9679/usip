@@ -6,6 +6,7 @@ import { createRoot } from "react-dom/client";
 import superjson from "superjson";
 import App from "./App";
 import { getLoginUrl } from "./const";
+import { shouldRedirectToLogin } from "./lib/authRedirect";
 import "./index.css";
 
 const queryClient = new QueryClient({
@@ -16,7 +17,14 @@ const redirectToLoginIfUnauthorized = (error: unknown) => {
   if (!(error instanceof TRPCClientError)) return;
   if (typeof window === "undefined") return;
   if (error.message !== UNAUTHED_ERR_MSG) return;
-  window.location.href = getLoginUrl();
+  const loginUrl = getLoginUrl();
+  // Never navigate to the page we are already on. getLoginUrl() is "/", which
+  // IS the sign-in page — so without this, a protected query failing on the
+  // sign-in page reloaded that page, which re-ran the query, which reloaded
+  // again: the screen flickering several times a second. useAuth has always
+  // had this guard; this half of the same job never did.
+  if (!shouldRedirectToLogin(window.location.pathname, loginUrl)) return;
+  window.location.href = loginUrl;
 };
 
 queryClient.getQueryCache().subscribe((event) => {
