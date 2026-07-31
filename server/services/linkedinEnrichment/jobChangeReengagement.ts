@@ -18,13 +18,14 @@
  * prospect never accrues two open re-engagement tasks, and respects a daily cap.
  */
 import { and, desc, eq, gte, inArray, like, sql } from "drizzle-orm";
+import { activeTaskStatuses } from "@shared/taskStatus";
 import { getDb } from "../../db";
 import { activities, prospects, prospectLinkedinFieldChanges, tasks, workspaceSettings } from "../../../drizzle/schema";
 import type { DetectedChange } from "./snapshot";
 
 /** All job-change tasks share this title prefix — used as the dedupe key. */
 const REENGAGE_PREFIX = "Re-engage:";
-const ACTIVE_STATUSES = ["open", "draft", "in_progress", "snoozed"];
+
 
 export interface JobChangeReengageResult {
   created: boolean;
@@ -145,7 +146,7 @@ export async function maybeCreateJobChangeReengagement(
         eq(tasks.relatedType, "prospect"),
         eq(tasks.relatedId, prospectId),
         like(tasks.title, `${REENGAGE_PREFIX}%`),
-        inArray(tasks.status, ACTIVE_STATUSES),
+        inArray(tasks.status, activeTaskStatuses()),
       ))
       .limit(1);
     if (existing.length > 0) return { created: false, reason: "already_active" };

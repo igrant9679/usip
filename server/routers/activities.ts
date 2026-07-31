@@ -1,4 +1,5 @@
 import { TRPCError } from "@trpc/server";
+import { TASK_STATUSES } from "@shared/taskStatus";
 import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { activities, attachments, notifications, tasks, workspaceSettings } from "../../drizzle/schema";
@@ -12,7 +13,7 @@ import { endOfZonedDay } from "@shared/availability";
 import { getWorkspaceTimezone } from "../services/workspaceTimezone";
 
 const TASK_TYPES = ["call", "email", "meeting", "linkedin", "todo", "follow_up", "social_touch", "manual_email", "meeting_prep", "crm_update", "generic_action"] as const;
-const TASK_STATUSES = ["open", "done", "cancelled", "in_progress", "snoozed", "draft"] as const;
+
 
 /* ─── Tasks ──────────────────────────────────────────────────────────── */
 

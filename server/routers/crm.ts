@@ -1,4 +1,5 @@
 import { TRPCError } from "@trpc/server";
+import { activeTaskStatuses } from "@shared/taskStatus";
 import { and, desc, eq, inArray, isNull, isNotNull, like, lt, lte, sql } from "drizzle-orm";
 import { z } from "zod";
 import { invokeLLM } from "../_core/llm";
@@ -1522,7 +1523,7 @@ export const opportunitiesRouter = router({
           eq(tasks.relatedType, "opportunity"),
           eq(tasks.relatedId, input.id),
           like(tasks.title, "Win-back:%"),
-          inArray(tasks.status, ["open", "draft", "in_progress", "snoozed"]),
+          inArray(tasks.status, activeTaskStatuses()),
         )).limit(1);
         if (existing.length === 0) {
           await db.insert(tasks).values({

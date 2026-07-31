@@ -9,6 +9,7 @@
  * workspace_settings and governs autonomous proposing + sending.
  */
 import { TRPCError } from "@trpc/server";
+import { activeTaskStatuses } from "@shared/taskStatus";
 import { and, desc, eq, inArray, like } from "drizzle-orm";
 import { z } from "zod";
 import { meetings, prospects, tasks, workspaceSettings } from "../../drizzle/schema";
@@ -49,7 +50,7 @@ async function createMeetingReboundTask(
         eq(tasks.relatedType, m.relatedType),
         eq(tasks.relatedId, m.relatedId),
         like(tasks.title, `${prefix}:%`),
-        inArray(tasks.status, ["open", "draft", "in_progress", "snoozed"]),
+        inArray(tasks.status, activeTaskStatuses()),
       )).limit(1);
       if (existing.length > 0) return null;
     }

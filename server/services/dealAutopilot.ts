@@ -15,6 +15,7 @@
  * Best-effort: one deal failing never aborts the batch.
  */
 import { and, asc, eq, gte, inArray, lt, notInArray, sql } from "drizzle-orm";
+import { activeTaskStatuses } from "@shared/taskStatus";
 import { opportunities, tasks, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { invokeLLM } from "../_core/llm";
@@ -60,7 +61,7 @@ export async function runDealAutopilotForWorkspace(
         eq(tasks.relatedType, "opportunity"),
         inArray(tasks.relatedId, ids),
         eq(tasks.source, "ai"),
-        inArray(tasks.status, ["open", "in_progress", "draft"]),
+        inArray(tasks.status, activeTaskStatuses()),
       ));
     busy = new Set(existing.map((t: any) => t.relatedId));
   }

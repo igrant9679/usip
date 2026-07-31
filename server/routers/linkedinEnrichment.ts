@@ -12,6 +12,7 @@
  *   daily force-run → admin+.
  */
 import { z } from "zod";
+import { activeTaskStatuses } from "@shared/taskStatus";
 import { TRPCError } from "@trpc/server";
 import { router } from "../_core/trpc";
 import { workspaceProcedure, adminWsProcedure, isAdminRole, requireMinRole } from "../_core/workspace";
@@ -600,7 +601,7 @@ export const linkedinEnrichmentRouter = router({
               eq(tasks.relatedType, "prospect"),
               inArray(tasks.relatedId, pids),
               like(tasks.title, "Re-engage:%"),
-              inArray(tasks.status, ["open", "draft", "in_progress", "snoozed"]),
+              inArray(tasks.status, activeTaskStatuses()),
             ))
         : [];
       const reengaged = new Set(active.map((t) => t.relatedId));

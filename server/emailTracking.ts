@@ -13,7 +13,8 @@
  */
 
 import type { Express, Request, Response } from "express";
-import { eq, sql } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
+import { activeTaskStatuses } from "@shared/taskStatus";
 import { getDb } from "./db";
 import { appUrl } from "./appUrl";
 import { emailDrafts, emailTrackingEvents } from "../drizzle/schema";
@@ -517,7 +518,12 @@ export function registerEmailTrackingRoutes(app: Express) {
           if (!wsRows[0]) continue;
           const ownerUserId = wsRows[0].ownerUserId;
 
-          // Check if a follow-up task already exists for this proposal
+          // Check if a follow-up task already exists for this proposal.
+          // Any LIVE status counts, not just "open": this runs daily, so with
+          // `status = open` a rep who moved the task to in_progress — or
+          // snoozed it — got a fresh duplicate follow-up every single day
+          // while they were working on it. A dedupe must count every task
+          // that still exists as work.
           const existingTask = await db
             .select({ id: tasks.id })
             .from(tasks)
@@ -527,7 +533,7 @@ export function registerEmailTrackingRoutes(app: Express) {
                 eq(tasks.relatedType, "proposal"),
                 eq(tasks.relatedId, proposal.id),
                 eq(tasks.type, "follow_up"),
-                eq(tasks.status, "open"),
+                inArray(tasks.status, activeTaskStatuses()),
               ),
             )
             .limit(1);

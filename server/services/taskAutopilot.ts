@@ -19,6 +19,7 @@
  * candidate never aborts the batch, and failures never surface to the user.
  */
 import { and, desc, eq, gte, inArray, isNull, ne, or, sql } from "drizzle-orm";
+import { activeTaskStatuses } from "@shared/taskStatus";
 import { prospects, tasks, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { invokeLLM } from "../_core/llm";
@@ -39,7 +40,7 @@ const EMPTY: AutopilotResult = { created: 0, drafts: 0, live: 0, skipped: 0, con
 const ALLOWED_TYPES = ["call", "manual_email", "social_touch", "follow_up", "meeting_prep", "generic_action"] as const;
 const ALLOWED_PRIORITIES = ["low", "normal", "high", "urgent"] as const;
 // statuses that mean "this prospect already has a live action" — don't pile on.
-const ACTIVE_STATUSES = ["open", "draft", "in_progress", "snoozed"];
+
 
 function clampDays(v: unknown): number {
   const n = Math.round(Number(v));
@@ -85,7 +86,7 @@ export async function generateTasksForWorkspace(
       eq(tasks.workspaceId, workspaceId),
       eq(tasks.relatedType, "prospect"),
       inArray(tasks.relatedId, ids),
-      inArray(tasks.status, ACTIVE_STATUSES),
+      inArray(tasks.status, activeTaskStatuses()),
     ));
   const busy = new Set(existing.map((t) => t.relatedId));
 
