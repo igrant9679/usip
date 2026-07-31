@@ -3033,6 +3033,25 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0142: forgot-password reset tokens ────────────────────────────────────
+  // There was no self-service password reset at all: a user whose account had
+  // a password they had forgotten could only be recovered by ANOTHER admin
+  // sending a password-setup email, or by profile.changeMyPassword while
+  // already signed in. A sole owner locking themselves out had no route back.
+  //
+  // The column holds the SHA-256 HASH of the token, never the token — a reset
+  // token is a full account takeover, so a database dump must not hand one out.
+  {
+    name: "0142_password_reset_tokens.sql",
+    statements: [
+      "ALTER TABLE `users` ADD COLUMN `password_reset_token_hash` varchar(64) NULL",
+      "ALTER TABLE `users` ADD COLUMN `password_reset_expires_at` timestamp NULL",
+      // The reset lookup is BY TOKEN HASH — without this it is a full scan of
+      // the users table on a public, unauthenticated endpoint.
+      "CREATE INDEX `ix_users_pw_reset` ON `users` (`password_reset_token_hash`)",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

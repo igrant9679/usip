@@ -24,6 +24,14 @@ import { users, loginHistory, workspaceMembers, workspaceInviteLinks } from "../
 import { sdk } from "./_core/sdk";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
+import { escapeHtml } from "@shared/escapeHtml";
+import {
+  hashResetToken,
+  isResetTokenLive,
+  isStrongEnoughPassword,
+  newResetToken,
+  resetTokenExpiry,
+} from "./services/passwordReset";
 
 const ipKey = (req: Request) =>
   ((req.headers["x-forwarded-for"] as string) ?? req.socket?.remoteAddress ?? "unknown")
@@ -67,7 +75,153 @@ function isStrongEnough(password: string): boolean {
   return typeof password === "string" && password.length >= 8;
 }
 
+/**
+ * Reset requests send EMAIL, so the ceiling is tighter than login's. Ten
+ * password guesses a quarter-hour is a person who forgot; ten reset mails is a
+ * person being used as a mail relay against someone else's inbox.
+ */
+const forgotPasswordLimiter = rateLimit({
+  windowMs: 15 * 60 * 1_000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: ipKey,
+  handler: (_req: Request, res: Response) => {
+    res.status(429).json({
+      error: "Too many reset requests from this IP address. Please wait 15 minutes and try again.",
+    });
+  },
+  skip: () => process.env.NODE_ENV === "test",
+});
+
 export function registerPasswordAuthRoutes(app: Express) {
+  /**
+   * POST /api/auth/forgot-password  { email }
+   *
+   * ⚠️ ALWAYS answers `{ ok: true }` — for an unknown address, for an address
+   * with no workspace, and when the send itself fails. Login already refuses to
+   * reveal which emails have accounts (there is a constant-time dummy compare
+   * guarding it); a reset form replying "no such account" would give the same
+   * fact away through the back door.
+   */
+  app.post("/api/auth/forgot-password", forgotPasswordLimiter, async (req: Request, res: Response) => {
+    const { email } = req.body ?? {};
+    // The generic answer, returned on EVERY path below.
+    const ok = () => res.json({ ok: true });
+
+    if (typeof email !== "string" || !isValidEmail(email.trim())) {
+      res.status(400).json({ error: "Please enter a valid email address." });
+      return;
+    }
+    const normalizedEmail = email.trim().toLowerCase();
+
+    try {
+      const db = await getDb();
+      if (!db) return ok();
+
+      const [user] = await db
+        .select({ id: users.id, email: users.email, name: users.name })
+        .from(users)
+        .where(eq(users.email, normalizedEmail));
+      if (!user?.email) return ok();
+
+      // sendSystemEmail needs a workspace to pick the system sender from. A
+      // user with no membership has nothing to send through — still `ok`.
+      const [member] = await db
+        .select({ workspaceId: workspaceMembers.workspaceId })
+        .from(workspaceMembers)
+        .where(eq(workspaceMembers.userId, user.id))
+        .limit(1);
+      if (!member) return ok();
+
+      const token = newResetToken();
+      await db
+        .update(users)
+        .set({
+          passwordResetTokenHash: hashResetToken(token),
+          passwordResetExpiresAt: resetTokenExpiry(Date.now()),
+        })
+        .where(eq(users.id, user.id));
+
+      const { sendSystemEmail } = await import("./emailDelivery");
+      const { appUrl } = await import("./appUrl");
+      const link = appUrl(`/reset-password?token=${encodeURIComponent(token)}`);
+      const who = user.name?.trim() || user.email.split("@")[0];
+      await sendSystemEmail(member.workspaceId, {
+        to: user.email,
+        subject: "Reset your Velocity password",
+        html: `
+<div style="font-family:system-ui,Segoe UI,Arial,sans-serif;max-width:520px;margin:0 auto;padding:24px;color:#0f172a">
+  <h2 style="margin:0 0 8px;font-size:18px">Reset your password</h2>
+  <p style="margin:0 0 16px;color:#475569;font-size:14px">Hi ${escapeHtml(who)}, we received a request to reset your password.</p>
+  <p style="margin:24px 0">
+    <a href="${link}" style="display:inline-block;background:#0f766e;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px">Choose a new password →</a>
+  </p>
+  <p style="margin:0 0 8px;color:#64748b;font-size:12px">This link works once and expires in 1 hour.</p>
+  <p style="margin:0;color:#64748b;font-size:12px"><strong>If you didn't ask for this, ignore this email</strong> — your password has not changed.</p>
+</div>`,
+      });
+      return ok();
+    } catch (e) {
+      // A failure here must not become an oracle either.
+      console.error("[ForgotPassword] failed:", e instanceof Error ? e.message : e);
+      return ok();
+    }
+  });
+
+  /**
+   * POST /api/auth/reset-password  { token, password }
+   *
+   * Sets the password and CLEARS the token (single use). Deliberately does NOT
+   * issue a session: the user signs in normally afterwards, which keeps the
+   * MFA step in force. A reset that logged you straight in would be a way past
+   * an authenticator app.
+   */
+  app.post("/api/auth/reset-password", forgotPasswordLimiter, async (req: Request, res: Response) => {
+    const { token, password } = req.body ?? {};
+    if (typeof token !== "string" || token.length < 32) {
+      res.status(400).json({ error: "That reset link is invalid or has expired." });
+      return;
+    }
+    if (!isStrongEnoughPassword(password)) {
+      res.status(400).json({ error: "Password must be at least 8 characters." });
+      return;
+    }
+
+    const db = await getDb();
+    if (!db) {
+      res.status(500).json({ error: "Database unavailable" });
+      return;
+    }
+
+    const [user] = await db
+      .select({
+        id: users.id,
+        passwordResetExpiresAt: users.passwordResetExpiresAt,
+      })
+      .from(users)
+      .where(eq(users.passwordResetTokenHash, hashResetToken(token)));
+
+    if (!user || !isResetTokenLive(user.passwordResetExpiresAt, Date.now())) {
+      res.status(400).json({ error: "That reset link is invalid or has expired." });
+      return;
+    }
+
+    const passwordHash = await bcrypt.hash(password, 12);
+    await db
+      .update(users)
+      .set({
+        passwordHash,
+        loginMethod: "password",
+        // Single use — clearing these is what spends the token.
+        passwordResetTokenHash: null,
+        passwordResetExpiresAt: null,
+      })
+      .where(eq(users.id, user.id));
+
+    res.json({ ok: true });
+  });
+
   // ── POST /api/auth/password-login ────────────────────────────────────────
   app.post(
     "/api/auth/password-login",

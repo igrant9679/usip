@@ -45,6 +45,14 @@ export const users = mysqlTable("users", {
    *  with NULL enabled-at = enrollment started but not yet confirmed. */
   mfaTotpSecret: varchar("mfa_totp_secret", { length: 64 }),
   mfaTotpEnabledAt: timestamp("mfa_totp_enabled_at"),
+  /**
+   * Forgot-password (migration 0142). The SHA-256 HASH of the reset token, not
+   * the token — a reset token is a full account takeover, so a database dump
+   * must not hand one over. Deliberately unlike `workspaceMembers.inviteToken`,
+   * which is stored raw: an invite only grants what the inviter chose to give.
+   */
+  passwordResetTokenHash: varchar("password_reset_token_hash", { length: 64 }),
+  passwordResetExpiresAt: timestamp("password_reset_expires_at"),
 });
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;

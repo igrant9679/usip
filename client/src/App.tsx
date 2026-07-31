@@ -68,6 +68,7 @@ import FormsV2 from "@/pages/usip/FormsV2";
 import PublicForm from "@/pages/PublicForm";
 import BookingPage from "@/pages/BookingPage";
 import LandingPage from "@/pages/LandingPage";
+import ResetPassword from "@/pages/ResetPassword";
 import LandingPages from "@/pages/usip/LandingPages";
 import ChatPage from "@/pages/ChatPage";
 import ChatAgents from "@/pages/usip/ChatAgents";
@@ -129,7 +130,9 @@ function Landing() {
   const params = new URLSearchParams(window.location.search);
   const returnPath = params.get("returnPath") ?? "/";
 
-  const [mode, setMode] = useState<"signin" | "signup">("signin");
+  const [mode, setMode] = useState<"signin" | "signup" | "forgot">("signin");
+  /** Forgot-password confirmation. Deliberately shown for ANY address — see below. */
+  const [resetSent, setResetSent] = useState(false);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -145,6 +148,34 @@ function Landing() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+
+    // ── Forgot password ────────────────────────────────────────────────────
+    // The server answers `{ ok: true }` for every address, known or not, so
+    // this confirmation must be shown unconditionally too. Rendering "no such
+    // account" here would leak exactly what the login handler's constant-time
+    // compare exists to hide.
+    if (mode === "forgot") {
+      if (!email.trim()) {
+        setError("Please enter your email address.");
+        return;
+      }
+      setLoading(true);
+      try {
+        await fetch("/api/auth/forgot-password", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Accept: "application/json" },
+          body: JSON.stringify({ email: email.trim().toLowerCase() }),
+          credentials: "include",
+        });
+        setResetSent(true);
+      } catch {
+        setError("Network error. Please check your connection and try again.");
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
+
     if (!email.trim() || !password) {
       setError("Please enter your email and password.");
       return;
@@ -237,6 +268,7 @@ function Landing() {
               disabled={loading}
             />
           </div>
+          {mode !== "forgot" && (
           <div className="space-y-2">
             <Label htmlFor="login-password" className="text-white/80">Password</Label>
             <div className="relative">
@@ -259,7 +291,29 @@ function Landing() {
                 {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
               </button>
             </div>
+            {mode === "signin" && !mfaStep && (
+              <div className="text-right">
+                <button
+                  type="button"
+                  className="text-xs text-white/50 hover:text-[#14B89A] hover:underline"
+                  onClick={() => { setMode("forgot"); setError(null); setResetSent(false); setPassword(""); }}
+                >
+                  Forgot password?
+                </button>
+              </div>
+            )}
           </div>
+          )}
+          {mode === "forgot" && !resetSent && (
+            <p className="text-xs text-white/50">
+              Enter your email and we'll send a link to choose a new password. The link works once and expires in an hour.
+            </p>
+          )}
+          {mode === "forgot" && resetSent && (
+            <p className="text-sm text-white/80 bg-[#14B89A]/10 border border-[#14B89A]/30 rounded-md px-3 py-2">
+              If an account exists for <strong>{email.trim().toLowerCase()}</strong>, a reset link is on its way. Check your inbox and spam folder.
+            </p>
+          )}
           {mode === "signin" && mfaStep && (
             <div className="space-y-2">
               <Label htmlFor="login-totp" className="text-white/80">Authentication code</Label>
@@ -282,21 +336,34 @@ function Landing() {
               {error}
             </p>
           )}
+          {!(mode === "forgot" && resetSent) && (
           <Button
             type="submit"
             className="w-full bg-[#14B89A] hover:bg-[#0FA086] text-black font-semibold"
             disabled={loading}
           >
             {loading ? (
-              <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> {mode === "signup" ? "Creating account…" : mfaStep ? "Verifying…" : "Signing in…"}</>
+              <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> {mode === "signup" ? "Creating account…" : mode === "forgot" ? "Sending…" : mfaStep ? "Verifying…" : "Signing in…"}</>
             ) : (
-              <><LogIn className="mr-2 h-4 w-4" /> {mode === "signup" ? "Create account" : mfaStep ? "Verify code" : "Sign in"}</>
+              <><LogIn className="mr-2 h-4 w-4" /> {mode === "signup" ? "Create account" : mode === "forgot" ? "Send reset link" : mfaStep ? "Verify code" : "Sign in"}</>
             )}
           </Button>
+          )}
         </form>
 
         <p className="text-sm text-white/60 text-center">
-          {mode === "signin" ? (
+          {mode === "forgot" ? (
+            <>
+              Remembered it?{" "}
+              <button
+                type="button"
+                className="text-[#14B89A] hover:underline font-medium"
+                onClick={() => { setMode("signin"); setError(null); setResetSent(false); }}
+              >
+                Back to sign in
+              </button>
+            </>
+          ) : mode === "signin" ? (
             <>
               Don't have an account?{" "}
               <button
@@ -463,6 +530,9 @@ function Router() {
       <Route path="/f/:publicId"><PublicForm /></Route>
       <Route path="/b/:slug"><BookingPage /></Route>
       <Route path="/l/:slug"><LandingPage /></Route>
+      {/* PUBLIC by necessity — the visitor cannot sign in, that is why they
+          are here. No AuthGate. */}
+      <Route path="/reset-password"><ResetPassword /></Route>
       <Route path="/c/:slug"><ChatPage /></Route>
       <Route path="/v2/landing-pages"><AuthGate><LandingPages /></AuthGate></Route>
       <Route path="/v2/chat"><AuthGate><ChatAgents /></AuthGate></Route>
