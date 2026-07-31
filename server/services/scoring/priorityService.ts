@@ -5,17 +5,30 @@
  *            + 0.10 engagement + 0.05 dataQuality + 0.05 sequenceReadiness
  *
  * personFit / companyFit read the latest persisted result of the workspace's
- * PRIMARY person / company fit models. intent, engagement, data-quality and
+ * PRIMARY person / company fit models. engagement, data-quality and
  * sequence-readiness are built-in calculators over real signals (activities,
  * enrollments, suppressions, field completeness). Weights are renormalized
  * over the components that actually apply to the object (a company has no
  * person-fit or sequence-readiness), so the blend always stays on 0..100.
+ *
+ * INTENT has two sources, and is NULL — renormalized away, not counted as a
+ * zero — when neither measured anything:
+ *   • tracked website visits (`website_visits.intent`, classified at write time
+ *     by @shared/pageIntent). Contacts only; visits carry no prospect id.
+ *   • the row's own signal JSON (intentTopics, hiringSignals, …).
+ *
+ * ⚠️ The JSON half has NO WRITER anywhere in this repo — every occurrence of
+ * those keys is a read — so before website visits were wired in, intent was 0
+ * for every row in the system while still consuming its full 0.15 weight. That
+ * is a flat ~15% off every priority score: harmless to the ORDER, but it pushed
+ * records down through the absolute hot/warm/cold thresholds.
  */
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { getDb } from "../../db";
 import {
   scoreModels, scoreResults, priorityScoreResults,
   prospects, contacts, accounts, activities, enrollments, emailSuppressions,
+  websiteVisits,
 } from "../../../drizzle/schema";
 import {
   PRIORITY_WEIGHTS, PRIORITY_THRESHOLDS, ratingFor, clamp, round2,
@@ -70,10 +83,40 @@ async function engagementScore(ws: number, objectId: number): Promise<number> {
   return round2(clamp(score, 0, 100));
 }
 
-/* ─── intent (best-effort from firmographic/signal JSON) ─── */
-function intentScoreFromRow(row: Record<string, unknown>): number {
+/* ─── intent ─── */
+
+/** The signal keys the JSON calculator understands. */
+const INTENT_JSON_KEYS = [
+  "intentTopics",
+  "hiringSignals",
+  "websiteKeywords",
+  "recentFunding",
+  "recentExecChange",
+  "recentNews",
+] as const;
+
+/**
+ * Intent from the row's own signal JSON.
+ *
+ * 🔴 Returns NULL when the row carries no intent data at all, where it used to
+ * return 0. `blend()` skips null components and renormalises — that is how a
+ * company already reports "no person-fit" — and this function was the one place
+ * that answered "not measured" with a hard zero.
+ *
+ * It mattered because NOTHING IN THE REPO WRITES THESE KEYS. Every occurrence
+ * of intentTopics / hiringSignals / websiteKeywords / recentFunding /
+ * recentExecChange / recentNews is a read. So intent was 0 for every row in the
+ * system, and being counted at its full 0.15 weight it took a flat ~15% off
+ * every priority score — which does not change the ORDER but does push records
+ * down through the absolute hot/warm/cold thresholds.
+ *
+ * An empty array IS a measurement (`intentTopics: []` legitimately scores 0);
+ * an absent key is not.
+ */
+function intentScoreFromRow(row: Record<string, unknown>): number | null {
   const cf = (row.customFields ?? row.enrichmentData) as Record<string, unknown> | null;
-  if (!cf || typeof cf !== "object") return 0;
+  if (!cf || typeof cf !== "object") return null;
+  if (!INTENT_JSON_KEYS.some((k) => k in cf)) return null;
   let score = 0;
   const arr = (k: string) => (Array.isArray((cf as Record<string, unknown>)[k]) ? ((cf as Record<string, unknown>)[k] as unknown[]) : []);
   const topics = arr("intentTopics");
@@ -84,6 +127,67 @@ function intentScoreFromRow(row: Record<string, unknown>): number {
   if (cf.recentExecChange) score += 8;
   if (cf.recentNews) score += 10;
   return round2(clamp(score, 0, 100));
+}
+
+/**
+ * Intent from tracked website visits — a signal this app ALREADY COLLECTS.
+ *
+ * `website_visits.intent` is written by the public tracker and classified at
+ * write time by `@shared/pageIntent` (a `/pricing` hit is high, `/careers` is
+ * not a buying signal). Until now its only reader was the /v2/website-visitors
+ * list: a real, per-person intent signal sitting next to a scorer that was
+ * looking for keys nothing writes.
+ *
+ * Pure so every band and decay case is testable without a database.
+ *
+ * Returns the STRONGEST decayed signal rather than a sum: five visits to
+ * /pricing is one person interested in pricing, not five times the intent.
+ * Null — not 0 — when there are no visits, for the same reason as above.
+ */
+export function intentFromVisitRows(
+  rows: Array<{ intent: string | null; createdAt: Date | string }>,
+  nowMs: number,
+): number | null {
+  const BAND: Record<string, number> = { high: 100, medium: 55, low: 20 };
+  let best = 0;
+  let measured = false;
+  for (const r of rows) {
+    const base = BAND[String(r.intent ?? "").toLowerCase()];
+    if (base === undefined) continue; // unclassified visit says nothing
+    const t = new Date(r.createdAt).getTime();
+    if (Number.isNaN(t)) continue;
+    measured = true;
+    const age = Math.max(0, Math.floor((nowMs - t) / DAY));
+    // The same decay curve as engagement — one recency rule, not a second one.
+    best = Math.max(best, base * engagementDecay(age));
+  }
+  return measured ? round2(clamp(best, 0, 100)) : null;
+}
+
+/**
+ * Visit-derived intent for a CONTACT.
+ *
+ * Scoped on workspaceId AND contactId. `website_visits` takes its contactId
+ * from a PUBLIC, unauthenticated beacon — the cross-tenant hole fixed in
+ * `24c720e` — so a read that keys on the id alone is exactly the mistake that
+ * bug was.
+ */
+async function websiteIntentScore(ws: number, contactId: number, nowMs: number): Promise<number | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db
+    .select({ intent: websiteVisits.intent, createdAt: websiteVisits.createdAt })
+    .from(websiteVisits)
+    .where(and(eq(websiteVisits.workspaceId, ws), eq(websiteVisits.contactId, contactId)))
+    .orderBy(desc(websiteVisits.createdAt))
+    .limit(200);
+  return intentFromVisitRows(rows, nowMs);
+}
+
+/** The strongest available signal, or null when none was measured. */
+function strongestIntent(...values: Array<number | null>): number | null {
+  const present = values.filter((v): v is number => v != null);
+  return present.length ? Math.max.apply(null, present) : null;
 }
 
 /* ─── data quality ─── */
@@ -196,8 +300,14 @@ export async function calculatePriorityForObject(
   if (objectType === "person") {
     let o = (await db.select().from(prospects)
       .where(and(eq(prospects.workspaceId, ws), eq(prospects.id, objectId))).limit(1))[0] as Record<string, unknown> | undefined;
-    if (!o) o = (await db.select().from(contacts)
-      .where(and(eq(contacts.workspaceId, ws), eq(contacts.id, objectId))).limit(1))[0] as Record<string, unknown> | undefined;
+    // Which table the person came from decides whether website visits can be
+    // attributed: website_visits carries contactId/leadId, never a prospectId.
+    let isContact = false;
+    if (!o) {
+      o = (await db.select().from(contacts)
+        .where(and(eq(contacts.workspaceId, ws), eq(contacts.id, objectId))).limit(1))[0] as Record<string, unknown> | undefined;
+      isContact = !!o;
+    }
     if (!o) return null;
 
     const flags = await personFlags(ws, o.email as string | null, o.verificationStatus);
@@ -211,7 +321,12 @@ export async function calculatePriorityForObject(
       if (acct) companyFit = await primaryFitScore(ws, "company", acct.id);
     }
     const engagement = await engagementScore(ws, objectId);
-    const intent = intentScoreFromRow(o);
+    // Two possible sources, and null unless at least one actually measured
+    // something. Visits only attach to a contact.
+    const intent = strongestIntent(
+      intentScoreFromRow(o),
+      isContact ? await websiteIntentScore(ws, objectId, nowMs) : null,
+    );
     const dataQuality = personDataQuality(o, { bounced: flags.bounced }, nowMs);
     const seq = await sequenceReadiness(ws, objectId, o, flags);
 
