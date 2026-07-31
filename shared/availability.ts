@@ -80,6 +80,20 @@ export function localDateOf(tz: string, utcMs: number): { y: number; m: number; 
 }
 
 /**
+ * `YYYY-MM-DD` of an instant, as that calendar day is read in `tz`.
+ *
+ * The tz-aware counterpart of `d.toISOString().slice(0, 10)`, which is a UTC
+ * day wearing whatever label the reader assumes. Anything that buckets rows by
+ * day, or asks "have we already done this today", wants this instead — in
+ * UTC-8 an activity at 5pm local belongs to the NEXT UTC day, so the two
+ * disagree for a third of every day.
+ */
+export function zonedDayKey(tz: string, utcMs: number): string {
+  const { y, m, d } = localDateOf(safeTimezone(tz), utcMs);
+  return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+}
+
+/**
  * A time as a human reads it, IN a named zone, with the zone said out loud.
  *
  * The autopilot used to hand the LLM `new Date(s).toLocaleString()` — the host's
