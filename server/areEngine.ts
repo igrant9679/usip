@@ -32,6 +32,7 @@
  * Per-campaign and per-phase try/catch so one failure never blocks the rest.
  */
 import { createHash } from "node:crypto";
+import { canonicalText } from "@shared/canonicalText";
 import { and, desc, eq, gte, inArray, isNotNull, like, lte, notInArray, or, sql } from "drizzle-orm";
 import { getDb } from "./db";
 import {
@@ -1286,7 +1287,9 @@ function scoreIcpMatch(
  * at the same company. Returns null when there isn't enough to key on.
  */
 function nameOrgDedupKey(p: Record<string, unknown>): string | null {
-  const norm = (s: unknown) => String(s ?? "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().replace(/\s+/g, " ");
+  // @shared/canonicalText. The trailing collapse this used to carry was a
+  // no-op — [^a-z0-9]+ has already collapsed every run of separators.
+  const norm = canonicalText;
   const name = `${norm(p.firstName)} ${norm(p.lastName)}`.trim();
   const org = norm(p.companyDomain) || norm(p.companyName);
   if (!name || !org) return null;

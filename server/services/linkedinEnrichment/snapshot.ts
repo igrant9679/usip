@@ -8,6 +8,7 @@
  * the feature spec.
  */
 import { createHash } from "crypto";
+import { canonicalText } from "@shared/canonicalText";
 import type { VelocityLinkedInProfile } from "./mapper";
 
 export type ChangePriority = "high" | "medium" | "low";
@@ -68,10 +69,8 @@ const JSON_FIELDS: Array<{
   },
 ];
 
-/** Canonical comparison form — lowercases, collapses non-alphanumerics. */
-function norm(s?: string | null): string {
-  return (s ?? "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-}
+/** Canonical comparison form — one definition, @shared/canonicalText. */
+const norm = canonicalText;
 
 /** The raw + canonical monitored snapshot of a profile. */
 export interface ProfileSnapshot {

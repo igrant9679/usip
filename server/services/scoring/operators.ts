@@ -6,6 +6,7 @@
  * rather than throwing — a single bad criterion must never break scoring.
  */
 import type { Operator } from "./types";
+import { canonicalTokens } from "@shared/canonicalText";
 
 const s = (v: unknown): string => (v == null ? "" : String(v)).toLowerCase().trim();
 const num = (v: unknown): number | null => {
@@ -31,7 +32,10 @@ const toDate = (v: unknown): Date | null => {
 
 /** Jaccard token overlap 0..1 (mirrors the enrichment matcher heuristic). */
 function tokenOverlap(a: string, b: string): number {
-  const t = (x: string) => new Set(x.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().split(" ").filter(Boolean));
+  // @shared/canonicalText — this file's own comment above admitted it
+  // "mirrors the enrichment matcher heuristic". A mirror is a copy that
+  // has not drifted YET.
+  const t = canonicalTokens;
   const ta = t(a), tb = t(b);
   if (ta.size === 0 || tb.size === 0) return 0;
   let inter = 0;

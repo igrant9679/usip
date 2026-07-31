@@ -22,6 +22,7 @@
  * still SAVED so the user can triage them; they're just flagged.
  */
 import { and, eq, or } from "drizzle-orm";
+import { canonicalText } from "@shared/canonicalText";
 import { getDb } from "../../db";
 import {
   discoveryLogs,
@@ -31,13 +32,8 @@ import {
 } from "../../../drizzle/schema";
 
 /* ─── Normalization helpers ──────────────────────────────────────────── */
-function norm(s: string | null | undefined): string {
-  return String(s ?? "")
-    .toLowerCase()
-    .replace(/[^a-z0-9 ]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
+// One canonical form — @shared/canonicalText.
+const norm = canonicalText;
 function isEmail(s: string | null | undefined): boolean {
   if (!s) return false;
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);

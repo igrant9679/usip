@@ -9,6 +9,7 @@
  * Every query is workspace-scoped. Matching is read-only — it never writes.
  */
 import { and, eq, like } from "drizzle-orm";
+import { canonicalText, canonicalTokens } from "@shared/canonicalText";
 import { getDb } from "../../db";
 import { prospects } from "../../../drizzle/schema";
 import type { VelocityLinkedInProfile } from "./mapper";
@@ -47,8 +48,10 @@ type ProspectRow = typeof prospects.$inferSelect;
 
 /* ───────────────────────────── text helpers ───────────────────────────── */
 
-const norm = (s?: string | null) => (s ?? "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-const tokens = (s?: string | null) => new Set(norm(s).split(" ").filter(Boolean));
+// One canonical form for the whole codebase — @shared/canonicalText. Four
+// copies of this rule existed; they agreed, which is one edit from not.
+const norm = canonicalText;
+const tokens = canonicalTokens;
 
 /** Jaccard token overlap, 0..1. */
 function overlap(a?: string | null, b?: string | null): number {
