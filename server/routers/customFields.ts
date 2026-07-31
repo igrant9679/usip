@@ -10,6 +10,7 @@ import { accounts, contacts, customFieldDefs, leads, opportunities } from "../..
 import { getDb } from "../db";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, repProcedure, workspaceProcedure } from "../_core/workspace";
+import { reservedCustomFieldKey } from "@shared/customFieldKeys";
 
 const ENTITY_TYPES = ["lead", "contact", "account", "opportunity"] as const;
 
@@ -51,6 +52,17 @@ export const customFieldsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // The customFields blob is shared with the engines — see
+      // @shared/customFieldKeys. A field named `technologies` (snake_case-legal
+      // and an ordinary thing to want) is read by the scoring engine, and one
+      // named linkedinUrl decides who Social Autopilot sends invites to.
+      const clash = reservedCustomFieldKey(input.fieldKey);
+      if (clash) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `"${input.fieldKey}" is reserved by ${clash.owner} — it is stored under the same key. Pick another name.`,
+        });
+      }
       const r = await db.insert(customFieldDefs).values({
         workspaceId: ctx.workspace.id,
         entityType: input.entityType,
@@ -138,6 +150,31 @@ export const customFieldsRouter = router({
         if (val === undefined || val === null || val === "") {
           throw new TRPCError({ code: "BAD_REQUEST", message: `Required field '${def.label}' is missing` });
         }
+      }
+
+      /**
+       * Only DEFINED keys may be written.
+       *
+       * The input is `z.record(z.string(), z.any())` and the defs above were
+       * used solely to check `required` — so this accepted any key at all, and
+       * the blob it writes into is shared with the engines. Without this, a rep
+       * could set `linkedinUrl` on a lead and enroll it into Social Autopilot's
+       * invite targeting, fabricate `coOwners` on an opportunity, or write the
+       * scoring engine's `technologies` / `intentTopics` and move a lead score.
+       *
+       * The UI cannot trip this: CustomFieldsPanel builds its payload from the
+       * definitions it just rendered. Only a hand-made call reaches it.
+       */
+      const defined = new Set(defs.map((d) => d.fieldKey));
+      for (const key of Object.keys(input.values)) {
+        if (defined.has(key)) continue;
+        const clash = reservedCustomFieldKey(key);
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: clash
+            ? `"${key}" is reserved by ${clash.owner} and cannot be set as a custom field.`
+            : `"${key}" is not a custom field on ${input.entityType}. Define it in Settings first.`,
+        });
       }
 
       // Merge with existing customFields
