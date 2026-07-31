@@ -71,6 +71,47 @@ import { runSignalEnhancement } from "./signalEnhancement";
  * Idempotent: re-running for the same prospect reuses the linked contact
  * rather than creating duplicates, so a second positive signal is safe.
  */
+/**
+ * Map an ARE intelligence record onto the intent keys the priority scorer reads.
+ *
+ * The enrichment pass pays an LLM to find trigger events and pain signals, and
+ * until now all of it stayed in `prospect_intelligence` — keyed by
+ * prospectQueueId, which no CRM surface joins on. Promotion is the one moment
+ * the code holds both records, so it is where the data gets carried across.
+ * The keys are the ones `intentScoreFromRow` reads, and they are RESERVED in
+ * @shared/customFieldKeys precisely so an engine can own them.
+ *
+ * ⚠️ Deliberately conservative. `triggerEvents[].type` is FREE TEXT — the
+ * enrichment JSON schema declares it `{ type: "string" }` with no enum — so
+ * deciding "is this a funding round?" would be string-matching an LLM's prose.
+ * `recentFunding`, `recentExecChange`, `hiringSignals` and `websiteKeywords`
+ * are therefore left ABSENT rather than guessed, and absent means unmeasured
+ * (they contribute nothing) rather than a fabricated zero.
+ *
+ * Pure; the write is separate, so the mapping is testable without a database.
+ */
+export function intentKeysFromIntelligence(intel: {
+  triggerEvents?: unknown;
+  painSignals?: unknown;
+  recentNews?: unknown;
+}): Record<string, unknown> | null {
+  const arr = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
+  const text = (v: unknown): string => (typeof v === "string" ? v.trim() : "");
+
+  const topics: string[] = [];
+  const push = (s: string) => {
+    if (s && !topics.includes(s) && topics.length < 20) topics.push(s);
+  };
+  for (const p of arr(intel.painSignals)) push(text((p as { signal?: unknown })?.signal));
+  for (const t of arr(intel.triggerEvents)) push(text((t as { type?: unknown })?.type));
+
+  const news = arr(intel.recentNews);
+  const out: Record<string, unknown> = {};
+  if (topics.length) out.intentTopics = topics;
+  if (news.length) out.recentNews = news;
+  return Object.keys(out).length ? out : null;
+}
+
 export async function promoteProspectToCrm(
   workspaceId: number,
   prospectQueueId: number,
@@ -177,6 +218,33 @@ export async function promoteProspectToCrm(
     }).$returningId();
     opportunityId = newOpp.id;
     await db.execute(sql`UPDATE are_campaigns SET opportunitiesCreated = opportunitiesCreated + 1 WHERE id = ${campaignId}`);
+  }
+
+  // ── Carry the ARE enrichment onto the contact ───────────────────────────
+  // Everything the enrichment pass learned lives in prospect_intelligence,
+  // keyed by prospectQueueId — which no CRM surface joins on, so it was
+  // invisible the moment the prospect became a contact. Best-effort: losing
+  // the carry-over must never fail a promotion.
+  try {
+    const [intelForContact] = await db.select().from(prospectIntelligence)
+      .where(and(
+        eq(prospectIntelligence.prospectQueueId, prospectQueueId),
+        eq(prospectIntelligence.workspaceId, workspaceId),
+      )).limit(1);
+    const intentKeys = intelForContact ? intentKeysFromIntelligence(intelForContact) : null;
+    if (intentKeys && contactId) {
+      const [existingContact] = await db.select({ customFields: contacts.customFields })
+        .from(contacts)
+        .where(and(eq(contacts.id, contactId), eq(contacts.workspaceId, workspaceId)))
+        .limit(1);
+      const current = (existingContact?.customFields as Record<string, unknown> | null) ?? {};
+      await db.update(contacts)
+        // Merge: the admin-defined custom field values live in this same blob.
+        .set({ customFields: { ...current, ...intentKeys } } as never)
+        .where(and(eq(contacts.id, contactId), eq(contacts.workspaceId, workspaceId)));
+    }
+  } catch (e) {
+    console.error("[ARE] intelligence carry-over failed:", e instanceof Error ? e.message : e);
   }
 
   // Write the linkage back. These columns existed from the start and were
