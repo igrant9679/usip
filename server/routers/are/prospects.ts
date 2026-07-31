@@ -30,7 +30,7 @@
  * decision, not something to infer.
  */
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, ne, sql } from "drizzle-orm";
+import { and, desc, eq, getTableColumns, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
   areAbVariants,
@@ -947,11 +947,55 @@ export const prospectsRouter = router({
         // that explicitly ask for sequenceStatus="skipped" still get them.
         conditions.push(ne(prospectQueue.sequenceStatus, "skipped"));
       }
+      /**
+       * How many verified intent signals the enrichment pass found.
+       *
+       * `triggerEvents` and `painSignals` are the two arrays that describe a
+       * reason to reach out NOW, as opposed to icpMatchScore which describes
+       * whether this is the right kind of person at all. techStack and
+       * recentNews are deliberately excluded: the first is fit, the second is
+       * ambient company noise that is often nothing to do with buying.
+       */
+      const intentSignals = sql<number>`(
+        COALESCE(JSON_LENGTH(${prospectIntelligence.triggerEvents}), 0)
+        + COALESCE(JSON_LENGTH(${prospectIntelligence.painSignals}), 0)
+      )`;
+
       const rows = await db
-        .select()
+        .select({ ...getTableColumns(prospectQueue), intentSignals })
         .from(prospectQueue)
+        // Scoped on BOTH sides. prospect_intelligence carries its own
+        // workspaceId and joining on the queue id alone is the shape that made
+        // websiteVisits leak across tenants (24c720e).
+        .leftJoin(
+          prospectIntelligence,
+          and(
+            eq(prospectIntelligence.prospectQueueId, prospectQueue.id),
+            eq(prospectIntelligence.workspaceId, prospectQueue.workspaceId),
+          ),
+        )
         .where(and(...conditions))
-        .orderBy(desc(prospectQueue.icpMatchScore))
+        /**
+         * ICP FIT STAYS THE PRIMARY KEY; intent only breaks ties.
+         *
+         * This decides who a human approves first, and therefore who gets
+         * mailed first. Letting intent OUTRANK fit would need a weight — "an
+         * intent signal is worth N points of fit" — and there is nothing in
+         * this codebase to derive N from. Inventing one to make the feature
+         * look cleverer is the same fabrication refused in 974b903. A
+         * tiebreak needs no invented number and can never push a worse-fit
+         * prospect above a better-fit one.
+         *
+         * It is not cosmetic: icpMatchScore is an integer an LLM picks, and
+         * those cluster hard on round numbers, so ties are the common case.
+         *
+         * A row with no intelligence sorts as 0 here. That is NOT the
+         * "absent counted as a measured zero" bug fixed in 96b161d — the
+         * primary key is untouched, so an unenriched prospect keeps its full
+         * fit ranking and only orders after an EQUALLY-fitting one that has
+         * evidence behind it.
+         */
+        .orderBy(desc(prospectQueue.icpMatchScore), desc(intentSignals))
         .limit(input.limit)
         .offset(input.offset);
       return rows;

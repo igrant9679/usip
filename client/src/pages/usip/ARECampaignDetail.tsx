@@ -360,6 +360,20 @@ function ProspectRow({
 
       {/* Status badges */}
       <div className="hidden sm:flex items-center gap-1.5 shrink-0">
+        {/*
+          Intent signals — the tiebreak the queue is now ordered by, shown so
+          the order is explainable rather than mysterious. Two prospects with
+          the same ICP ring are no longer interchangeable, and this is why.
+        */}
+        {Number(p.intentSignals ?? 0) > 0 && (
+          <Badge
+            variant="outline"
+            className="text-[10px] px-1.5 py-0 h-5 border-0 bg-amber-500/15 text-amber-600 cursor-help"
+            title={`${p.intentSignals} intent signal${Number(p.intentSignals) === 1 ? "" : "s"} found by enrichment (trigger events + pain signals). Ranks ahead of an equally-matched prospect with none.`}
+          >
+            ⚡ {p.intentSignals}
+          </Badge>
+        )}
         <Badge
           variant="outline"
           className={`text-[10px] px-1.5 py-0 h-5 border-0 ${p.enrichmentStatus === "failed" ? "cursor-help" : ""}`}
