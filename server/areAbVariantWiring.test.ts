@@ -189,6 +189,41 @@ describe("the A/B metadata upsert derives its key", () => {
     expect(hits.length).toBe(1);
   });
 
+  /**
+   * THE INSERT MUST RUN, not merely be shaped correctly.
+   *
+   * Every other assertion in this describe block reads the columns and the
+   * helpers inside the insert. Prefixing it with `if (false)` keeps all of
+   * them true — the row is never written, `are_ab_variants` stays empty, and
+   * the A/B tab compares A against A, which is the 9e33965 bug this file was
+   * written for. That mutation passed.
+   *
+   * Checked at the LINE level: the statement must begin with `await`, so no
+   * condition can sit in front of it. The one legitimate guard is the
+   * `if (opener)` block around it, which is a null check on the step, not a
+   * switch on the write.
+   */
+  it("the insert is an executed statement, not a disabled one", () => {
+    const line = src.split("\n").find((l) => l.includes("await db.insert(areAbVariants)"));
+    expect(line, "the areAbVariants insert has moved or been renamed").toBeDefined();
+    expect(
+      line!.trim(),
+      "\n\nThe insert must be the whole statement. Anything in front of it —\n" +
+        "`if (false)`, a flag, a short-circuit — leaves every column assertion\n" +
+        "in this file true while are_ab_variants stays empty and the A/B tab\n" +
+        "compares a variant against itself.\n",
+    ).toMatch(/^await db\.insert\(areAbVariants\)/);
+  });
+
+  it("nothing short-circuits the surrounding block", () => {
+    const start = src.indexOf("await db.insert(areAbVariants)");
+    const block = src.slice(Math.max(0, start - 600), start);
+    expect(block.length).toBeGreaterThan(200); // floor: real code above it
+    // `if (opener)` is the intended guard; a literal-false one is not.
+    expect(block).not.toMatch(/if\s*\(\s*false\s*\)/);
+    expect(block).toMatch(/if\s*\(opener\)/);
+  });
+
   it("keys the row by the step, not by a literal", () => {
     const start = src.indexOf("insert(areAbVariants)");
     const block = src.slice(start, start + 700);

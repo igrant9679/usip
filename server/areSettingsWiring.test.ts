@@ -88,6 +88,45 @@ describe("ARE settings are actually enforced", () => {
     expect(keys.length).toBeGreaterThan(8);
   });
 
+  /**
+   * THE REVERSE DIRECTION, which was missing entirely.
+   *
+   * Everything else here derives its key list FROM the getAreSettings return
+   * block and checks each key is consumed. Delete a key from that block and it
+   * simply drops out of the list — fewer keys, still above the floor, green.
+   * Removing `areDefaultDailySendCap` passed.
+   *
+   * The harm is the one this file's own message describes: the column still
+   * exists, settings.save still writes it, and the UI reads a value that is
+   * never returned — so it renders a default, the user re-sets it, and their
+   * choice silently never applies. "A control that silently does nothing is
+   * worse than one that is absent."
+   *
+   * Anchored on the SCHEMA, which is the thing that cannot quietly shrink.
+   */
+  it("every are* column in workspace_settings is returned by getAreSettings", () => {
+    const schema = read("drizzle/schema.ts");
+    const start = schema.indexOf("export const workspaceSettings");
+    expect(start, "workspaceSettings table not found in schema").toBeGreaterThan(-1);
+    const block = schema.slice(start, schema.indexOf("\n});", start));
+    const columns = [...block.matchAll(/^\s{2}(are[A-Za-z0-9]+):/gm)].map((m) => m[1]);
+
+    // Floor: a scan that finds no columns would report a clean result.
+    expect(columns.length, "no are* columns found — has the table been renamed?").toBeGreaterThan(10);
+
+    const missing = columns.filter((c) => !keys.includes(c));
+    expect(
+      missing,
+      missing.length
+        ? `\n\nare* column(s) saved on workspace_settings but NOT returned by\n` +
+            `getAreSettings:\n  ${missing.join("\n  ")}\n\n` +
+            `The column still exists and settings.save still writes it, so the value is\n` +
+            `stored and never read back. The ARE Settings page then renders a default,\n` +
+            `the user re-sets it, and it silently never applies.\n`
+        : undefined,
+    ).toEqual([]);
+  });
+
   it("every setting is either consumed by real code or declared unenforced", () => {
     const files = [...sourceFiles(join(ROOT, "server")), ...sourceFiles(join(ROOT, "client", "src"))]
       .map((f) => f.slice(ROOT.length + 1).split(sep).join("/"))
