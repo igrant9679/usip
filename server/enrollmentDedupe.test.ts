@@ -75,15 +75,60 @@ describe("every inbound surface that auto-enrols checks first", () => {
 
   for (const file of INBOUND) {
     it(`${file} guards its enrollment insert`, () => {
+      /**
+       * MUTATION-VERIFIED — and the previous version of this test did NOT hold.
+       *
+       * It asserted `src.toContain("hasActiveEnrollmentForEmail")`. Changing
+       * forms.ts to
+       *   `if (false && (await hasActiveEnrollmentForEmail(...)))`
+       * disables the dedupe completely — every repeat submission re-enrols and
+       * the whole sequence sends again — and the string was still there, so
+       * the FULL SUITE stayed green at 1601 passed.
+       *
+       * The call has to GATE the insert, so that is what is asserted: the
+       * insert must sit in the `else` of an `if` whose condition is the
+       * awaited dedupe call and nothing else.
+       */
       const src = read(file);
-      expect(src, `${file} no longer inserts enrollments — update this list`).toContain("insert(enrollments)");
-      expect(src).toContain("hasActiveEnrollmentForEmail");
+      expect(src, `${file} no longer inserts enrollments — update this list`).toContain(
+        "insert(enrollments)",
+      );
+
+      // Exactly one insert, or the shape check below could pass on a guarded
+      // insert while an unguarded sibling sends the sequence twice — the
+      // file-level `toContain` weakness that left two cron endpoints open
+      // (b15490d), in its other form.
+      expect(
+        src.split("insert(enrollments)").length - 1,
+        `${file} has more than one enrollment insert — each needs its own dedupe`,
+      ).toBe(1);
+
+      expect(
+        src,
+        `\n\n${file}: the dedupe call must be the WHOLE condition guarding the\n` +
+          `insert. \`if (false && await hasActiveEnrollmentForEmail(...))\` keeps the\n` +
+          `call, the import and every token this test used to look for, and\n` +
+          `re-enrols on every submission.\n`,
+      ).toMatch(
+        /if \(await hasActiveEnrollmentForEmail\([^)]*\)\) \{[\s\S]{0,400}?\} else \{[\s\S]{0,200}?\.insert\(enrollments\)/,
+      );
     });
   }
 
-  it("no OTHER router auto-enrols without a dedupe check", () => {
-    // Catches a fourth inbound surface being added later with the same omission.
-    const dir = join(ROOT, "server", "routers");
+  it("no OTHER server file auto-enrols without a dedupe check", () => {
+    /**
+     * Catches a fourth inbound surface being added later with the same omission.
+     *
+     * Scans all of `server/`, not just `server/routers`. It used to stop at the
+     * routers, while `sequenceEngine.ts` and `services/workflowEngine.ts` both
+     * insert enrollments outside it — the second reachable from a workflow rule,
+     * i.e. exactly the automatic path this test exists for. Both do dedupe
+     * (workflowEngine by contact/lead/prospect id, sequenceEngine by
+     * contactId+leadId), so nothing was broken; the scan was simply claiming
+     * more coverage than it had, which is how a real fifth surface would land
+     * unnoticed.
+     */
+    const dir = join(ROOT, "server");
     const files: string[] = [];
     (function walk(d: string) {
       for (const e of readdirSync(d, { withFileTypes: true })) {
@@ -93,11 +138,27 @@ describe("every inbound surface that auto-enrols checks first", () => {
       }
     })(dir);
 
+    // Floor: the scanner has to have found source. A walk pointed at the wrong
+    // directory reports an empty offender list, which reads as "clean".
+    expect(files.length, "found no server source to scan").toBeGreaterThan(150);
+    const inserters = files.filter((f) => readFileSync(f, "utf8").includes("insert(enrollments)"));
+    expect(
+      inserters.length,
+      "no file inserts enrollments — the scan pattern has gone stale",
+    ).toBeGreaterThanOrEqual(6);
+
+    /**
+     * Seeds demo data on a fresh workspace. Not an inbound surface: it runs
+     * once, from a hand-invoked script, against records it just created.
+     */
+    const ALLOWED_UNGUARDED = ["server/seed.ts"];
+
     const offenders: string[] = [];
     for (const f of files) {
       const rel = f.slice(ROOT.length + 1).split(sep).join("/");
       const src = readFileSync(f, "utf8");
       if (!src.includes("insert(enrollments)")) continue;
+      if (ALLOWED_UNGUARDED.includes(rel)) continue;
       const guarded =
         src.includes("hasActiveEnrollmentForEmail") ||
         // crm.ts / segmentRules.ts / sequences.ts guard by contactId or
@@ -109,11 +170,23 @@ describe("every inbound surface that auto-enrols checks first", () => {
     expect(
       offenders,
       offenders.length
-        ? `\n\nRouter(s) inserting enrollments with no dedupe of any kind:\n  ${offenders.join("\n  ")}\n\n` +
+        ? `\n\nFile(s) inserting enrollments with no dedupe of any kind:\n  ${offenders.join("\n  ")}\n\n` +
             `enrollments has no unique index and sequenceEngine does not dedupe by\n` +
             `recipient at send time, so a duplicate enrollment sends the whole sequence\n` +
             `again. Use hasActiveEnrollmentForEmail() from services/enrollmentDedupe.\n`
         : undefined,
     ).toEqual([]);
+
+    // Staleness, the other way: an allowlisted file that no longer inserts is
+    // an exemption nobody is checking, and the next file to take that name
+    // inherits it silently.
+    for (const rel of ALLOWED_UNGUARDED) {
+      const hit = files.find((f) => f.slice(ROOT.length + 1).split(sep).join("/") === rel);
+      expect(hit, `${rel} is allowlisted here but no longer exists`).toBeTruthy();
+      expect(
+        readFileSync(hit!, "utf8").includes("insert(enrollments)"),
+        `${rel} no longer inserts enrollments — drop it from ALLOWED_UNGUARDED`,
+      ).toBe(true);
+    }
   });
 });
