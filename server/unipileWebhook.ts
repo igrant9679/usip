@@ -28,6 +28,7 @@ import {
   unipileEmailsCache,
   unipileMessages,
   users,
+  workspaceMembers,
   workspaceSettings,
 } from "../drizzle/schema";
 import { processInboundReply } from "./inboundReplyPoller";
@@ -153,6 +154,56 @@ export function registerUnipileWebhookRoutes(app: Express) {
 
         if (!userId || !workspaceId) {
           console.warn("[UnipileWebhook] Missing userId or workspaceId in query params");
+          return;
+        }
+
+        /**
+         * 🔴 THE TENANT COMES FROM THE QUERY STRING, so it must be VERIFIED.
+         *
+         * This is the only handler in this file that takes its workspace from
+         * the caller — the other six resolve it by looking up unipile_accounts
+         * by the provider's account_id, i.e. from a row we already own. This
+         * one is a `notify_url` we mint ourselves, which is exactly why it read
+         * as trustworthy and was not.
+         *
+         * Unauthenticated and unsigned, it wrote `workspaceId` straight into
+         * unipile_accounts AND the sending_accounts / calendar_accounts
+         * bridges below — so a POST naming someone else's workspace planted a
+         * MAILBOX AND A CALENDAR in it, and the victim's outbound engine can
+         * send through a sending account. Same shape as the public beacon that
+         * put another tenant's contact on a stranger's dashboard (24c720e):
+         * an id crossing the trust boundary and being believed.
+         *
+         * The barrier that stopped it being trivial is real but thin:
+         * getUnipileAccount() below needs `account_id` to exist in OUR Unipile
+         * tenant. Every user who has connected an account knows one of those —
+         * their own.
+         *
+         * Verifying the pair is enough, and does not disturb the legitimate
+         * flow: we build the notify_url at connect time from the real row's
+         * userId + workspaceId, so a genuine callback always passes.
+         */
+        const dbCheck = await getDb();
+        if (!dbCheck) {
+          console.error("[UnipileWebhook] REFUSED account-webhook: DB unavailable, cannot verify tenancy");
+          return;
+        }
+        const [membership] = await dbCheck
+          .select({ id: workspaceMembers.id })
+          .from(workspaceMembers)
+          .where(
+            and(
+              eq(workspaceMembers.userId, userId),
+              eq(workspaceMembers.workspaceId, workspaceId),
+            ),
+          )
+          .limit(1);
+        if (!membership) {
+          // The 200 has already been sent (above, so Unipile does not retry),
+          // so refusing can only be logged — loudly.
+          console.error(
+            `[UnipileWebhook] REFUSED account-webhook: user ${userId} is not a member of workspace ${workspaceId}`,
+          );
           return;
         }
 
