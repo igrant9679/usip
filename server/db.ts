@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { and, eq, sql, desc } from "drizzle-orm";
+import { and, eq, isNull, sql, desc } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
   accounts,
@@ -98,7 +98,22 @@ export async function getUserWorkspaces(userId: number) {
     })
     .from(workspaceMembers)
     .innerJoin(workspaces, eq(workspaceMembers.workspaceId, workspaces.id))
-    .where(eq(workspaceMembers.userId, userId));
+    /**
+     * Deactivated memberships are NOT memberships — the same rule as
+     * resolveWorkspace (3366f4b), which this list was missed by.
+     *
+     * It matters twice: this is the workspace SWITCHER, so a leaver kept seeing
+     * the workspace they were removed from; and workspace.switch uses this very
+     * list as its authorization check ("Not a member of that workspace"), so it
+     * was authorising against a stale answer.
+     *
+     * SAFE because seed.ts's ensureUserHasWorkspace guards on ANY membership
+     * row rather than an active one. workspace.list auto-bootstraps a seeded
+     * demo workspace when this comes back empty — so if that guard were ever
+     * narrowed to active-only, deactivating someone would hand them a brand new
+     * workspace. Pinned in deactivationRevokesAccess.test.ts.
+     */
+    .where(and(eq(workspaceMembers.userId, userId), isNull(workspaceMembers.deactivatedAt)));
 }
 
 export async function getWorkspaceMembers(workspaceId: number) {

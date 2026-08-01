@@ -38,15 +38,28 @@ const AUTH_PATHS = [
   "server/_core/streamHelpers.ts",
   "server/_core/storageProxy.ts",
   "server/unipileWebhook.ts",
+  /**
+   * `db.ts` was MISSED by the first pass of this fix. getUserWorkspaces is the
+   * workspace SWITCHER list — and `workspace.switch` uses it as its
+   * authorization check ("Not a member of that workspace"), so an unfiltered
+   * list authorised on a stale answer while the leaver went on seeing the
+   * workspace they had been removed from.
+   */
+  "server/db.ts",
 ];
 
 /**
  * Membership lookups that deliberately do NOT filter, with the reason.
- * Keyed by the variable they bind, because that is what says what it is for.
+ *
+ * Keyed by the bound variable, or by the enclosing function when the query is
+ * returned directly — whichever says what the lookup is FOR. A listing is not
+ * an authorization.
  */
 const UNFILTERED_ALLOWED: Record<string, string> = {
   everMember:
     "resolveWorkspace: chooses between 'your access was deactivated' and 'you have no workspace'. Never authorizes anything — the active lookup above it already failed.",
+  getWorkspaceMembers:
+    "The Team DIRECTORY. Deactivated members must appear here — the page renders them with a 'deactivated' state behind a showInactive toggle. Filtering would hide the very thing an admin came to check.",
 };
 
 /**
@@ -65,7 +78,21 @@ function membershipLookups(src: string): { binding: string; stmt: string }[] {
     const before = src.slice(window, m.index);
     const bindings = [...before.matchAll(/const\s+\[?(\w+)\]?\s*=\s*await/g)];
     const last = bindings.length ? bindings[bindings.length - 1] : null;
-    const binding = last ? last[1] : "";
+    /**
+     * Label = the bound variable, else the enclosing function.
+     *
+     * `db` is excluded: every function here opens with `const db = await
+     * getDb()`, so it is always the nearest binding and it names nothing. With
+     * it included, two different lookups in db.ts both labelled themselves "db"
+     * and neither could be allowlisted or argued about. Kept for SLICING (it
+     * bounds the statement) but never used as the name.
+     */
+    const named = bindings.filter((b) => b[1] !== "db");
+    let binding = named.length ? named[named.length - 1][1] : "";
+    if (!binding) {
+      const fns = [...src.slice(0, m.index).matchAll(/(?:export\s+)?(?:async\s+)?function\s+(\w+)/g)];
+      binding = fns.length ? fns[fns.length - 1][1] : "";
+    }
     /**
      * Start the statement AT ITS OWN BINDING, not a fixed distance back.
      *
@@ -158,6 +185,40 @@ describe("resolveWorkspace", () => {
 
   it("still distinguishes never-a-member from deactivated", () => {
     expect(src).toContain("NO_WORKSPACE");
+  });
+});
+
+/**
+ * A NON-OBVIOUS DEPENDENCY, pinned because the safe version looks arbitrary.
+ *
+ * `workspace.list` auto-bootstraps a seeded demo workspace when
+ * getUserWorkspaces returns nothing. Now that that list excludes deactivated
+ * memberships, the ONLY thing stopping a deactivated user being handed a brand
+ * new workspace is that `ensureUserHasWorkspace` guards on ANY membership row
+ * rather than an active one.
+ *
+ * Narrowing that guard to active-only would read like a tidy-up and would
+ * silently turn offboarding into provisioning.
+ */
+describe("deactivation cannot bootstrap a fresh workspace", () => {
+  const seed = strip(readFileSync(join(ROOT, "server/seed.ts"), "utf8"));
+
+  it("ensureUserHasWorkspace bails on ANY membership row, active or not", () => {
+    const fn = seed.slice(seed.indexOf("export async function ensureUserHasWorkspace"));
+    const guard = fn.slice(0, fn.indexOf("const slug"));
+    expect(guard, "the early-return guard is gone").toMatch(/existing\.length > 0/);
+    expect(
+      guard,
+      "\n\nThis guard must NOT filter on deactivatedAt. workspace.list bootstraps\n" +
+        "a new seeded workspace when the (now active-only) membership list is\n" +
+        "empty — so filtering here would hand a deactivated leaver a fresh\n" +
+        "workspace instead of locking them out.\n",
+    ).not.toMatch(/deactivatedAt/);
+  });
+
+  it("workspace.list still routes through that guard", () => {
+    const ws = strip(readFileSync(join(ROOT, "server/routers/workspace.ts"), "utf8"));
+    expect(ws).toContain("ensureUserHasWorkspace");
   });
 });
 
