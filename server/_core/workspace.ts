@@ -4,7 +4,7 @@
  * `ctx.workspace` and `ctx.member.role` are guaranteed.
  */
 import { TRPCError } from "@trpc/server";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { workspaceMembers, workspaces, type WorkspaceMember, type Workspace } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { protectedProcedure } from "./trpc";
@@ -26,6 +26,20 @@ async function resolveWorkspace(userId: number, headerVal?: string) {
   const db = await getDb();
   if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
 
+  /**
+   * 🔴 DEACTIVATION MUST REVOKE ACCESS, and it did not.
+   *
+   * `team.deactivate` reassigns the member's leads, opportunities and open
+   * tasks, sets `deactivatedAt`, hides them from the Team list, and refuses to
+   * reassign work TO them ("Reassign target is deactivated"). Every signal in
+   * the product says this person is out.
+   *
+   * This function — which EVERY authenticated request passes through — matched
+   * the membership on (userId, workspaceId) alone. `deactivatedAt` appeared
+   * nowhere in `_core/`. So a deactivated member kept their session, could sign
+   * in again with their password, and carried on at whatever role they held,
+   * including admin. Offboarding a leaver removed their work, not their access.
+   */
   // Look for membership matching header workspace if provided
   if (headerVal) {
     const wsId = Number(headerVal);
@@ -34,21 +48,43 @@ async function resolveWorkspace(userId: number, headerVal?: string) {
         .select({ ws: workspaces, mb: workspaceMembers })
         .from(workspaceMembers)
         .innerJoin(workspaces, eq(workspaceMembers.workspaceId, workspaces.id))
-        .where(and(eq(workspaceMembers.userId, userId), eq(workspaceMembers.workspaceId, wsId)))
+        .where(and(
+          eq(workspaceMembers.userId, userId),
+          eq(workspaceMembers.workspaceId, wsId),
+          isNull(workspaceMembers.deactivatedAt),
+        ))
         .limit(1);
       if (rows[0]) return { workspace: rows[0].ws, member: rows[0].mb };
+      // Deliberately FALLS THROUGH rather than throwing: someone deactivated in
+      // this workspace may still be active in another, and should land there.
     }
   }
 
-  // Fallback: first workspace
+  // Fallback: first workspace they are still active in
   const rows = await db
     .select({ ws: workspaces, mb: workspaceMembers })
     .from(workspaceMembers)
     .innerJoin(workspaces, eq(workspaceMembers.workspaceId, workspaces.id))
-    .where(eq(workspaceMembers.userId, userId))
+    .where(and(eq(workspaceMembers.userId, userId), isNull(workspaceMembers.deactivatedAt)))
     .limit(1);
 
   if (!rows[0]) {
+    /**
+     * Separate "you were deactivated" from "you never had a workspace" — the
+     * two need different words, and a leaver hitting a bare NO_WORKSPACE would
+     * read it as a bug and ask someone to fix it.
+     */
+    const [everMember] = await db
+      .select({ id: workspaceMembers.id })
+      .from(workspaceMembers)
+      .where(eq(workspaceMembers.userId, userId))
+      .limit(1);
+    if (everMember) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "Your access to this workspace has been deactivated. Contact an administrator.",
+      });
+    }
     throw new TRPCError({
       code: "PRECONDITION_FAILED",
       message: "NO_WORKSPACE",

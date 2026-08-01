@@ -17,7 +17,7 @@
  *     "STOPPED"     — account synchronisation stopped
  */
 import type { Express, Request, Response } from "express";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { getDb } from "./db";
 import {
   calendarAccounts,
@@ -195,6 +195,8 @@ export function registerUnipileWebhookRoutes(app: Express) {
             and(
               eq(workspaceMembers.userId, userId),
               eq(workspaceMembers.workspaceId, workspaceId),
+              // A deactivated member may not connect an account either.
+              isNull(workspaceMembers.deactivatedAt),
             ),
           )
           .limit(1);

@@ -28,7 +28,7 @@
  * `window.open(pdfUrl)` in Quotes.tsx still carries it.
  */
 import type { Express } from "express";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { workspaceMembers } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { ENV } from "./env";
@@ -97,6 +97,8 @@ export function registerStorageProxy(app: Express) {
           and(
             eq(workspaceMembers.userId, userId),
             eq(workspaceMembers.workspaceId, workspaceId),
+            // Deactivation revokes access — see resolveWorkspace.
+            isNull(workspaceMembers.deactivatedAt),
           ),
         )
         .limit(1);

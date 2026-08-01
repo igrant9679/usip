@@ -18,7 +18,7 @@
  *     through the whole stream (matches existing Stop-doesn't-save semantics)
  */
 import type { Request, Response } from "express";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { workspaceMembers } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { sdk } from "./sdk";
@@ -120,6 +120,8 @@ export async function resolveStreamAuth(req: Request, res: Response): Promise<St
       and(
         eq(workspaceMembers.userId, userId),
         eq(workspaceMembers.workspaceId, workspaceId),
+        // Deactivation revokes access — see resolveWorkspace.
+        isNull(workspaceMembers.deactivatedAt),
       ),
     )
     .limit(1);
