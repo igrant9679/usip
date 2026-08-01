@@ -22,7 +22,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import { join, sep } from "node:path";
 import {
-  formatInZone, generateSlots, localDateOf, safeTimezone, tzOffsetMs, wallTimeToUtcMs,
+  formatInZone, generateSlots, localDateOf, safeTimezone, tzOffsetMs, wallTimeToUtcMs, zonedDayKey,
 } from "../shared/availability";
 import { computeSlots } from "./services/meetingScheduler";
 
@@ -60,6 +60,55 @@ describe("timezone primitives", () => {
     expect(safeTimezone("Mars/Olympus_Mons")).toBe("UTC");
     expect(safeTimezone(null)).toBe("UTC");
     expect(safeTimezone(NY)).toBe(NY);
+  });
+});
+
+/**
+ * `zonedDayKey` was exported by d682552 as the tz-aware counterpart of
+ * `toISOString().slice(0, 10)` — the inline form that put every row after
+ * 4pm Pacific on tomorrow's bar and reported a deal closed 6pm Pacific as
+ * closing the next day. It had NO tests. Replacing its body with exactly the
+ * expression it exists to replace passed the whole suite.
+ *
+ * Every case below is a real instant checked against `Intl`, because zone
+ * arithmetic is not intuition — the reportScheduler sweep asserted a
+ * US/Pacific claim that was simply wrong until it was printed.
+ */
+describe("zonedDayKey", () => {
+  it("returns the LOCAL calendar day, not the UTC one", () => {
+    // 01:30Z on the 16th is still the 15th in New York.
+    expect(zonedDayKey(NY, Date.UTC(2026, 6, 16, 1, 30))).toBe("2026-07-15");
+    // ...and the same instant really is the 16th in UTC, so the two differ.
+    expect(zonedDayKey("UTC", Date.UTC(2026, 6, 16, 1, 30))).toBe("2026-07-16");
+  });
+
+  it("flips the calendar day the other way east of UTC", () => {
+    // 22:00Z on the 15th is already the 16th in Sydney.
+    expect(zonedDayKey("Australia/Sydney", Date.UTC(2026, 6, 15, 22))).toBe("2026-07-16");
+  });
+
+  it("crosses the MONTH boundary, which is what broke the monthly report", () => {
+    // 2026-02-01T08:00Z is Sat 31 Jan 22:00 in Honolulu — a report scheduled
+    // "monthly, on the 1st" arrived on the last day of the month before.
+    expect(zonedDayKey("Pacific/Honolulu", Date.UTC(2026, 1, 1, 8))).toBe("2026-01-31");
+    expect(zonedDayKey("UTC", Date.UTC(2026, 1, 1, 8))).toBe("2026-02-01");
+  });
+
+  it("is DST-aware rather than a hardcoded offset", () => {
+    // 07:30Z is the previous day in Los Angeles in January (PST, -8) but the
+    // same day in July (PDT, -7). A fixed -8 passes one and fails the other.
+    expect(zonedDayKey("America/Los_Angeles", Date.UTC(2026, 0, 15, 7, 30))).toBe("2026-01-14");
+    expect(zonedDayKey("America/Los_Angeles", Date.UTC(2026, 6, 15, 7, 30))).toBe("2026-07-15");
+  });
+
+  it("zero-pads, so the keys sort and compare as strings", () => {
+    // The whole point is `===` against another day key and ORDER in a chart.
+    expect(zonedDayKey("UTC", Date.UTC(2026, 0, 5, 12))).toBe("2026-01-05");
+    expect(zonedDayKey("UTC", Date.UTC(2026, 0, 5, 12)) < zonedDayKey("UTC", Date.UTC(2026, 0, 12, 12))).toBe(true);
+  });
+
+  it("falls back to UTC for a bad zone instead of throwing", () => {
+    expect(zonedDayKey("Mars/Olympus_Mons", Date.UTC(2026, 6, 16, 1, 30))).toBe("2026-07-16");
   });
 });
 
