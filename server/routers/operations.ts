@@ -505,10 +505,37 @@ export const campaignsRouter = router({
     return { ok: true };
   }),
 
+  /**
+   * Delete a campaign AND its setup.
+   *
+   * 🔴 The confirm dialog says "This permanently removes the campaign and its
+   * setup. This cannot be undone." It deleted the CAMPAIGNS ROW ONLY.
+   * `campaign_components` — which IS the setup, the sequence / social post / ad
+   * / content / event components — was left behind, along with
+   * `campaign_step_stats`, keyed to a campaign id that no longer exists.
+   * Nothing anywhere deletes by campaignId, so nothing would ever collect them.
+   *
+   * Same shape as the quote delete two routers down and `tours.deleteTour`:
+   * children scoped by BOTH their own workspaceId and the parent, after an
+   * ownership check, and children before the parent — a child delete that runs
+   * after the parent has gone has nothing left to find it by.
+   */
   delete: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    await db.delete(campaigns).where(and(eq(campaigns.id, input.id), eq(campaigns.workspaceId, ctx.workspace.id)));
+    const [owned] = await db
+      .select({ id: campaigns.id })
+      .from(campaigns)
+      .where(and(eq(campaigns.id, input.id), eq(campaigns.workspaceId, ctx.workspace.id)));
+    if (!owned) throw new TRPCError({ code: "NOT_FOUND", message: "Campaign not found" });
+
+    await db
+      .delete(campaignComponents)
+      .where(and(eq(campaignComponents.campaignId, owned.id), eq(campaignComponents.workspaceId, ctx.workspace.id)));
+    await db
+      .delete(campaignStepStats)
+      .where(and(eq(campaignStepStats.campaignId, owned.id), eq(campaignStepStats.workspaceId, ctx.workspace.id)));
+    await db.delete(campaigns).where(and(eq(campaigns.id, owned.id), eq(campaigns.workspaceId, ctx.workspace.id)));
     return { ok: true };
   }),
 

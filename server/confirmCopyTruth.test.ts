@@ -106,6 +106,81 @@ describe("deleteDef keeps it", () => {
   });
 });
 
+/**
+ * Second claim from the same sweep. Campaigns' delete dialog says "This
+ * permanently removes the campaign AND ITS SETUP." It deleted the campaigns row
+ * only — `campaign_components` (which IS the setup: the sequence / social post
+ * / ad / content / event components) and `campaign_step_stats` were left keyed
+ * to a campaign id that no longer exists, and NOTHING anywhere deletes by
+ * campaignId, so nothing would ever collect them.
+ */
+describe("campaigns.delete removes the setup it promises to", () => {
+  const ops = strip(readFileSync(join(ROOT, "server/routers/operations.ts"), "utf8"));
+  const campaignsUi = readFileSync(join(ROOT, "client/src/pages/usip/Campaigns.tsx"), "utf8");
+
+  const del = (() => {
+    const router = ops.slice(ops.indexOf("campaignsRouter = router("));
+    const at = router.indexOf("delete: repProcedure");
+    expect(at, "campaigns delete not found").toBeGreaterThan(0);
+    const next = router.indexOf("updateOutreach:", at);
+    expect(next, "could not bound the handler").toBeGreaterThan(at);
+    return router.slice(at, next);
+  })();
+
+  it("the dialog still promises the setup goes too", () => {
+    expect(campaignsUi).toMatch(/removes the campaign and its setup/i);
+  });
+
+  it("deletes campaign_components — the setup — in an executed statement", () => {
+    expect(
+      del,
+      "\n\nThe dialog promises the setup is removed. campaign_components IS the\n" +
+        "setup; leaving it behind orphans rows nothing will ever collect.\n",
+    ).toMatch(/await db[\s\S]{0,80}?\.delete\(campaignComponents\)/);
+  });
+
+  it("deletes campaign_step_stats too", () => {
+    expect(del).toMatch(/await db[\s\S]{0,80}?\.delete\(campaignStepStats\)/);
+  });
+
+  it("scopes both child deletes by workspace as well as campaign", () => {
+    // A parent check is only a check when the CHILD is tied to that parent —
+    // and both these tables carry their own workspaceId.
+    expect(del).toMatch(/campaignComponents\.workspaceId/);
+    expect(del).toMatch(/campaignStepStats\.workspaceId/);
+  });
+
+  it("verifies ownership BEFORE deleting anything, and USES the result", () => {
+    /**
+     * Bound to the query, not merely ordered before the deletes.
+     *
+     * A mutation replacing `const [owned] = await db.select(...)` with
+     * `const owned = { id: input.id }` passed the first version — the select
+     * text was still there, still ahead of the deletes, and completely
+     * ignored. FOURTH time this session that presence-not-effect has slipped a
+     * mutation through; the shape has to be assumed now, not discovered.
+     */
+    expect(
+      del,
+      "\n\n`owned` must be the RESULT of the workspace-scoped select — otherwise\n" +
+        "the deletes below run on a caller-supplied id.\n",
+    ).toMatch(/const \[owned\] = await db[\s\S]{0,120}?\.select\(\{ id: campaigns\.id \}\)/);
+    const check = del.indexOf("const [owned]");
+    expect(check).toBeGreaterThan(0);
+    expect(check).toBeLessThan(del.indexOf(".delete("));
+  });
+
+  it("deletes children BEFORE the parent", () => {
+    // A child delete that runs after the parent is gone has nothing left to
+    // find it by — the shape recorded for tours.deleteTour and quotes.delete.
+    const child = del.indexOf(".delete(campaignComponents)");
+    const parent = del.indexOf(".delete(campaigns)");
+    expect(child).toBeGreaterThan(0);
+    expect(parent).toBeGreaterThan(0);
+    expect(child).toBeLessThan(parent);
+  });
+});
+
 describe("every entity type can actually be cleared", () => {
   it("ENTITY_TABLE covers every ENTITY_TYPES member", () => {
     /**
