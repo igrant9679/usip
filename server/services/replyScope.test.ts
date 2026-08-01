@@ -51,7 +51,59 @@ describe("email_replies scope in autonomous engines", () => {
       // projection — must carry the draftId scope.
       const reads = src.split("\n").filter((l) => /\.from\(emailReplies\)/.test(l));
       expect(reads.length, `${file} no longer reads emailReplies — update this list`).toBeGreaterThan(0);
-      expect(src).toContain("isNotNull(emailReplies.draftId)");
+
+      /**
+       * PER-READ, not per-file.
+       *
+       * This was `expect(src).toContain("isNotNull(emailReplies.draftId)")`,
+       * which one scoped read satisfies for the whole file no matter how many
+       * unscoped siblings join it — the same weakness that let two ungated cron
+       * endpoints sit behind a file-level `toContain` (b15490d). It was already
+       * inaccurate: replyClassifier.ts has TWO reads and one scope.
+       *
+       * Each read is checked in its own statement window (from `.from(` to the
+       * terminating `;`), so adding an unscoped read is what fails, not just
+       * deleting the last scope.
+       */
+      const ALLOWED_UNSCOPED: Record<string, string> = {
+        // The daily-cap counter in runConversationAutopilotAllWorkspaces. It
+        // counts rows already CLASSIFIED today (`classifiedAt >= dayStart`) to
+        // work out remaining budget — it derives no decision about a person and
+        // reads no message content. Scoping it would under-count the LLM calls
+        // the cap exists to bound, since a rep classifying a message by hand
+        // from the triage inbox spends the same money.
+        "count(*)": "server/services/replyClassifier.ts",
+      };
+
+      const unscoped: string[] = [];
+      for (const [i, line] of src.split("\n").entries()) {
+        if (!/\.from\(emailReplies\)/.test(line)) continue;
+        // The statement this read belongs to: from the `.from(` line forward to
+        // the `;` that ends it. Starting EARLIER than the read line is wrong —
+        // a `;` on any preceding line truncates the window to nothing, and the
+        // read then looks unscoped no matter what it carries. That is how the
+        // first version of this check flagged the allowlisted counter.
+        const win = src.split("\n").slice(i, i + 12).join("\n");
+        const end = win.indexOf(";");
+        const stmt = end === -1 ? win : win.slice(0, end + 1);
+        if (stmt.includes("isNotNull(emailReplies.draftId)")) continue;
+        const excuse = Object.entries(ALLOWED_UNSCOPED).find(
+          ([marker, f]) => f === file && stmt.includes(marker),
+        );
+        if (excuse) continue;
+        unscoped.push(`${file}:${i + 1}  ${line.trim()}`);
+      }
+
+      expect(
+        unscoped,
+        unscoped.length
+          ? `\n\nUnscoped read(s) of email_replies in an autonomous engine:\n  ${unscoped.join("\n  ")}\n\n` +
+              `This table holds ALL synced inbound mail — ~62,000 rows of private\n` +
+              `correspondence against zero genuine campaign replies. A read without\n` +
+              `isNotNull(emailReplies.draftId) treats private mail as a reply to\n` +
+              `outreach. Add the scope, or allowlist it here with the reason.\n`
+          : undefined,
+      ).toEqual([]);
     });
 
     it(`${file} imports isNotNull, which a bundler would not catch`, () => {
