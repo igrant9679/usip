@@ -26,6 +26,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { NAV_HELP, navHelpFor } from "../client/src/lib/helpText";
 
 const ROOT = join(__dirname, "..");
 const read = (p: string) => readFileSync(join(ROOT, p), "utf8");
@@ -116,5 +117,51 @@ describe("nav hover-help coverage", () => {
       nowLive,
       nowLive.length ? `\n\nThese are listed inert but now have a sidebar link — drop them:\n  ${nowLive.join("\n  ")}\n` : undefined,
     ).toEqual([]);
+  });
+});
+
+/**
+ * The lookup itself. Everything above checks that the KEYS and the LINKS agree;
+ * nothing exercised the resolution.
+ *
+ * `navHelpFor` documents that it tolerates a trailing slash, and deleting that
+ * fallback passed the whole suite — no sidebar href currently ends in one
+ * except "/", which the exact lookup already answers. So the fallback is a
+ * stated contract that no data reaches, which is precisely the kind of promise
+ * that quietly stops being true. Same shape as zonedDayKey: exported to do a
+ * job, never called by a test.
+ */
+describe("navHelpFor resolution", () => {
+  it("resolves an exact href to that href's own entry", () => {
+    // Identity, not just definedness: returning SOME entry for every href would
+    // satisfy a `toBeDefined()` and put the wrong tip on every page.
+    expect(navHelpFor("/v2/home")).toBeDefined();
+    expect(navHelpFor("/v2/home")).toBe(NAV_HELP["/v2/home"]);
+    expect(navHelpFor("/inbox")).toBe(NAV_HELP["/inbox"]);
+  });
+
+  it("tolerates a trailing slash, as its contract says", () => {
+    expect(navHelpFor("/v2/home/")).toEqual(navHelpFor("/v2/home"));
+  });
+
+  /**
+   * DELIBERATELY NOT ASSERTED, because the assertion would be a lie.
+   *
+   * I first wrote `expect(navHelpFor("/")).toEqual(NAV_HELP["/"])` to cover the
+   * exact-lookup half. NAV_HELP has no "/" key — 56 keys, none of them the root
+   * — so that compared undefined to undefined and passed no matter what the
+   * function did. Vacuous, and the second time this audit reproduced its own
+   * subject inside a fix for it.
+   *
+   * The honest position: dropping the exact lookup and keeping only
+   * `NAV_HELP[href.replace(/\/$/, "")]` is an EQUIVALENT MUTANT. The two
+   * differ only for an href that ends in "/" AND is itself a key, and no such
+   * key exists. Nothing can kill it, so nothing here pretends to. If a NAV_HELP
+   * key with a trailing slash is ever added, this becomes testable — and the
+   * orphan check above is what would flag that key in the first place.
+   */
+  it("returns undefined for an unknown href rather than throwing", () => {
+    expect(navHelpFor("/not-a-page")).toBeUndefined();
+    expect(navHelpFor("")).toBeUndefined();
   });
 });

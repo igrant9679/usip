@@ -40,7 +40,26 @@ const stripComments = (src: string) =>
 
 describe("uniqueHeaders", () => {
   it("strips a UTF-8 BOM from the first header", () => {
+    /**
+     * NOT MUTATION-TESTABLE, and that is a property of the code rather than a
+     * gap here — recorded so the next audit does not chase it.
+     *
+     * Deleting the explicit `charCodeAt(0) === 0xfeff` check in
+     * services/csv.ts changes NOTHING: the next line is `noBom.trim()`, and
+     * U+FEFF is <ZWNBSP> in the ECMAScript WhiteSpace production, so `.trim()`
+     * already removes it. The explicit check is belt-and-braces for the day
+     * `base` stops trimming, so it is worth keeping and impossible to kill.
+     *
+     * This assertion is still worth having: it pins the OUTPUT, which is what
+     * callers depend on, no matter which line produces it.
+     *
+     * The BOM below is a real U+FEFF and is invisible in most editors. If this
+     * test ever starts passing against a mutant, check the byte is still here
+     * before concluding anything — one editor pass can silently drop it.
+     */
     expect(uniqueHeaders(["﻿First Name", "Email"])).toEqual(["First Name", "Email"]);
+    // Belt-and-braces on the fixture itself: a dropped BOM makes this vacuous.
+    expect("﻿First Name".charCodeAt(0), "the U+FEFF fixture has been lost").toBe(0xfeff);
   });
 
   it("keeps duplicate headers distinct instead of collapsing them", () => {
