@@ -122,6 +122,49 @@ describe("every scheduled endpoint is gated", () => {
   });
 
   /**
+   * PRESENCE AND ORDERING ARE NOT ENOUGH — and this guard had only those two.
+   *
+   * Dropping the `if (!...) return;` around the call:
+   *
+   *     requireScheduledSecret(req, res, "rejection-digest");
+   *
+   * leaves the call present, ahead of getDb(), and named in every assertion
+   * above — while the handler runs the entire cron for an unauthenticated
+   * caller. The 401 is even written first, so the response is already sent and
+   * the work happens behind it. That mutation passed this file.
+   *
+   * The helper's own contract says so in its header: "On refusal it has ALREADY
+   * written the 401, so every caller must `return` immediately." A contract
+   * nothing enforces is a comment. Same shape as the webhook gate whose
+   * membership row was bound to a literal (8893dc8): the value has to be ACTED
+   * ON, not merely computed.
+   */
+  it.each(endpoints.map((e) => [e.path, e] as const))(
+    "%s RETURNS on refusal rather than calling and continuing",
+    (_path, e) => {
+      expect(
+        e.body,
+        `\n\n${e.file} — ${e.path} calls requireScheduledSecret without acting on it.\n\n` +
+          `The helper writes the 401 itself and returns false; a caller that does not\n` +
+          `\`return\` runs the whole cron for an anonymous request anyway. Required shape:\n` +
+          `  if (!requireScheduledSecret(req, res, "<name>")) return;\n`,
+      ).toMatch(/if\s*\(\s*!requireScheduledSecret\(\s*req,\s*res,\s*["'`][^"'`]+["'`]\s*\)\s*\)\s*return;/);
+    },
+  );
+
+  /**
+   * The route name is what lands in the rejection log. A copy-pasted handler
+   * that gates correctly but reports its sibling's name sends whoever is
+   * reading that log to the wrong endpoint — and copy-paste is how all three
+   * of these came to differ in the first place.
+   */
+  it.each(endpoints.map((e) => [e.path, e] as const))("%s names ITSELF in the gate call", (path, e) => {
+    const named = /requireScheduledSecret\(\s*req,\s*res,\s*["'`]([^"'`]+)["'`]/.exec(e.body);
+    expect(named, `${path}: could not read the route name passed to the gate`).not.toBeNull();
+    expect(path.endsWith(`/${named![1]}`), `${path} gates under the name "${named![1]}"`).toBe(true);
+  });
+
+  /**
    * Ordering matters as much as presence — the lesson from the delete sweep,
    * where a procedure verified a parent and then deleted an unrelated child.
    * A gate after the work has already started is not a gate.
