@@ -10,7 +10,7 @@ import { accounts, contacts, customFieldDefs, leads, opportunities } from "../..
 import { getDb } from "../db";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, repProcedure, workspaceProcedure } from "../_core/workspace";
-import { reservedCustomFieldKey } from "@shared/customFieldKeys";
+import { reservedCustomFieldKey, undefinedCustomFieldKeys } from "@shared/customFieldKeys";
 
 const ENTITY_TYPES = ["lead", "contact", "account", "opportunity"] as const;
 
@@ -235,8 +235,7 @@ export const customFieldsRouter = router({
        * definitions it just rendered. Only a hand-made call reaches it.
        */
       const defined = new Set(defs.map((d) => d.fieldKey));
-      for (const key of Object.keys(input.values)) {
-        if (defined.has(key)) continue;
+      for (const key of undefinedCustomFieldKeys(input.values, defined)) {
         const clash = reservedCustomFieldKey(key);
         throw new TRPCError({
           code: "BAD_REQUEST",

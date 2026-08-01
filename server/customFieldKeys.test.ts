@@ -26,6 +26,7 @@ import {
   RESERVED_CUSTOM_FIELD_KEYS,
   canonicalCustomFieldKey,
   reservedCustomFieldKey,
+  undefinedCustomFieldKeys,
 } from "@shared/customFieldKeys";
 
 const ROOT = join(__dirname, "..");
@@ -191,10 +192,102 @@ describe("the router enforces it", () => {
   });
 
   it("setValues writes only DEFINED keys", () => {
+    /**
+     * MUTATION-VERIFIED. The previous version of this test asserted that
+     * `defs.map((d) => d.fieldKey)` and `Object.keys(input.values)` appeared
+     * in the handler. Changing `if (defined.has(key)) continue;` to
+     * `if (defined.has(key) || true) continue;` — which disables the allowlist
+     * completely and restores the a278a39 hole — left both strings in place,
+     * and the FULL SUITE stayed green at 1601 passed.
+     *
+     * The decision now lives in a pure function and is tested by CALLING it
+     * (below). What is left here is the wiring: the handler must route its
+     * keys through that function and throw, because a perfect helper nothing
+     * calls is the dead-wiring class this repo keeps finding.
+     */
     const setValues = src.slice(src.indexOf("setValues:"));
+    expect(src.indexOf("setValues:"), "setValues handler not found").toBeGreaterThan(0);
     expect(setValues.length).toBeGreaterThan(400);
-    // The definitions must be used as an allowlist, not only for `required`.
-    expect(setValues).toMatch(/defs\.map\(\(d\) => d\.fieldKey\)/);
-    expect(setValues).toMatch(/Object\.keys\(input\.values\)/);
+    expect(setValues).toMatch(
+      /for \(const key of undefinedCustomFieldKeys\(input\.values, defined\)\)/,
+    );
+    /**
+     * The loop body must REFUSE, unconditionally.
+     *
+     * Written first as `expect(loop).toMatch(/throw new TRPCError/)`, which a
+     * mutation to `if (0) throw new TRPCError({` walked straight through — the
+     * token was still present and the refusal was dead. That is the exact
+     * defect this whole re-audit is about, reproduced inside the fix for it.
+     * So the STATEMENT is pinned, not the token: loop → clash → bare throw,
+     * with nothing in between to switch it off.
+     */
+    expect(
+      setValues,
+      "\n\nThe refusal must be an unconditional `throw` in the loop body. A throw\n" +
+        "behind an `if`, or a `console.warn` in its place, detects the bad key\n" +
+        "and writes it anyway.\n",
+    ).toMatch(
+      /for \(const key of undefinedCustomFieldKeys\(input\.values, defined\)\) \{\s*const clash = reservedCustomFieldKey\(key\);\s*throw new TRPCError\(\{/,
+    );
+    // `defined` must come from the workspace's own definitions, not a literal.
+    expect(setValues).toMatch(/const defined = new Set\(defs\.map\(\(d\) => d\.fieldKey\)\)/);
+  });
+
+  it("imports the helper it calls — a free identifier ships and throws at runtime", () => {
+    // esbuild bundles an undeclared identifier happily; tsc is the only thing
+    // that catches it, and this repo carries ~341 pre-existing tsc errors that
+    // make a new one easy to miss. Fourth instance of this trap (e9121b9).
+    expect(src).toMatch(
+      /import\s*\{[^}]*\bundefinedCustomFieldKeys\b[^}]*\}\s*from\s*"@shared\/customFieldKeys"/,
+    );
+  });
+});
+
+describe("undefinedCustomFieldKeys — the allowlist itself", () => {
+  it("returns the keys the workspace never defined", () => {
+    expect(
+      undefinedCustomFieldKeys({ tier: "gold", linkedinUrl: "x" }, new Set(["tier"])),
+    ).toEqual(["linkedinUrl"]);
+  });
+
+  it("accepts a payload that is entirely defined", () => {
+    expect(undefinedCustomFieldKeys({ tier: "gold" }, new Set(["tier", "region"]))).toEqual([]);
+  });
+
+  it("refuses EVERY key when the workspace has no definitions", () => {
+    // The mutation that survived made this case return [] — every engine-owned
+    // key writable on a workspace that has defined no custom fields at all.
+    expect(
+      undefinedCustomFieldKeys({ linkedinUrl: "x", intentTopics: ["a"] }, new Set()),
+    ).toEqual(["linkedinUrl", "intentTopics"]);
+  });
+
+  it("names the engine-owned keys specifically, since those steer a feature", () => {
+    // Each of these moves something: linkedinUrl picks Social Autopilot's
+    // invite targets, coOwners fabricates ownership, the scoring keys move a
+    // lead score. a278a39 lists them in full.
+    for (const key of ["linkedinUrl", "coOwners", "technologies", "intentTopics"]) {
+      expect(undefinedCustomFieldKeys({ [key]: 1 }, new Set(["tier"]))).toEqual([key]);
+    }
+  });
+
+  it("matches EXACTLY — a defined `firstName` does not license writing `first_name`", () => {
+    // The key checked has to be the key written, or setValues stores a
+    // spelling no reader looks for. Deliberately NOT canonicalised; the
+    // reasoning is recorded on the function.
+    expect(undefinedCustomFieldKeys({ first_name: "a" }, new Set(["firstName"]))).toEqual([
+      "first_name",
+    ]);
+  });
+
+  it("does not treat an inherited property as defined", () => {
+    // `{}.constructor` is truthy on any object literal, so a membership test
+    // written as `key in obj` rather than a Set would let `constructor` and
+    // `toString` through. Set.has has no prototype chain — asserted so a
+    // refactor back to a plain object is caught here.
+    expect(undefinedCustomFieldKeys({ constructor: 1, toString: 2 }, new Set(["tier"]))).toEqual([
+      "constructor",
+      "toString",
+    ]);
   });
 });

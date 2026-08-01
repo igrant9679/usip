@@ -79,3 +79,29 @@ const RESERVED_CANONICAL = new Map<string, { key: string; owner: string }>(
 export function reservedCustomFieldKey(key: string): { key: string; owner: string } | null {
   return RESERVED_CANONICAL.get(canonicalCustomFieldKey(key)) ?? null;
 }
+
+/**
+ * The keys in a `setValues` payload that the workspace has NOT defined.
+ *
+ * Extracted from routers/customFields.ts so the allowlist can be tested by
+ * CALLING it. The guard that used to cover it asserted that
+ * `defs.map((d) => d.fieldKey)` and `Object.keys(input.values)` appeared in
+ * the handler — both still true after `if (defined.has(key)) continue;` was
+ * mutated to `if (defined.has(key) || true) continue;`, which disables the
+ * allowlist entirely. That mutation passed the whole suite (1601 green).
+ * Presence of the pieces is not the effect; a pure function has no such gap.
+ *
+ * Exact match on purpose. `defined` holds the workspace's own fieldKeys as
+ * stored, and `setValues` writes `input.values` into the blob under the key
+ * the caller supplied — so the key that is checked must be the key that is
+ * written. Canonicalising here would accept `first_name` for a field defined
+ * as `firstName` and then write `first_name`, a key no reader looks for.
+ * (`reservedCustomFieldKey` is separator-insensitive for the opposite reason:
+ * it refuses a NEW definition, where either spelling would collide.)
+ */
+export function undefinedCustomFieldKeys(
+  values: Record<string, unknown>,
+  defined: ReadonlySet<string>,
+): string[] {
+  return Object.keys(values).filter((key) => !defined.has(key));
+}
