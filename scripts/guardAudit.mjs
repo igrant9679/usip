@@ -29,8 +29,16 @@
  * `mutate` returns a verdict.
  *
  * ─── MUTATE: the verdict ─────────────────────────────────────────────────────
- * Battery JSON is a list of {id, file, find | re, repl, guard, what}. Rules the
- * runner enforces, each one learned by getting it wrong:
+ * Battery JSON is a list of {id, file, find | re, repl, guard, what}.
+ *
+ * ⚠️ MULTI-LINE `find` STRINGS: most files in this repo use CRLF, so a `find`
+ * that joins lines with "\n" matches NOTHING and the entry reports
+ * HARNESS-FAILURE. Use `re` with `\r?\n` between lines, or keep `find` to a
+ * single line. (Not normalised on the runner's side on purpose: rewriting a
+ * file's line endings as a side effect of testing it would be a worse bug than
+ * the one being hunted.)
+ *
+ * Rules the runner enforces, each one learned by getting it wrong:
  *   · `find` must match EXACTLY ONCE — a mutation that silently applied
  *     nowhere reports the guard as healthy;
  *   · the mutation must leave the file PARSING, or vitest prints "no tests"

@@ -439,12 +439,24 @@ export const pipelineAlertsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      /**
+       * `activities` links by relatedType/relatedId and records its author in
+       * `actorUserId`. This wrote `opportunityId` and `createdByUserId`, and
+       * NEITHER COLUMN EXISTS — Drizzle maps an object key to a column and
+       * silently ignores anything it does not recognise, so both were dropped
+       * on the way to the INSERT with no error anywhere.
+       *
+       * The note was therefore saved attached to nothing and authored by
+       * nobody: it never appeared in the deal's activity feed, which is the
+       * only place anyone would look for it.
+       */
       await db.insert(activities).values({
         workspaceId: ctx.workspace.id,
-        opportunityId: input.opportunityId,
+        relatedType: "opportunity",
+        relatedId: input.opportunityId,
         type: "note",
         body: input.note,
-        createdByUserId: ctx.user.id,
+        actorUserId: ctx.user.id,
       });
       return { ok: true };
     }),

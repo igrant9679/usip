@@ -1282,7 +1282,10 @@ Reason: ${input.reason}`,
           kind: "system",
           title: `Extension requested: "${proposal.title}"`,
           body: `${clientLabel} has requested an extension. Reason: ${input.reason.slice(0, 200)}`,
-          isRead: false,
+          // `isRead` is not a column — unread is `readAt IS NULL`, which is
+          // already the default. Drizzle dropped the key silently, so the
+          // intent happened to be met; the line was still a lie about what
+          // this table stores.
         });
       }
       // Log activity

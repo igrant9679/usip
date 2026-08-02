@@ -684,12 +684,21 @@ export const prospectsRouter = router({
           phone: prospect.phone ?? null,
           linkedinUrl: prospect.linkedinUrl ?? null,
           city: prospect.city ?? null,
-          functionalArea: prospect.functionalArea ?? null,
-          industry: prospect.industry ?? null,
           companyDomain: prospect.companyDomain ?? null,
           seniority: prospect.seniority ?? null,
-          sourceProspectId: prospect.id,
-        } as never);
+          /**
+           * `functionalArea`, `industry` and `sourceProspectId` used to be set
+           * here. None of the three is a column on `contacts`, and Drizzle
+           * silently drops an unrecognised key — so they never reached the
+           * INSERT and nothing reported it. `as never` is why tsc stayed quiet.
+           *
+           * The back-link is not lost: `prospects.linkedContactId` is set just
+           * below, which is the direction the code actually reads (974b903).
+           * functionalArea and industry have nowhere to go on this table at
+           * all — persisting them is a migration and a product decision, not
+           * something to smuggle in behind a cast.
+           */
+        });
         contactId = (inserted as { insertId: number }).insertId;
       }
 
