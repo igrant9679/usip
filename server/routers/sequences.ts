@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { and, count, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { accounts, activities, campaigns, chatAgents, contacts, emailDrafts, emailReplies, enrollments, forms, landingPages, leads, prospects, segmentSequenceRules, senderPoolMembers, sendingAccounts, sequenceAbVariants, sequenceEdges, sequenceNodes, sequences, unipileAccounts, users, workspaceMembers, workspaces, workspaceSettings } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
@@ -1478,15 +1478,31 @@ export async function deliverEmailDraft(params: {
 
   // ── Resolve sending account ──────────────────────────────────────
   let fromAccount: typeof sendingAccounts.$inferSelect | undefined;
+  let sequenceSenderPicked = false;
   if (draft.sequenceId) {
     const picked = await pickAccountForSequenceDraft(db, workspaceId, draft.sequenceId);
     if (picked) {
       fromAccount = picked;
+      sequenceSenderPicked = true;
       console.log(
         `[deliverEmailDraft] draft ${draft.id} sequence ${draft.sequenceId} → pool/account ${picked.id} (${picked.fromEmail})`,
       );
     }
   }
+  /**
+   * FALLBACKS MUST RESPECT `enabled` TOO.
+   *
+   * pickAccountForSequenceDraft deliberately returns null for a campaign whose
+   * configured account is disabled — its comment says so: "a disabled account
+   * shouldn't dispatch even when it's the campaign's only sender". Both
+   * fallbacks below then selected WITHOUT that filter, so the refusal was
+   * undone two steps later: the mail still went out, just from a different
+   * mailbox, and that mailbox could itself be disabled.
+   *
+   * Disabling is the control an admin uses to STOP a mailbox sending — after a
+   * blacklisting, a bounce spike, or a rep leaving. It has to mean that
+   * everywhere, or it means nothing.
+   */
   if (!fromAccount) {
     const [personal] = await db
       .select({ sa: sendingAccounts })
@@ -1497,18 +1513,33 @@ export async function deliverEmailDraft(params: {
           eq(sendingAccounts.workspaceId, workspaceId),
           eq(unipileAccounts.userId, userId),
           isNotNull(sendingAccounts.unipileAccountId),
+          eq(sendingAccounts.enabled, true),
         ),
       )
       .limit(1);
     if (personal) fromAccount = personal.sa;
   }
   if (!fromAccount) {
+    // Ordered, because `.limit(1)` with no ORDER BY let the row the database
+    // happened to return decide which mailbox a campaign sent from.
     const [fallback] = await db
       .select()
       .from(sendingAccounts)
-      .where(eq(sendingAccounts.workspaceId, workspaceId))
+      .where(and(eq(sendingAccounts.workspaceId, workspaceId), eq(sendingAccounts.enabled, true)))
+      .orderBy(asc(sendingAccounts.id))
       .limit(1);
     if (fallback) fromAccount = fallback;
+  }
+  if (fromAccount && draft.sequenceId && !sequenceSenderPicked) {
+    /**
+     * Loud, because the campaign's sender is a deliberate choice — a warmed
+     * domain, a specific rep's identity — and substituting it silently is how
+     * a campaign ends up sending from the wrong address for weeks unnoticed.
+     */
+    console.warn(
+      `[deliverEmailDraft] draft ${draft.id} sequence ${draft.sequenceId}: campaign sender unavailable ` +
+        `(deleted, disabled, or over its daily limit) — FELL BACK to account ${fromAccount.id} (${fromAccount.fromEmail})`,
+    );
   }
   if (!fromAccount) {
     throw new TRPCError({
