@@ -37,6 +37,32 @@ import { adminWsProcedure, roleRank, workspaceProcedure } from "../_core/workspa
 import { publicProcedure, protectedProcedure, router } from "../_core/trpc";
 import { recordAudit } from "../audit";
 import { appBaseUrl as publicAppOrigin } from "../appUrl";
+import { activeTaskStatuses } from "@shared/taskStatus";
+
+/**
+ * `status IN (…)` over the LIVE-work set, as bound parameters.
+ *
+ * Offboarding counted and reassigned `status = 'open'` only. 9f2e78f
+ * established that live work is four statuses — open, draft, in_progress,
+ * snoozed — and that `eq(tasks.status, "open")` is not a synonym for "live".
+ * These four call sites said the same thing in RAW SQL, where that guard's
+ * scan could not see them, so they kept the old meaning:
+ *
+ *   · delete's owned-work COUNT — a member whose work is all in_progress or
+ *     snoozed reported ZERO owned tasks, so no reassignment was demanded and
+ *     the delete went through. team.delete removes the user row when no
+ *     memberships remain, so those tasks were left pointing at a DELETED user.
+ *   · all three reassignments — even when reassignment did happen, only the
+ *     `open` ones moved. in_progress is the task somebody is doing right now;
+ *     snoozed is the user having said "later" in the most explicit way the UI
+ *     offers.
+ *
+ * Bound rather than interpolated. The values come from a const tuple, not from
+ * input, but a hand-built IN list is how the next one stops being bound.
+ */
+function liveTaskStatuses() {
+  return sql`status IN (${sql.join(activeTaskStatuses().map((s) => sql`${s}`), sql`, `)})`;
+}
 
 const ROLE_ENUM = z.enum(["super_admin", "admin", "manager", "rep"]);
 const DEFAULT_NOTIFY_POLICY = {
@@ -544,7 +570,7 @@ export const teamRouter = router({
       // Reassign owned work
       const [leadUpd] = await db.execute(sql`UPDATE leads SET ownerUserId = ${input.reassignToUserId} WHERE workspaceId = ${ctx.workspace.id} AND ownerUserId = ${target.userId}`) as any;
       const [oppUpd] = await db.execute(sql`UPDATE opportunities SET ownerUserId = ${input.reassignToUserId} WHERE workspaceId = ${ctx.workspace.id} AND ownerUserId = ${target.userId}`) as any;
-      const [taskUpd] = await db.execute(sql`UPDATE tasks SET ownerUserId = ${input.reassignToUserId} WHERE workspaceId = ${ctx.workspace.id} AND ownerUserId = ${target.userId} AND status = 'open'`) as any;
+      const [taskUpd] = await db.execute(sql`UPDATE tasks SET ownerUserId = ${input.reassignToUserId} WHERE workspaceId = ${ctx.workspace.id} AND ownerUserId = ${target.userId} AND ${liveTaskStatuses()}`) as any;
 
       await db
         .update(workspaceMembers)
@@ -564,7 +590,7 @@ export const teamRouter = router({
         reassigned: {
           leads: Number(leadUpd?.affectedRows ?? 0),
           opportunities: Number(oppUpd?.affectedRows ?? 0),
-          openTasks: Number(taskUpd?.affectedRows ?? 0),
+          tasks: Number(taskUpd?.affectedRows ?? 0),
         },
       };
     }),
@@ -625,20 +651,20 @@ export const teamRouter = router({
       // Owned-work guard — mirrors deactivate (leads, opps, open tasks).
       const [leadRows] = await db.execute(sql`SELECT COUNT(*) AS n FROM leads WHERE workspaceId = ${ctx.workspace.id} AND ownerUserId = ${target.userId}`) as any;
       const [oppRows] = await db.execute(sql`SELECT COUNT(*) AS n FROM opportunities WHERE workspaceId = ${ctx.workspace.id} AND ownerUserId = ${target.userId}`) as any;
-      const [taskRows] = await db.execute(sql`SELECT COUNT(*) AS n FROM tasks WHERE workspaceId = ${ctx.workspace.id} AND ownerUserId = ${target.userId} AND status = 'open'`) as any;
+      const [taskRows] = await db.execute(sql`SELECT COUNT(*) AS n FROM tasks WHERE workspaceId = ${ctx.workspace.id} AND ownerUserId = ${target.userId} AND ${liveTaskStatuses()}`) as any;
       const owned = {
         leads: Number(leadRows?.[0]?.n ?? 0),
         opportunities: Number(oppRows?.[0]?.n ?? 0),
-        openTasks: Number(taskRows?.[0]?.n ?? 0),
+        tasks: Number(taskRows?.[0]?.n ?? 0),
       };
-      const totalOwned = owned.leads + owned.opportunities + owned.openTasks;
+      const totalOwned = owned.leads + owned.opportunities + owned.tasks;
 
-      let reassigned = { leads: 0, opportunities: 0, openTasks: 0 };
+      let reassigned = { leads: 0, opportunities: 0, tasks: 0 };
       if (totalOwned > 0) {
         if (!input.reassignToUserId) {
           throw new TRPCError({
             code: "BAD_REQUEST",
-            message: `This member still owns ${owned.leads} lead(s), ${owned.opportunities} opportunit${owned.opportunities === 1 ? "y" : "ies"}, and ${owned.openTasks} open task(s). Choose a member to reassign their work to before deleting.`,
+            message: `This member still owns ${owned.leads} lead(s), ${owned.opportunities} opportunit${owned.opportunities === 1 ? "y" : "ies"}, and ${owned.tasks} unfinished task(s). Choose a member to reassign their work to before deleting.`,
           });
         }
         if (input.reassignToUserId === target.userId) {
@@ -653,11 +679,11 @@ export const teamRouter = router({
 
         const [leadUpd] = await db.execute(sql`UPDATE leads SET ownerUserId = ${input.reassignToUserId} WHERE workspaceId = ${ctx.workspace.id} AND ownerUserId = ${target.userId}`) as any;
         const [oppUpd] = await db.execute(sql`UPDATE opportunities SET ownerUserId = ${input.reassignToUserId} WHERE workspaceId = ${ctx.workspace.id} AND ownerUserId = ${target.userId}`) as any;
-        const [taskUpd] = await db.execute(sql`UPDATE tasks SET ownerUserId = ${input.reassignToUserId} WHERE workspaceId = ${ctx.workspace.id} AND ownerUserId = ${target.userId} AND status = 'open'`) as any;
+        const [taskUpd] = await db.execute(sql`UPDATE tasks SET ownerUserId = ${input.reassignToUserId} WHERE workspaceId = ${ctx.workspace.id} AND ownerUserId = ${target.userId} AND ${liveTaskStatuses()}`) as any;
         reassigned = {
           leads: Number(leadUpd?.affectedRows ?? 0),
           opportunities: Number(oppUpd?.affectedRows ?? 0),
-          openTasks: Number(taskUpd?.affectedRows ?? 0),
+          tasks: Number(taskUpd?.affectedRows ?? 0),
         };
       }
 
@@ -788,7 +814,7 @@ export const teamRouter = router({
         // Reassign owned work
         await db.execute(sql`UPDATE leads SET ownerUserId = ${input.reassignToUserId} WHERE workspaceId = ${ctx.workspace.id} AND ownerUserId = ${target.userId}`);
         await db.execute(sql`UPDATE opportunities SET ownerUserId = ${input.reassignToUserId} WHERE workspaceId = ${ctx.workspace.id} AND ownerUserId = ${target.userId}`);
-        await db.execute(sql`UPDATE tasks SET ownerUserId = ${input.reassignToUserId} WHERE workspaceId = ${ctx.workspace.id} AND ownerUserId = ${target.userId} AND status = 'open'`);
+        await db.execute(sql`UPDATE tasks SET ownerUserId = ${input.reassignToUserId} WHERE workspaceId = ${ctx.workspace.id} AND ownerUserId = ${target.userId} AND ${liveTaskStatuses()}`);
 
         await db.update(workspaceMembers).set({ deactivatedAt: new Date() }).where(eq(workspaceMembers.id, target.id));
         deactivated++;

@@ -206,7 +206,7 @@ export default function Team() {
       utils.team.list.invalidate();
       setDeactivateTarget(null);
       setReassignTo(null);
-      toast.success(`Deactivated — reassigned ${res.reassigned.leads} leads, ${res.reassigned.opportunities} opps, ${res.reassigned.openTasks} tasks`);
+      toast.success(`Deactivated — reassigned ${res.reassigned.leads} leads, ${res.reassigned.opportunities} opps, ${res.reassigned.tasks} tasks`);
     },
     onError: (e) => toast.error(e.message),
   });
@@ -222,7 +222,7 @@ export default function Team() {
       utils.team.list.invalidate();
       setDeleteTarget(null);
       setDeleteReassignTo(null);
-      const moved = res.reassigned.leads + res.reassigned.opportunities + res.reassigned.openTasks;
+      const moved = res.reassigned.leads + res.reassigned.opportunities + res.reassigned.tasks;
       toast.success(
         res.deletedUser
           ? `Deleted — removed completely${moved ? `, reassigned ${moved} item(s)` : ""}`
@@ -1412,7 +1412,7 @@ export default function Team() {
           </DialogHeader>
           <div className="space-y-3 text-sm">
             <p className="text-muted-foreground">
-              Their open leads, opportunities, and open tasks must be reassigned to another active member before deactivation.
+              Their open leads, opportunities, and unfinished tasks must be reassigned to another active member before deactivation.
             </p>
             <div className="space-y-1">
               <Label>Reassign owned work to</Label>
@@ -1507,7 +1507,7 @@ export default function Team() {
           </DialogHeader>
           <div className="space-y-3 py-2">
             <p className="text-sm text-muted-foreground">
-              All owned leads, opportunities, and open tasks will be reassigned to the selected member.
+              All owned leads, opportunities, and unfinished tasks will be reassigned to the selected member.
               Members who are already deactivated, yourself, or peers above your rank will be skipped.
             </p>
             <div>

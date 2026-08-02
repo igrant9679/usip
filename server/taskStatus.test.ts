@@ -195,3 +195,81 @@ describe("the sites that had the bug", () => {
     expect(src).not.toMatch(/eq\(tasks\.status,\s*"open"\)/);
   });
 });
+
+/**
+ * THE SAME RULE, WRITTEN IN RAW SQL — where the scan above could not see it.
+ *
+ * The allowlist scan matches `eq(tasks.status, "open")`, the Drizzle form.
+ * admin.ts said the identical thing four times as
+ * `sql\`… AND status = 'open'\``, and every one of them slipped through:
+ *
+ *   · team.delete's owned-work COUNT — the gate that decides whether an admin
+ *     is forced to reassign before removing someone. A member whose work was
+ *     all in_progress or snoozed counted as owning ZERO tasks, so the delete
+ *     proceeded unchallenged; team.delete then removes the user row when no
+ *     memberships remain, leaving those tasks owned by a DELETED user id.
+ *   · deactivate, team.delete and bulkDeactivate's reassignments — only the
+ *     `open` tasks moved. in_progress is the task somebody is doing right now.
+ *
+ * Fixed by `liveTaskStatuses()` in admin.ts, which binds activeTaskStatuses()
+ * into an IN list. This guard exists so the NEXT one is caught in the form it
+ * is actually written in, rather than only in the form we thought to scan for.
+ *
+ * Comments are stripped first — admin.ts's own explanation of the bug quotes
+ * `status = 'open'`, and matching your own prose about the code is a trap this
+ * repo has hit repeatedly.
+ */
+describe("raw SQL cannot say status = 'open' either", () => {
+  const RAW_OPEN = /\bstatus\s*=\s*'open'/;
+
+  /** Raw-SQL sites, by file. */
+  const sites = FILES.filter((f) => RAW_OPEN.test(stripped(f))).map(rel);
+
+  it("scans real source (floor)", () => {
+    // The same floor the rest of this file keeps: an empty scan reports clean.
+    expect(FILES.length).toBeGreaterThan(150);
+  });
+
+  it("no offboarding path filters tasks by a bare 'open' in SQL", () => {
+    expect(
+      sites,
+      sites.length
+        ? `\n\nRaw-SQL \`status = 'open'\` in:\n  ${sites.join("\n  ")}\n\n` +
+            `This is the same drift as eq(tasks.status, "open"), in the form the\n` +
+            `allowlist scan above cannot see. If it decides whether work still\n` +
+            `EXISTS — a dedupe, an owned-work count, a reassignment — it must use\n` +
+            `the live set (open, draft, in_progress, snoozed). admin.ts binds it\n` +
+            `via liveTaskStatuses(); do the same rather than inlining a literal.\n`
+        : undefined,
+    ).toEqual([]);
+  });
+
+  it("admin.ts reassigns and counts over the LIVE set, bound not inlined", () => {
+    const admin = stripped(
+      FILES.find((f) => rel(f) === "server/routers/admin.ts")!,
+    );
+    // Every tasks statement on the offboarding paths goes through the helper.
+    const helperUses = (admin.match(/\$\{liveTaskStatuses\(\)\}/g) ?? []).length;
+    expect(
+      helperUses,
+      "expected the count + all three reassignments to use liveTaskStatuses()",
+    ).toBeGreaterThanOrEqual(4);
+
+    // And the helper must derive from the shared definition, not a local list.
+    expect(admin).toMatch(/function liveTaskStatuses\(\)[\s\S]{0,200}?activeTaskStatuses\(\)/);
+    expect(admin).toMatch(/import \{ activeTaskStatuses \} from "@shared\/taskStatus"/);
+    // Bound parameters, not string-built.
+    expect(admin).toMatch(/sql\.join\(/);
+  });
+
+  it("the owned-work gate counts the same set it reassigns", () => {
+    /**
+     * The gate and the fix have to agree. If the COUNT is narrower than the
+     * UPDATE, an admin is never asked to reassign work that the UPDATE would
+     * have moved — which is precisely how in_progress tasks were orphaned.
+     */
+    const admin = stripped(FILES.find((f) => rel(f) === "server/routers/admin.ts")!);
+    const countStmt = /SELECT COUNT\(\*\) AS n FROM tasks[^`]*`/.exec(admin)?.[0] ?? "";
+    expect(countStmt, "the owned-task count statement was not found").toContain("liveTaskStatuses()");
+  });
+});

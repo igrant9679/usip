@@ -139,8 +139,13 @@ function mutate(batteryPath) {
     const path = join(ROOT, m.file);
     const original = readFileSync(path, "utf8");
     const pattern = m.re ? new RegExp(m.re, m.reFlags ?? "") : null;
+    // Flags are de-duplicated: a battery entry that already passes "g" used to
+    // build "gg" here and crash the whole run with an unhelpful RegExp error,
+    // mid-battery. A harness that dies is worse than one that reports a
+    // failure, because the run is left half-done.
+    const countFlags = [...new Set(((pattern?.flags ?? "") + "g").split(""))].join("");
     const hits = pattern
-      ? (original.match(new RegExp(pattern.source, (pattern.flags || "") + "g")) ?? []).length
+      ? (original.match(new RegExp(pattern.source, countFlags)) ?? []).length
       : original.split(m.find).length - 1;
 
     if (hits !== 1) {
