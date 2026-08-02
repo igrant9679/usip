@@ -1,10 +1,10 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { usageCounters, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { tryDecryptSecret } from "./crypto";
 import { ENV } from "./env";
-import { getRequestWorkspaceId } from "./requestContext";
+import { getRequestUserId, getRequestWorkspaceId } from "./requestContext";
 
 // ---------------------------------------------------------------------------
 // Public types — kept stable so existing 24 call sites do not change.
@@ -873,6 +873,101 @@ function resolveProvider(
  * have to agree, and changing which month a call lands in is a billing
  * decision rather than a bug fix.
  */
+/**
+ * Per-USER burst ceiling for interactive LLM calls.
+ *
+ * 47 invokeLLM call sites across 22 routers had no ceiling of any kind, so any
+ * signed-in user could drive arbitrary model spend as fast as they could send
+ * requests. Enforced HERE rather than as a list of tRPC paths in the rate-limit
+ * middleware: a path list has to be maintained, and the 48th call site would
+ * simply not be on it.
+ *
+ * Applied ONLY when there is a request user — an interactive call. Background
+ * engines pass `workspaceId` explicitly and run with no request context, so
+ * they are untouched; they carry their own per-feature daily caps
+ * (taskAutopilotDailyCap and friends), which is the right control for them.
+ *
+ * A safety valve, not a business number: the repo already caps the PUBLIC LLM
+ * path at 20/min, and this sits just above it because a signed-in user doing
+ * bulk work legitimately bursts harder than an anonymous chat visitor.
+ */
+const LLM_BURST_WINDOW_MS = 60_000;
+const LLM_BURST_MAX = 30;
+const llmBurst = new Map<number, number[]>();
+
+function checkLlmBurst(userId: number | undefined, now: number): void {
+  if (!userId) return; // background job — see the note above
+  const hits = (llmBurst.get(userId) ?? []).filter((t) => now - t < LLM_BURST_WINDOW_MS);
+  if (hits.length >= LLM_BURST_MAX) {
+    llmBurst.set(userId, hits);
+    throw new Error(
+      `LLM rate limit: more than ${LLM_BURST_MAX} AI requests in a minute. Please wait a moment and try again.`,
+    );
+  }
+  hits.push(now);
+  llmBurst.set(userId, hits);
+  // The map is keyed by user and pruned on read, but a long-lived process with
+  // many users would still accumulate empty arrays. Cheap sweep when it grows.
+  if (llmBurst.size > 500) {
+    llmBurst.forEach((v, k) => {
+      if (v.every((t: number) => now - t >= LLM_BURST_WINDOW_MS)) llmBurst.delete(k);
+    });
+  }
+}
+
+/**
+ * Per-WORKSPACE monthly token budget.
+ *
+ * `workspace_settings.llmMonthlyTokenCap` is NULL by default, which means
+ * unlimited — what a month's budget should be is a billing decision this
+ * codebase cannot derive, and shipping a guessed number would cut workspaces
+ * off mid-campaign on deploy (the fabrication refused in 974b903 / ff9e04d).
+ * The mechanism ships off; the owner sets the number.
+ *
+ * Unlike the burst ceiling this DOES apply to background engines. A budget
+ * that the autonomous engines are exempt from is not a budget — they are the
+ * heaviest spenders in the system.
+ *
+ * Cached briefly so a per-call check does not become two queries per LLM call.
+ * FAILS OPEN on a DB error: at that point the app is already broken, and
+ * refusing every AI feature on top of it helps nobody.
+ */
+const CAP_CACHE_MS = 60_000;
+const capCache = new Map<number, { at: number; cap: number | null; used: number }>();
+
+async function checkMonthlyCap(workspaceId: number | undefined, now: number): Promise<void> {
+  if (!workspaceId) return;
+  const cached = capCache.get(workspaceId);
+  let cap = cached?.cap ?? null;
+  let used = cached?.used ?? 0;
+  if (!cached || now - cached.at > CAP_CACHE_MS) {
+    try {
+      const db = await getDb();
+      if (!db) return;
+      const month = new Date().toISOString().slice(0, 7);
+      const [[settings], [counter]] = await Promise.all([
+        db.select({ cap: workspaceSettings.llmMonthlyTokenCap })
+          .from(workspaceSettings).where(eq(workspaceSettings.workspaceId, workspaceId)),
+        db.select({ used: usageCounters.llmTokens })
+          .from(usageCounters)
+          .where(and(eq(usageCounters.workspaceId, workspaceId), eq(usageCounters.month, month))),
+      ]);
+      cap = settings?.cap ?? null;
+      used = Number(counter?.used ?? 0);
+      capCache.set(workspaceId, { at: now, cap, used });
+    } catch (e) {
+      console.error(`[usage] cap check failed for workspace ${workspaceId}:`, e instanceof Error ? e.message : String(e));
+      return; // fail open
+    }
+  }
+  if (cap !== null && cap > 0 && used >= cap) {
+    throw new Error(
+      `This workspace has reached its monthly AI budget (${used.toLocaleString()} of ${cap.toLocaleString()} tokens). ` +
+        `Raise it in Settings → Billing, or wait for the next month.`,
+    );
+  }
+}
+
 async function recordLlmTokens(workspaceId: number | undefined, tokens: number): Promise<void> {
   if (!workspaceId || !Number.isFinite(tokens) || tokens <= 0) return;
   try {
@@ -899,6 +994,14 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
   //   2. async-local store set by workspaceProcedure middleware (every tRPC call)
   //   3. undefined → env-only credentials
   const workspaceId = params.workspaceId ?? getRequestWorkspaceId();
+
+  // Both ceilings are checked BEFORE the provider call and before a
+  // concurrency slot is taken — a limit enforced after the money is spent is
+  // not a limit, and a refused call must not hold a slot others are queued on.
+  const now = Date.now();
+  checkLlmBurst(getRequestUserId(), now);
+  await checkMonthlyCap(workspaceId, now);
+
   const creds = await loadCreds(workspaceId);
   const provider = resolveProvider(params.provider, creds);
   await acquireLlmSlot();

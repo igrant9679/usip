@@ -1590,6 +1590,22 @@ function EmailVerificationSettingsSection({ isAdmin }: { isAdmin: boolean }) {
 }
 
 function BillingTab({ usage }: { usage: any }) {
+  const utils = trpc.useUtils();
+  const settingsQ = trpc.settings.get.useQuery();
+  const saveMut = trpc.settings.save.useMutation({
+    onSuccess: () => { utils.settings.get.invalidate(); toast.success("AI budget saved"); },
+    onError: (e) => toast.error(e.message),
+  });
+  const [cap, setCap] = useState<string>("");
+  useEffect(() => {
+    const v = (settingsQ.data as any)?.llmMonthlyTokenCap;
+    setCap(v === null || v === undefined ? "" : String(v));
+  }, [settingsQ.data]);
+
+  const used = Number(usage?.llmTokens ?? 0);
+  const capNum = cap.trim() === "" ? null : Number(cap);
+  const overBudget = capNum !== null && capNum > 0 && used >= capNum;
+
   return (
     <>
       <Section title="Billing" description="Plan tier, seat count, and this month's usage counters.">
@@ -1598,6 +1614,48 @@ function BillingTab({ usage }: { usage: any }) {
           <StatCard label="Emails sent" value={Number(usage?.emailsSent ?? 0).toLocaleString()} />
           <StatCard label="LLM tokens" value={Number(usage?.llmTokens ?? 0).toLocaleString()} />
           <StatCard label="Month" value={usage?.month ?? "—"} />
+        </div>
+      </Section>
+      <Section
+        title="Monthly AI budget"
+        description="Caps this workspace's LLM token spend for the calendar month. Leave blank for no limit."
+      >
+        <div className="p-4 space-y-3">
+          <div className="flex items-end gap-2 flex-wrap">
+            <div className="space-y-1">
+              <label className="text-xs text-muted-foreground" htmlFor="llm-cap">Token cap per month</label>
+              <Input
+                id="llm-cap"
+                type="number"
+                min={0}
+                placeholder="No limit"
+                className="w-48"
+                value={cap}
+                onChange={(e) => setCap(e.target.value)}
+              />
+            </div>
+            <Button
+              size="sm"
+              disabled={saveMut.isPending}
+              onClick={() => saveMut.mutate({ llmMonthlyTokenCap: cap.trim() === "" ? null : Math.max(0, Math.floor(Number(cap) || 0)) })}
+            >
+              Save
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {capNum === null || capNum <= 0
+              ? "No limit set — AI features are never refused for budget reasons."
+              : `${used.toLocaleString()} of ${capNum.toLocaleString()} tokens used this month.`}
+          </p>
+          {overBudget && (
+            <p className="text-xs text-red-600 dark:text-red-400">
+              This workspace is over budget. AI features are refused until the cap is raised or the month rolls over.
+            </p>
+          )}
+          <p className="text-xs text-muted-foreground">
+            Applies to everything that calls a model, including the autonomous engines — a budget those were exempt
+            from would not be a budget.
+          </p>
         </div>
       </Section>
       <Section title="Invoices" description="Placeholder — invoice history appears here once billing is activated.">

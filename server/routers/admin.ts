@@ -118,6 +118,12 @@ export const settingsRouter = router({
         ipAllowlist: z.array(z.string()).optional(),
         enforce2fa: z.boolean().optional(),
         blockInvalidEmailsFromSequences: z.boolean().optional(),
+        /**
+         * Monthly LLM token budget (migration 0143). `null` clears it back to
+         * unlimited, which is the default — so `.nullable()` is load-bearing:
+         * without it there would be no way to turn a cap back off.
+         */
+        llmMonthlyTokenCap: z.number().int().min(0).nullable().optional(),
         notifyPolicy: z
           .record(
             z.string(),

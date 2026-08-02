@@ -3052,6 +3052,23 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0143: per-workspace monthly LLM token budget ──────────────────────────
+  // Nothing bounded an authenticated user driving LLM-backed procedures: 47
+  // call sites across 22 routers, no ceiling of any kind. The counter that
+  // would have shown the damage (usage_counters.llmTokens) was never written
+  // either, so the spend was invisible as well as unbounded.
+  //
+  // NULL means UNLIMITED, and that is the default on purpose. What a month's
+  // budget should be is a billing decision this codebase cannot derive, and
+  // inventing one would silently cut off workspaces mid-campaign on deploy.
+  // The mechanism ships off; the owner sets the number in Settings.
+  {
+    name: "0143_llm_monthly_token_cap.sql",
+    statements: [
+      "ALTER TABLE `workspace_settings` ADD COLUMN `llmMonthlyTokenCap` int NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

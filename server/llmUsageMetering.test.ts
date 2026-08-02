@@ -154,3 +154,114 @@ describe("what is still NOT measured", () => {
     ).toEqual([]);
   });
 });
+
+/**
+ * ...and bounded. Two ceilings, both at the same funnel as the meter.
+ *
+ * 47 invokeLLM call sites across 22 routers had no ceiling of any kind: any
+ * signed-in user could drive arbitrary model spend as fast as they could send
+ * requests. Enforced in invokeLLM rather than as a list of tRPC paths in the
+ * rate-limit middleware — a path list must be maintained, and the 48th call
+ * site would simply not be on it.
+ */
+describe("the burst ceiling", () => {
+  const fn = llm.slice(llm.indexOf("function checkLlmBurst"), llm.indexOf("async function checkMonthlyCap"));
+
+  it("was isolated", () => {
+    expect(fn.length).toBeGreaterThan(200);
+  });
+
+  it("is checked BEFORE the provider call and before a concurrency slot", () => {
+    /**
+     * A limit enforced after the money is spent is not a limit — and a refused
+     * call must not hold a slot that other calls are queued behind.
+     */
+    const invoke = llm.slice(llm.indexOf("export async function invokeLLM"));
+    const check = invoke.indexOf("checkLlmBurst(");
+    const cap = invoke.indexOf("checkMonthlyCap(");
+    const slot = invoke.indexOf("acquireLlmSlot()");
+    const call = invoke.indexOf("switch (provider)");
+    expect(check).toBeGreaterThan(0);
+    expect(check).toBeLessThan(slot);
+    expect(cap).toBeLessThan(slot);
+    expect(slot).toBeLessThan(call);
+  });
+
+  it("keys on the USER, and exempts background jobs deliberately", () => {
+    /**
+     * Engines pass workspaceId explicitly and run with no request context, so
+     * getRequestUserId() is undefined for them. They carry their own
+     * per-feature daily caps, which is the right control for a job nobody is
+     * waiting on. Throttling them here would be throttling the product.
+     */
+    expect(llm).toMatch(/checkLlmBurst\(getRequestUserId\(\), now\)/);
+    expect(fn).toMatch(/if \(!userId\) return;/);
+  });
+
+  it("prunes its window rather than counting forever", () => {
+    // Without the filter the map only grows and every user is eventually
+    // limited by requests they made hours ago.
+    expect(fn).toMatch(/filter\(\(t\) => now - t < LLM_BURST_WINDOW_MS\)/);
+  });
+});
+
+describe("the monthly budget", () => {
+  const fn = llm.slice(llm.indexOf("async function checkMonthlyCap"), llm.indexOf("async function recordLlmTokens"));
+
+  it("was isolated", () => {
+    expect(fn.length).toBeGreaterThan(400);
+  });
+
+  it("defaults to UNLIMITED — no invented number ships", () => {
+    /**
+     * `llmMonthlyTokenCap` is NULL by default. What a month's budget should be
+     * is a billing decision this codebase cannot derive, and a guessed number
+     * would cut workspaces off mid-campaign on deploy — the fabrication
+     * refused in 974b903 and ff9e04d.
+     */
+    expect(fn).toMatch(/if \(cap !== null && cap > 0 && used >= cap\)/);
+    const schema = read("drizzle/schema.ts");
+    expect(schema).toMatch(/llmMonthlyTokenCap: int\("llmMonthlyTokenCap"\)(?!\.default)/);
+    // A .notNull() or a .default() here would be exactly the invented number.
+    expect(schema).not.toMatch(/llmMonthlyTokenCap: int\("llmMonthlyTokenCap"\)\s*\.\s*(?:notNull|default)/);
+  });
+
+  it("applies to background engines too", () => {
+    // Unlike the burst ceiling. A budget the autonomous engines are exempt
+    // from is not a budget — they are the heaviest spenders in the system.
+    expect(fn).not.toMatch(/getRequestUserId/);
+    expect(llm).toMatch(/await checkMonthlyCap\(workspaceId, now\)/);
+  });
+
+  it("fails OPEN on a database error", () => {
+    // At that point the app is already broken; refusing every AI feature on
+    // top of it helps nobody. Matches hasActiveEnrollmentForEmail's reasoning.
+    expect(fn).toMatch(/catch \(e\) \{[\s\S]{0,220}?return; \/\/ fail open/);
+  });
+
+  it("reads the same month key the meter writes", () => {
+    expect(fn).toMatch(/const month = new Date\(\)\.toISOString\(\)\.slice\(0, 7\)/);
+  });
+
+  it("is cached, so a ceiling does not cost two queries per call", () => {
+    expect(fn).toMatch(/capCache/);
+    expect(llm).toMatch(/const CAP_CACHE_MS = /);
+  });
+});
+
+describe("the cap is reachable and persistable", () => {
+  it("settings.save accepts it, nullable so it can be turned back off", () => {
+    expect(admin).toMatch(/llmMonthlyTokenCap: z\.number\(\)\.int\(\)\.min\(0\)\.nullable\(\)\.optional\(\)/);
+  });
+
+  it("migration 0143 adds the column", () => {
+    const migrations = read("server/_core/rawMigrations.ts");
+    expect(migrations).toMatch(/name: "0143_llm_monthly_token_cap\.sql"/);
+    // Asserted as the STATEMENT, not just the column name appearing somewhere:
+    // dca9672's guard passed while the ADD COLUMN was deleted, because the name
+    // still appeared in a CREATE INDEX line.
+    expect(migrations).toMatch(
+      /ALTER TABLE `workspace_settings` ADD COLUMN `llmMonthlyTokenCap` int NULL/,
+    );
+  });
+});

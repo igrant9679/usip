@@ -1382,6 +1382,12 @@ export const workspaceSettings = mysqlTable("workspace_settings", {
   areScraperSources: json("areScraperSources"),
   areIcpRegenSchedule: varchar("areIcpRegenSchedule", { length: 20 }),
   areSequenceQualityThreshold: int("areSequenceQualityThreshold"),
+  /** Monthly LLM token budget for this workspace (Migration 0143).
+   *  NULL = unlimited, and that is the default: what a month's budget should
+   *  be is a billing decision, and shipping a guessed number would cut
+   *  workspaces off mid-campaign on deploy. Enforced in _core/llm.ts against
+   *  usage_counters.llmTokens for the current UTC month. */
+  llmMonthlyTokenCap: int("llmMonthlyTokenCap"),
   // AI auto-send toggle (Migration 0050)
   aiAutoSendEnabled: boolean("aiAutoSendEnabled").default(false).notNull(),
   aiAutoSendScoreMin: int("aiAutoSendScoreMin").default(70).notNull(),
