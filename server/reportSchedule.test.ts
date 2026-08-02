@@ -19,7 +19,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { isDue, renderReportHtml } from "./services/reportScheduler";
+import { activeRecipients, isDue, renderReportHtml } from "./services/reportScheduler";
 import { zonedDayKey } from "@shared/availability";
 
 const ROOT = join(__dirname, "..");
@@ -171,5 +171,167 @@ describe("reportScheduler does not reach for the container's clock", () => {
   it("resolves the workspace timezone instead", () => {
     expect(src).toContain("getWorkspaceTimezone");
     expect(src).toContain("zonedDayKey");
+  });
+});
+
+/**
+ * Offboarding must stop the DELIVERY, not just the login.
+ *
+ * `saved_reports.scheduleRecipients` is free text and nothing connected it to
+ * membership. 3366f4b and e5da0fb revoked a deactivated member's access — they
+ * could no longer sign in or see the workspace in the switcher — and this
+ * hourly cron carried on emailing them the pipeline every week, indefinitely.
+ * The body is runSpec() output: real deal, contact and pipeline rows.
+ *
+ * Two halves, because the two offboarding paths leave different evidence:
+ *   deactivate → the membership row survives with deactivatedAt set, so the
+ *                address is recognisable at SEND time and filtered here.
+ *                Reactivating restores delivery with no setting lost.
+ *   delete     → team.delete removes the membership row, and the user row too
+ *                when no memberships remain. Nothing is left to recognise, so
+ *                admin.ts strips the address at removal time instead.
+ */
+describe("activeRecipients — a revoked member stops receiving the data", () => {
+  it("drops a deactivated member's address", () => {
+    expect(activeRecipients(["rep@acme.com", "boss@acme.com"], ["rep@acme.com"])).toEqual([
+      "boss@acme.com",
+    ]);
+  });
+
+  it("KEEPS an external address that was never a member", () => {
+    /**
+     * The load-bearing half. Emailing a report to a client or an exec with no
+     * Velocity account is what the free-text field is FOR. A filter that
+     * dropped unknown addresses would quietly break every such schedule while
+     * looking like a security fix.
+     */
+    expect(activeRecipients(["cfo@client.com", "rep@acme.com"], ["rep@acme.com"])).toEqual([
+      "cfo@client.com",
+    ]);
+  });
+
+  it("compares case-insensitively and ignores surrounding whitespace", () => {
+    // An address is case-insensitive, and the field is comma-separated free
+    // text typed by a human — "Rep@Acme.com , x" is the normal shape.
+    expect(activeRecipients([" Rep@Acme.COM ", "boss@acme.com"], ["rep@acme.com"])).toEqual([
+      "boss@acme.com",
+    ]);
+    expect(activeRecipients(["rep@acme.com"], [" REP@ACME.COM "])).toEqual([]);
+  });
+
+  it("returns everything when nobody is revoked", () => {
+    const all = ["a@x.com", "b@x.com"];
+    expect(activeRecipients(all, [])).toEqual(all);
+  });
+
+  it("can empty the list — the caller must not send to nobody", () => {
+    // emailSavedReport turns this into a refusal rather than a send with an
+    // empty `to`, which some transports happily accept.
+    expect(activeRecipients(["rep@acme.com"], ["rep@acme.com"])).toEqual([]);
+  });
+
+  it("a member with a NULL email cannot affect anyone else's delivery", () => {
+    // Such a row normalises to "" in the revoked set. It must decide nothing.
+    expect(activeRecipients(["a@x.com", "b@x.com"], ["", "   "])).toEqual(["a@x.com", "b@x.com"]);
+  });
+
+  it("never returns a blank recipient, whoever is revoked", () => {
+    /**
+     * Dropped on its own account rather than as a side effect of the revoked
+     * set. My first version filtered blanks out of the revoked set instead, so
+     * whether a blank recipient survived depended on whether some UNRELATED
+     * member happened to have a null email — and the test I wrote for it was
+     * vacuous, passing with the filter removed. Caught by re-running the
+     * battery; the function moved, not the assertion.
+     */
+    expect(activeRecipients(["", "  ", "a@x.com"], [])).toEqual(["a@x.com"]);
+    expect(activeRecipients(["", "a@x.com"], [""])).toEqual(["a@x.com"]);
+    expect(activeRecipients([""], ["rep@acme.com"])).toEqual([]);
+  });
+});
+
+describe("the filter is actually wired into the send path", () => {
+  const src = readFileSync(join(ROOT, "server/services/reportScheduler.ts"), "utf8");
+
+  it("emailSavedReport filters before it sends", () => {
+    const at = src.indexOf("export async function emailSavedReport");
+    expect(at, "emailSavedReport not found").toBeGreaterThan(0);
+    const fn = src.slice(at, at + 1800);
+    expect(fn).toMatch(/const recipients = activeRecipients\(configured, await revokedMemberEmails\(/);
+    // Ordering: the filter must precede the send, or it decides nothing.
+    const filtered = fn.indexOf("activeRecipients(");
+    const sent = fn.indexOf("sendSystemEmail(");
+    expect(filtered).toBeGreaterThan(0);
+    expect(sent).toBeGreaterThan(0);
+    expect(filtered).toBeLessThan(sent);
+  });
+
+  it("refuses to send when the filter empties the list", () => {
+    const at = src.indexOf("export async function emailSavedReport");
+    const fn = src.slice(at, at + 1800);
+    expect(fn).toMatch(/if \(recipients\.length === 0\)[\s\S]{0,120}?return \{ ok: false/);
+  });
+
+  it("scopes the revoked lookup to the workspace AND to deactivated rows", () => {
+    const at = src.indexOf("async function revokedMemberEmails");
+    expect(at, "revokedMemberEmails not found").toBeGreaterThan(0);
+    const fn = src.slice(at, at + 900);
+    expect(fn).toMatch(/eq\(workspaceMembers\.workspaceId, workspaceId\)/);
+    expect(fn).toMatch(/isNotNull\(workspaceMembers\.deactivatedAt\)/);
+    // Without the join it cannot compare addresses at all.
+    expect(fn).toMatch(/innerJoin\(users, eq\(users\.id, workspaceMembers\.userId\)\)/);
+  });
+});
+
+describe("team.delete strips the departing member from every schedule", () => {
+  const admin = readFileSync(join(ROOT, "server/routers/admin.ts"), "utf8");
+
+  const del = (() => {
+    const at = admin.indexOf("  delete: adminWsProcedure");
+    expect(at, "team.delete not found").toBeGreaterThan(0);
+    const next = admin.indexOf("bulkChangeRole:", at);
+    expect(next, "could not bound the handler").toBeGreaterThan(at);
+    return admin.slice(at, next);
+  })();
+
+  it("reads the workspace's schedules and rewrites them", () => {
+    expect(del).toMatch(/from\(savedReports\)/);
+    expect(del).toMatch(/eq\(savedReports\.workspaceId, ctx\.workspace\.id\)/);
+    expect(del).toMatch(/await db\.update\(savedReports\)/);
+  });
+
+  it("matches the address case-insensitively", () => {
+    // Invited as "Rep@Acme.com", typed into the schedule as "rep@acme.com".
+    expect(del).toMatch(/tgtEmail = \(tgtUser\?\.email \?\? ""\)\.trim\(\)\.toLowerCase\(\)/);
+    expect(del).toMatch(/e\.toLowerCase\(\) !== tgtEmail/);
+  });
+
+  it("turns the schedule OFF when it strips the last recipient", () => {
+    // Otherwise the cron runs the report every hour and fails to deliver it
+    // forever — "No valid recipients configured" on a loop.
+    expect(del).toMatch(/scheduleRecipients: null, scheduleFreq: "none"/);
+  });
+
+  it("runs while the user record still exists", () => {
+    /**
+     * The whole reason this lives in the handler rather than at send time:
+     * team.delete removes the membership row and, when no memberships remain,
+     * the user row. Both destroy the evidence this needs. It must therefore
+     * read tgtUser BEFORE the deletes and strip BEFORE them too.
+     */
+    const capture = del.indexOf("const [tgtUser] = await db.select()");
+    const strip = del.indexOf("from(savedReports)");
+    const delMember = del.indexOf("delete(workspaceMembers)");
+    const delUser = del.indexOf("delete(users)");
+    expect(capture).toBeGreaterThan(0);
+    expect(strip).toBeGreaterThan(capture);
+    expect(delMember).toBeGreaterThan(strip);
+    expect(delUser).toBeGreaterThan(strip);
+  });
+
+  it("reports what it did, rather than doing it silently", () => {
+    // An admin who set up that schedule needs to know it changed.
+    expect(del).toMatch(/strippedFromReports/);
+    expect(del).toMatch(/return \{ ok: true[^}]*strippedFromReports/);
   });
 });

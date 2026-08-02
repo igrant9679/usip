@@ -11,8 +11,8 @@
  * notifications), never a rep's mailbox. Body is an inline HTML table capped
  * at 100 rows with a link to open the full report in /reports.
  */
-import { and, eq, ne } from "drizzle-orm";
-import { savedReports } from "../../drizzle/schema";
+import { and, eq, isNotNull, ne } from "drizzle-orm";
+import { savedReports, users, workspaceMembers } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { appUrl } from "../appUrl";
 import { sendSystemEmail } from "../emailDelivery";
@@ -22,6 +22,59 @@ import { localDateOf, safeTimezone, zonedDayKey, zonedDowHour } from "@shared/av
 import { getWorkspaceTimezone } from "./workspaceTimezone";
 
 const esc = escapeHtml; // one escaper — @shared/escapeHtml
+
+/**
+ * Addresses on a schedule that belong to a REVOKED member of that workspace.
+ *
+ * `scheduleRecipients` is free text and deliberately so — emailing a report to
+ * a client or an exec with no Velocity account is a real use. But it means
+ * offboarding never touched it: 3366f4b/e5da0fb revoked a deactivated member's
+ * ACCESS, and this cron kept mailing them the workspace's pipeline every week
+ * regardless. Access was revoked; delivery was not.
+ *
+ * Deliberately narrow. An address is dropped ONLY when it belongs to a member
+ * row of THIS workspace that is deactivated. An address with no membership
+ * here is left alone — that is the external recipient the feature is for, and
+ * silently dropping those would break the schedule instead of securing it.
+ *
+ * Deletion is handled elsewhere, and has to be: team.delete removes the
+ * membership row (and the user row, when no memberships remain), so by the
+ * time this runs there is nothing left to recognise them by. admin.ts strips
+ * the address at removal time for exactly that reason.
+ *
+ * Pure so it can be tested by calling it. Compared lowercased and trimmed
+ * because an address is case-insensitive; NOT routed through
+ * normalizeSuppressionEmail, which is the same rule today but answers a
+ * different question and may diverge.
+ */
+export function activeRecipients(recipients: string[], revokedEmails: readonly string[]): string[] {
+  // Blank recipients are dropped on their own account, not as a side effect of
+  // the revoked set. A member row with a NULL email normalises to "", and the
+  // first version of this let that empty string decide whether a blank
+  // recipient survived — so the answer for one address depended on an
+  // unrelated user's missing data. Handled here, once.
+  const kept = recipients.filter((r) => r.trim() !== "");
+  // The `.filter(Boolean)` below is belt-and-braces and, now that blanks are
+  // dropped above, an EQUIVALENT MUTANT — removing it changes no observable
+  // behaviour, so no test can kill it. Recorded rather than deleted: it keeps
+  // the revoked set honest for any future caller that skips the line above.
+  const revoked = new Set(revokedEmails.map((e) => String(e ?? "").trim().toLowerCase()).filter(Boolean));
+  if (revoked.size === 0) return kept;
+  return kept.filter((r) => !revoked.has(r.trim().toLowerCase()));
+}
+
+/** Emails of members of this workspace whose access has been revoked. */
+async function revokedMemberEmails(db: any, workspaceId: number): Promise<string[]> {
+  const rows = await db
+    .select({ email: users.email })
+    .from(workspaceMembers)
+    .innerJoin(users, eq(users.id, workspaceMembers.userId))
+    .where(and(
+      eq(workspaceMembers.workspaceId, workspaceId),
+      isNotNull(workspaceMembers.deactivatedAt),
+    ));
+  return rows.map((r: { email: string | null }) => r.email ?? "").filter(Boolean);
+}
 
 const CHART_PALETTE = ["#0EA5E9", "#8B5CF6", "#F59E0B", "#10B981", "#EC4899", "#06B6D4", "#F43F5E", "#84CC16", "#6366F1"];
 
@@ -142,8 +195,15 @@ export async function emailSavedReport(reportId: number, workspaceId: number): P
   const [r] = await db.select().from(savedReports)
     .where(and(eq(savedReports.id, reportId), eq(savedReports.workspaceId, workspaceId))).limit(1);
   if (!r) return { ok: false, reason: "Report not found" };
-  const recipients = String(r.scheduleRecipients ?? "").split(/[,;\s]+/).map((e) => e.trim()).filter((e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e));
-  if (recipients.length === 0) return { ok: false, reason: "No valid recipients configured" };
+  const configured = String(r.scheduleRecipients ?? "").split(/[,;\s]+/).map((e) => e.trim()).filter((e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e));
+  if (configured.length === 0) return { ok: false, reason: "No valid recipients configured" };
+
+  // A revoked member must stop receiving the workspace's data, not just stop
+  // being able to log in and look at it.
+  const recipients = activeRecipients(configured, await revokedMemberEmails(db, r.workspaceId));
+  if (recipients.length === 0) {
+    return { ok: false, reason: "All configured recipients are deactivated members" };
+  }
   const result = await runSpec(r.workspaceId, r.config as ReportSpec);
   const tz = await getWorkspaceTimezone(r.workspaceId);
   const send = await sendSystemEmail(r.workspaceId, {

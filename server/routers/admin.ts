@@ -23,6 +23,7 @@ import {
   loginHistory,
   memberPermissions,
   opportunities,
+  savedReports,
   tasks,
   usageCounters,
   users,
@@ -663,6 +664,47 @@ export const teamRouter = router({
       // Capture identity for the audit trail before the rows are gone.
       const [tgtUser] = await db.select().from(users).where(eq(users.id, target.userId));
 
+      /**
+       * Stop mailing them the workspace's data.
+       *
+       * `saved_reports.scheduleRecipients` is free text, so nothing connected
+       * it to membership: the hourly report cron kept emailing a removed
+       * member the pipeline every week, indefinitely. Access was revoked;
+       * delivery was not — the 3366f4b shape one layer out.
+       *
+       * Stripped HERE rather than filtered at send time (which is how the
+       * deactivated case is handled) because this procedure deletes the
+       * membership row, and the user row too when no memberships remain — so
+       * afterwards there is nothing left to recognise the address by.
+       *
+       * Only this workspace's schedules, and only this one address: other
+       * recipients, including external ones with no account, are untouched.
+       */
+      let strippedFromReports = 0;
+      const tgtEmail = (tgtUser?.email ?? "").trim().toLowerCase();
+      if (tgtEmail) {
+        const scheduled = await db
+          .select({ id: savedReports.id, recipients: savedReports.scheduleRecipients })
+          .from(savedReports)
+          .where(and(eq(savedReports.workspaceId, ctx.workspace.id), isNotNull(savedReports.scheduleRecipients)));
+        for (const row of scheduled) {
+          const kept = String(row.recipients ?? "")
+            .split(/[,;\s]+/)
+            .map((e) => e.trim())
+            .filter(Boolean)
+            .filter((e) => e.toLowerCase() !== tgtEmail);
+          if (kept.length === String(row.recipients ?? "").split(/[,;\s]+/).map((e) => e.trim()).filter(Boolean).length) continue;
+          // Last recipient gone → the schedule has nobody to send to. Turn it
+          // off rather than leave it running and failing every hour.
+          await db.update(savedReports)
+            .set(kept.length > 0
+              ? { scheduleRecipients: kept.join(", ") }
+              : { scheduleRecipients: null, scheduleFreq: "none" })
+            .where(and(eq(savedReports.id, row.id), eq(savedReports.workspaceId, ctx.workspace.id)));
+          strippedFromReports++;
+        }
+      }
+
       // Remove the membership row.
       await db.delete(workspaceMembers).where(eq(workspaceMembers.id, target.id));
 
@@ -686,9 +728,9 @@ export const teamRouter = router({
         entityType: "workspace_member",
         entityId: target.userId,
         before: { email: tgtUser?.email, role: target.role },
-        after: { deleted: true, deletedUser, reassignedTo: input.reassignToUserId ?? null },
+        after: { deleted: true, deletedUser, reassignedTo: input.reassignToUserId ?? null, strippedFromReports },
       });
-      return { ok: true, deletedUser, reassigned };
+      return { ok: true, deletedUser, reassigned, strippedFromReports };
     }),
 
   bulkChangeRole: adminWsProcedure
