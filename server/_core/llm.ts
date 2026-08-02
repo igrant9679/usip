@@ -1,6 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { eq } from "drizzle-orm";
-import { workspaceSettings } from "../../drizzle/schema";
+import { eq, sql } from "drizzle-orm";
+import { usageCounters, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { tryDecryptSecret } from "./crypto";
 import { ENV } from "./env";
@@ -849,6 +849,50 @@ function resolveProvider(
   );
 }
 
+/**
+ * Add a call's tokens to this workspace's month.
+ *
+ * `usage_counters.llmTokens` was READ by usage.currentMonth and rendered on
+ * Settings → Billing as "LLM tokens", and NOTHING EVER WROTE IT. No row was
+ * inserted anywhere in the server, so the panel reported 0 for every workspace
+ * forever — a measurement never taken, presented as one that was. The same
+ * shape as the intent score that "was 0 for every row, and counted as if we
+ * had measured it" (96b161d).
+ *
+ * ATOMIC. `llmTokens = llmTokens + n` in SQL rather than read-modify-write:
+ * concurrent LLM calls are the normal case here (the engine runs them in
+ * parallel), and a lost update on a spend counter is a bill nobody can
+ * reconcile. The `submitCount` bumps elsewhere in this repo are still
+ * read-modify-write and are recorded as known-open.
+ *
+ * BEST EFFORT. Metering must never fail the call it is measuring — a broken
+ * counter is a reporting problem, a thrown counter is an outage.
+ *
+ * The month key is UTC (`YYYY-MM`), matching usage.currentMonth's read exactly.
+ * A workspace-timezone billing period would be defensible, but the two sides
+ * have to agree, and changing which month a call lands in is a billing
+ * decision rather than a bug fix.
+ */
+async function recordLlmTokens(workspaceId: number | undefined, tokens: number): Promise<void> {
+  if (!workspaceId || !Number.isFinite(tokens) || tokens <= 0) return;
+  try {
+    const db = await getDb();
+    if (!db) return;
+    const month = new Date().toISOString().slice(0, 7);
+    await db
+      .insert(usageCounters)
+      .values({ workspaceId, month, llmTokens: Math.round(tokens) })
+      .onDuplicateKeyUpdate({
+        set: { llmTokens: sql`${usageCounters.llmTokens} + ${Math.round(tokens)}` },
+      });
+  } catch (e) {
+    console.error(
+      `[usage] failed to record ${tokens} LLM tokens for workspace ${workspaceId}:`,
+      e instanceof Error ? e.message : String(e),
+    );
+  }
+}
+
 export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
   // Resolution order for workspaceId:
   //   1. explicit params.workspaceId (background jobs, tests)
@@ -858,16 +902,27 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
   const creds = await loadCreds(workspaceId);
   const provider = resolveProvider(params.provider, creds);
   await acquireLlmSlot();
+  let result: InvokeResult;
   try {
     switch (provider) {
       case "anthropic":
-        return await invokeViaAnthropic(params, creds);
+        result = await invokeViaAnthropic(params, creds);
+        break;
       case "openai":
-        return await invokeViaOpenAI(params, creds);
+        result = await invokeViaOpenAI(params, creds);
+        break;
       case "gemini":
-        return await invokeViaGemini(params, creds);
+        result = await invokeViaGemini(params, creds);
+        break;
+      default:
+        throw new Error(`Unsupported provider: ${provider as string}`);
     }
   } finally {
     releaseLlmSlot();
   }
+  // Metered HERE, at the one funnel every provider returns through, rather
+  // than at each call site — there are dozens and a new one would simply not
+  // be counted.
+  await recordLlmTokens(workspaceId, result.usage?.total_tokens ?? 0);
+  return result;
 }
