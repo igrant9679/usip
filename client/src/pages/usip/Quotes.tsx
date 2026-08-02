@@ -108,7 +108,14 @@ export default function Quotes() {
                       <div className="flex gap-1">
                         {!q.pdfUrl && <Button size="sm" variant="ghost" onClick={() => genPdf.mutate({ id: q.id })}>Generate</Button>}
                         {q.pdfUrl && <Button size="sm" variant="ghost" onClick={() => window.open(q.pdfUrl!, "_blank")}><ExternalLink className="size-3.5" /></Button>}
-                        {q.status === "draft" && q.pdfUrl && <ConfirmButton size="sm" variant="ghost" destructive={false} ariaLabel="Send quote" title="Send this quote?" description="The quote will be emailed to the customer. This action is logged and can't be unsent." confirmLabel="Send" onConfirm={() => send.mutate({ id: q.id })}><Send className="size-3.5" /></ConfirmButton>}
+                        {/* Says what it does. It marks the quote sent; it does
+                            NOT email anyone — there is no send path here, the
+                            rep delivers the PDF themselves. The old copy
+                            promised an email that was never sent, claimed a log
+                            entry that was never written, and said "can't be
+                            unsent" three lines above a comment calling Send the
+                            reversible one of the two. */}
+                        {q.status === "draft" && q.pdfUrl && <ConfirmButton size="sm" variant="ghost" destructive={false} ariaLabel="Mark quote as sent" title="Mark this quote as sent?" description="Marks the quote as sent and records who did it. It does not email the customer — send them the PDF yourself. There's no undo from here; once marked, you can record it as Accepted or Rejected." confirmLabel="Mark sent" onConfirm={() => send.mutate({ id: q.id })}><Send className="size-3.5" /></ConfirmButton>}
                         {q.status === "sent" && (
                           <>
                             <Button size="sm" variant="ghost" onClick={() => setStatus.mutate({ id: q.id, status: "accepted" })}>Accept</Button>

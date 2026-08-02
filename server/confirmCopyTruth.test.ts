@@ -201,3 +201,116 @@ describe("every entity type can actually be cleared", () => {
     ).toEqual([]);
   });
 });
+
+/**
+ * quotes.send — the find that opened this seam (ec965dd), now adjudicated.
+ *
+ * The dialog made THREE claims and kept none:
+ *   "The quote will be emailed to the customer."  → nothing in the handler
+ *                                                    sends mail; there is no
+ *                                                    send path at all.
+ *   "This action is logged"                       → no recordAudit existed
+ *                                                    anywhere in quotesRouter.
+ *   "and can't be unsent."                        → quotes.setStatus moves it
+ *                                                    straight back to draft,
+ *                                                    and a comment three lines
+ *                                                    below in the same file
+ *                                                    called Send "the
+ *                                                    reversible one of the two".
+ *
+ * Resolved by the OWNER as a copy fix, not a feature: the rep delivers the PDF.
+ * Recorded here because that decision is what makes the assertions below the
+ * right ones to demand — if sending is ever built, this file fails and the copy
+ * has to be revisited deliberately.
+ *
+ * Why it stayed a copy fix: `pdfUrl` is a /manus-storage link and ec965dd made
+ * that route authenticated, so mailing it would hand the customer a 401; and
+ * SendEmailOptions is {to, subject, html, text, replyTo} with no attachment
+ * support in any adapter. Real sending is real work, not a wording change.
+ */
+describe("quotes.send says only what it does", () => {
+  const ops = strip(readFileSync(join(ROOT, "server/routers/operations.ts"), "utf8"));
+  const quotesUi = readFileSync(join(ROOT, "client/src/pages/usip/Quotes.tsx"), "utf8");
+
+  const send = (() => {
+    const router = ops.slice(ops.indexOf("quotesRouter = router("));
+    const at = router.indexOf("send: workspaceProcedure");
+    expect(at, "quotes.send not found — every assertion below would be vacuous").toBeGreaterThan(0);
+    const next = router.indexOf("setStatus:", at);
+    expect(next, "could not bound the handler").toBeGreaterThan(at);
+    return router.slice(at, next);
+  })();
+
+  /** The confirm dialog for the Send button, isolated from the other two. */
+  const dialog = (() => {
+    const at = quotesUi.indexOf('ariaLabel="Mark quote as sent"');
+    expect(at, "the send ConfirmButton was not found by its aria-label").toBeGreaterThan(0);
+    const end = quotesUi.indexOf("/>", at);
+    const bounded = end > at ? quotesUi.slice(at, end) : quotesUi.slice(at, at + 600);
+    expect(bounded).toContain("description=");
+    return bounded;
+  })();
+
+  it("does not promise an email", () => {
+    /**
+     * THE ORIGINAL BUG. Anything of the form "will be emailed / we'll send /
+     * the customer will receive" is a promise this handler cannot keep.
+     */
+    /**
+     * Matched on the PROMISE forms, not on the word "email".
+     *
+     * The first version of this assertion used /email(ed)? (to )?the customer/
+     * and failed against the honest copy, because "does not email the
+     * customer" contains it. A guard that cannot tell a denial from a promise
+     * would have pushed the next author into vaguer wording to get green —
+     * making the copy worse to satisfy the test.
+     */
+    expect(
+      dialog,
+      "\n\nThe Send dialog promises the customer an email again. quotes.send does\n" +
+        "not send one — build the send path, or don't promise it.\n",
+    ).not.toMatch(/will be emailed|will email|emails the customer|we'?ll send|will receive|sent to the customer/i);
+  });
+
+  it("says plainly that it does NOT email", () => {
+    // Stronger than staying silent: a button with a paper-plane icon labelled
+    // "Send" reads as "this mails it" unless the copy says otherwise.
+    expect(dialog).toMatch(/does not email/i);
+  });
+
+  it("promises a record, and the handler writes one", () => {
+    expect(dialog).toMatch(/records who did it/i);
+    expect(
+      send,
+      "\n\nThe dialog says the action is recorded. Without recordAudit it is not.\n",
+    ).toMatch(/await recordAudit\(\{/);
+    expect(send).toMatch(/entityType: "quote"/);
+    expect(send).toMatch(/actorUserId: ctx\.user\.id/);
+  });
+
+  it("audits only a change that really happened", () => {
+    /**
+     * The UPDATE is workspace-scoped, so a foreign or missing id matched
+     * nothing and the handler still answered ok:true. Logging that as a state
+     * change would put a fiction in the audit trail — the one place whose
+     * whole value is being true.
+     */
+    const ownership = send.indexOf("const [q] = await db.select");
+    const audit = send.indexOf("recordAudit");
+    expect(ownership, "no ownership read before the audit").toBeGreaterThan(0);
+    expect(send).toMatch(/if \(!q\) throw new TRPCError\(\{ code: "NOT_FOUND"/);
+    expect(ownership).toBeLessThan(audit);
+  });
+
+  it("still does not send mail — if that changes, this copy must change too", () => {
+    /**
+     * The reverse direction. Building the send path is a fine thing to do; it
+     * just cannot happen quietly while the dialog says "does not email".
+     */
+    expect(
+      send,
+      "\n\nquotes.send now sends mail. Update the confirm dialog — it currently\n" +
+        "tells the user it does NOT email the customer.\n",
+    ).not.toMatch(/sendSystemEmail|sendWorkspaceEmail|createEmailAdapter/);
+  });
+});

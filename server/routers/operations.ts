@@ -1473,10 +1473,44 @@ export const quotesRouter = router({
     return { url: put.url };
   }),
 
+  /**
+   * Marks a quote as sent. It does NOT email the customer, and the dialog no
+   * longer says it does.
+   *
+   * The confirm copy used to promise three things and keep none: an email to
+   * the customer (there is no send path here at all), a log entry (no
+   * recordAudit existed anywhere in this router), and "can't be unsent" (which
+   * setStatus contradicts). Adding outbound mail to a customer is a product
+   * decision, and it was made deliberately: the rep delivers the PDF. So the
+   * code keeps the one promise worth keeping — it records who did it.
+   *
+   * Building the real send later means resolving a recipient through
+   * opportunityContactRoles and finding a way for the customer to READ the
+   * PDF: `pdfUrl` is a /manus-storage link, and ec965dd made that
+   * authenticated, so mailing it would send a 401. SendEmailOptions carries no
+   * attachments today either. Both are real work, neither is a copy fix.
+   */
   send: workspaceProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    await db.update(quotes).set({ status: "sent", sentAt: new Date() }).where(and(eq(quotes.id, input.id), eq(quotes.workspaceId, ctx.workspace.id)));
+    // Read first, so the audit entry below cannot claim a state change that
+    // never happened: the UPDATE is workspace-scoped, so a foreign or missing
+    // id matched nothing and this still answered ok:true.
+    const [q] = await db.select({ id: quotes.id, quoteNumber: quotes.quoteNumber, status: quotes.status })
+      .from(quotes).where(and(eq(quotes.id, input.id), eq(quotes.workspaceId, ctx.workspace.id)));
+    if (!q) throw new TRPCError({ code: "NOT_FOUND", message: "Quote not found" });
+
+    const sentAt = new Date();
+    await db.update(quotes).set({ status: "sent", sentAt }).where(and(eq(quotes.id, q.id), eq(quotes.workspaceId, ctx.workspace.id)));
+    await recordAudit({
+      workspaceId: ctx.workspace.id,
+      actorUserId: ctx.user.id,
+      action: "update",
+      entityType: "quote",
+      entityId: q.id,
+      before: { status: q.status },
+      after: { status: "sent", sentAt, quoteNumber: q.quoteNumber },
+    });
     return { ok: true };
   }),
 
