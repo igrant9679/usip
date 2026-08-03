@@ -24,6 +24,7 @@ import {
   workspaceSettings,
 } from "../../drizzle/schema";
 import { getDb } from "../db";
+import { recordEmailsSent } from "../usageCounters";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { router } from "../_core/trpc";
 import { buildMergeContextFromDb, resolveMergeVars, textToHtml, injectTracking, resolveBookingUrl, renderSequenceOptOut } from "../mergeVars";
@@ -268,6 +269,12 @@ export const smtpConfigRouter = router({
         throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: `Failed to send email: ${err?.message}` });
       }
 
+      // A real outbound message left the workspace. The metered adapter factory
+      // cannot see this path — it builds its own transporter from the SMTP
+      // config — so it records for itself. After the try/catch, because a throw
+      // means nothing was delivered.
+      await recordEmailsSent(ctx.workspace.id, 1);
+
       // Mark as sent
       await db.update(emailDrafts).set({ status: "sent", sentAt: new Date() }).where(eq(emailDrafts.id, draft.id));
 
@@ -412,6 +419,8 @@ export const smtpConfigRouter = router({
                 }
               : undefined,
           });
+          // Per message, not per batch: this loop sends one email per draft.
+          await recordEmailsSent(ctx.workspace.id, 1);
           await db.update(emailDrafts).set({ status: "sent", sentAt: new Date() }).where(eq(emailDrafts.id, draft.id));
           if (draft.toContactId || draft.toLeadId) {
             await db.insert(activities).values({

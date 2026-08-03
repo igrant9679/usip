@@ -8,6 +8,7 @@ import nodemailer from "nodemailer";
 import { ImapFlow } from "imapflow";
 import { simpleParser } from "mailparser";
 import type { SendingAccount } from "../drizzle/schema";
+import { recordEmailsSent } from "./usageCounters";
 import { createDecipheriv, createCipheriv, randomBytes } from "crypto";
 
 /* ─── Encryption helpers ─────────────────────────────────────────────────── */
@@ -363,7 +364,7 @@ export class SendGridAdapter implements EmailAdapter {
 
 /* ─── Factory ────────────────────────────────────────────────────────────── */
 
-export function createEmailAdapter(account: SendingAccount): EmailAdapter {
+function buildEmailAdapter(account: SendingAccount): EmailAdapter {
   // Checked before the Unipile bridge: a SendGrid account never has a
   // unipileAccountId, but ordering this first makes the send-only path
   // unambiguous rather than dependent on another column being empty.
@@ -378,4 +379,41 @@ export function createEmailAdapter(account: SendingAccount): EmailAdapter {
     return new UnipileMailAdapter(account);
   }
   return new ImapSmtpAdapter(account);
+}
+
+/**
+ * Every adapter, with its `sendEmail` metered.
+ *
+ * `usage_counters.emailsSent` is read by usage.currentMonth and rendered on
+ * Settings → Billing as "Emails sent", and NOTHING WROTE IT — the tile showed
+ * 0 for every workspace forever, exactly like `llmTokens` did before a1c1f99.
+ *
+ * Counted HERE rather than at the 11 `createEmailAdapter` call sites, for the
+ * reason the LLM meter sits inside invokeLLM: a per-call-site counter misses
+ * the twelfth. Every adapter is constructed through this factory, so wrapping
+ * the instance covers all three implementations and every caller at once.
+ *
+ * ⚠️ This is ONE OF THREE transmission points, and the others must not also
+ * count or a send would be counted twice. `sendWorkspaceEmail`'s raw
+ * SMTP-config branch and `operations.sendScheduleNow` bypass the adapter
+ * entirely and record their own; `sendSystemEmail` and
+ * `sendCampaignEmailViaPool` are orchestrators that reach transmission through
+ * exactly one of the three, so they count once without knowing about counting.
+ *
+ * Only SUCCESSFUL sends: a throw from the underlying adapter propagates before
+ * the increment is reached, because nothing was delivered.
+ *
+ * `sendingAccountDailyStats.sentCount` is a DIFFERENT counter — per account,
+ * per day, enforcing `dailySendLimit`. Both are correct and neither replaces
+ * the other.
+ */
+export function createEmailAdapter(account: SendingAccount): EmailAdapter {
+  const adapter = buildEmailAdapter(account);
+  const send = adapter.sendEmail.bind(adapter);
+  adapter.sendEmail = async (input) => {
+    const result = await send(input);
+    await recordEmailsSent(account.workspaceId, 1);
+    return result;
+  };
+  return adapter;
 }

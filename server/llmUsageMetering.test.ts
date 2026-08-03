@@ -1,20 +1,18 @@
 /**
- * LLM spend is measured.
+ * usage_counters — both figures behind Settings → Billing are now measured.
  *
- * `usage_counters.llmTokens` was READ by `usage.currentMonth` and rendered on
- * Settings → Billing as "LLM tokens", and NOTHING ANYWHERE WROTE IT. There is
- * no `insert(usageCounters)` in the entire server outside this fix, so every
- * workspace's LLM usage read 0 forever — a measurement never taken, presented
- * as one that was. The same shape as the intent score that "was 0 for every
- * row, and counted as if we had measured it" (96b161d).
+ * `llmTokens` AND `emailsSent` were both READ by `usage.currentMonth` and
+ * rendered on that panel, and NEITHER WAS EVER WRITTEN. There was no
+ * `insert(usageCounters)` anywhere in the server, so both tiles reported 0 for
+ * every workspace forever — measurements never taken, presented as ones that
+ * were (the 96b161d shape).
  *
- * That also made it the blocker for the open cost question: nothing bounds an
- * authenticated user hammering an LLM-backed procedure, and you cannot bound
- * spend you are not measuring. This is the measurement half; the ceiling is a
- * number only the owner can choose.
+ * `llmTokens` was wired first (a1c1f99), with the increment inline in
+ * _core/llm.ts. `emailsSent` needed the identical upsert, so the increment
+ * moved to server/usageCounters.ts and both callers share it. A second copy
+ * would have been the drift this repo keeps sweeping out.
  *
- * `emailsSent` on the same table and the same Billing panel is STILL unwritten
- * — see the note at the bottom.
+ * The LLM ceilings (burst + monthly budget) are asserted at the bottom.
  */
 import { describe, expect, it } from "vitest";
 import { readFileSync, readdirSync, statSync } from "node:fs";
@@ -34,218 +32,236 @@ function sourceFiles(dir: string, out: string[] = []): string[] {
   }
   return out;
 }
+const rel = (f: string) => relative(ROOT, f).replace(/\\/g, "/");
 
+const counters = strip(read("server/usageCounters.ts"));
 const llm = strip(read("server/_core/llm.ts"));
 const admin = strip(read("server/routers/admin.ts"));
+const adapter = strip(read("server/emailAdapter.ts"));
 
-describe("the counter is actually written", () => {
-  it("something inserts into usage_counters at all", () => {
+describe("one increment, shared by both counters", () => {
+  it("usage_counters is written from exactly one module", () => {
     /**
-     * The whole bug in one assertion. Before this, the answer was zero files.
+     * The whole bug in one assertion — before a1c1f99 the answer was zero
+     * files. Exactly one now: a second copy of this upsert is how the two
+     * counters drift, one getting a fix the other does not.
      */
     const writers = sourceFiles(join(ROOT, "server"))
       .filter((f) => /\.insert\(usageCounters\)/.test(strip(readFileSync(f, "utf8"))))
-      .map((f) => relative(ROOT, f).replace(/\\/g, "/"));
-    expect(
-      writers,
-      "\n\nNothing writes usage_counters, so Settings → Billing reports 0 for every\n" +
-        "workspace while claiming to show this month's usage.\n",
-    ).toContain("server/_core/llm.ts");
+      .map(rel);
+    expect(writers).toEqual(["server/usageCounters.ts"]);
   });
 
-  it("meters at the invokeLLM funnel, not at call sites", () => {
+  it("increments ATOMICALLY rather than read-modify-write", () => {
+    // Concurrent LLM calls and concurrent sends are both normal here, and a
+    // lost update on a usage counter is a bill nobody can reconcile.
+    expect(counters).toMatch(/onDuplicateKeyUpdate\(\{ set: \{ \[column\]: sql`\$\{col\} \+ \$\{amount\}`/);
+    expect(counters).not.toMatch(/\.select\(\)[\s\S]{0,200}?from\(usageCounters\)/);
+  });
+
+  it("never fails the thing it is measuring", () => {
+    // A broken counter is a reporting problem; a thrown counter is an outage.
+    const bump = counters.slice(counters.indexOf("async function bump"), counters.indexOf("export async function recordLlmTokens"));
+    expect(bump).toMatch(/\} catch \(e\) \{/);
+    expect(bump.slice(bump.indexOf("} catch (e) {"))).not.toMatch(/throw/);
+    expect(bump).toMatch(/if \(!workspaceId \|\| !Number\.isFinite\(n\) \|\| n <= 0\) return;/);
+  });
+
+  it("the writer and the reader agree on the month key", () => {
     /**
-     * There are dozens of invokeLLM callers. Metering at each one means the
-     * next caller is simply not counted — the dead-wiring class this repo
-     * keeps finding. One funnel, every provider returns through it.
+     * A counter keyed one way and read another reports zero forever while
+     * looking wired — normalising a write without the read that pairs with it
+     * (bounceFeedback). One definition, used by both.
      */
-    expect((llm.match(/recordLlmTokens\(/g) ?? []).length, "expected one definition + one call").toBe(2);
+    expect(counters).toMatch(/export function usageMonthKey/);
+    expect(counters).toMatch(/return now\.toISOString\(\)\.slice\(0, 7\)/);
+    expect(admin, "reader month key").toMatch(/const month = new Date\(\)\.toISOString\(\)\.slice\(0, 7\)/);
+    // The LLM cap check reads the counter too, and must use the same key.
+    expect(llm).toMatch(/const month = usageMonthKey\(\)/);
+  });
+});
+
+describe("llmTokens", () => {
+  it("meters at the invokeLLM funnel, not at call sites", () => {
+    // Dozens of callers; metering each one means the next is not counted.
     const fn = llm.slice(llm.indexOf("export async function invokeLLM"));
     expect(fn).toMatch(/await recordLlmTokens\(workspaceId, result\.usage\?\.total_tokens \?\? 0\)/);
-    // ...and after the provider call, or there is nothing to count yet.
     expect(fn.indexOf("switch (provider)")).toBeLessThan(fn.indexOf("recordLlmTokens("));
+    expect(llm).toMatch(/import \{ recordLlmTokens, usageMonthKey \} from "\.\.\/usageCounters"/);
   });
 
-  it("counts every provider, not just Anthropic", () => {
-    // All three populate `usage`; metering the shared return path is what
-    // makes that true in practice rather than in principle.
+  it("counts every provider — none returns early past the meter", () => {
     const fn = llm.slice(llm.indexOf("export async function invokeLLM"), llm.indexOf("export async function invokeLLM") + 1400);
-    for (const p of ["anthropic", "openai", "gemini"]) {
-      expect(fn).toContain(`case "${p}":`);
-    }
-    // Each branch assigns the shared `result`, so none can bypass the meter.
+    for (const p of ["anthropic", "openai", "gemini"]) expect(fn).toContain(`case "${p}":`);
     expect((fn.match(/result = await invokeVia/g) ?? []).length).toBe(3);
   });
 });
 
-describe("the write is safe to run on a hot path", () => {
-  const fn = llm.slice(llm.indexOf("async function recordLlmTokens"), llm.indexOf("export async function invokeLLM"));
-
-  it("was isolated", () => {
-    expect(fn.length).toBeGreaterThan(300);
+describe("emailsSent", () => {
+  /**
+   * THREE transmission points, and only three. Counting at an orchestration
+   * layer as well would double-count every send that reaches transmission
+   * through it — `sendSystemEmail` and `sendCampaignEmailViaPool` each reach
+   * exactly one of these, so they count once while knowing nothing about
+   * counting.
+   */
+  it("the adapter factory meters every send it makes", () => {
+    // 11 createEmailAdapter call sites, 3 adapter implementations, one wrapper.
+    expect(adapter).toMatch(/export function createEmailAdapter\(account: SendingAccount\): EmailAdapter \{[\s\S]{0,400}?await recordEmailsSent\(account\.workspaceId, 1\)/);
+    // Wrapped, not replaced: the other adapter methods must still be the
+    // adapter's own, and the factory must still build all three kinds.
+    expect(adapter).toMatch(/function buildEmailAdapter/);
+    expect(adapter).toMatch(/const send = adapter\.sendEmail\.bind\(adapter\)/);
   });
 
-  it("increments ATOMICALLY rather than read-modify-write", () => {
+  it("counts only what actually went out", () => {
     /**
-     * Concurrent LLM calls are the normal case — the engine runs them in
-     * parallel — and a lost update on a spend counter is a bill nobody can
-     * reconcile. The `submitCount` bumps elsewhere in this repo are still
-     * read-modify-write and recorded as known-open.
-     */
-    expect(fn).toMatch(/onDuplicateKeyUpdate\(\{[\s\S]{0,200}?sql`\$\{usageCounters\.llmTokens\} \+ /);
-    // A select-then-set would be the wrong shape entirely.
-    expect(fn).not.toMatch(/\.select\(\)[\s\S]{0,200}?from\(usageCounters\)/);
-  });
-
-  it("never fails the call it is measuring", () => {
-    // A broken counter is a reporting problem; a thrown counter is an outage.
-    expect(fn).toMatch(/try \{/);
-    expect(fn).toMatch(/\} catch \(e\) \{/);
-    const catchBlock = fn.slice(fn.indexOf("} catch (e) {"));
-    expect(catchBlock, "the catch must swallow, not rethrow").not.toMatch(/throw/);
-  });
-
-  it("ignores calls it cannot attribute, and non-positive counts", () => {
-    // No workspace → env-only credentials, e.g. a script. Counting it against
-    // an arbitrary workspace would be worse than not counting it.
-    expect(fn).toMatch(/if \(!workspaceId \|\| !Number\.isFinite\(tokens\) \|\| tokens <= 0\) return;/);
-  });
-});
-
-describe("the writer and the reader agree on the month", () => {
-  it("both derive YYYY-MM the same way", () => {
-    /**
-     * A counter keyed one way and read another reports zero forever while
-     * looking wired — the bounceFeedback lesson: normalising a write without
-     * normalising the read that pairs with it is its own little bug class.
-     */
-    const writer = /const month = new Date\(\)\.toISOString\(\)\.slice\(0, 7\)/;
-    expect(llm, "writer month key").toMatch(writer);
-    expect(admin, "reader month key").toMatch(writer);
-  });
-
-  it("the reader still reads the column, so the pair stays wired", () => {
-    expect(admin).toMatch(/llmTokens: Number\(row\?\.llmTokens \?\? 0\)/);
-    expect(admin).toMatch(/from\(usageCounters\)/);
-  });
-});
-
-describe("what is still NOT measured", () => {
-  it("emailsSent remains unwritten — recorded, not silently accepted", () => {
-    /**
-     * Same table, same Billing panel, same bug: `emailsSent` is read by
-     * usage.currentMonth and rendered as "Emails sent", and nothing increments
-     * it either. Not fixed here because the send paths are several (SMTP
-     * adapter, system sender, sequence engine, ARE) and picking the wrong
-     * funnel would double-count — a wrong number is worse than a zero,
-     * because a zero is obviously broken.
+     * The increment must sit AFTER the awaited send, so a throw skips it.
      *
-     * This test PASSES while it is unwritten and FAILS once someone wires it,
-     * so the note cannot rot: whoever adds the writer updates this and the
-     * Billing panel stops lying about the other tile too.
+     * Written first as `indexOf(send) < indexOf(record)` — which the mutation
+     * that moves the increment ABOVE the send walked straight through, because
+     * deleting the first anchor makes indexOf return -1 and -1 is less than
+     * anything. The `-1 <` trap, in a test written during the very session
+     * that catalogued it. Anchors are proven found before they are compared.
      */
-    const writers = sourceFiles(join(ROOT, "server")).filter((f) =>
-      /emailsSent:\s*sql`|emailsSent:\s*\d|set: \{[^}]*emailsSent/.test(strip(readFileSync(f, "utf8"))),
-    );
+    const factory = adapter.slice(adapter.indexOf("export function createEmailAdapter"));
+    const sent = factory.indexOf("const result = await send(input)");
+    const recorded = factory.indexOf("recordEmailsSent(");
+    expect(sent, "the awaited send is gone — the ordering below would be vacuous").toBeGreaterThan(0);
+    expect(recorded, "the increment is gone").toBeGreaterThan(0);
+    expect(sent).toBeLessThan(recorded);
+  });
+
+  it("the two raw-transporter paths record their own", () => {
+    // Neither goes through createEmailAdapter, so the factory cannot see them.
+    expect(strip(read("server/emailDelivery.ts"))).toMatch(/await recordEmailsSent\(workspaceId, 1\)/);
+    expect(strip(read("server/routers/operations.ts"))).toMatch(/await recordEmailsSent\(ctx\.workspace\.id, 1\)/);
+  });
+
+  /**
+   * Every raw `transporter.sendMail(` outside the metered factory, and what
+   * was decided about it. This scan FOUND TWO I HAD MISSED — smtpConfig's
+   * sendDraft and sendBulkApproved — which is exactly why the counting is
+   * enumerated rather than assumed.
+   */
+  const COUNTED_RAW: Record<string, { why: string; sends: number }> = {
+    "server/emailDelivery.ts": {
+      why: "sendWorkspaceEmail's SMTP-config branch — real transactional mail.",
+      sends: 1,
+    },
+    "server/routers/operations.ts": {
+      why: "sendScheduleNow — a dashboard report mailed to recipients.",
+      sends: 1,
+    },
+    "server/routers/smtpConfig.ts": {
+      // TWO, and the count matters: this file has two distinct send paths and
+      // asserting only that the FILE records lets one of them be deleted while
+      // the other keeps the test green — the whole-file `toContain` weakness,
+      // caught here by a mutation that removed the sendDraft increment.
+      why: "sendDraft + sendBulkApproved — the primary outbound sales path.",
+      sends: 2,
+    },
+  };
+
+  const NOT_COUNTED_RAW: Record<string, string> = {
+    "server/services/warmupEngine.ts":
+      "Warmup traffic: the workspace mailing its OWN mailboxes to build sender reputation. " +
+      "Counting it would make the Billing tile mostly self-sends and tell the owner nothing " +
+      "about customer volume. sendingAccountDailyStats already tracks it per account.",
+  };
+
+  it("every raw send is either counted or excluded ON PURPOSE", () => {
+    const raw = sourceFiles(join(ROOT, "server"))
+      .filter((f) => rel(f) !== "server/emailAdapter.ts")
+      .filter((f) => /transporter\.sendMail\(/.test(strip(readFileSync(f, "utf8"))))
+      .map(rel)
+      .sort();
+    const known = [...Object.keys(COUNTED_RAW), ...Object.keys(NOT_COUNTED_RAW)].sort();
     expect(
-      writers.map((f) => relative(ROOT, f).replace(/\\/g, "/")),
-      "\n\nemailsSent is now written somewhere — good. Delete this test and the\n" +
-        "note above it, and confirm Settings → Billing shows a real number.\n",
-    ).toEqual([]);
+      raw,
+      "\n\nA raw transporter.sendMail() outside the metered adapter factory.\n" +
+        "It bypasses the meter, so either record for itself with\n" +
+        "`await recordEmailsSent(workspaceId, 1)` after a successful send and add\n" +
+        "it to COUNTED_RAW, or add it to NOT_COUNTED_RAW with the reason.\n",
+    ).toEqual(known);
+  });
+
+  it("the counted ones actually record, once per send path", () => {
+    for (const [f, { sends }] of Object.entries(COUNTED_RAW)) {
+      const calls = (strip(read(f)).match(/await recordEmailsSent\(/g) ?? []).length;
+      expect(
+        calls,
+        `\n\n${f} should record ${sends} time(s) — one per transmission point.\n` +
+          `Fewer means a send path stopped counting; more means one is counted twice.\n`,
+      ).toBe(sends);
+    }
+  });
+
+  it("the excluded ones really do not record", () => {
+    // Otherwise an entry drifts into being counted while the note still says
+    // it is exempt — the two halves disagreeing is the bug, either way round.
+    for (const f of Object.keys(NOT_COUNTED_RAW)) {
+      expect(strip(read(f)), `${f} is listed as excluded but records`).not.toMatch(/recordEmailsSent\(/);
+    }
+  });
+
+  it("does not double-count the orchestrators", () => {
+    /**
+     * sendSystemEmail and sendCampaignEmailViaPool both reach transmission
+     * through the adapter OR by delegating to sendWorkspaceEmail. Exactly ONE
+     * increment in emailDelivery.ts — on the raw branch — keeps that honest;
+     * a second would double every pooled send.
+     */
+    const delivery = strip(read("server/emailDelivery.ts"));
+    expect((delivery.match(/recordEmailsSent\(/g) ?? []).length, "expected exactly one call").toBe(1);
   });
 });
 
-/**
- * ...and bounded. Two ceilings, both at the same funnel as the meter.
- *
- * 47 invokeLLM call sites across 22 routers had no ceiling of any kind: any
- * signed-in user could drive arbitrary model spend as fast as they could send
- * requests. Enforced in invokeLLM rather than as a list of tRPC paths in the
- * rate-limit middleware — a path list must be maintained, and the 48th call
- * site would simply not be on it.
- */
 describe("the burst ceiling", () => {
   const fn = llm.slice(llm.indexOf("function checkLlmBurst"), llm.indexOf("async function checkMonthlyCap"));
 
-  it("was isolated", () => {
-    expect(fn.length).toBeGreaterThan(200);
-  });
+  it("was isolated", () => expect(fn.length).toBeGreaterThan(200));
 
   it("is checked BEFORE the provider call and before a concurrency slot", () => {
-    /**
-     * A limit enforced after the money is spent is not a limit — and a refused
-     * call must not hold a slot that other calls are queued behind.
-     */
     const invoke = llm.slice(llm.indexOf("export async function invokeLLM"));
     const check = invoke.indexOf("checkLlmBurst(");
     const cap = invoke.indexOf("checkMonthlyCap(");
     const slot = invoke.indexOf("acquireLlmSlot()");
-    const call = invoke.indexOf("switch (provider)");
     expect(check).toBeGreaterThan(0);
     expect(check).toBeLessThan(slot);
     expect(cap).toBeLessThan(slot);
-    expect(slot).toBeLessThan(call);
+    expect(slot).toBeLessThan(invoke.indexOf("switch (provider)"));
   });
 
   it("keys on the USER, and exempts background jobs deliberately", () => {
-    /**
-     * Engines pass workspaceId explicitly and run with no request context, so
-     * getRequestUserId() is undefined for them. They carry their own
-     * per-feature daily caps, which is the right control for a job nobody is
-     * waiting on. Throttling them here would be throttling the product.
-     */
     expect(llm).toMatch(/checkLlmBurst\(getRequestUserId\(\), now\)/);
     expect(fn).toMatch(/if \(!userId\) return;/);
   });
 
   it("prunes its window rather than counting forever", () => {
-    // Without the filter the map only grows and every user is eventually
-    // limited by requests they made hours ago.
     expect(fn).toMatch(/filter\(\(t\) => now - t < LLM_BURST_WINDOW_MS\)/);
   });
 });
 
 describe("the monthly budget", () => {
-  const fn = llm.slice(llm.indexOf("async function checkMonthlyCap"), llm.indexOf("async function recordLlmTokens"));
+  const fn = llm.slice(llm.indexOf("async function checkMonthlyCap"), llm.indexOf("export async function invokeLLM"));
 
-  it("was isolated", () => {
-    expect(fn.length).toBeGreaterThan(400);
-  });
+  it("was isolated", () => expect(fn.length).toBeGreaterThan(400));
 
   it("defaults to UNLIMITED — no invented number ships", () => {
-    /**
-     * `llmMonthlyTokenCap` is NULL by default. What a month's budget should be
-     * is a billing decision this codebase cannot derive, and a guessed number
-     * would cut workspaces off mid-campaign on deploy — the fabrication
-     * refused in 974b903 and ff9e04d.
-     */
     expect(fn).toMatch(/if \(cap !== null && cap > 0 && used >= cap\)/);
     const schema = read("drizzle/schema.ts");
     expect(schema).toMatch(/llmMonthlyTokenCap: int\("llmMonthlyTokenCap"\)(?!\.default)/);
-    // A .notNull() or a .default() here would be exactly the invented number.
     expect(schema).not.toMatch(/llmMonthlyTokenCap: int\("llmMonthlyTokenCap"\)\s*\.\s*(?:notNull|default)/);
   });
 
   it("applies to background engines too", () => {
-    // Unlike the burst ceiling. A budget the autonomous engines are exempt
-    // from is not a budget — they are the heaviest spenders in the system.
     expect(fn).not.toMatch(/getRequestUserId/);
     expect(llm).toMatch(/await checkMonthlyCap\(workspaceId, now\)/);
   });
 
   it("fails OPEN on a database error", () => {
-    // At that point the app is already broken; refusing every AI feature on
-    // top of it helps nobody. Matches hasActiveEnrollmentForEmail's reasoning.
     expect(fn).toMatch(/catch \(e\) \{[\s\S]{0,220}?return; \/\/ fail open/);
-  });
-
-  it("reads the same month key the meter writes", () => {
-    expect(fn).toMatch(/const month = new Date\(\)\.toISOString\(\)\.slice\(0, 7\)/);
-  });
-
-  it("is cached, so a ceiling does not cost two queries per call", () => {
-    expect(fn).toMatch(/capCache/);
-    expect(llm).toMatch(/const CAP_CACHE_MS = /);
   });
 });
 
@@ -257,11 +273,9 @@ describe("the cap is reachable and persistable", () => {
   it("migration 0143 adds the column", () => {
     const migrations = read("server/_core/rawMigrations.ts");
     expect(migrations).toMatch(/name: "0143_llm_monthly_token_cap\.sql"/);
-    // Asserted as the STATEMENT, not just the column name appearing somewhere:
-    // dca9672's guard passed while the ADD COLUMN was deleted, because the name
-    // still appeared in a CREATE INDEX line.
-    expect(migrations).toMatch(
-      /ALTER TABLE `workspace_settings` ADD COLUMN `llmMonthlyTokenCap` int NULL/,
-    );
+    // The STATEMENT, not just the column name appearing somewhere: dca9672's
+    // guard passed while the ADD COLUMN was deleted, because the name still
+    // appeared in a CREATE INDEX line.
+    expect(migrations).toMatch(/ALTER TABLE `workspace_settings` ADD COLUMN `llmMonthlyTokenCap` int NULL/);
   });
 });

@@ -5,6 +5,7 @@ import { getDb } from "../db";
 import { tryDecryptSecret } from "./crypto";
 import { ENV } from "./env";
 import { getRequestUserId, getRequestWorkspaceId } from "./requestContext";
+import { recordLlmTokens, usageMonthKey } from "../usageCounters";
 
 // ---------------------------------------------------------------------------
 // Public types — kept stable so existing 24 call sites do not change.
@@ -850,30 +851,6 @@ function resolveProvider(
 }
 
 /**
- * Add a call's tokens to this workspace's month.
- *
- * `usage_counters.llmTokens` was READ by usage.currentMonth and rendered on
- * Settings → Billing as "LLM tokens", and NOTHING EVER WROTE IT. No row was
- * inserted anywhere in the server, so the panel reported 0 for every workspace
- * forever — a measurement never taken, presented as one that was. The same
- * shape as the intent score that "was 0 for every row, and counted as if we
- * had measured it" (96b161d).
- *
- * ATOMIC. `llmTokens = llmTokens + n` in SQL rather than read-modify-write:
- * concurrent LLM calls are the normal case here (the engine runs them in
- * parallel), and a lost update on a spend counter is a bill nobody can
- * reconcile. The `submitCount` bumps elsewhere in this repo are still
- * read-modify-write and are recorded as known-open.
- *
- * BEST EFFORT. Metering must never fail the call it is measuring — a broken
- * counter is a reporting problem, a thrown counter is an outage.
- *
- * The month key is UTC (`YYYY-MM`), matching usage.currentMonth's read exactly.
- * A workspace-timezone billing period would be defensible, but the two sides
- * have to agree, and changing which month a call lands in is a billing
- * decision rather than a bug fix.
- */
-/**
  * Per-USER burst ceiling for interactive LLM calls.
  *
  * 47 invokeLLM call sites across 22 routers had no ceiling of any kind, so any
@@ -944,7 +921,7 @@ async function checkMonthlyCap(workspaceId: number | undefined, now: number): Pr
     try {
       const db = await getDb();
       if (!db) return;
-      const month = new Date().toISOString().slice(0, 7);
+      const month = usageMonthKey();
       const [[settings], [counter]] = await Promise.all([
         db.select({ cap: workspaceSettings.llmMonthlyTokenCap })
           .from(workspaceSettings).where(eq(workspaceSettings.workspaceId, workspaceId)),
@@ -964,26 +941,6 @@ async function checkMonthlyCap(workspaceId: number | undefined, now: number): Pr
     throw new Error(
       `This workspace has reached its monthly AI budget (${used.toLocaleString()} of ${cap.toLocaleString()} tokens). ` +
         `Raise it in Settings → Billing, or wait for the next month.`,
-    );
-  }
-}
-
-async function recordLlmTokens(workspaceId: number | undefined, tokens: number): Promise<void> {
-  if (!workspaceId || !Number.isFinite(tokens) || tokens <= 0) return;
-  try {
-    const db = await getDb();
-    if (!db) return;
-    const month = new Date().toISOString().slice(0, 7);
-    await db
-      .insert(usageCounters)
-      .values({ workspaceId, month, llmTokens: Math.round(tokens) })
-      .onDuplicateKeyUpdate({
-        set: { llmTokens: sql`${usageCounters.llmTokens} + ${Math.round(tokens)}` },
-      });
-  } catch (e) {
-    console.error(
-      `[usage] failed to record ${tokens} LLM tokens for workspace ${workspaceId}:`,
-      e instanceof Error ? e.message : String(e),
     );
   }
 }

@@ -27,6 +27,7 @@ import {
   sendingAccountDailyStats,
 } from "../drizzle/schema";
 import { getDb } from "./db";
+import { recordEmailsSent } from "./usageCounters";
 import { buildTransporter, decrypt } from "./routers/smtpConfig";
 
 export interface SendEmailOptions {
@@ -225,6 +226,16 @@ export async function sendWorkspaceEmail(
       replyTo: opts.replyTo ?? cfg.replyTo ?? undefined,
     });
 
+    /**
+     * Transmission point 2 of 3. This branch builds its own nodemailer
+     * transporter from the workspace's SMTP config and never touches
+     * createEmailAdapter, so the meter inside that factory cannot see it.
+     *
+     * The adapter branch of this same function (sendCampaignEmailViaPool) is
+     * already counted by the factory — counting again here would double every
+     * pooled send.
+     */
+    await recordEmailsSent(workspaceId, 1);
     return { ok: true };
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);

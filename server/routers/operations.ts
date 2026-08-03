@@ -31,6 +31,7 @@ import {
   workspaceSettings,
 } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
+import { recordEmailsSent } from "../usageCounters";
 import { getDb } from "../db";
 import { invokeLLM } from "../_core/llm";
 import { router } from "../_core/trpc";
@@ -837,6 +838,14 @@ export const dashboardsRouter = router({
       subject: `${dash.name} \u2014 Dashboard Report (${sentAt.toLocaleDateString()})`,
       html,
     });
+    /**
+     * Transmission point 3 of 3. Builds its own transporter from the SMTP
+     * config and never touches createEmailAdapter, so the meter in that
+     * factory cannot see this send. `recipients` may be several addresses in
+     * one message — counted as the ONE message that was transmitted, which is
+     * what the other two points count too.
+     */
+    await recordEmailsSent(ctx.workspace.id, 1);
     await db.update(reportSchedules).set({ lastSentAt: sentAt }).where(eq(reportSchedules.id, sched.id));
     return { ok: true, sentAt };
   }),
