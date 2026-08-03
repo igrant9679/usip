@@ -399,6 +399,44 @@ describe("the confirm dialogs are generated from the same list", () => {
     expect(ui).not.toMatch(/leads,\s*opportunities,\s*or open tasks/i);
   });
 
+  it("every dialog opens with the reassign picker already filled", () => {
+    /**
+     * The set of ownable things is long enough that any long-tenured member
+     * trips the "choose someone to reassign to" gate, so an empty picker on
+     * every open turns a safety rail into an obstacle. Each site that OPENS one
+     * of the three dialogs must seed the state from `defaultReassignFor`.
+     *
+     * The old shape is asserted absent rather than the new one merely present:
+     * `setDeleteTarget(m); setDeleteReassignTo(null)` would leave the picker
+     * blank again and still satisfy a count of `defaultReassignFor` uses
+     * elsewhere in the file.
+     */
+    expect(ui).toMatch(/const defaultReassignFor = \(target: any\): number \| null =>/);
+    const uses = (ui.match(/defaultReassignFor\(/g) ?? []).length;
+    expect(uses, "a dialog-opening site no longer seeds the picker").toBeGreaterThanOrEqual(5);
+
+    // `(?!null)` matters: closing a dialog legitimately nulls BOTH — the
+    // onOpenChange and Cancel handlers do exactly that, and the first version
+    // of this assertion flagged them.
+    expect(ui, "a delete site reopened with an empty picker")
+      .not.toMatch(/setDeleteTarget\((?!null)[^)]*\);\s*setDeleteReassignTo\(null\)/);
+    expect(ui, "a deactivate site reopened with an empty picker")
+      .not.toMatch(/setDeactivateTarget\((?!null)[^)]*\);\s*setReassignTo\(null\)/);
+  });
+
+  it("the default is never an option the picker would hide", () => {
+    /**
+     * A pre-filled value that is not among the <option>s renders as a blank
+     * select, which reads as broken. Two exclusions exist and both are pinned:
+     * the actor cannot be the target (the server refuses that outright), and
+     * for BULK the actor must not be inside the current selection, because that
+     * picker hides everyone selected.
+     */
+    expect(ui).toMatch(/if \(!me \|\| \(target && target\.userId === me\)\) return null;/);
+    expect(ui).toMatch(/return mine && !mine\.deactivatedAt \? me : null;/);
+    expect(ui).toMatch(/setBulkReassignTo\(mine && !selected\.has\(mine\.memberId\) \? fallback : null\)/);
+  });
+
   it("the success toast totals through the shared helper", () => {
     // It used to read `.leads + .opportunities + .tasks`, which would have kept
     // reporting three of six — telling an admin 4 items moved when 4,000 had.

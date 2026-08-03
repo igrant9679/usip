@@ -5,6 +5,7 @@ import { EmptyState, PageHeader, Shell, SubNav } from "@/components/usip/Shell";
 import { ColorAvatar } from "@/components/usip/ColorAvatar";
 import { Link } from "wouter";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
 import { ownedWorkNounPhrase, summariseReassigned, totalOwnedWork } from "@shared/ownedWork";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -83,7 +84,32 @@ export default function Team() {
   const isAdmin = myRole === "admin" || myRole === "super_admin";
 
   const utils = trpc.useUtils();
+  const { user } = useAuth();
   const { data, isLoading } = trpc.team.list.useQuery();
+
+  /**
+   * Who the reassign picker starts on: the admin doing the offboarding.
+   *
+   * The set of things a member can own has grown (leads, opportunities,
+   * accounts, contacts, campaigns, sequences, assigned sequences, upcoming
+   * meetings, unfinished tasks), so in practice ANY long-tenured member trips
+   * the "choose someone to reassign to" gate. Landing on an empty picker every
+   * time turns a safety rail into an obstacle, and the safest hands are the
+   * ones already performing the action — an admin who wants somebody else
+   * simply changes it.
+   *
+   * Returns null rather than the actor when the actor IS the target: the server
+   * refuses `reassignToUserId === target.userId` outright, and pre-filling an
+   * option the picker itself filters out would render as a blank select that
+   * looks broken. (Self-deactivate and self-delete are refused anyway, so this
+   * is belt-and-braces for a dialog that should not open.)
+   */
+  const defaultReassignFor = (target: any): number | null => {
+    const me = user?.id ?? null;
+    if (!me || (target && target.userId === me)) return null;
+    const mine = (data ?? []).find((m: any) => m.userId === me);
+    return mine && !mine.deactivatedAt ? me : null;
+  };
 
   const [activeTab, setActiveTab] = useState<Tab>("members");
   const [filter, setFilter] = useState("");
@@ -512,7 +538,19 @@ export default function Team() {
                   size="sm"
                   variant="ghost"
                   className="text-rose-600 hover:text-rose-700"
-                  onClick={() => setBulkDeactivateOpen(true)}
+                  onClick={() => {
+                    /**
+                     * Bulk has one more exclusion than the single dialogs: its
+                     * picker hides anyone in the selection, so if the admin has
+                     * ticked themselves (the server skips them, but the UI lets
+                     * them tick it) a pre-filled actor would not be among the
+                     * options and the select would render blank.
+                     */
+                    const fallback = defaultReassignFor(null);
+                    const mine = (data ?? []).find((m: any) => m.userId === fallback);
+                    setBulkReassignTo(mine && !selected.has(mine.memberId) ? fallback : null);
+                    setBulkDeactivateOpen(true);
+                  }}
                 >
                   <UserMinus className="size-3.5" /> Deactivate
                 </Button>
@@ -666,7 +704,7 @@ export default function Team() {
                                         variant="ghost"
                                         className="text-rose-600"
                                         title="Permanently delete — as if never invited"
-                                        onClick={() => { setDeleteTarget(m); setDeleteReassignTo(null); }}
+                                        onClick={() => { setDeleteTarget(m); setDeleteReassignTo(defaultReassignFor(m)); }}
                                       >
                                         <Trash2 className="size-3.5" /> Delete
                                       </Button>
@@ -753,7 +791,7 @@ export default function Team() {
                                         size="sm"
                                         variant="ghost"
                                         className="text-rose-600"
-                                        onClick={() => { setDeactivateTarget(m); setReassignTo(null); }}
+                                        onClick={() => { setDeactivateTarget(m); setReassignTo(defaultReassignFor(m)); }}
                                       >
                                         <UserMinus className="size-3.5" /> Deactivate
                                       </Button>
@@ -766,7 +804,7 @@ export default function Team() {
                                         title={(isPendingInvite || isExpiredInvite)
                                           ? "Permanently delete this invitation — as if never sent"
                                           : "Permanently delete this member — as if never invited"}
-                                        onClick={() => { setDeleteTarget(m); setDeleteReassignTo(null); }}
+                                        onClick={() => { setDeleteTarget(m); setDeleteReassignTo(defaultReassignFor(m)); }}
                                       >
                                         <Trash2 className="size-3.5" /> Delete
                                       </Button>
@@ -1201,7 +1239,7 @@ export default function Team() {
                 onClick={() => {
                   setEditTarget(null);
                   setDeactivateTarget(editTarget);
-                  setReassignTo(null);
+                  setReassignTo(defaultReassignFor(editTarget));
                 }}
               >
                 <UserMinus className="size-4" /> Deactivate user
