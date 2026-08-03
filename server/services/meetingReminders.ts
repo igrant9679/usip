@@ -18,8 +18,15 @@ import { meetings } from "../../drizzle/schema";
 import { sendWorkspaceEmail } from "../emailDelivery";
 import { resolveBookingUrl } from "../mergeVars";
 import { escapeHtml } from "@shared/escapeHtml";
+import { remindableMeetingStatuses } from "@shared/meetingStatus";
 
-const REMINDER_STATUSES = ["scheduled", "invited"];
+/**
+ * ⚠️ BEHAVIOUR CHANGE: `rescheduled` was missing, so a meeting the attendee
+ * MOVED got no reminder — while the time they moved away from had already had
+ * one. Reminders now go out for rescheduled meetings too. `proposed` stays
+ * excluded on purpose; see @shared/meetingStatus.
+ */
+const REMINDER_STATUSES = remindableMeetingStatuses();
 
 function fmtWhen(d: Date): string {
   // No attendee timezone on file — label UTC explicitly to avoid ambiguity.

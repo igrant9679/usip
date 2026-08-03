@@ -21,25 +21,52 @@
  * responsible for this record" — not merely "this person created it".
  */
 
-/** `tasks` alone is filtered, because reassigning a CLOSED task rewrites history. */
+/**
+ * ⚠️ A MEETING IS NOT LIKE THE OTHERS, and the difference is recorded here
+ * because it constrains what reassignment can honestly claim. A lead has no
+ * existence outside this database; a meeting has a provider calendar event on
+ * the LEAVER'S calendar and an invite already sitting in the attendee's inbox
+ * with the leaver's name on it. Moving `ownerUserId` moves neither. So the
+ * server clears the row's calendar linkage and its `inviteSent` flag when it
+ * reassigns one — the new host genuinely does not have it on their calendar,
+ * and saying otherwise would be the more comfortable lie.
+ */
+
+/**
+ * Which rows of a table move.
+ *
+ * `all` is the default and the common case — a lead or an account belongs to
+ * somebody whatever state it is in. The other two exist because reassigning a
+ * row that is already in the PAST rewrites history rather than transferring
+ * responsibility: nobody takes over a meeting that happened last week, and
+ * changing who "did" a completed task is a lie about the record.
+ */
+export type OwnableScope =
+  /** Every row this member owns. */
+  | "all"
+  /** Tasks that still exist as work — see `@shared/taskStatus`. */
+  | "live_tasks"
+  /** Meetings still ahead of us — see `@shared/meetingStatus`. */
+  | "future_meetings";
+
 export interface OwnableTable {
   /** Key in the counts object the API returns. */
   key: string;
   /** Physical table name. */
   table: string;
-  /** Restrict to still-live rows (tasks only — see `activeTaskStatuses`). */
-  liveOnly: boolean;
+  scope: OwnableScope;
   singular: string;
   plural: string;
 }
 
 export const OWNABLE_TABLES: readonly OwnableTable[] = [
-  { key: "leads", table: "leads", liveOnly: false, singular: "lead", plural: "leads" },
-  { key: "opportunities", table: "opportunities", liveOnly: false, singular: "opportunity", plural: "opportunities" },
-  { key: "accounts", table: "accounts", liveOnly: false, singular: "account", plural: "accounts" },
-  { key: "contacts", table: "contacts", liveOnly: false, singular: "contact", plural: "contacts" },
-  { key: "campaigns", table: "campaigns", liveOnly: false, singular: "campaign", plural: "campaigns" },
-  { key: "tasks", table: "tasks", liveOnly: true, singular: "unfinished task", plural: "unfinished tasks" },
+  { key: "leads", table: "leads", scope: "all", singular: "lead", plural: "leads" },
+  { key: "opportunities", table: "opportunities", scope: "all", singular: "opportunity", plural: "opportunities" },
+  { key: "accounts", table: "accounts", scope: "all", singular: "account", plural: "accounts" },
+  { key: "contacts", table: "contacts", scope: "all", singular: "contact", plural: "contacts" },
+  { key: "campaigns", table: "campaigns", scope: "all", singular: "campaign", plural: "campaigns" },
+  { key: "meetings", table: "meetings", scope: "future_meetings", singular: "upcoming meeting", plural: "upcoming meetings" },
+  { key: "tasks", table: "tasks", scope: "live_tasks", singular: "unfinished task", plural: "unfinished tasks" },
 ] as const;
 
 export type OwnedWork = Record<string, number>;

@@ -29,6 +29,7 @@ import {
   DEFAULT_HORIZON_DAYS, DEFAULT_WORK_DAYS, formatInZone, generateSlots, isValidTimezone,
 } from "@shared/availability";
 import { slugify } from "@shared/slugify";
+import { isLiveMeetingStatus } from "@shared/meetingStatus";
 
 /**
  * Availability bounds. The generator's own defaults live in
@@ -70,7 +71,10 @@ export function parseWorkDays(s: string | null | undefined): number[] {
  * next sync, whereas its `meetings` row (with scheduledAt) is immediately
  * consistent — so back-to-back bookings of the same slot are correctly blocked.
  */
-const BUSY_MEETING_STATUSES = ["proposed", "invited", "scheduled", "rescheduled"];
+// Was a local array; now @shared/meetingStatus, which two other files were
+// answering the same question with differently. This one was the correct set,
+// and it is asked through `isLiveMeetingStatus` so the check is typed rather
+// than a `.includes(x as string)` that would accept any spelling at all.
 
 async function busyEventsFor(workspaceId: number, userId: number, nowMs: number) {
   const db = await getDb();
@@ -99,7 +103,7 @@ async function busyEventsFor(workspaceId: number, userId: number, nowMs: number)
   ]);
   const busy = events.map((r) => ({ startAt: r.startAt as Date, endAt: r.endAt as Date }));
   for (const m of mtgs) {
-    if (!m.startAt || !BUSY_MEETING_STATUSES.includes(m.status as string)) continue;
+    if (!m.startAt || !isLiveMeetingStatus(m.status as string)) continue;
     const s = m.startAt as Date;
     busy.push({ startAt: s, endAt: new Date(s.getTime() + (m.durationMin ?? 30) * 60000) });
   }

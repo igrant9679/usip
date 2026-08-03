@@ -251,13 +251,15 @@ describe("raw SQL cannot say status = 'open' either", () => {
     /**
      * Every tasks statement on the offboarding paths goes through the helper.
      *
-     * ⚠️ THE FLOOR DROPPED FROM 4 TO 2, AND THAT IS A CONSOLIDATION, NOT A
-     * REGRESSION. There used to be four hand-written statements — one count
-     * plus three reassignments — each carrying its own `${liveTaskStatuses()}`.
-     * They now share `countOwnedWork` / `reassignOwnedWork`, which iterate
-     * `OWNABLE_TABLES` and apply the filter to the tables that ask for it, so
-     * there is exactly one templated site each. The property being protected is
-     * unchanged: no offboarding statement may filter tasks by a bare 'open'.
+     * ⚠️ THE FLOOR DROPPED 4 → 2 → 1, AND EACH DROP WAS A CONSOLIDATION.
+     * There were four hand-written statements — one count plus three
+     * reassignments — each carrying its own `${liveTaskStatuses()}`. They first
+     * became two (a shared count and a shared UPDATE), then one, when per-table
+     * SCOPES replaced the tasks-only boolean and the filter moved down into
+     * `scopeCondition`. The property being protected has not changed: no
+     * offboarding statement may filter tasks by a bare 'open'. What enforces it
+     * now is the `case "live_tasks"` assertion below plus the two statements
+     * being required to apply their table's scope at all.
      *
      * Verified by mutation rather than assumed — dropping `liveOnly` from the
      * tasks entry, or the conditional from either statement, still fails here
@@ -266,17 +268,20 @@ describe("raw SQL cannot say status = 'open' either", () => {
     const helperUses = (admin.match(/\$\{liveTaskStatuses\(\)\}/g) ?? []).length;
     expect(
       helperUses,
-      "expected the shared count and reassign statements to use liveTaskStatuses()",
-    ).toBeGreaterThanOrEqual(2);
+      "liveTaskStatuses() is no longer bound into any statement",
+    ).toBeGreaterThanOrEqual(1);
 
     // The filter must be applied CONDITIONALLY, from the shared list's own flag
     // — hardcoding it onto every table would reassign closed tasks, and
     // dropping the conditional entirely would reassign none of them correctly.
-    const conditionalUses = (admin.match(/o\.liveOnly \? sql`AND \$\{liveTaskStatuses\(\)\}` : sql``/g) ?? []).length;
+    const conditionalUses = (admin.match(/\$\{scopeCondition\(o\.scope, now\)\}/g) ?? []).length;
     expect(
       conditionalUses,
-      "the live-task filter is no longer driven by OWNABLE_TABLES.liveOnly",
+      "the live-task filter is no longer driven by each table's scope",
     ).toBeGreaterThanOrEqual(2);
+    // …and that scope must still resolve to the live set for tasks.
+    expect(admin, "the live_tasks scope no longer binds liveTaskStatuses()")
+      .toMatch(/case "live_tasks":\s*return sql`AND \$\{liveTaskStatuses\(\)\}`;/);
 
     // And no hand-rolled tasks statement may survive alongside the helper.
     expect(admin, "a raw tasks UPDATE reappeared outside the shared helper")
@@ -306,7 +311,14 @@ describe("raw SQL cannot say status = 'open' either", () => {
     const updateStmt = /UPDATE \$\{sql\.raw[\s\S]*?`,/.exec(admin)?.[0] ?? "";
     expect(countStmt, "the owned-work count statement was not found — re-anchor this test").not.toBe("");
     expect(updateStmt, "the reassignment statement was not found — re-anchor this test").not.toBe("");
-    expect(countStmt, "the count no longer filters tasks by the live set").toContain("liveTaskStatuses()");
-    expect(updateStmt, "the reassignment no longer filters tasks by the live set").toContain("liveTaskStatuses()");
+    /**
+     * Both go through the SAME scope resolver, which is what makes them agree.
+     * Asserting `liveTaskStatuses()` appears inside each statement stopped
+     * working when per-table scopes replaced the tasks-only boolean — the
+     * filter now resolves one level down, in `scopeCondition`, which is
+     * asserted just above to still bind the live set for tasks.
+     */
+    expect(countStmt, "the count no longer applies the table's scope").toContain("scopeCondition(o.scope, now)");
+    expect(updateStmt, "the reassignment no longer applies the table's scope").toContain("scopeCondition(o.scope, now)");
   });
 });

@@ -44,8 +44,10 @@ import {
   describeOwnedWork,
   totalOwnedWork,
   zeroOwnedWork,
+  type OwnableScope,
   type OwnedWork,
 } from "@shared/ownedWork";
+import { liveMeetingStatuses } from "@shared/meetingStatus";
 
 /**
  * `status IN (…)` over the LIVE-work set, as bound parameters.
@@ -105,11 +107,12 @@ async function countOwnedWork(
   userId: number,
 ): Promise<OwnedWork> {
   const out = zeroOwnedWork();
+  const now = new Date();
   for (const o of OWNABLE_TABLES) {
     const [rows] = (await db.execute(
       sql`SELECT COUNT(*) AS n FROM ${sql.raw(`\`${safeTable(o.table)}\``)}
           WHERE workspaceId = ${workspaceId} AND ownerUserId = ${userId}
-          ${o.liveOnly ? sql`AND ${liveTaskStatuses()}` : sql``}`,
+          ${scopeCondition(o.scope, now)}`,
     )) as any;
     out[o.key] = Number(rows?.[0]?.n ?? 0);
   }
@@ -124,11 +127,13 @@ async function reassignOwnedWork(
   toUserId: number,
 ): Promise<OwnedWork> {
   const out = zeroOwnedWork();
+  const now = new Date();
   for (const o of OWNABLE_TABLES) {
     const [res] = (await db.execute(
       sql`UPDATE ${sql.raw(`\`${safeTable(o.table)}\``)} SET ownerUserId = ${toUserId}
+          ${RESET_ON_REASSIGN[o.table] ?? sql``}
           WHERE workspaceId = ${workspaceId} AND ownerUserId = ${fromUserId}
-          ${o.liveOnly ? sql`AND ${liveTaskStatuses()}` : sql``}`,
+          ${scopeCondition(o.scope, now)}`,
     )) as any;
     out[o.key] = Number(res?.affectedRows ?? 0);
   }
@@ -140,6 +145,47 @@ function safeTable(t: string): string {
   if (!/^[a-z_]+$/.test(t)) throw new Error(`refusing to interpolate table name: ${t}`);
   return t;
 }
+
+/**
+ * The WHERE fragment for each scope. Lives here rather than in the shared list
+ * because it is SQL, and @shared/ownedWork is imported by the client.
+ *
+ * `future_meetings` binds `now` rather than using MySQL's NOW(): NOW() reads
+ * the session timezone, and this repo has already been bitten once by a
+ * cron comparing times in a zone nobody chose (d682552).
+ */
+function scopeCondition(scope: OwnableScope, now: Date) {
+  switch (scope) {
+    case "all":
+      return sql``;
+    case "live_tasks":
+      return sql`AND ${liveTaskStatuses()}`;
+    case "future_meetings":
+      // A live meeting with no scheduledAt is a proposal holding candidate
+      // times — still ahead of us, so it moves too.
+      return sql`AND status IN (${sql.join(liveMeetingStatuses().map((s) => sql`${s}`), sql`, `)})
+                 AND (scheduledAt IS NULL OR scheduledAt >= ${now})`;
+  }
+}
+
+/**
+ * Columns reset when a row changes hands, keyed by table.
+ *
+ * Only meetings need this, and the reason is the one recorded in
+ * @shared/ownedWork: the provider calendar event and the attendee's invite both
+ * still belong to the person leaving, and this UPDATE cannot move either. So
+ * the new host's row must not claim to have it on their calendar.
+ * `inviteSent = 0` is the honest flag and the actionable one — it is what the
+ * Meetings UI reads to offer "send invite", which re-books on the NEW owner's
+ * calendar through the ordinary path.
+ *
+ * Nothing re-sends automatically: the meeting autopilot only creates meetings
+ * for prospects that have none, so clearing this cannot trigger a surprise
+ * invite. Checked before relying on it.
+ */
+const RESET_ON_REASSIGN: Record<string, ReturnType<typeof sql> | undefined> = {
+  meetings: sql`, calendarEventId = NULL, calendarAccountId = NULL, inviteSent = 0`,
+};
 
 const ROLE_ENUM = z.enum(["super_admin", "admin", "manager", "rep"]);
 const DEFAULT_NOTIFY_POLICY = {

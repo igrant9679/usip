@@ -30,6 +30,7 @@ import { attributeMeetingBookingToAre } from "../routers/are/execution";
 import { formatInZone, generateSlots, safeTimezone } from "@shared/availability";
 import { getWorkspaceTimezone } from "./workspaceTimezone";
 import { rankOf } from "../_core/workspace";
+import { liveMeetingStatuses } from "@shared/meetingStatus";
 
 // Every offerable time derives from the workspace's configured zone rather than
 // the host's clock — the container runs on UTC, which is a deployment detail, not
@@ -39,7 +40,15 @@ import { rankOf } from "../_core/workspace";
 
 export type MeetingAutopilotMode = "off" | "approval" | "auto";
 
-const ACTIVE_MEETING_STATUSES = ["proposed", "invited", "scheduled"];
+/**
+ * 🔴 THIS ARRAY WAS MISSING `rescheduled`, and it is the autopilot's dedupe —
+ * "does this prospect already have a live meeting?". A prospect who moved their
+ * meeting stopped counting, so the engine read them as unbooked and proposed a
+ * SECOND one; in `auto` mode that is a second invite to somebody who has just
+ * told us when they are free. Now @shared/meetingStatus, where the same
+ * question is answered once.
+ */
+const ACTIVE_MEETING_STATUSES = liveMeetingStatuses();
 // Highest privilege first, derived from the one rank map (_core/workspace.ts).
 // This file had the hierarchy written out BACKWARDS as its own constant — a
 // second place to update, inverted, and easy to miss.

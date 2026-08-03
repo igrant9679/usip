@@ -18,8 +18,12 @@ import { recordAudit } from "../audit";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, repProcedure, workspaceProcedure } from "../_core/workspace";
 import { proposeMeetingForProspect, runMeetingAutopilotForWorkspace, sendMeetingInvite } from "../services/meetingScheduler";
+import { MEETING_STATUSES } from "@shared/meetingStatus";
 
-const MEETING_STATUSES = ["proposed", "invited", "scheduled", "completed", "no_show", "cancelled", "rescheduled"] as const;
+// Was a fourth hand-written copy of the enum, for this router's z.enum(). The
+// anti-drift scanner found it on its first run — exactly as the task-status
+// guard turned up activities.ts (9f2e78f). Repointed at the shared definition,
+// which is a const tuple so z.enum() takes it directly.
 
 /**
  * Create a recovery task for a meeting that didn't happen.
@@ -197,7 +201,19 @@ export const meetingsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      await db.update(meetings).set({ status: "rescheduled", scheduledAt: new Date(input.scheduledAt) } as never)
+      /**
+       * `reminderSentAt` is cleared, because it records "we have reminded them
+       * about THIS meeting" and the meeting has just moved. Left stamped, the
+       * attendee got a reminder for the time they abandoned and none for the
+       * time they chose — the reminder cron only ever considers rows where it
+       * is NULL. A state transition that changes the date has to reset what was
+       * said about the old one.
+       */
+      await db.update(meetings).set({
+        status: "rescheduled",
+        scheduledAt: new Date(input.scheduledAt),
+        reminderSentAt: null,
+      } as never)
         .where(and(eq(meetings.id, input.id), eq(meetings.workspaceId, ctx.workspace.id)));
       return { ok: true };
     }),

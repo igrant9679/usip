@@ -65,14 +65,22 @@ describe("the ownable-work list", () => {
     expect(keys).toContain("accounts");
     expect(keys).toContain("contacts");
     expect(keys).toContain("campaigns");
-    expect(keys).toEqual(["leads", "opportunities", "accounts", "contacts", "campaigns", "tasks"]);
+    expect(keys).toContain("meetings");
+    expect(keys).toEqual(["leads", "opportunities", "accounts", "contacts", "campaigns", "meetings", "tasks"]);
   });
 
-  it("only tasks is status-filtered", () => {
-    // Reassigning a CLOSED lead is fine — it still belongs to somebody. A closed
-    // task is history, and rewriting its owner rewrites who did the work.
-    const live = OWNABLE_TABLES.filter((t) => t.liveOnly).map((t) => t.key);
-    expect(live).toEqual(["tasks"]);
+  it("scopes exactly the two tables where the PAST must not be rewritten", () => {
+    /**
+     * Reassigning a CLOSED lead is fine — it still belongs to somebody. A
+     * closed task is history, and rewriting its owner rewrites who did the
+     * work; a meeting that already happened is the same. Everything else is
+     * `all`, and a table quietly gaining a scope would stop moving rows the
+     * dialogs promise to move.
+     */
+    const byScope = (s: string) => OWNABLE_TABLES.filter((t) => t.scope === s).map((t) => t.key);
+    expect(byScope("live_tasks")).toEqual(["tasks"]);
+    expect(byScope("future_meetings")).toEqual(["meetings"]);
+    expect(byScope("all")).toEqual(["leads", "opportunities", "accounts", "contacts", "campaigns"]);
   });
 
   it("every table name is a bare identifier", () => {
@@ -91,8 +99,15 @@ describe("the ownable-work list", () => {
 
 describe("counting and describing owned work", () => {
   it("totals across every table, not the three it used to know about", () => {
-    const owned = { ...zeroOwnedWork(), leads: 1, opportunities: 2, accounts: 4, contacts: 8, campaigns: 16, tasks: 32 };
-    expect(totalOwnedWork(owned)).toBe(63);
+    const owned = { ...zeroOwnedWork(), leads: 1, opportunities: 2, accounts: 4, contacts: 8, campaigns: 16, meetings: 32, tasks: 64 };
+    expect(totalOwnedWork(owned)).toBe(127);
+  });
+
+  it("a member owning ONLY upcoming meetings still counts as owning work", () => {
+    // The one that decides whether a prospect turns up to meet nobody.
+    expect(totalOwnedWork({ ...zeroOwnedWork(), meetings: 1 })).toBe(1);
+    expect(describeOwnedWork({ ...zeroOwnedWork(), meetings: 1 })).toBe("1 upcoming meeting");
+    expect(describeOwnedWork({ ...zeroOwnedWork(), meetings: 4 })).toBe("4 upcoming meetings");
   });
 
   it("a member owning ONLY accounts still counts as owning work", () => {
@@ -108,7 +123,7 @@ describe("counting and describing owned work", () => {
 
   it("ignores keys it does not own", () => {
     // A stale field from an older client must not inflate the total.
-    expect(totalOwnedWork({ ...zeroOwnedWork(), leads: 2, meetings: 99 } as any)).toBe(2);
+    expect(totalOwnedWork({ ...zeroOwnedWork(), leads: 2, proposals: 99 } as any)).toBe(2);
   });
 
   it("survives null/undefined rather than throwing at an admin", () => {
@@ -144,7 +159,7 @@ describe("counting and describing owned work", () => {
     for (const t of OWNABLE_TABLES) {
       expect(phrase, `the confirm dialogs would not mention ${t.key}`).toContain(t.plural);
     }
-    expect(phrase).toBe("leads, opportunities, accounts, contacts, campaigns and unfinished tasks");
+    expect(phrase).toBe("leads, opportunities, accounts, contacts, campaigns, upcoming meetings and unfinished tasks");
   });
 });
 
@@ -220,8 +235,55 @@ describe("the helper itself", () => {
     expect(fn).toMatch(/WHERE workspaceId = \$\{workspaceId\} AND ownerUserId = \$\{fromUserId\}/);
   });
 
-  it("applies the live-task filter to exactly the tables that ask for it", () => {
-    expect(fn).toMatch(/\$\{o\.liveOnly \? sql`AND \$\{liveTaskStatuses\(\)\}` : sql``\}/);
+  it("applies each table's own scope, from the shared list", () => {
+    expect(fn).toMatch(/\$\{scopeCondition\(o\.scope, now\)\}/);
+  });
+
+  it("the future_meetings scope really restricts to future AND live", () => {
+    /**
+     * 🔴 ADDED AFTER TWO MUTATIONS PASSED. Everything above proved the scope is
+     * APPLIED; nothing proved what it CONTAINS, so gutting this branch — the
+     * one thing stopping past meetings being reassigned — went unnoticed.
+     * Presence of a call is not the presence of a condition.
+     *
+     * Both terms are pinned because each alone is a different wrong answer:
+     * without the status test, cancelled and completed meetings move; without
+     * the date bound, last quarter's meetings are re-attributed to someone who
+     * was not in them.
+     */
+    const scope = windowBetween(admin, `case "future_meetings":`, "const RESET_ON_REASSIGN", 100);
+    expect(scope).toMatch(/AND status IN \(\$\{sql\.join\(liveMeetingStatuses\(\)/);
+    expect(scope).toMatch(/AND \(scheduledAt IS NULL OR scheduledAt >= \$\{now\}\)/);
+  });
+
+  it("the date bound is a bound parameter, not MySQL NOW()", () => {
+    // NOW() reads the session timezone. This repo has already shipped a cron
+    // that compared times in a zone nobody chose (d682552).
+    const scope = windowBetween(admin, "function scopeCondition(", "const RESET_ON_REASSIGN", 200);
+    expect(scope).not.toMatch(/\bNOW\(\)/);
+    expect(scope).toMatch(/\$\{now\}/);
+  });
+
+  it("resets the calendar linkage when a meeting changes hands", () => {
+    /**
+     * The honest half. Moving ownerUserId does not move the provider calendar
+     * event or the invite already in the attendee's inbox — both still belong
+     * to the person leaving. A row that kept `inviteSent = 1` would be telling
+     * the new host the meeting is on their calendar when it is not.
+     */
+    expect(fn).toMatch(/\$\{RESET_ON_REASSIGN\[o\.table\] \?\? sql``\}/);
+    const reset = windowBetween(admin, "const RESET_ON_REASSIGN", "};", 60);
+    expect(reset).toMatch(/meetings: sql`, calendarEventId = NULL, calendarAccountId = NULL, inviteSent = 0`/);
+  });
+
+  it("every reset key is a table that is actually reassigned", () => {
+    // A reset for a table not in the list is dead code that reads as coverage.
+    const reset = windowBetween(admin, "const RESET_ON_REASSIGN", "};", 60);
+    const keys = [...reset.matchAll(/^\s*(\w+):\s*sql`/gm)].map((m) => m[1]!);
+    expect(keys.length).toBeGreaterThan(0);
+    for (const k of keys) {
+      expect(OWNABLE_TABLES.map((t) => t.table), `${k} is reset but never reassigned`).toContain(k);
+    }
   });
 
   it("counts rows actually affected, not the length of the list", () => {
