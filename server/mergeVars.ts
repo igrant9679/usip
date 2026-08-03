@@ -24,7 +24,7 @@ import { isActiveMember } from "./_core/activeMembers";
 import { contacts, accounts, leads, prospects, bookingLinks, users } from "../drizzle/schema";
 import { escapeHtml } from "@shared/escapeHtml";
 import { slugify } from "@shared/slugify";
-import { buildMergeLookup, parseMergeToken, resolveMergeName } from "@shared/mergeKeys";
+import { buildMergeLookup, isEmptyLinkToken, parseMergeToken, resolveMergeName, stripEmptyLinkCarriers } from "@shared/mergeKeys";
 
 export type MergeContext = {
   contact?: {
@@ -170,7 +170,11 @@ function buildVarMap(ctx: MergeContext): Map<string, string> {
 export function resolveMergeVars(text: string, ctx: MergeContext): string {
   const lookup = buildMergeLookup(buildVarMap(ctx));
 
-  return text.replace(/\{\{([^}]+)\}\}/g, (match, inner: string) => {
+  // A dead {{bookingLink}} takes its sentence with it — the same rule areEngine
+  // applies, from the same definition, because both paths render this token.
+  const carried = stripEmptyLinkCarriers(String(text ?? ""), (tok) => isEmptyLinkToken(tok, lookup));
+
+  return carried.replace(/\{\{([^}]+)\}\}/g, (match, inner: string) => {
     const { name, fallback } = parseMergeToken(inner);
     if (!name) return match;
 
@@ -206,6 +210,9 @@ export function renderMergeFields(
 ): string {
   if (!template) return template;
   const lookup = buildMergeLookup(Object.entries(vars));
+  // Same rule again. crm.ts and sequences.ts both send through here, and a
+  // meeting-ask template is exactly where a {{bookingLink}} CTA lives.
+  template = stripEmptyLinkCarriers(template, (tok) => isEmptyLinkToken(tok, lookup));
   // `[^}]` rather than the old `[a-zA-Z0-9_\s]`: the narrow class could not
   // match a `|`, so the fallback form never even entered the replacer.
   return template.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (match, inner: string) => {

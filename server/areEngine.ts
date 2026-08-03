@@ -66,7 +66,7 @@ import { normalizeSequence } from "@shared/areSequenceSteps";
 import { apolloPulledToday, apolloSearchPeople, getApolloDailyCap } from "./services/apollo";
 import { appBaseUrl as publicAppOrigin } from "./appUrl";
 import { escapeHtml } from "@shared/escapeHtml";
-import { buildMergeLookup, parseMergeToken, resolveMergeName } from "@shared/mergeKeys";
+import { buildMergeLookup, isEmptyLinkToken, parseMergeToken, resolveMergeName, stripEmptyLinkCarriers } from "@shared/mergeKeys";
 
 /* ─── Per-tick bounds (keep LLM cost + wall-time predictable) ───────────── */
 /** Max prospects enriched per engine cycle. Enrichment runs ONE AT A TIME
@@ -135,7 +135,16 @@ export function applyMerge(text: string, p: Prospect, bookingUrl = ""): string {
     title: p.title ?? "",
     bookingLink: bookingUrl,
   }));
-  return String(text ?? "").replace(/\{\{([^}]+)\}\}/g, (_match, inner: string) => {
+  /**
+   * A dead {{bookingLink}} takes its sentence with it, rather than sending a
+   * stranger "Book a time here: ". Runs BEFORE substitution — afterwards the
+   * token is gone and its carrier can no longer be found.
+   */
+  const carried = stripEmptyLinkCarriers(String(text ?? ""), (tok) =>
+    isEmptyLinkToken(tok, lookup),
+  );
+
+  return carried.replace(/\{\{([^}]+)\}\}/g, (_match, inner: string) => {
     const { name, fallback } = parseMergeToken(inner);
     const hit = name ? resolveMergeName(lookup, name) : undefined;
     if (hit === undefined) return ""; // strip unresolved tags
