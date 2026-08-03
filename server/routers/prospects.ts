@@ -27,6 +27,8 @@ import { lookupContactInfo, type LookupResult } from "../services/scraper";
 import { isSyntheticNameProspect } from "../services/prospectFromSource";
 import { reoonCheckBalance, getReoonKey } from "../services/reoon";
 import { resolveProspectProfileImage } from "../services/profileImage";
+import { SWEEP_DAILY_CAP_MAX, SWEEP_DAILY_CAP_MIN } from "@shared/enrichmentLimits";
+import { promoteProspectRow } from "../services/prospectPromotion";
 
 export const prospectsRouter = router({
   /** Fetch a single prospect (powers the /prospects/:id detail page). */
@@ -627,106 +629,47 @@ export const prospectsRouter = router({
    *   - If a contact with the same email already exists, links to it.
    *   - Otherwise inserts a new contact and links.
    */
+  /**
+   * Manual promotion from the People page.
+   *
+   * DELEGATES. This used to carry its own copy of the promotion — find the
+   * contact by email, create it, link it back — which was then duplicated by
+   * services/prospectPromotion when the sweeper needed the same thing. Two
+   * implementations of "put this prospect in the CRM" is how one of them
+   * silently stops linking an account, or stops recovering a stale link.
+   *
+   * `requireVerified: false` is the difference that matters and it is
+   * deliberate: a human looking at one prospect and pressing Promote has made
+   * a judgement the unattended sweeper cannot. The sweeper keeps the default
+   * (verified only), so an unverified address still cannot reach a campaign on
+   * its own.
+   */
   promoteToContact: workspaceProcedure
     .input(z.object({ prospectId: z.number().int() }))
     .mutation(async ({ ctx, input }) => {
-      const db = await getDb();
-      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-
-      const [prospect] = await db
-        .select()
-        .from(prospects)
-        .where(and(eq(prospects.id, input.prospectId), eq(prospects.workspaceId, ctx.workspace.id)))
-        .limit(1);
-      if (!prospect) throw new TRPCError({ code: "NOT_FOUND", message: "Prospect not found" });
-
-      if (prospect.linkedContactId) {
-        // Only trust the link if the contact still exists — contacts can be
-        // deleted out from under a prospect (e.g. a bulk contact purge), leaving
-        // a stale linkedContactId that makes Promote a silent permanent no-op.
-        const [stillThere] = await db
-          .select({ id: contacts.id })
-          .from(contacts)
-          .where(and(eq(contacts.id, prospect.linkedContactId), eq(contacts.workspaceId, ctx.workspace.id)))
-          .limit(1);
-        if (stillThere) {
-          return { contactId: prospect.linkedContactId, created: false };
-        }
-        // Stale link: the contact was deleted. Clear it and fall through to re-create.
-        await db
-          .update(prospects)
-          .set({ linkedContactId: null })
-          .where(and(eq(prospects.id, input.prospectId), eq(prospects.workspaceId, ctx.workspace.id)));
-      }
-
-      let contactId: number | null = null;
-      if (prospect.email) {
-        const [existing] = await db
-          .select({ id: contacts.id })
-          .from(contacts)
-          .where(
-            and(
-              eq(contacts.workspaceId, ctx.workspace.id),
-              eq(contacts.email, prospect.email),
-            ),
-          )
-          .limit(1);
-        if (existing) contactId = existing.id;
-      }
-
-      if (!contactId) {
-        const [inserted] = await db.insert(contacts).values({
-          workspaceId: ctx.workspace.id,
-          firstName: prospect.firstName,
-          lastName: prospect.lastName,
-          title: prospect.title ?? null,
-          email: prospect.email ?? null,
-          phone: prospect.phone ?? null,
-          linkedinUrl: prospect.linkedinUrl ?? null,
-          city: prospect.city ?? null,
-          companyDomain: prospect.companyDomain ?? null,
-          seniority: prospect.seniority ?? null,
-          /**
-           * `functionalArea`, `industry` and `sourceProspectId` used to be set
-           * here. None of the three is a column on `contacts`, and Drizzle
-           * silently drops an unrecognised key — so they never reached the
-           * INSERT and nothing reported it. `as never` is why tsc stayed quiet.
-           *
-           * The back-link is not lost: `prospects.linkedContactId` is set just
-           * below, which is the direction the code actually reads (974b903).
-           * functionalArea and industry have nowhere to go on this table at
-           * all — persisting them is a migration and a product decision, not
-           * something to smuggle in behind a cast.
-           */
-        });
-        contactId = (inserted as { insertId: number }).insertId;
-      }
-
-      await db
-        .update(prospects)
-        .set({ linkedContactId: contactId! })
-        .where(and(eq(prospects.id, input.prospectId), eq(prospects.workspaceId, ctx.workspace.id)));
-
-      await recordAudit({
-        workspaceId: ctx.workspace.id,
-        actorUserId: ctx.user.id,
-        action: "create",
-        entityType: "contact_from_prospect",
-        entityId: contactId!,
-        after: { prospectId: input.prospectId },
+      const outcome = await promoteProspectRow(ctx.workspace.id, input.prospectId, {
+        requireVerified: false,
+        ownerUserId: ctx.user.id,
       });
-
-      return { contactId: contactId!, created: true };
+      if (!outcome.promoted) {
+        if (outcome.reason === "not_found") {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Prospect not found" });
+        }
+        if (outcome.reason === "db_unavailable") {
+          throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        }
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            outcome.reason === "no_email"
+              ? "This prospect has no email address yet."
+              : "This prospect has no company, so there is nothing to file the contact under.",
+        });
+      }
+      // Response shape preserved for the People page: it reads `created`.
+      return { contactId: outcome.contactId, created: !outcome.alreadyLinked };
     }),
 
-  /**
-   * Promote a prospect to a LEAD — the front of the sales funnel
-   * (Prospect → Lead → Opportunity → Account/Customer). Idempotent:
-   *   - If already linked to an existing lead, returns it.
-   *   - If a stale link points at a deleted lead, clears it and re-creates.
-   *   - If a lead with the same email already exists, links to it.
-   *   - Otherwise inserts a new lead (status "new") and links.
-   */
   promoteToLead: workspaceProcedure
     .input(z.object({ prospectId: z.number().int() }))
     .mutation(async ({ ctx, input }) => {
@@ -1018,7 +961,7 @@ export const prospectsRouter = router({
   setSweepSettings: adminWsProcedure
     .input(z.object({
       mode: z.enum(["off", "approval", "auto"]).optional(),
-      dailyCap: z.number().int().min(1).max(500).optional(),
+      dailyCap: z.number().int().min(SWEEP_DAILY_CAP_MIN).max(SWEEP_DAILY_CAP_MAX).optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();

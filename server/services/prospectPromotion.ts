@@ -45,18 +45,33 @@ export type PromotionOutcome =
   | { promoted: false; reason: "not_found" | "no_email" | "not_verified" | "no_company" | "db_unavailable" };
 
 /**
- * Promote one `prospects` row to an account + contact, if it has earned it.
+ * Promote one `prospects` row to an account + contact.
+ *
+ * THE ONE PROMOTION. `prospects.promoteToContact` used to carry its own copy —
+ * I wrote this without noticing it (a case-sensitive grep for "toContact"
+ * never matches "ToContact"), which is precisely the duplication this repo
+ * keeps sweeping out. They were not identical, so consolidating took the best
+ * of both: the verified-email gate and account linking from here, the
+ * stale-link recovery from there. That router procedure now delegates.
  *
  * IDEMPOTENT. A prospect already carrying `linkedContactId` returns that
  * contact and creates nothing — the sweeper may reach the same row again on a
  * later pass, and a promotion that ran twice would put the same person in the
  * CRM twice and then into a campaign twice.
  */
-export async function promoteVerifiedProspect(
+export async function promoteProspectRow(
   workspaceId: number,
   prospectId: number,
-  opts: { ownerUserId?: number } = {},
+  opts: { requireVerified?: boolean; ownerUserId?: number } = {},
 ): Promise<PromotionOutcome> {
+  /**
+   * Defaults to TRUE — the safe direction. The unattended sweeper promotes
+   * hundreds of rows nobody is looking at, so the gate has to be on unless a
+   * caller deliberately turns it off. A human clicking Promote on one prospect
+   * they are looking at is the case that opts out.
+   */
+  const requireVerified = opts.requireVerified ?? true;
+
   const db = await getDb();
   if (!db) return { promoted: false, reason: "db_unavailable" };
 
@@ -67,14 +82,35 @@ export async function promoteVerifiedProspect(
     .limit(1);
   if (!p) return { promoted: false, reason: "not_found" };
 
-  // Already promoted — return the existing link rather than making a second.
+  /**
+   * Already promoted — but only if the contact still EXISTS.
+   *
+   * Contacts can be deleted out from under a prospect (a bulk purge), leaving
+   * a stale linkedContactId. Trusting it blindly makes promotion a silent,
+   * permanent no-op for that row. This check came from the existing
+   * `prospects.promoteToContact`, which had it and which this function
+   * absorbed; the first version of this file did not, and would have returned
+   * a contactId pointing at nothing.
+   */
   if (p.linkedContactId) {
-    const accountId = p.accountId ?? 0;
-    return { promoted: true, contactId: p.linkedContactId, accountId, alreadyLinked: true };
+    const [stillThere] = await db
+      .select({ id: contacts.id })
+      .from(contacts)
+      .where(and(eq(contacts.id, p.linkedContactId), eq(contacts.workspaceId, workspaceId)))
+      .limit(1);
+    if (stillThere) {
+      return { promoted: true, contactId: p.linkedContactId, accountId: p.accountId ?? 0, alreadyLinked: true };
+    }
+    await db
+      .update(prospects)
+      .set({ linkedContactId: null })
+      .where(and(eq(prospects.id, prospectId), eq(prospects.workspaceId, workspaceId)));
   }
 
   if (!p.email) return { promoted: false, reason: "no_email" };
-  if (!isPromotableEmailStatus(p.emailStatus)) return { promoted: false, reason: "not_verified" };
+  if (requireVerified && !isPromotableEmailStatus(p.emailStatus)) {
+    return { promoted: false, reason: "not_verified" };
+  }
 
   /**
    * A contact with no company is a row nobody can route, score or enrol

@@ -2,13 +2,15 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Section, StatusPill, fmt$ } from "@/components/usip/Common";
 import { PageHeader, Shell, StatCard, SubNav } from "@/components/usip/Shell";
 import { Link, useSearch } from "wouter";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { trpc } from "@/lib/trpc";
-import { AlertTriangle, Bell, Building2, CheckCircle2, CreditCard, Download, ExternalLink, Loader2, Mail, Palette, Plug, ShieldCheck, TestTube2, Trash2, User, XCircle, Zap, Settings as SettingsIcon } from "lucide-react";
+import { SWEEP_DAILY_CAP_DEFAULT, SWEEP_DAILY_CAP_MAX, SWEEP_DAILY_CAP_MIN } from "@shared/enrichmentLimits";
+import { AlertTriangle, Bell, Building2, CheckCircle2, CreditCard, Download, ExternalLink, Loader2, Mail, Palette, Plug, ShieldCheck, TestTube2, Trash2, User, XCircle, Zap, Settings as SettingsIcon, Database } from "lucide-react";
 import { useReduceMotion } from "@/components/PageTransition";
 import { useTheme, PALETTES } from "@/contexts/ThemeContext";
 import { cn } from "@/lib/utils";
@@ -26,6 +28,7 @@ const TABS = [
   { id: "integrations", label: "Integrations", icon: Plug },
   { id: "smtp", label: "Email Delivery", icon: Mail },
   { id: "proposals", label: "Proposals", icon: Zap },
+  { id: "enrichment", label: "Data enrichment", icon: Database },
   { id: "billing", label: "Billing", icon: CreditCard },
   { id: "danger", label: "Danger zone", icon: AlertTriangle },
 ] as const;
@@ -143,6 +146,7 @@ export default function Settings() {
           {tab === "integrations" && <IntegrationsTab />}
           {tab === "smtp" && <SmtpTab canEdit={isAdmin} />}
           {tab === "proposals" && <ProposalsTab settings={settings.data} save={save.mutate} canEdit={isAdmin} />}
+          {tab === "enrichment" && <EnrichmentTab />}
           {tab === "billing" && <BillingTab usage={usage.data} />}
           {tab === "danger" && <DangerTab canEdit={isAdmin} />}
         </div>
@@ -1584,6 +1588,95 @@ function EmailVerificationSettingsSection({ isAdmin }: { isAdmin: boolean }) {
             {nextRunLabel}
           </div>
         </div>
+      </div>
+    </Section>
+  );
+}
+
+/**
+ * Enrichment sweep controls.
+ *
+ * The daily cap had NO UI at all: the setter existed on
+ * prospects.setSweepSettings and the Autonomy Control Center only ever sent
+ * `mode`, so the cap could not be changed from anywhere in the product. The
+ * ceiling is imported rather than retyped — three copies of `500` is what let
+ * the old bound drift from the engine's clamp.
+ */
+function EnrichmentTab() {
+  const utils = trpc.useUtils();
+  const statusQ = trpc.prospects.sweepStatus.useQuery();
+  const saveMut = trpc.prospects.setSweepSettings.useMutation({
+    onSuccess: () => { utils.prospects.sweepStatus.invalidate(); toast.success("Enrichment settings saved"); },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const [mode, setMode] = useState<string>("off");
+  const [cap, setCap] = useState<string>("");
+  useEffect(() => {
+    if (!statusQ.data) return;
+    setMode((statusQ.data as any).mode ?? "off");
+    setCap(String((statusQ.data as any).dailyCap ?? SWEEP_DAILY_CAP_DEFAULT));
+  }, [statusQ.data]);
+
+  const capNum = Number(cap);
+  const capValid = Number.isFinite(capNum) && capNum >= SWEEP_DAILY_CAP_MIN && capNum <= SWEEP_DAILY_CAP_MAX;
+
+  return (
+    <Section
+      title="Enrichment sweep"
+      description="Finds and verifies an email address for prospects that don't have one, then promotes the verified ones into the CRM."
+    >
+      <div className="p-4 space-y-4">
+        <div className="space-y-1">
+          <label className="text-xs text-muted-foreground">Mode</label>
+          <Select value={mode} onValueChange={setMode}>
+            <SelectTrigger className="w-full sm:w-80"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="off">Off — never sweeps</SelectItem>
+              <SelectItem value="approval">Approve — only when you press Run sweep</SelectItem>
+              <SelectItem value="auto">Auto — sweeps daily</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="space-y-1">
+          <label className="text-xs text-muted-foreground" htmlFor="sweep-cap">
+            Prospects per day ({SWEEP_DAILY_CAP_MIN}–{SWEEP_DAILY_CAP_MAX})
+          </label>
+          <Input
+            id="sweep-cap"
+            type="number"
+            min={SWEEP_DAILY_CAP_MIN}
+            max={SWEEP_DAILY_CAP_MAX}
+            className="w-48"
+            value={cap}
+            onChange={(e) => setCap(e.target.value)}
+          />
+          {!capValid && cap !== "" && (
+            <p className="text-xs text-red-600 dark:text-red-400">
+              Must be between {SWEEP_DAILY_CAP_MIN} and {SWEEP_DAILY_CAP_MAX}.
+            </p>
+          )}
+        </div>
+
+        <p className="text-xs text-muted-foreground">
+          Each prospect that reaches the email step spends a Reoon verification credit from your own key, so{" "}
+          {SWEEP_DAILY_CAP_MAX}/day is roughly {(SWEEP_DAILY_CAP_MAX * 20).toLocaleString()} verifications a month. The
+          sweep stops early when your daily Reoon balance runs out, so a high cap is a permission rather than a promise.
+          Resolving a company's domain costs nothing.
+        </p>
+        <p className="text-xs text-muted-foreground">
+          The LinkedIn company backfill is a separate control with its own, much lower limit — it spends your connected
+          LinkedIn account's lookup allowance rather than credits you can top up.
+        </p>
+
+        <Button
+          size="sm"
+          disabled={saveMut.isPending || !capValid}
+          onClick={() => saveMut.mutate({ mode: mode as any, dailyCap: Math.floor(capNum) })}
+        >
+          Save
+        </Button>
       </div>
     </Section>
   );

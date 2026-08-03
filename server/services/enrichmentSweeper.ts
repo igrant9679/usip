@@ -34,10 +34,11 @@ import { areCampaigns, notifications, prospectQueue, prospects, workspaceSetting
 import { getDb } from "../db";
 import { lookupContactInfo, resolveVerifiedEmail } from "./scraper";
 import { getReoonKey, reoonCheckBalance } from "./reoon";
-import { promoteVerifiedProspect } from "./prospectPromotion";
+import { promoteProspectRow } from "./prospectPromotion";
 // Pure name predicate only — importing it does NOT reach any paid Apollo path.
 // It is the one definition of "this campaign is a demo, don't work it".
 import { isEnrichableCampaign } from "./apolloEnrich";
+import { clampSweepCap, SWEEP_DAILY_CAP_DEFAULT } from "@shared/enrichmentLimits";
 
 export type SweepMode = "off" | "approval" | "auto";
 
@@ -226,7 +227,7 @@ export async function resolveMissingDomains(
       notRejected(),
     ))
     .orderBy(prospectQueue.id)
-    .limit(Math.max(1, Math.min(500, limit)));
+    .limit(clampSweepCap(limit));
 
   const live = rows.filter((r) => isEnrichableCampaign(r.campaignName));
   const { apolloResolveDomain } = await import("./apollo");
@@ -541,7 +542,7 @@ export async function sweepWorkspace(
   const key = await getReoonKey(workspaceId);
   if (!key) return emptyResult("no_key");
 
-  const cap = Math.max(1, Math.min(500, opts.limit ?? 50));
+  const cap = clampSweepCap(opts.limit ?? SWEEP_DAILY_CAP_DEFAULT);
   const retry = opts.retryFailed ?? false;
 
   // Domain pre-pass. Costs no Apollo credits and no Reoon credits, and without
@@ -665,7 +666,7 @@ export async function sweepWorkspace(
          * the promotion without paying again.
          */
         try {
-          const outcome = await promoteVerifiedProspect(workspaceId, p.id);
+          const outcome = await promoteProspectRow(workspaceId, p.id);
           if (outcome.promoted && !outcome.alreadyLinked) result.promoted++;
         } catch (e) {
           console.error(`[EnrichmentSweep] promotion failed for prospect ${p.id}:`, (e as Error).message);

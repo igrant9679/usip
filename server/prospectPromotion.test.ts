@@ -26,6 +26,7 @@ const h = vi.hoisted(() => ({ db: null as unknown }));
 vi.mock("./db", () => ({ getDb: async () => h.db }));
 
 import { isPromotableEmailStatus, PROMOTABLE_EMAIL_STATUSES } from "./services/prospectPromotion";
+import { clampSweepCap } from "@shared/enrichmentLimits";
 
 describe("isPromotableEmailStatus — the whole product rule in one predicate", () => {
   it("promotes a verified address", () => {
@@ -120,7 +121,7 @@ function fakeDb(prospectRow: FakeRow | null, opts: { existingContactId?: number;
   return Object.assign(chain, { inserted, updated });
 }
 
-describe("promoteVerifiedProspect", () => {
+describe("promoteProspectRow", () => {
   beforeEach(() => {
     h.db = null;
   });
@@ -135,8 +136,8 @@ describe("promoteVerifiedProspect", () => {
   it("refuses a row whose email is not verified — and writes NOTHING", async () => {
     const db = fakeDb({ ...verified, emailStatus: "accept_all" });
     h.db = db;
-    const { promoteVerifiedProspect } = await import("./services/prospectPromotion");
-    const out = await promoteVerifiedProspect(1, 7);
+    const { promoteProspectRow } = await import("./services/prospectPromotion");
+    const out = await promoteProspectRow(1, 7);
     expect(out).toEqual({ promoted: false, reason: "not_verified" });
     // The refusal must be silent in the database, not "created then rejected".
     expect(db.inserted).toEqual([]);
@@ -145,8 +146,8 @@ describe("promoteVerifiedProspect", () => {
 
   it("refuses a row with no email at all", async () => {
     h.db = fakeDb({ ...verified, email: null, emailStatus: null });
-    const { promoteVerifiedProspect } = await import("./services/prospectPromotion");
-    expect(await promoteVerifiedProspect(1, 7)).toEqual({ promoted: false, reason: "no_email" });
+    const { promoteProspectRow } = await import("./services/prospectPromotion");
+    expect(await promoteProspectRow(1, 7)).toEqual({ promoted: false, reason: "no_email" });
   });
 
   it("is IDEMPOTENT — an already-linked prospect creates nothing", async () => {
@@ -156,25 +157,59 @@ describe("promoteVerifiedProspect", () => {
      * campaign twice, which is the double-send this repo already fixed once at
      * the enrollment layer.
      */
-    const db = fakeDb({ ...verified, linkedContactId: 42, accountId: 11 });
+    // The linked contact must still EXIST for the link to be trusted — see the
+    // stale-link case below.
+    const db = fakeDb({ ...verified, linkedContactId: 42, accountId: 11 }, { existingContactId: 42 });
     h.db = db;
-    const { promoteVerifiedProspect } = await import("./services/prospectPromotion");
-    const out = await promoteVerifiedProspect(1, 7);
+    const { promoteProspectRow } = await import("./services/prospectPromotion");
+    const out = await promoteProspectRow(1, 7);
     expect(out).toEqual({ promoted: true, contactId: 42, accountId: 11, alreadyLinked: true });
     expect(db.inserted).toEqual([]);
     expect(db.updated).toEqual([]);
   });
 
+  it("recovers from a STALE link when the contact was deleted", async () => {
+    /**
+     * Contacts can be purged out from under a prospect, leaving a
+     * linkedContactId pointing at nothing. Trusting it makes promotion a
+     * silent, permanent no-op for that row.
+     *
+     * This behaviour came from `prospects.promoteToContact`, which had it while
+     * this function did not — the duplication that consolidating removed. Kept
+     * because it is the half the other implementation got right.
+     */
+    const db = fakeDb({ ...verified, linkedContactId: 42, accountId: 11 }); // no existing contact
+    h.db = db;
+    const { promoteProspectRow } = await import("./services/prospectPromotion");
+    const out = await promoteProspectRow(1, 7);
+    expect(out.promoted).toBe(true);
+    expect((out as { alreadyLinked: boolean }).alreadyLinked, "must re-create, not reuse").toBe(false);
+    // The stale link is cleared before the row is promoted again.
+    expect(db.updated.some((u) => u.set.linkedContactId === null), "stale link not cleared").toBe(true);
+  });
+
+  it("promotes an UNVERIFIED row when the caller opts out of the gate", async () => {
+    /**
+     * The manual People-page path: a human looking at one prospect has made a
+     * judgement the unattended sweeper cannot. The default stays verified-only,
+     * so this can never happen by omission.
+     */
+    h.db = fakeDb({ ...verified, emailStatus: "accept_all" });
+    const { promoteProspectRow } = await import("./services/prospectPromotion");
+    const out = await promoteProspectRow(1, 7, { requireVerified: false });
+    expect(out.promoted).toBe(true);
+  });
+
   it("returns not_found for another workspace's prospect", async () => {
     h.db = fakeDb(null);
-    const { promoteVerifiedProspect } = await import("./services/prospectPromotion");
-    expect(await promoteVerifiedProspect(1, 7)).toEqual({ promoted: false, reason: "not_found" });
+    const { promoteProspectRow } = await import("./services/prospectPromotion");
+    expect(await promoteProspectRow(1, 7)).toEqual({ promoted: false, reason: "not_found" });
   });
 
   it("fails closed when the database is unavailable", async () => {
     h.db = null;
-    const { promoteVerifiedProspect } = await import("./services/prospectPromotion");
-    expect(await promoteVerifiedProspect(1, 7)).toEqual({ promoted: false, reason: "db_unavailable" });
+    const { promoteProspectRow } = await import("./services/prospectPromotion");
+    expect(await promoteProspectRow(1, 7)).toEqual({ promoted: false, reason: "db_unavailable" });
   });
 });
 
@@ -304,14 +339,14 @@ describe("import → clean → promote → enrol is actually connected", () => {
 
   it("the sweeper promotes a prospect once its address verifies", () => {
     // The seam that did not exist: a found address that nothing acted on.
-    expect(sweeper).toMatch(/import \{ promoteVerifiedProspect \} from "\.\/prospectPromotion"/);
-    expect(sweeper).toMatch(/await promoteVerifiedProspect\(workspaceId, p\.id\)/);
+    expect(sweeper).toMatch(/import \{ promoteProspectRow \} from "\.\/prospectPromotion"/);
+    expect(sweeper).toMatch(/await promoteProspectRow\(workspaceId, p\.id\)/);
   });
 
   it("promotion only runs when an address was actually found", () => {
     const loop = sweeper.slice(sweeper.indexOf("for (const p of rows) {"));
     const found = loop.indexOf("if (r.email) {");
-    const promote = loop.indexOf("promoteVerifiedProspect(");
+    const promote = loop.indexOf("promoteProspectRow(");
     expect(found, "the found-email branch is gone").toBeGreaterThan(0);
     expect(promote).toBeGreaterThan(found);
   });
@@ -332,7 +367,7 @@ describe("import → clean → promote → enrol is actually connected", () => {
   });
 
   it("counts only NEW promotions, not re-promotions of an already-linked row", () => {
-    // promoteVerifiedProspect is idempotent and reports alreadyLinked; counting
+    // promoteProspectRow is idempotent and reports alreadyLinked; counting
     // those would inflate the run summary on every subsequent sweep.
     expect(sweeper).toMatch(/if \(outcome\.promoted && !outcome\.alreadyLinked\) result\.promoted\+\+/);
   });
@@ -341,5 +376,82 @@ describe("import → clean → promote → enrol is actually connected", () => {
     // A control the page never sends is the dead wiring this repo keeps finding.
     expect(ui).toMatch(/setDestination/);
     expect((ui.match(/^\s+destination,$/gm) ?? []).length, "validate + commit").toBe(2);
+  });
+});
+
+/**
+ * The sweep ceiling, and the control for it.
+ *
+ * The bound used to be the literal `500` written THREE times — the zod input,
+ * the domain pass's row limit, and the run cap. Three copies of a limit is how
+ * a setting accepts 1000 while the engine quietly clamps to 500: a control
+ * that reports success and does nothing, which is this repo's signature
+ * defect. Raised to 1000 at the owner's request, from one definition.
+ *
+ * And there was no UI at all: setSweepSettings accepted `dailyCap` and the
+ * Autonomy Control Center only ever sent `mode`, so the cap could not be
+ * changed from anywhere in the product.
+ */
+describe("the sweep daily cap", () => {
+  const sweeper = strip(read("server/services/enrichmentSweeper.ts"));
+  const router = strip(read("server/routers/prospects.ts"));
+  const limits = read("shared/enrichmentLimits.ts");
+  const settingsUi = read("client/src/pages/usip/Settings.tsx");
+
+  it("has ONE definition, and it is 1000", () => {
+    expect(limits).toMatch(/export const SWEEP_DAILY_CAP_MAX = 1000;/);
+    expect(limits).toMatch(/export const SWEEP_DAILY_CAP_MIN = 1;/);
+  });
+
+  it("no literal 500 clamp survives anywhere on this path", () => {
+    /**
+     * The actual failure mode: the engine clamping lower than the setting
+     * allows. A `Math.min(500, …)` left behind would cap every workspace at
+     * 500 while the UI cheerfully accepted 1000.
+     */
+    expect(sweeper).not.toMatch(/Math\.min\(\s*500\s*,/);
+    expect(router).not.toMatch(/dailyCap: z\.number\(\)\.int\(\)\.min\(1\)\.max\(500\)/);
+  });
+
+  it("the engine clamps through the shared helper", () => {
+    expect(sweeper).toMatch(/import \{ clampSweepCap, SWEEP_DAILY_CAP_DEFAULT \} from "@shared\/enrichmentLimits"/);
+    // Both clamp sites: the run cap and the domain pass's row limit.
+    expect((sweeper.match(/clampSweepCap\(/g) ?? []).length, "run cap + domain pass").toBe(2);
+  });
+
+  it("the setter's bound comes from the same constants", () => {
+    expect(router).toMatch(/dailyCap: z\.number\(\)\.int\(\)\.min\(SWEEP_DAILY_CAP_MIN\)\.max\(SWEEP_DAILY_CAP_MAX\)/);
+  });
+
+  it("clampSweepCap actually clamps, in both directions", () => {
+    // Behavioural — the one part of this that can be tested by calling it.
+    expect(clampSweepCap(5000)).toBe(1000);
+    expect(clampSweepCap(0)).toBe(1);
+    expect(clampSweepCap(-10)).toBe(1);
+    expect(clampSweepCap(250)).toBe(250);
+    // A caller passing nothing usable gets the default, not NaN or zero.
+    expect(clampSweepCap(undefined)).toBe(50);
+    expect(clampSweepCap(Number.NaN)).toBe(50);
+    // Fractions cannot become a fractional LIMIT clause.
+    expect(clampSweepCap(10.9)).toBe(10);
+  });
+
+  it("is adjustable from Settings, and the control SENDS the cap", () => {
+    /**
+     * A control that renders and never sends is the dead wiring this repo
+     * keeps finding — and it is exactly what the Autonomy Control Center did
+     * with this setting for months.
+     */
+    expect(settingsUi).toMatch(/id: "enrichment", label: "Data enrichment"/);
+    expect(settingsUi).toMatch(/tab === "enrichment" && <EnrichmentTab \/>/);
+    expect(settingsUi).toMatch(/setSweepSettings\.useMutation/);
+    expect(settingsUi).toMatch(/saveMut\.mutate\(\{ mode: mode as any, dailyCap: Math\.floor\(capNum\) \}\)/);
+  });
+
+  it("the Settings input bounds come from the shared constants too", () => {
+    // Retyping 1000 here is how the form starts accepting what the server rejects.
+    expect(settingsUi).toMatch(/from "@shared\/enrichmentLimits"/);
+    expect(settingsUi).toMatch(/min=\{SWEEP_DAILY_CAP_MIN\}/);
+    expect(settingsUi).toMatch(/max=\{SWEEP_DAILY_CAP_MAX\}/);
   });
 });
