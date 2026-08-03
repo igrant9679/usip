@@ -248,12 +248,39 @@ describe("raw SQL cannot say status = 'open' either", () => {
     const admin = stripped(
       FILES.find((f) => rel(f) === "server/routers/admin.ts")!,
     );
-    // Every tasks statement on the offboarding paths goes through the helper.
+    /**
+     * Every tasks statement on the offboarding paths goes through the helper.
+     *
+     * ⚠️ THE FLOOR DROPPED FROM 4 TO 2, AND THAT IS A CONSOLIDATION, NOT A
+     * REGRESSION. There used to be four hand-written statements — one count
+     * plus three reassignments — each carrying its own `${liveTaskStatuses()}`.
+     * They now share `countOwnedWork` / `reassignOwnedWork`, which iterate
+     * `OWNABLE_TABLES` and apply the filter to the tables that ask for it, so
+     * there is exactly one templated site each. The property being protected is
+     * unchanged: no offboarding statement may filter tasks by a bare 'open'.
+     *
+     * Verified by mutation rather than assumed — dropping `liveOnly` from the
+     * tasks entry, or the conditional from either statement, still fails here
+     * and in server/ownedWorkReassign.test.ts.
+     */
     const helperUses = (admin.match(/\$\{liveTaskStatuses\(\)\}/g) ?? []).length;
     expect(
       helperUses,
-      "expected the count + all three reassignments to use liveTaskStatuses()",
-    ).toBeGreaterThanOrEqual(4);
+      "expected the shared count and reassign statements to use liveTaskStatuses()",
+    ).toBeGreaterThanOrEqual(2);
+
+    // The filter must be applied CONDITIONALLY, from the shared list's own flag
+    // — hardcoding it onto every table would reassign closed tasks, and
+    // dropping the conditional entirely would reassign none of them correctly.
+    const conditionalUses = (admin.match(/o\.liveOnly \? sql`AND \$\{liveTaskStatuses\(\)\}` : sql``/g) ?? []).length;
+    expect(
+      conditionalUses,
+      "the live-task filter is no longer driven by OWNABLE_TABLES.liveOnly",
+    ).toBeGreaterThanOrEqual(2);
+
+    // And no hand-rolled tasks statement may survive alongside the helper.
+    expect(admin, "a raw tasks UPDATE reappeared outside the shared helper")
+      .not.toMatch(/UPDATE\s+tasks\s+SET\s+ownerUserId/i);
 
     // And the helper must derive from the shared definition, not a local list.
     expect(admin).toMatch(/function liveTaskStatuses\(\)[\s\S]{0,200}?activeTaskStatuses\(\)/);
@@ -269,7 +296,17 @@ describe("raw SQL cannot say status = 'open' either", () => {
      * have moved — which is precisely how in_progress tasks were orphaned.
      */
     const admin = stripped(FILES.find((f) => rel(f) === "server/routers/admin.ts")!);
-    const countStmt = /SELECT COUNT\(\*\) AS n FROM tasks[^`]*`/.exec(admin)?.[0] ?? "";
-    expect(countStmt, "the owned-task count statement was not found").toContain("liveTaskStatuses()");
+    /**
+     * Re-anchored: the count no longer names `tasks` inline. Both statements
+     * are templated over OWNABLE_TABLES, so what has to agree is that the COUNT
+     * and the UPDATE carry the SAME conditional — checked here by isolating
+     * each statement and requiring the filter in both.
+     */
+    const countStmt = /SELECT COUNT\(\*\) AS n FROM[\s\S]*?`,/.exec(admin)?.[0] ?? "";
+    const updateStmt = /UPDATE \$\{sql\.raw[\s\S]*?`,/.exec(admin)?.[0] ?? "";
+    expect(countStmt, "the owned-work count statement was not found — re-anchor this test").not.toBe("");
+    expect(updateStmt, "the reassignment statement was not found — re-anchor this test").not.toBe("");
+    expect(countStmt, "the count no longer filters tasks by the live set").toContain("liveTaskStatuses()");
+    expect(updateStmt, "the reassignment no longer filters tasks by the live set").toContain("liveTaskStatuses()");
   });
 });

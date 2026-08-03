@@ -401,7 +401,9 @@ describe("team.delete refuses to remove the workspace owner", () => {
 
   it("refuses BEFORE any of the destructive work", () => {
     const guardAt = proc.search(/ownerRow\.ownerUserId === target\.userId/);
-    const reassignAt = proc.search(/UPDATE leads SET ownerUserId/);
+    // Re-anchored when the three hand-written reassignments were consolidated
+    // into @shared/ownedWork — there is no inline `UPDATE leads` any more.
+    const reassignAt = proc.search(/await reassignOwnedWork\(/);
     expect(guardAt, "the owner guard is missing").toBeGreaterThan(-1);
     expect(reassignAt, "the reassignment is missing — re-anchor this test").toBeGreaterThan(-1);
     expect(guardAt).toBeLessThan(reassignAt);

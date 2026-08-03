@@ -39,6 +39,13 @@ import { publicProcedure, protectedProcedure, router } from "../_core/trpc";
 import { recordAudit } from "../audit";
 import { appBaseUrl as publicAppOrigin } from "../appUrl";
 import { activeTaskStatuses } from "@shared/taskStatus";
+import {
+  OWNABLE_TABLES,
+  describeOwnedWork,
+  totalOwnedWork,
+  zeroOwnedWork,
+  type OwnedWork,
+} from "@shared/ownedWork";
 
 /**
  * `status IN (…)` over the LIVE-work set, as bound parameters.
@@ -63,6 +70,75 @@ import { activeTaskStatuses } from "@shared/taskStatus";
  */
 function liveTaskStatuses() {
   return sql`status IN (${sql.join(activeTaskStatuses().map((s) => sql`${s}`), sql`, `)})`;
+}
+
+/**
+ * Reassignment of owned work. The LIST lives in `@shared/ownedWork` because the
+ * three confirm dialogs describe it to the user and must not drift from what
+ * these statements actually move — see the header there.
+ *
+ * There were three copies of the statements — deactivate, delete and
+ * bulkDeactivate each spelled out its own UPDATEs — which is the shape this
+ * codebase keeps finding drifted (seven task-status enumerations, five
+ * slugifys, four merge-field renderers). Adding accounts, contacts and
+ * campaigns would have made it eighteen statements across three sites.
+ *
+ * `tasks` is the only table with a status condition: reassigning a CLOSED task
+ * would rewrite history, and `liveTaskStatuses()` is what "still work" means —
+ * open, draft, in_progress and snoozed, not just `open` (9f2e78f).
+ *
+ * ⚠️ NOT atomic, and deliberately not dressed up as if it were. These are
+ * separate statements with no surrounding transaction, matching what the three
+ * call sites already did. A failure part-way leaves some rows moved and the
+ * member still present, which is a re-runnable state; the alternative — a
+ * transaction spanning a multi-table UPDATE over what may be tens of thousands
+ * of contact rows — is a lock this admin action does not need to hold.
+ *
+ * 🔒 The table name is interpolated with `sql.raw`, so it must never come from
+ * input. It comes from the frozen OWNABLE_TABLES array and is asserted against
+ * /^[a-z_]+$/ below — the same belt-and-braces as dangerZone.tableStatus.
+ */
+/** How much live work `userId` owns in this workspace, per table. */
+async function countOwnedWork(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  workspaceId: number,
+  userId: number,
+): Promise<OwnedWork> {
+  const out = zeroOwnedWork();
+  for (const o of OWNABLE_TABLES) {
+    const [rows] = (await db.execute(
+      sql`SELECT COUNT(*) AS n FROM ${sql.raw(`\`${safeTable(o.table)}\``)}
+          WHERE workspaceId = ${workspaceId} AND ownerUserId = ${userId}
+          ${o.liveOnly ? sql`AND ${liveTaskStatuses()}` : sql``}`,
+    )) as any;
+    out[o.key] = Number(rows?.[0]?.n ?? 0);
+  }
+  return out;
+}
+
+/** Move every ownable row from one member to another. Returns rows moved. */
+async function reassignOwnedWork(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  workspaceId: number,
+  fromUserId: number,
+  toUserId: number,
+): Promise<OwnedWork> {
+  const out = zeroOwnedWork();
+  for (const o of OWNABLE_TABLES) {
+    const [res] = (await db.execute(
+      sql`UPDATE ${sql.raw(`\`${safeTable(o.table)}\``)} SET ownerUserId = ${toUserId}
+          WHERE workspaceId = ${workspaceId} AND ownerUserId = ${fromUserId}
+          ${o.liveOnly ? sql`AND ${liveTaskStatuses()}` : sql``}`,
+    )) as any;
+    out[o.key] = Number(res?.affectedRows ?? 0);
+  }
+  return out;
+}
+
+/** Defence in depth for the one identifier that cannot be a bound parameter. */
+function safeTable(t: string): string {
+  if (!/^[a-z_]+$/.test(t)) throw new Error(`refusing to interpolate table name: ${t}`);
+  return t;
 }
 
 const ROLE_ENUM = z.enum(["super_admin", "admin", "manager", "rep"]);
@@ -574,10 +650,8 @@ export const teamRouter = router({
       if (!rcpt) throw new TRPCError({ code: "BAD_REQUEST", message: "Reassign target is not a workspace member" });
       if (rcpt.deactivatedAt) throw new TRPCError({ code: "BAD_REQUEST", message: "Reassign target is deactivated" });
 
-      // Reassign owned work
-      const [leadUpd] = await db.execute(sql`UPDATE leads SET ownerUserId = ${input.reassignToUserId} WHERE workspaceId = ${ctx.workspace.id} AND ownerUserId = ${target.userId}`) as any;
-      const [oppUpd] = await db.execute(sql`UPDATE opportunities SET ownerUserId = ${input.reassignToUserId} WHERE workspaceId = ${ctx.workspace.id} AND ownerUserId = ${target.userId}`) as any;
-      const [taskUpd] = await db.execute(sql`UPDATE tasks SET ownerUserId = ${input.reassignToUserId} WHERE workspaceId = ${ctx.workspace.id} AND ownerUserId = ${target.userId} AND ${liveTaskStatuses()}`) as any;
+      // Reassign owned work — one shared definition of what "owned" covers.
+      const reassigned = await reassignOwnedWork(db, ctx.workspace.id, target.userId, input.reassignToUserId);
 
       await db
         .update(workspaceMembers)
@@ -590,16 +664,9 @@ export const teamRouter = router({
         action: "update",
         entityType: "workspace_member",
         entityId: target.userId,
-        after: { deactivated: true, reassignedTo: input.reassignToUserId },
+        after: { deactivated: true, reassignedTo: input.reassignToUserId, reassigned },
       });
-      return {
-        ok: true,
-        reassigned: {
-          leads: Number(leadUpd?.affectedRows ?? 0),
-          opportunities: Number(oppUpd?.affectedRows ?? 0),
-          tasks: Number(taskUpd?.affectedRows ?? 0),
-        },
-      };
+      return { ok: true, reassigned };
     }),
 
   reactivate: adminWsProcedure
@@ -682,23 +749,15 @@ export const teamRouter = router({
         });
       }
 
-      // Owned-work guard — mirrors deactivate (leads, opps, open tasks).
-      const [leadRows] = await db.execute(sql`SELECT COUNT(*) AS n FROM leads WHERE workspaceId = ${ctx.workspace.id} AND ownerUserId = ${target.userId}`) as any;
-      const [oppRows] = await db.execute(sql`SELECT COUNT(*) AS n FROM opportunities WHERE workspaceId = ${ctx.workspace.id} AND ownerUserId = ${target.userId}`) as any;
-      const [taskRows] = await db.execute(sql`SELECT COUNT(*) AS n FROM tasks WHERE workspaceId = ${ctx.workspace.id} AND ownerUserId = ${target.userId} AND ${liveTaskStatuses()}`) as any;
-      const owned = {
-        leads: Number(leadRows?.[0]?.n ?? 0),
-        opportunities: Number(oppRows?.[0]?.n ?? 0),
-        tasks: Number(taskRows?.[0]?.n ?? 0),
-      };
-      const totalOwned = owned.leads + owned.opportunities + owned.tasks;
+      // Owned-work guard — the same definition deactivate reassigns by.
+      const owned = await countOwnedWork(db, ctx.workspace.id, target.userId);
 
-      let reassigned = { leads: 0, opportunities: 0, tasks: 0 };
-      if (totalOwned > 0) {
+      let reassigned = zeroOwnedWork();
+      if (totalOwnedWork(owned) > 0) {
         if (!input.reassignToUserId) {
           throw new TRPCError({
             code: "BAD_REQUEST",
-            message: `This member still owns ${owned.leads} lead(s), ${owned.opportunities} opportunit${owned.opportunities === 1 ? "y" : "ies"}, and ${owned.tasks} unfinished task(s). Choose a member to reassign their work to before deleting.`,
+            message: `This member still owns ${describeOwnedWork(owned)}. Choose a member to reassign their work to before deleting.`,
           });
         }
         if (input.reassignToUserId === target.userId) {
@@ -711,14 +770,7 @@ export const teamRouter = router({
         if (!rcpt) throw new TRPCError({ code: "BAD_REQUEST", message: "Reassign target is not a workspace member" });
         if (rcpt.deactivatedAt) throw new TRPCError({ code: "BAD_REQUEST", message: "Reassign target is deactivated" });
 
-        const [leadUpd] = await db.execute(sql`UPDATE leads SET ownerUserId = ${input.reassignToUserId} WHERE workspaceId = ${ctx.workspace.id} AND ownerUserId = ${target.userId}`) as any;
-        const [oppUpd] = await db.execute(sql`UPDATE opportunities SET ownerUserId = ${input.reassignToUserId} WHERE workspaceId = ${ctx.workspace.id} AND ownerUserId = ${target.userId}`) as any;
-        const [taskUpd] = await db.execute(sql`UPDATE tasks SET ownerUserId = ${input.reassignToUserId} WHERE workspaceId = ${ctx.workspace.id} AND ownerUserId = ${target.userId} AND ${liveTaskStatuses()}`) as any;
-        reassigned = {
-          leads: Number(leadUpd?.affectedRows ?? 0),
-          opportunities: Number(oppUpd?.affectedRows ?? 0),
-          tasks: Number(taskUpd?.affectedRows ?? 0),
-        };
+        reassigned = await reassignOwnedWork(db, ctx.workspace.id, target.userId, input.reassignToUserId);
       }
 
       // Capture identity for the audit trail before the rows are gone.
@@ -872,10 +924,8 @@ export const teamRouter = router({
         if (target.deactivatedAt) { skipped++; continue; }
         if (ctx.member.role !== "super_admin" && roleRank(target.role) >= roleRank(ctx.member.role)) { skipped++; continue; }
 
-        // Reassign owned work
-        await db.execute(sql`UPDATE leads SET ownerUserId = ${input.reassignToUserId} WHERE workspaceId = ${ctx.workspace.id} AND ownerUserId = ${target.userId}`);
-        await db.execute(sql`UPDATE opportunities SET ownerUserId = ${input.reassignToUserId} WHERE workspaceId = ${ctx.workspace.id} AND ownerUserId = ${target.userId}`);
-        await db.execute(sql`UPDATE tasks SET ownerUserId = ${input.reassignToUserId} WHERE workspaceId = ${ctx.workspace.id} AND ownerUserId = ${target.userId} AND ${liveTaskStatuses()}`);
+        // Reassign owned work — same definition as the single-member paths.
+        await reassignOwnedWork(db, ctx.workspace.id, target.userId, input.reassignToUserId);
 
         await db.update(workspaceMembers).set({ deactivatedAt: new Date() }).where(eq(workspaceMembers.id, target.id));
         deactivated++;

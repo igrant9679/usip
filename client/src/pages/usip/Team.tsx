@@ -6,6 +6,7 @@ import { ColorAvatar } from "@/components/usip/ColorAvatar";
 import { Link } from "wouter";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { trpc } from "@/lib/trpc";
+import { ownedWorkNounPhrase, summariseReassigned, totalOwnedWork } from "@shared/ownedWork";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
@@ -206,7 +207,7 @@ export default function Team() {
       utils.team.list.invalidate();
       setDeactivateTarget(null);
       setReassignTo(null);
-      toast.success(`Deactivated — reassigned ${res.reassigned.leads} leads, ${res.reassigned.opportunities} opps, ${res.reassigned.tasks} tasks`);
+      toast.success(`Deactivated — reassigned ${totalOwnedWork(res.reassigned)} item(s): ${summariseReassigned(res.reassigned)}`);
     },
     onError: (e) => toast.error(e.message),
   });
@@ -222,7 +223,7 @@ export default function Team() {
       utils.team.list.invalidate();
       setDeleteTarget(null);
       setDeleteReassignTo(null);
-      const moved = res.reassigned.leads + res.reassigned.opportunities + res.reassigned.tasks;
+      const moved = totalOwnedWork(res.reassigned);
       toast.success(
         res.deletedUser
           ? `Deleted — removed completely${moved ? `, reassigned ${moved} item(s)` : ""}`
@@ -1411,8 +1412,11 @@ export default function Team() {
             <DialogTitle>Deactivate {deactivateTarget?.name ?? deactivateTarget?.email}</DialogTitle>
           </DialogHeader>
           <div className="space-y-3 text-sm">
+            {/* The list comes from @shared/ownedWork, the same array the
+                reassignment iterates — a promise the code cannot quietly stop
+                keeping. */}
             <p className="text-muted-foreground">
-              Their open leads, opportunities, and unfinished tasks must be reassigned to another active member before deactivation.
+              Their {ownedWorkNounPhrase()} must be reassigned to another active member before deactivation.
             </p>
             <div className="space-y-1">
               <Label>Reassign owned work to</Label>
@@ -1464,7 +1468,7 @@ export default function Team() {
               </p>
             </div>
             <div className="space-y-1">
-              <Label>Reassign owned work to <span className="text-muted-foreground font-normal">(only required if they own leads, opportunities, or open tasks)</span></Label>
+              <Label>Reassign owned work to <span className="text-muted-foreground font-normal">(required if they own any {ownedWorkNounPhrase()})</span></Label>
               <select
                 className="w-full border rounded-md px-2 py-1.5 bg-background"
                 value={deleteReassignTo ?? ""}
@@ -1507,7 +1511,7 @@ export default function Team() {
           </DialogHeader>
           <div className="space-y-3 py-2">
             <p className="text-sm text-muted-foreground">
-              All owned leads, opportunities, and unfinished tasks will be reassigned to the selected member.
+              All owned {ownedWorkNounPhrase()} will be reassigned to the selected member.
               Members who are already deactivated, yourself, or peers above your rank will be skipped.
             </p>
             <div>
