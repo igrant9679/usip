@@ -34,6 +34,7 @@ import { router } from "../_core/trpc";
 import { adminWsProcedure, repProcedure, workspaceProcedure } from "../_core/workspace";
 import { activeMemberIds } from "../_core/activeMembers";
 import { notifyIfEnabled } from "../services/policyNotify";
+import { gradeForTier } from "@shared/leadTier";
 import { evalConditions } from "./operations";
 
 /* ───────── helpers ───────── */
@@ -232,8 +233,8 @@ async function recomputeOne(workspaceId: number, leadId: number) {
   const ai = scoreAiFit(aiFitJson, cfg);
   const breakdown = composeScore({ firmo, behav, aiFit: ai, cfg });
 
-  const grade: "A" | "B" | "C" | "D" =
-    breakdown.tier === "sales_ready" ? "A" : breakdown.tier === "hot" ? "B" : breakdown.tier === "warm" ? "C" : "D";
+  // One mapping, shared with the client — see @shared/leadTier.
+  const grade = gradeForTier(breakdown.tier);
 
   const previousTotal = lead.score ?? 0;
   await db.update(leads).set({ score: breakdown.total, grade, scoreReasons: breakdown.reasons }).where(eq(leads.id, leadId));

@@ -4,6 +4,7 @@ import { trpc } from "@/lib/trpc";
 import { ConfirmButton, fmtDate, StatusPill } from "./Common";
 import { Brain, ChevronDown, CheckCircle2, Clock, Loader2, Paperclip, Phone, Calendar, MessageSquare, RefreshCw, Sparkles, Trash2, Users, XCircle, ShieldCheck, FileText, Download, Send, Wand2, Sparkle, Linkedin, UserPlus } from "lucide-react";
 import { EmailVerificationBadge } from "./EmailVerificationBadge";
+import { LEAD_TIERS, leadTierLabel, type LeadTier } from "@shared/leadTier";
 import { ContactOverview } from "./detail/ContactOverview";
 import { AccountOverview } from "./detail/AccountOverview";
 import { OpportunityOverview } from "./detail/OpportunityOverview";
@@ -32,7 +33,10 @@ function LeadScorePanel({ leadId }: { leadId: number }) {
   const [openSec, setOpenSec] = useState<"firmo" | "behav" | "ai" | null>("firmo");
   if (isLoading || !bd) return <div className="text-sm text-muted-foreground py-6 flex items-center gap-2"><Loader2 className="size-3 animate-spin" /> Loading score…</div>;
   const tier = bd.tier as string;
-  const tierLabel = tier === "sales_ready" ? "Sales Ready" : tier.charAt(0).toUpperCase() + tier.slice(1);
+  // The label comes from @shared/leadTier rather than a local special case for
+  // "sales_ready" plus a capitalise-the-first-letter fallback — which is how
+  // one surface ends up saying "Sales Ready" and another "Sales_ready".
+  const tierLabel = leadTierLabel((LEAD_TIERS as readonly string[]).includes(tier) ? (tier as LeadTier) : null);
   const tierCls = tier === "sales_ready" ? "bg-emerald-100 text-emerald-800" : tier === "hot" ? "bg-orange-100 text-orange-800" : tier === "warm" ? "bg-yellow-100 text-yellow-800" : "bg-slate-200 text-slate-700";
   const max = (bd.firmographic.max ?? 40) + (bd.behavioral.max ?? 30) + (bd.aiFit.max ?? 30);
   const sparkW = 540, sparkH = 36;

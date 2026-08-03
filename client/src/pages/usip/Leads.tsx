@@ -17,20 +17,32 @@ import {
 import { useState } from "react";
 import { toast } from "sonner";
 import { confirmAction } from "@/components/usip/Common";
+import { leadTierLabel, tierForGrade, type LeadTier } from "@shared/leadTier";
 
+const NEUTRAL_TONE = "bg-slate-200 text-slate-700";
 const GRADE_TONE: Record<string, string> = { A: "bg-emerald-100 text-emerald-800", B: "bg-blue-100 text-blue-800", C: "bg-amber-100 text-amber-800", D: "bg-rose-100 text-rose-800" };
-const TIER_TONE: Record<string, { label: string; cls: string }> = {
-  cold: { label: "Cold", cls: "bg-slate-200 text-slate-700" },
-  warm: { label: "Warm", cls: "bg-yellow-100 text-yellow-800" },
-  hot: { label: "Hot", cls: "bg-orange-100 text-orange-800" },
-  sales_ready: { label: "Sales Ready", cls: "bg-emerald-100 text-emerald-800" },
+const TIER_TONE: Record<LeadTier, string> = {
+  cold: NEUTRAL_TONE,
+  warm: "bg-yellow-100 text-yellow-800",
+  hot: "bg-orange-100 text-orange-800",
+  sales_ready: "bg-emerald-100 text-emerald-800",
 };
-function tierFromScore(s: number | null | undefined): keyof typeof TIER_TONE {
-  const n = s ?? 0;
-  if (n >= 81) return "sales_ready";
-  if (n >= 61) return "hot";
-  if (n >= 31) return "warm";
-  return "cold";
+
+/**
+ * The tier badge comes from the SERVER'S grade, not from re-deriving it here.
+ *
+ * This used to be `tierFromScore(l.score)` against hardcoded 81/61/31, while
+ * the server picks the tier with per-workspace thresholds
+ * (`lead_score_config.tierSalesReadyMin` and friends) and stores the resulting
+ * letter on `leads.grade`. Any workspace that tuned those saw the two badges in
+ * this very cell disagree — grade B beside the label "Sales Ready" — and the
+ * "A lead becomes Sales-Ready" notification followed the server's answer, not
+ * the one on screen. The mapping is a bijection, so the grade is all the client
+ * needs; @shared/leadTier owns both directions.
+ */
+function tierBadge(grade: string | null | undefined): { label: string; cls: string } {
+  const tier = tierForGrade(grade);
+  return { label: leadTierLabel(tier), cls: tier ? TIER_TONE[tier] : NEUTRAL_TONE };
 }
 
 /* ─── Send Email Modal ──────────────────────────────────────────────────── */
@@ -334,8 +346,11 @@ export default function Leads() {
                     <td className="px-3 py-2 text-muted-foreground">{l.source}</td>
                     <td className="px-3 py-2">
                       <span className="font-mono tabular-nums">{l.score}</span>
-                      <span className={`ml-2 inline-block px-1.5 rounded text-xs ${GRADE_TONE[l.grade ?? "C"] ?? ""}`}>{l.grade ?? "—"}</span>
-                      {(() => { const t = tierFromScore(l.score); return <span className={`ml-1 inline-block px-1.5 rounded text-xs ${TIER_TONE[t].cls}`}>{TIER_TONE[t].label}</span>; })()}
+                      {/* An unscored lead reads neutral in BOTH badges. It used
+                          to show "—" tinted as if it were a C, next to "Cold" —
+                          two different fabrications of a score nobody took. */}
+                      <span className={`ml-2 inline-block px-1.5 rounded text-xs ${l.grade ? GRADE_TONE[l.grade] ?? NEUTRAL_TONE : NEUTRAL_TONE}`}>{l.grade ?? "—"}</span>
+                      {(() => { const t = tierBadge(l.grade); return <span className={`ml-1 inline-block px-1.5 rounded text-xs ${t.cls}`}>{t.label}</span>; })()}
                     </td>
                     <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
                       {(l as any).aiNextAction ? (

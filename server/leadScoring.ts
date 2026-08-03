@@ -74,7 +74,12 @@ export type AiFitOutput = {
   objection_risks: string[];
 };
 
-export type LeadTier = "cold" | "warm" | "hot" | "sales_ready";
+// The tier vocabulary and its grade mapping live in @shared/leadTier, because
+// the Leads table needs the second half and used to re-derive it from
+// hardcoded thresholds. Re-exported so this module's existing importers are
+// unaffected.
+export type { LeadTier } from "@shared/leadTier";
+import type { LeadTier } from "@shared/leadTier";
 
 export type ScoreBreakdown = {
   firmographic: number;
