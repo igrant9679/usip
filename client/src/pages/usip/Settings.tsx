@@ -10,6 +10,7 @@ import { Link, useSearch } from "wouter";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { trpc } from "@/lib/trpc";
 import { SWEEP_DAILY_CAP_DEFAULT, SWEEP_DAILY_CAP_MAX, SWEEP_DAILY_CAP_MIN } from "@shared/enrichmentLimits";
+import { NOTIFY_EVENTS, type NotifyPolicy } from "@shared/notifyPolicy";
 import { AlertTriangle, Bell, Building2, CheckCircle2, CreditCard, Download, ExternalLink, Loader2, Mail, Palette, Plug, ShieldCheck, TestTube2, Trash2, User, XCircle, Zap, Settings as SettingsIcon, Database } from "lucide-react";
 import { useReduceMotion } from "@/components/PageTransition";
 import { useTheme, PALETTES } from "@/contexts/ThemeContext";
@@ -17,7 +18,6 @@ import { cn } from "@/lib/utils";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
-type NotifyPolicy = Record<string, { inApp: boolean; email: boolean }>;
 
 const TABS = [
   { id: "general", label: "General", icon: Building2 },
@@ -35,13 +35,9 @@ const TABS = [
 
 type TabId = (typeof TABS)[number]["id"];
 
-const NOTIFY_EVENTS = [
-  { key: "newLeadRouted", label: "New lead routed to me" },
-  { key: "salesReadyCrossed", label: "A lead becomes Sales-Ready" },
-  { key: "dealMoved", label: "A deal I own moves stage" },
-  { key: "taskOverdue", label: "One of my tasks is overdue" },
-  { key: "mention", label: "Someone @mentions me" },
-];
+// Events, labels AND defaults come from @shared/notifyPolicy — this file used
+// to carry its own list plus a blanket `{ inApp: true, email: false }` default,
+// which disagreed with the server's seed on two of the five keys.
 
 export default function Settings() {
   const { current } = useWorkspace();
@@ -730,8 +726,8 @@ function NotificationsTab({ settings, save, canEdit }: { settings: any; save: (v
   const initial: NotifyPolicy = useMemo(() => {
     const p = (settings?.notifyPolicy ?? {}) as NotifyPolicy;
     const merged: NotifyPolicy = {};
-    for (const { key } of NOTIFY_EVENTS) {
-      merged[key] = p[key] ?? { inApp: true, email: false };
+    for (const { key, defaults } of NOTIFY_EVENTS) {
+      merged[key] = p[key] ?? { ...defaults };
     }
     return merged;
   }, [settings]);

@@ -17,6 +17,7 @@ import { router } from "../_core/trpc";
 import { publicProcedure } from "../_core/trpc";
 import { repProcedure, workspaceProcedure } from "../_core/workspace";
 import { activeOwnerOrNull } from "../_core/activeMembers";
+import { notifyLeadRouted } from "../services/leadNotifications";
 
 const FIELD = z.object({ key: z.string(), label: z.string(), required: z.boolean().optional() });
 
@@ -177,6 +178,17 @@ export const formsRouter = router({
           } as never);
           leadId = Number((r as any)[0]?.insertId ?? 0) || null;
         } catch (e) { console.error("[FormSubmit] lead insert failed:", e); }
+
+        // Tell whoever it landed on. Awaited rather than fire-and-forget: it is
+        // one insert, and a lead captured but unannounced is the whole bug.
+        await notifyLeadRouted({
+          workspaceId: form.workspaceId,
+          ownerUserId,
+          leadId,
+          name,
+          company,
+          source: "webform",
+        });
 
         // Form-enrichment bridge: link the lead to an account + prospect so
         // enrichment/scoring can run on it. Best-effort, never blocks submit.

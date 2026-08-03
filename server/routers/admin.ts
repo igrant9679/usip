@@ -48,6 +48,7 @@ import {
   type OwnedWork,
 } from "@shared/ownedWork";
 import { liveMeetingStatuses } from "@shared/meetingStatus";
+import { defaultNotifyPolicy } from "@shared/notifyPolicy";
 
 /**
  * `status IN (…)` over the LIVE-work set, as bound parameters.
@@ -202,13 +203,15 @@ const RESET_ON_REASSIGN: Record<string, ReturnType<typeof sql> | undefined> = {
 };
 
 const ROLE_ENUM = z.enum(["super_admin", "admin", "manager", "rep"]);
-const DEFAULT_NOTIFY_POLICY = {
-  newLeadRouted: { inApp: true, email: false },
-  salesReadyCrossed: { inApp: true, email: true },
-  dealMoved: { inApp: true, email: false },
-  taskOverdue: { inApp: true, email: false },
-  mention: { inApp: true, email: true },
-};
+/**
+ * Was a local literal, and it DISAGREED with the Settings tab's own copy:
+ * this one seeded `salesReadyCrossed` and `mention` with `email: true` while
+ * the client defaulted every unset key to `email: false`. A workspace that had
+ * never saved showed one thing and stored another — invisible only because
+ * nothing consumed the value, which is the condition under which drift
+ * accumulates. One definition now, in @shared/notifyPolicy.
+ */
+const DEFAULT_NOTIFY_POLICY = defaultNotifyPolicy();
 
 async function getOrSeedSettings(workspaceId: number) {
   const db = await getDb();

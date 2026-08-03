@@ -14,6 +14,7 @@ import { and, desc, eq, sql } from "drizzle-orm";
 import { router, publicProcedure } from "../_core/trpc";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { activeOwnerOrNull, workspaceNotifyUserId } from "../_core/activeMembers";
+import { notifyLeadRouted } from "../services/leadNotifications";
 import { getDb } from "../db";
 import { landingPages, leads, enrollments } from "../../drizzle/schema";
 import { resolveBookingUrl } from "../mergeVars";
@@ -252,6 +253,16 @@ export const landingPagesRouter = router({
           } as never);
           leadId = Number((r as any)[0]?.insertId ?? 0) || null;
         } catch (e) { console.error("[landingPages.submit] lead insert failed:", e); }
+
+        // Same as forms.submit — a lead captured but unannounced is the bug.
+        await notifyLeadRouted({
+          workspaceId: page.workspaceId,
+          ownerUserId,
+          leadId,
+          name: [firstName, lastName].filter(Boolean).join(" ") || email || "Unknown",
+          company,
+          source: `landing:${page.slug}`,
+        });
 
         if (leadId && page.autoEnrollSequenceId) {
           try {

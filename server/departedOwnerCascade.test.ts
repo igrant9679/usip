@@ -230,6 +230,13 @@ const SURFACES: Array<{
     gate: /const owner =\s*\(await activeOwnerOrNull\(workspaceId, campaign\.ownerUserId\)\) \?\?\s*\(await workspaceNotifyUserId\(workspaceId\)\) \?\?\s*undefined;/,
   },
   {
+    what: "a routed-lead notification is not addressed to a departed rep",
+    file: "server/services/leadNotifications.ts",
+    start: "export async function notifyLeadRouted(",
+    end: "db.insert(notifications)",
+    gate: /const owner = await activeOwnerOrNull\(notice\.workspaceId, notice\.ownerUserId \?\? null\);\s*if \(!owner\) return false;/,
+  },
+  {
     what: "the autopilot's meeting owner is an active member",
     file: "server/services/meetingScheduler.ts",
     start: "async function pickWorkspaceOwner(",
@@ -247,7 +254,7 @@ describe("every session-less path that names a member gates on active membership
    * pinned rather than bounded so that REMOVING a surface is also a decision.
    */
   it("checks every surface in the table, and the table has not shrunk", () => {
-    expect(SURFACES.length).toBe(20);
+    expect(SURFACES.length).toBe(21);
     expect(new Set(SURFACES.map((s) => `${s.file}::${s.start}`)).size).toBe(SURFACES.length);
   });
 
@@ -552,7 +559,7 @@ describe("the surface table stays in step with the code", () => {
     .filter((f) => f !== "server/services/meetingScheduler.ts");
 
   it("every table file really imports the gate", () => {
-    expect(tableFiles.length).toBeGreaterThanOrEqual(10);
+    expect(tableFiles.length).toBeGreaterThanOrEqual(11);
     for (const f of tableFiles) {
       expect(importsHelper(f), `${f} is in the table but does not import _core/activeMembers`).toBe(true);
     }
@@ -560,7 +567,7 @@ describe("the surface table stays in step with the code", () => {
 
   it("no file imports the gate without appearing in the table", () => {
     const consumers = globSourceFiles().filter(importsHelper);
-    expect(consumers.length, "nothing imports the gate — the scan is broken").toBeGreaterThanOrEqual(10);
+    expect(consumers.length, "nothing imports the gate — the scan is broken").toBeGreaterThanOrEqual(11);
     for (const f of consumers) {
       expect(
         tableFiles,
