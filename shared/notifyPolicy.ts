@@ -50,25 +50,32 @@ export const NOTIFY_EVENTS: readonly NotifyEvent[] = [
     key: "salesReadyCrossed",
     label: "A lead becomes Sales-Ready",
     defaults: { inApp: true, email: true },
-    wired: false,
+    // routers/leadScoring.ts, on the score crossing tierSalesReadyMin. ALSO
+    // gated by the older lead_score_config.notifyOnSalesReady — see there.
+    wired: true,
   },
   {
     key: "dealMoved",
     label: "A deal I own moves stage",
     defaults: { inApp: true, email: false },
-    wired: false,
+    // routers/crm.ts setStage, when the stage really changed and the owner is
+    // not the person who moved it.
+    wired: true,
   },
   {
     key: "taskOverdue",
     label: "One of my tasks is overdue",
     defaults: { inApp: true, email: false },
-    wired: false,
+    // services/workflowEngine.ts runTaskOverdueCron — the same scan that fires
+    // the workflow trigger, so both have identical reach.
+    wired: true,
   },
   {
     key: "mention",
     label: "Someone @mentions me",
     defaults: { inApp: true, email: true },
-    wired: false,
+    // routers/are/prospects.ts, on a prospect note containing @name.
+    wired: true,
   },
 ];
 

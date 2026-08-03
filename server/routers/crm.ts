@@ -46,6 +46,7 @@ import { createEmailAdapter } from "../emailAdapter";
 import { router } from "../_core/trpc";
 import { repProcedure, workspaceProcedure } from "../_core/workspace";
 import { activeOwnerOrNull } from "../_core/activeMembers";
+import { notifyIfEnabled } from "../services/policyNotify";
 import { isSuppressed, makeUnsubscribeUrl } from "../unsubscribe";
 import { assertSendAllowed } from "../sendLimits";
 import { ensureCustomerForWonOpp } from "../services/wonToCustomer";
@@ -1501,6 +1502,29 @@ export const opportunitiesRouter = router({
       });
     } catch (e) {
       console.warn("[crm.setStage] stage-history insert failed:", e);
+    }
+    /**
+     * Tell the deal's owner it moved — the "A deal I own moves stage" switch in
+     * Settings → Notifications, which had no dispatch site at all until now.
+     *
+     * Two conditions, both deliberate. The stage must actually have CHANGED:
+     * the Kanban re-issues setStage on a drop that lands back in the same
+     * column, and a notification saying a deal moved to where it already was is
+     * noise that teaches people to ignore the bell. And the owner must not be
+     * the person who moved it — telling someone what they just did themselves
+     * is the same kind of noise, and the common case on this endpoint.
+     */
+    if (before.stage !== input.stage && before.ownerUserId && before.ownerUserId !== ctx.user.id) {
+      await notifyIfEnabled({
+        workspaceId: ctx.workspace.id,
+        userId: before.ownerUserId,
+        event: "dealMoved",
+        kind: "system",
+        title: `Deal moved: ${before.name}`,
+        body: `${ctx.user.name ?? "Someone"} moved "${before.name}" from ${before.stage} to ${input.stage}.`,
+        relatedType: "opportunity",
+        relatedId: input.id,
+      });
     }
     // Funnel: Closed Won → the account becomes a Customer (post-sale CS handoff:
     // health, renewals, QBRs). Shared helper so every won path behaves the same.

@@ -17,7 +17,7 @@ import { router } from "../_core/trpc";
 import { publicProcedure } from "../_core/trpc";
 import { repProcedure, workspaceProcedure } from "../_core/workspace";
 import { activeOwnerOrNull } from "../_core/activeMembers";
-import { notifyLeadRouted } from "../services/leadNotifications";
+import { notifyLeadRouted } from "../services/policyNotify";
 
 const FIELD = z.object({ key: z.string(), label: z.string(), required: z.boolean().optional() });
 

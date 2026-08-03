@@ -230,11 +230,11 @@ const SURFACES: Array<{
     gate: /const owner =\s*\(await activeOwnerOrNull\(workspaceId, campaign\.ownerUserId\)\) \?\?\s*\(await workspaceNotifyUserId\(workspaceId\)\) \?\?\s*undefined;/,
   },
   {
-    what: "a routed-lead notification is not addressed to a departed rep",
-    file: "server/services/leadNotifications.ts",
-    start: "export async function notifyLeadRouted(",
+    what: "no policy notification is addressed to a departed member",
+    file: "server/services/policyNotify.ts",
+    start: "export async function notifyIfEnabled(",
     end: "db.insert(notifications)",
-    gate: /const owner = await activeOwnerOrNull\(notice\.workspaceId, notice\.ownerUserId \?\? null\);\s*if \(!owner\) return false;/,
+    gate: /const userId = await activeOwnerOrNull\(notice\.workspaceId, notice\.userId \?\? null\);\s*if \(!userId\) return false;/,
   },
   {
     what: "the autopilot's meeting owner is an active member",

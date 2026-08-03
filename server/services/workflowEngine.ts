@@ -35,6 +35,7 @@
  */
 import { and, eq, gte, lt, sql } from "drizzle-orm";
 import { getDb } from "../db";
+import { notifyIfEnabled } from "./policyNotify";
 import {
   contacts, emailDrafts, enrollments, leads, notifications, opportunities,
   sequences, tasks, workflowRules, workflowRuns, workspaceSettings,
@@ -472,6 +473,30 @@ export async function runTaskOverdueCron(intervalMs: number): Promise<void> {
   console.log(`[WorkflowEngine] task_overdue: ${due.length} task(s) crossed their due date`);
 
   for (const t of due) {
+    /**
+     * Tell the task's OWNER, which is separate from firing workflow rules and
+     * had no implementation at all — "One of my tasks is overdue" was a switch
+     * in Settings → Notifications with nothing behind it. This cron already
+     * finds exactly the right rows, once each, on the tick containing their due
+     * date, so there is nothing to dedupe.
+     *
+     * ⚠️ INHERITS THIS SCAN'S `status = "open"`, which is one of the two sites
+     * deliberately allowlisted in 9f2e78f — whether an `in_progress` task should
+     * fire "overdue" is a product decision and `snoozed` certainly should not.
+     * The notification therefore has exactly the same reach as the trigger, and
+     * widening one without the other would be the drift that guard exists for.
+     */
+    await notifyIfEnabled({
+      workspaceId: t.workspaceId,
+      userId: t.ownerUserId,
+      event: "taskOverdue",
+      kind: "task_due",
+      title: `Task overdue: ${t.title}`,
+      body: `"${t.title}" passed its due date${t.priority ? ` (priority: ${t.priority})` : ""}.`,
+      relatedType: "task",
+      relatedId: t.id,
+    }).catch((e) => console.error(`[WorkflowEngine] task_overdue notify failed for task ${t.id}:`, e));
+
     await fireWorkflowRules(t.workspaceId, "task_overdue", {
       payload: {
         entity: "task",

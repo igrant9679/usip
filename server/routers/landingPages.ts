@@ -14,7 +14,7 @@ import { and, desc, eq, sql } from "drizzle-orm";
 import { router, publicProcedure } from "../_core/trpc";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { activeOwnerOrNull, workspaceNotifyUserId } from "../_core/activeMembers";
-import { notifyLeadRouted } from "../services/leadNotifications";
+import { notifyLeadRouted } from "../services/policyNotify";
 import { getDb } from "../db";
 import { landingPages, leads, enrollments } from "../../drizzle/schema";
 import { resolveBookingUrl } from "../mergeVars";

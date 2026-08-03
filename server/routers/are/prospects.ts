@@ -51,6 +51,7 @@ import { parseLlmJson } from "./llmJson";
 import { invokeLLM, isRetryableLLMError } from "../../_core/llm";
 import { router } from "../../_core/trpc";
 import { workspaceProcedure } from "../../_core/workspace";
+import { notifyIfEnabled } from "../../services/policyNotify";
 import { resolveVerifiedEmail } from "../../services/scraper";
 import { apolloResolveDomain } from "../../services/apollo";
 import { buildBrandContext } from "../../services/brandContext";
@@ -1624,17 +1625,30 @@ export const prospectsRouter = router({
           const deepLinkMeta = input.campaignId
             ? `{"campaignId":${input.campaignId},"prospectId":${input.prospectId}}\n`
             : "";
-          await db.insert(notifications).values(
-            mentionedUserIds.map((uid) => ({
+          /**
+           * One at a time through the shared gate rather than a bulk insert.
+           * Two things it fixes: the "Someone @mentions me" switch was never
+           * consulted, and the member lookup above joins `workspaceMembers`
+           * with NO `deactivatedAt` filter — so a departed colleague still
+           * matched a name and was still notified. `notifyIfEnabled`
+           * re-resolves every recipient.
+           *
+           * A loop of single inserts costs more round-trips than one bulk
+           * insert; the mention list is a handful of people at most, and
+           * correctness per recipient is worth more than one query.
+           */
+          for (const uid of mentionedUserIds) {
+            await notifyIfEnabled({
               workspaceId: ctx.workspace.id,
               userId: uid,
-              kind: "mention" as const,
+              event: "mention",
+              kind: "mention",
               title: `${ctx.user.name ?? "Someone"} mentioned you in a prospect note`,
               body: deepLinkMeta + input.body.slice(0, 240),
               relatedType: "prospect_note",
               relatedId: row.id,
-            }))
-          );
+            });
+          }
         }
       }
       return { id: row.id };

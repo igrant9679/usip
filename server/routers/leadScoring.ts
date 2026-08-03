@@ -33,6 +33,7 @@ import { invokeLLM } from "../_core/llm";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, repProcedure, workspaceProcedure } from "../_core/workspace";
 import { activeMemberIds } from "../_core/activeMembers";
+import { notifyIfEnabled } from "../services/policyNotify";
 import { evalConditions } from "./operations";
 
 /* ───────── helpers ───────── */
@@ -247,13 +248,29 @@ async function recomputeOne(workspaceId: number, leadId: number) {
     aiFitPayload: aiFitJson as any,
   });
 
-  // Threshold-cross notification → assigned owner only (when admin-enabled).
+  /**
+   * Threshold-cross notification → assigned owner only.
+   *
+   * ⚠️ TWO SWITCHES CONTROL THIS ONE NOTIFICATION, and they are ANDed rather
+   * than one silently winning. `lead_score_config.notifyOnSalesReady` predates
+   * the Settings → Notifications panel, which offers "A lead becomes
+   * Sales-Ready" as well — and until now only the older one worked, so an admin
+   * could switch it off in Settings and go on receiving them. Either being off
+   * is a user saying no; neither is a good reason to override the other. The
+   * duplication is recorded rather than resolved, because deleting a setting
+   * somebody may be relying on is a product call.
+   *
+   * The owner also went in RAW. A lead owned by a departed member had the
+   * notification addressed to them; `notifyIfEnabled` re-resolves it.
+   */
   const [cfgRow] = await db.select().from(leadScoreConfig).where(eq(leadScoreConfig.workspaceId, workspaceId));
-  const notifyEnabled = cfgRow?.notifyOnSalesReady ?? true;
-  if (notifyEnabled && lead.ownerUserId && previousTotal < cfg.tierSalesReadyMin && breakdown.total >= cfg.tierSalesReadyMin) {
-    await db.insert(notifications).values({
+  const crossed = previousTotal < cfg.tierSalesReadyMin && breakdown.total >= cfg.tierSalesReadyMin;
+  if (crossed) {
+    await notifyIfEnabled({
       workspaceId,
       userId: lead.ownerUserId,
+      event: "salesReadyCrossed",
+      alsoRequire: cfgRow?.notifyOnSalesReady ?? true,
       kind: "system",
       title: `Lead is Sales Ready: ${lead.firstName} ${lead.lastName}`,
       body: `Score crossed ${cfg.tierSalesReadyMin} (${previousTotal} → ${breakdown.total}). ${lead.company ?? ""}`,
