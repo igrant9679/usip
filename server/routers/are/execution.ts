@@ -29,7 +29,6 @@ import { TRPCError } from "@trpc/server";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
-  accounts,
   areCampaigns,
   areExecutionQueue,
   areSignalLog,
@@ -40,6 +39,7 @@ import {
   prospectIntelligence,
 } from "../../../drizzle/schema";
 import { getDb } from "../../db";
+import { findOrCreateAccount } from "../../services/crmMatching";
 import { invokeLLM } from "../../_core/llm";
 import { router } from "../../_core/trpc";
 import { workspaceProcedure } from "../../_core/workspace";
@@ -131,32 +131,19 @@ export async function promoteProspectToCrm(
   const owner = campaign.ownerUserId ?? undefined;
   const companyName = prospect.companyName ?? "Unknown Company";
 
-  // ── Account: match on DOMAIN first, then name. Domain is the reliable
-  // identity (two "Acme" rows are usually different companies; one domain
-  // is one company), and Apollo now supplies a domain for free.
-  let accountId: number | undefined;
-  if (prospect.companyDomain) {
-    const [byDomain] = await db.select({ id: accounts.id }).from(accounts)
-      .where(and(eq(accounts.workspaceId, workspaceId), eq(accounts.domain, prospect.companyDomain)))
-      .limit(1);
-    if (byDomain) accountId = byDomain.id;
-  }
-  if (!accountId) {
-    const [byName] = await db.select({ id: accounts.id }).from(accounts)
-      .where(and(eq(accounts.workspaceId, workspaceId), eq(accounts.name, companyName)))
-      .limit(1);
-    if (byName) accountId = byName.id;
-  }
-  if (!accountId) {
-    const [newAcc] = await db.insert(accounts).values({
-      workspaceId,
-      name: companyName,
-      domain: prospect.companyDomain ?? undefined,
-      industry: prospect.industry ?? undefined,
-      ownerUserId: owner,
-    }).$returningId();
-    accountId = newAcc.id;
-  }
+  /**
+   * Shared with the People-list promotion (services/prospectPromotion), which
+   * needs the identical rule. Two copies of "is this the same company?" is how
+   * one of them silently starts creating duplicate accounts, so the matching
+   * moved to services/crmMatching and both call it. Behaviour is unchanged:
+   * domain first, then name, then create.
+   */
+  const accountId: number = await findOrCreateAccount(db, workspaceId, {
+    companyName,
+    companyDomain: prospect.companyDomain,
+    industry: prospect.industry,
+    ownerUserId: owner,
+  });
 
   // ── Contact: reuse the previously linked row, else match on email, else
   // create. The old inline code inserted unconditionally, so a prospect who
