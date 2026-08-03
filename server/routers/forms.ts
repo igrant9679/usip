@@ -7,7 +7,7 @@
  * feeding the top of the autonomous pipeline with zero manual steps.
  */
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { z } from "zod";
 import { enrollments, forms, formSubmissions, leads } from "../../drizzle/schema";
@@ -214,7 +214,9 @@ export const formsRouter = router({
         await db.insert(formSubmissions).values({
           workspaceId: form.workspaceId, formId: form.id, data, name, email, company, leadId, routedToUserId,
         } as never);
-        await db.update(forms).set({ submitCount: (form.submitCount ?? 0) + 1 } as never).where(eq(forms.id, form.id));
+        // Atomic — the sibling of the landing-page counter, and the same lost
+        // update: two concurrent submitters both read N and both write N+1.
+        await db.update(forms).set({ submitCount: sql`${forms.submitCount} + 1` } as never).where(eq(forms.id, form.id));
       } catch (e) { console.error("[FormSubmit] submission insert failed:", e); }
 
       return { ok: true, redirectUrl: form.redirectUrl ?? null };

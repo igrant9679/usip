@@ -13,7 +13,7 @@ import { TRPCError } from "@trpc/server";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { router, publicProcedure } from "../_core/trpc";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
-import { activeOwnerOrNull } from "../_core/activeMembers";
+import { activeOwnerOrNull, workspaceNotifyUserId } from "../_core/activeMembers";
 import { getDb } from "../db";
 import { landingPages, leads, enrollments } from "../../drizzle/schema";
 import { resolveBookingUrl } from "../mergeVars";
@@ -160,10 +160,35 @@ export const landingPagesRouter = router({
     // Best-effort view count — never block rendering.
     db.update(landingPages).set({ viewCount: sql`${landingPages.viewCount} + 1` } as never)
       .where(eq(landingPages.id, p.id)).catch(() => {});
-    // Optional "Book a meeting" CTA → the page creator's self-serve booking page.
+    /**
+     * Optional "Book a meeting" CTA → the page creator's self-serve booking page.
+     *
+     * 🔴 FALLS BACK, because otherwise this CTA dies permanently and NO ADMIN
+     * CAN FIX IT. `createdByUserId` is stamped once at create and is not part of
+     * `contentInput`, so there is no way to change a page's booking host through
+     * the UI. When that person leaves, `resolveBookingUrl` correctly returns ""
+     * (be56c02), the client hides the button, and a live published marketing
+     * page silently loses its primary conversion path with nobody told and no
+     * way back short of deleting and recreating the page.
+     *
+     * Same precedent as the ARE promotion in b96f811: the fallback is
+     * `workspaceNotifyUserId`, who already receives that workspace's autonomous
+     * notifications. Deliberately NOT the rule /b/:slug uses — there the link IS
+     * the person and a departed host must 404, whereas a landing page is the
+     * workspace's asset and its author is provenance, not the offer.
+     *
+     * If the stand-in has no active booking link of their own, resolveBookingUrl
+     * returns "" and the CTA hides exactly as it does today. Degrading is fine;
+     * degrading with no possible repair was not.
+     */
     let bookingUrl = "";
     if (p.showBookingCta) {
-      try { bookingUrl = await resolveBookingUrl(p.workspaceId, p.createdByUserId); } catch { /* best-effort */ }
+      try {
+        const host =
+          (await activeOwnerOrNull(p.workspaceId, p.createdByUserId)) ??
+          (await workspaceNotifyUserId(p.workspaceId));
+        bookingUrl = host ? await resolveBookingUrl(p.workspaceId, host) : "";
+      } catch { /* best-effort */ }
     }
     return {
       headline: p.headline,
@@ -249,8 +274,19 @@ export const landingPagesRouter = router({
         }
       }
 
+      /**
+       * Atomic in SQL. `(page.submitCount ?? 0) + 1` is computed in JS from a
+       * row read at the top of this handler, which is a LOST UPDATE: two people
+       * submitting the same page at once both read N and both write N+1, so two
+       * submissions are recorded as one. `viewCount` forty lines above was
+       * already atomic, which is what made the difference visible — a page can
+       * show fewer submissions than it had, and the conversion rate an admin
+       * judges it by is computed from these two numbers.
+       *
+       * Same shape as the bookingLinks.bookingCount fix (72aa576).
+       */
       try {
-        await db.update(landingPages).set({ submitCount: (page.submitCount ?? 0) + 1 } as never)
+        await db.update(landingPages).set({ submitCount: sql`${landingPages.submitCount} + 1` } as never)
           .where(eq(landingPages.id, page.id));
       } catch { /* metric only */ }
 

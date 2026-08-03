@@ -33,7 +33,7 @@
  * Best-effort throughout: a single action or rule failing never throws into
  * the caller's event path.
  */
-import { and, eq, gte, lt } from "drizzle-orm";
+import { and, eq, gte, lt, sql } from "drizzle-orm";
 import { getDb } from "../db";
 import {
   contacts, emailDrafts, enrollments, leads, notifications, opportunities,
@@ -412,7 +412,11 @@ export async function fireWorkflowRules(
         } as never);
         await db
           .update(workflowRules)
-          .set({ fireCount: (rule.fireCount ?? 0) + 1, lastFiredAt: new Date() })
+          // Atomic: `rule` was loaded before the actions ran, and this engine is
+          // dispatched from event sites that fire concurrently — two events
+          // matching one rule both read N and both write N+1, so a rule that
+          // fired twice reports once. Found by the counter scan, not by hand.
+          .set({ fireCount: sql`${workflowRules.fireCount} + 1`, lastFiredAt: new Date() })
           .where(eq(workflowRules.id, rule.id));
       } catch (e) {
         console.error(`[WorkflowEngine] ws ${workspaceId} rule ${rule.id} run-log failed:`, (e as Error).message);
