@@ -152,6 +152,55 @@ const SURFACES: Array<{
     gate: /targetUserIds: \(\(\(r\.targetUserIds as number\[\] \| null\) \?\? \[\]\)\.filter\(\(u\) => active\.has\(u\)\)\)/,
   },
   {
+    what: "ARE event notifications go to somebody who reads them",
+    file: "server/routers/are/notify.ts",
+    start: "export async function areNotify(",
+    end: "db.insert(notifications)",
+    gate: /const recipient = await workspaceNotifyUserId\(opts\.workspaceId\);\s*if \(!recipient\) return;/,
+  },
+  {
+    what: "the proposal-followup cron raises its task on an active member",
+    file: "server/emailTracking.ts",
+    start: "for (const proposal of staleProposals)",
+    end: "db.insert(tasks)",
+    gate: /const ownerUserId = await workspaceNotifyUserId\(proposal\.workspaceId\);\s*if \(!ownerUserId\) continue;/,
+  },
+  {
+    what: "a client accepting a proposal from a share link raises a task somebody owns",
+    file: "server/routers/proposals.ts",
+    start: `if (proposal.status === "accepted") return { ok: true, alreadyAccepted: true };`,
+    end: "db.insert(tasks)",
+    gate: /const ownerUserId = await workspaceNotifyUserId\(proposal\.workspaceId\);/,
+  },
+  {
+    what: "the unattended auto-send worker picks a present actor",
+    file: "server/routers/sequences.ts",
+    start: "let actorUserId = ",
+    end: "no actor user for draft",
+    gate: /let actorUserId = await activeOwnerOrNull\(ws\.workspaceId, draft\.createdByUserId\);\s*if \(!actorUserId\) \{\s*actorUserId = await workspaceNotifyUserId\(ws\.workspaceId\);/,
+  },
+  {
+    what: "the company-backfill cron neither runs nor reports for a workspace with no active owner",
+    file: "server/services/enrichmentSweeper.ts",
+    start: `if (ws.mode !== "auto") continue;`,
+    end: "backfillQueueCompanies({",
+    gate: /const recipient = await workspaceNotifyUserId\(ws\.id\);\s*if \(!recipient\) continue;/,
+  },
+  {
+    what: "the enrichment sweep reports to somebody who reads it",
+    file: "server/services/enrichmentSweeper.ts",
+    start: "emailsFound += r.emailsFound;",
+    end: "Enrichment Sweep: ",
+    gate: /await notifyOwner\(\s*ws\.id, await workspaceNotifyUserId\(ws\.id\),/,
+  },
+  {
+    what: "an account routed by a territory rule is not filed under a departed rep",
+    file: "server/routers/crm.ts",
+    start: "const routed = await applyTerritoryRules(",
+    end: "db.insert(accounts)",
+    gate: /const routedOwner = await activeOwnerOrNull\(ctx\.workspace\.id, routed\.ownerUserId\);\s*if \(routedOwner\) resolvedOwnerId = routedOwner;/,
+  },
+  {
     what: "the autopilot's meeting owner is an active member",
     file: "server/services/meetingScheduler.ts",
     start: "async function pickWorkspaceOwner(",
@@ -169,7 +218,7 @@ describe("every session-less path that names a member gates on active membership
    * pinned rather than bounded so that REMOVING a surface is also a decision.
    */
   it("checks every surface in the table, and the table has not shrunk", () => {
-    expect(SURFACES.length).toBe(10);
+    expect(SURFACES.length).toBe(17);
     expect(new Set(SURFACES.map((s) => `${s.file}::${s.start}`)).size).toBe(SURFACES.length);
   });
 
@@ -213,6 +262,127 @@ describe("the gate itself", () => {
      */
     const q = windowBetween(helper, "export async function activeMemberIds(", "export async function isActiveMember(");
     expect(q).toMatch(/return new Set\(rows\.map\(\(r\) => r\.userId\)\)/);
+  });
+});
+
+describe("the workspace-owner resolver", () => {
+  const helper = strip(read("server/_core/activeMembers.ts"));
+  const fn = windowBetween(helper, "export async function workspaceNotifyUserId(", "console.error(\"[activeMembers] workspaceNotifyUserId");
+
+  it("prefers the REAL owner and only then a stand-in", () => {
+    /**
+     * Order is the whole design. Falling straight to "highest-ranked active
+     * member" would quietly redirect every autonomous notification away from a
+     * healthy workspace's actual owner — a fix that breaks the normal case to
+     * repair the broken one.
+     */
+    const ownerAt = fn.search(/isActiveMember\(workspaceId, ws\.ownerUserId\)/);
+    const fallbackAt = fn.search(/rankOf\(b\.role\) - rankOf\(a\.role\)/);
+    expect(ownerAt, "the owner is never consulted").toBeGreaterThan(-1);
+    expect(fallbackAt, "there is no stand-in — re-anchor this test").toBeGreaterThan(-1);
+    expect(ownerAt).toBeLessThan(fallbackAt);
+    expect(fn).toMatch(/if \(ws && \(await isActiveMember\(workspaceId, ws\.ownerUserId\)\)\) return ws\.ownerUserId;/);
+  });
+
+  it("the stand-in is drawn only from ACTIVE members", () => {
+    expect(fn).toMatch(/and\(eq\(workspaceMembers\.workspaceId, workspaceId\), isNull\(workspaceMembers\.deactivatedAt\)\)/);
+  });
+
+  it("returns null rather than guessing when nobody is left", () => {
+    expect(fn).toMatch(/if \(members\.length === 0\) return null;/);
+  });
+
+  it("reuses the shared rank map instead of declaring a ninth copy", () => {
+    // Seven copies of the role hierarchy already existed once (1bbed68), and
+    // roleRank.test.ts enforces the single source. A rank map is a permission
+    // boundary; a local copy here would decide who hears from the automation.
+    expect(helper).toMatch(/^import \{ rankOf \} from "\.\/workspace";$/m);
+    expect(helper).not.toMatch(/super_admin:\s*4/);
+  });
+});
+
+describe("no unattended path reads workspaces.ownerUserId raw any more", () => {
+  /**
+   * The BACKWARD scan. Six inline lookups existed when this started, in five
+   * files, and enumerating the ones I happened to find would say nothing about
+   * the seventh somebody adds next month. So the rule is stated as an absence,
+   * with an allowlist that has to be argued for.
+   *
+   * Comments are stripped first — this repo has twice been fooled by a scanner
+   * matching prose that a fix had just written.
+   */
+  const ALLOWED = new Map<string, string>([
+    ["server/_core/activeMembers.ts", "the resolver itself — it is what everything else calls"],
+    ["server/routers/admin.ts", "the team.delete guard, which must compare against the raw column, and transferOwnership, which writes it"],
+  ]);
+
+  it("every raw read is either gone or allowlisted with a reason", () => {
+    const offenders: string[] = [];
+    let scanned = 0;
+    for (const f of globSourceFiles()) {
+      const src = strip(read(f));
+      if (!readsRawOwner(src)) continue;
+      scanned++;
+      if (!ALLOWED.has(f)) offenders.push(f);
+    }
+    // FLOOR: the allowlisted files must themselves be found, or the regex has
+    // drifted and this scan is passing by looking at nothing.
+    expect(scanned, "the scan found no reads at all — the pattern has drifted").toBeGreaterThanOrEqual(ALLOWED.size);
+    expect(
+      offenders,
+      `these read workspaces.ownerUserId directly. An unattended path must call ` +
+      `workspaceNotifyUserId() instead, or be added to ALLOWED with a reason:\n  ${offenders.join("\n  ")}`,
+    ).toEqual([]);
+  });
+
+  it("the allowlist has not gone stale", () => {
+    // Both directions: an allowlisted file that no longer reads the column is a
+    // permission nobody needs, and it hides the next real offender.
+    for (const [f, why] of ALLOWED) {
+      expect(why.length, `${f} is allowlisted with no reason`).toBeGreaterThan(20);
+      expect(readsRawOwner(strip(read(f))), `${f} is allowlisted but no longer reads the column — drop it`).toBe(true);
+    }
+  });
+});
+
+describe("team.delete refuses to remove the workspace owner", () => {
+  const proc = windowBetween(
+    strip(read("server/routers/admin.ts")),
+    "  delete: adminWsProcedure",
+    "  bulkChangeRole: adminWsProcedure",
+    400,
+  );
+
+  it("compares the target against the owner column and throws", () => {
+    /**
+     * The sole-super_admin guard beside it protects the ROLE, not the OWNER
+     * column — with a second super_admin present the owner was deletable, and
+     * only transferOwnership ever rewrites that column.
+     */
+    /**
+     * Pinned as a STATEMENT. An earlier version of this assertion matched only
+     * `ownerRow.ownerUserId === target.userId`, and `if (false && ownerRow && …)`
+     * walked straight through it — the same mutation this file warns about in
+     * the SURFACES table, reproduced in the one describe block that had not
+     * applied the rule. Caught by re-running the battery, not by reading it.
+     */
+    expect(proc).toMatch(/if \(ownerRow && ownerRow\.ownerUserId === target\.userId\) \{/);
+    expect(proc).toMatch(/throw new TRPCError\(\{\s*code: "BAD_REQUEST",\s*message: "This member owns the workspace\./);
+  });
+
+  it("the comparison is fed by a real lookup, not a literal", () => {
+    // The 8893dc8 trap: leaving the query in place but binding the result to a
+    // constant keeps "the query exists" and "the check runs" both true.
+    expect(proc).toMatch(/const \[ownerRow\] = await db\s*\.select\(\{ ownerUserId: workspaces\.ownerUserId \}\)/);
+    expect(proc).toMatch(/\.where\(eq\(workspaces\.id, ctx\.workspace\.id\)\)/);
+  });
+
+  it("refuses BEFORE any of the destructive work", () => {
+    const guardAt = proc.search(/ownerRow\.ownerUserId === target\.userId/);
+    const reassignAt = proc.search(/UPDATE leads SET ownerUserId/);
+    expect(guardAt, "the owner guard is missing").toBeGreaterThan(-1);
+    expect(reassignAt, "the reassignment is missing — re-anchor this test").toBeGreaterThan(-1);
+    expect(guardAt).toBeLessThan(reassignAt);
   });
 });
 
@@ -351,7 +521,7 @@ describe("the surface table stays in step with the code", () => {
     .filter((f) => f !== "server/services/meetingScheduler.ts");
 
   it("every table file really imports the gate", () => {
-    expect(tableFiles.length).toBeGreaterThanOrEqual(6);
+    expect(tableFiles.length).toBeGreaterThanOrEqual(9);
     for (const f of tableFiles) {
       expect(importsHelper(f), `${f} is in the table but does not import _core/activeMembers`).toBe(true);
     }
@@ -359,7 +529,7 @@ describe("the surface table stays in step with the code", () => {
 
   it("no file imports the gate without appearing in the table", () => {
     const consumers = globSourceFiles().filter(importsHelper);
-    expect(consumers.length, "nothing imports the gate — the scan is broken").toBeGreaterThanOrEqual(6);
+    expect(consumers.length, "nothing imports the gate — the scan is broken").toBeGreaterThanOrEqual(9);
     for (const f of consumers) {
       expect(
         tableFiles,
@@ -369,7 +539,36 @@ describe("the surface table stays in step with the code", () => {
   });
 });
 
-/** Every .ts under server/, excluding tests and the helper itself. */
+/**
+ * Does this source read `workspaces.ownerUserId` directly?
+ *
+ * The table is routinely imported under an alias — `workspaces as workspacesT`
+ * in emailTracking.ts alone — so the binding is resolved from the file's own
+ * import list rather than guessed. A hardcoded `workspacesT?` pattern was the
+ * first version and a mutation importing it as anything else walked past it.
+ *
+ * 📌 BLIND SPOT, WRITTEN DOWN RATHER THAN PAPERED OVER: a read reached through
+ * a local rebinding (`const t = workspaces; t.ownerUserId`) or a runtime
+ * `await import()` destructure is not visible here. Static import aliases are,
+ * which is the spelling every current file uses. A scanner that looks
+ * exhaustive and isn't would be worse than one whose limit is stated.
+ */
+function readsRawOwner(strippedSrc: string): boolean {
+  const names = new Set<string>(["workspaces"]);
+  for (const m of strippedSrc.matchAll(/\bworkspaces\s+as\s+(\w+)/g)) names.add(m[1]!);
+  for (const n of names) {
+    if (new RegExp(`\\b${n}\\.ownerUserId\\b`).test(strippedSrc)) return true;
+  }
+  return false;
+}
+
+/**
+ * Every .ts under server/, excluding tests.
+ *
+ * The helper itself is NOT excluded, and that was a real bug here: skipping it
+ * made the raw-read scan below see one allowlisted file instead of two, and its
+ * floor caught that rather than letting a half-blind scan report clean.
+ */
 function globSourceFiles(): string[] {
   const { readdirSync, statSync } = require("fs") as typeof import("fs");
   const out: string[] = [];
@@ -378,7 +577,6 @@ function globSourceFiles(): string[] {
       const rel = `${dir}/${name}`;
       if (statSync(join(ROOT, rel)).isDirectory()) { walk(rel); continue; }
       if (!name.endsWith(".ts") || name.endsWith(".test.ts")) continue;
-      if (rel === "server/_core/activeMembers.ts") continue;
       out.push(rel);
     }
   };

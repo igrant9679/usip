@@ -20,6 +20,7 @@ import { appUrl } from "./appUrl";
 import { emailDrafts, emailTrackingEvents } from "../drizzle/schema";
 import { normalizeSuppressionEmail } from "./unsubscribe";
 import { requireScheduledSecret } from "./scheduledTaskAuth";
+import { activeOwnerOrNull, workspaceNotifyUserId } from "./_core/activeMembers";
 
 // 1×1 transparent GIF (43 bytes)
 const TRACKING_PIXEL = Buffer.from(
@@ -509,14 +510,16 @@ export function registerEmailTrackingRoutes(app: Express) {
       let processed = 0;
       for (const proposal of staleProposals) {
         try {
-          // Get workspace owner
-          const wsRows = await db
-            .select({ ownerUserId: workspaces.ownerUserId })
-            .from(workspaces)
-            .where(eq(workspaces.id, proposal.workspaceId))
-            .limit(1);
-          if (!wsRows[0]) continue;
-          const ownerUserId = wsRows[0].ownerUserId;
+          /**
+           * Who to raise this on. `workspaces.ownerUserId` was read raw in
+           * five places in this file, none of which checked the owner still
+           * works here — so every follow-up task and alert this unattended cron
+           * produces could be assigned to a deleted user. A task owned by
+           * nobody still occupies the dedupe check below, so the follow-up is
+           * not merely unseen: it is also never re-raised for anyone else.
+           */
+          const ownerUserId = await workspaceNotifyUserId(proposal.workspaceId);
+          if (!ownerUserId) continue;
 
           // Check if a follow-up task already exists for this proposal.
           // Any LIVE status counts, not just "open": this runs daily, so with
@@ -706,15 +709,11 @@ export function registerEmailTrackingRoutes(app: Express) {
             occurredAt: new Date(),
           });
           // In-app notification to workspace owner
-          const wsOwnerRows = await db
-            .select({ ownerUserId: workspaces.ownerUserId })
-            .from(workspaces)
-            .where(eq(workspaces.id, rp.workspaceId))
-            .limit(1);
-          if (wsOwnerRows[0]) {
+          const expiryRecipient = await workspaceNotifyUserId(rp.workspaceId);
+          if (expiryRecipient) {
             await db.insert(notifications).values({
               workspaceId: rp.workspaceId,
-              userId: wsOwnerRows[0].ownerUserId,
+              userId: expiryRecipient,
               kind: "system",
               title: `Proposal expiring ${countdownText}: "${rp.title}"`,
               body: `A reminder email was sent to ${rp.clientEmail}. The proposal expires on ${expDate.toLocaleDateString()}.`,
@@ -813,14 +812,8 @@ export function registerEmailTrackingRoutes(app: Express) {
               ),
             );
           if (alreadyNotified.length > 0) continue;
-          // Get workspace owner
-          const wsRow = await db
-            .select({ ownerUserId: workspaces.ownerUserId })
-            .from(workspaces)
-            .where(eq(workspaces.id, pendingAct.workspaceId))
-            .limit(1);
-          if (!wsRow[0]) continue;
-          const ownerUserId = wsRow[0].ownerUserId;
+          const ownerUserId = await workspaceNotifyUserId(pendingAct.workspaceId);
+          if (!ownerUserId) continue;
           // Get proposal title
           const propRow = await db
             .select({ title: proposals.title })
@@ -903,14 +896,8 @@ export function registerEmailTrackingRoutes(app: Express) {
               ),
             );
           if (existingEscalation.length > 0) continue;
-          // Get workspace owner
-          const ws72Row = await db
-            .select({ ownerUserId: workspaces.ownerUserId })
-            .from(workspaces)
-            .where(eq(workspaces.id, act72.workspaceId))
-            .limit(1);
-          if (!ws72Row[0]) continue;
-          const ownerUserId72 = ws72Row[0].ownerUserId;
+          const ownerUserId72 = await workspaceNotifyUserId(act72.workspaceId);
+          if (!ownerUserId72) continue;
           // Get proposal title
           const prop72Row = await db
             .select({ title: proposals.title })
@@ -1068,14 +1055,13 @@ export function registerEmailTrackingRoutes(app: Express) {
           // built, so the fallback for a campaign with no owner — the only
           // reason this branch exists — crashed the digest for that campaign.
           // Runtime-only, and tsc had been flagging it among ~500 others.
-          let recipientUserId = campaign.ownerUserId;
+          //
+          // BOTH sides are membership-checked now: a campaign whose owner has
+          // left falls through to the workspace resolver exactly as one with no
+          // owner does, rather than mailing a digest to a deleted user.
+          let recipientUserId = await activeOwnerOrNull(campaign.workspaceId, campaign.ownerUserId);
           if (!recipientUserId) {
-            const [ws] = await db
-              .select({ ownerUserId: workspacesT.ownerUserId })
-              .from(workspacesT)
-              .where(eqR(workspacesT.id, campaign.workspaceId))
-              .limit(1);
-            recipientUserId = ws?.ownerUserId ?? null;
+            recipientUserId = await workspaceNotifyUserId(campaign.workspaceId);
           }
 
           // Write in-app notification with CSV inline

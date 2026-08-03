@@ -654,6 +654,33 @@ export const teamRouter = router({
           .where(and(eq(workspaceMembers.workspaceId, ctx.workspace.id), eq(workspaceMembers.role, "super_admin")));
         if (Number(c) <= 1) throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot delete the sole super_admin" });
       }
+      /**
+       * 🔴 THE SOLE-SUPER_ADMIN GUARD ABOVE PROTECTS THE ROLE, NOT THE OWNER
+       * COLUMN. With a second super_admin present, this procedure would happily
+       * delete the member named by `workspaces.ownerUserId` — and nothing else
+       * in the codebase ever rewrites that column except `transferOwnership`.
+       *
+       * It is the standing recipient for every notification an autonomous
+       * engine raises with no user present: all six areNotify event types and
+       * the five owner-addressed writes in the proposal-followup cron. Left
+       * dangling, the whole unattended reporting channel addresses a deleted
+       * user and the workspace hears nothing from its own automation.
+       *
+       * Refused rather than auto-transferred: picking the next owner is a
+       * decision with consequences (billing, the ARE inbox, who gets paged),
+       * and `transferOwnership` already exists to make it deliberately.
+       */
+      const [ownerRow] = await db
+        .select({ ownerUserId: workspaces.ownerUserId })
+        .from(workspaces)
+        .where(eq(workspaces.id, ctx.workspace.id))
+        .limit(1);
+      if (ownerRow && ownerRow.ownerUserId === target.userId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "This member owns the workspace. Transfer ownership to someone else before deleting them.",
+        });
+      }
 
       // Owned-work guard — mirrors deactivate (leads, opps, open tasks).
       const [leadRows] = await db.execute(sql`SELECT COUNT(*) AS n FROM leads WHERE workspaceId = ${ctx.workspace.id} AND ownerUserId = ${target.userId}`) as any;

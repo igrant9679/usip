@@ -28,6 +28,7 @@ import { createEmailAdapter } from "../emailAdapter";
 import { getDb } from "../db";
 import { appUrl } from "../appUrl";
 import { invokeLLM } from "../_core/llm";
+import { workspaceNotifyUserId } from "../_core/activeMembers";
 import { publicProcedure, router } from "../_core/trpc";
 import {
   managerProcedure,
@@ -745,12 +746,7 @@ export const proposalsRouter = router({
       });
       const taskId = Number((taskResult as any)[0]?.insertId ?? 0);
       // Notify workspace owner (if different from current user)
-      const wsRows = await db
-        .select({ ownerUserId: workspaces.ownerUserId })
-        .from(workspaces)
-        .where(eq(workspaces.id, ctx.workspace.id))
-        .limit(1);
-      const ownerUserId = wsRows[0]?.ownerUserId;
+      const ownerUserId = await workspaceNotifyUserId(ctx.workspace.id);
       if (ownerUserId && ownerUserId !== ctx.user.id) {
         await db.insert(notifications).values({
           workspaceId: ctx.workspace.id,
@@ -943,13 +939,13 @@ Write 2-4 paragraphs of professional proposal content for this section. Be speci
         .update(proposals)
         .set({ status: "accepted", acceptedAt: new Date() })
         .where(eq(proposals.id, proposal.id));
-      // Get workspace owner
-      const wsRows = await db
-        .select({ ownerUserId: workspaces.ownerUserId })
-        .from(workspaces)
-        .where(eq(workspaces.id, proposal.workspaceId))
-        .limit(1);
-      const ownerUserId = wsRows[0]?.ownerUserId;
+      /**
+       * PUBLIC PATH — the client accepts from a share link, with no session.
+       * The resulting follow-up task is the only thing that tells the business
+       * a deal just closed, and it was addressed to a raw `ownerUserId`. If
+       * that person had left, the acceptance landed in nobody's queue.
+       */
+      const ownerUserId = await workspaceNotifyUserId(proposal.workspaceId);
       if (ownerUserId) {
         // Create follow-up task for owner
         await db.insert(tasks).values({
@@ -1250,13 +1246,8 @@ Write 2-4 paragraphs of professional proposal content for this section. Be speci
         .limit(1);
       if (!rows[0]) throw new TRPCError({ code: "NOT_FOUND", message: "Proposal not found" });
       const proposal = rows[0];
-      // Get workspace owner
-      const wsRows = await db
-        .select({ ownerUserId: workspaces.ownerUserId })
-        .from(workspaces)
-        .where(eq(workspaces.id, proposal.workspaceId))
-        .limit(1);
-      const ownerUserId = wsRows[0]?.ownerUserId;
+      // PUBLIC PATH — extension request from a share link, same reasoning.
+      const ownerUserId = await workspaceNotifyUserId(proposal.workspaceId);
       const clientLabel = input.clientName ?? proposal.clientName;
       const dueAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // due in 24h
       // Create a task for the rep

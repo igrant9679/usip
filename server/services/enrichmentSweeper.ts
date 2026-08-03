@@ -32,6 +32,7 @@
 import { and, eq, isNotNull, isNull, ne, or } from "drizzle-orm";
 import { areCampaigns, notifications, prospectQueue, prospects, workspaceSettings, workspaces } from "../../drizzle/schema";
 import { getDb } from "../db";
+import { workspaceNotifyUserId } from "../_core/activeMembers";
 import { lookupContactInfo, resolveVerifiedEmail } from "./scraper";
 import { getReoonKey, reoonCheckBalance } from "./reoon";
 import { promoteProspectRow } from "./prospectPromotion";
@@ -713,7 +714,6 @@ export async function runCompanyBackfillAllWorkspaces(): Promise<{ workspaces: n
   const rows = await db
     .select({
       id: workspaces.id,
-      ownerUserId: workspaces.ownerUserId,
       mode: workspaceSettings.companyBackfillMode,
       cap: workspaceSettings.companyBackfillDailyCap,
       lastRunAt: workspaceSettings.companyBackfillLastRunAt,
@@ -723,14 +723,24 @@ export async function runCompanyBackfillAllWorkspaces(): Promise<{ workspaces: n
 
   let touched = 0, filled = 0;
   for (const ws of rows) {
-    if (ws.mode !== "auto" || !ws.ownerUserId) continue;
+    if (ws.mode !== "auto") continue;
+    /**
+     * Resolved once and used for all three: the run gate, the acting user, and
+     * the report at the end. The raw column gated only on being NON-NULL, so a
+     * workspace whose owner had been deleted still ran the whole backfill —
+     * spending the LinkedIn daily allowance — and then reported it to a user id
+     * that cannot sign in. A run nobody hears about is worse than no run: the
+     * allowance is gone either way.
+     */
+    const recipient = await workspaceNotifyUserId(ws.id);
+    if (!recipient) continue;
     // Daily means daily. The cron ticks more often so a restart cannot turn
     // the cap into a per-boot allowance.
     if (ws.lastRunAt && Date.now() - new Date(ws.lastRunAt).getTime() < 20 * 60 * 60 * 1000) continue;
     try {
       const r = await backfillQueueCompanies({
         workspaceId: ws.id,
-        userId: ws.ownerUserId,
+        userId: recipient,
         isAdmin: true,
         limit: ws.cap ?? 50,
       });
@@ -749,7 +759,7 @@ export async function runCompanyBackfillAllWorkspaces(): Promise<{ workspaces: n
           ? " Stopped early — the LinkedIn daily lookup limit was reached."
           : r.stoppedBecause === "cap" ? " Stopped at the daily cap." : "";
         await notifyOwner(
-          ws.id, ws.ownerUserId,
+          ws.id, recipient,
           `Company Backfill: filled ${r.filled} of ${r.attempted}`,
           `Read ${r.attempted} LinkedIn profile${r.attempted === 1 ? "" : "s"} and found an employer for ${r.filled}.`
           + (r.noCompanyOnProfile > 0 ? ` ${r.noCompanyOnProfile} had no employer to read — most LinkedIn headlines are slogans rather than "Title at Company".` : "")
@@ -791,9 +801,8 @@ export async function runEnrichmentSweepAllWorkspaces(): Promise<{ swept: number
         swept++;
         emailsFound += r.emailsFound;
         console.log(`[EnrichmentSweep] ws=${ws.id} attempted=${r.attempted} found=${r.emailsFound} stopped=${r.stoppedBecause}`);
-        const [owner] = await db.select({ id: workspaces.ownerUserId }).from(workspaces).where(eq(workspaces.id, ws.id));
         await notifyOwner(
-          ws.id, owner?.id ?? null,
+          ws.id, await workspaceNotifyUserId(ws.id),
           `Enrichment Sweep: ${r.emailsFound} email${r.emailsFound === 1 ? "" : "s"} found`,
           `Checked ${r.attempted} prospect${r.attempted === 1 ? "" : "s"} and resolved ${r.emailsFound} address${r.emailsFound === 1 ? "" : "es"}.`
           + (r.domainsResolved > 0 ? ` Also resolved ${r.domainsResolved} company domain${r.domainsResolved === 1 ? "" : "s"} at no cost.` : "")

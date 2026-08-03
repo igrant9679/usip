@@ -45,6 +45,7 @@ import { getDb } from "../db";
 import { createEmailAdapter } from "../emailAdapter";
 import { router } from "../_core/trpc";
 import { repProcedure, workspaceProcedure } from "../_core/workspace";
+import { activeOwnerOrNull } from "../_core/activeMembers";
 import { isSuppressed, makeUnsubscribeUrl } from "../unsubscribe";
 import { assertSendAllowed } from "../sendLimits";
 import { ensureCustomerForWonOpp } from "../services/wonToCustomer";
@@ -281,7 +282,16 @@ export const accountsRouter = router({
         });
         if (routed) {
           resolvedTerritoryId = routed.territoryId ?? resolvedTerritoryId;
-          if (routed.ownerUserId) resolvedOwnerId = routed.ownerUserId;
+          /**
+           * A territory rule stores an ownerUserId and nothing revalidated it,
+           * so a rule written before a rep left kept filing every matching new
+           * account under them. Same shape as `lead_routing_rules.targetUserIds`.
+           *
+           * No fallback had to be invented: `resolvedOwnerId` already defaults
+           * to the rep creating the account, who is by definition present.
+           */
+          const routedOwner = await activeOwnerOrNull(ctx.workspace.id, routed.ownerUserId);
+          if (routedOwner) resolvedOwnerId = routedOwner;
         }
       }
       const r = await db.insert(accounts).values({ ...input, workspaceId: ctx.workspace.id, territoryId: resolvedTerritoryId ?? undefined, ownerUserId: resolvedOwnerId });

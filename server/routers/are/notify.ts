@@ -13,9 +13,9 @@
  *   hook_enhanced        — AI rewrote the outreach hook after a signal
  */
 
-import { eq } from "drizzle-orm";
-import { notifications, workspaces } from "../../../drizzle/schema";
+import { notifications } from "../../../drizzle/schema";
 import { getDb } from "../../db";
+import { workspaceNotifyUserId } from "../../_core/activeMembers";
 
 export type AreEventType =
   | "meeting_booked"
@@ -42,16 +42,18 @@ export async function areNotify(opts: AreNotifyOptions): Promise<void> {
   try {
     const db = await getDb();
     if (!db) return;
-    // Resolve the workspace owner
-    const [ws] = await db
-      .select({ ownerUserId: workspaces.ownerUserId })
-      .from(workspaces)
-      .where(eq(workspaces.id, opts.workspaceId))
-      .limit(1);
-    if (!ws) return;
+    /**
+     * The owner, or an active stand-in if they have left. Read raw, this was
+     * the ARE engine's ONLY reporting channel pointed at a user id nobody
+     * checks — every campaign_completed, auto_approved and icp_updated notice
+     * written into a void. Null means the workspace has no active members, so
+     * there is nobody to tell.
+     */
+    const recipient = await workspaceNotifyUserId(opts.workspaceId);
+    if (!recipient) return;
     await db.insert(notifications).values({
       workspaceId: opts.workspaceId,
-      userId: ws.ownerUserId,
+      userId: recipient,
       kind: "are_event",
       title: opts.title,
       body: opts.body,

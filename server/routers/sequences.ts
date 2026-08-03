@@ -28,6 +28,7 @@ function unsubscribeFooterText(unsubscribeUrl: string): string {
 }
 import { router } from "../_core/trpc";
 import { adminWsProcedure, managerProcedure, repProcedure, roleRank, workspaceProcedure } from "../_core/workspace";
+import { activeOwnerOrNull, workspaceNotifyUserId } from "../_core/activeMembers";
 import { appBaseUrl as publicAppOrigin } from "../appUrl";
 import { utcDayStart } from "@shared/timeWindows";
 import { getSequenceAbVariantStats } from "../services/performanceMetrics";
@@ -1843,17 +1844,21 @@ export async function autoSendForAllWorkspaces(): Promise<{
         continue;
       }
 
-      // Actor: prefer draft.createdByUserId, fall back to workspace owner.
-      // Used by deliverEmailDraft to look up the personal Unipile mailbox
-      // and to attribute the activity/audit rows.
-      let actorUserId = draft.createdByUserId ?? null;
+      /**
+       * Actor: prefer draft.createdByUserId, fall back to the workspace owner.
+       * Used by deliverEmailDraft to look up the PERSONAL UNIPILE MAILBOX and
+       * to attribute the activity/audit rows.
+       *
+       * Both halves are membership-checked, and here that is more than tidiness:
+       * this is the unattended auto-send worker, so an actor who has left would
+       * have it reach for a departed rep's personal mailbox to send from, and
+       * stamp the audit row with a user nobody can ask about. A draft whose
+       * author has gone now sends as the workspace's owner instead — and the
+       * existing `no actor user` skip catches a workspace with nobody left.
+       */
+      let actorUserId = await activeOwnerOrNull(ws.workspaceId, draft.createdByUserId);
       if (!actorUserId) {
-        const [owner] = await db
-          .select({ ownerUserId: workspaces.ownerUserId })
-          .from(workspaces)
-          .where(eq(workspaces.id, ws.workspaceId))
-          .limit(1);
-        actorUserId = owner?.ownerUserId ?? null;
+        actorUserId = await workspaceNotifyUserId(ws.workspaceId);
       }
       if (!actorUserId) {
         skipped++;
