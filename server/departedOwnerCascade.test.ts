@@ -201,6 +201,28 @@ const SURFACES: Array<{
     gate: /const routedOwner = await activeOwnerOrNull\(ctx\.workspace\.id, routed\.ownerUserId\);\s*if \(routedOwner\) resolvedOwnerId = routedOwner;/,
   },
   {
+    what: "the voice agent does not introduce itself on behalf of a departed rep, OUT LOUD, to a caller",
+    file: "server/services/voiceBridge.ts",
+    start: "let ownerName: string | null = null;",
+    end: "const startedAtMs = Date.now();",
+    /**
+     * The BINDING plus the branch it guards. Deliberately NOT also pinning the
+     * identifier used inside the `users` lookup: swapping it back to
+     * `agent.ownerUserId` there is an EQUIVALENT MUTANT — the branch is only
+     * entered when the gated value is non-null, and in that case the two hold
+     * the same number. Mutation W2 proved that rather than exposing a hole, and
+     * an assertion added to catch it would be pinning style, not behaviour.
+     */
+    gate: /const voiceOwnerUserId = await activeOwnerOrNull\(agent\.workspaceId, agent\.ownerUserId\);\s*if \(voiceOwnerUserId\) \{/,
+  },
+  {
+    what: "an inbound call-back reaches somebody who still works here",
+    file: "server/voiceWebhook.ts",
+    start: "const match = await matchCallerToRecord(",
+    end: "db.insert(voiceCalls)",
+    gate: /const callOwnerUserId = await activeOwnerOrNull\(agent\.workspaceId, agent\.ownerUserId\);\s*const callNotifyUserId = callOwnerUserId \?\? \(await workspaceNotifyUserId\(agent\.workspaceId\)\);/,
+  },
+  {
     what: "the autopilot's meeting owner is an active member",
     file: "server/services/meetingScheduler.ts",
     start: "async function pickWorkspaceOwner(",
@@ -218,7 +240,7 @@ describe("every session-less path that names a member gates on active membership
    * pinned rather than bounded so that REMOVING a surface is also a decision.
    */
   it("checks every surface in the table, and the table has not shrunk", () => {
-    expect(SURFACES.length).toBe(17);
+    expect(SURFACES.length).toBe(19);
     expect(new Set(SURFACES.map((s) => `${s.file}::${s.start}`)).size).toBe(SURFACES.length);
   });
 

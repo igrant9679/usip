@@ -14,6 +14,7 @@ import { eq } from "drizzle-orm";
 import { users, voiceAgents, voiceCalls, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { tryDecryptSecret } from "../_core/crypto";
+import { activeOwnerOrNull } from "../_core/activeMembers";
 import { logCallActivity } from "./voiceCrmLink";
 
 const XAI_REALTIME_WS = "wss://api.x.ai/v1/realtime";
@@ -87,9 +88,25 @@ export function answerInboundCall(opts: BridgeOpts): void {
       await finalizeRow(opts.callRowId, { status: "failed", outcome: "No xAI API key configured — call not answered" });
       return;
     }
+    /**
+     * 🔴 THIS NAME IS SPOKEN TO A LIVE CALLER. `defaultInstructions` puts it in
+     * the agent's system prompt as "You answer calls on behalf of {ownerName},
+     * who is currently unavailable" — so an agent whose owner has left the
+     * company introduces itself on their behalf, out loud, to a customer.
+     *
+     * A DELETED member happened to be safe by accident (no users row, so the
+     * lookup returned nothing). A DEACTIVATED one was not: the users row
+     * survives, so the name kept being spoken. Membership is the question, not
+     * whether a user row exists.
+     *
+     * With no active owner the clause is omitted entirely — the prompt already
+     * handles null by dropping it, and an assistant that simply doesn't name
+     * anyone is correct, where one naming a leaver is not.
+     */
     let ownerName: string | null = null;
-    if (agent.ownerUserId) {
-      const [owner] = await db.select({ name: users.name }).from(users).where(eq(users.id, agent.ownerUserId)).limit(1);
+    const voiceOwnerUserId = await activeOwnerOrNull(agent.workspaceId, agent.ownerUserId);
+    if (voiceOwnerUserId) {
+      const [owner] = await db.select({ name: users.name }).from(users).where(eq(users.id, voiceOwnerUserId)).limit(1);
       ownerName = owner?.name ?? null;
     }
 

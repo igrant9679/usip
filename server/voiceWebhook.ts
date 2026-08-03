@@ -21,6 +21,7 @@ import { and, eq, isNotNull } from "drizzle-orm";
 import { notifications, voiceAgents, voiceCalls } from "../drizzle/schema";
 import { getDb } from "./db";
 import { tryDecryptSecret } from "./_core/crypto";
+import { activeOwnerOrNull, workspaceNotifyUserId } from "./_core/activeMembers";
 import { answerInboundCall } from "./services/voiceBridge";
 import { matchCallerToRecord } from "./services/voiceCrmLink";
 
@@ -107,6 +108,21 @@ export function registerVoiceWebhookRoutes(app: Express): void {
       // Best-effort caller → CRM record match (contact > lead > prospect).
       const match = await matchCallerToRecord(agent.workspaceId, from).catch(() => null);
 
+      /**
+       * Who this call belongs to, and who hears about it.
+       *
+       * A voice agent outlives its owner's employment: the phone number stays
+       * routed and xAI keeps posting calls to this webhook. Filed against a
+       * departed rep, an inbound call-back is stamped with a user who cannot
+       * sign in AND the "your voice agent answered a call" notification goes
+       * nowhere — a real prospect rang back and nobody in the business knows.
+       *
+       * The notification falls through to the workspace resolver rather than
+       * being dropped: an unattributed call still has to reach somebody.
+       */
+      const callOwnerUserId = await activeOwnerOrNull(agent.workspaceId, agent.ownerUserId);
+      const callNotifyUserId = callOwnerUserId ?? (await workspaceNotifyUserId(agent.workspaceId));
+
       const insert = await db.insert(voiceCalls).values({
         workspaceId: agent.workspaceId,
         agentId: agent.id,
@@ -117,7 +133,7 @@ export function registerVoiceWebhookRoutes(app: Express): void {
         status: "ringing",
         relatedType: match?.relatedType ?? null,
         relatedId: match?.relatedId ?? null,
-        userId: agent.ownerUserId ?? null,
+        userId: callOwnerUserId,
         startedAt: new Date(),
       });
       const callRowId = Number((insert as unknown as { insertId?: number })?.insertId ?? 0);
@@ -132,10 +148,10 @@ export function registerVoiceWebhookRoutes(app: Express): void {
 
       // Notify the member the agent answers for. kind stays inside the
       // notifications enum ("system") — do NOT invent a new enum value here.
-      if (agent.ownerUserId) {
+      if (callNotifyUserId) {
         await db.insert(notifications).values({
           workspaceId: agent.workspaceId,
-          userId: agent.ownerUserId,
+          userId: callNotifyUserId,
           kind: "system",
           title: `Call-back${match ? ` from ${match.name}` : from ? ` from ${from}` : ""}`,
           body: `Your voice agent "${agent.name}" answered an inbound call${match ? ` from ${match.name} (${match.relatedType})` : ""}.`,
