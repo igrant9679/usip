@@ -20,6 +20,7 @@
 import { and, eq } from "drizzle-orm";
 import { appBaseUrl } from "./appUrl";
 import { getDb } from "./db";
+import { isActiveMember } from "./_core/activeMembers";
 import { contacts, accounts, leads, prospects, bookingLinks, users } from "../drizzle/schema";
 import { escapeHtml } from "@shared/escapeHtml";
 import { slugify } from "@shared/slugify";
@@ -62,7 +63,15 @@ export { appBaseUrl };
  * Resolve a rep's self-serve booking URL for {{bookingLink}}, lazily
  * provisioning a link if the rep doesn't have one yet (same get-or-create as the
  * bookingLinks.mine endpoint) so a meeting-ask draft never renders a broken CTA.
- * Returns "" only when the link is explicitly deactivated or on any failure.
+ * Returns "" when the link is explicitly deactivated, when the rep is no
+ * longer an active member, or on any failure.
+ *
+ * 🔴 THE MEMBERSHIP CHECK MUST COME BEFORE THE LAZY PROVISION, not after.
+ * `{{bookingLink}}` is rendered from a stored author id — `draft.createdByUserId`,
+ * `page.createdByUserId` — which may name someone who left months ago. Without
+ * this gate the get-or-create branch would MINT A NEW booking link for a
+ * non-member and mail a prospect a link to a calendar nobody watches. An empty
+ * string is the documented "no link" value and every caller already handles it.
  */
 export async function resolveBookingUrl(
   workspaceId: number,
@@ -73,6 +82,7 @@ export async function resolveBookingUrl(
   try {
     const db = await getDb();
     if (!db) return "";
+    if (!(await isActiveMember(workspaceId, userId))) return "";
     let [link] = await db
       .select({ slug: bookingLinks.slug, active: bookingLinks.active })
       .from(bookingLinks)

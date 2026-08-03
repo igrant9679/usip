@@ -32,6 +32,7 @@ import {
 import { invokeLLM } from "../_core/llm";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, repProcedure, workspaceProcedure } from "../_core/workspace";
+import { activeMemberIds } from "../_core/activeMembers";
 import { evalConditions } from "./operations";
 
 /* ───────── helpers ───────── */
@@ -497,13 +498,32 @@ export async function routeLeadOwner(workspaceId: number, payload: RoutingPayloa
   }
 
   const rows = await db.select().from(leadRoutingRules).where(eq(leadRoutingRules.workspaceId, workspaceId));
+
+  /**
+   * 🔴 `targetUserIds` is a STORED LIST OF USER IDS and nothing revalidated it.
+   * A rep who leaves keeps their place in the round-robin: every Nth inbound
+   * lead is filed under someone who cannot sign in, indefinitely, and the rule
+   * still reports a rising `matchCount` so it looks like it is working.
+   *
+   * Filtered here, once, over every rule — `pickRoutingMatch` is pure and must
+   * stay that way. It already treats an empty target list as "no match" and
+   * falls through to the NEXT rule, so a rule whose whole team has gone
+   * degrades to the next-best rule and finally to an unowned lead, rather than
+   * to a ghost. The stored cursor is taken modulo the surviving length, so it
+   * stays in range; the rotation shifts, which is the correct outcome when the
+   * roster changes.
+   */
+  const active = await activeMemberIds(
+    workspaceId,
+    rows.flatMap((r) => ((r.targetUserIds as number[] | null) ?? [])),
+  );
   const rules: RoutingRule[] = rows.map((r) => ({
     id: r.id,
     enabled: r.enabled,
     priority: r.priority,
     conditions: (r.conditions as any) ?? {},
     strategy: r.strategy,
-    targetUserIds: (r.targetUserIds as number[] | null) ?? [],
+    targetUserIds: (((r.targetUserIds as number[] | null) ?? []).filter((u) => active.has(u))),
     rrCursor: r.rrCursor,
   }));
   const m = pickRoutingMatch(rules, payload, evalConditions);

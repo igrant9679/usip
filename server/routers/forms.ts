@@ -16,6 +16,7 @@ import { recordAudit } from "../audit";
 import { router } from "../_core/trpc";
 import { publicProcedure } from "../_core/trpc";
 import { repProcedure, workspaceProcedure } from "../_core/workspace";
+import { activeOwnerOrNull } from "../_core/activeMembers";
 
 const FIELD = z.object({ key: z.string(), label: z.string(), required: z.boolean().optional() });
 
@@ -151,7 +152,9 @@ export const formsRouter = router({
       let routedToUserId: number | null = null;
 
       if (form.autoCreateLead && (email || firstName)) {
-        let ownerUserId: number | null = form.createdByUserId ?? null;
+        // The form's author may have left since it was published. An unowned
+        // lead is claimable by the workspace; one filed under a leaver is not.
+        let ownerUserId: number | null = await activeOwnerOrNull(form.workspaceId, form.createdByUserId);
         if (form.autoRoute) {
           try {
             const { routeLeadOwner } = await import("./leadScoring");

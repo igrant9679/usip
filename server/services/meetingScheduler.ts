@@ -320,10 +320,19 @@ function startOfUtcDay(): Date {
   return d;
 }
 
-/** Pick the highest-privilege member of a workspace to own autopilot-created meetings. */
+/**
+ * Pick the highest-privilege ACTIVE member of a workspace to own
+ * autopilot-created meetings.
+ *
+ * The rank sort made the omission bite hardest: a deactivated super_admin
+ * sorts to the top, so the first person to be offboarded from a small
+ * workspace would silently own every meeting the autopilot booked afterwards —
+ * on a calendar nobody connects and against a notification nobody reads.
+ */
 async function pickWorkspaceOwner(db: any, workspaceId: number): Promise<number | null> {
   const members = await db.select({ userId: workspaceMembers.userId, role: workspaceMembers.role })
-    .from(workspaceMembers).where(eq(workspaceMembers.workspaceId, workspaceId));
+    .from(workspaceMembers)
+    .where(and(eq(workspaceMembers.workspaceId, workspaceId), isNull(workspaceMembers.deactivatedAt)));
   if (!members.length) return null;
   members.sort((a: any, b: any) => rankOf(b.role) - rankOf(a.role));
   return members[0]?.userId ?? null;

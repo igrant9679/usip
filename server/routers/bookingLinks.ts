@@ -20,6 +20,7 @@ import { TRPCError } from "@trpc/server";
 import { and, eq, gte, lte, sql } from "drizzle-orm";
 import { router, publicProcedure } from "../_core/trpc";
 import { workspaceProcedure } from "../_core/workspace";
+import { isActiveMember } from "../_core/activeMembers";
 import { getDb } from "../db";
 import { activities, bookingLinks, calendarEvents, leads, meetings, notifications, users, type BookingLink } from "../../drizzle/schema";
 import { sendMeetingInvite } from "../services/meetingScheduler";
@@ -35,6 +36,13 @@ import { slugify } from "@shared/slugify";
  * below must span exactly the window the generator will consider.
  */
 const HORIZON_DAYS = DEFAULT_HORIZON_DAYS;
+
+/**
+ * One refusal for every reason a link cannot be booked — turned off, unknown
+ * slug, or a host who no longer works here. Kept as a constant so the three
+ * throw sites cannot drift into telling a stranger which one it was.
+ */
+const BOOKING_UNAVAILABLE = "This booking link is not available.";
 
 // slugify comes from @shared/slugify — one rule for every public URL.
 
@@ -148,6 +156,22 @@ export async function bookSlotForLink(link: BookingLink, opts: BookSlotOpts) {
   const openSlots = await openSlotsForLink(link);
   if (!openSlots.includes(start.toISOString())) {
     throw new TRPCError({ code: "CONFLICT", message: "That time is no longer available — please pick another slot." });
+  }
+
+  /**
+   * The host must still work here. Checked HERE as well as in `getPublic`
+   * because this function is the shared booking path — the chat agent books
+   * through it too, and a gate only on the page load would leave the POST open.
+   *
+   * A departed rep's link is worse than a dead link: `busyEventsFor` finds no
+   * calendar events for them, so EVERY slot reads as open; `sendMeetingInvite`
+   * finds no calendar account, so it records the meeting with
+   * `inviteSent: false` and no invite is ever sent; and the notification below
+   * is addressed to a user id that cannot sign in. The prospect is told they
+   * are booked and nobody in the workspace is told anything.
+   */
+  if (!(await isActiveMember(link.workspaceId, link.userId))) {
+    throw new TRPCError({ code: "NOT_FOUND", message: BOOKING_UNAVAILABLE });
   }
 
   // Inbound lead for the booker (routed to the link owner), unless the caller
@@ -324,7 +348,15 @@ export const bookingLinksRouter = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const [link] = await db.select().from(bookingLinks).where(eq(bookingLinks.slug, input.slug));
-      if (!link || !link.active) throw new TRPCError({ code: "NOT_FOUND", message: "This booking link is not available." });
+      if (!link || !link.active) throw new TRPCError({ code: "NOT_FOUND", message: BOOKING_UNAVAILABLE });
+      /**
+       * Same refusal, same words, when the host has left the workspace — a
+       * stranger must not be able to tell "no such link" from "that rep left",
+       * and there is nothing useful to show either way.
+       */
+      if (!(await isActiveMember(link.workspaceId, link.userId))) {
+        throw new TRPCError({ code: "NOT_FOUND", message: BOOKING_UNAVAILABLE });
+      }
       const [owner] = await db.select({ name: users.name }).from(users).where(eq(users.id, link.userId));
       const slots = await openSlotsForLink(link);
       return {

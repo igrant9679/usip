@@ -23,6 +23,7 @@ import { TRPCError } from "@trpc/server";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { router, publicProcedure } from "../_core/trpc";
 import { adminWsProcedure } from "../_core/workspace";
+import { activeOwnerOrNull, isActiveMember } from "../_core/activeMembers";
 import { getDb } from "../db";
 import {
   activities, bookingLinks, chatAgentKnowledge, chatAgents, chatSessions, enrollments, leads, notifications, tasks,
@@ -59,6 +60,11 @@ async function linkForAgent(agent: typeof chatAgents.$inferSelect) {
   if (!db) return null;
   const userId = agent.bookingUserId ?? agent.createdByUserId;
   if (!userId) return null;
+  // The agent inherits its host from a row written at create time. If that
+  // person has left, stop OFFERING their calendar — `bookSlotForLink` refuses
+  // the booking anyway, but a slot list a visitor cannot act on is worse than
+  // no slot list.
+  if (!(await isActiveMember(agent.workspaceId, userId))) return null;
   const [link] = await db.select().from(bookingLinks)
     .where(and(eq(bookingLinks.workspaceId, agent.workspaceId), eq(bookingLinks.userId, userId)));
   return link && link.active ? link : null;
@@ -703,7 +709,11 @@ async function createLeadForSession(
   if (!db || !visitor.email) return null;
   const parts = (visitor.name ?? "").trim().split(/\s+/).filter(Boolean);
 
-  let ownerUserId: number | null = agent.bookingUserId ?? agent.createdByUserId ?? null;
+  // Unowned beats owned-by-a-leaver: the workspace can still see and claim it.
+  let ownerUserId: number | null = await activeOwnerOrNull(
+    agent.workspaceId,
+    agent.bookingUserId ?? agent.createdByUserId ?? null,
+  );
   if (agent.autoRoute) {
     try {
       const { routeLeadOwner } = await import("./leadScoring");
@@ -807,7 +817,13 @@ async function handoffToRep(
 ): Promise<void> {
   const db = await getDb();
   if (!db) return;
-  const ownerUserId = agent.bookingUserId ?? agent.createdByUserId ?? null;
+  // A handoff task and its notification both name an owner. Addressed to
+  // someone who left, the task looks assigned and the notification is never
+  // read — the visitor waits for a reply nobody knows they are owed.
+  const ownerUserId = await activeOwnerOrNull(
+    agent.workspaceId,
+    agent.bookingUserId ?? agent.createdByUserId ?? null,
+  );
   const who = visitor.name || visitor.email || "A website visitor";
   const copy = HANDOFF_COPY[reason] ?? HANDOFF_COPY.qualified;
   // No email means the rep has no way to reach them — say so in the task rather

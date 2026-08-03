@@ -19,6 +19,7 @@ import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import {
   auditLog,
+  bookingLinks,
   leads,
   loginHistory,
   memberPermissions,
@@ -737,6 +738,33 @@ export const teamRouter = router({
         }
       }
 
+      /**
+       * Turn off their public booking page.
+       *
+       * The reader-side gate (`_core/activeMembers`) already refuses to serve
+       * or book a link whose host is not an active member, so this is not what
+       * closes the hole — it is what keeps the STORED state honest. After this
+       * procedure there is no membership row and often no user row, so a
+       * `booking_links` row left `active: true` describes a bookable page for a
+       * person the workspace can no longer name. Same reasoning as the saved-
+       * report strip above: hard delete leaves nothing behind to recognise them
+       * by later.
+       */
+      let bookingLinksDeactivated = 0;
+      try {
+        const [res] = (await db
+          .update(bookingLinks)
+          .set({ active: false })
+          .where(and(
+            eq(bookingLinks.workspaceId, ctx.workspace.id),
+            eq(bookingLinks.userId, target.userId),
+            eq(bookingLinks.active, true),
+          ))) as any;
+        bookingLinksDeactivated = Number(res?.affectedRows ?? 0);
+      } catch (e) {
+        console.error("[team.delete] booking link deactivate failed:", (e as Error).message);
+      }
+
       // Remove the membership row.
       await db.delete(workspaceMembers).where(eq(workspaceMembers.id, target.id));
 
@@ -760,9 +788,9 @@ export const teamRouter = router({
         entityType: "workspace_member",
         entityId: target.userId,
         before: { email: tgtUser?.email, role: target.role },
-        after: { deleted: true, deletedUser, reassignedTo: input.reassignToUserId ?? null, strippedFromReports },
+        after: { deleted: true, deletedUser, reassignedTo: input.reassignToUserId ?? null, strippedFromReports, bookingLinksDeactivated },
       });
-      return { ok: true, deletedUser, reassigned, strippedFromReports };
+      return { ok: true, deletedUser, reassigned, strippedFromReports, bookingLinksDeactivated };
     }),
 
   bulkChangeRole: adminWsProcedure

@@ -13,6 +13,7 @@ import { TRPCError } from "@trpc/server";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { router, publicProcedure } from "../_core/trpc";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
+import { activeOwnerOrNull } from "../_core/activeMembers";
 import { getDb } from "../db";
 import { landingPages, leads, enrollments } from "../../drizzle/schema";
 import { resolveBookingUrl } from "../mergeVars";
@@ -202,7 +203,8 @@ export const landingPagesRouter = router({
       const phone = str(data.phone, 40);
 
       if (page.autoCreateLead && (email || firstName)) {
-        let ownerUserId: number | null = page.createdByUserId ?? null;
+        // Same as forms.submit: a page outlives its author's employment.
+        let ownerUserId: number | null = await activeOwnerOrNull(page.workspaceId, page.createdByUserId);
         if (page.autoRoute) {
           try {
             const { routeLeadOwner } = await import("./leadScoring");
