@@ -9,6 +9,7 @@ import {
   contactImports,
   contactImportRows,
   contacts,
+  prospects,
 } from "../../drizzle/schema";
 import { parseCSVText } from "../services/csv";
 import { CONTACT_IMPORT_FIELDS } from "@shared/importFields";
@@ -169,6 +170,53 @@ export function nameCompanyKey(
   return `${f}|${l}|${c}`;
 }
 
+/**
+ * Where an import lands.
+ *
+ * `contacts` is the CRM proper. `prospects` is the People/CRM backlog that the
+ * enrichment sweeper actually reads — importing there is what makes an old
+ * list cleanable, because the sweeper never looks at `contacts`. Rows arrive
+ * with no email (or an unverified one), get an address found and verified, and
+ * `promoteVerifiedProspect` moves the ones that come back `valid` into the CRM.
+ */
+const DESTINATION = z.enum(["contacts", "prospects"]).default("contacts");
+export type ImportDestination = z.infer<typeof DESTINATION>;
+
+/**
+ * Rows already in the DESTINATION table, for duplicate detection.
+ *
+ * Shared by validateRows and commit deliberately. The preview and the import
+ * must dedupe against the same population, or the preview promises one thing
+ * and the import does another — the exact failure this file's header records
+ * from the last time those two drifted apart.
+ */
+async function existingRowsForDestination(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  wsId: number,
+  destination: ImportDestination,
+): Promise<Array<{ email: string | null; firstName: string | null; lastName: string | null; companyName: string | null }>> {
+  if (destination === "prospects") {
+    return db
+      .select({
+        email: prospects.email,
+        firstName: prospects.firstName,
+        lastName: prospects.lastName,
+        companyName: prospects.company,
+      })
+      .from(prospects)
+      .where(eq(prospects.workspaceId, wsId));
+  }
+  return db
+    .select({
+      email: contacts.email,
+      firstName: contacts.firstName,
+      lastName: contacts.lastName,
+      companyName: contacts.companyName,
+    })
+    .from(contacts)
+    .where(eq(contacts.workspaceId, wsId));
+}
+
 export const importsRouter = router({
   /** Step 1: Parse CSV text, return headers + first 5 preview rows */
   parseCSV: workspaceProcedure
@@ -209,6 +257,8 @@ export const importsRouter = router({
         fieldMapping: z.record(z.string(), z.string().nullable()),
         /** Opt-in name+company matching for rows with no email. Default OFF. */
         matchOnNameCompany: z.boolean().default(false),
+        /** MUST match commit, or the preview dedupes against the wrong table. */
+        destination: DESTINATION,
         /**
          * MUST match what commit is called with. The preview used to compute its
          * counts as though duplicates were always skipped, so with the toggle off
@@ -237,15 +287,7 @@ export const importsRouter = router({
 
       // Fetch existing contacts for duplicate detection. Name+company is pulled
       // too so the opt-in matcher has something to compare against.
-      const existingContacts = await db
-        .select({
-          email: contacts.email,
-          firstName: contacts.firstName,
-          lastName: contacts.lastName,
-          companyName: contacts.companyName,
-        })
-        .from(contacts)
-        .where(eq(contacts.workspaceId, wsId));
+      const existingContacts = await existingRowsForDestination(db, wsId, input.destination);
       const existingEmails = new Set(
         existingContacts.map((c: { email: string | null }) => c.email?.toLowerCase() ?? "").filter((e: string) => e.length > 0),
       );
@@ -336,6 +378,8 @@ export const importsRouter = router({
          * thing and the import do another.
          */
         matchOnNameCompany: z.boolean().default(false),
+        /** Where the rows land. See DESTINATION. */
+        destination: DESTINATION,
         /**
          * `sequenceId` and `segmentId` used to be accepted here, stored on the
          * import record, and acted on by NOTHING — no enrolment, no segment
@@ -375,15 +419,7 @@ export const importsRouter = router({
       const importId = importRecord.id;
 
       // Fetch existing contacts (name+company too, for the opt-in matcher)
-      const existingContacts = await db
-        .select({
-          email: contacts.email,
-          firstName: contacts.firstName,
-          lastName: contacts.lastName,
-          companyName: contacts.companyName,
-        })
-        .from(contacts)
-        .where(eq(contacts.workspaceId, wsId));
+      const existingContacts = await existingRowsForDestination(db, wsId, input.destination);
       const existingEmails = new Set(
         existingContacts.map((c: { email: string | null }) => c.email?.toLowerCase() ?? "").filter((e: string) => e.length > 0),
       );
@@ -609,21 +645,51 @@ export const importsRouter = router({
         };
       };
 
+      const toProspects = input.destination === "prospects";
+
+      /**
+       * The same mapped row, shaped for the prospects backlog.
+       *
+       * Clamped to the column widths for the reason buildContactValues records:
+       * MySQL strict mode REJECTS an over-long value rather than truncating,
+       * and one rejection kills the whole 500-row chunk.
+       *
+       * `enrichmentData` is deliberately left unset — the sweeper treats
+       * `enrichmentData IS NULL` as "not attempted yet", so writing anything
+       * here would make every imported row look already-worked and it would
+       * never be cleaned.
+       */
+      const buildProspectValues = (p: Pending) => ({
+        workspaceId: wsId,
+        firstName: (p.mapped.firstName?.trim() ?? "").slice(0, 80),
+        lastName: (p.mapped.lastName?.trim() ?? "").slice(0, 80),
+        email: p.mapped.email?.trim()?.slice(0, 320) || null,
+        phone: p.mapped.phone?.trim()?.slice(0, 40) || null,
+        title: p.mapped.title?.trim()?.slice(0, 120) || null,
+        linkedinUrl: p.mapped.linkedinUrl?.trim() || null,
+        city: p.mapped.city?.trim()?.slice(0, 80) || null,
+        seniority: p.mapped.seniority?.trim()?.slice(0, 64) || null,
+        company: p.mapped.company?.trim()?.slice(0, 200) || null,
+        companyDomain: normDomain(p.mapped.website)?.slice(0, 200) ?? null,
+      });
+
       for (let i = 0; i < toInsert.length; i += CHUNK) {
         const chunk = toInsert.slice(i, i + CHUNK);
         try {
-          const ids = await db
-            .insert(contacts)
-            .values(chunk.map(buildContactValues) as never)
-            .$returningId(); // ordered ids for the batch
+          const ids = toProspects
+            ? await db.insert(prospects).values(chunk.map(buildProspectValues) as never).$returningId()
+            : await db.insert(contacts).values(chunk.map(buildContactValues) as never).$returningId(); // ordered ids
           for (let j = 0; j < chunk.length; j++) {
+            const newId = (ids as Array<{ id: number }>)[j]?.id;
             importRowValues.push({
               importId,
               rowIndex: chunk[j].rowIndex,
               rowData: chunk[j].row,
               mappedData: chunk[j].mapped,
               status: "imported",
-              contactId: (ids as Array<{ id: number }>)[j]?.id,
+              // Exactly one of the two, so the audit row says what it made.
+              contactId: toProspects ? null : newId,
+              prospectId: toProspects ? newId : null,
             });
             importedRows++;
           }
@@ -632,8 +698,14 @@ export const importsRouter = router({
           // lose the other 499. Preserves prior error-capture behavior.
           for (const p of chunk) {
             try {
-              const [c] = await db.insert(contacts).values(buildContactValues(p) as never).$returningId();
-              importRowValues.push({ importId, rowIndex: p.rowIndex, rowData: p.row, mappedData: p.mapped, status: "imported", contactId: c.id });
+              const [c] = toProspects
+                ? await db.insert(prospects).values(buildProspectValues(p) as never).$returningId()
+                : await db.insert(contacts).values(buildContactValues(p) as never).$returningId();
+              importRowValues.push({
+                importId, rowIndex: p.rowIndex, rowData: p.row, mappedData: p.mapped, status: "imported",
+                contactId: toProspects ? null : c.id,
+                prospectId: toProspects ? c.id : null,
+              });
               importedRows++;
             } catch {
               importRowValues.push({ importId, rowIndex: p.rowIndex, rowData: p.row, mappedData: p.mapped, status: "error", errorReason: "Database insert failed" });

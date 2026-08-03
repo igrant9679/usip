@@ -3069,6 +3069,23 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0144: CSV import can target the prospects backlog ─────────────────────
+  // Import wrote `contacts`; the enrichment sweeper only ever reads `prospects`
+  // and `prospect_queue`. So an imported list was never cleaned — the chain
+  // import → clean → enrol had no middle. Importing into `prospects` puts the
+  // list where the sweeper already looks, and promoteVerifiedProspect moves the
+  // ones that come back with a verified address into the CRM.
+  //
+  // The audit row needs to say what it created: `contactId` cannot describe a
+  // prospect, and leaving it NULL makes an imported row look like it produced
+  // nothing.
+  {
+    name: "0144_import_rows_prospect_id.sql",
+    statements: [
+      "ALTER TABLE `contact_import_rows` ADD COLUMN `prospectId` int NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

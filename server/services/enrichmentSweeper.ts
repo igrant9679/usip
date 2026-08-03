@@ -34,6 +34,7 @@ import { areCampaigns, notifications, prospectQueue, prospects, workspaceSetting
 import { getDb } from "../db";
 import { lookupContactInfo, resolveVerifiedEmail } from "./scraper";
 import { getReoonKey, reoonCheckBalance } from "./reoon";
+import { promoteVerifiedProspect } from "./prospectPromotion";
 // Pure name predicate only — importing it does NOT reach any paid Apollo path.
 // It is the one definition of "this campaign is a demo, don't work it".
 import { isEnrichableCampaign } from "./apolloEnrich";
@@ -66,6 +67,8 @@ export interface SweepResult {
   domainsAttempted: number;
   domainsResolved: number;
   emailsFound: number;
+  /** Prospects whose new address verified and were promoted into the CRM. */
+  promoted: number;
   creditsQuick: number;
   creditsPower: number;
   /** Why the run ended: finished the candidates, hit the cap, or ran dry. */
@@ -75,7 +78,8 @@ export interface SweepResult {
 /** A run that did nothing, shaped so callers never special-case null. */
 const emptyResult = (stoppedBecause: SweepResult["stoppedBecause"]): SweepResult => ({
   attempted: 0, fromQueue: 0, fromProspects: 0, domainsAttempted: 0, domainsResolved: 0,
-  emailsFound: 0, creditsQuick: 0, creditsPower: 0, stoppedBecause,
+  emailsFound: 0,
+  promoted: 0, creditsQuick: 0, creditsPower: 0, stoppedBecause,
 });
 
 /**
@@ -644,7 +648,29 @@ export async function sweepWorkspace(
       result.creditsQuick += r.reoonCreditsQuick ?? 0;
       result.creditsPower += r.reoonCreditsPower ?? 0;
       dailyCreditsLeft -= r.reoonCreditsPower ?? 0;
-      if (r.email) result.emailsFound++;
+      if (r.email) {
+        result.emailsFound++;
+        /**
+         * The last link in import → clean → enrol.
+         *
+         * A found address is only useful once the person is a CONTACT: the
+         * sweeper works `prospects`, and segment→sequence rules only ever read
+         * `contacts`. promoteVerifiedProspect applies the product rule — it
+         * promotes on a `valid` verdict and refuses accept_all / risky — so an
+         * unverified row can never reach a campaign.
+         *
+         * Best-effort and per row: a promotion that fails must not abort a
+         * sweep that has already spent credits on the rest of the batch, and
+         * the row keeps its found address either way, so the next run retries
+         * the promotion without paying again.
+         */
+        try {
+          const outcome = await promoteVerifiedProspect(workspaceId, p.id);
+          if (outcome.promoted && !outcome.alreadyLinked) result.promoted++;
+        } catch (e) {
+          console.error(`[EnrichmentSweep] promotion failed for prospect ${p.id}:`, (e as Error).message);
+        }
+      }
     } catch (e) {
       // Count the attempt anyway: a prospect that reliably throws must not be
       // retried forever inside the same run.

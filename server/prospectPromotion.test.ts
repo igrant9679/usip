@@ -242,3 +242,104 @@ describe("the promotion is wired the way it claims", () => {
      */
   });
 });
+
+/**
+ * ...and the pipeline it sits in: import → clean → promote → enrol.
+ *
+ * Each seam here was a place the chain used to break. Import wrote `contacts`,
+ * which the sweeper never reads; the sweeper found addresses nothing acted on;
+ * segment rules only ever saw `contacts`. The parts existed and did not touch.
+ */
+describe("import → clean → promote → enrol is actually connected", () => {
+  const imports = strip(read("server/routers/imports.ts"));
+  const sweeper = strip(read("server/services/enrichmentSweeper.ts"));
+  const ui = read("client/src/pages/usip/ImportContacts.tsx");
+
+  it("import can target the prospects backlog", () => {
+    expect(imports).toMatch(/const DESTINATION = z\.enum\(\["contacts", "prospects"\]\)\.default\("contacts"\)/);
+    expect(imports).toMatch(/\.insert\(prospects\)/);
+  });
+
+  it("defaults to contacts, so an existing importer is unchanged", () => {
+    // A destination that defaulted to `prospects` would silently reroute every
+    // caller's import into a backlog they never asked for.
+    expect(imports).toMatch(/z\.enum\(\["contacts", "prospects"\]\)\.default\("contacts"\)/);
+  });
+
+  it("the PREVIEW dedupes against the same table the import writes", () => {
+    /**
+     * Both procedures call one helper. This file's own header records what
+     * happened last time they diverged: the preview reported rows as
+     * duplicates that the import then created.
+     */
+    expect((imports.match(/existingRowsForDestination\(db, wsId, input\.destination\)/g) ?? []).length).toBe(2);
+    // Both procedures ACCEPT it too — one that didn't would silently dedupe
+    // against contacts while the other wrote prospects. Counted rather than
+    // matched within a window: the two inputs are ~200 lines apart, and a
+    // proximity regex would have been asserting layout, not wiring.
+    expect((imports.match(/^\s+destination: DESTINATION,$/gm) ?? []).length).toBe(2);
+  });
+
+  it("imported prospects are left LOOKING UNWORKED, or the sweeper skips them", () => {
+    /**
+     * `enrichmentData IS NULL` is the sweeper's "not attempted" marker. Writing
+     * anything into it at import time would make every row look already-worked
+     * and none of them would ever be cleaned — the whole point of the import.
+     */
+    const builder = imports.slice(imports.indexOf("const buildProspectValues"));
+    expect(builder.length).toBeGreaterThan(200);
+    expect(builder.slice(0, 900)).not.toMatch(/enrichmentData/);
+  });
+
+  it("the audit row records what it created, contact OR prospect", () => {
+    /**
+     * BOTH insert paths — the chunked batch and the per-row fallback that
+     * takes over when a chunk fails. Asserted as a count: a file-level match
+     * is satisfied by either one alone, so deleting the pair from the chunk
+     * path left this green while every batched import mislabelled its rows.
+     */
+    expect((imports.match(/contactId: toProspects \? null : /g) ?? []).length, "chunk + per-row fallback").toBe(2);
+    expect((imports.match(/prospectId: toProspects \? /g) ?? []).length).toBe(2);
+  });
+
+  it("the sweeper promotes a prospect once its address verifies", () => {
+    // The seam that did not exist: a found address that nothing acted on.
+    expect(sweeper).toMatch(/import \{ promoteVerifiedProspect \} from "\.\/prospectPromotion"/);
+    expect(sweeper).toMatch(/await promoteVerifiedProspect\(workspaceId, p\.id\)/);
+  });
+
+  it("promotion only runs when an address was actually found", () => {
+    const loop = sweeper.slice(sweeper.indexOf("for (const p of rows) {"));
+    const found = loop.indexOf("if (r.email) {");
+    const promote = loop.indexOf("promoteVerifiedProspect(");
+    expect(found, "the found-email branch is gone").toBeGreaterThan(0);
+    expect(promote).toBeGreaterThan(found);
+  });
+
+  it("a failed promotion cannot abort a sweep that already spent credits", () => {
+    /**
+     * Matched on the promotion's OWN handler, by its message.
+     *
+     * The first version sliced 400 characters from the promotion call and
+     * looked for `catch (e)` — which found the sweep loop's outer catch a
+     * little further down, so deleting the promotion's handler entirely left
+     * it green. A window wide enough to contain a sibling of the thing you are
+     * looking for is not a check; this is the second time that exact shape has
+     * slipped a mutation through in this session.
+     */
+    const loop = sweeper.slice(sweeper.indexOf("for (const p of rows) {"));
+    expect(loop).toMatch(/catch \(e\) \{[\s\S]{0,120}?promotion failed for prospect/);
+  });
+
+  it("counts only NEW promotions, not re-promotions of an already-linked row", () => {
+    // promoteVerifiedProspect is idempotent and reports alreadyLinked; counting
+    // those would inflate the run summary on every subsequent sweep.
+    expect(sweeper).toMatch(/if \(outcome\.promoted && !outcome\.alreadyLinked\) result\.promoted\+\+/);
+  });
+
+  it("the destination is reachable from the UI and sent on BOTH calls", () => {
+    // A control the page never sends is the dead wiring this repo keeps finding.
+    expect(ui).toMatch(/setDestination/);
+    expect((ui.match(/^\s+destination,$/gm) ?? []).length, "validate + commit").toBe(2);
+  });
+});

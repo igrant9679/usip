@@ -2315,6 +2315,9 @@ export const contactImportRows = mysqlTable(
       .notNull(),
     errorReason: text("errorReason"),
     contactId: int("contactId"), // set after successful import
+    /** Set INSTEAD of contactId when the import targeted the prospects backlog
+     *  (migration 0144). Exactly one of the two is populated per row. */
+    prospectId: int("prospectId"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
   (t) => ({

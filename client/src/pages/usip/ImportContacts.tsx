@@ -122,6 +122,12 @@ export default function ImportContacts() {
    * company narrows it but cannot eliminate it, so this stays the user's call.
    */
   const [matchOnNameCompany, setMatchOnNameCompany] = useState(false);
+  /**
+   * Where the rows land. `contacts` is the CRM proper; `prospects` is the
+   * backlog the enrichment sweeper actually reads — the sweeper never looks at
+   * contacts, so an old list imported straight into the CRM is never cleaned.
+   */
+  const [destination, setDestination] = useState<"contacts" | "prospects">("contacts");
   /** Rows with no email — email dedup is structurally blind to these. */
   const [noEmailCount, setNoEmailCount] = useState(0);
   const [unmatchableCount, setUnmatchableCount] = useState(0);
@@ -200,6 +206,7 @@ export default function ImportContacts() {
         filename,
         fieldMapping,
         matchOnNameCompany: override?.matchOnNameCompany ?? matchOnNameCompany,
+        destination,
         // Both dedupe settings must reach the preview, or its counts describe a
         // different import than the one the button performs.
         skipDuplicates: override?.skipDuplicates ?? skipDuplicates,
@@ -227,6 +234,7 @@ export default function ImportContacts() {
         // Must mirror what the preview was computed with, or the summary would
         // promise one thing and the import do another.
         matchOnNameCompany,
+        destination,
         postImportActions: { tag: tag || undefined },
       } as any);
       setImportResult(result);
@@ -401,6 +409,30 @@ export default function ImportContacts() {
               <p className="text-xs text-muted-foreground">
                 <span className="text-destructive">*</span> Required fields: First Name, Last Name
               </p>
+
+              {/* Chosen BEFORE validation, because the preview dedupes against
+                  whichever table the rows will land in. */}
+              <div className="rounded-lg border p-3 space-y-2">
+                <p className="text-sm font-medium">Import into</p>
+                <Select value={destination} onValueChange={(v) => setDestination(v as "contacts" | "prospects")}>
+                  <SelectTrigger className="w-full sm:w-80"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="contacts">CRM Contacts — ready to use</SelectItem>
+                    <SelectItem value="prospects">Prospects — clean them first</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  {destination === "contacts"
+                    ? "Rows become contacts immediately. Nothing verifies their email addresses."
+                    : "Rows join the prospect backlog. The enrichment sweeper finds and verifies an address for each one, and only those that come back verified are promoted to contacts — where your segment rules can enrol them."}
+                </p>
+                {destination === "prospects" && (
+                  <p className="text-xs text-muted-foreground">
+                    Cleaning runs on a daily cap (Settings → Prospects), so a large list is worked through over
+                    several days rather than all at once.
+                  </p>
+                )}
+              </div>
 
               <div className="flex justify-between">
                 <Button variant="outline" onClick={() => setStep(1)} className="gap-2">
