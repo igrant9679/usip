@@ -22,6 +22,15 @@
  */
 
 /**
+ * ⚠️ `campaigns` AND `are_campaigns` ARE DIFFERENT TABLES, and only the first
+ * was here. `are_campaigns` is the AUTONOMOUS engine — the one that sources
+ * strangers, writes to them and promotes the ones who reply — and its
+ * `ownerUserId` is stamped onto every account, contact and opportunity it
+ * creates. Two columns with the same name on two tables with almost the same
+ * name is precisely the shape that gets half-covered.
+ */
+
+/**
  * ⚠️ A SEQUENCE HAS TWO OWNERS, not one. `ownerUserId` is who created or forked
  * it; `assignedToUserId` is the rep a manager handed it to, and either can name
  * somebody who has left independently of the other. Both are PERMISSION
@@ -89,6 +98,7 @@ export const OWNABLE_TABLES: readonly OwnableTable[] = [
   { key: "accounts", table: "accounts", column: "ownerUserId", scope: "all", singular: "account", plural: "accounts" },
   { key: "contacts", table: "contacts", column: "ownerUserId", scope: "all", singular: "contact", plural: "contacts" },
   { key: "campaigns", table: "campaigns", column: "ownerUserId", scope: "all", singular: "campaign", plural: "campaigns" },
+  { key: "areCampaigns", table: "are_campaigns", column: "ownerUserId", scope: "all", singular: "autonomous campaign", plural: "autonomous campaigns" },
   { key: "sequences", table: "sequences", column: "ownerUserId", scope: "all", singular: "sequence", plural: "sequences" },
   { key: "assignedSequences", table: "sequences", column: "assignedToUserId", scope: "all", singular: "assigned sequence", plural: "assigned sequences" },
   { key: "meetings", table: "meetings", column: "ownerUserId", scope: "future_meetings", singular: "upcoming meeting", plural: "upcoming meetings" },

@@ -67,9 +67,23 @@ describe("the ownable-work list", () => {
     expect(keys).toContain("campaigns");
     expect(keys).toContain("meetings");
     expect(keys).toEqual([
-      "leads", "opportunities", "accounts", "contacts", "campaigns",
+      "leads", "opportunities", "accounts", "contacts", "campaigns", "areCampaigns",
       "sequences", "assignedSequences", "meetings", "tasks",
     ]);
+  });
+
+  it("covers BOTH campaign tables, which are different things", () => {
+    /**
+     * `campaigns` and `are_campaigns` are separate tables whose owner columns
+     * share a name, and only the first was here. `are_campaigns` is the
+     * autonomous engine — the one that sources strangers, mails them and
+     * promotes the ones who reply — so its owner is the more consequential of
+     * the two. Two near-identical names is exactly the shape that gets
+     * half-covered.
+     */
+    const tables = OWNABLE_TABLES.map((t) => t.table);
+    expect(tables).toContain("campaigns");
+    expect(tables).toContain("are_campaigns");
   });
 
   it("a sequence's TWO owner columns are both covered", () => {
@@ -98,7 +112,8 @@ describe("the ownable-work list", () => {
     expect(byScope("live_tasks")).toEqual(["tasks"]);
     expect(byScope("future_meetings")).toEqual(["meetings"]);
     expect(byScope("all")).toEqual([
-      "leads", "opportunities", "accounts", "contacts", "campaigns", "sequences", "assignedSequences",
+      "leads", "opportunities", "accounts", "contacts", "campaigns", "areCampaigns",
+      "sequences", "assignedSequences",
     ]);
   });
 
@@ -188,8 +203,8 @@ describe("counting and describing owned work", () => {
       expect(phrase, `the confirm dialogs would not mention ${t.key}`).toContain(t.plural);
     }
     expect(phrase).toBe(
-      "leads, opportunities, accounts, contacts, campaigns, sequences, " +
-      "assigned sequences, upcoming meetings and unfinished tasks",
+      "leads, opportunities, accounts, contacts, campaigns, autonomous campaigns, " +
+      "sequences, assigned sequences, upcoming meetings and unfinished tasks",
     );
   });
 });

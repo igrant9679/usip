@@ -43,6 +43,7 @@ import { findOrCreateAccount } from "../../services/crmMatching";
 import { invokeLLM } from "../../_core/llm";
 import { router } from "../../_core/trpc";
 import { workspaceProcedure } from "../../_core/workspace";
+import { activeOwnerOrNull, workspaceNotifyUserId } from "../../_core/activeMembers";
 import { notifyOwner } from "../../_core/notification";
 import { areNotify } from "./notify";
 import { runSignalEnhancement } from "./signalEnhancement";
@@ -128,7 +129,32 @@ export async function promoteProspectToCrm(
     .where(eq(areCampaigns.id, campaignId)).limit(1);
   if (!campaign) return null;
 
-  const owner = campaign.ownerUserId ?? undefined;
+  /**
+   * 🔴 THIS ID IS STAMPED ON BRAND-NEW RECORDS, not inherited by old ones.
+   *
+   * `promoteProspectToCrm` runs on a POSITIVE SIGNAL — a prospect replied
+   * interestedly, or booked a meeting — and creates an account, a contact and
+   * (when the campaign says so) an opportunity, all owned by whoever owns the
+   * ARE campaign. Read raw, an autonomous campaign whose owner had left kept
+   * minting fresh CRM records owned by a user who no longer exists, at the
+   * exact moment a stranger turned into a deal. `95eca9c` reassigns the
+   * accounts and contacts that ALREADY exist when somebody is offboarded; this
+   * path would have gone on creating new ones forever afterwards.
+   *
+   * ⚖️ FALLS BACK RATHER THAN GOING UNOWNED, which is the opposite of what the
+   * public forms and landing pages do — and the difference is deliberate.
+   * Those take anonymous, high-volume traffic where an unowned lead sitting in
+   * a shared list is genuinely better than a wrong owner. This fires rarely and
+   * on the strongest buying signal the product has, so a record nobody owns is
+   * a deal nobody follows up. The fallback is `workspaceNotifyUserId` — not an
+   * invented rule, but the SAME recipient `areNotify` already sends this very
+   * event's notification to, so the record lands with the person already being
+   * told about it.
+   */
+  const owner =
+    (await activeOwnerOrNull(workspaceId, campaign.ownerUserId)) ??
+    (await workspaceNotifyUserId(workspaceId)) ??
+    undefined;
   const companyName = prospect.companyName ?? "Unknown Company";
 
   /**
