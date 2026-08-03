@@ -111,7 +111,7 @@ async function countOwnedWork(
   for (const o of OWNABLE_TABLES) {
     const [rows] = (await db.execute(
       sql`SELECT COUNT(*) AS n FROM ${sql.raw(`\`${safeTable(o.table)}\``)}
-          WHERE workspaceId = ${workspaceId} AND ownerUserId = ${userId}
+          WHERE workspaceId = ${workspaceId} AND ${sql.raw(`\`${safeColumn(o.column)}\``)} = ${userId}
           ${scopeCondition(o.scope, now)}`,
     )) as any;
     out[o.key] = Number(rows?.[0]?.n ?? 0);
@@ -130,9 +130,9 @@ async function reassignOwnedWork(
   const now = new Date();
   for (const o of OWNABLE_TABLES) {
     const [res] = (await db.execute(
-      sql`UPDATE ${sql.raw(`\`${safeTable(o.table)}\``)} SET ownerUserId = ${toUserId}
-          ${RESET_ON_REASSIGN[o.table] ?? sql``}
-          WHERE workspaceId = ${workspaceId} AND ownerUserId = ${fromUserId}
+      sql`UPDATE ${sql.raw(`\`${safeTable(o.table)}\``)} SET ${sql.raw(`\`${safeColumn(o.column)}\``)} = ${toUserId}
+          ${RESET_ON_REASSIGN[o.key] ?? sql``}
+          WHERE workspaceId = ${workspaceId} AND ${sql.raw(`\`${safeColumn(o.column)}\``)} = ${fromUserId}
           ${scopeCondition(o.scope, now)}`,
     )) as any;
     out[o.key] = Number(res?.affectedRows ?? 0);
@@ -140,10 +140,21 @@ async function reassignOwnedWork(
   return out;
 }
 
-/** Defence in depth for the one identifier that cannot be a bound parameter. */
+/**
+ * Defence in depth for the identifiers that cannot be bound parameters.
+ *
+ * Both come from the frozen OWNABLE_TABLES array and can never be caller
+ * input, which is why this is defence in depth rather than the defence — the
+ * same belt-and-braces as dangerZone.tableStatus.
+ */
 function safeTable(t: string): string {
   if (!/^[a-z_]+$/.test(t)) throw new Error(`refusing to interpolate table name: ${t}`);
   return t;
+}
+
+function safeColumn(c: string): string {
+  if (!/^[a-zA-Z][a-zA-Z0-9_]*$/.test(c)) throw new Error(`refusing to interpolate column name: ${c}`);
+  return c;
 }
 
 /**
@@ -169,7 +180,10 @@ function scopeCondition(scope: OwnableScope, now: Date) {
 }
 
 /**
- * Columns reset when a row changes hands, keyed by table.
+ * Columns reset when a row changes hands, keyed by OWNABLE_TABLES entry key.
+ *
+ * Keyed by `key`, not `table`: `sequences` appears twice (once per owner
+ * column), and a reset keyed on the table name would fire for both passes.
  *
  * Only meetings need this, and the reason is the one recorded in
  * @shared/ownedWork: the provider calendar event and the attendee's invite both

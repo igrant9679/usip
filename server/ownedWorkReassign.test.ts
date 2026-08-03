@@ -66,7 +66,24 @@ describe("the ownable-work list", () => {
     expect(keys).toContain("contacts");
     expect(keys).toContain("campaigns");
     expect(keys).toContain("meetings");
-    expect(keys).toEqual(["leads", "opportunities", "accounts", "contacts", "campaigns", "meetings", "tasks"]);
+    expect(keys).toEqual([
+      "leads", "opportunities", "accounts", "contacts", "campaigns",
+      "sequences", "assignedSequences", "meetings", "tasks",
+    ]);
+  });
+
+  it("a sequence's TWO owner columns are both covered", () => {
+    /**
+     * `ownerUserId` is who created or forked it; `assignedToUserId` is the rep
+     * a manager handed it to. They move independently, so one entry each — and
+     * `sequences.fork` makes every fork `private` and owned by the forking rep,
+     * which is why this is the common shape of a rep's work rather than an edge
+     * case. Covering only `ownerUserId` would leave every hand-assigned
+     * sequence pointing at the leaver.
+     */
+    const seq = OWNABLE_TABLES.filter((t) => t.table === "sequences");
+    expect(seq.map((t) => t.column).sort()).toEqual(["assignedToUserId", "ownerUserId"]);
+    expect(seq.every((t) => t.scope === "all")).toBe(true);
   });
 
   it("scopes exactly the two tables where the PAST must not be rewritten", () => {
@@ -80,18 +97,29 @@ describe("the ownable-work list", () => {
     const byScope = (s: string) => OWNABLE_TABLES.filter((t) => t.scope === s).map((t) => t.key);
     expect(byScope("live_tasks")).toEqual(["tasks"]);
     expect(byScope("future_meetings")).toEqual(["meetings"]);
-    expect(byScope("all")).toEqual(["leads", "opportunities", "accounts", "contacts", "campaigns"]);
+    expect(byScope("all")).toEqual([
+      "leads", "opportunities", "accounts", "contacts", "campaigns", "sequences", "assignedSequences",
+    ]);
   });
 
-  it("every table name is a bare identifier", () => {
-    // These are interpolated into SQL with sql.raw — they can never be anything
+  it("every table AND column name is a bare identifier", () => {
+    // Both are interpolated into SQL with sql.raw — they can never be anything
     // a caller supplies, and the shape is asserted on both sides.
-    for (const t of OWNABLE_TABLES) expect(t.table).toMatch(/^[a-z_]+$/);
+    for (const t of OWNABLE_TABLES) {
+      expect(t.table).toMatch(/^[a-z_]+$/);
+      expect(t.column).toMatch(/^[a-zA-Z][a-zA-Z0-9_]*$/);
+    }
   });
 
-  it("keys and table names line up, and nothing is duplicated", () => {
+  it("keys are unique, and so is every (table, column) pair", () => {
+    /**
+     * The table alone is NO LONGER unique — `sequences` appears twice, once per
+     * owner column. What must not repeat is the pair, because two entries
+     * hitting the same column would run the same UPDATE twice and double-count
+     * it, and `key` because it indexes the counts object the API returns.
+     */
     expect(new Set(OWNABLE_TABLES.map((t) => t.key)).size).toBe(OWNABLE_TABLES.length);
-    expect(new Set(OWNABLE_TABLES.map((t) => t.table)).size).toBe(OWNABLE_TABLES.length);
+    expect(new Set(OWNABLE_TABLES.map((t) => `${t.table}.${t.column}`)).size).toBe(OWNABLE_TABLES.length);
   });
 });
 
@@ -159,7 +187,10 @@ describe("counting and describing owned work", () => {
     for (const t of OWNABLE_TABLES) {
       expect(phrase, `the confirm dialogs would not mention ${t.key}`).toContain(t.plural);
     }
-    expect(phrase).toBe("leads, opportunities, accounts, contacts, campaigns, upcoming meetings and unfinished tasks");
+    expect(phrase).toBe(
+      "leads, opportunities, accounts, contacts, campaigns, sequences, " +
+      "assigned sequences, upcoming meetings and unfinished tasks",
+    );
   });
 });
 
@@ -221,6 +252,45 @@ describe("the delete guard counts the same set it reassigns", () => {
   });
 });
 
+describe("the COUNT reads the same column it will move", () => {
+  /**
+   * 🔴 ADDED AFTER A MUTATION PASSED. Everything below pins the UPDATE's
+   * column; nothing pinned the COUNT's, so hardcoding it back to `ownerUserId`
+   * went unnoticed — and that is the disarmed-guard bug one level down. A rep
+   * who OWNS nothing but has sequences ASSIGNED to them would count as owning
+   * zero, the delete refusal would not fire, and the assignments would be left
+   * pointing at a member who no longer exists.
+   */
+  const countFn = windowBetween(admin, "async function countOwnedWork(", "async function reassignOwnedWork(");
+
+  it("matches on the entry's own column", () => {
+    expect(countFn).toMatch(/AND \$\{sql\.raw\(`\\`\$\{safeColumn\(o\.column\)\}\\``\)\} = \$\{userId\}/);
+    expect(countFn).not.toMatch(/AND ownerUserId = /);
+  });
+
+  it("applies the entry's own scope and workspace", () => {
+    expect(countFn).toMatch(/WHERE workspaceId = \$\{workspaceId\}/);
+    expect(countFn).toMatch(/\$\{scopeCondition\(o\.scope, now\)\}/);
+  });
+});
+
+describe("the identifier validators are real", () => {
+  /**
+   * `safeTable` / `safeColumn` are defence in depth — both values come from a
+   * frozen array — but a check nothing verifies is a check that rots. Pinned as
+   * STATEMENTS: `if (false) throw` left the function present and the guard gone.
+   */
+  const fns = windowBetween(admin, "function safeTable(", "function scopeCondition(", 200);
+
+  it("safeTable refuses anything that is not a bare table name", () => {
+    expect(fns).toMatch(/if \(!\/\^\[a-z_\]\+\$\/\.test\(t\)\) throw new Error\(/);
+  });
+
+  it("safeColumn refuses anything that is not a bare column name", () => {
+    expect(fns).toMatch(/if \(!\/\^\[a-zA-Z\]\[a-zA-Z0-9_\]\*\$\/\.test\(c\)\) throw new Error\(/);
+  });
+});
+
 describe("the helper itself", () => {
   const fn = windowBetween(admin, "async function reassignOwnedWork(", "function safeTable(");
 
@@ -232,7 +302,19 @@ describe("the helper itself", () => {
   it("scopes every statement to the workspace AND the outgoing owner", () => {
     // Dropping workspaceId would reassign that user's rows in EVERY workspace
     // they belong to — the streamRouteAuth finding, applied to a bulk UPDATE.
-    expect(fn).toMatch(/WHERE workspaceId = \$\{workspaceId\} AND ownerUserId = \$\{fromUserId\}/);
+    expect(fn).toMatch(/WHERE workspaceId = \$\{workspaceId\} AND \$\{sql\.raw\(`\\`\$\{safeColumn\(o\.column\)\}\\``\)\} = \$\{fromUserId\}/);
+  });
+
+  it("matches and sets the SAME column", () => {
+    /**
+     * The pair that has to agree. Setting `ownerUserId` while matching on
+     * `assignedToUserId` would hand the wrong rows to the new member and leave
+     * the assignment untouched — and with two entries per table it is now a
+     * mistake the shape of the code invites.
+     */
+    const sets = [...fn.matchAll(/SET \$\{sql\.raw\(`\\`\$\{safeColumn\(o\.column\)\}\\``\)\} = \$\{toUserId\}/g)];
+    expect(sets.length, "the SET no longer uses the entry's own column").toBe(1);
+    expect(fn).not.toMatch(/SET ownerUserId =/);
   });
 
   it("applies each table's own scope, from the shared list", () => {
@@ -271,18 +353,22 @@ describe("the helper itself", () => {
      * to the person leaving. A row that kept `inviteSent = 1` would be telling
      * the new host the meeting is on their calendar when it is not.
      */
-    expect(fn).toMatch(/\$\{RESET_ON_REASSIGN\[o\.table\] \?\? sql``\}/);
+    expect(fn).toMatch(/\$\{RESET_ON_REASSIGN\[o\.key\] \?\? sql``\}/);
     const reset = windowBetween(admin, "const RESET_ON_REASSIGN", "};", 60);
     expect(reset).toMatch(/meetings: sql`, calendarEventId = NULL, calendarAccountId = NULL, inviteSent = 0`/);
   });
 
-  it("every reset key is a table that is actually reassigned", () => {
-    // A reset for a table not in the list is dead code that reads as coverage.
+  it("every reset key is an ENTRY that is actually reassigned", () => {
+    /**
+     * Keyed by `key`, not `table`. `sequences` appears twice, so a reset keyed
+     * on the table name would fire on both passes — and a reset for something
+     * not in the list at all is dead code that reads as coverage.
+     */
     const reset = windowBetween(admin, "const RESET_ON_REASSIGN", "};", 60);
     const keys = [...reset.matchAll(/^\s*(\w+):\s*sql`/gm)].map((m) => m[1]!);
     expect(keys.length).toBeGreaterThan(0);
     for (const k of keys) {
-      expect(OWNABLE_TABLES.map((t) => t.table), `${k} is reset but never reassigned`).toContain(k);
+      expect(OWNABLE_TABLES.map((t) => t.key), `${k} is reset but never reassigned`).toContain(k);
     }
   });
 

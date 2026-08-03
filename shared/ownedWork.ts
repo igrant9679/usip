@@ -22,6 +22,23 @@
  */
 
 /**
+ * ⚠️ A SEQUENCE HAS TWO OWNERS, not one. `ownerUserId` is who created or forked
+ * it; `assignedToUserId` is the rep a manager handed it to, and either can name
+ * somebody who has left independently of the other. Both are PERMISSION
+ * columns rather than actors — nothing on the send path reads them — so the
+ * damage is bounded and worth stating precisely: a `private` sequence whose
+ * owner has gone is invisible to every REP (managers and above see all rows
+ * unfiltered), it cannot be edited by a rep because the edit gates compare
+ * against `ownerUserId`, and the assignment renders in the UI as the literal
+ * string "User 47". Meanwhile the sequence keeps sending, because sends are
+ * driven by campaigns and enrolments, not by either column.
+ *
+ * Not dramatic, and it is listed here anyway because `sequences.fork` creates
+ * every fork as `visibility: "private"` owned by the forking rep — so this is
+ * the common shape of a rep's work, not an edge case.
+ */
+
+/**
  * ⚠️ A MEETING IS NOT LIKE THE OTHERS, and the difference is recorded here
  * because it constrains what reassignment can honestly claim. A lead has no
  * existence outside this database; a meeting has a provider calendar event on
@@ -50,23 +67,32 @@ export type OwnableScope =
   | "future_meetings";
 
 export interface OwnableTable {
-  /** Key in the counts object the API returns. */
+  /** Key in the counts object the API returns. Unique across this list. */
   key: string;
   /** Physical table name. */
   table: string;
+  /**
+   * The column holding the member's id. Almost always `ownerUserId`, but
+   * `sequences` carries TWO independent ones — it can be owned by one rep and
+   * assigned to another — so a table may appear more than once here, with a
+   * different column each time. `key` is what stays unique.
+   */
+  column: string;
   scope: OwnableScope;
   singular: string;
   plural: string;
 }
 
 export const OWNABLE_TABLES: readonly OwnableTable[] = [
-  { key: "leads", table: "leads", scope: "all", singular: "lead", plural: "leads" },
-  { key: "opportunities", table: "opportunities", scope: "all", singular: "opportunity", plural: "opportunities" },
-  { key: "accounts", table: "accounts", scope: "all", singular: "account", plural: "accounts" },
-  { key: "contacts", table: "contacts", scope: "all", singular: "contact", plural: "contacts" },
-  { key: "campaigns", table: "campaigns", scope: "all", singular: "campaign", plural: "campaigns" },
-  { key: "meetings", table: "meetings", scope: "future_meetings", singular: "upcoming meeting", plural: "upcoming meetings" },
-  { key: "tasks", table: "tasks", scope: "live_tasks", singular: "unfinished task", plural: "unfinished tasks" },
+  { key: "leads", table: "leads", column: "ownerUserId", scope: "all", singular: "lead", plural: "leads" },
+  { key: "opportunities", table: "opportunities", column: "ownerUserId", scope: "all", singular: "opportunity", plural: "opportunities" },
+  { key: "accounts", table: "accounts", column: "ownerUserId", scope: "all", singular: "account", plural: "accounts" },
+  { key: "contacts", table: "contacts", column: "ownerUserId", scope: "all", singular: "contact", plural: "contacts" },
+  { key: "campaigns", table: "campaigns", column: "ownerUserId", scope: "all", singular: "campaign", plural: "campaigns" },
+  { key: "sequences", table: "sequences", column: "ownerUserId", scope: "all", singular: "sequence", plural: "sequences" },
+  { key: "assignedSequences", table: "sequences", column: "assignedToUserId", scope: "all", singular: "assigned sequence", plural: "assigned sequences" },
+  { key: "meetings", table: "meetings", column: "ownerUserId", scope: "future_meetings", singular: "upcoming meeting", plural: "upcoming meetings" },
+  { key: "tasks", table: "tasks", column: "ownerUserId", scope: "live_tasks", singular: "unfinished task", plural: "unfinished tasks" },
 ] as const;
 
 export type OwnedWork = Record<string, number>;
