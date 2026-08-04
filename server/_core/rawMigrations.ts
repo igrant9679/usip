@@ -3086,6 +3086,36 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0145: landing-page submissions are stored, not just counted ───────────
+  // `landingPages.submit` created a lead, routed it, enrolled it and bumped
+  // `submitCount` — and kept the submitted data nowhere. Three ordinary paths
+  // lost it outright: `autoCreateLead` switched off, a submission with neither
+  // email nor first name, and a lead insert that throws (caught and continued,
+  // by design). The counter ticks in all three, so the page reports a
+  // submission whose contents no longer exist.
+  //
+  // Same columns as `form_submissions` on purpose. The two capture surfaces are
+  // one product idea and had already drifted apart once by being written twice.
+  {
+    name: "0145_landing_page_submissions.sql",
+    statements: [
+      "CREATE TABLE IF NOT EXISTS `landing_page_submissions` (" +
+        "`id` int NOT NULL AUTO_INCREMENT, " +
+        "`workspaceId` int NOT NULL, " +
+        "`pageId` int NOT NULL, " +
+        "`data` json NULL, " +
+        "`name` varchar(200) NULL, " +
+        "`email` varchar(320) NULL, " +
+        "`company` varchar(200) NULL, " +
+        "`leadId` int NULL, " +
+        "`routedToUserId` int NULL, " +
+        "`createdAt` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP, " +
+        "PRIMARY KEY (`id`)" +
+        ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+      "CREATE INDEX `ix_lpsub_page` ON `landing_page_submissions` (`workspaceId`, `pageId`)",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

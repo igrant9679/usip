@@ -16,7 +16,7 @@ import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { activeOwnerOrNull, workspaceNotifyUserId } from "../_core/activeMembers";
 import { notifyLeadRouted } from "../services/policyNotify";
 import { getDb } from "../db";
-import { landingPages, leads, enrollments } from "../../drizzle/schema";
+import { landingPages, landingPageSubmissions, leads, enrollments } from "../../drizzle/schema";
 import { resolveBookingUrl } from "../mergeVars";
 import { hostedPageChatSlug } from "../services/hostedChat";
 import { slugify } from "@shared/slugify";
@@ -137,17 +137,37 @@ export const landingPagesRouter = router({
     return { ok: true as const };
   }),
 
-  /** Submissions list for a page (Admin). */
+  /**
+   * Submissions list for a page (Admin).
+   *
+   * 🔴 THIS USED TO DERIVE THE LIST FROM `leads`, matching
+   * `source = "landing:<slug>"`. That could only ever show submissions that
+   * BECAME leads — so it was structurally blind to the three cases where a
+   * submit produced no lead (`autoCreateLead` off, no email or first name, or
+   * the lead insert throwing). Those are precisely the submissions worth
+   * looking at, and the page's own counter had already counted them, so the
+   * list and the number disagreed by exactly the ones that were lost.
+   *
+   * It now reads the real `landing_page_submissions` row (migration 0145).
+   *
+   * ⚠️ NOT BACKFILLED. Rows exist from that migration onward only. Earlier
+   * captures still exist as leads — the client says so when a page's counter is
+   * ahead of its stored submissions, rather than showing an empty list that
+   * reads as "nothing ever happened".
+   *
+   * Scoped to the caller's workspace as well as the page id: `id` is caller
+   * input, and without the workspace predicate any admin could read another
+   * tenant's captured leads by guessing an integer.
+   */
   submissions: adminWsProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) return [];
-    // Leads captured from this page's slug (source = "landing:<slug>").
-    const [page] = await db.select({ slug: landingPages.slug }).from(landingPages)
-      .where(and(eq(landingPages.id, input.id), eq(landingPages.workspaceId, ctx.workspace.id)));
-    if (!page) return [];
-    return db.select().from(leads)
-      .where(and(eq(leads.workspaceId, ctx.workspace.id), eq(leads.source, `landing:${page.slug}`)))
-      .orderBy(desc(leads.createdAt)).limit(200);
+    return db.select().from(landingPageSubmissions)
+      .where(and(
+        eq(landingPageSubmissions.workspaceId, ctx.workspace.id),
+        eq(landingPageSubmissions.pageId, input.id),
+      ))
+      .orderBy(desc(landingPageSubmissions.createdAt)).limit(200);
   }),
 
   /* ──────────────────────────── Public surface ────────────────────────── */
@@ -228,6 +248,14 @@ export const landingPagesRouter = router({
       const company = str(data.company, 200);
       const phone = str(data.phone, 40);
 
+      /**
+       * Hoisted out of the `autoCreateLead` branch so the submission row below
+       * can record them. They stay null when no lead was attempted, which is
+       * exactly what the row should say.
+       */
+      let leadId: number | null = null;
+      let routedToUserId: number | null = null;
+
       if (page.autoCreateLead && (email || firstName)) {
         // Same as forms.submit: a page outlives its author's employment.
         let ownerUserId: number | null = await activeOwnerOrNull(page.workspaceId, page.createdByUserId);
@@ -240,7 +268,7 @@ export const landingPagesRouter = router({
             if (routed) ownerUserId = routed;
           } catch (e) { console.error("[landingPages.submit] routing failed:", e); }
         }
-        let leadId: number | null = null;
+        routedToUserId = ownerUserId;
         try {
           const r = await db.insert(leads).values({
             workspaceId: page.workspaceId,
@@ -296,6 +324,36 @@ export const landingPagesRouter = router({
        *
        * Same shape as the bookingLinks.bookingCount fix (72aa576).
        */
+      /**
+       * 🔴 OUTSIDE THE `autoCreateLead` BRANCH, and that placement is the fix.
+       *
+       * Three ordinary paths reach here having created no lead: the page has
+       * lead creation switched off, the submission carried neither an email nor
+       * a first name, or the lead insert threw and was caught above. Before
+       * this row existed, all three incremented the counter and stored the
+       * submitted data NOWHERE — the page reported a submission whose contents
+       * no longer existed anywhere in the product.
+       *
+       * `leadId`/`routedToUserId` are null in exactly those cases, which is the
+       * useful signal rather than a gap: it distinguishes "nobody was told"
+       * from "routed to Sam".
+       *
+       * Best-effort like its counterpart in forms.submit — a capture surface
+       * must never fail the visitor's submit because bookkeeping failed.
+       */
+      try {
+        await db.insert(landingPageSubmissions).values({
+          workspaceId: page.workspaceId,
+          pageId: page.id,
+          data,
+          name: [firstName, lastName].filter(Boolean).join(" ") || rawName || null,
+          email,
+          company,
+          leadId,
+          routedToUserId,
+        } as never);
+      } catch (e) { console.error("[landingPages.submit] submission insert failed:", e); }
+
       try {
         await db.update(landingPages).set({ submitCount: sql`${landingPages.submitCount} + 1` } as never)
           .where(eq(landingPages.id, page.id));

@@ -593,6 +593,41 @@ export const formSubmissions = mysqlTable(
 );
 export type FormSubmission = typeof formSubmissions.$inferSelect;
 
+/**
+ * A landing page's submissions — the sibling of `form_submissions`.
+ *
+ * 🔴 WHAT THIS FIXES. `landingPages.submit` created a lead, routed it, enrolled
+ * it and incremented a counter — and stored the submitted DATA nowhere. Three
+ * ordinary paths therefore lost it outright: `autoCreateLead` switched off, a
+ * submission carrying neither an email nor a first name, and a lead insert that
+ * throws (the handler catches and continues, by design). In all three the
+ * counter still ticks, so the page reports a submission whose contents no
+ * longer exist anywhere.
+ *
+ * Deliberately the same shape as `form_submissions`, including keeping the full
+ * payload in `data`: the two capture surfaces are the same product idea and had
+ * already diverged once by drifting apart quietly.
+ */
+export const landingPageSubmissions = mysqlTable(
+  "landing_page_submissions",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    pageId: int("pageId").notNull(),
+    data: json("data"),
+    name: varchar("name", { length: 200 }),
+    email: varchar("email", { length: 320 }),
+    company: varchar("company", { length: 200 }),
+    leadId: int("leadId"),                 // lead auto-created from this submission, if any
+    routedToUserId: int("routedToUserId"), // rep it was auto-routed to
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    byPage: index("ix_lpsub_page").on(t.workspaceId, t.pageId),
+  }),
+);
+export type LandingPageSubmission = typeof landingPageSubmissions.$inferSelect;
+
 export const activities = mysqlTable(
   "activities",
   {
