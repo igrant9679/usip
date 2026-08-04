@@ -25,6 +25,7 @@ import { sdk } from "./_core/sdk";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
 import { escapeHtml } from "@shared/escapeHtml";
+import { safeReturnPath } from "@shared/returnPath";
 import {
   hashResetToken,
   isResetTokenLive,
@@ -356,7 +357,7 @@ export function registerPasswordAuthRoutes(app: Express) {
       const cookieOptions = getSessionCookieOptions(req);
       res.cookie(COOKIE_NAME, sessionToken, { ...cookieOptions, maxAge: ONE_YEAR_MS });
 
-      const redirect = typeof returnPath === "string" && returnPath.startsWith("/") ? returnPath : "/";
+      const redirect = safeReturnPath(returnPath);
       const acceptsJson = (req.headers.accept ?? "").includes("application/json");
       if (acceptsJson) {
         res.json({ ok: true, redirect });
@@ -526,7 +527,7 @@ export function registerPasswordAuthRoutes(app: Express) {
       const cookieOptions = getSessionCookieOptions(req);
       res.cookie(COOKIE_NAME, sessionToken, { ...cookieOptions, maxAge: ONE_YEAR_MS });
 
-      const redirect = typeof returnPath === "string" && returnPath.startsWith("/") ? returnPath : "/";
+      const redirect = safeReturnPath(returnPath);
       const acceptsJson = (req.headers.accept ?? "").includes("application/json");
       if (acceptsJson) {
         res.json({ ok: true, redirect });

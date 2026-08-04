@@ -123,12 +123,16 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import { WorkspaceBrandingSync } from "@/components/usip/WorkspaceBrandingSync";
 import { ConfirmProvider } from "@/components/usip/Common";
+import { safeReturnPath } from "@shared/returnPath";
 
 const INVITE_RETURN_KEY = "usip_invite_return";
 
 function Landing() {
   const params = new URLSearchParams(window.location.search);
-  const returnPath = params.get("returnPath") ?? "/";
+  // Sanitised at the READ, not at the use: this value reaches
+  // `window.location.href` below as the fallback when the server sends no
+  // redirect, and `//evil.com` starts with "/". See @shared/returnPath.
+  const returnPath = safeReturnPath(params.get("returnPath"));
 
   const [mode, setMode] = useState<"signin" | "signup" | "forgot">("signin");
   /** Forgot-password confirmation. Deliberately shown for ANY address — see below. */
@@ -220,7 +224,10 @@ function Landing() {
         );
         return;
       }
-      window.location.href = data.redirect ?? returnPath;
+      // The server already sanitises `redirect`; re-checked here because this
+      // is the sink, and a sink that trusts its caller is one refactor from
+      // trusting the query string again.
+      window.location.href = safeReturnPath(data.redirect ?? returnPath);
     } catch {
       setError("Network error. Please check your connection and try again.");
     } finally {
