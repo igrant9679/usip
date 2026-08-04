@@ -48,7 +48,7 @@ import {
   type OwnedWork,
 } from "@shared/ownedWork";
 import { liveMeetingStatuses } from "@shared/meetingStatus";
-import { defaultNotifyPolicy } from "@shared/notifyPolicy";
+import { defaultMemberNotifyPrefs, defaultNotifyPolicy, pickKnownNotifyPrefs } from "@shared/notifyPolicy";
 
 /**
  * `status IN (…)` over the LIVE-work set, as bound parameters.
@@ -1010,14 +1010,17 @@ export const teamRouter = router({
     .input(
       z.object({
         notifEmail: z.string().email().nullable().optional(),
-        notifPrefs: z
-          .object({
-            sequence_reply: z.boolean().optional(),
-            social_response: z.boolean().optional(),
-            workflow_alert: z.boolean().optional(),
-            system: z.boolean().optional(),
-          })
-          .optional(),
+        /**
+         * Keyed by the FIVE notification events (@shared/notifyPolicy), which
+         * is the vocabulary the rest of the product uses. It used to be
+         * `sequence_reply / social_response / workflow_alert / system` — a set
+         * the UI never sent and nothing ever read, so every save wrote `{}`.
+         *
+         * A record rather than a fixed object so the list can grow in one
+         * place; `pickKnownNotifyPrefs` is the allowlist that keeps it from
+         * becoming the arbitrary-key hole `a278a39` closed on customFields.
+         */
+        notifPrefs: z.record(z.string(), z.boolean()).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -1025,7 +1028,7 @@ export const teamRouter = router({
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const patch: Record<string, unknown> = {};
       if (input.notifEmail !== undefined) patch.notifEmail = input.notifEmail;
-      if (input.notifPrefs !== undefined) patch.notifPrefs = input.notifPrefs;
+      if (input.notifPrefs !== undefined) patch.notifPrefs = pickKnownNotifyPrefs(input.notifPrefs);
       if (Object.keys(patch).length === 0) return { ok: true };
       await db
         .update(workspaceMembers)
@@ -1755,10 +1758,16 @@ export const teamRouter = router({
           eq(workspaceMembers.userId, ctx.user.id),
         ),
       );
-    const DEFAULT_PREFS = { sequence_reply: true, social_response: true, workflow_alert: true, system: true };
+    /**
+     * Normalised to the five events before it leaves the server, so the page
+     * renders one switch per real event whatever the row happens to contain.
+     * A stored blob full of the old `sequence_reply` keys simply produces all
+     * defaults — absent means "follow the workspace", never "off".
+     */
+    const stored = (row?.notifPrefs as Record<string, boolean> | null) ?? null;
     return {
       notifEmail: row?.notifEmail ?? null,
-      notifPrefs: (row?.notifPrefs as Record<string, boolean> | null) ?? DEFAULT_PREFS,
+      notifPrefs: { ...defaultMemberNotifyPrefs(), ...pickKnownNotifyPrefs(stored ?? {}) },
     };
   }),
 

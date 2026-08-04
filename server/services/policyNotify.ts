@@ -19,7 +19,7 @@
  * One gate, so a sixth event cannot be added with a fifth spelling of it.
  */
 import { and, eq } from "drizzle-orm";
-import { isEmailEnabled, isInAppEnabled } from "@shared/notifyPolicy";
+import { isEmailEnabled, isInAppEnabled, memberWantsEvent } from "@shared/notifyPolicy";
 import { escapeHtml } from "@shared/escapeHtml";
 import { notifications, users, workspaceMembers, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
@@ -88,6 +88,26 @@ export async function notifyIfEnabled(notice: PolicyNotice): Promise<boolean> {
       .where(eq(workspaceSettings.workspaceId, notice.workspaceId))
       .limit(1);
     if (!isInAppEnabled(settings?.policy, notice.event)) return false;
+
+    /**
+     * The member's own switch, which can only NARROW the workspace policy —
+     * checked after it, so muting is possible and un-muting is not. Absent
+     * defers to the policy, which is what makes the old stored vocabulary
+     * (`sequence_reply` and friends) harmless rather than an accidental mute.
+     *
+     * Mutes BOTH channels: the page offers one switch per event, and "stop
+     * telling me about this" is the only reading of it that does not need a
+     * second column the UI has never had.
+     */
+    const [member] = await db
+      .select({ prefs: workspaceMembers.notifPrefs })
+      .from(workspaceMembers)
+      .where(and(
+        eq(workspaceMembers.workspaceId, notice.workspaceId),
+        eq(workspaceMembers.userId, userId),
+      ))
+      .limit(1);
+    if (!memberWantsEvent(member?.prefs, notice.event)) return false;
 
     await db.insert(notifications).values({
       workspaceId: notice.workspaceId,

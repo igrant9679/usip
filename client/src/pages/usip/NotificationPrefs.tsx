@@ -6,19 +6,23 @@ import { trpc } from "@/lib/trpc";
 import { Bell, BellRing } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { NOTIFY_EVENTS } from "@shared/notifyPolicy";
 
-const PREF_ITEMS = [
-  { key: "newLead", label: "New lead assigned to me" },
-  { key: "taskDue", label: "Task due reminders" },
-  { key: "dealStageChange", label: "Deal stage changes" },
-  { key: "emailReply", label: "Email reply received" },
-  { key: "sequenceComplete", label: "Sequence enrollment completed" },
-  { key: "workflowFired", label: "Workflow rule fired" },
-  { key: "npsSubmitted", label: "NPS survey submitted" },
-  { key: "teamInvite", label: "Team invitation accepted" },
-] as const;
+/**
+ * The SAME five events the workspace policy uses (@shared/notifyPolicy).
+ *
+ * This page used to list eight events of its own invention — newLead, taskDue,
+ * dealStageChange, emailReply, sequenceComplete, workflowFired, npsSubmitted,
+ * teamInvite — none of which matched the four keys the server accepted, which
+ * in turn matched none of the five the product notifies on. Zod strips unknown
+ * keys, so every save wrote `{}` and the page reported success.
+ *
+ * A member's switch can only MUTE an event the workspace has enabled; it cannot
+ * enable one the admin turned off. See the header in @shared/notifyPolicy.
+ */
+const PREF_ITEMS = NOTIFY_EVENTS;
 
-type PrefKey = typeof PREF_ITEMS[number]["key"];
+type PrefKey = string;
 
 export default function NotificationPrefs() {
   const me = trpc.team.getNotifPrefs.useQuery();
@@ -56,7 +60,10 @@ export default function NotificationPrefs() {
 
   return (
     <Shell title="Notification Preferences">
-      <PageHeader title="Notification Preferences" description="Configure which events trigger in-app bell notifications and email digests for your account. Customise notification frequency, grouping, and delivery channel per event type." pageKey="notification-prefs"
+      {/* The old description promised frequency, grouping and per-channel
+          delivery — none of which exists. What these switches actually do is
+          mute an event for you, both in-app and by email. */}
+      <PageHeader title="Notification Preferences" description="Mute any event you would rather not hear about. These switches narrow what your workspace has enabled in Settings → Notifications; they cannot switch on an event an admin has turned off." pageKey="notification-prefs"
         icon={<BellRing className="size-5" />}
       >
         <Button onClick={handleSave} disabled={!dirty || update.isPending}>
@@ -83,6 +90,9 @@ export default function NotificationPrefs() {
 
         <Section title="Event notifications">
           <div className="divide-y">
+            <p className="px-4 py-3 text-xs text-muted-foreground">
+              Turning one off stops both the bell notification and the email for that event.
+            </p>
             {PREF_ITEMS.map(({ key, label }) => (
               <div key={key} className="flex items-center justify-between px-4 py-3">
                 <div className="flex items-center gap-3">

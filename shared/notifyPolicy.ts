@@ -124,6 +124,68 @@ export function isEmailEnabled(policy: unknown, eventKey: string): boolean {
   return entry.email === true;
 }
 
+/* ─── Per-member overrides ────────────────────────────────────────────────── */
+
+/**
+ * A member's own switches, keyed by the SAME event vocabulary.
+ *
+ * 🔴 THEY USED TO BE A THIRD, UNRELATED VOCABULARY, and nothing joined up.
+ * `NotificationPrefs.tsx` saved `newLead, taskDue, dealStageChange, emailReply,
+ * sequenceComplete, workflowFired, npsSubmitted, teamInvite`;
+ * `team.updateNotifPrefs` accepted `sequence_reply, social_response,
+ * workflow_alert, system`; `getNotifPrefs` defaulted to that second set. NONE
+ * of the three overlapped the five events the product actually notifies on, and
+ * zod strips unknown keys — so the page wrote `{}`, toasted "Preferences
+ * saved", and wiped whatever had been there.
+ *
+ * ⚖️ AN OVERRIDE CAN ONLY NARROW, NEVER WIDEN. The workspace policy is the
+ * ceiling: a member may mute an event their admin turned on, but cannot turn on
+ * one the admin turned off. Otherwise a per-user setting silently overrules a
+ * workspace-wide decision, and the admin panel stops meaning anything.
+ *
+ * ABSENT MEANS "FOLLOW THE WORKSPACE", not "off". That is what makes the old
+ * stored garbage harmless: a row full of `sequence_reply` keys has no entry for
+ * any of the five, so every one of them defers to the policy exactly as an
+ * untouched member does.
+ */
+export type MemberNotifyPrefs = Record<string, boolean>;
+
+/** Every event on, which is what "I have never touched this page" means. */
+export function defaultMemberNotifyPrefs(): MemberNotifyPrefs {
+  const out: MemberNotifyPrefs = {};
+  for (let i = 0; i < NOTIFY_EVENTS.length; i++) out[NOTIFY_EVENTS[i]!.key] = true;
+  return out;
+}
+
+/**
+ * Does this member still want this event?
+ *
+ * Only an EXPLICIT `false` mutes. Anything else — absent key, absent object,
+ * a stale key from the old vocabulary — defers to the workspace policy.
+ */
+export function memberWantsEvent(prefs: unknown, eventKey: string): boolean {
+  const p = prefs as MemberNotifyPrefs | null | undefined;
+  if (!p || typeof p !== "object") return true;
+  return p[eventKey] !== false;
+}
+
+/**
+ * Drop anything that is not one of the five events.
+ *
+ * An allowlist rather than a passthrough, because `notifPrefs` is a JSON blob
+ * on a shared row and `z.record(z.string(), …)` would otherwise let a
+ * hand-made call write arbitrary keys into it — the hole `a278a39` closed on
+ * `customFields`. Also cleans stale keys out on the next save.
+ */
+export function pickKnownNotifyPrefs(input: Record<string, boolean>): MemberNotifyPrefs {
+  const out: MemberNotifyPrefs = {};
+  for (let i = 0; i < NOTIFY_EVENTS.length; i++) {
+    const k = NOTIFY_EVENTS[i]!.key;
+    if (typeof input[k] === "boolean") out[k] = input[k]!;
+  }
+  return out;
+}
+
 /** Only the events something actually dispatches. */
 export function wiredNotifyEventKeys(): string[] {
   const out: string[] = [];

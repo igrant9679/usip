@@ -22,9 +22,12 @@ import { readFileSync, readdirSync, statSync } from "fs";
 import { join } from "path";
 import {
   NOTIFY_EVENTS,
+  defaultMemberNotifyPrefs,
   defaultNotifyPolicy,
   isEmailEnabled,
   isInAppEnabled,
+  memberWantsEvent,
+  pickKnownNotifyPrefs,
   wiredNotifyEventKeys,
 } from "@shared/notifyPolicy";
 
@@ -316,6 +319,117 @@ describe("the shared gate", () => {
   });
 });
 
+/* ── Per-member overrides ────────────────────────────────────────────────── */
+
+describe("a member's own switches", () => {
+  it("only an EXPLICIT false mutes", () => {
+    /**
+     * Absent means "follow the workspace", never "off". That is what makes the
+     * old stored vocabulary harmless — a row full of `sequence_reply` keys has
+     * no entry for any of the five events, so each defers to the policy exactly
+     * as an untouched member does, rather than muting everything.
+     */
+    expect(memberWantsEvent(undefined, "mention")).toBe(true);
+    expect(memberWantsEvent(null, "mention")).toBe(true);
+    expect(memberWantsEvent({}, "mention")).toBe(true);
+    expect(memberWantsEvent({ sequence_reply: false, workflow_alert: false }, "mention")).toBe(true);
+    expect(memberWantsEvent({ mention: true }, "mention")).toBe(true);
+    expect(memberWantsEvent({ mention: false }, "mention")).toBe(false);
+  });
+
+  it("defaults every event ON", () => {
+    const p = defaultMemberNotifyPrefs();
+    expect(Object.keys(p).sort()).toEqual(NOTIFY_EVENTS.map((e) => e.key).sort());
+    expect(Object.values(p).every((v) => v === true)).toBe(true);
+  });
+
+  it("the allowlist drops anything outside the five events", () => {
+    /**
+     * `notifPrefs` is a JSON blob on a shared row and the input is now a
+     * record, so without this an arbitrary key could be written into it — the
+     * hole a278a39 closed on customFields. It also cleans the stale vocabulary
+     * out on the next save.
+     */
+    const cleaned = pickKnownNotifyPrefs({
+      mention: false,
+      dealMoved: true,
+      sequence_reply: false,
+      linkedinUrl: true,
+      __proto__: true,
+    } as any);
+    expect(cleaned).toEqual({ dealMoved: true, mention: false });
+  });
+
+  it("ignores non-boolean values rather than coercing them", () => {
+    expect(pickKnownNotifyPrefs({ mention: "false" } as any)).toEqual({});
+    expect(pickKnownNotifyPrefs({ mention: 0 } as any)).toEqual({});
+  });
+
+  it("can only NARROW the workspace policy, never widen it", () => {
+    /**
+     * The ordering that enforces it lives in policyNotify: the workspace gate
+     * runs first and returns, so a member's `true` is never consulted for an
+     * event the admin switched off. Asserted structurally because the two reads
+     * are DB-backed.
+     */
+    const src = strip(read("server/services/policyNotify.ts"));
+    const policyGate = src.indexOf("if (!isInAppEnabled(settings?.policy, notice.event)) return false;");
+    const memberGate = src.indexOf("memberWantsEvent(member?.prefs, notice.event)");
+    expect(policyGate, "the workspace gate was not found").toBeGreaterThan(-1);
+    expect(memberGate, "the member gate was not found").toBeGreaterThan(-1);
+    expect(memberGate, "the member override is consulted before the workspace policy")
+      .toBeGreaterThan(policyGate);
+  });
+
+  it("the member's prefs are read from their own membership row", () => {
+    /**
+     * 🪤 BOUNDED TO THE PREFS LOOKUP. The first version asserted
+     * `eq(workspaceMembers.workspaceId, …)` against the WHOLE FILE — which the
+     * email address lookup further down also contains, so dropping the scope
+     * from THIS query left the assertion green. The b15490d weakness exactly: a
+     * file-level match is not a per-statement check.
+     *
+     * It matters: without the workspace term, a member of two workspaces has
+     * one workspace's mute applied in the other, and `.limit(1)` picks whichever
+     * row the database feels like.
+     */
+    const src = strip(read("server/services/policyNotify.ts"));
+    const at = src.indexOf(".select({ prefs: workspaceMembers.notifPrefs })");
+    expect(at, "the prefs lookup was not found — re-anchor this test").toBeGreaterThan(-1);
+    const end = src.indexOf("memberWantsEvent(member?.prefs", at);
+    expect(end, "could not bound the prefs lookup").toBeGreaterThan(at);
+    const lookup = src.slice(at, end);
+
+    expect(lookup, "the prefs lookup is not scoped to the workspace")
+      .toMatch(/eq\(workspaceMembers\.workspaceId, notice\.workspaceId\)/);
+    expect(lookup).toMatch(/eq\(workspaceMembers\.userId, userId\)/);
+    expect(src).toMatch(/if \(!memberWantsEvent\(member\?\.prefs, notice\.event\)\) return false;/);
+  });
+
+  it("the server accepts and returns the FIVE events, not the old vocabulary", () => {
+    const admin = strip(read("server/routers/admin.ts"));
+    expect(admin).toMatch(/notifPrefs: z\.record\(z\.string\(\), z\.boolean\(\)\)\.optional\(\)/);
+    expect(admin).toMatch(/patch\.notifPrefs = pickKnownNotifyPrefs\(input\.notifPrefs\)/);
+    expect(admin).toMatch(/\.\.\.defaultMemberNotifyPrefs\(\), \.\.\.pickKnownNotifyPrefs\(stored \?\? \{\}\)/);
+    for (const stale of ["sequence_reply", "social_response", "workflow_alert"]) {
+      expect(admin, `${stale} is still in the prefs vocabulary`).not.toMatch(
+        new RegExp(`${stale}: z\\.boolean`),
+      );
+    }
+  });
+
+  it("the page renders the shared event list, not eight of its own", () => {
+    const ui = read("client/src/pages/usip/NotificationPrefs.tsx");
+    expect(ui).toMatch(/^import \{ NOTIFY_EVENTS \} from "@shared\/notifyPolicy";$/m);
+    expect(ui).toMatch(/const PREF_ITEMS = NOTIFY_EVENTS;/);
+    for (const invented of ["newLead", "taskDue", "dealStageChange", "npsSubmitted", "teamInvite"]) {
+      expect(ui, `${invented} is back in the page's own list`).not.toMatch(
+        new RegExp(`key: "${invented}"`),
+      );
+    }
+  });
+});
+
 /* ── The email column ────────────────────────────────────────────────────── */
 
 describe("the email leg", () => {
@@ -350,9 +464,22 @@ describe("the email leg", () => {
      * Both are read via workspaceMembers joined to users, so this cannot mail
      * somebody outside the workspace even if a userId were wrong.
      */
-    expect(src).toMatch(/notifEmail: workspaceMembers\.notifEmail, loginEmail: users\.email/);
-    expect(src).toMatch(/eq\(workspaceMembers\.workspaceId, notice\.workspaceId\)/);
-    expect(src).toMatch(/eq\(workspaceMembers\.userId, userId\)/);
+    /**
+     * 🪤 BOUNDED, for the reason the prefs lookup above had to be: once TWO
+     * queries in this file scope on `workspaceMembers.workspaceId`, a
+     * whole-file match proves nothing about either. Adding the member-prefs
+     * read is what made this one blind, and the mutation caught it the same
+     * day it was introduced.
+     */
+    const at = src.indexOf("notifEmail: workspaceMembers.notifEmail, loginEmail: users.email");
+    expect(at, "the address lookup was not found — re-anchor this test").toBeGreaterThan(-1);
+    const end = src.indexOf("const to =", at);
+    expect(end, "could not bound the address lookup").toBeGreaterThan(at);
+    const lookup = src.slice(at, end);
+
+    expect(lookup, "the address lookup is not scoped to the workspace")
+      .toMatch(/eq\(workspaceMembers\.workspaceId, notice\.workspaceId\)/);
+    expect(lookup).toMatch(/eq\(workspaceMembers\.userId, userId\)/);
     expect(src).toMatch(/const to = \(row\?\.notifEmail \?\? row\?\.loginEmail \?\? ""\)\.trim\(\);/);
     expect(src).toMatch(/if \(!to\) return;/);
   });
