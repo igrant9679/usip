@@ -8,7 +8,7 @@ import { and, eq, isNull } from "drizzle-orm";
 import { workspaceMembers, workspaces, type WorkspaceMember, type Workspace } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { protectedProcedure } from "./trpc";
-import { runWithRequestContext } from "./requestContext";
+import { mergeRequestContext } from "./requestContext";
 
 export type WorkspaceCtxExtension = {
   workspace: Workspace;
@@ -152,7 +152,14 @@ export const workspaceProcedure = protectedProcedure.use(async ({ ctx, next }) =
   }
   // Stash workspaceId in async-local storage so downstream code (notably
   // invokeLLM) can pick up the active workspace without threading it through.
-  return runWithRequestContext(
+  /**
+   * MERGE, do not replace. `als.run` installs a brand-new store, so calling
+   * `runWithRequestContext` here would drop the `clientIp` the base middleware
+   * in `_core/trpc.ts` just set. Harmless for an authenticated call — the
+   * ceiling prefers the userId anyway — but it makes the store's contents
+   * depend on middleware order, which is how the next reader gets it wrong.
+   */
+  return mergeRequestContext(
     { workspaceId: workspace.id, userId: ctx.user.id },
     () => next({ ctx: { ...ctx, workspace, member } })
   );

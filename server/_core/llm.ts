@@ -4,7 +4,7 @@ import { usageCounters, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { tryDecryptSecret } from "./crypto";
 import { ENV } from "./env";
-import { getRequestUserId, getRequestWorkspaceId } from "./requestContext";
+import { getRequestClientIp, getRequestUserId, getRequestWorkspaceId } from "./requestContext";
 import { recordLlmTokens, usageMonthKey } from "../usageCounters";
 
 // ---------------------------------------------------------------------------
@@ -870,26 +870,67 @@ function resolveProvider(
  */
 const LLM_BURST_WINDOW_MS = 60_000;
 const LLM_BURST_MAX = 30;
-const llmBurst = new Map<number, number[]>();
 
-function checkLlmBurst(userId: number | undefined, now: number): void {
-  if (!userId) return; // background job — see the note above
-  const hits = (llmBurst.get(userId) ?? []).filter((t) => now - t < LLM_BURST_WINDOW_MS);
-  if (hits.length >= LLM_BURST_MAX) {
-    llmBurst.set(userId, hits);
+/**
+ * 🔴 THE ANONYMOUS HALF OF THE SAME CEILING.
+ *
+ * `if (!userId) return` covered background jobs — but it also covered every
+ * UNAUTHENTICATED caller, because `getRequestUserId()` is only ever set for a
+ * signed-in request. So the public chat agent, which reaches `invokeLLM` through
+ * `chatAgents.send` → `runChatTurn`, skipped this entirely. The only thing
+ * bounding it was `METERED_PUBLIC_PROCEDURES` in `publicRateLimit.ts`: a
+ * hand-written array of tRPC path substrings **with one entry in it**. Precisely
+ * the maintenance hazard the note above refuses for the authenticated side.
+ *
+ * A request now always carries at least a client IP (base middleware in
+ * `_core/trpc.ts`), so the funnel can key on that when there is no user. The
+ * express limiter stays as a cheaper, earlier rejection for the one path it
+ * knows about — defence in depth rather than the defence.
+ *
+ * ⚠️ AN IP IS A WEAKER KEY THAN A USER ID, and it is the strongest one an
+ * anonymous request has. Visitors behind one corporate NAT share a bucket. The
+ * public ceiling is set where that only bites a site sending 20 chat messages a
+ * minute from a single egress IP, which is a better problem than unmetered
+ * model spend on someone else's API key.
+ */
+const LLM_PUBLIC_BURST_MAX = 20;
+
+/** Keyed `u:<userId>` or `ip:<addr>` so the two namespaces cannot collide. */
+const llmBurst = new Map<string, number[]>();
+
+function checkLlmBurst(
+  userId: number | undefined,
+  clientIp: string | undefined,
+  now: number,
+): void {
+  // A signed-in user is the better key, so it wins when both are present.
+  const key = userId ? `u:${userId}` : clientIp ? `ip:${clientIp}` : null;
+  // Neither → no request context at all → a background job. Those carry their
+  // own per-feature daily caps, and the monthly workspace budget still applies.
+  if (!key) return;
+  const max = userId ? LLM_BURST_MAX : LLM_PUBLIC_BURST_MAX;
+
+  const hits = (llmBurst.get(key) ?? []).filter((t) => now - t < LLM_BURST_WINDOW_MS);
+  if (hits.length >= max) {
+    llmBurst.set(key, hits);
     throw new Error(
-      `LLM rate limit: more than ${LLM_BURST_MAX} AI requests in a minute. Please wait a moment and try again.`,
+      `LLM rate limit: more than ${max} AI requests in a minute. Please wait a moment and try again.`,
     );
   }
   hits.push(now);
-  llmBurst.set(userId, hits);
-  // The map is keyed by user and pruned on read, but a long-lived process with
-  // many users would still accumulate empty arrays. Cheap sweep when it grows.
+  llmBurst.set(key, hits);
+  // The map is keyed and pruned on read, but a long-lived process with many
+  // callers would still accumulate empty arrays. Cheap sweep when it grows.
   if (llmBurst.size > 500) {
     llmBurst.forEach((v, k) => {
       if (v.every((t: number) => now - t >= LLM_BURST_WINDOW_MS)) llmBurst.delete(k);
     });
   }
+}
+
+/** Test seam — the ceiling is process-local, so suites must be able to reset it. */
+export function __resetLlmBurstForTests(): void {
+  llmBurst.clear();
 }
 
 /**
@@ -956,7 +997,7 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
   // concurrency slot is taken — a limit enforced after the money is spent is
   // not a limit, and a refused call must not hold a slot others are queued on.
   const now = Date.now();
-  checkLlmBurst(getRequestUserId(), now);
+  checkLlmBurst(getRequestUserId(), getRequestClientIp(), now);
   await checkMonthlyCap(workspaceId, now);
 
   const creds = await loadCreds(workspaceId);

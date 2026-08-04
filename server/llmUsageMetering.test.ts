@@ -242,9 +242,25 @@ describe("the burst ceiling", () => {
     expect(slot).toBeLessThan(invoke.indexOf("switch (provider)"));
   });
 
-  it("keys on the USER, and exempts background jobs deliberately", () => {
-    expect(llm).toMatch(/checkLlmBurst\(getRequestUserId\(\), now\)/);
-    expect(fn).toMatch(/if \(!userId\) return;/);
+  /**
+   * ⚠️ THIS ASSERTION USED TO READ `checkLlmBurst(getRequestUserId(), now)` and
+   * `if (!userId) return;` — and it was RIGHT about the code and WRONG about
+   * the product. That early return exempted background jobs as intended, and
+   * also every UNAUTHENTICATED caller, because `getRequestUserId()` is only set
+   * for a signed-in request. The public chat agent reached `invokeLLM` with the
+   * ceiling doing nothing.
+   *
+   * A structural guard can only ever pin the shape it was given. The real
+   * behaviour now lives in `server/llmRateLimit.test.ts`, which executes the
+   * ceiling; this stays as the cheap wiring check.
+   */
+  it("keys on the user when there is one, and on the client IP when there is not", () => {
+    expect(llm).toMatch(/checkLlmBurst\(getRequestUserId\(\), getRequestClientIp\(\), now\)/);
+    expect(fn, "both keys, namespaced so they cannot collide").toMatch(
+      /const key = userId \? `u:\$\{userId\}` : clientIp \? `ip:\$\{clientIp\}` : null;/,
+    );
+    // The exemption survives — for genuine background jobs, which have neither.
+    expect(fn).toMatch(/if \(!key\) return;/);
   });
 
   it("prunes its window rather than counting forever", () => {
