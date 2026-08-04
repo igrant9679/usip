@@ -2,9 +2,16 @@
  * seedHelpContent.ts — SDR enablement Help Center content.
  *
  * Seeds (idempotently, per workspace):
- *   - 9 help categories  (deduped by (workspaceId, name) — no slug column on help_categories)
- *   - 39 help articles   (deduped by (workspaceId, slug), all status:'published')
- *   - 10 guided tours    (deduped by (workspaceId, name); steps delete+reinsert each run)
+ *   - help categories  (deduped by (workspaceId, name) — no slug column on help_categories)
+ *   - help articles    (deduped by (workspaceId, slug), all status:'published')
+ *   - guided tours     (deduped by (workspaceId, name); steps delete+reinsert each run)
+ *
+ * ⚠️ COUNTS DELIBERATELY NOT REPEATED HERE. This header used to say "9
+ * categories, 39 articles, 10 tours" long after the file held 10, 52 and 58 —
+ * a number in a comment is a claim nothing checks. `server/helpContent.test.ts`
+ * asserts the structural invariants instead (every categorySlug resolves, every
+ * slug is unique, every tourName resolves, every "Learn more" link in
+ * helpText.ts points at an article that exists).
  *
  * Also retires the 5 legacy demo tours that the 10 SDR tours supersede
  * (the non-overlapping legacy tours — "Adding Your First Lead", "Renewals & Churn
@@ -28,13 +35,13 @@ import { getDb } from "./db";
 
 type AnyDb = NonNullable<Awaited<ReturnType<typeof getDb>>>;
 
-/* ─── Categories (6) ─────────────────────────────────────────────────────── */
+/* ─── Categories ─────────────────────────────────────────────────────────── */
 
 type CatSeed = { slug: string; name: string; icon: string; sortOrder: number };
 
 // NOTE: HelpCenter.tsx renders cat.icon as a literal string (emoji), not a
 // lucide component name — so these are emojis, matching the "📁" fallback.
-const CATEGORIES: CatSeed[] = [
+export const CATEGORIES: CatSeed[] = [
   { slug: "getting-started", name: "Getting Started", icon: "🚀", sortOrder: 1 },
   { slug: "prospecting", name: "Prospecting", icon: "🔍", sortOrder: 2 },
   { slug: "crm-pipeline", name: "CRM & Pipeline", icon: "📊", sortOrder: 3 },
@@ -43,10 +50,11 @@ const CATEGORIES: CatSeed[] = [
   { slug: "playbooks", name: "Daily Playbooks", icon: "📘", sortOrder: 6 },
   { slug: "meetings-calls", name: "Meetings & Calls", icon: "📞", sortOrder: 7 },
   { slug: "autopilots", name: "Autopilots & Automation", icon: "⚡", sortOrder: 8 },
-  { slug: "settings-account", name: "Settings & Account", icon: "⚙️", sortOrder: 9 },
+  { slug: "team-admin", name: "Team & Admin", icon: "👥", sortOrder: 9 },
+  { slug: "settings-account", name: "Settings & Account", icon: "⚙️", sortOrder: 10 },
 ];
 
-/* ─── Articles (39) ──────────────────────────────────────────────────────── */
+/* ─── Articles ───────────────────────────────────────────────────────────── */
 
 type ArticleSeed = {
   slug: string;
@@ -61,7 +69,7 @@ type ArticleSeed = {
   bodyMarkdown: string;
 };
 
-const ARTICLES: ArticleSeed[] = [
+export const ARTICLES: ArticleSeed[] = [
   // Articles for what shipped in the 0130-0134 range. Written against the
   // measured behaviour of this workspace, not the intended behaviour.
   {
@@ -681,9 +689,65 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     tags: ["mailboxes", "email", "smtp", "deliverability", "settings"],
     bodyMarkdown: `**Settings → Mailboxes** manages the accounts your sequences send from. Click **Link mailbox** to start the guided wizard:\n\n1. **Link** — pick your provider. *Other (SMTP/IMAP)* connects a single account with a **live Test SMTP** check before saving, or use **Bulk Import via CSV** (sample file provided, up to 100 accounts at once).\n2. **Configure** — three quick modules: **Signature** (used on that mailbox's sends), **Sending limits** (daily cap, hourly cap, delay between emails — the defaults are deliverability-safe), and **Opt-out link** (an unsubscribe footer for that mailbox).\n3. **Finish** — the overview shows a ✓/✗ per module; *Fix Configuration Issues* jumps you to whatever's incomplete.\n\nThe mailbox table shows each account's **setup %**, daily usage against its cap, **warmup progress** (see "Mailbox warmup"), deliverability signal, and aliases. Row menu: test the connection, refresh aliases, configure, set default, or unlink. Setup progress matters — a complete configuration (signature + limits + opt-out) is what keeps your mail out of spam folders.`,
   },
+  {
+    slug: "ai-budget-and-usage",
+    categorySlug: "settings-account",
+    title: "The monthly AI budget",
+    summary: "Cap what the workspace can spend on AI in a month — including the autonomous engines.",
+    readingTimeMinutes: 2,
+    tags: ["billing", "ai", "usage", "limits", "settings"],
+    bodyMarkdown: `**Settings → Billing → Monthly AI budget** caps how many AI tokens this workspace may consume in a calendar month.\n\n**It ships switched off.** The field is empty by default, which means *unlimited*. What a sensible monthly budget looks like is a commercial decision, and a guessed number would have cut live workspaces off mid-campaign the day it deployed — so the mechanism is here and the number is yours.\n\n**It applies to the background engines too.** The ARE engine, sequence generation, the reply Autopilot and every other unattended AI caller count against the same figure. That is deliberate: a budget the autonomous engines are exempt from is not a budget, and they are the heaviest spenders in the system.\n\n**Where usage comes from.** Every AI call is metered at one funnel, so the counter on the Billing tab is the whole picture rather than a sample. It resets on the first of the month.\n\n**When the cap is reached**, AI-backed features stop and say so. Raise the number or wait for the reset — nothing is lost, and sending that does not involve AI carries on.\n\nOne deliberate exception: if the database is unreachable the check **lets calls through** rather than blocking every AI feature on top of an already-broken app.`,
+  },
+
+  /* ── Team & Admin ────────────────────────────────────────────────────────── */
+  {
+    slug: "team-roles-and-permissions",
+    categorySlug: "team-admin",
+    title: "Roles and what each one can do",
+    summary: "Four roles, one rank rule, and the per-member overrides that sit on top.",
+    readingTimeMinutes: 3,
+    tags: ["team", "roles", "permissions", "admin"],
+    bodyMarkdown: `Velocity has four roles, in rank order: **Rep → Manager → Admin → Super admin**. Almost every permission question in the product resolves through that one ranking.\n\n**The rank rule:** you can only act on people *below* you. An admin can change a rep's or a manager's role, deactivate them, or delete them — but not another admin's, and not their own. A super admin is exempt and can act on anyone. This is why an action that works on one teammate is silently unavailable on another: check their role first.\n\n**What each role adds:**\n- **Rep** — their own records, sequences and tasks. Private sequences they own are visible only to them and to managers and above.\n- **Manager** — sees every rep's work unfiltered, plus team-wide reporting.\n- **Admin** — Settings, the Team page, invitations, integrations, mailboxes, workflow rules and the autopilots.\n- **Super admin** — everything above, plus the Danger Zone (see "Archiving, transferring and exporting").\n\n**Per-member overrides.** A handful of capabilities are granted individually rather than by role, from the member's row on the Team page: exporting workspace data, managing API keys, managing integrations, and managing sequences. An override can only take away — a member still needs the role underneath it.\n\n**Two things the workspace protects on its own**, whatever your rank: it will not let you remove the last remaining super admin, and it will not let you delete the member listed as the workspace **owner**. The owner is the standing recipient for everything the autonomous engines report when no human is present, so deleting them would quietly silence the workspace's own automation. Move it deliberately with **Transfer ownership** first.`,
+  },
+  {
+    slug: "inviting-teammates",
+    categorySlug: "team-admin",
+    title: "Inviting teammates",
+    summary: "Send an invitation, what happens if it expires, and how to resend one.",
+    readingTimeMinutes: 3,
+    tags: ["team", "invite", "onboarding", "admin"],
+    bodyMarkdown: `**Settings → Team → Invite** adds someone by email and role. They get a link that signs them in and joins them to this workspace at the role you chose.\n\n**Invitations expire.** The default is **7 days**, adjustable on the same page. Two things then happen on their own:\n\n- **A warning email** goes out to anyone whose invitation is inside its last **48 hours**, telling them how long is left and carrying the accept link. It is only recorded as sent if it actually left — a skipped send (no sending account configured yet, for instance) writes nothing, so the activity log never claims a reminder the invitee never got.\n- **A nightly job** marks anything past its date as *Expired*, and the Team page shows a distinct badge for it.\n\n**An expired invitation is not a dead end.** Use **Resend** on the member's row: it issues a fresh token with a new expiry and mails a new link. The person keeps the same seat and role — nothing needs deleting and recreating.\n\n**Accepting.** The link opens a page showing which workspace and role the invite is for, then signs the invitee in. The email on the invitation and the email they sign in with must match — if they do not, the page says which address the invite was sent to rather than silently joining the wrong person. That check is the reason a forwarded invite link cannot be used by whoever received it.\n\n**Setting a password later.** If someone joined through a linked provider and later needs a password, use **Resend password setup**. That issues a token scoped to password setup only — it does not re-run acceptance, and it does not change their role or their existing sign-in method.`,
+  },
+  {
+    slug: "offboarding-a-teammate",
+    categorySlug: "team-admin",
+    title: "Offboarding: deactivate, reassign, delete",
+    summary: "What happens to a leaver's work, exactly what moves, and the one thing reassignment cannot fix.",
+    readingTimeMinutes: 5,
+    tags: ["team", "offboarding", "deactivate", "reassign", "admin"],
+    bodyMarkdown: `When somebody leaves, **deactivate** them on **Settings → Team**. Deactivation revokes access immediately — their session stops working, they cannot sign in again, and they disappear from assignment pickers — while keeping their history intact for reporting.\n\n**You must name someone to inherit their work.** The picker defaults to you. This is not a formality: their open work would otherwise point at a person who no longer exists in the product, and nothing else in Velocity ever repairs those columns.\n\n**Exactly what moves to the new owner:**\n\n| Moves | Scope |\n|---|---|\n| Leads, opportunities, accounts, contacts | all of them |\n| Campaigns and autonomous (ARE) campaigns | all of them |\n| Sequences they own **and** sequences assigned to them | both columns, they move independently |\n| Unfinished tasks | open work only |\n| Upcoming meetings | future only |\n\n**What deliberately does not move:** completed tasks and past meetings. Reassigning a finished task would rewrite the record of who actually did the work, and that is history rather than a workload.\n\n> ⚠️ **A meeting is not like the others.** Moving an upcoming meeting changes who owns it in Velocity. It does **not** move the calendar event off the leaver's calendar, and it does not recall the invitation already sitting in the attendee's inbox with the leaver's name on it. Velocity therefore clears the meeting's calendar link and its "invite sent" flag when it reassigns one — the new host genuinely does not have it in their calendar yet, and saying otherwise would be the comfortable lie. **Re-send those invites.**\n\n**Deactivate vs delete.** Deactivate is the normal path and is reversible — **Reactivate** restores access. Delete removes the membership row entirely and is not. Both reassign work; both refuse to remove the last super admin or the workspace owner.\n\n**Doing several at once.** Select multiple members and use **Bulk deactivate** — up to 50 at a time, with one inheritor for the batch. It skips anyone it is not allowed to touch (yourself, already-deactivated members, and anyone at or above your rank) and reports how many it skipped rather than failing the whole batch. If the batch would empty the last super-admin seat it refuses outright, before touching anything.`,
+  },
+  {
+    slug: "notifications-and-alerts",
+    categorySlug: "team-admin",
+    title: "Notifications: what sends, and who decides",
+    summary: "Five events, an admin policy, and a personal switch that can only turn things down.",
+    readingTimeMinutes: 4,
+    tags: ["notifications", "email", "alerts", "settings", "admin"],
+    bodyMarkdown: `Velocity notifies on **five events**, and both the bell and the emails come from the same list:\n\n| Event | In-app | Email |\n|---|---|---|\n| A new lead is routed to me | on | off |\n| A lead becomes Sales-Ready | on | **on** |\n| A deal I own moves stage | on | off |\n| One of my tasks is overdue | on | off |\n| Someone @mentions me | on | **on** |\n\nThose are the **defaults** for a workspace that has never opened the page. All five have a real dispatch site behind them — nothing in that list is a switch that does nothing.\n\n**Two levels, and they are not equal.**\n\n1. **The workspace policy** — *Settings → Notifications*, admin only. This is the ceiling.\n2. **Your own preferences** — on your profile. You can **mute** an event your admin turned on. You cannot turn on one your admin turned off. A personal setting that silently overruled a workspace decision would make the admin panel meaningless.\n\nNever having touched your own page means "follow the workspace" for every event — not "off".\n\n> ⚠️ **One switch per event covers both channels.** Muting *A deal I own moves stage* mutes the bell **and** the email for that event. There is currently no way to keep the in-app notice while dropping only the email.\n\n**A different address for alerts.** Each member can set a **notification email** on their profile that differs from their sign-in address — useful if you want alerts going to a shared or monitored inbox.\n\n**Two deliberate asymmetries worth knowing**, because they explain surprises in both directions:\n\n- If the stored policy is missing or malformed, **in-app notifications still fire**. A dropped notice is a lead nobody knows arrived; noise is something you can switch off.\n- In the same situation, **email does not send**. Email is a second copy of a notice that has already been written, so silence costs nothing — whereas mailing people from a workspace that never opened the settings page is not recoverable.`,
+  },
+  {
+    slug: "danger-zone",
+    categorySlug: "team-admin",
+    title: "Archiving, transferring and exporting",
+    summary: "The three super-admin-only actions, and which of them you cannot undo.",
+    readingTimeMinutes: 3,
+    tags: ["admin", "workspace", "export", "ownership", "danger-zone"],
+    bodyMarkdown: `**Settings → Danger Zone** holds three workspace-level actions. All three are **super admin only** — being an admin is not enough, and the page will say so rather than failing quietly.\n\n**Transfer ownership.** Hands the workspace to another active member. Two things happen together: the owner column moves, and the new owner is **promoted to super admin**. Half of that would be a workspace whose owner cannot administer it. You cannot transfer to yourself, to somebody who is not a member, or to a deactivated member.\n\nThis is the deliberate way to move the owner seat, and it is what the product points you at when it refuses to delete the current owner — the owner is the standing recipient for everything the autonomous engines report when nobody is present.\n\n**Export workspace data.** Returns a summary of your contacts, leads, accounts, opportunities, customers and tasks. Beyond the super-admin requirement, this one also honours the per-member **export data** permission, so it can be withheld from an individual super admin.\n\n**Archive workspace.** Marks the workspace archived and stamps the date.\n\n> ⚠️ **There is no un-archive.** Because of that, archiving is currently recorded rather than enforced — the workspace keeps working after you archive it. That is the honest state of it: making the flag bite without an un-archive procedure would be a one-way lockout with no way back, so enforcement waits until both ship together.`,
+  },
 ];
 
-/* ─── Tours (10) ─────────────────────────────────────────────────────────── */
+/* ─── Tours ──────────────────────────────────────────────────────────────── */
 
 type StepSeed = {
   title: string;
@@ -708,7 +772,7 @@ type TourSeed = {
   steps: StepSeed[];
 };
 
-const TOURS: TourSeed[] = [
+export const TOURS: TourSeed[] = [
   // Onboarding variations. One route in is not enough: a rep and an admin
   // need different first sessions, and returning users need neither.
   {
