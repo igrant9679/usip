@@ -145,7 +145,21 @@ function mutate(batteryPath) {
 
   for (const m of battery) {
     const path = join(ROOT, m.file);
-    const original = readFileSync(path, "utf8");
+    /**
+     * A battery naming a file that has MOVED used to throw ENOENT out of the
+     * loop and kill the whole run — the same failure as the "gg" flags bug
+     * below, and the same lesson: a harness that dies leaves the run half-done
+     * and the remaining guards unaudited. `server/llm.ts` (now `_core/llm.ts`)
+     * did exactly this and took five later entries with it.
+     */
+    let original;
+    try {
+      original = readFileSync(path, "utf8");
+    } catch {
+      console.log(`⚠️  ${m.id}: cannot read ${m.file} — MUTATION NOT APPLIED`);
+      results.push({ ...m, verdict: "HARNESS-FAILURE" });
+      continue;
+    }
     const pattern = m.re ? new RegExp(m.re, m.reFlags ?? "") : null;
     // Flags are de-duplicated: a battery entry that already passes "g" used to
     // build "gg" here and crash the whole run with an unhelpful RegExp error,
