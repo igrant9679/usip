@@ -494,8 +494,18 @@ describe("the email leg", () => {
     expect(src).toMatch(/const title = escapeHtml\(notice\.title\);/);
     expect(src).toMatch(/const body = notice\.body \? escapeHtml\(notice\.body\) : "";/);
     expect(src).toMatch(/href="\$\{escapeHtml\(link\)\}"/);
-    // The raw fields must never reach the template directly.
-    const html = src.slice(src.indexOf("html:"));
+    /**
+     * The raw fields must never reach the template directly.
+     *
+     * ⚠️ THE FOUND-CHECK IS LOAD-BEARING. `indexOf` returns -1 when the token
+     * is gone and `slice(-1)` is the LAST CHARACTER of the file, against which
+     * a `.not.toMatch` passes vacuously forever. Rename `html:` in the mailer
+     * call — a plausible refactor — and without this line the XSS guard below
+     * would go quietly green while nothing was being checked at all.
+     */
+    const htmlAt = src.indexOf("html:");
+    expect(htmlAt, "`html:` not found in policyNotify.ts — re-anchor this test").toBeGreaterThan(-1);
+    const html = src.slice(htmlAt);
     expect(html, "an unescaped value reaches the email body").not.toMatch(/\$\{notice\.(title|body)\}/);
   });
 

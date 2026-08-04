@@ -86,7 +86,16 @@ describe("llmTokens", () => {
     // Dozens of callers; metering each one means the next is not counted.
     const fn = llm.slice(llm.indexOf("export async function invokeLLM"));
     expect(fn).toMatch(/await recordLlmTokens\(workspaceId, result\.usage\?\.total_tokens \?\? 0\)/);
-    expect(fn.indexOf("switch (provider)")).toBeLessThan(fn.indexOf("recordLlmTokens("));
+    /**
+     * ⚠️ `-1 < N` IS TRUE. An ordering assertion on a bare `indexOf` goes GREEN
+     * when the left-hand token is DELETED, which is the one change it exists to
+     * notice. Both ends are proven present before they are compared.
+     */
+    const switchAt = fn.indexOf("switch (provider)");
+    const meterAt = fn.indexOf("recordLlmTokens(");
+    expect(switchAt, "`switch (provider)` not found — re-anchor this test").toBeGreaterThan(-1);
+    expect(meterAt, "`recordLlmTokens(` not found inside invokeLLM").toBeGreaterThan(-1);
+    expect(switchAt).toBeLessThan(meterAt);
     expect(llm).toMatch(/import \{ recordLlmTokens, usageMonthKey \} from "\.\.\/usageCounters"/);
   });
 
