@@ -105,6 +105,25 @@ export function isInAppEnabled(policy: unknown, eventKey: string): boolean {
   return entry.inApp !== false;
 }
 
+/**
+ * Should this event ALSO send an email?
+ *
+ * ⚠️ FAILS CLOSED, which is the opposite of `isInAppEnabled` — and the asymmetry
+ * is the decision, not an inconsistency.
+ *
+ * In-app fails open because a dropped notification is a lead nobody knows
+ * arrived; the notification IS the delivery. Email is a second channel on top
+ * of an in-app notice that has already been written, so a missing policy costs
+ * nobody the information. What it would cost is the other way round: mailing
+ * people who never asked to be mailed, from a workspace that has never opened
+ * the settings page. Silence is recoverable; unexpected email is not.
+ */
+export function isEmailEnabled(policy: unknown, eventKey: string): boolean {
+  const entry = (policy as NotifyPolicy | null | undefined)?.[eventKey];
+  if (!entry || typeof entry !== "object") return false;
+  return entry.email === true;
+}
+
 /** Only the events something actually dispatches. */
 export function wiredNotifyEventKeys(): string[] {
   const out: string[] = [];

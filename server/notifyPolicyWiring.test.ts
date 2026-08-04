@@ -23,6 +23,7 @@ import { join } from "path";
 import {
   NOTIFY_EVENTS,
   defaultNotifyPolicy,
+  isEmailEnabled,
   isInAppEnabled,
   wiredNotifyEventKeys,
 } from "@shared/notifyPolicy";
@@ -83,10 +84,28 @@ describe("the policy helpers", () => {
     expect(isInAppEnabled({ newLeadRouted: { inApp: true, email: false } }, "newLeadRouted")).toBe(true);
   });
 
-  it("email is tracked but not yet acted on — no path sends one", () => {
-    // Recorded rather than implied: the panel offers an email column and
-    // nothing in this change sends email. isInAppEnabled is the only consumer.
-    expect(NOTIFY_EVENTS.some((e) => e.defaults.email)).toBe(true);
+  it("the email column FAILS CLOSED, unlike the in-app one", () => {
+    /**
+     * The asymmetry is the decision. In-app fails open because a dropped
+     * notification is a lead nobody knows arrived — the notification IS the
+     * delivery. Email is a second channel on top of an in-app row that has
+     * already been written, so silence costs nobody the information, while the
+     * other error mails people who never opened the settings page.
+     */
+    expect(isEmailEnabled(undefined, "mention")).toBe(false);
+    expect(isEmailEnabled(null, "mention")).toBe(false);
+    expect(isEmailEnabled({}, "mention")).toBe(false);
+    expect(isEmailEnabled({ mention: "yes" }, "mention")).toBe(false);
+    expect(isEmailEnabled({ mention: { inApp: true } }, "mention")).toBe(false);
+    // …and the in-app one still fails OPEN on the same inputs.
+    expect(isInAppEnabled(undefined, "mention")).toBe(true);
+    expect(isInAppEnabled({}, "mention")).toBe(true);
+  });
+
+  it("email requires an explicit true, not merely truthy", () => {
+    expect(isEmailEnabled({ mention: { inApp: true, email: true } }, "mention")).toBe(true);
+    expect(isEmailEnabled({ mention: { inApp: true, email: false } }, "mention")).toBe(false);
+    expect(isEmailEnabled({ mention: { inApp: true, email: 1 } } as any, "mention")).toBe(false);
   });
 });
 
@@ -294,6 +313,69 @@ describe("the shared gate", () => {
     }
     // …and the lead one points at the lead it just created.
     expect(src).toMatch(/relatedType: "lead",\s*relatedId: notice\.leadId,/);
+  });
+});
+
+/* ── The email column ────────────────────────────────────────────────────── */
+
+describe("the email leg", () => {
+  const src = strip(read("server/services/policyNotify.ts"));
+
+  it("sends only AFTER the in-app row exists", () => {
+    /**
+     * Order, not just presence. Email is strictly a SECOND channel: if it went
+     * first, an SMTP failure would cost the recipient the notification itself,
+     * and the two channels could disagree about whether anything happened.
+     */
+    const insert = src.indexOf("db.insert(notifications)");
+    const email = src.indexOf("isEmailEnabled(");
+    expect(insert, "the in-app insert was not found").toBeGreaterThan(-1);
+    expect(email, "the email gate was not found").toBeGreaterThan(-1);
+    expect(email, "email is decided before the notification is written").toBeGreaterThan(insert);
+  });
+
+  it("is gated on the policy's email flag, not the in-app one", () => {
+    expect(src).toMatch(/if \(isEmailEnabled\(settings\?\.policy, notice\.event\)\)/);
+  });
+
+  it("cannot break the caller when SMTP fails", () => {
+    // Several dispatch sites are public submit handlers; a mail round-trip must
+    // not sit inside a prospect's form POST, and a bounce must not surface.
+    expect(src).toMatch(/void sendPolicyEmail\(notice, userId\)\.catch\(/);
+  });
+
+  it("addresses the member through their membership row", () => {
+    /**
+     * `notifEmail` is a personal address that may differ from the login one.
+     * Both are read via workspaceMembers joined to users, so this cannot mail
+     * somebody outside the workspace even if a userId were wrong.
+     */
+    expect(src).toMatch(/notifEmail: workspaceMembers\.notifEmail, loginEmail: users\.email/);
+    expect(src).toMatch(/eq\(workspaceMembers\.workspaceId, notice\.workspaceId\)/);
+    expect(src).toMatch(/eq\(workspaceMembers\.userId, userId\)/);
+    expect(src).toMatch(/const to = \(row\?\.notifEmail \?\? row\?\.loginEmail \?\? ""\)\.trim\(\);/);
+    expect(src).toMatch(/if \(!to\) return;/);
+  });
+
+  it("ESCAPES every value it interpolates into the HTML", () => {
+    /**
+     * 🔒 Titles and bodies carry prospect names, note text and deal names —
+     * attacker-influenced strings on the public capture paths. areEngine's
+     * textToHtml already had to learn this: a URL containing a double quote
+     * closed the attribute and everything after it parsed as more attributes.
+     */
+    expect(src).toMatch(/const title = escapeHtml\(notice\.title\);/);
+    expect(src).toMatch(/const body = notice\.body \? escapeHtml\(notice\.body\) : "";/);
+    expect(src).toMatch(/href="\$\{escapeHtml\(link\)\}"/);
+    // The raw fields must never reach the template directly.
+    const html = src.slice(src.indexOf("html:"));
+    expect(html, "an unescaped value reaches the email body").not.toMatch(/\$\{notice\.(title|body)\}/);
+  });
+
+  it("says why the recipient is getting it", () => {
+    // Internal mail still needs to explain itself, or the first reaction is
+    // "who signed me up for this" rather than "I should turn that off".
+    expect(src).toMatch(/Settings → Notifications/);
   });
 });
 

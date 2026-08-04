@@ -18,10 +18,13 @@
  *
  * One gate, so a sixth event cannot be added with a fifth spelling of it.
  */
-import { eq } from "drizzle-orm";
-import { isInAppEnabled } from "@shared/notifyPolicy";
-import { notifications, workspaceSettings } from "../../drizzle/schema";
+import { and, eq } from "drizzle-orm";
+import { isEmailEnabled, isInAppEnabled } from "@shared/notifyPolicy";
+import { escapeHtml } from "@shared/escapeHtml";
+import { notifications, users, workspaceMembers, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
+import { appUrl } from "../appUrl";
+import { sendWorkspaceEmail } from "../emailDelivery";
 import { activeOwnerOrNull } from "../_core/activeMembers";
 
 /**
@@ -95,11 +98,81 @@ export async function notifyIfEnabled(notice: PolicyNotice): Promise<boolean> {
       relatedType: notice.relatedType ?? null,
       relatedId: notice.relatedId ?? null,
     } as never);
+
+    /**
+     * The email column. Strictly a SECOND channel, sent only after the in-app
+     * row exists — so a mail failure can never cost anyone the notification
+     * itself, and the two can never disagree about whether something happened.
+     */
+    if (isEmailEnabled(settings?.policy, notice.event)) {
+      void sendPolicyEmail(notice, userId).catch((e) =>
+        console.error(`[policyNotify] ${notice.event} email failed:`, (e as Error).message),
+      );
+    }
     return true;
   } catch (e) {
     console.error(`[policyNotify] ${notice.event} failed:`, (e as Error).message);
     return false;
   }
+}
+
+/**
+ * Deliver the email half.
+ *
+ * Fire-and-forget from the caller's point of view: several dispatch sites are
+ * public submit handlers and unattended crons, and SMTP is slow enough that
+ * awaiting it would put a mail round-trip inside a prospect's form POST.
+ *
+ * Silently does nothing when the workspace has no SMTP configured —
+ * `sendWorkspaceEmail` returns `{ok:false}` rather than throwing, which is the
+ * right shape here: email is opt-in infrastructure, not a requirement.
+ */
+async function sendPolicyEmail(notice: PolicyNotice, userId: number): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+
+  /**
+   * `workspace_members.notifEmail` is a personal notification address that may
+   * differ from the login one; fall back to the account email. Both are read
+   * through the membership row, so this cannot address somebody outside the
+   * workspace even if a userId were wrong.
+   */
+  const [row] = await db
+    .select({ notifEmail: workspaceMembers.notifEmail, loginEmail: users.email })
+    .from(workspaceMembers)
+    .innerJoin(users, eq(users.id, workspaceMembers.userId))
+    .where(and(
+      eq(workspaceMembers.workspaceId, notice.workspaceId),
+      eq(workspaceMembers.userId, userId),
+    ))
+    .limit(1);
+
+  const to = (row?.notifEmail ?? row?.loginEmail ?? "").trim();
+  if (!to) return;
+
+  /**
+   * 🔒 EVERY INTERPOLATED VALUE IS ESCAPED. Titles and bodies carry prospect
+   * names, note text and deal names — attacker-influenced strings on the public
+   * capture paths. `textToHtml` in areEngine already had to learn this: a URL
+   * with a double quote closed an attribute and everything after it parsed as
+   * more attributes.
+   */
+  const title = escapeHtml(notice.title);
+  const body = notice.body ? escapeHtml(notice.body) : "";
+  const link = notice.relatedType && notice.relatedId
+    ? appUrl(`/notifications?related=${encodeURIComponent(notice.relatedType)}&id=${notice.relatedId}`)
+    : appUrl("/notifications");
+
+  await sendWorkspaceEmail(notice.workspaceId, {
+    to,
+    subject: notice.title.slice(0, 200),
+    html:
+      `<p><strong>${title}</strong></p>` +
+      (body ? `<p>${body.replace(/\n/g, "<br>")}</p>` : "") +
+      `<p><a href="${escapeHtml(link)}">Open in Velocity</a></p>` +
+      `<p style="color:#6b7280;font-size:12px">You are receiving this because ` +
+      `email is enabled for this event in Settings → Notifications.</p>`,
+  });
 }
 
 export interface LeadRoutedNotice {
