@@ -31,6 +31,9 @@ import {
   CONTACT_IMPORT_FIELDS,
   autoMapHeaders,
   findDuplicateFieldMappings,
+  isFieldRequiredFor,
+  missingRequiredMappings,
+  requiredFieldsFor,
 } from "@shared/importFields";
 
 /* ─── System fields ──────────────────────────────────────────────────────────
@@ -263,6 +266,14 @@ export default function ImportContacts() {
   const duplicateMappings = findDuplicateFieldMappings(fieldMapping);
   const conflictedHeaders = new Set(duplicateMappings.flatMap((d) => d.headers));
 
+  /**
+   * Required fields depend on the DESTINATION, which is chosen on this same
+   * screen — so the list re-evaluates as the user switches it rather than
+   * describing whichever destination happened to be selected first.
+   */
+  const missingRequired = missingRequiredMappings(fieldMapping, destination);
+  const canContinue = duplicateMappings.length === 0 && missingRequired.length === 0;
+
   return (
     <Shell>
       <PageHeader
@@ -401,7 +412,7 @@ export default function ImportContacts() {
                               {SYSTEM_FIELDS.map((f) => (
                                 <SelectItem key={f.key} value={f.key}>
                                   {f.label}
-                                  {f.required && (
+                                  {isFieldRequiredFor(f, destination) && (
                                     <span className="ml-1 text-destructive">*</span>
                                   )}
                                 </SelectItem>
@@ -416,8 +427,30 @@ export default function ImportContacts() {
               </div>
 
               <p className="text-xs text-muted-foreground">
-                <span className="text-destructive">*</span> Required fields: First Name, Last Name
+                <span className="text-destructive">*</span> Required for{" "}
+                {destination === "prospects" ? "Prospects" : "CRM Contacts"}:{" "}
+                {requiredFieldsFor(destination).map((f) => f.label).join(", ")}
+                {destination === "prospects" && (
+                  <> — Email is not required here, because finding one is what this destination is for.</>
+                )}
               </p>
+
+              {missingRequired.length > 0 && (
+                <Alert variant="destructive">
+                  <AlertCircle className="h-4 w-4" />
+                  <AlertDescription className="space-y-1">
+                    <p className="font-medium">
+                      No column is mapped to{" "}
+                      {missingRequired.map((f) => f.label).join(", ")}.
+                    </p>
+                    <p className="text-xs">
+                      {destination === "prospects"
+                        ? "Prospects need a name and a company — the enrichment sweeper resolves the company to a domain before it can find an address."
+                        : "A CRM contact needs a name, a company and an email address. If your file has no email column, import into Prospects instead and let the sweeper find one."}
+                    </p>
+                  </AlertDescription>
+                </Alert>
+              )}
 
               {duplicateMappings.length > 0 && (
                 <Alert variant="destructive">
@@ -475,7 +508,7 @@ export default function ImportContacts() {
                   // as `override`, so every field of it reads undefined and the
                   // function works only because each one falls back to state.
                   onClick={() => void handleValidate()}
-                  disabled={validateRowsMutation.isPending || duplicateMappings.length > 0}
+                  disabled={validateRowsMutation.isPending || !canContinue}
                   className="gap-2"
                 >
                   {validateRowsMutation.isPending ? (

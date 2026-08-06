@@ -220,6 +220,10 @@ describe("what the collapse actually did to a row", () => {
     seenNameKeys: new Set<string>(),
     matchOnNameCompany: false,
     skipDuplicates: true,
+    // The legacy pair: this block is about the email FORMAT check, which is
+    // what the collapse tripped. Destination-specific required sets are
+    // covered in importRequiredFields.test.ts.
+    requiredFields: ["firstName", "lastName"],
   };
 
   it("rejected every row with the verdict text as the address", () => {
@@ -347,9 +351,16 @@ describe("the matcher has one definition, and it is not a similarity match", () 
     // A warning the user can click past leaves the silent drop in place.
     // Boolean form for the same reason as above.
     expect(/findDuplicateFieldMappings\(/.test(client), "UI no longer detects conflicts").toBe(true);
+    // The button's own condition, and the definition that condition depends on.
+    // Asserting only `disabled={... !canContinue}` would survive canContinue
+    // being redefined to ignore duplicates entirely.
     expect(
-      /disabled=\{[^}]*duplicateMappings\.length > 0/.test(client),
-      "the Validate button no longer blocks on a conflict",
+      /disabled=\{[^}]*!canContinue/.test(client),
+      "the Validate button no longer blocks",
+    ).toBe(true);
+    expect(
+      /canContinue\s*=\s*duplicateMappings\.length === 0/.test(client),
+      "canContinue no longer accounts for duplicate mappings",
     ).toBe(true);
   });
 });

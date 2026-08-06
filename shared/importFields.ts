@@ -29,32 +29,87 @@
  * column is worse than no option, because the import still reports success.
  */
 
+/** Where an import lands. Mirrors the `destination` input on both procedures. */
+export type ImportDestination = "contacts" | "prospects";
+
 export interface ContactImportField {
   key: string;
   label: string;
-  required: boolean;
+  /**
+   * Destinations where this column must be mapped AND carry a value on every
+   * row. Empty means optional everywhere.
+   */
+  requiredFor: ImportDestination[];
 }
 
+const BOTH: ImportDestination[] = ["contacts", "prospects"];
+
+/**
+ * ⚠️ **`email` IS REQUIRED FOR `contacts` AND DELIBERATELY NOT FOR
+ * `prospects`.** A CRM contact with no address cannot be sequenced, so
+ * requiring one there is what was asked for and what the product means. The
+ * `prospects` backlog is the opposite case BY DESIGN: it exists to hold people
+ * whose address is not known yet, and the enrichment sweeper's whole job is to
+ * find one and promote them. Requiring an email there would reject exactly the
+ * rows the destination was built for and make the sweeper unreachable from an
+ * import.
+ *
+ * `company` is required for BOTH, and for prospects it is load-bearing rather
+ * than tidiness: the free domain pass resolves a company NAME to a domain, and
+ * the email finder needs that domain. A prospect with no company is not
+ * workable by any pass in the pipeline.
+ */
 export const CONTACT_IMPORT_FIELDS: ContactImportField[] = [
-  { key: "firstName", label: "First Name", required: true },
-  { key: "lastName", label: "Last Name", required: true },
-  { key: "email", label: "Email", required: false },
-  { key: "phone", label: "Phone", required: false },
-  { key: "title", label: "Job Title", required: false },
-  { key: "company", label: "Company", required: false },
-  { key: "linkedinUrl", label: "LinkedIn URL", required: false },
-  { key: "website", label: "Website", required: false },
-  { key: "industry", label: "Industry", required: false },
-  { key: "city", label: "City", required: false },
-  { key: "state", label: "State / Region", required: false },
-  { key: "country", label: "Country", required: false },
-  { key: "seniority", label: "Seniority", required: false },
+  { key: "firstName", label: "First Name", requiredFor: BOTH },
+  { key: "lastName", label: "Last Name", requiredFor: BOTH },
+  { key: "email", label: "Email", requiredFor: ["contacts"] },
+  { key: "phone", label: "Phone", requiredFor: [] },
+  { key: "title", label: "Job Title", requiredFor: [] },
+  { key: "company", label: "Company", requiredFor: BOTH },
+  { key: "linkedinUrl", label: "LinkedIn URL", requiredFor: [] },
+  { key: "website", label: "Website", requiredFor: [] },
+  { key: "industry", label: "Industry", requiredFor: [] },
+  { key: "city", label: "City", requiredFor: [] },
+  { key: "state", label: "State / Region", requiredFor: [] },
+  { key: "country", label: "Country", requiredFor: [] },
+  { key: "seniority", label: "Seniority", requiredFor: [] },
 ];
 
 export const CONTACT_IMPORT_FIELD_KEYS: string[] = CONTACT_IMPORT_FIELDS.map((f) => f.key);
 
-export const REQUIRED_CONTACT_IMPORT_FIELDS: ContactImportField[] =
-  CONTACT_IMPORT_FIELDS.filter((f) => f.required);
+export function isFieldRequiredFor(field: ContactImportField, destination: ImportDestination): boolean {
+  return field.requiredFor.includes(destination);
+}
+
+/** The fields a given destination insists on, in display order. */
+export function requiredFieldsFor(destination: ImportDestination): ContactImportField[] {
+  return CONTACT_IMPORT_FIELDS.filter((f) => isFieldRequiredFor(f, destination));
+}
+
+export function requiredFieldKeysFor(destination: ImportDestination): string[] {
+  return requiredFieldsFor(destination).map((f) => f.key);
+}
+
+/**
+ * Required fields with no column mapped to them.
+ *
+ * The mapping-level half of the rule — the row-level half lives in
+ * `classifyImportRow`. Both halves are needed and neither implies the other: a
+ * mapped column can still be empty on a given row, and an unmapped required
+ * field would otherwise fail every row one at a time instead of saying once
+ * that the mapping is incomplete.
+ */
+export function missingRequiredMappings(
+  mapping: Record<string, string | null>,
+  destination: ImportDestination,
+): ContactImportField[] {
+  // `filter(Boolean)` is type narrowing, not a rule: no field key is null, so
+  // letting nulls into the set could never change an answer. Recorded because a
+  // mutation removing it survives, and an unexplained equivalent mutant looks
+  // like a coverage hole to whoever audits this next.
+  const mapped = new Set(Object.values(mapping).filter(Boolean) as string[]);
+  return requiredFieldsFor(destination).filter((f) => !mapped.has(f.key));
+}
 
 /* ─── Header → field matching ────────────────────────────────────────────── */
 

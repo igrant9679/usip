@@ -16,6 +16,8 @@ import {
   CONTACT_IMPORT_FIELDS,
   describeDuplicateMappings,
   findDuplicateFieldMappings,
+  missingRequiredMappings,
+  requiredFieldKeysFor,
 } from "@shared/importFields";
 
 /* ─── Field definitions ─────────────────────────────────────────────────── */
@@ -80,6 +82,31 @@ export function assertNoDuplicateMappings(mapping: Record<string, string | null>
   });
 }
 
+/**
+ * Every required field has a column mapped to it.
+ *
+ * Called by BOTH procedures against the SAME destination. Until now only
+ * `validateRows` checked this at all, so an unmapped required field was a
+ * preview error and a successful import — a caller skipping the preview got
+ * the rows in regardless. The whole point of this pair of procedures is that
+ * the preview describes the import.
+ */
+export function assertRequiredFieldsMapped(
+  mapping: Record<string, string | null>,
+  destination: ImportDestination,
+): void {
+  const missing = missingRequiredMappings(mapping, destination);
+  if (missing.length === 0) return;
+  throw new TRPCError({
+    code: "BAD_REQUEST",
+    message:
+      `Required fields not mapped: ${missing.map((f) => f.label).join(", ")}. ` +
+      (destination === "prospects"
+        ? `Prospects need a name and a company — the enrichment sweeper resolves the company to a domain before it can find an address.`
+        : `A CRM contact needs a name, a company and an email address.`),
+  });
+}
+
 /* ─── Router ────────────────────────────────────────────────────────────── */
 
 /**
@@ -137,11 +164,35 @@ export function classifyImportRow(
     seenNameKeys: Set<string>;
     matchOnNameCompany: boolean;
     skipDuplicates: boolean;
+    /**
+     * Which fields this row must carry, from `requiredFieldKeysFor(destination)`.
+     *
+     * NOT optional and NOT defaulted: preview and commit must be handed the
+     * same set or they resume disagreeing about which rows import, which is the
+     * exact defect this shared classifier was extracted to end. A default here
+     * would let one caller quietly omit it and still compile.
+     */
+    requiredFields: string[];
   },
 ): ImportRowClass {
   const errors: string[] = [];
-  if (!mapped.firstName?.trim()) errors.push("Missing First Name");
-  if (!mapped.lastName?.trim()) errors.push("Missing Last Name");
+  /**
+   * Fail LOUD on a caller that omits the set. `new Set(undefined)` is a valid
+   * empty set, so the natural failure mode of forgetting this argument is
+   * "nothing is required" — an import that silently accepts every row. tsc
+   * catches it for the two real call sites; this catches anything else.
+   */
+  if (!Array.isArray(opts.requiredFields)) {
+    throw new Error("classifyImportRow: requiredFields is missing — refusing to treat that as 'nothing required'");
+  }
+  // Iterated in CONTACT_IMPORT_FIELDS order so the message reads in the same
+  // order as the mapping screen rather than in whichever order the caller
+  // happened to build the list.
+  const required = new Set(opts.requiredFields);
+  for (const f of CONTACT_IMPORT_FIELDS) {
+    if (!required.has(f.key)) continue;
+    if (!mapped[f.key]?.trim()) errors.push(`Missing ${f.label}`);
+  }
   if (mapped.email && !isValidEmail(mapped.email)) {
     errors.push(`Invalid email format: ${mapped.email}`);
   }
@@ -302,19 +353,10 @@ export const importsRouter = router({
       const { headers, rows } = parseCSVText(input.csvText);
       const wsId = ctx.workspace.id;
 
-      assertNoDuplicateMappings(input.fieldMapping as Record<string, string | null>);
-
-      // Validate mapping has required fields
-      const mappedSystemFields = Object.values(input.fieldMapping).filter(Boolean) as string[];
-      const missingRequired = SYSTEM_FIELDS.filter(
-        (f) => f.required && !mappedSystemFields.includes(f.key),
-      );
-      if (missingRequired.length > 0) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: `Required fields not mapped: ${missingRequired.map((f) => f.label).join(", ")}`,
-        });
-      }
+      const mapping = input.fieldMapping as Record<string, string | null>;
+      assertNoDuplicateMappings(mapping);
+      assertRequiredFieldsMapped(mapping, input.destination);
+      const requiredFields = requiredFieldKeysFor(input.destination);
 
       // Fetch existing contacts for duplicate detection. Name+company is pulled
       // too so the opt-in matcher has something to compare against.
@@ -353,6 +395,7 @@ export const importsRouter = router({
           seenNameKeys,
           matchOnNameCompany: input.matchOnNameCompany,
           skipDuplicates: input.skipDuplicates,
+          requiredFields,
         });
 
         if (!mapped.email) {
@@ -436,7 +479,10 @@ export const importsRouter = router({
 
       // BEFORE the import record is created: a rejected import must leave no
       // half-written history row claiming it ran.
-      assertNoDuplicateMappings(input.fieldMapping as Record<string, string | null>);
+      const mapping = input.fieldMapping as Record<string, string | null>;
+      assertNoDuplicateMappings(mapping);
+      assertRequiredFieldsMapped(mapping, input.destination);
+      const requiredFields = requiredFieldKeysFor(input.destination);
 
       // Create import record
       const [importRecord] = await db
@@ -501,6 +547,7 @@ export const importsRouter = router({
           seenNameKeys,
           matchOnNameCompany: input.matchOnNameCompany,
           skipDuplicates: input.skipDuplicates,
+          requiredFields,
         });
 
         if (!mapped.email) noEmailRows++;

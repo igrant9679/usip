@@ -99,11 +99,17 @@ describe("parseCSVText", () => {
 
 /* ─── 2. One classifier for preview and import ───────────────────────────── */
 
+/**
+ * `requiredFields` is the legacy pair on purpose: these tests are about dedup
+ * and preview/commit parity, not about which fields a destination insists on.
+ * Destination-specific required sets are covered in importRequiredFields.test.ts.
+ */
 const emptySets = () => ({
   existingEmails: new Set<string>(),
   seenEmails: new Set<string>(),
   existingNameKeys: new Set<string>(),
   seenNameKeys: new Set<string>(),
+  requiredFields: ["firstName", "lastName"],
 });
 
 describe("classifyImportRow", () => {
