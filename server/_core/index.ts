@@ -67,6 +67,7 @@ import { runChatFollowUps } from "../services/chatFollowUp";
 import { registerUnsubscribeRoute } from "../unsubscribe";
 import { registerPasswordAuthRoutes } from "../passwordAuth";
 import { registerPublicRateLimits } from "../publicRateLimit";
+import { registerHealthRoute } from "../health";
 import { guardOverlap } from "./cronGuard";
 import { reportSecretHealth } from "./secretHealth";
 import { registerLLMStreamRoutes } from "../llmStreamRoute";
@@ -110,6 +111,11 @@ async function startServer() {
   // registration order, so a limiter mounted after `app.post("/api/scheduled/…")`
   // would never run. This sat below registerEmailTrackingRoutes while it only
   // covered /api/trpc (mounted later still); it does not any more.
+  // Before serveStatic's SPA catch-all, or /api/health would return index.html
+  // — a 200 with the wrong body, which is the failure this endpoint exists to
+  // rule out. Unaffected by registerPublicRateLimits (it covers only
+  // /api/scheduled and /api/trpc).
+  registerHealthRoute(app);
   registerPublicRateLimits(app);
   registerStorageProxy(app);
   registerOAuthRoutes(app);
