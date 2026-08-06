@@ -27,7 +27,11 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { Link } from "wouter";
-import { CONTACT_IMPORT_FIELDS } from "@shared/importFields";
+import {
+  CONTACT_IMPORT_FIELDS,
+  autoMapHeaders,
+  findDuplicateFieldMappings,
+} from "@shared/importFields";
 
 /* ─── System fields ──────────────────────────────────────────────────────────
  * Imported, not mirrored. This file used to declare its own copy under a comment
@@ -176,19 +180,9 @@ export default function ImportContacts() {
     try {
       const result = await parseCSVMutation.mutateAsync({ csvText, filename });
       setHeaders(result.headers);
-      // Auto-map: try to match CSV headers to system fields by label similarity
-      const autoMapping: Record<string, string | null> = {};
-      result.headers.forEach((h) => {
-        const normalized = h.toLowerCase().replace(/[^a-z0-9]/g, "");
-        const match = SYSTEM_FIELDS.find((f) => {
-          const fNorm = f.label.toLowerCase().replace(/[^a-z0-9]/g, "");
-          const kNorm = f.key.toLowerCase();
-          return normalized === fNorm || normalized === kNorm ||
-            normalized.includes(kNorm) || kNorm.includes(normalized);
-        });
-        autoMapping[h] = match?.key ?? null;
-      });
-      setFieldMapping(autoMapping);
+      // Exact label / key / alias matching, one column per field — see
+      // shared/importFields.ts for why this is not a similarity match.
+      setFieldMapping(autoMapHeaders(result.headers));
       setStep(2);
     } catch (err: any) {
       toast.error(err.message ?? "Failed to parse CSV.");
@@ -260,6 +254,14 @@ export default function ImportContacts() {
   }
 
   const totalRows = totalRowCount || validCount + duplicateCount + errorRows.length;
+
+  /**
+   * Two columns claiming one field. The import keeps whichever comes last and
+   * discards the other silently, so this blocks rather than warns — the server
+   * refuses it too, which is the guard that actually holds.
+   */
+  const duplicateMappings = findDuplicateFieldMappings(fieldMapping);
+  const conflictedHeaders = new Set(duplicateMappings.flatMap((d) => d.headers));
 
   return (
     <Shell>
@@ -368,7 +370,14 @@ export default function ImportContacts() {
                   </thead>
                   <tbody>
                     {headers.map((header) => (
-                      <tr key={header} className="border-t">
+                      <tr
+                        key={header}
+                        className={
+                          conflictedHeaders.has(header)
+                            ? "border-t bg-destructive/10"
+                            : "border-t"
+                        }
+                      >
                         <td className="px-4 py-2 font-mono text-xs text-muted-foreground">
                           {header}
                         </td>
@@ -410,6 +419,29 @@ export default function ImportContacts() {
                 <span className="text-destructive">*</span> Required fields: First Name, Last Name
               </p>
 
+              {duplicateMappings.length > 0 && (
+                <Alert variant="destructive">
+                  <AlertCircle className="h-4 w-4" />
+                  <AlertDescription className="space-y-2">
+                    <p className="font-medium">
+                      Two columns are mapped to the same field.
+                    </p>
+                    <ul className="text-xs space-y-1">
+                      {duplicateMappings.map((d) => (
+                        <li key={d.field}>
+                          <span className="font-medium">{d.label}</span> ←{" "}
+                          {d.headers.map((h) => `"${h}"`).join(", ")}
+                        </li>
+                      ))}
+                    </ul>
+                    <p className="text-xs">
+                      Only one of them would be imported and the other would be dropped without
+                      a warning, so pick one and set the rest to “Skip this column”.
+                    </p>
+                  </AlertDescription>
+                </Alert>
+              )}
+
               {/* Chosen BEFORE validation, because the preview dedupes against
                   whichever table the rows will land in. */}
               <div className="rounded-lg border p-3 space-y-2">
@@ -443,7 +475,7 @@ export default function ImportContacts() {
                   // as `override`, so every field of it reads undefined and the
                   // function works only because each one falls back to state.
                   onClick={() => void handleValidate()}
-                  disabled={validateRowsMutation.isPending}
+                  disabled={validateRowsMutation.isPending || duplicateMappings.length > 0}
                   className="gap-2"
                 >
                   {validateRowsMutation.isPending ? (

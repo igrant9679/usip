@@ -12,7 +12,11 @@ import {
   prospects,
 } from "../../drizzle/schema";
 import { parseCSVText } from "../services/csv";
-import { CONTACT_IMPORT_FIELDS } from "@shared/importFields";
+import {
+  CONTACT_IMPORT_FIELDS,
+  describeDuplicateMappings,
+  findDuplicateFieldMappings,
+} from "@shared/importFields";
 
 /* ─── Field definitions ─────────────────────────────────────────────────── */
 
@@ -49,6 +53,31 @@ function mapRowToContact(
     }
   }
   return result;
+}
+
+/**
+ * Refuse a mapping where two columns claim one field.
+ *
+ * The loop above has no merge step — the LAST column assigned to a field wins
+ * and the other's data is discarded with no error anywhere in the summary. That
+ * is not hypothetical: the client's old similarity matcher mapped both `Email`
+ * and `Email Status` onto `email`, and on a verified-email export the status
+ * verdict ("valid" / "unknown") overwrote every real address.
+ *
+ * Enforced HERE, in both procedures, rather than only in the mapping UI. The
+ * client now prevents reaching this state, but `fieldMapping` is a free-form
+ * record on the wire and a UI check is not a guard — the same reasoning that
+ * moved the LLM ceiling to the funnel instead of a path list.
+ */
+export function assertNoDuplicateMappings(mapping: Record<string, string | null>): void {
+  const dupes = findDuplicateFieldMappings(mapping);
+  if (dupes.length === 0) return;
+  throw new TRPCError({
+    code: "BAD_REQUEST",
+    message:
+      `Two columns are mapped to the same field, and only one would be imported: ` +
+      `${describeDuplicateMappings(dupes)}. Map one column per field.`,
+  });
 }
 
 /* ─── Router ────────────────────────────────────────────────────────────── */
@@ -273,6 +302,8 @@ export const importsRouter = router({
       const { headers, rows } = parseCSVText(input.csvText);
       const wsId = ctx.workspace.id;
 
+      assertNoDuplicateMappings(input.fieldMapping as Record<string, string | null>);
+
       // Validate mapping has required fields
       const mappedSystemFields = Object.values(input.fieldMapping).filter(Boolean) as string[];
       const missingRequired = SYSTEM_FIELDS.filter(
@@ -402,6 +433,10 @@ export const importsRouter = router({
       const wsId = ctx.workspace.id;
       const userId = ctx.user.id;
       const { headers, rows } = parseCSVText(input.csvText);
+
+      // BEFORE the import record is created: a rejected import must leave no
+      // half-written history row claiming it ran.
+      assertNoDuplicateMappings(input.fieldMapping as Record<string, string | null>);
 
       // Create import record
       const [importRecord] = await db

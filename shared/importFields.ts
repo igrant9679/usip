@@ -55,3 +55,164 @@ export const CONTACT_IMPORT_FIELD_KEYS: string[] = CONTACT_IMPORT_FIELDS.map((f)
 
 export const REQUIRED_CONTACT_IMPORT_FIELDS: ContactImportField[] =
   CONTACT_IMPORT_FIELDS.filter((f) => f.required);
+
+/* ─── Header → field matching ────────────────────────────────────────────── */
+
+/**
+ * Strip a CSV header down to its comparable form. Case, spaces, punctuation and
+ * a leading BOM all vary between exporters and mean nothing.
+ */
+export function normalizeHeader(header: string): string {
+  // No explicit BOM strip: U+FEFF is not [a-z0-9], so the class below already
+  // removes it. An earlier version stripped it separately and a mutation test
+  // proved that line could never fail — dead code in a guard's path is worse
+  // than absent, because it reads as protection. (`uniqueHeaders` in
+  // services/csv.ts DOES need its own strip: it preserves the header verbatim
+  // as an object key rather than normalising it.)
+  return header.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+/**
+ * Extra spellings a header may use for a field, beyond its own label and key.
+ *
+ * ⚠️ THIS IS AN ALLOWLIST, AND THAT IS THE WHOLE POINT. It replaced a
+ * bidirectional substring matcher:
+ *
+ *   normalized.includes(kNorm) || kNorm.includes(normalized)
+ *
+ * which mapped **`Email Status` onto `email`**, because "emailstatus" contains
+ * "email". On a verified-email export — where that column holds `valid` /
+ * `unknown` / `catch-all`, not an address — every row then failed validation
+ * with "Invalid email format: valid". Worse, when the file ALSO had a real
+ * `Email` column both headers mapped to `email` and `mapRowToContact` kept
+ * whichever came LAST in the file, so the verdict silently overwrote the
+ * address. Reported from a live 200-row import, 2026-08-06; reproduced exactly.
+ *
+ * It mis-mapped plenty besides: `Company Website` and `Company Domain` → the
+ * `company` NAME field, `Company Phone` → the contact's `phone`, `Company City`
+ * → `company`. Substring similarity is not evidence that two columns mean the
+ * same thing.
+ *
+ * RULE FOR ADDING ONE: an alias must be a spelling of *this contact's* value.
+ * `Company Linkedin Url`, `Company Phone` and `Company City` are deliberately
+ * ABSENT — they describe the employer, not the person, and there is nowhere
+ * correct to put them. An unmatched header maps to nothing and is shown as
+ * "Skip this column", which is visible and harmless; a wrong match is neither.
+ */
+export const HEADER_ALIASES: Record<string, string> = {
+  // firstName — "firstname" itself is the normalised LABEL, matched directly
+  first: "firstName", fname: "firstName", givenname: "firstName", forename: "firstName",
+  // lastName
+  last: "lastName", lname: "lastName", surname: "lastName", familyname: "lastName",
+  // email — note NOTHING here is a verification-status column
+  emailaddress: "email", workemail: "email", businessemail: "email", personalemail: "email",
+  primaryemail: "email", emailaddresses: "email",
+  // phone — the person's, never the switchboard
+  phonenumber: "phone", mobile: "phone", mobilephone: "phone", mobilenumber: "phone",
+  workphone: "phone", workdirectphone: "phone", directphone: "phone", telephone: "phone",
+  cell: "phone", cellphone: "phone",
+  // title — "jobtitle" is the normalised label, matched directly
+  position: "title", role: "title", currenttitle: "title", jobrole: "title",
+  // company
+  companyname: "company", organization: "company", organisation: "company",
+  employer: "company", accountname: "company", currentcompany: "company",
+  // linkedinUrl — the PERSON's profile
+  linkedin: "linkedinUrl", linkedinprofile: "linkedinUrl", linkedinprofileurl: "linkedinUrl",
+  personlinkedinurl: "linkedinUrl", linkedinlink: "linkedinUrl",
+  // website — the employer's site is the right home for these
+  companywebsite: "website", companydomain: "website", domain: "website",
+  websiteurl: "website", companyurl: "website", web: "website",
+  // industry
+  companyindustry: "industry", sector: "industry", vertical: "industry",
+  // city / state / country — the CONTACT's location
+  town: "city", locationcity: "city",
+  region: "state", province: "state", locationstate: "state", stateprovince: "state",
+  locationcountry: "country",
+  // seniority
+  senioritylevel: "seniority", level: "seniority",
+};
+
+/**
+ * Which field a header maps to, or null.
+ *
+ * Exact matches only: the field's own label, its key, or an explicit alias.
+ * There is no fuzzy fallback on purpose — see HEADER_ALIASES.
+ */
+export function matchHeaderToField(header: string): string | null {
+  const n = normalizeHeader(header);
+  if (!n) return null;
+  const direct = CONTACT_IMPORT_FIELDS.find(
+    (f) => n === normalizeHeader(f.label) || n === f.key.toLowerCase(),
+  );
+  if (direct) return direct.key;
+  return HEADER_ALIASES[n] ?? null;
+}
+
+/**
+ * Auto-map a whole header row.
+ *
+ * **At most one column per field**, first occurrence in file order winning.
+ * A file carrying both `Work Email` and `Personal Email` maps the first and
+ * leaves the second unmapped rather than quietly letting the later column
+ * overwrite the earlier one inside `mapRowToContact` — which is the same
+ * last-write-wins hazard the substring matcher turned into a live bug. The
+ * skipped column is still listed in the mapping table, so the user can see it
+ * and choose it instead.
+ */
+export function autoMapHeaders(headers: string[]): Record<string, string | null> {
+  const mapping: Record<string, string | null> = {};
+  const taken = new Set<string>();
+  for (const h of headers) {
+    const field = matchHeaderToField(h);
+    if (field && !taken.has(field)) {
+      taken.add(field);
+      mapping[h] = field;
+    } else {
+      mapping[h] = null;
+    }
+  }
+  return mapping;
+}
+
+/**
+ * Fields that more than one column claims.
+ *
+ * `mapRowToContact` assigns in mapping order with no merge step, so a field
+ * claimed twice keeps ONE column's value and discards the other with no error
+ * — invisible in every summary the importer produces. Both the mapping UI and
+ * the server refuse a mapping in this state rather than picking for the user.
+ *
+ * `uniqueHeaders` already solved the neighbouring problem (two columns sharing
+ * a *header*); this is two different headers claiming the same *field*.
+ */
+export function findDuplicateFieldMappings(
+  mapping: Record<string, string | null>,
+): Array<{ field: string; label: string; headers: string[] }> {
+  // A plain record rather than a Map: this file is consumed by both the server
+  // and the browser bundle, and the project's tsc target rejects iterating a
+  // Map without --downlevelIteration.
+  const byField: Record<string, string[]> = {};
+  for (const [header, field] of Object.entries(mapping)) {
+    if (!field) continue;
+    byField[field] = [...(byField[field] ?? []), header];
+  }
+  const out: Array<{ field: string; label: string; headers: string[] }> = [];
+  for (const [field, headers] of Object.entries(byField)) {
+    if (headers.length < 2) continue;
+    out.push({
+      field,
+      label: CONTACT_IMPORT_FIELDS.find((f) => f.key === field)?.label ?? field,
+      headers,
+    });
+  }
+  return out;
+}
+
+/** Shared wording, so the UI and the server's error say the same thing. */
+export function describeDuplicateMappings(
+  dupes: Array<{ label: string; headers: string[] }>,
+): string {
+  return dupes
+    .map((d) => `${d.label} ← ${d.headers.map((h) => `"${h}"`).join(", ")}`)
+    .join("; ");
+}
