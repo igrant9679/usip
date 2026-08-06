@@ -26,6 +26,7 @@ import { normalizeDomain } from "./domain";
 import { scrapeCompanySite, type ScrapedSite } from "./companySite";
 import { readDomainCache, writeDomainCache } from "./domainCache";
 import { generatePatterns, type EmailPattern } from "./emailPatterns";
+import { domainAcceptsMail } from "./mxCheck";
 
 /* ─── Types ────────────────────────────────────────────────────────────── */
 
@@ -118,6 +119,25 @@ export async function resolveVerifiedEmail(input: {
   const apiKey = await getReoonKey(input.workspaceId);
   if (!apiKey) {
     return { email: null, status: null, reason: "reoon_key_missing", creditsQuick: 0, creditsPower: 0 };
+  }
+
+  /**
+   * Free DNS check before anything paid. If the domain cannot receive mail then
+   * no address at it can exist, so the scrape and all 3 verifications are spend
+   * with a known answer. Placed above the scrape rather than beside the
+   * patterns because a published address on a mail-less domain is no more
+   * reachable than a generated one — unlike lookupContactInfo, this function
+   * returns no phone, so the scrape buys nothing here.
+   */
+  const mx = await domainAcceptsMail(domain);
+  if (!mx.acceptsMail) {
+    return {
+      email: null,
+      status: null,
+      reason: `no_mx (${mx.reason})`,
+      creditsQuick: 0,
+      creditsPower: 0,
+    };
   }
 
   // Scrape the company site (cached 30d) — occasionally a real personal email
@@ -320,6 +340,50 @@ export async function lookupContactInfo(
       reoonCreditsQuick: 0,
       reoonCreditsPower: 0,
       message: "Already had an email — scraped site only (no verify)",
+    };
+  }
+
+  /**
+   * Free DNS check before anything paid.
+   *
+   * Placed HERE — after the scrape, before pattern generation — and not at the
+   * top of the function on purpose: the scrape yields phones and social URLs
+   * that are worth keeping and get persisted below whatever the mail situation
+   * is. Only the Reoon spend is pointless on a domain that cannot receive mail,
+   * so only the Reoon spend is skipped. Gating the whole function would throw
+   * away a phone number to save nothing.
+   */
+  const mx = await domainAcceptsMail(domain);
+  if (!mx.acceptsMail) {
+    enrichment.skipReason = `no_mx (${mx.reason})`;
+    const phone = pickPhone(scraped, input.existingPhone);
+    const db = await getDb();
+    if (db) {
+      const update: Record<string, unknown> = { enrichmentData: enrichment };
+      if (phone && !input.existingPhone) update.phone = phone;
+      await db
+        .update(prospects)
+        .set(update)
+        .where(
+          and(
+            eq(prospects.id, input.prospectId),
+            eq(prospects.workspaceId, input.workspaceId),
+          ),
+        );
+    }
+    return {
+      ok: false,
+      email: null,
+      emailStatus: null,
+      phone,
+      enrichment,
+      reoonCredits: 0,
+      reoonCreditsQuick: 0,
+      reoonCreditsPower: 0,
+      message:
+        mx.reason === "no_such_domain"
+          ? `${domain} does not exist — no address there can be reached`
+          : `${domain} does not accept email — skipped verification (no credits spent)`,
     };
   }
 
