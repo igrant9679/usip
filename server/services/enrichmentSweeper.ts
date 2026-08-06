@@ -540,15 +540,16 @@ export async function sweepWorkspace(
   const db = await getDb();
   if (!db) return emptyResult("no_key");
 
-  const key = await getReoonKey(workspaceId);
-  if (!key) return emptyResult("no_key");
-
   const cap = clampSweepCap(opts.limit ?? SWEEP_DAILY_CAP_DEFAULT);
   const retry = opts.retryFailed ?? false;
 
   // Domain pre-pass. Costs no Apollo credits and no Reoon credits, and without
   // it almost every sourced prospect is unworkable — so it runs first, and its
-  // results are visible to the candidate query immediately below.
+  // results are visible to the candidate query immediately below. It also runs
+  // BEFORE the Reoon key check: the key gates only the paid email pass, and a
+  // workspace with no key configured should still get the free work. (Until
+  // 2026-08-06 the key check sat above this pass, so a keyless workspace's
+  // sweep did nothing at all — including the part that costs nothing.)
   let domains = { attempted: 0, resolved: 0 };
   if (opts.resolveDomains !== false) {
     try {
@@ -560,136 +561,151 @@ export async function sweepWorkspace(
       console.error("[EnrichmentSweep] domain pre-pass failed:", (e as Error).message);
     }
   }
-  // Queue first: it is where the ARE backlog lives, and those rows are the ones
-  // a campaign will actually mail once they have an address.
-  const [queueRows, rows] = await Promise.all([
-    queueCandidatesFor(workspaceId, cap, retry),
-    candidatesFor(workspaceId, cap, retry),
-  ]);
-  if (rows.length === 0 && queueRows.length === 0) {
-    return { ...emptyResult("no_candidates"), domainsAttempted: domains.attempted, domainsResolved: domains.resolved };
-  }
 
-  // One balance read up front, then decremented locally. Re-reading per
-  // prospect would add a network round trip to every single lookup.
-  let dailyCreditsLeft = 0;
+  // Every exit from here on stamps the run (the `finally` below), or the
+  // cron's 20-hour gate never engages for exactly the runs that end early —
+  // no key, no candidates, or a failed balance check would quietly repeat the
+  // domain pass on every 6-hour tick, and "daily means daily" would hold only
+  // on the happy path.
   try {
-    const balance = await reoonCheckBalance(key);
-    dailyCreditsLeft = balance.remaining_daily_credits ?? 0;
-  } catch (e) {
-    console.error("[EnrichmentSweep] balance check failed:", (e as Error).message);
-    return emptyResult("no_credits");
-  }
-
-  const result: SweepResult = {
-    ...emptyResult("done"),
-    domainsAttempted: domains.attempted,
-    domainsResolved: domains.resolved,
-  };
-
-  // ── ARE queue rows ──
-  // resolveVerifiedEmail is the SAME resolver the ARE engine calls at sourcing
-  // time; only the write-back differs, because lookupContactInfo persists to the
-  // prospects table and these rows live in prospect_queue.
-  for (const q of queueRows) {
-    if (!shouldContinue({ attempted: result.attempted, cap, dailyCreditsLeft })) {
-      result.stoppedBecause = result.attempted >= cap ? "cap" : "no_credits";
-      break;
+    const key = await getReoonKey(workspaceId);
+    if (!key) {
+      // The key gates the email pass only; report what the free pass did so
+      // the caller can tell "did nothing" from "did the unpaid half".
+      return { ...emptyResult("no_key"), domainsAttempted: domains.attempted, domainsResolved: domains.resolved };
     }
+
+    // Queue first: it is where the ARE backlog lives, and those rows are the ones
+    // a campaign will actually mail once they have an address.
+    const [queueRows, rows] = await Promise.all([
+      queueCandidatesFor(workspaceId, cap, retry),
+      candidatesFor(workspaceId, cap, retry),
+    ]);
+    if (rows.length === 0 && queueRows.length === 0) {
+      return { ...emptyResult("no_candidates"), domainsAttempted: domains.attempted, domainsResolved: domains.resolved };
+    }
+
+    // One balance read up front, then decremented locally. Re-reading per
+    // prospect would add a network round trip to every single lookup.
+    let dailyCreditsLeft = 0;
     try {
-      const found = await resolveVerifiedEmail({
-        firstName: q.firstName,
-        lastName: q.lastName,
-        companyDomain: q.companyDomain,
-        companyWebsite: q.companyDomain,
-        workspaceId,
-      });
-      result.attempted++;
-      result.fromQueue++;
-      result.creditsQuick += found.creditsQuick ?? 0;
-      result.creditsPower += found.creditsPower ?? 0;
-      dailyCreditsLeft -= found.creditsPower ?? 0;
-      // Stamp enrichedAt on EVERY attempt, hit or miss — it is the marker that
-      // stops the next sweep paying to re-check the same miss forever.
-      const patch: Record<string, unknown> = {
-        enrichedAt: new Date(),
-        enrichmentStatus: found.email ? "complete" : "failed",
-      };
-      if (found.email) {
-        patch.email = found.email;
-        result.emailsFound++;
-      } else if (found.reason) {
-        patch.enrichmentError = found.reason.slice(0, 500);
-      }
-      await db.update(prospectQueue).set(patch as never).where(eq(prospectQueue.id, q.id));
+      const balance = await reoonCheckBalance(key);
+      dailyCreditsLeft = balance.remaining_daily_credits ?? 0;
     } catch (e) {
-      result.attempted++;
-      result.fromQueue++;
-      console.error(`[EnrichmentSweep] queue prospect ${q.id} failed:`, (e as Error).message);
+      console.error("[EnrichmentSweep] balance check failed:", (e as Error).message);
+      return emptyResult("no_credits");
     }
-  }
 
-  // ── prospects (People/CRM) rows ──
-  for (const p of rows) {
-    if (!shouldContinue({ attempted: result.attempted, cap, dailyCreditsLeft })) {
-      result.stoppedBecause = result.attempted >= cap ? "cap" : "no_credits";
-      break;
-    }
-    try {
-      const r = await lookupContactInfo({
-        workspaceId,
-        prospectId: p.id,
-        firstName: p.firstName ?? "",
-        lastName: p.lastName ?? "",
-        companyDomain: p.companyDomain ?? null,
-        skipIfHasEmail: true,
-        existingPhone: p.phone ?? null,
-      });
-      result.attempted++;
-      result.fromProspects++;
-      result.creditsQuick += r.reoonCreditsQuick ?? 0;
-      result.creditsPower += r.reoonCreditsPower ?? 0;
-      dailyCreditsLeft -= r.reoonCreditsPower ?? 0;
-      if (r.email) {
-        result.emailsFound++;
-        /**
-         * The last link in import → clean → enrol.
-         *
-         * A found address is only useful once the person is a CONTACT: the
-         * sweeper works `prospects`, and segment→sequence rules only ever read
-         * `contacts`. promoteVerifiedProspect applies the product rule — it
-         * promotes on a `valid` verdict and refuses accept_all / risky — so an
-         * unverified row can never reach a campaign.
-         *
-         * Best-effort and per row: a promotion that fails must not abort a
-         * sweep that has already spent credits on the rest of the batch, and
-         * the row keeps its found address either way, so the next run retries
-         * the promotion without paying again.
-         */
-        try {
-          const outcome = await promoteProspectRow(workspaceId, p.id);
-          if (outcome.promoted && !outcome.alreadyLinked) result.promoted++;
-        } catch (e) {
-          console.error(`[EnrichmentSweep] promotion failed for prospect ${p.id}:`, (e as Error).message);
+    const result: SweepResult = {
+      ...emptyResult("done"),
+      domainsAttempted: domains.attempted,
+      domainsResolved: domains.resolved,
+    };
+
+    // ── ARE queue rows ──
+    // resolveVerifiedEmail is the SAME resolver the ARE engine calls at sourcing
+    // time; only the write-back differs, because lookupContactInfo persists to the
+    // prospects table and these rows live in prospect_queue.
+    for (const q of queueRows) {
+      if (!shouldContinue({ attempted: result.attempted, cap, dailyCreditsLeft })) {
+        result.stoppedBecause = result.attempted >= cap ? "cap" : "no_credits";
+        break;
+      }
+      try {
+        const found = await resolveVerifiedEmail({
+          firstName: q.firstName,
+          lastName: q.lastName,
+          companyDomain: q.companyDomain,
+          companyWebsite: q.companyDomain,
+          workspaceId,
+        });
+        result.attempted++;
+        result.fromQueue++;
+        result.creditsQuick += found.creditsQuick ?? 0;
+        result.creditsPower += found.creditsPower ?? 0;
+        dailyCreditsLeft -= found.creditsPower ?? 0;
+        // Stamp enrichedAt on EVERY attempt, hit or miss — it is the marker that
+        // stops the next sweep paying to re-check the same miss forever.
+        const patch: Record<string, unknown> = {
+          enrichedAt: new Date(),
+          enrichmentStatus: found.email ? "complete" : "failed",
+        };
+        if (found.email) {
+          patch.email = found.email;
+          result.emailsFound++;
+        } else if (found.reason) {
+          patch.enrichmentError = found.reason.slice(0, 500);
         }
+        await db.update(prospectQueue).set(patch as never).where(eq(prospectQueue.id, q.id));
+      } catch (e) {
+        result.attempted++;
+        result.fromQueue++;
+        console.error(`[EnrichmentSweep] queue prospect ${q.id} failed:`, (e as Error).message);
       }
-    } catch (e) {
-      // Count the attempt anyway: a prospect that reliably throws must not be
-      // retried forever inside the same run.
-      result.attempted++;
-      result.fromProspects++;
-      console.error(`[EnrichmentSweep] prospect ${p.id} failed:`, (e as Error).message);
     }
+
+    // ── prospects (People/CRM) rows ──
+    for (const p of rows) {
+      if (!shouldContinue({ attempted: result.attempted, cap, dailyCreditsLeft })) {
+        result.stoppedBecause = result.attempted >= cap ? "cap" : "no_credits";
+        break;
+      }
+      try {
+        const r = await lookupContactInfo({
+          workspaceId,
+          prospectId: p.id,
+          firstName: p.firstName ?? "",
+          lastName: p.lastName ?? "",
+          companyDomain: p.companyDomain ?? null,
+          skipIfHasEmail: true,
+          existingPhone: p.phone ?? null,
+        });
+        result.attempted++;
+        result.fromProspects++;
+        result.creditsQuick += r.reoonCreditsQuick ?? 0;
+        result.creditsPower += r.reoonCreditsPower ?? 0;
+        dailyCreditsLeft -= r.reoonCreditsPower ?? 0;
+        if (r.email) {
+          result.emailsFound++;
+          /**
+           * The last link in import → clean → enrol.
+           *
+           * A found address is only useful once the person is a CONTACT: the
+           * sweeper works `prospects`, and segment→sequence rules only ever read
+           * `contacts`. promoteVerifiedProspect applies the product rule — it
+           * promotes on a `valid` verdict and refuses accept_all / risky — so an
+           * unverified row can never reach a campaign.
+           *
+           * Best-effort and per row: a promotion that fails must not abort a
+           * sweep that has already spent credits on the rest of the batch, and
+           * the row keeps its found address either way, so the next run retries
+           * the promotion without paying again.
+           */
+          try {
+            const outcome = await promoteProspectRow(workspaceId, p.id);
+            if (outcome.promoted && !outcome.alreadyLinked) result.promoted++;
+          } catch (e) {
+            console.error(`[EnrichmentSweep] promotion failed for prospect ${p.id}:`, (e as Error).message);
+          }
+        }
+      } catch (e) {
+        // Count the attempt anyway: a prospect that reliably throws must not be
+        // retried forever inside the same run.
+        result.attempted++;
+        result.fromProspects++;
+        console.error(`[EnrichmentSweep] prospect ${p.id} failed:`, (e as Error).message);
+      }
+    }
+
+    return result;
+  } finally {
+    try {
+      await db
+        .update(workspaceSettings)
+        .set({ enrichmentSweepLastRunAt: new Date() } as never)
+        .where(eq(workspaceSettings.workspaceId, workspaceId));
+    } catch { /* stamp only */ }
   }
-
-  try {
-    await db
-      .update(workspaceSettings)
-      .set({ enrichmentSweepLastRunAt: new Date() } as never)
-      .where(eq(workspaceSettings.workspaceId, workspaceId));
-  } catch { /* stamp only */ }
-
-  return result;
 }
 
 /**
@@ -801,13 +817,21 @@ export async function runEnrichmentSweepAllWorkspaces(): Promise<{ swept: number
         swept++;
         emailsFound += r.emailsFound;
         console.log(`[EnrichmentSweep] ws=${ws.id} attempted=${r.attempted} found=${r.emailsFound} stopped=${r.stoppedBecause}`);
+        // A run with no Reoon key can still resolve domains (the free pass runs
+        // before the key check). Titling that "0 emails found" reads as failure
+        // when the run did exactly what it could — lead with what it did do.
+        const title = r.attempted > 0
+          ? `Enrichment Sweep: ${r.emailsFound} email${r.emailsFound === 1 ? "" : "s"} found`
+          : `Enrichment Sweep: ${r.domainsResolved} company domain${r.domainsResolved === 1 ? "" : "s"} resolved`;
         await notifyOwner(
-          ws.id, await workspaceNotifyUserId(ws.id),
-          `Enrichment Sweep: ${r.emailsFound} email${r.emailsFound === 1 ? "" : "s"} found`,
-          `Checked ${r.attempted} prospect${r.attempted === 1 ? "" : "s"} and resolved ${r.emailsFound} address${r.emailsFound === 1 ? "" : "es"}.`
-          + (r.domainsResolved > 0 ? ` Also resolved ${r.domainsResolved} company domain${r.domainsResolved === 1 ? "" : "s"} at no cost.` : "")
-          + (r.creditsPower > 0 ? ` Spent ${r.creditsPower} verification credit${r.creditsPower === 1 ? "" : "s"}.` : "")
-          + (r.stoppedBecause === "no_credits" ? " Stopped early — verification credits ran low." : ""),
+          ws.id, await workspaceNotifyUserId(ws.id), title,
+          [
+            r.attempted > 0 ? `Checked ${r.attempted} prospect${r.attempted === 1 ? "" : "s"} and resolved ${r.emailsFound} address${r.emailsFound === 1 ? "" : "es"}.` : "",
+            r.domainsResolved > 0 ? `Resolved ${r.domainsResolved} company domain${r.domainsResolved === 1 ? "" : "s"} at no cost.` : "",
+            r.creditsPower > 0 ? `Spent ${r.creditsPower} verification credit${r.creditsPower === 1 ? "" : "s"}.` : "",
+            r.stoppedBecause === "no_credits" ? "Stopped early — verification credits ran low." : "",
+            r.stoppedBecause === "no_key" ? "Email lookups were skipped — add a Reoon API key in Settings → Data enrichment to turn resolved domains into verified addresses." : "",
+          ].filter(Boolean).join(" "),
         );
       }
     } catch (e) {

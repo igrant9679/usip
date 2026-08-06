@@ -190,8 +190,12 @@ const SURFACES: Array<{
     what: "the enrichment sweep reports to somebody who reads it",
     file: "server/services/enrichmentSweeper.ts",
     start: "emailsFound += r.emailsFound;",
-    end: "Enrichment Sweep: ",
-    gate: /await notifyOwner\(\s*ws\.id, await workspaceNotifyUserId\(ws\.id\),/,
+    // Re-anchored when the notify title became a ternary: "Enrichment Sweep: "
+    // now appears BEFORE the call, which would end the window too early. This
+    // string sits inside the call's own body argument, so the gate stays in
+    // the window.
+    end: "Email lookups were skipped",
+    gate: /await notifyOwner\(\s*ws\.id, await workspaceNotifyUserId\(ws\.id\), title,/,
   },
   {
     what: "an account routed by a territory rule is not filed under a departed rep",
