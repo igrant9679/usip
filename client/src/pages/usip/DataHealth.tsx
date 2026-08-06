@@ -259,6 +259,17 @@ export default function DataHealth() {
 
   const [mergeGroup, setMergeGroup] = useState<DupeGroup | null>(null);
 
+  /**
+   * On demand, not on load: the audit replays every past import and scans up
+   * to 50k rows per table. `enabled: false` means it runs only when the button
+   * calls refetch().
+   */
+  const auditQuery = trpc.dataHealth.importMappingAudit.useQuery(undefined, {
+    enabled: false,
+    refetchOnWindowFocus: false,
+  });
+  const audit = auditQuery.data;
+
   const total = metrics?.total ?? 0;
 
   const accent = useAccentColor();
@@ -463,6 +474,117 @@ export default function DataHealth() {
               </CardContent>
             </Card>
           )}
+        </section>
+
+        {/* ── Import mapping audit ──
+            Read-only, and run on demand rather than on page load: it replays
+            every past import's stored column mapping and scans up to 50k rows
+            per table, which is not work to do on every visit. */}
+        <section>
+          <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-3">
+            CSV Import Mapping Audit
+          </h2>
+          <Card>
+            <CardContent className="pt-5 pb-4 space-y-4">
+              <div className="flex items-start justify-between gap-4">
+                <p className="text-sm text-muted-foreground">
+                  Until August 2026 the importer matched CSV columns to fields by name similarity,
+                  which could file a company website under the company <em>name</em> or let two
+                  columns claim one field. This replays every past import’s stored mapping and
+                  reports what it finds. It only reads — nothing is changed.
+                </p>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="shrink-0"
+                  onClick={() => void auditQuery.refetch()}
+                  disabled={auditQuery.isFetching}
+                >
+                  {auditQuery.isFetching
+                    ? <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                    : <ShieldCheck className="size-3.5 mr-1.5" />}
+                  {auditQuery.isFetching ? "Checking…" : "Run audit"}
+                </Button>
+              </div>
+
+              {audit && (
+                <div className="space-y-4">
+                  {audit.clean ? (
+                    <div className="flex items-center gap-2 text-sm">
+                      <CheckCircle2 className="size-4 text-emerald-600" />
+                      <span>
+                        No past import stored a mapping with the defect
+                        {" "}({audit.importsChecked} checked).
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      <div className="flex items-center gap-2 text-sm">
+                        <AlertTriangle className="size-4 text-amber-600" />
+                        <span>
+                          <strong>{audit.affectedImports.length}</strong> of {audit.importsChecked}{" "}
+                          imports used a mapping with the defect.
+                        </span>
+                      </div>
+                      <div className="rounded-lg border divide-y">
+                        {audit.affectedImports.map((imp) => (
+                          <div key={imp.importId} className="p-3 space-y-1.5">
+                            <div className="flex items-baseline justify-between gap-3">
+                              <span className="text-sm font-medium truncate">{imp.filename}</span>
+                              <span className="text-xs text-muted-foreground shrink-0">
+                                {imp.completedAt ? new Date(imp.completedAt).toLocaleDateString() : "incomplete"}
+                              </span>
+                            </div>
+                            <p className="text-xs text-muted-foreground">
+                              {imp.rowsImported.toLocaleString()} rows imported ·{" "}
+                              {(imp.contactsStillPresent + imp.prospectsStillPresent).toLocaleString()} still present
+                            </p>
+                            {imp.suspectAssignments.map((s) => (
+                              <p key={s.header} className="text-xs">
+                                <span className="font-mono">{s.header}</span> was filed as{" "}
+                                <strong>{s.storedField}</strong>
+                                {s.correctField ? <> — belongs in <strong>{s.correctField}</strong></> : <> — belongs nowhere</>}
+                              </p>
+                            ))}
+                            {imp.duplicateClaims.map((d) => (
+                              <p key={d.field} className="text-xs">
+                                {d.headers.map((h) => `"${h}"`).join(" and ")} both claimed{" "}
+                                <strong>{d.label}</strong> — only{" "}
+                                <span className="font-mono">{d.keptHeader}</span> was kept.
+                              </p>
+                            ))}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <div>
+                    <p className="text-xs font-medium mb-1.5">Rows that still look wrong today</p>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+                      {[
+                        ["Company name is a URL", audit.residue.contactsCompanyNameIsUrl + audit.residue.prospectsCompanyIsUrl],
+                        ["…possibly a URL", audit.residue.contactsCompanyNameMaybeUrl + audit.residue.prospectsCompanyMaybeUrl],
+                        ["LinkedIn is a company page", audit.residue.contactsLinkedInIsCompanyPage + audit.residue.prospectsLinkedInIsCompanyPage],
+                        ["Email is a verdict", audit.residue.contactsEmailIsVerdict + audit.residue.prospectsEmailIsVerdict],
+                      ].map(([label, n]) => (
+                        <div key={label as string} className="rounded-lg border p-2">
+                          <div className="text-lg font-semibold">{(n as number).toLocaleString()}</div>
+                          <div className="text-muted-foreground">{label}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {audit.notes.length > 0 && (
+                    <ul className="text-xs text-muted-foreground space-y-1 list-disc pl-4">
+                      {audit.notes.map((n) => <li key={n}>{n}</li>)}
+                    </ul>
+                  )}
+                </div>
+              )}
+            </CardContent>
+          </Card>
         </section>
       </div>
 

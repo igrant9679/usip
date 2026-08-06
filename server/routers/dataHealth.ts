@@ -4,7 +4,7 @@ import { z } from "zod";
 import { activities, contacts, emailDrafts, enrollments, opportunityContactRoles } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { router } from "../_core/trpc";
-import { repProcedure, workspaceProcedure } from "../_core/workspace";
+import { adminWsProcedure, repProcedure, workspaceProcedure } from "../_core/workspace";
 
 export const dataHealthRouter = router({
   getMetrics: workspaceProcedure.query(async ({ ctx }) => {
@@ -126,6 +126,19 @@ export const dataHealthRouter = router({
 
       return { ok: true, primaryId: input.primaryId, mergedFields: Object.keys(patch) };
     }),
+
+  /**
+   * How much data the old CSV column matcher mis-filed (fixed in 8c967cc).
+   *
+   * READ-ONLY, and deliberately not paired with a repair action: the counts
+   * have to be read before anyone decides what — if anything — to change.
+   * Admin-scoped because it reports every import in the workspace, including
+   * other members' filenames and column mappings.
+   */
+  importMappingAudit: adminWsProcedure.query(async ({ ctx }) => {
+    const { auditImportMappings } = await import("../services/importMappingAudit");
+    return auditImportMappings(ctx.workspace.id);
+  }),
 
   getDuplicateGroups: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
