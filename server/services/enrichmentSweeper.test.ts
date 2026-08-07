@@ -464,6 +464,33 @@ describe("the manual sweep UI matches what the engine actually does", () => {
     expect(fn.includes("isNotNull(prospectQueue.linkedinUrl)")).toBe(true);
   });
 
+  it("QE skips only its OWN prior attempts, never another pass's stamp", () => {
+    /**
+     * 76e5f74's lesson, recurring: ~183 rows carry enrichedAt from
+     * sourcing-time PATTERN attempts that failed for lack of a domain — a
+     * failure mode that says nothing about a LinkedIn lookup. A bare
+     * isNull(enrichedAt) in the QE candidate query reduced the first
+     * production run to 1 candidate out of a measured 59, which is how this
+     * assertion came to exist. The marker must be pass-specific: the
+     * `quickenrich…` error prefix this pass writes itself.
+     */
+    const src = readFileSync(join(__dirname, "enrichmentSweeper.ts"), "utf8");
+    const at = src.indexOf("async function quickenrichCandidatesFor");
+    const fn = src.slice(at, src.indexOf("async function", at + 10));
+    expect(
+      fn.includes('notLike(prospectQueue.enrichmentError, "quickenrich%")'),
+      "the pass-specific marker predicate is gone",
+    ).toBe(true);
+    expect(
+      fn.includes("isNull(prospectQueue.enrichedAt)"),
+      "bare enrichedAt filter is back — stale pattern-attempt stamps will starve the pass again",
+    ).toBe(false);
+    // And the misses the predicate keys on must still be written with that
+    // prefix, or every miss gets retried forever.
+    expect(src.includes("`quickenrich: ${found.reason}`")).toBe(true);
+    expect(src.includes('"quickenrich hit failed Reoon verification (invalid)"')).toBe(true);
+  });
+
   it("the card caption and summariser surface the QuickEnrich numbers", () => {
     expect(ui.includes("quickenrichReady"), "caption hides QE-reachable rows — '0 ready to verify' lies again").toBe(true);
     expect(ui.includes("quickenrichFound"), "summariser hides QE finds").toBe(true);

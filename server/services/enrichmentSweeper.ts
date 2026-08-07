@@ -29,7 +29,7 @@
  * connected account, so it is NOT folded into sweepWorkspace: quietly draining
  * that inside a run the user thinks is about email would be a surprise.
  */
-import { and, eq, isNotNull, isNull, ne, or } from "drizzle-orm";
+import { and, eq, isNotNull, isNull, ne, notLike, or } from "drizzle-orm";
 import { areCampaigns, notifications, prospectQueue, prospects, workspaceSettings, workspaces } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { workspaceNotifyUserId } from "../_core/activeMembers";
@@ -222,7 +222,27 @@ async function quickenrichCandidatesFor(workspaceId: number, limit: number, retr
     ne(prospectQueue.linkedinUrl, ""),
     notRejected(),
   ];
-  if (!retryFailed) conds.push(isNull(prospectQueue.enrichedAt));
+  /**
+   * Skip only rows QUICKENRICH ITSELF has attempted — identified by the
+   * `quickenrich…` prefix this pass writes on every miss — never rows some
+   * other pass stamped. This is `76e5f74`'s lesson recurring for a new pass:
+   * ~183 rows carry `enrichedAt` from sourcing-time PATTERN attempts that
+   * failed precisely because the row had no domain, and a pattern failure on a
+   * domain-less row says nothing about whether a LinkedIn lookup succeeds —
+   * QuickEnrich doesn't use the domain at all. A bare `isNull(enrichedAt)`
+   * here reduced the first production run to 1 candidate out of a measured 59.
+   * (A QE hit needs no marker: the row gains an email and exits on that
+   * predicate; a QE throw writes nothing and retries next run, same as the
+   * pattern loop.)
+   */
+  if (!retryFailed) {
+    conds.push(
+      or(
+        isNull(prospectQueue.enrichmentError),
+        notLike(prospectQueue.enrichmentError, "quickenrich%"),
+      ),
+    );
+  }
 
   const rows = await db
     .select({
