@@ -1462,6 +1462,17 @@ export const workspaceSettings = mysqlTable("workspace_settings", {
   // reads this first and falls back to the env var so existing deployments
   // keep working.
   reoonApiKeyEnc: text("reoonApiKeyEnc"),
+  // ── QuickEnrich (Migration 0146) ──
+  // B2B contact database keyed on LinkedIn URLs — evaluated 2026-08-06 as a
+  // prospect SOURCE for ARE campaigns (their contact-finder discovery endpoint
+  // is free; email delivery is 1 credit on success). ONLY the key lives here:
+  // no cap, no mode, no toggle, because nothing in the pipeline consumes
+  // QuickEnrich yet and a control nothing consults is this repo's signature
+  // defect. Those columns arrive in the same commit as the engine pass that
+  // reads them. The key itself IS consumed today — by quickenrich.test and the
+  // trial tooling — and any address sourced from here still goes through Reoon
+  // before promoteVerifiedProspect will touch it.
+  quickenrichApiKeyEnc: text("quickenrichApiKeyEnc"),
   // ── Backlog enrichment sweeper (Migration 0132) ──
   // off      = never sweeps
   // approval = sweeps only when a human presses "Run sweep"

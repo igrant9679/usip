@@ -40,6 +40,7 @@ import { MailboxesSection } from "@/components/usip/settings/MailboxesSection";
 import { VoiceAgentsSection } from "@/components/usip/settings/VoiceAgentsSection";
 import { ApolloSourceCard } from "@/components/usip/settings/ApolloSourceCard";
 import { ReoonVerifierCard } from "@/components/usip/settings/ReoonVerifierCard";
+import { QuickEnrichSourceCard } from "@/components/usip/settings/QuickEnrichSourceCard";
 import { BrandingSection } from "@/components/usip/settings/BrandingSection";
 import { SocialAccountsSection } from "@/components/usip/settings/SocialAccountsSection";
 import {
@@ -226,6 +227,7 @@ export default function SettingsHub() {
           <div className="space-y-4" data-tour-id="settings-data-sources">
             <ApolloSourceCard />
             <ReoonVerifierCard />
+            <QuickEnrichSourceCard />
           </div>
         )}
       </main>

@@ -3116,6 +3116,22 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0146: QuickEnrich BYOK key ────────────────────────────────────────────
+  // Same shape as Reoon (0131) and Apollo: encrypted per-workspace key with an
+  // env-var fallback, managed from Settings → Data sources. ONE column, no
+  // cap/mode — controls ship with the engine pass that consults them, not
+  // before (the inert-settings class: three switches found saving to nothing
+  // on 2026-08-03). Verify the same way as every recent migration: the
+  // settings card's status query selects this column, so the card rendering
+  // IS the proof the column exists — a clean boot proves nothing because
+  // runRawMigrations swallows failures.
+  {
+    name: "0146_quickenrich_key.sql",
+    statements: [
+      "ALTER TABLE `workspace_settings` ADD COLUMN `quickenrichApiKeyEnc` text NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

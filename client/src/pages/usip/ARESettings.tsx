@@ -11,6 +11,7 @@
 import { Shell, PageHeader } from "@/components/usip/Shell";
 import { ApolloSourceCard } from "@/components/usip/settings/ApolloSourceCard";
 import { ReoonVerifierCard } from "@/components/usip/settings/ReoonVerifierCard";
+import { QuickEnrichSourceCard } from "@/components/usip/settings/QuickEnrichSourceCard";
 import { ARE_SOURCES, ARE_SOURCE_IDS } from "@shared/areSources";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -41,7 +42,7 @@ import {
   Sliders,
   Sparkles,
   Star,
-  Zap, Settings2, MailCheck
+  Zap, Settings2, MailCheck, Radar
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -568,6 +569,16 @@ export default function ARESettings() {
           description="Verifies the addresses Velocity derives from the company domain. Without it, sourcing finds people but never a sendable email."
         >
           <ReoonVerifierCard variant="bare" />
+        </Section>
+
+        {/* -- 8d. QuickEnrich connection (candidate source, under trial — the
+              description must not promise campaign wiring that doesn't exist) -- */}
+        <Section
+          icon={Radar}
+          title="QuickEnrich"
+          description="Candidate prospect source under evaluation. Stores the key and tests the connection; campaigns do not pull from it yet."
+        >
+          <QuickEnrichSourceCard variant="bare" />
         </Section>
 
         {/* -- 9. ICP Regen Schedule -- */}

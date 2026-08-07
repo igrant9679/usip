@@ -54,6 +54,7 @@ import { mindmapsRouter } from "./routers/mindmaps";
 import { aiCredentialsRouter } from "./routers/aiCredentials";
 import { apolloRouter } from "./routers/apollo";
 import { reoonRouter } from "./routers/reoon";
+import { quickenrichRouter } from "./routers/quickenrich";
 import { voiceAgentsRouter } from "./routers/voiceAgents";
 import { reportsRouter } from "./routers/reports";
 import { profileRouter } from "./routers/profile";
@@ -166,6 +167,7 @@ export const appRouter = router({
   aiCredentials: aiCredentialsRouter,
   apollo: apolloRouter,
   reoon: reoonRouter,
+  quickenrich: quickenrichRouter,
   voiceAgents: voiceAgentsRouter,
   reports: reportsRouter,
   profile: profileRouter,
