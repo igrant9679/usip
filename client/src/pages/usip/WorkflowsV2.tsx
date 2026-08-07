@@ -72,11 +72,19 @@ export default function WorkflowsV2() {
   const runSweep = trpc.prospects.runSweep.useMutation({
     onSuccess: (r: any) => {
       utils.prospects.sweepStatus.invalidate();
-      const why = r?.stoppedBecause === "no_key" ? "no Reoon key configured"
+      const why = r?.stoppedBecause === "no_key" ? "no Reoon key — email lookups skipped"
         : r?.stoppedBecause === "no_credits" ? "Reoon credits ran low"
         : r?.stoppedBecause === "no_candidates" ? "nothing was waiting"
         : r?.stoppedBecause === "cap" ? "hit the batch cap" : "finished the batch";
-      toast.success(`Swept ${r?.attempted ?? 0} — found ${r?.emailsFound ?? 0} email${r?.emailsFound === 1 ? "" : "s"} (${why})`);
+      // Domains are reported whenever the free pass resolved any — on a keyless
+      // run they are the ONLY work done, and "Swept 0 — found 0 emails" would
+      // report that run as a no-op when it did exactly what it could.
+      const domains = r?.domainsResolved ?? 0;
+      toast.success(
+        `Swept ${r?.attempted ?? 0} — found ${r?.emailsFound ?? 0} email${r?.emailsFound === 1 ? "" : "s"}`
+        + (domains > 0 ? `, resolved ${domains} company domain${domains === 1 ? "" : "s"} free` : "")
+        + ` (${why})`,
+      );
     },
     onError: (e) => toast.error(e.message),
   });
@@ -265,14 +273,19 @@ export default function WorkflowsV2() {
                   <div className="text-[11px] text-muted-foreground">
                     {(sweepAp.data as any).candidates} ready to verify
                     {(sweepAp.data as any).queue?.needsDomain ? ` · ${(sweepAp.data as any).queue.needsDomain} need a company domain first (free to resolve)` : ""}
-                    {!(sweepAp.data as any).reoonConfigured ? " · no Reoon key — nothing can be verified" : ""}
+                    {/* A keyless sweep still runs the free domain pass (the key
+                        gates only the paid email pass), so the button stays
+                        enabled. The previous caption claimed a keyless run could
+                        do nothing at all, and gated the button on it — locking
+                        keyless workspaces out of work the server would do. */}
+                    {!(sweepAp.data as any).reoonConfigured ? " · no Reoon key — resolves domains only, email lookups skipped" : ""}
                   </div>
                 </div>
                 <Button
                   size="sm"
                   variant="outline"
                   className="shrink-0 gap-1.5"
-                  disabled={runSweep.isPending || !(sweepAp.data as any).reoonConfigured}
+                  disabled={runSweep.isPending}
                   onClick={() => runSweep.mutate({ limit: 25 })}
                 >
                   {runSweep.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Play className="size-3.5" />}

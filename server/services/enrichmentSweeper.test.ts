@@ -221,6 +221,40 @@ describe("sweepWorkspace pass ordering", () => {
   });
 });
 
+describe("the manual sweep UI matches what the engine actually does", () => {
+  /**
+   * 64f8ba3 moved the Reoon key check below the free domain pass, but the
+   * WorkflowsV2 "Sweep 25" button stayed disabled without a key behind the
+   * caption "nothing can be verified" — locking keyless workspaces out of work
+   * the server would happily do. A UI gate is a claim about the engine, and
+   * this suite is where the engine's behaviour is pinned, so the claim is
+   * checked here too. Boolean asserts, not toMatch: a failure must not dump
+   * the client file into the report (it contains strings guardAudit reads as
+   * build breaks).
+   */
+  const { readFileSync } = require("node:fs") as typeof import("node:fs");
+  const { join } = require("node:path") as typeof import("node:path");
+  const ui = readFileSync(join(__dirname, "../../client/src/pages/usip/WorkflowsV2.tsx"), "utf8");
+
+  it("does not disable the sweep button on a missing Reoon key", () => {
+    const at = ui.indexOf("onClick={() => runSweep.mutate({ limit: 25 })}");
+    expect(at, "sweep button not found — re-anchor").toBeGreaterThan(-1);
+    const block = ui.slice(Math.max(0, at - 600), at);
+    const disabled = /disabled=\{([^}]*)\}/.exec(block)?.[1] ?? "";
+    expect(disabled.length > 0, "disabled expression not found — re-anchor").toBe(true);
+    expect(disabled.includes("reoonConfigured"), "button is key-gated again — the free domain pass runs without a key").toBe(false);
+  });
+
+  it("the keyless caption says what still happens, not that nothing can", () => {
+    expect(ui.includes("nothing can be verified"), "the overclaiming caption is back").toBe(false);
+    expect(ui.includes("resolves domains only, email lookups skipped"), "keyless caption missing").toBe(true);
+  });
+
+  it("the result toast reports resolved domains, so a keyless run never reads as a no-op", () => {
+    expect(ui.includes("domainsResolved"), "toast ignores the free pass's output").toBe(true);
+  });
+});
+
 describe("runEnrichmentSweepAllWorkspaces", () => {
   const autoWorkspace = (): Row => ({ id: 1, mode: "auto", cap: 100, lastRunAt: null });
 
