@@ -34,7 +34,8 @@ import { areCampaigns, notifications, prospectQueue, prospects, workspaceSetting
 import { getDb } from "../db";
 import { workspaceNotifyUserId } from "../_core/activeMembers";
 import { lookupContactInfo, resolveVerifiedEmail } from "./scraper";
-import { getReoonKey, reoonCheckBalance } from "./reoon";
+import { getReoonKey, reoonCheckBalance, reoonStatusToUsip, reoonVerifySingle } from "./reoon";
+import { getQuickEnrichKey, quickenrichFindEmailByLinkedIn } from "./quickenrich";
 import { promoteProspectRow } from "./prospectPromotion";
 // Pure name predicate only — importing it does NOT reach any paid Apollo path.
 // It is the one definition of "this campaign is a demo, don't work it".
@@ -69,6 +70,15 @@ export interface SweepResult {
   domainsAttempted: number;
   domainsResolved: number;
   emailsFound: number;
+  /**
+   * QuickEnrich pass: lookups by LinkedIn URL for rows the pattern path can
+   * never reach (no company domain). Found emails ALSO count in emailsFound —
+   * these are the per-source detail, not a separate total.
+   */
+  quickenrichAttempted: number;
+  quickenrichFound: number;
+  /** QuickEnrich credits spent — their billing charges only on delivery, so this equals quickenrichFound. */
+  quickenrichCredits: number;
   /** Prospects whose new address verified and were promoted into the CRM. */
   promoted: number;
   creditsQuick: number;
@@ -81,6 +91,7 @@ export interface SweepResult {
 const emptyResult = (stoppedBecause: SweepResult["stoppedBecause"]): SweepResult => ({
   attempted: 0, fromQueue: 0, fromProspects: 0, domainsAttempted: 0, domainsResolved: 0,
   emailsFound: 0,
+  quickenrichAttempted: 0, quickenrichFound: 0, quickenrichCredits: 0,
   promoted: 0, creditsQuick: 0, creditsPower: 0, stoppedBecause,
 });
 
@@ -179,6 +190,44 @@ async function queueCandidatesFor(workspaceId: number, limit: number, retryFaile
       firstName: prospectQueue.firstName,
       lastName: prospectQueue.lastName,
       companyDomain: prospectQueue.companyDomain,
+      campaignName: areCampaigns.name,
+    })
+    .from(prospectQueue)
+    .innerJoin(areCampaigns, eq(prospectQueue.campaignId, areCampaigns.id))
+    .where(and(...conds))
+    .orderBy(prospectQueue.id)
+    .limit(limit);
+
+  return rows.filter((r) => isEnrichableCampaign(r.campaignName));
+}
+
+/**
+ * Queue rows only QuickEnrich can work: a LinkedIn URL and NO company domain.
+ *
+ * The predicate is the exact complement of queueCandidatesFor's domain
+ * requirement, so no row is ever eligible for both passes in one run — the
+ * pattern path stays the cheaper choice wherever a domain exists, and a row
+ * the domain pre-pass just repaired moves OUT of this set before it is read
+ * (both queries run after that pass). Measured 2026-08-07: 59 of these rows,
+ * 0 pattern candidates — this set IS the stuck backlog.
+ */
+async function quickenrichCandidatesFor(workspaceId: number, limit: number, retryFailed: boolean) {
+  const db = await getDb();
+  if (!db) return [];
+  const conds = [
+    eq(prospectQueue.workspaceId, workspaceId),
+    or(isNull(prospectQueue.email), eq(prospectQueue.email, "")),
+    or(isNull(prospectQueue.companyDomain), eq(prospectQueue.companyDomain, "")),
+    isNotNull(prospectQueue.linkedinUrl),
+    ne(prospectQueue.linkedinUrl, ""),
+    notRejected(),
+  ];
+  if (!retryFailed) conds.push(isNull(prospectQueue.enrichedAt));
+
+  const rows = await db
+    .select({
+      id: prospectQueue.id,
+      linkedinUrl: prospectQueue.linkedinUrl,
       campaignName: areCampaigns.name,
     })
     .from(prospectQueue)
@@ -530,6 +579,17 @@ export async function countCandidates(workspaceId: number, retryFailed = false):
 }
 
 /**
+ * How many rows the QuickEnrich pass could work, for the card. Counted
+ * separately from countCandidates because the two sets are disjoint by
+ * construction and the card labels them differently — folding them into one
+ * number would hide which pipeline can move, which is the exact ambiguity
+ * queueDiagnostics exists to prevent.
+ */
+export async function countQuickenrichCandidates(workspaceId: number, retryFailed = false): Promise<number> {
+  return (await quickenrichCandidatesFor(workspaceId, 10000, retryFailed)).length;
+}
+
+/**
  * Sweep one workspace. Never throws — a single bad domain must not abort a
  * 50-prospect run, and the caller (a cron) has nowhere useful to report to.
  */
@@ -584,12 +644,17 @@ export async function sweepWorkspace(
     }
 
     // Queue first: it is where the ARE backlog lives, and those rows are the ones
-    // a campaign will actually mail once they have an address.
-    const [queueRows, rows] = await Promise.all([
+    // a campaign will actually mail once they have an address. QuickEnrich
+    // candidates are queried only when a key exists, so a workspace without one
+    // keeps the exact pre-integration behaviour, including its no_candidates
+    // verdict.
+    const qeKey = await getQuickEnrichKey(workspaceId);
+    const [queueRows, rows, qeRows] = await Promise.all([
       queueCandidatesFor(workspaceId, cap, retry),
       candidatesFor(workspaceId, cap, retry),
+      qeKey ? quickenrichCandidatesFor(workspaceId, cap, retry) : Promise.resolve([]),
     ]);
-    if (rows.length === 0 && queueRows.length === 0) {
+    if (rows.length === 0 && queueRows.length === 0 && qeRows.length === 0) {
       return (outcome = { ...emptyResult("no_candidates"), domainsAttempted: domains.attempted, domainsResolved: domains.resolved });
     }
 
@@ -609,6 +674,61 @@ export async function sweepWorkspace(
       domainsAttempted: domains.attempted,
       domainsResolved: domains.resolved,
     };
+
+    // ── QuickEnrich rows (LinkedIn URL, no domain) ──
+    // These are the rows every other pass is structurally blind to: patterns
+    // need a domain, the domain pass needs a company name, and these rows have
+    // neither — only a LinkedIn URL, which is exactly QuickEnrich's lookup key.
+    // Runs FIRST so the stuck majority of the backlog is not starved by the
+    // shared cap; rides the same shouldContinue budget as the other passes.
+    for (const q of qeRows) {
+      if (!shouldContinue({ attempted: result.attempted, cap, dailyCreditsLeft })) {
+        result.stoppedBecause = result.attempted >= cap ? "cap" : "no_credits";
+        break;
+      }
+      try {
+        const found = await quickenrichFindEmailByLinkedIn(qeKey, q.linkedinUrl ?? "");
+        result.attempted++;
+        result.fromQueue++;
+        result.quickenrichAttempted++;
+        // Stamp enrichedAt on EVERY attempt, hit or miss — same contract as the
+        // pattern pass: the marker that stops the next run paying to re-check.
+        const patch: Record<string, unknown> = { enrichedAt: new Date() };
+        if (found.email) {
+          result.quickenrichCredits++; // their billing charges only on delivery
+          // Their word is never send-safe: Reoon power-verifies every hit. An
+          // invalid verdict means the address is NOT written — unlike a pattern
+          // guess, a wrong database entry looks exactly like a right one.
+          let status = "unknown";
+          try {
+            const v = await reoonVerifySingle(found.email, key, "power");
+            result.creditsPower++;
+            dailyCreditsLeft--;
+            status = reoonStatusToUsip(v.status);
+          } catch {
+            /* verification unavailable → keep the address, flagged by status "unknown" */
+          }
+          if (status === "invalid") {
+            patch.enrichmentStatus = "failed";
+            patch.enrichmentError = "quickenrich hit failed Reoon verification (invalid)";
+          } else {
+            patch.email = found.email;
+            patch.enrichmentStatus = "complete";
+            result.emailsFound++;
+            result.quickenrichFound++;
+          }
+        } else {
+          patch.enrichmentStatus = "failed";
+          patch.enrichmentError = `quickenrich: ${found.reason}`.slice(0, 500);
+        }
+        await db.update(prospectQueue).set(patch as never).where(eq(prospectQueue.id, q.id));
+      } catch (e) {
+        result.attempted++;
+        result.fromQueue++;
+        result.quickenrichAttempted++;
+        console.error(`[EnrichmentSweep] quickenrich prospect ${q.id} failed:`, (e as Error).message);
+      }
+    }
 
     // ── ARE queue rows ──
     // resolveVerifiedEmail is the SAME resolver the ARE engine calls at sourcing

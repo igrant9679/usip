@@ -32,7 +32,12 @@ vi.mock("../server/db", () => ({ getDb: mocks.getDb, checkPermission: vi.fn() })
 vi.mock("./db", () => ({ getDb: mocks.getDb, checkPermission: vi.fn() }));
 
 import { encryptSecret } from "./_core/crypto";
-import { getQuickEnrichKey, quickenrichTestKey, QUICKENRICH_BASE } from "./services/quickenrich";
+import {
+  getQuickEnrichKey,
+  quickenrichFindEmailByLinkedIn,
+  quickenrichTestKey,
+  QUICKENRICH_BASE,
+} from "./services/quickenrich";
 
 /** Chainable fake returning one workspace_settings row. */
 function dbWithRow(row: Record<string, unknown> | null) {
@@ -153,6 +158,68 @@ describe("quickenrichTestKey — proves the key without spending", () => {
     const r = await quickenrichTestKey("k");
     expect(r.ok).toBe(false);
     expect(r.status).toBe(0);
+  });
+});
+
+describe("quickenrichFindEmailByLinkedIn — envelope-agnostic on purpose", () => {
+  /**
+   * Their docs name the fields but not the wrapper, so the parser recognises
+   * the common shapes and treats anything else as a MISS, never a crash — a
+   * sweep must not die on row 7 of 25 because a vendor reshaped a payload.
+   * (The json() producer/consumer drift class, handled by admitting
+   * uncertainty at the read.)
+   */
+  const jsonResponse = (status: number, body: unknown) => ({
+    status,
+    ok: status >= 200 && status < 300,
+    json: async () => body,
+  });
+  const LI = "https://linkedin.com/in/ada-li";
+
+  it.each([
+    ["bare object", { email: "Ada@Acme.io", first_name: "Ada" }],
+    ["data object", { data: { email: "ada@acme.io" } }],
+    ["data array", { data: [{ email: "ada@acme.io" }] }],
+    ["results array", { results: [{ email: "ada@acme.io" }] }],
+    ["work_email spelling", { data: { work_email: "ada@acme.io" } }],
+  ])("finds the address in a %s envelope", async (_name, body) => {
+    mocks.fetch.mockResolvedValue(jsonResponse(200, body));
+    const r = await quickenrichFindEmailByLinkedIn("k", LI);
+    expect(r.reason).toBe("found");
+    expect(r.email).toBe("ada@acme.io"); // lowercased
+  });
+
+  it("sends the LinkedIn URL encoded, with the bearer key", async () => {
+    mocks.fetch.mockResolvedValue(jsonResponse(200, { data: {} }));
+    await quickenrichFindEmailByLinkedIn("k", LI);
+    const [url, opts] = mocks.fetch.mock.calls[0];
+    expect(url).toBe(`${QUICKENRICH_BASE}/api/employees/search?linkedin_url=${encodeURIComponent(LI)}`);
+    expect(opts.headers.Authorization).toBe("Bearer k");
+  });
+
+  it("a 404 is a no_match, not an error", async () => {
+    mocks.fetch.mockResolvedValue(jsonResponse(404, {}));
+    expect((await quickenrichFindEmailByLinkedIn("k", LI)).reason).toBe("no_match");
+  });
+
+  it("a recognisable envelope with no address is a no_match", async () => {
+    mocks.fetch.mockResolvedValue(jsonResponse(200, { data: { first_name: "Ada" } }));
+    expect((await quickenrichFindEmailByLinkedIn("k", LI)).reason).toBe("no_match");
+  });
+
+  it("never accepts a non-address string as an email", async () => {
+    // has_email flags and status words must not leak into the email field —
+    // that is the Email Status bug wearing an API costume.
+    mocks.fetch.mockResolvedValue(jsonResponse(200, { data: { email: "valid" } }));
+    const r = await quickenrichFindEmailByLinkedIn("k", LI);
+    expect(r.email).toBeNull();
+  });
+
+  it("HTTP failure and network failure return distinct reasons, and never throw", async () => {
+    mocks.fetch.mockResolvedValue(jsonResponse(500, {}));
+    expect((await quickenrichFindEmailByLinkedIn("k", LI)).reason).toBe("http_error");
+    mocks.fetch.mockRejectedValue(new Error("ETIMEDOUT"));
+    expect((await quickenrichFindEmailByLinkedIn("k", LI)).reason).toBe("network_error");
   });
 });
 

@@ -49,7 +49,9 @@ function describeSweepResult(r: any): string {
     : r?.stoppedBecause === "cap" ? "hit the batch cap" : "finished the batch";
   const emails = r?.emailsFound ?? 0;
   const domains = r?.domainsResolved ?? 0;
+  const qe = r?.quickenrichFound ?? 0;
   return `found ${emails} email${emails === 1 ? "" : "s"}`
+    + (qe > 0 ? ` (${qe} via QuickEnrich)` : "")
     + (domains > 0 ? `, resolved ${domains} company domain${domains === 1 ? "" : "s"} free` : "")
     + ` (${why})`;
 }
@@ -283,6 +285,7 @@ export default function WorkflowsV2() {
                   <div className="text-sm font-medium">Run an enrichment sweep now</div>
                   <div className="text-[11px] text-muted-foreground">
                     {(sweepAp.data as any).candidates} ready to verify
+                    {(sweepAp.data as any).quickenrichReady ? ` · ${(sweepAp.data as any).quickenrichReady} reachable via QuickEnrich (LinkedIn lookup, 1 credit per hit)` : ""}
                     {(sweepAp.data as any).queue?.needsDomain ? ` · ${(sweepAp.data as any).queue.needsDomain} need a company domain first (free to resolve)` : ""}
                     {/* A keyless sweep still runs the free domain pass (the key
                         gates only the paid email pass), so the button stays

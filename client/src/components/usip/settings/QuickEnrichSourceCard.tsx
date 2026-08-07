@@ -100,10 +100,11 @@ export function QuickEnrichSourceCard({
           before anything is spent; delivery costs a credit only on success.
         </p>
         <p>
-          Today the key powers the connection test and the sourcing trial —{" "}
+          The <span className="font-medium text-foreground">enrichment sweep uses this key</span> to
+          look up addresses for prospects that have a LinkedIn profile but no company domain —
+          the rows every other pass is blind to. Each hit costs one credit and is
+          Reoon-verified before it goes anywhere. Sourcing is separate:{" "}
           <span className="font-medium text-foreground">campaigns do not pull from QuickEnrich yet</span>.
-          When they do, any address it supplies is still Reoon-verified before promotion, the
-          same bar every found address has to clear.
         </p>
       </div>
 

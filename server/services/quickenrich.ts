@@ -7,18 +7,21 @@
  * flags without the values, so a sourcing funnel can know its hit rate before
  * spending. Email delivery is 1 credit only on success ($0.004/record).
  *
- * ⚠️ SURFACE IS DELIBERATELY MINIMAL. This module exports key resolution and a
- * connection test — nothing else, because nothing else has a caller yet. The
- * sourcing/enrichment functions arrive in the same commit as the engine pass
- * that consumes them (the dead-wiring rule: a finished feature with no caller
- * is this repo's dominant defect). When they do:
+ * CONSUMERS (each function here exists because one of these calls it):
+ *   - quickenrich.test (router) → quickenrichTestKey
+ *   - the enrichment sweep's QuickEnrich pass → quickenrichFindEmailByLinkedIn,
+ *     for queue rows a pattern can never reach (LinkedIn URL, no domain).
  *
+ * Two invariants the sweep pass holds, recorded where the client lives:
  *   - a QuickEnrich-supplied address is NEVER send-safe on their word — their
  *     "email_verification_date" is a freshness claim about their database, not
  *     an independent check. Reoon power verification before
  *     promoteVerifiedProspect stays the gate, exactly as for pattern-derived
  *     addresses. QuickEnrich replaces the GUESSING step, not the verifying one.
- *   - spend goes behind a per-workspace daily cap column added with that pass.
+ *   - spend rides the sweep's existing daily cap (one attempt = at most one
+ *     credit, charged only on delivery). There is no balance check because
+ *     their API publishes no balance endpoint — the cap is the only brake, and
+ *     saying so here beats implying a safety net that does not exist.
  */
 import { eq } from "drizzle-orm";
 import { workspaceSettings } from "../../drizzle/schema";
@@ -70,6 +73,83 @@ export type QuickEnrichTestResult = {
  * key authenticates and the account is live. A 401/403 is a bad key; anything
  * 2xx proves the connection regardless of how many rows match.
  */
+export type QuickEnrichLookup = {
+  /** The address their database returned, or null on any kind of miss. */
+  email: string | null;
+  /** Why null, when it is: distinguishes "not in their DB" from "call failed". */
+  reason: "found" | "no_match" | "http_error" | "network_error" | "unrecognised_shape";
+};
+
+/** Track whether we've already dumped one unrecognised body this process — one
+ *  sample is diagnosis, one per row is log spam across a 25-row sweep. */
+let loggedUnrecognisedShape = false;
+
+/**
+ * Look up an email by LinkedIn URL — the one query their database is keyed on,
+ * and the reason this vendor fits this backlog: the stuck rows have a LinkedIn
+ * URL and nothing else usable. 1 credit, charged by them only when an email is
+ * returned. Never throws: a sweep must not abort on row 7 of 25.
+ *
+ * ⚠️ ENVELOPE IS INFERRED. Their docs name the fields (email, first/last,
+ * title…) but not the wrapper, so this recognises the common shapes and treats
+ * an unrecognised 200 as a MISS after logging one raw sample — the
+ * producer/consumer field-drift class, handled by admitting uncertainty at the
+ * read instead of trusting a guessed schema.
+ */
+export async function quickenrichFindEmailByLinkedIn(
+  apiKey: string,
+  linkedinUrl: string,
+): Promise<QuickEnrichLookup> {
+  try {
+    const res = await fetch(
+      `${QUICKENRICH_BASE}/api/employees/search?linkedin_url=${encodeURIComponent(linkedinUrl)}`,
+      {
+        headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json" },
+        signal: AbortSignal.timeout(15_000),
+      },
+    );
+    if (res.status === 404) return { email: null, reason: "no_match" };
+    if (!res.ok) return { email: null, reason: "http_error" };
+
+    let json: unknown;
+    try {
+      json = await res.json();
+    } catch {
+      return { email: null, reason: "unrecognised_shape" };
+    }
+
+    // Common envelopes: bare object, {data: {...}}, {data: [...]}, {results: [...]}.
+    const j = json as Record<string, unknown>;
+    const candidates: unknown[] = [
+      j,
+      j.data,
+      Array.isArray(j.data) ? j.data[0] : undefined,
+      Array.isArray(j.results) ? j.results[0] : undefined,
+      Array.isArray(j.employees) ? j.employees[0] : undefined,
+    ];
+    for (const c of candidates) {
+      if (!c || typeof c !== "object") continue;
+      const rec = c as Record<string, unknown>;
+      const email = [rec.email, rec.work_email, rec.professional_email]
+        .find((v): v is string => typeof v === "string" && v.includes("@"));
+      if (email) return { email: email.trim().toLowerCase(), reason: "found" };
+    }
+    // A 200 with no recognisable address is a miss ("has no email for this
+    // person") unless the shape is entirely alien — then say so, once.
+    const keys = Object.keys(j);
+    if (keys.length > 0 && !("data" in j) && !("results" in j) && !("employees" in j) && !("email" in j)) {
+      if (!loggedUnrecognisedShape) {
+        loggedUnrecognisedShape = true;
+        console.warn("[quickenrich] unrecognised response shape, keys:", keys.slice(0, 12).join(","));
+      }
+      return { email: null, reason: "unrecognised_shape" };
+    }
+    return { email: null, reason: "no_match" };
+  } catch {
+    return { email: null, reason: "network_error" };
+  }
+}
+
 export async function quickenrichTestKey(apiKey: string): Promise<QuickEnrichTestResult> {
   try {
     const res = await fetch(`${QUICKENRICH_BASE}/api/employees/contact-finder`, {

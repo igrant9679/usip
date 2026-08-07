@@ -26,17 +26,28 @@ const mocks = vi.hoisted(() => ({
   getDb: vi.fn(),
   getReoonKey: vi.fn(),
   reoonCheckBalance: vi.fn(),
+  reoonVerifySingle: vi.fn(),
   apolloResolveDomain: vi.fn(),
   resolveVerifiedEmail: vi.fn(),
   lookupContactInfo: vi.fn(),
   promoteProspectRow: vi.fn(),
   workspaceNotifyUserId: vi.fn(),
+  getQuickEnrichKey: vi.fn(),
+  quickenrichFindEmailByLinkedIn: vi.fn(),
 }));
 
 vi.mock("../db", () => ({ getDb: mocks.getDb }));
-vi.mock("./reoon", () => ({
+// importOriginal keeps reoonStatusToUsip REAL: the QE pass's verdict handling
+// depends on that mapping, and a re-implementation here would be a mirror.
+vi.mock("./reoon", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   getReoonKey: mocks.getReoonKey,
   reoonCheckBalance: mocks.reoonCheckBalance,
+  reoonVerifySingle: mocks.reoonVerifySingle,
+}));
+vi.mock("./quickenrich", () => ({
+  getQuickEnrichKey: mocks.getQuickEnrichKey,
+  quickenrichFindEmailByLinkedIn: mocks.quickenrichFindEmailByLinkedIn,
 }));
 // getApolloKey is here only because apolloEnrich (imported for its pure
 // campaign predicate) names it at module load.
@@ -144,6 +155,11 @@ beforeEach(() => {
   mocks.workspaceNotifyUserId.mockResolvedValue(7);
   mocks.getReoonKey.mockResolvedValue("");
   mocks.reoonCheckBalance.mockResolvedValue({ remaining_daily_credits: 5000 });
+  // QE defaults OFF so every pre-integration test keeps its exact behaviour;
+  // QE-specific tests opt in.
+  mocks.getQuickEnrichKey.mockResolvedValue("");
+  mocks.quickenrichFindEmailByLinkedIn.mockResolvedValue({ email: null, reason: "no_match" });
+  mocks.reoonVerifySingle.mockResolvedValue({ status: "safe" });
 });
 
 describe("sweepWorkspace pass ordering", () => {
@@ -254,6 +270,85 @@ describe("sweepWorkspace pass ordering", () => {
     ).toBe(true);
   });
 
+  it("QuickEnrich pass works the rows every other pass is blind to", async () => {
+    /**
+     * The fake serves the SAME scripted rows to every prospect_queue query
+     * (it cannot read WHERE clauses — stated in the header), so this row is
+     * seen by the QE pass AND the pattern pass. The QE counters are asserted
+     * specifically, which is unaffected by that overlap.
+     */
+    const { db, writes } = makeDb(new Map([[prospectQueue, [queueRow()]]]));
+    mocks.getDb.mockResolvedValue(db);
+    mocks.getReoonKey.mockResolvedValue("rk");
+    mocks.getQuickEnrichKey.mockResolvedValue("qk");
+    mocks.quickenrichFindEmailByLinkedIn.mockResolvedValue({ email: "ada@acme.io", reason: "found" });
+
+    // The pattern pass finds nothing this test — so emailsFound below can ONLY
+    // come from the QE pass. A mutation dropping QE finds from the shared total
+    // survived while the pattern mock was also returning an address.
+    mocks.resolveVerifiedEmail.mockResolvedValue({ email: null, reason: "no_valid_pattern", creditsQuick: 0, creditsPower: 0 });
+
+    const r = await sweepWorkspace(1);
+
+    expect(r.quickenrichAttempted).toBeGreaterThanOrEqual(1);
+    expect(r.quickenrichFound).toBeGreaterThanOrEqual(1);
+    expect(r.quickenrichCredits).toBeGreaterThanOrEqual(1);
+    expect(r.emailsFound, "QE finds must count in the shared total the card and cron report").toBe(r.quickenrichFound);
+    // The hit was Reoon POWER-verified before being written — never their word.
+    expect(mocks.reoonVerifySingle).toHaveBeenCalledWith("ada@acme.io", "rk", "power");
+    expect(writes.some((w) => w.table === prospectQueue && w.payload.email === "ada@acme.io")).toBe(true);
+  });
+
+  it("the QE pass honours the shared cap, at the boundary", async () => {
+    // Boundary, not slack: cap 1 with 2 candidates. The fake serves both rows
+    // to the QE pass; a compliant loop attempts exactly one and stops the run.
+    const { db } = makeDb(new Map([[prospectQueue, [queueRow(), { ...queueRow(), id: 12 }]]]));
+    mocks.getDb.mockResolvedValue(db);
+    mocks.getReoonKey.mockResolvedValue("rk");
+    mocks.getQuickEnrichKey.mockResolvedValue("qk");
+    mocks.quickenrichFindEmailByLinkedIn.mockResolvedValue({ email: "ada@acme.io", reason: "found" });
+
+    const r = await sweepWorkspace(1, { limit: 1 });
+
+    expect(r.quickenrichAttempted).toBe(1);
+    expect(r.attempted).toBe(1);
+    expect(r.stoppedBecause).toBe("cap");
+  });
+
+  it("an invalid Reoon verdict means the QuickEnrich address is NOT written", async () => {
+    // A wrong database entry looks exactly like a right one — unlike a pattern
+    // guess there is no shape to distrust, so the verifier's no is final.
+    const { db, writes } = makeDb(new Map([[prospectQueue, [queueRow()]]]));
+    mocks.getDb.mockResolvedValue(db);
+    mocks.getReoonKey.mockResolvedValue("rk");
+    mocks.getQuickEnrichKey.mockResolvedValue("qk");
+    mocks.quickenrichFindEmailByLinkedIn.mockResolvedValue({ email: "bad@acme.io", reason: "found" });
+    mocks.reoonVerifySingle.mockResolvedValue({ status: "invalid" });
+    // Keep the pattern pass out of the email column for this assertion.
+    mocks.resolveVerifiedEmail.mockResolvedValue({ email: null, reason: "no_valid_pattern", creditsQuick: 0, creditsPower: 0 });
+
+    const r = await sweepWorkspace(1);
+
+    expect(r.quickenrichFound).toBe(0);
+    expect(r.quickenrichCredits).toBe(1); // their billing charged on delivery regardless
+    expect(writes.some((w) => w.table === prospectQueue && w.payload.email === "bad@acme.io")).toBe(false);
+    expect(writes.some((w) =>
+      w.table === prospectQueue && String(w.payload.enrichmentError ?? "").includes("failed Reoon verification"),
+    )).toBe(true);
+  });
+
+  it("no QuickEnrich key → the pass does not run and nothing else changes", async () => {
+    const { db } = makeDb(new Map([[prospectQueue, [queueRow()]]]));
+    mocks.getDb.mockResolvedValue(db);
+    mocks.getReoonKey.mockResolvedValue("rk");
+
+    const r = await sweepWorkspace(1);
+
+    expect(mocks.quickenrichFindEmailByLinkedIn).not.toHaveBeenCalled();
+    expect(r.quickenrichAttempted).toBe(0);
+    expect(r.stoppedBecause).toBe("done");
+  });
+
   it("resolveDomains:false still short-circuits a keyless run entirely", async () => {
     const { db } = makeDb(new Map([[prospectQueue, [queueRow()]]]));
     mocks.getDb.mockResolvedValue(db);
@@ -332,6 +427,54 @@ describe("the manual sweep UI matches what the engine actually does", () => {
     expect(migrations.slice(at, at + 300)).toContain("ADD COLUMN `enrichmentSweepLastResult` json NULL");
     const schema = readFileSync(join(__dirname, "../../drizzle/schema.ts"), "utf8");
     expect(schema).toContain('enrichmentSweepLastResult: json("enrichmentSweepLastResult")');
+  });
+
+  it("a QE-only workspace is not dismissed as no_candidates (structural — the fake cannot isolate it)", () => {
+    /**
+     * The fake db serves identical rows to every prospect_queue query, so a
+     * "QE candidates exist but pattern candidates don't" state cannot be
+     * scripted — whenever qeRows is non-empty, queueRows is too, and a mutation
+     * dropping qeRows from the exit condition would survive every executed
+     * test. Pinned structurally instead, with the limitation named.
+     */
+    const src = readFileSync(join(__dirname, "enrichmentSweeper.ts"), "utf8");
+    expect(
+      src.includes("if (rows.length === 0 && queueRows.length === 0 && qeRows.length === 0)"),
+      "the no_candidates exit ignores QuickEnrich candidates",
+    ).toBe(true);
+  });
+
+  it("QE candidates exclude rows WITH a domain (structural — the fake cannot see WHERE)", () => {
+    /**
+     * The disjointness that prevents double-spend: rows with a domain stay on
+     * the cheaper pattern path. The fake returns scripted rows whatever the
+     * query says, so this predicate is invisible to every executed test — a
+     * mutation deleting it survived. Pinned at the source, inside the QE
+     * candidates function's own window.
+     */
+    const src = readFileSync(join(__dirname, "enrichmentSweeper.ts"), "utf8");
+    const at = src.indexOf("async function quickenrichCandidatesFor");
+    expect(at, "quickenrichCandidatesFor not found — re-anchor").toBeGreaterThan(-1);
+    const fn = src.slice(at, src.indexOf("async function", at + 10));
+    expect(fn.length).toBeGreaterThan(300);
+    expect(
+      fn.includes('or(isNull(prospectQueue.companyDomain), eq(prospectQueue.companyDomain, ""))'),
+      "the no-domain predicate is gone — domained rows will be spent on twice",
+    ).toBe(true);
+    expect(fn.includes("isNotNull(prospectQueue.linkedinUrl)")).toBe(true);
+  });
+
+  it("the card caption and summariser surface the QuickEnrich numbers", () => {
+    expect(ui.includes("quickenrichReady"), "caption hides QE-reachable rows — '0 ready to verify' lies again").toBe(true);
+    expect(ui.includes("quickenrichFound"), "summariser hides QE finds").toBe(true);
+  });
+
+  it("sweepStatus reports quickenrichReady, zeroed without a key", () => {
+    const router = readFileSync(join(__dirname, "../routers/prospects.ts"), "utf8");
+    expect(
+      /quickenrichReady: qeKey \? await countQuickenrichCandidates\(ctx\.workspace\.id\) : 0/.test(router),
+      "sweepStatus does not gate quickenrichReady on the key",
+    ).toBe(true);
   });
 
   it("sweepStatus returns the persisted result to the card", () => {

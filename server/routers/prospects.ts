@@ -934,11 +934,13 @@ export const prospectsRouter = router({
       .from(workspaceSettings)
       .where(eq(workspaceSettings.workspaceId, ctx.workspace.id))
       .limit(1);
-    const [mod, key] = await Promise.all([
+    const [mod, key, qeMod] = await Promise.all([
       import("../services/enrichmentSweeper"),
       getReoonKey(ctx.workspace.id),
+      import("../services/quickenrich"),
     ]);
-    const { countCandidates, queueDiagnostics } = mod;
+    const { countCandidates, countQuickenrichCandidates, queueDiagnostics } = mod;
+    const qeKey = await qeMod.getQuickEnrichKey(ctx.workspace.id);
     return {
       mode: (s?.mode ?? "off") as "off" | "approval" | "auto",
       dailyCap: s?.dailyCap ?? 50,
@@ -949,6 +951,13 @@ export const prospectsRouter = router({
       /** Retryable = already attempted; surfaced separately so "0 waiting" is unambiguous. */
       attemptedAlready: Math.max(0, (await countCandidates(ctx.workspace.id, true)) - (await countCandidates(ctx.workspace.id))),
       reoonConfigured: key.length > 0,
+      /**
+       * Rows only the QuickEnrich pass can reach (LinkedIn URL, no domain).
+       * Zero when no key is configured, because the pass will not run —
+       * reporting reachable rows a missing key makes unreachable would be the
+       * sweep-button lie over again.
+       */
+      quickenrichReady: qeKey ? await countQuickenrichCandidates(ctx.workspace.id) : 0,
       /** Why the count is what it is — see queueDiagnostics. */
       queue: await queueDiagnostics(ctx.workspace.id),
     };

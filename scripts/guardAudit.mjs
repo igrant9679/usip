@@ -160,7 +160,19 @@ function mutate(batteryPath) {
       results.push({ ...m, verdict: "HARNESS-FAILURE" });
       continue;
     }
-    const pattern = m.re ? new RegExp(m.re, m.reFlags ?? "") : null;
+    // An invalid `re` must be a per-entry verdict, not a mid-battery crash —
+    // an unhandled throw here killed a run at entry 5 of 12 (2026-08-07),
+    // leaving seven guards unaudited: the ENOENT/"gg" lesson, third spelling.
+    let pattern = null;
+    if (m.re) {
+      try {
+        pattern = new RegExp(m.re, m.reFlags ?? "");
+      } catch (e) {
+        console.log(`⚠️  ${m.id}: invalid regex (${e.message}) — MUTATION NOT APPLIED`);
+        results.push({ ...m, verdict: "HARNESS-FAILURE" });
+        continue;
+      }
+    }
     // Flags are de-duplicated: a battery entry that already passes "g" used to
     // build "gg" here and crash the whole run with an unhelpful RegExp error,
     // mid-battery. A harness that dies is worse than one that reports a
