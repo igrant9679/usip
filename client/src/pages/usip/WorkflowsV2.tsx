@@ -35,6 +35,25 @@ function fmtWhen(d?: string | Date | null): string {
 
 const MODE_LABEL: Record<string, string> = { off: "Off", approval: "Approve", auto: "Autonomous" };
 
+/**
+ * One sentence for a sweep result, used by BOTH the toast and the persistent
+ * "Last sweep" line on the card — one definition so the two surfaces cannot
+ * describe the same run differently. Domains are always mentioned when any
+ * were resolved: on a keyless run the free pass is the ONLY work done, and
+ * omitting it made "Swept 0 — found 0 emails" describe that run as a no-op.
+ */
+function describeSweepResult(r: any): string {
+  const why = r?.stoppedBecause === "no_key" ? "no Reoon key — email lookups skipped"
+    : r?.stoppedBecause === "no_credits" ? "Reoon credits ran low"
+    : r?.stoppedBecause === "no_candidates" ? "nothing was waiting"
+    : r?.stoppedBecause === "cap" ? "hit the batch cap" : "finished the batch";
+  const emails = r?.emailsFound ?? 0;
+  const domains = r?.domainsResolved ?? 0;
+  return `found ${emails} email${emails === 1 ? "" : "s"}`
+    + (domains > 0 ? `, resolved ${domains} company domain${domains === 1 ? "" : "s"} free` : "")
+    + ` (${why})`;
+}
+
 export default function WorkflowsV2() {
   const accent = useAccentColor();
   const utils = trpc.useUtils();
@@ -72,19 +91,11 @@ export default function WorkflowsV2() {
   const runSweep = trpc.prospects.runSweep.useMutation({
     onSuccess: (r: any) => {
       utils.prospects.sweepStatus.invalidate();
-      const why = r?.stoppedBecause === "no_key" ? "no Reoon key — email lookups skipped"
-        : r?.stoppedBecause === "no_credits" ? "Reoon credits ran low"
-        : r?.stoppedBecause === "no_candidates" ? "nothing was waiting"
-        : r?.stoppedBecause === "cap" ? "hit the batch cap" : "finished the batch";
-      // Domains are reported whenever the free pass resolved any — on a keyless
-      // run they are the ONLY work done, and "Swept 0 — found 0 emails" would
-      // report that run as a no-op when it did exactly what it could.
-      const domains = r?.domainsResolved ?? 0;
-      toast.success(
-        `Swept ${r?.attempted ?? 0} — found ${r?.emailsFound ?? 0} email${r?.emailsFound === 1 ? "" : "s"}`
-        + (domains > 0 ? `, resolved ${domains} company domain${domains === 1 ? "" : "s"} free` : "")
-        + ` (${why})`,
-      );
+      // The toast is immediate feedback; the durable copy of the same numbers
+      // is the "Last sweep" line on the card (persisted by the engine, 0147),
+      // which the invalidate above refreshes. ONE summariser feeds both, or
+      // the two surfaces drift into describing the same run differently.
+      toast.success(`Swept ${r?.attempted ?? 0} — ${describeSweepResult(r)}`);
     },
     onError: (e) => toast.error(e.message),
   });
@@ -280,6 +291,13 @@ export default function WorkflowsV2() {
                         keyless workspaces out of work the server would do. */}
                     {!(sweepAp.data as any).reoonConfigured ? " · no Reoon key — resolves domains only, email lookups skipped" : ""}
                   </div>
+                  {(sweepAp.data as any).lastResult && (
+                    <div className="text-[11px] text-muted-foreground mt-0.5">
+                      Last sweep {fmtWhen((sweepAp.data as any).lastResult.at)}: swept{" "}
+                      {(sweepAp.data as any).lastResult.attempted ?? 0} —{" "}
+                      {describeSweepResult((sweepAp.data as any).lastResult)}
+                    </div>
+                  )}
                 </div>
                 <Button
                   size="sm"

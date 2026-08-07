@@ -1482,6 +1482,13 @@ export const workspaceSettings = mysqlTable("workspace_settings", {
   enrichmentSweepMode: mysqlEnum("enrichmentSweepMode", ["off", "approval", "auto"]).default("off").notNull(),
   enrichmentSweepDailyCap: int("enrichmentSweepDailyCap").default(50).notNull(),
   enrichmentSweepLastRunAt: timestamp("enrichmentSweepLastRunAt"),
+  // ── Last sweep result (Migration 0147) ──
+  // The full SweepResult of the most recent run (+ an `at` ISO timestamp),
+  // written beside the lastRunAt stamp in sweepWorkspace's finally — cron and
+  // manual runs alike. Exists because the result of a manual run lived only in
+  // a ~4-second toast: a user who blinked had no way to see what their own run
+  // did, and manual runs send no owner notification.
+  enrichmentSweepLastResult: json("enrichmentSweepLastResult"),
   // ── LinkedIn company backfill (Migration 0134) ──
   // Separate from the sweep on purpose: it spends LinkedIn lookups (a hard
   // ~100/day allowance on the connected account), not Reoon credits. One

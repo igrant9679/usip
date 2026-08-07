@@ -929,6 +929,7 @@ export const prospectsRouter = router({
         mode: workspaceSettings.enrichmentSweepMode,
         dailyCap: workspaceSettings.enrichmentSweepDailyCap,
         lastRunAt: workspaceSettings.enrichmentSweepLastRunAt,
+        lastResult: workspaceSettings.enrichmentSweepLastResult,
       })
       .from(workspaceSettings)
       .where(eq(workspaceSettings.workspaceId, ctx.workspace.id))
@@ -942,6 +943,8 @@ export const prospectsRouter = router({
       mode: (s?.mode ?? "off") as "off" | "approval" | "auto",
       dailyCap: s?.dailyCap ?? 50,
       lastRunAt: s?.lastRunAt ?? null,
+      /** Full SweepResult of the most recent run (+ `at` ISO timestamp), or null before the first post-0147 run. */
+      lastResult: (s?.lastResult ?? null) as (Record<string, unknown> & { at?: string }) | null,
       candidates: await countCandidates(ctx.workspace.id),
       /** Retryable = already attempted; surfaced separately so "0 waiting" is unambiguous. */
       attemptedAlready: Math.max(0, (await countCandidates(ctx.workspace.id, true)) - (await countCandidates(ctx.workspace.id))),

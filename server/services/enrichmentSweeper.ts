@@ -567,12 +567,20 @@ export async function sweepWorkspace(
   // no key, no candidates, or a failed balance check would quietly repeat the
   // domain pass on every 6-hour tick, and "daily means daily" would hold only
   // on the happy path.
+  //
+  // `outcome` mirrors whatever each exit returns, so the finally can PERSIST
+  // the result next to the stamp. Before 0147 the result lived only in the
+  // caller's toast (gone in ~4s) or the cron's owner notification — a user who
+  // blinked had no way to see what their own run just did. Null only if the
+  // body threw, which "never throws" makes unexpected — nothing is persisted
+  // then, because a fabricated result row would be worse than an absent one.
+  let outcome: SweepResult | null = null;
   try {
     const key = await getReoonKey(workspaceId);
     if (!key) {
       // The key gates the email pass only; report what the free pass did so
       // the caller can tell "did nothing" from "did the unpaid half".
-      return { ...emptyResult("no_key"), domainsAttempted: domains.attempted, domainsResolved: domains.resolved };
+      return (outcome = { ...emptyResult("no_key"), domainsAttempted: domains.attempted, domainsResolved: domains.resolved });
     }
 
     // Queue first: it is where the ARE backlog lives, and those rows are the ones
@@ -582,7 +590,7 @@ export async function sweepWorkspace(
       candidatesFor(workspaceId, cap, retry),
     ]);
     if (rows.length === 0 && queueRows.length === 0) {
-      return { ...emptyResult("no_candidates"), domainsAttempted: domains.attempted, domainsResolved: domains.resolved };
+      return (outcome = { ...emptyResult("no_candidates"), domainsAttempted: domains.attempted, domainsResolved: domains.resolved });
     }
 
     // One balance read up front, then decremented locally. Re-reading per
@@ -593,7 +601,7 @@ export async function sweepWorkspace(
       dailyCreditsLeft = balance.remaining_daily_credits ?? 0;
     } catch (e) {
       console.error("[EnrichmentSweep] balance check failed:", (e as Error).message);
-      return emptyResult("no_credits");
+      return (outcome = emptyResult("no_credits"));
     }
 
     const result: SweepResult = {
@@ -697,12 +705,20 @@ export async function sweepWorkspace(
       }
     }
 
-    return result;
+    return (outcome = result);
   } finally {
     try {
       await db
         .update(workspaceSettings)
-        .set({ enrichmentSweepLastRunAt: new Date() } as never)
+        .set({
+          enrichmentSweepLastRunAt: new Date(),
+          // The full result, with its own timestamp: the sweep card renders
+          // this, so a run's numbers outlive the toast. Written for cron and
+          // manual runs alike because it happens HERE and not in a caller.
+          ...(outcome
+            ? { enrichmentSweepLastResult: { ...outcome, at: new Date().toISOString() } }
+            : {}),
+        } as never)
         .where(eq(workspaceSettings.workspaceId, workspaceId));
     } catch { /* stamp only */ }
   }

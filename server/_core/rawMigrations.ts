@@ -3132,6 +3132,21 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0147: the last sweep result survives its toast ────────────────────────
+  // A manual sweep's result was returned to the caller, toasted for ~4 seconds
+  // and thrown away; manual runs send no owner notification, so a user who
+  // blinked had no record of what their own run did. sweepWorkspace now writes
+  // the full result JSON beside the lastRunAt stamp (same finally, both cron
+  // and manual paths), and the Autonomy Center card renders it. Verify like
+  // every recent migration: run a sweep and see the "Last sweep" line appear —
+  // the card's query selects this column, so the line rendering IS the proof.
+  {
+    name: "0147_sweep_last_result.sql",
+    statements: [
+      "ALTER TABLE `workspace_settings` ADD COLUMN `enrichmentSweepLastResult` json NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

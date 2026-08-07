@@ -178,6 +178,52 @@ describe("sweepWorkspace pass ordering", () => {
     expect(stamp?.payload.enrichmentSweepLastRunAt).toBeInstanceOf(Date);
   });
 
+  it("persists the run's RESULT beside the stamp, on every exit (0147)", async () => {
+    /**
+     * The result used to live only in the caller's ~4s toast — manual runs
+     * send no notification, so a user who blinked had no record of what their
+     * own run did. Persisted in the same finally as the stamp so early exits
+     * (the keyless run here IS one) are covered identically to full runs.
+     */
+    const { db, writes } = makeDb(new Map([[prospectQueue, [queueRow()]]]));
+    mocks.getDb.mockResolvedValue(db);
+
+    const returned = await sweepWorkspace(1);
+
+    const stamp = writes.find((w) => w.op === "update" && w.table === workspaceSettings);
+    const persisted = stamp?.payload.enrichmentSweepLastResult as Record<string, unknown>;
+    expect(persisted).toBeTruthy();
+    // What the card shows must be what the caller was told — same object.
+    expect(persisted).toMatchObject({ ...returned });
+    expect(persisted.stoppedBecause).toBe("no_key");
+    expect(persisted.domainsResolved).toBe(1);
+    expect(Number.isNaN(Date.parse(String(persisted.at))), "at is not a parseable timestamp").toBe(false);
+  });
+
+  it("persists the result on a no-candidates exit too", async () => {
+    const { db, writes } = makeDb(new Map());
+    mocks.getDb.mockResolvedValue(db);
+    mocks.getReoonKey.mockResolvedValue("rk");
+
+    await sweepWorkspace(1);
+
+    const stamp = writes.find((w) => w.op === "update" && w.table === workspaceSettings);
+    expect((stamp?.payload.enrichmentSweepLastResult as Record<string, unknown>)?.stoppedBecause).toBe("no_candidates");
+  });
+
+  it("persists the result of a full run, with its counts", async () => {
+    const { db, writes } = makeDb(new Map([[prospectQueue, [queueRow()]]]));
+    mocks.getDb.mockResolvedValue(db);
+    mocks.getReoonKey.mockResolvedValue("rk");
+
+    await sweepWorkspace(1);
+
+    const stamp = writes.find((w) => w.op === "update" && w.table === workspaceSettings);
+    const persisted = stamp?.payload.enrichmentSweepLastResult as Record<string, unknown>;
+    expect(persisted?.stoppedBecause).toBe("done");
+    expect(persisted?.emailsFound).toBe(1);
+  });
+
   it("stamps lastRunAt on a no-candidates run for the same reason", async () => {
     const { db, writes } = makeDb(new Map());
     mocks.getDb.mockResolvedValue(db);
@@ -252,6 +298,51 @@ describe("the manual sweep UI matches what the engine actually does", () => {
 
   it("the result toast reports resolved domains, so a keyless run never reads as a no-op", () => {
     expect(ui.includes("domainsResolved"), "toast ignores the free pass's output").toBe(true);
+  });
+
+  it("the card renders the persisted last result, and shares ONE summariser with the toast", () => {
+    /**
+     * The whole point of 0147: the numbers survive the toast. And one
+     * describeSweepResult feeds both surfaces — a second inline why-mapping is
+     * how the toast and the card end up describing the same run differently
+     * (the three-vocabularies class, at sentence scale).
+     */
+    /**
+     * The exact conditional, not just the identifier: `{false && (…).lastResult
+     * && (` keeps every substring a loose scan looks for while rendering
+     * nothing — that mutation survived the first version of this test. A
+     * source scan cannot prove a render, so this pins the shape and names the
+     * limit; a cleverer neutering (opacity-0, an early return above) would
+     * need a rendered-DOM test to catch.
+     */
+    expect(
+      ui.includes("{(sweepAp.data as any).lastResult && ("),
+      "the last-result line's conditional is gone or no longer starts the render expression",
+    ).toBe(true);
+    const calls = ui.split("describeSweepResult(").length - 1;
+    expect(calls >= 3, "toast and card no longer share the one summariser (def + 2 calls)").toBe(true);
+    const whyMaps = ui.split('stoppedBecause === "no_key"').length - 1;
+    expect(whyMaps, "a second stop-reason vocabulary has appeared").toBe(1);
+  });
+
+  it("migration 0147 exists and matches the schema column", () => {
+    const migrations = readFileSync(join(__dirname, "../_core/rawMigrations.ts"), "utf8");
+    const at = migrations.indexOf("0147_sweep_last_result.sql");
+    expect(at, "migration 0147 missing — schema-only columns break prod silently").toBeGreaterThan(-1);
+    expect(migrations.slice(at, at + 300)).toContain("ADD COLUMN `enrichmentSweepLastResult` json NULL");
+    const schema = readFileSync(join(__dirname, "../../drizzle/schema.ts"), "utf8");
+    expect(schema).toContain('enrichmentSweepLastResult: json("enrichmentSweepLastResult")');
+  });
+
+  it("sweepStatus returns the persisted result to the card", () => {
+    const router = readFileSync(join(__dirname, "../routers/prospects.ts"), "utf8");
+    const start = router.indexOf("sweepStatus: workspaceProcedure");
+    const end = router.indexOf("setSweepSettings", start);
+    expect(start, "sweepStatus not found — re-anchor").toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const block = router.slice(start, end);
+    expect(block.includes("lastResult: workspaceSettings.enrichmentSweepLastResult"), "sweepStatus does not select the column").toBe(true);
+    expect(/lastResult: \(s\?\.lastResult \?\? null\)/.test(block), "sweepStatus does not return lastResult").toBe(true);
   });
 });
 
