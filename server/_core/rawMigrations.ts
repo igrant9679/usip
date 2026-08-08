@@ -3147,6 +3147,25 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0148: QuickEnrich as an ARE prospect source ───────────────────────────
+  // Mirrors 0124 (Apollo) deliberately: discovery via their FREE contact-finder
+  // endpoint (0 credits — returns names/titles/LinkedIn URLs + has_email flags,
+  // never addresses), a daily pull cap for queue hygiene, and 'quickenrich' in
+  // BOTH sourceType enums — prospect_queue and are_scrape_jobs — because an
+  // enum value the DB doesn't know fails at runtime INSERT with the reason on
+  // e.cause, not at compile time (the `as never` class). Emails are resolved
+  // later by the sweep's QuickEnrich pass (1 credit, only on delivery,
+  // Reoon-verified) or the pattern path when a domain exists.
+  // Coverage justifying this: measured 2026-08-07, ~85% hit rate on the ICP.
+  {
+    name: "0148_quickenrich_source.sql",
+    statements: [
+      "ALTER TABLE `workspace_settings` ADD COLUMN `quickenrichDailyPullCap` int NOT NULL DEFAULT 50",
+      "ALTER TABLE `are_scrape_jobs` MODIFY COLUMN `sourceType` enum('google_business','linkedin_company','linkedin_people','web_scrape','news','industry_events','apollo','internal','quickenrich') NOT NULL",
+      "ALTER TABLE `prospect_queue` MODIFY COLUMN `sourceType` enum('internal_contact','internal_lead','google_business','linkedin_company','linkedin_people','web_scrape','news_event','industry_event','apollo','zoominfo','clay','ai_research','quickenrich') NOT NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

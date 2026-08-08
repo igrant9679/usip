@@ -571,12 +571,11 @@ export default function ARESettings() {
           <ReoonVerifierCard variant="bare" />
         </Section>
 
-        {/* -- 8d. QuickEnrich connection (candidate source, under trial — the
-              description must not promise campaign wiring that doesn't exist) -- */}
+        {/* -- 8d. QuickEnrich connection (feeds the "QuickEnrich" source above) -- */}
         <Section
           icon={Radar}
           title="QuickEnrich"
-          description="Candidate prospect source under evaluation. Stores the key and tests the connection; campaigns do not pull from it yet."
+          description="Campaigns discover people from the QuickEnrich database for free; the enrichment sweep then buys their emails one credit per hit, Reoon-verified."
         >
           <QuickEnrichSourceCard variant="bare" />
         </Section>

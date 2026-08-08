@@ -23,10 +23,12 @@
  *     their API publishes no balance endpoint — the cap is the only brake, and
  *     saying so here beats implying a safety net that does not exist.
  */
-import { eq } from "drizzle-orm";
-import { workspaceSettings } from "../../drizzle/schema";
+import { and, eq, gte, sql } from "drizzle-orm";
+import { areScrapeJobs, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { tryDecryptSecret } from "../_core/crypto";
+import { normalizeDomain } from "./scraper/domain";
+import { utcDayStart } from "@shared/timeWindows";
 
 export const QUICKENRICH_BASE = "https://app.quickenrich.io";
 
@@ -53,6 +55,173 @@ export async function getQuickEnrichKey(workspaceId?: number | null): Promise<st
     }
   }
   return process.env.QUICKENRICH_API_KEY ?? "";
+}
+
+/* ─── Sourcing (migration 0148) ──────────────────────────────────────────── */
+
+/** Daily pull cap — queue hygiene, since discovery itself is their free endpoint. */
+export async function getQuickenrichDailyPullCap(workspaceId: number): Promise<number> {
+  const db = await getDb();
+  if (!db) return 50;
+  const [row] = await db
+    .select({ cap: workspaceSettings.quickenrichDailyPullCap })
+    .from(workspaceSettings)
+    .where(eq(workspaceSettings.workspaceId, workspaceId))
+    .limit(1);
+  return row?.cap ?? 50;
+}
+
+/** Records pulled today, via are_scrape_jobs — the same ledger Apollo uses. */
+export async function quickenrichPulledToday(workspaceId: number): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const midnight = utcDayStart();
+  const [row] = await db
+    .select({ total: sql<number>`COALESCE(SUM(${areScrapeJobs.resultCount}), 0)` })
+    .from(areScrapeJobs)
+    .where(
+      and(
+        eq(areScrapeJobs.workspaceId, workspaceId),
+        eq(areScrapeJobs.sourceType, "quickenrich"),
+        gte(areScrapeJobs.scrapedAt, midnight),
+      ),
+    );
+  return Number(row?.total ?? 0);
+}
+
+/**
+ * Country names→ISO codes for the geos a campaign is likely to carry. Their
+ * contact-finder filters on country_code; a geo that doesn't map cleanly is
+ * OMITTED and reported back, never guessed — sending "California" as a country
+ * would silently empty the search. Deliberately small: cover what campaigns
+ * actually write, and the caller logs whatever was dropped.
+ */
+const COUNTRY_CODES: Record<string, string> = {
+  "united states": "US", usa: "US", us: "US", america: "US", "united states of america": "US",
+  "united kingdom": "GB", uk: "GB", "great britain": "GB", england: "GB",
+  canada: "CA", australia: "AU", ireland: "IE", "new zealand": "NZ",
+  germany: "DE", france: "FR", netherlands: "NL", spain: "ES", italy: "IT",
+  sweden: "SE", norway: "NO", denmark: "DK", switzerland: "CH", belgium: "BE",
+  india: "IN", singapore: "SG",
+};
+
+export type QuickEnrichFilterBuild = {
+  /** Body for POST /api/employees/contact-finder, or null when nothing mapped. */
+  body: Record<string, unknown> | null;
+  /** Geos that could not be mapped to a country code — for the discovery log. */
+  unmappedGeos: string[];
+};
+
+/**
+ * Campaign targeting → contact-finder filters. Titles and industries map
+ * directly (their filter fields are `title` and `industry_linkedin`); geos map
+ * only through the country table above. Employee-count bands are deliberately
+ * NOT sent: their band format is undocumented, and a mis-formatted filter
+ * silently empties results — the Email Status lesson says similarity is not
+ * meaning, and that applies to filter vocabularies too.
+ */
+export function buildQuickenrichFilters(targeting: {
+  titles: string[];
+  industries: string[];
+  geos: string[];
+}): QuickEnrichFilterBuild {
+  const clean = (xs: string[], max: number) =>
+    xs.map((s) => s.trim()).filter(Boolean).slice(0, max);
+
+  const filters: Record<string, unknown> = {};
+  const titles = clean(targeting.titles, 12);
+  const industries = clean(targeting.industries, 12);
+  if (titles.length > 0) filters.title = { include: titles };
+  if (industries.length > 0) filters.industry_linkedin = { include: industries };
+
+  const codes = new Set<string>();
+  const unmappedGeos: string[] = [];
+  for (const g of clean(targeting.geos, 12)) {
+    const code = COUNTRY_CODES[g.toLowerCase()];
+    if (code) codes.add(code);
+    else unmappedGeos.push(g);
+  }
+  // Array.from, not a spread: this project's tsc target rejects iterating a
+  // Set without --downlevelIteration.
+  if (codes.size > 0) filters.country_code = { include: Array.from(codes) };
+
+  // Their API requires at least one active filter — and a filter-less search
+  // would be "every contact they have", which is never a campaign audience
+  // (the internal-CRM source refuses for the same reason).
+  if (!filters.title && !filters.industry_linkedin) {
+    return { body: null, unmappedGeos };
+  }
+  return { body: { filters, logic: "AND", page: 1 }, unmappedGeos };
+}
+
+export type QuickEnrichDiscoveredPerson = {
+  firstName: string;
+  lastName: string;
+  title: string | null;
+  linkedinUrl: string | null;
+  companyName: string | null;
+  companyDomain: string | null;
+  /** Their DB claims an email exists — the enrichment lookup will likely pay off. */
+  hasEmail: boolean;
+};
+
+/**
+ * Free discovery search. Returns people WITHOUT addresses — that is the
+ * endpoint's design (has_email flags only), and the reason sourcing costs
+ * nothing: the sweep's lookup pass spends the credit later, per hit, on rows
+ * the flag says are worth it. Never throws.
+ */
+export async function quickenrichContactFinder(
+  apiKey: string,
+  body: Record<string, unknown>,
+): Promise<{ ok: true; people: QuickEnrichDiscoveredPerson[] } | { ok: false; error: string }> {
+  try {
+    const res = await fetch(`${QUICKENRICH_BASE}/api/employees/contact-finder`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(20_000),
+    });
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+    let json: unknown;
+    try {
+      json = await res.json();
+    } catch {
+      return { ok: false, error: "unparseable response body" };
+    }
+    const j = json as Record<string, unknown>;
+    const rows = [j.data, j.results, j.items, j.employees, Array.isArray(j) ? j : undefined]
+      .find(Array.isArray) as Array<Record<string, unknown>> | undefined;
+    if (!rows) return { ok: false, error: `unrecognised envelope (keys: ${Object.keys(j).slice(0, 10).join(",")})` };
+
+    const str = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim() : null);
+    const people: QuickEnrichDiscoveredPerson[] = [];
+    for (const r of rows) {
+      const linkedinUrl = str(r.linkedin_url) ?? str(r.linkedin) ?? str(r.li_url);
+      const firstName = str(r.first_name) ?? "";
+      const lastName = str(r.last_name) ?? "";
+      // No LinkedIn URL means the enrichment lookup has no key to work with —
+      // and no name means nothing to address. Either way the row is inert in
+      // OUR pipeline, whatever their DB knows about it.
+      if (!linkedinUrl || (!firstName && !lastName)) continue;
+      people.push({
+        firstName,
+        lastName,
+        title: str(r.title) ?? str(r.job_title),
+        linkedinUrl,
+        companyName: str(r.company_name) ?? str(r.company),
+        companyDomain: normalizeDomain(str(r.company_url) ?? str(r.company_domain) ?? str(r.company_website)),
+        hasEmail: r.has_email === true,
+      });
+    }
+    return { ok: true, people };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
 }
 
 export type QuickEnrichTestResult = {

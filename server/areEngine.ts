@@ -64,6 +64,13 @@ import { ARE_DEFAULT_SOURCES, normalizeSources } from "@shared/areSources";
 // upsert in routers/are/prospects.ts — see shared/areSequenceSteps.ts.
 import { normalizeSequence } from "@shared/areSequenceSteps";
 import { apolloPulledToday, apolloSearchPeople, getApolloDailyCap } from "./services/apollo";
+import {
+  buildQuickenrichFilters,
+  getQuickEnrichKey,
+  getQuickenrichDailyPullCap,
+  quickenrichContactFinder,
+  quickenrichPulledToday,
+} from "./services/quickenrich";
 import { appBaseUrl as publicAppOrigin } from "./appUrl";
 import { escapeHtml } from "@shared/escapeHtml";
 import { buildMergeLookup, isEmptyLinkToken, parseMergeToken, resolveMergeName, stripEmptyLinkCarriers } from "@shared/mergeKeys";
@@ -1047,7 +1054,8 @@ async function runDiscovery(campaign: Campaign): Promise<number> {
     | "news"
     | "web_scrape"
     | "internal"
-    | "apollo";
+    | "apollo"
+    | "quickenrich";
   type SourceResult = {
     sourceType: SourceType;
     query: string;
@@ -1077,6 +1085,15 @@ async function runDiscovery(campaign: Campaign): Promise<number> {
     tasks.push(
       discoverViaApollo(campaign, { titles, industries, geos, keywords, overrides }).then((raw) => ({
         sourceType: "apollo" as const,
+        query,
+        raw,
+      })),
+    );
+  }
+  if (sources.includes("quickenrich")) {
+    tasks.push(
+      discoverViaQuickenrich(campaign, { titles, industries, geos }).then((raw) => ({
+        sourceType: "quickenrich" as const,
         query,
         raw,
       })),
@@ -1363,6 +1380,75 @@ async function discoverViaApollo(
     `Apollo returned ${res.prospects.length} people (${withDomain} with a company domain) from ${res.totalAvailable.toLocaleString()} matches. Emails are resolved during enrichment — Apollo search never includes them.`);
 
   return res.prospects.map((p) => ({ ...p }));
+}
+
+/**
+ * QuickEnrich discovery — their FREE contact-finder against the campaign's
+ * titles/industries (geos only where they map cleanly to a country code).
+ *
+ * Discovery costs nothing by the endpoint's design: it returns people with
+ * LinkedIn URLs and has_email FLAGS, never addresses. The credit is spent
+ * later, per row, by the sweep's QuickEnrich lookup pass — only on delivery,
+ * and Reoon-verified before anything is written. has_email rows are taken
+ * first, so the daily pull headroom goes to the rows most likely to convert.
+ * Measured basis for this source existing at all: ~85% enrichment hit rate on
+ * this workspace's ICP, 2026-08-07.
+ */
+async function discoverViaQuickenrich(
+  campaign: Campaign,
+  targeting: { titles: string[]; industries: string[]; geos: string[] },
+): Promise<Array<Record<string, unknown>>> {
+  const apiKey = await getQuickEnrichKey(campaign.workspaceId);
+  if (!apiKey) {
+    await emitLog(campaign.workspaceId, campaign.id, "discovery", "warn",
+      "QuickEnrich skipped — no API key configured (Settings → Data sources).");
+    return [];
+  }
+
+  const cap = await getQuickenrichDailyPullCap(campaign.workspaceId);
+  const used = await quickenrichPulledToday(campaign.workspaceId);
+  const headroom = cap - used;
+  if (headroom <= 0) {
+    await emitLog(campaign.workspaceId, campaign.id, "discovery", "warn",
+      `QuickEnrich skipped — daily pull cap reached (${used}/${cap}). Raise it in Settings → Data sources if you want more per day.`);
+    return [];
+  }
+
+  const { body, unmappedGeos } = buildQuickenrichFilters(targeting);
+  if (!body) {
+    await emitLog(campaign.workspaceId, campaign.id, "discovery", "warn",
+      "QuickEnrich skipped — no target titles or industries configured (refusing to search their entire database).");
+    return [];
+  }
+
+  const res = await quickenrichContactFinder(apiKey, body);
+  if (!res.ok) {
+    await emitLog(campaign.workspaceId, campaign.id, "discovery", "error",
+      `QuickEnrich search failed: ${res.error}`);
+    return [];
+  }
+
+  // has_email first: those rows are the ones the paid lookup will convert, so
+  // they get the pull headroom before the maybes.
+  const ranked = [...res.people].sort((a, b) => Number(b.hasEmail) - Number(a.hasEmail));
+  const kept = ranked.slice(0, headroom);
+  const withEmailFlag = kept.filter((p) => p.hasEmail).length;
+
+  await emitLog(campaign.workspaceId, campaign.id, "discovery", "info",
+    `QuickEnrich returned ${res.people.length} people (kept ${kept.length}, ${withEmailFlag} flagged has_email). `
+    + `Emails are resolved during enrichment — discovery is free and never includes them.`
+    + (unmappedGeos.length > 0
+      ? ` Geo filters not sent (no clean country mapping): ${unmappedGeos.join(", ")}.`
+      : ""));
+
+  return kept.map((p) => ({
+    firstName: p.firstName,
+    lastName: p.lastName,
+    title: p.title,
+    linkedinUrl: p.linkedinUrl,
+    companyName: p.companyName,
+    companyDomain: p.companyDomain,
+  }));
 }
 
 /**

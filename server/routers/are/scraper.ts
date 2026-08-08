@@ -338,7 +338,7 @@ function cleanName(v: unknown, max: number): string {
 export async function saveScrapeJobAndQueue(
   workspaceId: number,
   campaignId: number | null,
-  sourceType: "google_business" | "linkedin_company" | "linkedin_people" | "web_scrape" | "news" | "industry_events" | "apollo" | "internal",
+  sourceType: "google_business" | "linkedin_company" | "linkedin_people" | "web_scrape" | "news" | "industry_events" | "apollo" | "internal" | "quickenrich",
   query: string,
   prospects: Array<Record<string, unknown>>,
 ): Promise<void> {
@@ -377,6 +377,7 @@ export async function saveScrapeJobAndQueue(
       industry_events: "industry_event",
       apollo: "apollo",
       internal: "internal_contact",
+      quickenrich: "quickenrich",
     };
 
     // The internal-CRM source yields a MIX of contacts and leads in one batch,
@@ -389,6 +390,7 @@ export async function saveScrapeJobAndQueue(
       "google_business", "linkedin_company", "linkedin_people",
       "web_scrape", "news_event", "industry_event",
       "apollo", "zoominfo", "clay", "ai_research",
+      "quickenrich",
     ]);
     const rowSourceType = (p: Record<string, unknown>) => {
       const override = String(p.__queueSourceType ?? "");

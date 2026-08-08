@@ -6,11 +6,9 @@
  *   quickenrich.upsert — set/clear the API key (admin only)
  *   quickenrich.test   — free contact-finder call to prove the key works (admin)
  *
- * ONLY credential management lives here. Sourcing/enrichment procedures arrive
- * with the engine pass that uses the key — shipping them ahead of a consumer
- * is the dead-wiring class, and shipping caps/modes ahead of an engine that
- * reads them is the inert-settings class. The card in Settings says exactly
- * what the key powers today so the UI never overclaims.
+ * The daily pull cap arrived WITH its consumer (discoverViaQuickenrich,
+ * migration 0148) — the inert-settings rule this file used to state was held:
+ * no control shipped ahead of the engine that reads it.
  */
 import { TRPCError } from "@trpc/server";
 import { eq } from "drizzle-orm";
@@ -20,7 +18,7 @@ import { checkPermission, getDb } from "../db";
 import { encryptSecret, maskSecret, tryDecryptSecret } from "../_core/crypto";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
-import { getQuickEnrichKey, quickenrichTestKey } from "../services/quickenrich";
+import { getQuickEnrichKey, quickenrichPulledToday, quickenrichTestKey } from "../services/quickenrich";
 
 async function ensureSettingsRow(workspaceId: number): Promise<void> {
   const db = await getDb();
@@ -36,12 +34,15 @@ async function ensureSettingsRow(workspaceId: number): Promise<void> {
 }
 
 export const quickenrichRouter = router({
-  /** Masked credential status + where it resolves from. Never returns plaintext. */
+  /** Masked credential status + the sourcing guardrails. Never returns plaintext. */
   get: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const [row] = await db
-      .select({ enc: workspaceSettings.quickenrichApiKeyEnc })
+      .select({
+        enc: workspaceSettings.quickenrichApiKeyEnc,
+        cap: workspaceSettings.quickenrichDailyPullCap,
+      })
       .from(workspaceSettings)
       .where(eq(workspaceSettings.workspaceId, ctx.workspace.id))
       .limit(1);
@@ -55,6 +56,8 @@ export const quickenrichRouter = router({
       masked: maskSecret(effective),
       /** "workspace" = this workspace's own key, "env" = the deploy-wide fallback. */
       source: workspaceKey ? ("workspace" as const) : envKey ? ("env" as const) : ("none" as const),
+      dailyPullCap: row?.cap ?? 50,
+      pulledToday: await quickenrichPulledToday(ctx.workspace.id),
     };
   }),
 
@@ -64,19 +67,29 @@ export const quickenrichRouter = router({
    *   var if the deployment sets one.
    */
   upsert: adminWsProcedure
-    .input(z.object({ apiKey: z.string() }))
+    .input(z.object({
+      apiKey: z.string().optional(),
+      dailyPullCap: z.number().int().min(1).max(10000).optional(),
+    }))
     .mutation(async ({ ctx, input }) => {
       await checkPermission(ctx, "manage_api_keys");
       await ensureSettingsRow(ctx.workspace.id);
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
 
-      await db
-        .update(workspaceSettings)
-        .set({
-          quickenrichApiKeyEnc: input.apiKey === "" ? null : encryptSecret(input.apiKey.trim()),
-        })
-        .where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
+      const updates: Record<string, string | number | null> = {};
+      if (input.apiKey !== undefined) {
+        updates.quickenrichApiKeyEnc = input.apiKey === "" ? null : encryptSecret(input.apiKey.trim());
+      }
+      if (input.dailyPullCap !== undefined) {
+        updates.quickenrichDailyPullCap = input.dailyPullCap;
+      }
+      if (Object.keys(updates).length > 0) {
+        await db
+          .update(workspaceSettings)
+          .set(updates)
+          .where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
+      }
       return { ok: true as const };
     }),
 

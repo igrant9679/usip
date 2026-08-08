@@ -50,6 +50,11 @@ export const ARE_SOURCES = [
     label: "Apollo.io",
     description: "Search your Apollo account for matching people. Costs no Apollo credits.",
   },
+  {
+    id: "quickenrich",
+    label: "QuickEnrich",
+    description: "Discover people matching your titles and industries from the QuickEnrich database. Discovery is free; emails are found during enrichment, one credit per hit.",
+  },
 ] as const;
 
 export type AreSourceId = (typeof ARE_SOURCES)[number]["id"];

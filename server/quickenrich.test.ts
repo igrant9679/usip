@@ -33,11 +33,14 @@ vi.mock("./db", () => ({ getDb: mocks.getDb, checkPermission: vi.fn() }));
 
 import { encryptSecret } from "./_core/crypto";
 import {
+  buildQuickenrichFilters,
   getQuickEnrichKey,
+  quickenrichContactFinder,
   quickenrichFindEmailByLinkedIn,
   quickenrichTestKey,
   QUICKENRICH_BASE,
 } from "./services/quickenrich";
+import { ARE_SOURCE_IDS } from "@shared/areSources";
 
 /** Chainable fake returning one workspace_settings row. */
 function dbWithRow(row: Record<string, unknown> | null) {
@@ -223,6 +226,138 @@ describe("quickenrichFindEmailByLinkedIn — envelope-agnostic on purpose", () =
   });
 });
 
+describe("buildQuickenrichFilters — targeting → their vocabulary, conservatively", () => {
+  it("maps titles and industries to their documented filter fields", () => {
+    const { body } = buildQuickenrichFilters({
+      titles: ["CFO", " Executive Director "],
+      industries: ["non-profit organizations"],
+      geos: [],
+    });
+    expect(body).toMatchObject({
+      logic: "AND",
+      page: 1,
+      filters: {
+        title: { include: ["CFO", "Executive Director"] },
+        industry_linkedin: { include: ["non-profit organizations"] },
+      },
+    });
+  });
+
+  it("sends a geo ONLY when it maps cleanly to a country code, and reports the rest", () => {
+    // "California" sent as a country_code would silently empty the search —
+    // similarity is not meaning, in filter vocabularies as in CSV headers.
+    const { body, unmappedGeos } = buildQuickenrichFilters({
+      titles: ["CFO"],
+      industries: [],
+      geos: ["United States", "California", "UK"],
+    });
+    expect((body as any).filters.country_code.include.sort()).toEqual(["GB", "US"]);
+    expect(unmappedGeos).toEqual(["California"]);
+  });
+
+  it("refuses to search with no titles and no industries", () => {
+    // A filter-less search is 'every contact they have' — never a campaign
+    // audience. Same refusal, same reason, as the internal-CRM source.
+    const { body } = buildQuickenrichFilters({ titles: [], industries: [], geos: ["United States"] });
+    expect(body).toBeNull();
+  });
+
+  it("bounds the include lists", () => {
+    const { body } = buildQuickenrichFilters({
+      titles: Array.from({ length: 40 }, (_, i) => `T${i}`),
+      industries: [],
+      geos: [],
+    });
+    expect((body as any).filters.title.include).toHaveLength(12);
+  });
+});
+
+describe("quickenrichContactFinder — free discovery, defensively parsed", () => {
+  const jsonResponse = (status: number, body: unknown) => ({
+    status,
+    ok: status >= 200 && status < 300,
+    json: async () => body,
+  });
+  const BODY = { filters: { title: { include: ["CFO"] } }, logic: "AND", page: 1 };
+
+  it("maps their row shape to prospect fields, normalising the company URL to a domain", async () => {
+    mocks.fetch.mockResolvedValue(jsonResponse(200, {
+      data: [{
+        first_name: "Ada", last_name: "Li", title: "CFO",
+        linkedin_url: "https://linkedin.com/in/ada-li",
+        company_name: "Acme", company_url: "https://www.acme.io/about",
+        has_email: true,
+      }],
+    }));
+    const r = await quickenrichContactFinder("k", BODY);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.people).toEqual([{
+      firstName: "Ada", lastName: "Li", title: "CFO",
+      linkedinUrl: "https://linkedin.com/in/ada-li",
+      companyName: "Acme", companyDomain: "acme.io",
+      hasEmail: true,
+    }]);
+  });
+
+  it("drops rows with no LinkedIn URL or no name — inert in OUR pipeline", async () => {
+    // No LinkedIn URL = the enrichment lookup has no key to work with; no name
+    // = nothing to address. Keeping either would queue rows nothing can work.
+    mocks.fetch.mockResolvedValue(jsonResponse(200, {
+      data: [
+        { first_name: "Ada", last_name: "Li", linkedin_url: "https://linkedin.com/in/ada" },
+        { first_name: "No", last_name: "Url" },
+        { linkedin_url: "https://linkedin.com/in/nameless" },
+      ],
+    }));
+    const r = await quickenrichContactFinder("k", BODY);
+    if (!r.ok) throw new Error("expected ok");
+    expect(r.people).toHaveLength(1);
+    expect(r.people[0].firstName).toBe("Ada");
+  });
+
+  it("treats has_email as strictly boolean true", async () => {
+    mocks.fetch.mockResolvedValue(jsonResponse(200, {
+      data: [
+        { first_name: "A", last_name: "B", linkedin_url: "https://linkedin.com/in/a", has_email: "true" },
+      ],
+    }));
+    const r = await quickenrichContactFinder("k", BODY);
+    if (!r.ok) throw new Error("expected ok");
+    expect(r.people[0].hasEmail).toBe(false);
+  });
+
+  it("reports HTTP and envelope failures as errors, and never throws", async () => {
+    mocks.fetch.mockResolvedValue(jsonResponse(500, {}));
+    expect((await quickenrichContactFinder("k", BODY)).ok).toBe(false);
+    mocks.fetch.mockResolvedValue(jsonResponse(200, { weird: "shape" }));
+    const r = await quickenrichContactFinder("k", BODY);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain("unrecognised envelope");
+    mocks.fetch.mockRejectedValue(new Error("ETIMEDOUT"));
+    expect((await quickenrichContactFinder("k", BODY)).ok).toBe(false);
+  });
+});
+
+describe("the areSources rule, now enforced: a source exists only if the engine runs it", () => {
+  /**
+   * areSources.ts has stated this rule in prose since the three-vocabulary
+   * cleanup; nothing checked it. Four checkboxes were once silent no-ops for
+   * exactly this reason. Every id in the vocabulary must have a dispatch
+   * branch in runDiscovery — adding an entry without one now fails here
+   * instead of shipping a checkbox that does nothing.
+   */
+  it("every ARE source id has a runDiscovery branch", () => {
+    const engine = read("server/areEngine.ts");
+    for (const id of ARE_SOURCE_IDS) {
+      expect(
+        engine.includes(`sources.includes("${id}")`),
+        `source "${id}" is offered but the engine never runs it — the silent-checkbox class`,
+      ).toBe(true);
+    }
+  });
+});
+
 describe("migration parity — the dominant prod-breaking bug, pre-empted", () => {
   it("0146 exists in rawMigrations and adds the column schema declares", () => {
     const migrations = read("server/_core/rawMigrations.ts");
@@ -240,16 +375,44 @@ describe("no inert controls, no leaks", () => {
   const routerSrc = read("server/routers/quickenrich.ts");
   const schema = read("drizzle/schema.ts");
 
-  it("stores ONLY the key — caps and modes ship with the engine that reads them", () => {
+  it("every QuickEnrich control is consumed by the engine — none is decoration", () => {
     /**
-     * The inert-settings class: a control that saves and reads back while no
-     * path consults it. If this fails because you are ADDING the sourcing
-     * integration, delete it and add the consuming-path test instead — that is
-     * the intended lifecycle, not a loophole.
+     * This test REPLACED the inert-columns guard when sourcing landed (its
+     * annotated lifecycle: the absence test died in the same commit that
+     * added the consumer). The obligation inverts: a column that exists must
+     * be consulted where the work happens.
      */
-    for (const col of ["quickenrichDailyCap", "quickenrichMode", "quickenrichSweepMode"]) {
-      expect(schema.includes(col), `${col} exists but nothing consumes QuickEnrich yet`).toBe(false);
-    }
+    expect(schema).toContain('quickenrichDailyPullCap: int("quickenrichDailyPullCap")');
+    const engine = read("server/areEngine.ts");
+    expect(engine.includes("getQuickenrichDailyPullCap(campaign.workspaceId)"), "the pull cap is not consulted by discovery").toBe(true);
+    expect(engine.includes("quickenrichPulledToday(campaign.workspaceId)"), "today's usage is not counted against the cap").toBe(true);
+    expect(engine.includes("getQuickEnrichKey(campaign.workspaceId)"), "discovery does not check the key").toBe(true);
+  });
+
+  it("migration 0148 carries the cap AND both sourceType enum widenings", () => {
+    // An enum value the DB doesn't know fails at runtime INSERT (reason on
+    // e.cause), so schema-side enum edits without the MODIFYs are the
+    // as-never class wearing a sourcing costume.
+    const migrations = read("server/_core/rawMigrations.ts");
+    const at = migrations.indexOf("0148_quickenrich_source.sql");
+    expect(at, "migration 0148 missing").toBeGreaterThan(-1);
+    const block = migrations.slice(at, at + 1200);
+    expect(block).toContain("ADD COLUMN `quickenrichDailyPullCap` int NOT NULL DEFAULT 50");
+    expect(block).toMatch(/ALTER TABLE `are_scrape_jobs` MODIFY COLUMN `sourceType` enum\('[^)]*'quickenrich'\) NOT NULL/);
+    expect(block).toMatch(/ALTER TABLE `prospect_queue` MODIFY COLUMN `sourceType` enum\('[^)]*'quickenrich'\) NOT NULL/);
+    // And the schema enums agree with the migration.
+    expect(/quickenrich[\s\S]{0,40}?\]\)\.notNull\(\)/.test(schema), "a schema sourceType enum is missing quickenrich").toBe(true);
+  });
+
+  it("discovery ranks has_email rows first, so headroom goes to convertible people", () => {
+    const engine = read("server/areEngine.ts");
+    expect(engine.includes("Number(b.hasEmail) - Number(a.hasEmail)"), "has_email prioritisation is gone").toBe(true);
+  });
+
+  it("saveScrapeJobAndQueue maps the quickenrich source end to end", () => {
+    const scraper = read("server/routers/are/scraper.ts");
+    expect(scraper.includes('quickenrich: "quickenrich"'), "job→queue sourceType mapping missing").toBe(true);
+    expect(/QUEUE_SOURCE_TYPES = new Set\(\[[\s\S]*?"quickenrich",[\s\S]*?\]\)/.test(scraper), "queue enum allowlist missing quickenrich").toBe(true);
   });
 
   it("the status endpoint never returns the key", () => {
@@ -286,10 +449,15 @@ describe("no inert controls, no leaks", () => {
     }
   });
 
-  it("the card says campaigns do NOT pull from it yet", () => {
-    // The overclaim guard. When the source integration lands, update the copy
-    // and this assertion together.
+  it("the card describes the live wiring: free discovery, credits at enrichment, Reoon gate", () => {
+    // Updated together with the sourcing integration, per the old overclaim
+    // guard's annotation. The card must not resurrect the pre-sourcing claim.
     const card = read("client/src/components/usip/settings/QuickEnrichSourceCard.tsx");
-    expect(card).toContain("campaigns do not pull from QuickEnrich yet");
+    expect(card).toContain("Campaigns source new prospects from QuickEnrich");
+    expect(card.includes("campaigns do not pull from QuickEnrich yet")).toBe(false);
+    expect(card).toContain("Reoon-verified");
+    // The cap input exists and the save path sends it.
+    expect(card).toContain("Daily pull cap");
+    expect(card).toContain("dailyPullCap: capNum");
   });
 });

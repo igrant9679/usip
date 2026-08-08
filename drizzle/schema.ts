@@ -1473,6 +1473,11 @@ export const workspaceSettings = mysqlTable("workspace_settings", {
   // trial tooling — and any address sourced from here still goes through Reoon
   // before promoteVerifiedProspect will touch it.
   quickenrichApiKeyEnc: text("quickenrichApiKeyEnc"),
+  // Max prospects pulled from QuickEnrich contact-finder per workspace per day
+  // (Migration 0148). Queue hygiene, not spend: discovery is their free
+  // endpoint; credits are spent later by the sweep's lookup pass, only on
+  // delivery. Consumed by discoverViaQuickenrich in areEngine.
+  quickenrichDailyPullCap: int("quickenrichDailyPullCap").default(50).notNull(),
   // ── Backlog enrichment sweeper (Migration 0132) ──
   // off      = never sweeps
   // approval = sweeps only when a human presses "Run sweep"
@@ -3418,6 +3423,7 @@ export const prospectQueue = mysqlTable(
       "google_business", "linkedin_company", "linkedin_people",
       "web_scrape", "news_event", "industry_event",
       "apollo", "zoominfo", "clay", "ai_research",
+      "quickenrich", // migration 0148
     ]).notNull(),
     sourceId: varchar("sourceId", { length: 256 }), // external ID from data provider
     sourceUrl: text("sourceUrl"),                    // original URL scraped
@@ -3736,6 +3742,7 @@ export const areScrapeJobs = mysqlTable(
       "google_business", "linkedin_company", "linkedin_people",
       "web_scrape", "news", "industry_events",
       "apollo", "internal", // migration 0124
+      "quickenrich", // migration 0148
     ]).notNull(),
     query: text("query").notNull(),          // search query or URL
     status: mysqlEnum("status", ["pending", "running", "complete", "failed"]).default("pending").notNull(),
