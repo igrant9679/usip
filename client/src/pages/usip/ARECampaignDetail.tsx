@@ -37,6 +37,7 @@ import { Separator } from "@/components/ui/separator";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { trpc } from "@/lib/trpc";
+import { ARE_SOURCES, ARE_DEFAULT_SOURCES, normalizeSources } from "@shared/areSources";
 import {
   Activity,
   ArrowLeft,
@@ -1648,6 +1649,7 @@ export default function ARECampaignDetail() {
   const [thresholdDraft, setThresholdDraft] = useState<number | null>(null);
   const [minConfDraft, setMinConfDraft] = useState<number | null>(null);
   const [s2oEnabled, setS2oEnabled] = useState<boolean | null>(null);
+  const [sourcesDraft, setSourcesDraft] = useState<string[] | null>(null);
   // Bulk selection
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [rejectDialogOpen, setRejectDialogOpen] = useState(false);
@@ -1715,6 +1717,7 @@ export default function ARECampaignDetail() {
       setThresholdDraft(null);
       setMinConfDraft(null);
       setS2oEnabled(null);
+      setSourcesDraft(null);
     },
     onError: (e) => toast.error(e.message),
   });
@@ -1785,6 +1788,11 @@ export default function ARECampaignDetail() {
   const autoThreshold = thresholdDraft !== null ? thresholdDraft : (campaign?.autoApproveThreshold ?? null);
   const minConfidence = minConfDraft !== null ? minConfDraft : ((campaign as any)?.minConfidence ?? 40);
   const s2oActive = s2oEnabled !== null ? s2oEnabled : (campaign?.signalToOpportunityEnabled ?? false);
+  // Mirrors the engine exactly (areEngine.runDiscovery): a stored list that
+  // normalizes to empty means "run every default source", so that is what the
+  // checkboxes must show — anything else would be a lying surface.
+  const storedSources = normalizeSources((campaign as any)?.prospectSources);
+  const activeSources = sourcesDraft ?? (storedSources.length > 0 ? storedSources : [...ARE_DEFAULT_SOURCES]);
 
   const statusColor = campaign.status === "active" ? "#34D399" : campaign.status === "paused" ? "#F59E0B" : "#94A3B8";
   const autonomyColor =
@@ -2458,8 +2466,52 @@ export default function ARECampaignDetail() {
                 </CardContent>
               </Card>
 
+              {/* Prospect sources */}
+              <Card className="bg-card border">
+                <CardHeader className="pb-2 pt-4 px-4">
+                  <CardTitle className="text-sm flex items-center gap-2">
+                    <Globe className="size-4 text-blue-500" />
+                    Prospect Sources
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="px-4 pb-4 space-y-3">
+                  <p className="text-xs text-muted-foreground leading-relaxed">
+                    Where discovery finds new prospects for this campaign. Changes apply on the next discovery run — discovery fires when the send queue drains below the daily cap.
+                  </p>
+                  <div className="space-y-2">
+                    {ARE_SOURCES.map((s) => (
+                      <label key={s.id} className="flex items-start gap-2.5 cursor-pointer">
+                        <Checkbox
+                          className="mt-0.5"
+                          checked={activeSources.includes(s.id)}
+                          onCheckedChange={() =>
+                            setSourcesDraft(
+                              activeSources.includes(s.id)
+                                ? activeSources.filter((x) => x !== s.id)
+                                : [...activeSources, s.id],
+                            )
+                          }
+                        />
+                        <span className="space-y-0.5">
+                          <span className="block text-xs font-medium text-foreground">{s.label}</span>
+                          <span className="block text-[11px] text-muted-foreground leading-snug">{s.description}</span>
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                  {sourcesDraft !== null && sourcesDraft.length === 0 && (
+                    <div className="flex items-start gap-2 p-2.5 rounded-lg border border-amber-500/20 bg-amber-500/5 text-xs">
+                      <Zap className="size-3.5 text-amber-500 mt-0.5 shrink-0" />
+                      <span className="text-amber-700 dark:text-amber-300">
+                        Nothing selected does not mean off — discovery falls back to running <strong>every</strong> source. Leave at least one box ticked to narrow it.
+                      </span>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
               {/* Save button */}
-              {(thresholdDraft !== null || minConfDraft !== null || s2oEnabled !== null) && (
+              {(thresholdDraft !== null || minConfDraft !== null || s2oEnabled !== null || sourcesDraft !== null) && (
                 <div className="flex items-center gap-3">
                   <Button
                     onClick={() => updateCampaign.mutate({
@@ -2467,6 +2519,7 @@ export default function ARECampaignDetail() {
                       autoApproveThreshold: autoThreshold,
                       minConfidence,
                       signalToOpportunityEnabled: s2oActive,
+                      ...(sourcesDraft !== null ? { prospectSources: sourcesDraft } : {}),
                     })}
                     disabled={updateCampaign.isPending}
                     className="gap-1.5"
@@ -2476,7 +2529,7 @@ export default function ARECampaignDetail() {
                   </Button>
                   <Button
                     variant="ghost" size="sm" className="text-xs text-muted-foreground"
-                    onClick={() => { setThresholdDraft(null); setS2oEnabled(null); }}
+                    onClick={() => { setThresholdDraft(null); setMinConfDraft(null); setS2oEnabled(null); setSourcesDraft(null); }}
                   >
                     Discard
                   </Button>
