@@ -225,6 +225,59 @@ export function renderMergeFields(
 }
 
 /**
+ * FINAL egress scrub: no `{{…}}` ever leaves in a template send.
+ *
+ * The renderers deliberately disagree about unresolved tags — areEngine
+ * strips them (autonomous, no reviewer), while resolveMergeVars and
+ * renderMergeFields leave them verbatim *so reviewers can spot them* in
+ * drafts and previews. That policy is right for editing surfaces and wrong at
+ * the wire: the sequences auto-send path proved it by mailing recipients a
+ * literal `{{senderCompany}}` when two offered tokens were missing from the
+ * merge map, and the same shape resurfaced 2026-08-08 as a `{{company}}` in a
+ * stored campaign subject. Renderer policy stays reviewer-friendly; THIS runs
+ * at the send boundary, template paths only.
+ *
+ * ⚠️ Never apply this to human-composed mail (the Rep Mailbox adapter path):
+ * a person may legitimately type `{{firstName}}` when discussing a template
+ * with a colleague, and silently rewriting a human's words is worse than any
+ * stray brace.
+ *
+ * The tidy-up is deliberately minimal: collapse the doubled space a removed
+ * mid-sentence token leaves, and the space a removed token strands before
+ * punctuation. Anything smarter is a rewrite of prose nobody reviewed.
+ *
+ * `removed` reports what was cut so call sites can log it — a fired scrub is
+ * an upstream bug (a token offered somewhere but absent from a merge map),
+ * and silence here would hide exactly the signal that gets it fixed.
+ */
+export function scrubUnresolvedMergeTags(text: string): { text: string; removed: string[] } {
+  const removed: string[] = [];
+  if (!text || !text.includes("{{")) return { text: text ?? "", removed };
+  let out = text.replace(/\{\{([^}]*)\}\}/g, (_m, inner: string) => {
+    removed.push(inner.trim());
+    return "";
+  });
+  if (removed.length > 0) {
+    out = out
+      .replace(/[ \t]{2,}/g, " ")         // "at  ." → "at ."
+      .replace(/[ \t]+([,.;:!?])/g, "$1") // "at ." → "at."
+      .trim();                            // a removed edge tag strands edge whitespace
+  }
+  return { text: out, removed };
+}
+
+/** scrubUnresolvedMergeTags + the warn every call site would otherwise re-type. */
+export function scrubForSend(text: string, where: string): string {
+  const { text: out, removed } = scrubUnresolvedMergeTags(text);
+  if (removed.length > 0) {
+    console.warn(
+      `[mergeScrub] ${where}: stripped unresolved merge tag(s) [${removed.join(", ")}] at the send boundary — a token is offered somewhere but missing from this path's merge map`,
+    );
+  }
+  return out;
+}
+
+/**
  * Inject a tracking pixel <img> tag and wrap all <a href="..."> links
  * with the click-tracking redirect URL.
  *

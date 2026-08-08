@@ -29,6 +29,7 @@ import {
 import { getDb } from "./db";
 import { recordEmailsSent } from "./usageCounters";
 import { buildTransporter, decrypt } from "./routers/smtpConfig";
+import { scrubForSend } from "./mergeVars";
 
 export interface SendEmailOptions {
   to: string | string[];
@@ -41,6 +42,24 @@ export interface SendEmailOptions {
 export interface SendEmailResult {
   ok: boolean;
   reason?: string;
+}
+
+/**
+ * Every function in this file carries template-rendered content (campaign
+ * steps, notifications, reports) — never human-composed mail, which goes
+ * through emailAdapter and must NOT be scrubbed. So the no-braces-on-the-wire
+ * guarantee is enforced here once, at the shared boundary, rather than hoped
+ * for in every renderer upstream (they deliberately disagree — see
+ * scrubUnresolvedMergeTags). Idempotent, so the pool's fallback into
+ * sendWorkspaceEmail scrubbing twice is harmless.
+ */
+function scrubTemplateOpts<T extends SendEmailOptions>(opts: T, where: string): T {
+  return {
+    ...opts,
+    subject: scrubForSend(opts.subject, `${where}.subject`),
+    html: scrubForSend(opts.html, `${where}.html`),
+    ...(opts.text !== undefined ? { text: scrubForSend(opts.text, `${where}.text`) } : {}),
+  };
 }
 
 /**
@@ -65,6 +84,7 @@ export async function sendCampaignEmailViaPool(
   workspaceId: number,
   opts: SendEmailOptions & { fromName?: string },
 ): Promise<SendEmailResult & { accountId?: number; fromEmail?: string }> {
+  opts = scrubTemplateOpts(opts, "emailDelivery.pool");
   try {
     const db = await getDb();
     if (!db) return { ok: false, reason: "DB unavailable" };
@@ -184,6 +204,7 @@ export async function sendWorkspaceEmail(
   workspaceId: number,
   opts: SendEmailOptions,
 ): Promise<SendEmailResult> {
+  opts = scrubTemplateOpts(opts, "emailDelivery.workspace");
   try {
     const db = await getDb();
     if (!db) return { ok: false, reason: "DB unavailable" };
@@ -257,6 +278,7 @@ export async function sendSystemEmail(
   workspaceId: number,
   opts: SendEmailOptions,
 ): Promise<SendEmailResult> {
+  opts = scrubTemplateOpts(opts, "emailDelivery.system");
   try {
     const db = await getDb();
     if (!db) return { ok: false, reason: "DB unavailable" };

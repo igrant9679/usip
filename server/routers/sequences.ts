@@ -33,7 +33,7 @@ import { appBaseUrl as publicAppOrigin } from "../appUrl";
 import { utcDayStart } from "@shared/timeWindows";
 import { getSequenceAbVariantStats } from "../services/performanceMetrics";
 import { escapeHtml as sharedEscapeHtml } from "@shared/escapeHtml";
-import { renderMergeFields } from "../mergeVars";
+import { renderMergeFields, scrubForSend } from "../mergeVars";
 
 /** One escaper for the whole codebase — @shared/escapeHtml. The comment here
  *  used to read "duplicated from crm.ts — separate router", and duplication is
@@ -1604,11 +1604,15 @@ export async function deliverEmailDraft(params: {
     senderCompany: senderWorkspace?.name ?? "",
     signature: sig,
   };
-  const renderedSubject = renderMergeFields(draft.subject ?? "", mergeVars);
+  // scrubForSend: renderMergeFields leaves unknown tokens VISIBLE by design
+  // (reviewers spot them in drafts) — but this is the send boundary, where a
+  // literal {{senderCompany}} has already reached recipients once. Scrubbed
+  // before HTML-wrapping, or the braces ride into the markup untouched.
+  const renderedSubject = scrubForSend(renderMergeFields(draft.subject ?? "", mergeVars), "sequences.autoSend.subject");
   const mergeVarsNoSig = { ...mergeVars, signature: "" };
-  const renderedBody = renderMergeFields(draft.body ?? "", mergeVarsNoSig);
+  const renderedBody = scrubForSend(renderMergeFields(draft.body ?? "", mergeVarsNoSig), "sequences.autoSend.body");
   const renderedBodyText = bodyMentionsSignatureToken
-    ? renderMergeFields(draft.body ?? "", mergeVars)
+    ? scrubForSend(renderMergeFields(draft.body ?? "", mergeVars), "sequences.autoSend.bodyText")
     : sig
       ? `${renderedBody.replace(/\s+$/, "")}\n\n${sig}`
       : renderedBody;

@@ -55,7 +55,7 @@ import { appBaseUrl as publicAppOrigin } from "../appUrl";
 // shared/quoteTotals.ts — a deal line and a quote line do the same sum.
 import { centsToDecimal, computeQuoteTotals, toCents } from "@shared/quoteTotals";
 import { escapeHtml as sharedEscapeHtml } from "@shared/escapeHtml";
-import { renderMergeFields } from "../mergeVars";
+import { renderMergeFields, scrubForSend } from "../mergeVars";
 
 /** The ONE public origin — see server/appUrl.ts. */
 const getAppBaseUrl = publicAppOrigin;
@@ -719,17 +719,19 @@ export const contactsRouter = router({
           senderCompany,
           signature: workspaceSignature,
         };
-        const renderedSubject = renderMergeFields(input.subject, mergeVars);
+        // scrubForSend: the renderer leaves unknown tokens visible for
+        // reviewers; the send boundary must not (see mergeVars).
+        const renderedSubject = scrubForSend(renderMergeFields(input.subject, mergeVars), "crm.send.subject");
         // Render body WITHOUT signature substitution first — we want to
         // wrap body paragraphs and signature lines with different spacing,
         // so we need to render them as separate HTML blocks below.
         const mergeVarsNoSig = { ...mergeVars, signature: "" };
-        const renderedBody = renderMergeFields(input.body, mergeVarsNoSig);
+        const renderedBody = scrubForSend(renderMergeFields(input.body, mergeVarsNoSig), "crm.send.body");
 
         // The plain-text version always includes the signature inline.
         const renderedBodyText =
           bodyMentionsSignatureToken
-            ? renderMergeFields(input.body, mergeVars)
+            ? scrubForSend(renderMergeFields(input.body, mergeVars), "crm.send.bodyText")
             : workspaceSignature
               ? `${renderedBody.replace(/\s+$/, "")}\n\n${workspaceSignature}`
               : renderedBody;
