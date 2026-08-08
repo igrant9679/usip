@@ -71,6 +71,11 @@ import {
   quickenrichContactFinder,
   quickenrichPulledToday,
 } from "./services/quickenrich";
+import {
+  HEALABLE_NO_EMAIL,
+  HEALABLE_POOL_PREFIX,
+  sequenceCompletionVerdict,
+} from "./services/sequenceCompletion";
 import { appBaseUrl as publicAppOrigin } from "./appUrl";
 import { escapeHtml } from "@shared/escapeHtml";
 import { buildMergeLookup, isEmptyLinkToken, parseMergeToken, resolveMergeName, stripEmptyLinkCarriers } from "@shared/mergeKeys";
@@ -587,7 +592,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
       // arrives, even though the prospect is now reachable.
       try {
         const healable = await db
-          .select({ id: areExecutionQueue.id })
+          .select({ id: areExecutionQueue.id, prospectQueueId: areExecutionQueue.prospectQueueId })
           .from(areExecutionQueue)
           .innerJoin(prospectQueue, eq(areExecutionQueue.prospectQueueId, prospectQueue.id))
           .where(
@@ -603,11 +608,27 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
               // against the daily cap, and a still-broken account simply
               // re-fails the same bounded batch next tick.
               or(
-                eq(areExecutionQueue.failureReason, "Prospect has no email address"),
-                like(areExecutionQueue.failureReason, "Pool send failed:%"),
+                eq(areExecutionQueue.failureReason, HEALABLE_NO_EMAIL),
+                like(areExecutionQueue.failureReason, `${HEALABLE_POOL_PREFIX}%`),
               ),
               isNotNull(prospectQueue.email),
-              eq(prospectQueue.sequenceStatus, "enrolled"),
+              /**
+               * "enrolled" — the normal case — OR "completed" with ZERO sent
+               * steps. The second arm is the lockout repair: sequences whose
+               * every step died unreachably were marked completed (see
+               * sequenceCompletionVerdict for the 2026-08-08 incident), which
+               * put them beyond this heal exactly when enrichment found their
+               * emails. Zero-sent is the guard that matters: a sequence that
+               * ever SENT anything genuinely ran and stays finished — this
+               * arm can only revive sequences that never started.
+               */
+              or(
+                eq(prospectQueue.sequenceStatus, "enrolled"),
+                and(
+                  eq(prospectQueue.sequenceStatus, "completed"),
+                  sql`NOT EXISTS (SELECT 1 FROM \`are_execution_queue\` AS sent_probe WHERE sent_probe.\`prospectQueueId\` = ${prospectQueue.id} AND sent_probe.\`status\` = 'sent')`,
+                ),
+              ),
             ),
           );
         if (healable.length > 0) {
@@ -615,6 +636,18 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
             .update(areExecutionQueue)
             .set({ status: "scheduled", failureReason: null, executedAt: null })
             .where(inArray(areExecutionQueue.id, healable.map((h) => h.id)));
+          // Revive the completed prospects the steps belong to, or the
+          // completion sweep (which only scans "enrolled") never re-evaluates
+          // them and the re-scheduled steps dispatch under a lying status.
+          const revivedIds = Array.from(new Set(healable.map((h) => h.prospectQueueId)));
+          const revived = await db
+            .update(prospectQueue)
+            .set({ sequenceStatus: "enrolled" })
+            .where(and(
+              inArray(prospectQueue.id, revivedIds),
+              eq(prospectQueue.sequenceStatus, "completed"),
+            ));
+          void revived;
           await emitLog(wsId, campId, "dispatch", "info",
             `Re-scheduled ${healable.length} failed step(s) (email resolved or send infra recovered)`);
         }
@@ -691,7 +724,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
         if (!p.email) {
           await db
             .update(areExecutionQueue)
-            .set({ status: "failed", failureReason: "Prospect has no email address", executedAt: new Date() })
+            .set({ status: "failed", failureReason: HEALABLE_NO_EMAIL, executedAt: new Date() })
             .where(eq(areExecutionQueue.id, step.id));
           continue;
         }
@@ -810,20 +843,25 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
         ),
       );
     for (const p of enrolledProspects) {
-      const [stillScheduled] = await db
-        .select({ n: sql<number>`count(*)` })
-        .from(areExecutionQueue)
-        .where(
-          and(
-            eq(areExecutionQueue.prospectQueueId, p.id),
-            eq(areExecutionQueue.status, "scheduled"),
-          ),
-        );
-      const [total] = await db
-        .select({ n: sql<number>`count(*)` })
+      // One aggregated read instead of two counts — and the two extra facts
+      // (sent, healable-failed) are what the completion decision was missing
+      // when it marked zero-send sequences finished and disarmed the heal.
+      const [c] = await db
+        .select({
+          total: sql<number>`count(*)`,
+          stillScheduled: sql<number>`sum(case when ${areExecutionQueue.status} = 'scheduled' then 1 else 0 end)`,
+          sent: sql<number>`sum(case when ${areExecutionQueue.status} = 'sent' then 1 else 0 end)`,
+          healableFailed: sql<number>`sum(case when ${areExecutionQueue.status} = 'failed' and (${areExecutionQueue.failureReason} = ${HEALABLE_NO_EMAIL} or ${areExecutionQueue.failureReason} like ${`${HEALABLE_POOL_PREFIX}%`}) then 1 else 0 end)`,
+        })
         .from(areExecutionQueue)
         .where(eq(areExecutionQueue.prospectQueueId, p.id));
-      if (Number(total?.n ?? 0) > 0 && Number(stillScheduled?.n ?? 0) === 0) {
+      const verdict = sequenceCompletionVerdict({
+        total: Number(c?.total ?? 0),
+        stillScheduled: Number(c?.stillScheduled ?? 0),
+        sent: Number(c?.sent ?? 0),
+        healableFailed: Number(c?.healableFailed ?? 0),
+      });
+      if (verdict) {
         await db
           .update(prospectQueue)
           .set({ sequenceStatus: "completed" })
