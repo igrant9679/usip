@@ -464,6 +464,66 @@ describe("the manual sweep UI matches what the engine actually does", () => {
     expect(fn.includes("isNotNull(prospectQueue.linkedinUrl)")).toBe(true);
   });
 
+  it("every LIMITed candidate query enforces enrichability in SQL, not only in JS", () => {
+    /**
+     * The window-eclipse class, caught live 2026-08-08: isEnrichableCampaign
+     * ran only AFTER the SQL `LIMIT`, so the N lowest-id rows could all be
+     * demo rows, the JS filter emptied the page, and the sweep said "nothing
+     * was waiting" while the unlimited count said "46 reachable" — the same
+     * predicate, disagreeing because one was windowed before filtering.
+     * Every LIMITed query must carry the SQL half; the JS filter stays as the
+     * belt on all of them.
+     */
+    const src = readFileSync(join(__dirname, "enrichmentSweeper.ts"), "utf8");
+    expect(src.includes("function enrichableCampaignSql()"), "the SQL predicate helper is gone").toBe(true);
+    for (const fn of ["queueCandidatesFor", "quickenrichCandidatesFor", "resolveMissingDomains"]) {
+      const at = src.indexOf(`async function ${fn}`);
+      expect(at, `${fn} not found — re-anchor`).toBeGreaterThan(-1);
+      /**
+       * Window ends at the NEXT function declaration, not the next `export`:
+       * these are private functions, so an export-anchored window swallowed
+       * the neighbouring function — and its intact predicate satisfied the
+       * assertion while this one's was deleted. The ambiguous-anchor trap,
+       * once more, caught by the battery rather than by reading.
+       */
+      const rest = src.slice(at + 10);
+      const next = rest.search(/\r?\n(?:export )?(?:async )?function /);
+      const body = next === -1 ? src.slice(at) : src.slice(at, at + 10 + next);
+      expect(body.length, `${fn} window is not the one function`).toBeLessThan(3500);
+      expect(body.includes("...enrichableCampaignSql()"), `${fn} lost the SQL enrichability predicate — its LIMIT window can be eclipsed by demo rows again`).toBe(true);
+      expect(body.includes("isEnrichableCampaign"), `${fn} lost the JS belt filter`).toBe(true);
+    }
+    // The SQL half must mirror the JS definition's two rules: non-empty name,
+    // not a [demo] campaign.
+    const helper = src.slice(src.indexOf("function enrichableCampaignSql()"), src.indexOf("function enrichableCampaignSql()") + 400);
+    expect(helper.includes('ne(areCampaigns.name, "")')).toBe(true);
+    expect(helper.includes('notLike(areCampaigns.name, "[demo]%")')).toBe(true);
+  });
+
+  it("the result carries its own diagnosis: key presence and candidate counts", async () => {
+    // Added because a "nothing was waiting" verdict was undiagnosable from the
+    // persisted record alone. These fields make the NEXT contradiction
+    // self-explanatory on the card's Last-sweep data.
+    const { db } = makeDb(new Map([[prospectQueue, [queueRow()]]]));
+    mocks.getDb.mockResolvedValue(db);
+    mocks.getReoonKey.mockResolvedValue("rk");
+    mocks.getQuickEnrichKey.mockResolvedValue("qk");
+    mocks.quickenrichFindEmailByLinkedIn.mockResolvedValue({ email: "ada@acme.io", reason: "found" });
+
+    const r = await sweepWorkspace(1);
+
+    expect(r.qeKeyPresent).toBe(true);
+    expect(r.qeCandidates).toBeGreaterThanOrEqual(1);
+    expect(r.patternCandidates).toBeGreaterThanOrEqual(1);
+
+    const { db: db2 } = makeDb(new Map());
+    mocks.getDb.mockResolvedValue(db2);
+    const empty = await sweepWorkspace(1);
+    expect(empty.stoppedBecause).toBe("no_candidates");
+    expect(empty.qeKeyPresent).toBe(true);
+    expect(empty.qeCandidates).toBe(0);
+  });
+
   it("QE skips only its OWN prior attempts, never another pass's stamp", () => {
     /**
      * 76e5f74's lesson, recurring: ~183 rows carry enrichedAt from

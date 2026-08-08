@@ -45,6 +45,27 @@ import { clampSweepCap, SWEEP_DAILY_CAP_DEFAULT } from "@shared/enrichmentLimits
 export type SweepMode = "off" | "approval" | "auto";
 
 /**
+ * Enrichability, expressed in SQL for the LIMITed candidate queries.
+ *
+ * isEnrichableCampaign (the one JS definition) kept being applied AFTER the
+ * SQL `LIMIT`, which lets excluded rows eclipse the whole window: the sweep
+ * fetches the N lowest-id SQL matches, the JS filter strips the demo rows, and
+ * the page comes back EMPTY while an unlimited count of the same predicate
+ * honestly reports dozens. Observed live 2026-08-08 — the card said
+ * "46 reachable via QuickEnrich" while the run said "nothing was waiting",
+ * from the same workspace in the same minute.
+ *
+ * These two conditions mirror isEnrichableCampaign exactly: a non-empty
+ * campaign name that does not start with "[demo]" (MySQL LIKE is
+ * case-insensitive under this schema's *_ci collation, and `[` is literal in
+ * LIKE). The JS filter stays on every query as the belt — if the two ever
+ * disagree, the JS side wins and the structural test that pins both fails.
+ */
+function enrichableCampaignSql() {
+  return [ne(areCampaigns.name, ""), notLike(areCampaigns.name, "[demo]%")];
+}
+
+/**
  * A rejected prospect is not work.
  *
  * reject/bulkReject set `sequenceStatus = "skipped"`, and are.prospects.list
@@ -83,6 +104,15 @@ export interface SweepResult {
   promoted: number;
   creditsQuick: number;
   creditsPower: number;
+  /**
+   * Diagnostics, persisted with the result so a surprising verdict explains
+   * itself. Added after a live run said "nothing was waiting" while the card
+   * said "46 reachable" — with these, that contradiction names its own cause
+   * from the Last-sweep record instead of needing a debugging session.
+   */
+  qeKeyPresent: boolean;
+  patternCandidates: number;
+  qeCandidates: number;
   /** Why the run ended: finished the candidates, hit the cap, or ran dry. */
   stoppedBecause: "done" | "cap" | "no_credits" | "no_key" | "no_candidates";
 }
@@ -92,6 +122,7 @@ const emptyResult = (stoppedBecause: SweepResult["stoppedBecause"]): SweepResult
   attempted: 0, fromQueue: 0, fromProspects: 0, domainsAttempted: 0, domainsResolved: 0,
   emailsFound: 0,
   quickenrichAttempted: 0, quickenrichFound: 0, quickenrichCredits: 0,
+  qeKeyPresent: false, patternCandidates: 0, qeCandidates: 0,
   promoted: 0, creditsQuick: 0, creditsPower: 0, stoppedBecause,
 });
 
@@ -179,6 +210,7 @@ async function queueCandidatesFor(workspaceId: number, limit: number, retryFaile
     isNotNull(prospectQueue.firstName),
     isNotNull(prospectQueue.lastName),
     notRejected(),
+    ...enrichableCampaignSql(),
   ];
   // enrichedAt is the attempt marker here — prospect_queue has a real one, so
   // unlike the prospects table there is nothing to infer from a json column.
@@ -221,6 +253,7 @@ async function quickenrichCandidatesFor(workspaceId: number, limit: number, retr
     isNotNull(prospectQueue.linkedinUrl),
     ne(prospectQueue.linkedinUrl, ""),
     notRejected(),
+    ...enrichableCampaignSql(),
   ];
   /**
    * Skip only rows QUICKENRICH ITSELF has attempted — identified by the
@@ -295,6 +328,7 @@ export async function resolveMissingDomains(
       isNotNull(prospectQueue.companyName),
       ne(prospectQueue.companyName, ""),
       notRejected(),
+      ...enrichableCampaignSql(),
     ))
     .orderBy(prospectQueue.id)
     .limit(clampSweepCap(limit));
@@ -674,8 +708,13 @@ export async function sweepWorkspace(
       candidatesFor(workspaceId, cap, retry),
       qeKey ? quickenrichCandidatesFor(workspaceId, cap, retry) : Promise.resolve([]),
     ]);
+    const counts = {
+      qeKeyPresent: qeKey.length > 0,
+      patternCandidates: rows.length + queueRows.length,
+      qeCandidates: qeRows.length,
+    };
     if (rows.length === 0 && queueRows.length === 0 && qeRows.length === 0) {
-      return (outcome = { ...emptyResult("no_candidates"), domainsAttempted: domains.attempted, domainsResolved: domains.resolved });
+      return (outcome = { ...emptyResult("no_candidates"), ...counts, domainsAttempted: domains.attempted, domainsResolved: domains.resolved });
     }
 
     // One balance read up front, then decremented locally. Re-reading per
@@ -686,11 +725,12 @@ export async function sweepWorkspace(
       dailyCreditsLeft = balance.remaining_daily_credits ?? 0;
     } catch (e) {
       console.error("[EnrichmentSweep] balance check failed:", (e as Error).message);
-      return (outcome = emptyResult("no_credits"));
+      return (outcome = { ...emptyResult("no_credits"), ...counts });
     }
 
     const result: SweepResult = {
       ...emptyResult("done"),
+      ...counts,
       domainsAttempted: domains.attempted,
       domainsResolved: domains.resolved,
     };
