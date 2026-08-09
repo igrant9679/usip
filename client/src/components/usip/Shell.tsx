@@ -6,6 +6,9 @@ import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { HelpHover } from "@/components/usip/HelpTip";
 import { navHelpFor } from "@/lib/helpText";
+import { PRIMARY_TOOLS, TOOLS, type ToolGroup } from "@/lib/toolRegistry";
+import { CommandPalette, openCommandPalette } from "@/components/usip/CommandPalette";
+import { LayoutGrid } from "lucide-react";
 import {
   Activity,
   Bell,
@@ -298,122 +301,50 @@ const TOP_LINKS: NavLink[] = [
   { href: "/calendar", label: "My Calendar", icon: CalendarDays },
 ];
 
-// ONE rail, each capability exactly once. The v2 surface is primary; legacy
-// pages that a v2 page supersedes (/prospects, /contacts, /accounts,
-// /sequences, /tasks, /pipeline, "/" dashboard) left the rail but their
-// routes stay alive for deep links, tours, and muscle memory. Admin-ish
-// config (Team, Settings, Custom fields, Sending accounts) lives in the
-// Admin Settings panel + Settings hub, not here.
-const SECTIONS: NavSection[] = [
-  {
-    label: "Prospect and enrich",
-    icon: Search,
-    color: "#3B82F6",
-    darkColor: "#60A5FA",
-    items: [
-      { href: "/v2/people", label: "People", icon: Users },
-      { href: "/v2/companies", label: "Companies", icon: Building2 },
-      { href: "/v2/lists", label: "Lists", icon: ListChecks },
-      { href: "/find-prospects", label: "Find Prospects", icon: Radar },
-      { href: "/v2/data-enrichment", label: "Data enrichment", icon: Database },
-      { href: "/data-health", label: "Data health", icon: BarChart3 },
-      { href: "/import", label: "Import contacts", icon: Upload },
-    ],
-  },
-  {
-    label: "Engage",
-    icon: Send,
-    color: "#9333EA",
-    darkColor: "#D8B4FE",
-    items: [
-      { href: "/v2/sequences", label: "Sequences", icon: Activity },
-      { href: "/v2/emails", label: "Emails", icon: Mail },
-      { href: "/v2/calls", label: "Calls", icon: Phone },
-      { href: "/v2/tasks", label: "Tasks", icon: ListChecks },
-      { href: "/unified-inbox", label: "Unified Inbox", icon: MessageSquare },
-      { href: "/social", label: "Social", icon: Share2 },
-      { href: "/email-builder", label: "Email Builder", icon: LayoutTemplate },
-      { href: "/campaigns", label: "Campaigns", icon: Megaphone },
-      { href: "/segments", label: "Segments", icon: Filter },
-    ],
-  },
-  {
-    label: "Win deals",
-    icon: DollarSign,
-    color: "#10B981",
-    darkColor: "#34D399",
-    items: [
-      { href: "/leads", label: "Leads", icon: Target },
-      { href: "/v2/deals", label: "Deals", icon: KanbanSquare },
-      { href: "/v2/meetings", label: "Meetings", icon: CalendarDays },
-      { href: "/v2/conversations", label: "Conversations", icon: MessageSquare },
-      { href: "/pipeline-alerts", label: "Pipeline alerts", icon: AlertTriangle },
-      { href: "/proposals", label: "Proposals", icon: ClipboardList },
-      { href: "/products", label: "Products", icon: Package },
-    ],
-  },
-  {
-    label: "Customer success",
-    icon: Heart,
-    color: "#DB2777",
-    darkColor: "#F472B6",
-    items: [
-      { href: "/customers", label: "Customers", icon: Heart },
-      { href: "/renewals", label: "Renewals", icon: CalendarClock },
-      { href: "/qbrs", label: "QBRs", icon: ClipboardCheck },
-    ],
-  },
-  {
-    label: "Revenue Engine",
-    icon: Bot,
-    color: "#7C3AED",
-    darkColor: "#A78BFA",
-    items: [
-      { href: "/are", label: "ARE Hub", icon: Bot },
-      { href: "/ai-pipeline", label: "AI Pipeline", icon: Sparkles },
-      { href: "/brand-voice", label: "Brand Voice", icon: Mic2 },
-      { href: "/personas", label: "Personas", icon: Users },
-    ],
-  },
-  {
-    label: "Automation and analytics",
-    icon: Wrench,
-    color: "#F59E0B",
-    darkColor: "#FBBF24",
-    items: [
-      { href: "/v2/workflows", label: "Autonomy Center", icon: Workflow },
-      { href: "/workflows", label: "Workflow rules", icon: GitFork },
-      { href: "/lead-scoring", label: "Lead scoring", icon: Target },
-      { href: "/lead-routing", label: "Lead routing", icon: Sparkles },
-      { href: "/v2/analytics", label: "Analytics", icon: BarChart3 },
-      { href: "/reports", label: "Reports", icon: FileText },
-      { href: "/dashboards", label: "Dashboards", icon: PieChart },
-      { href: "/mindmaps", label: "Mindmaps", icon: GitFork },
-    ],
-  },
-  {
-    label: "Inbound",
-    icon: ArrowRightCircle,
-    color: "#14B8A6",
-    darkColor: "#2DD4BF",
-    items: [
-      { href: "/v2/website-visitors", label: "Website visitors", icon: Globe },
-      { href: "/v2/forms", label: "Forms", icon: FileText },
-      { href: "/v2/landing-pages", label: "Landing Pages", icon: LayoutTemplate, adminOnly: true },
-      { href: "/v2/chat", label: "Chat", icon: MessageSquare, adminOnly: true },
-    ],
-  },
-  {
-    label: "Saved records",
-    icon: Users,
-    color: "#F43F5E",
-    darkColor: "#FB7185",
-    items: [
-      { href: "/v2/saved-people", label: "People", icon: Users },
-      { href: "/v2/saved-companies", label: "Companies", icon: Building2 },
-    ],
-  },
+// THE RAIL IS A BUDGET, NOT A CATALOG. It renders only the registry's
+// `primary` tools (lib/toolRegistry — the ONE list of every destination),
+// grouped into four workflow stages that mirror the daily loop. Everything
+// else is one keystroke away in the ⌘K palette and one click away in the
+// Library page (/v2/library); both render from the same registry, so the
+// three surfaces can never disagree about what exists. The previous rail
+// listed ~44 items across 8 architecture-named sections — a feature catalog
+// the owner told us they got lost in.
+const GROUP_META: { group: ToolGroup; label: string; icon: any; color: string; darkColor: string }[] = [
+  { group: "Prospect & enrich", label: "Prospect", icon: Search, color: "#3B82F6", darkColor: "#60A5FA" },
+  { group: "Engage", label: "Engage", icon: Send, color: "#9333EA", darkColor: "#D8B4FE" },
+  { group: "Win deals", label: "Win deals", icon: DollarSign, color: "#10B981", darkColor: "#34D399" },
+  { group: "Autopilot & AI", label: "Autopilot", icon: Bot, color: "#7C3AED", darkColor: "#A78BFA" },
 ];
+
+/** Accent hues for tools whose group has no rail section (Library reach). */
+const EXTRA_GROUP_COLORS: Partial<Record<ToolGroup, { c: string; d: string }>> = {
+  "Daily": { c: "#3B82F6", d: "#93C5FD" },
+  "Customer success": { c: "#DB2777", d: "#F472B6" },
+  "Analytics & reporting": { c: "#F59E0B", d: "#FBBF24" },
+  "Inbound": { c: "#14B8A6", d: "#2DD4BF" },
+  "Configuration": { c: "#64748B", d: "#94A3B8" },
+};
+
+const SECTIONS: NavSection[] = GROUP_META.map((m) => ({
+  label: m.label,
+  icon: m.icon,
+  color: m.color,
+  darkColor: m.darkColor,
+  items: PRIMARY_TOOLS.filter((t) => t.group === m.group && t.group !== "Daily").map((t) => ({
+    href: t.href,
+    label: t.label,
+    icon: t.icon,
+    adminOnly: t.adminOnly,
+  })),
+}));
+
+const LIBRARY_LINK: NavLink = {
+  href: "/v2/library",
+  label: "Library — all tools",
+  icon: LayoutGrid,
+  color: "#F43F5E",
+  darkColor: "#FB7185",
+};
 
 // (The old "More" catch-all section is gone — every page either has one slot
 // in a section above, moved to the Settings hub / Admin Settings panel, or is
@@ -506,7 +437,16 @@ const BOTTOM_LINKS: NavLink[] = [
 const SECTION_COLOR_BY_HREF: Record<string, { c: string; d: string }> = (() => {
   const m: Record<string, { c: string; d: string }> = {};
   for (const s of SECTIONS) for (const it of s.items) m[it.href] = { c: s.color, d: s.darkColor };
-  for (const l of [...TOP_LINKS, ...BOTTOM_LINKS]) if (l.color) m[l.href] = { c: l.color, d: l.darkColor ?? l.color };
+  for (const l of [...TOP_LINKS, ...BOTTOM_LINKS, LIBRARY_LINK]) if (l.color) m[l.href] = { c: l.color, d: l.darkColor ?? l.color };
+  // Every registry tool keeps its group hue even when it has no rail slot —
+  // demoted pages must not lose their section accent.
+  for (const t of TOOLS) {
+    if (m[t.href]) continue;
+    const meta = GROUP_META.find((g) => g.group === t.group);
+    const extra = EXTRA_GROUP_COLORS[t.group];
+    if (meta) m[t.href] = { c: meta.color, d: meta.darkColor };
+    else if (extra) m[t.href] = { c: extra.c, d: extra.d };
+  }
   return m;
 })();
 
@@ -712,6 +652,8 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
   return (
     <AccentContext.Provider value={accentColor}>
     <div className="h-full flex bg-background text-foreground">
+      {/* ⌘K palette — mounted once per Shell, listens globally */}
+      <CommandPalette isAdmin={current?.role === "admin" || current?.role === "super_admin"} />
       {/* Mobile backdrop */}
       {mobileOpen && (
         <div
@@ -763,13 +705,29 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
             try { sessionStorage.setItem(SIDEBAR_SCROLL_KEY, String((e.currentTarget as HTMLElement).scrollTop)); } catch {}
           }}
         >
+          {/* Search — opens the ⌘K palette; every demoted page is reachable here */}
+          <button
+            type="button"
+            onClick={openCommandPalette}
+            className="w-full flex items-center gap-2.5 rounded-md px-3 py-2 text-[13px] text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+          >
+            <Search className="size-4 shrink-0 opacity-95" />
+            <span className="flex-1 truncate text-left">Search…</span>
+            <kbd className="text-[10px] px-1.5 py-0.5 rounded border border-border bg-muted/60">Ctrl K</kbd>
+          </button>
+
           {/* Top quick-links */}
           {topLinks.map((l) => renderNavLink(l))}
 
           <div className="my-2 border-t border-border" />
 
-          {/* Sectioned rail */}
+          {/* Sectioned rail — the four workflow stages */}
           {SECTIONS.map((s) => renderSection(s))}
+
+          <div className="my-2 border-t border-border" />
+
+          {/* Everything else, grouped and searchable */}
+          {renderNavLink(LIBRARY_LINK)}
         </nav>
 
         {/* Pinned bottom: deliverability + admin settings, then the user row */}

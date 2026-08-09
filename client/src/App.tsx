@@ -37,6 +37,7 @@ import LinkedInEnrichmentImport from "@/pages/usip/LinkedInEnrichmentImport";
 import SequencesV2 from "@/pages/usip/SequencesV2";
 import SequenceEditor from "@/pages/usip/SequenceEditor";
 import Home from "@/pages/usip/Home";
+import Library from "@/pages/usip/Library";
 import ProspectDetail from "@/pages/usip/ProspectDetail";
 import AccountDetail from "@/pages/usip/AccountDetail";
 import ContactDetail from "@/pages/usip/ContactDetail";
@@ -514,6 +515,7 @@ function Router() {
         Inbox, Pipeline, Workflows, Dashboards, Contacts, Accounts).
       */}
       <Route path="/v2/home"><AuthGate><Home /></AuthGate></Route>
+      <Route path="/v2/library"><AuthGate><Library /></AuthGate></Route>
       <Route path="/v2/ai-assistant"><AuthGate><AIAssistant /></AuthGate></Route>
       <Route path="/v2/people"><AuthGate><People /></AuthGate></Route>
       <Route path="/v2/companies/:id"><AuthGate><CompanyProfile /></AuthGate></Route>

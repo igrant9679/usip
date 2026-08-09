@@ -27,6 +27,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { NAV_HELP, navHelpFor } from "../client/src/lib/helpText";
+import { PRIMARY_TOOLS, TOOLS } from "../client/src/lib/toolRegistry";
 
 const ROOT = join(__dirname, "..");
 const read = (p: string) => readFileSync(join(ROOT, p), "utf8");
@@ -49,10 +50,25 @@ function sliceArray(src: string, name: string): string {
 const shell = read("client/src/components/usip/Shell.tsx");
 const helpText = read("client/src/lib/helpText.ts");
 
-/** Only the arrays the sidebar actually renders. */
-const liveNav = ["TOP_LINKS", "SECTIONS", "BOTTOM_LINKS"].map((n) => sliceArray(shell, n)).join("\n");
+/**
+ * The rail's sections are no longer a literal — they derive from
+ * lib/toolRegistry's `primary` tools, so the live set is the REAL import
+ * (stronger than a source scan) plus the arrays Shell still declares
+ * literally (top links, bottom links, the Library row).
+ */
+const liveNav = ["TOP_LINKS", "BOTTOM_LINKS"].map((n) => sliceArray(shell, n)).join("\n") +
+  // LIBRARY_LINK is an object literal ("= {"), not an array — sliceArray would
+  // skid past it to the NEXT "= [" (ADMIN_MENU_ITEMS) and count admin popover
+  // hrefs as rail links. A bounded window over the object itself instead.
+  shell.slice(shell.indexOf("const LIBRARY_LINK"), shell.indexOf("};", shell.indexOf("const LIBRARY_LINK")));
 
-const liveLinks = [...liveNav.matchAll(/href:\s*"([^"]+)"/g)].map((m) => m[1]);
+const liveLinks = [
+  ...[...liveNav.matchAll(/href:\s*"([^"]+)"/g)].map((m) => m[1]),
+  ...PRIMARY_TOOLS.map((t) => t.href),
+];
+
+/** Registry hrefs — help copy for a demoted (non-rail) page keys on these. */
+const registryHrefs = new Set(TOOLS.map((t) => t.href));
 
 const navHelpBlock = helpText.slice(helpText.indexOf("NAV_HELP"), helpText.indexOf("FIELD_HELP"));
 const helpKeys = new Set([...navHelpBlock.matchAll(/"(\/[^"]*)":/g)].map((m) => m[1]));
@@ -73,7 +89,10 @@ const INERT_KEYS = new Set([
 describe("nav hover-help coverage", () => {
   it("finds the live nav and the help keys (guards the scanner itself)", () => {
     // Both previous versions of this scan returned 0 and looked clean.
-    expect(liveLinks.length).toBeGreaterThan(40);
+    // The rail was deliberately slimmed to ~22 links (2026-08-09) — the floor
+    // guards against the scanner finding NOTHING, not against a small rail.
+    expect(liveLinks.length).toBeGreaterThan(18);
+    expect(PRIMARY_TOOLS.length).toBeGreaterThan(10); // the real import worked
     expect(helpKeys.size).toBeGreaterThan(40);
   });
 
@@ -96,17 +115,21 @@ describe("nav hover-help coverage", () => {
     ).toEqual([]);
   });
 
-  it("every NAV_HELP key matches a sidebar link, or is declared inert", () => {
-    // This is the direction that actually broke: copy keyed to an href the
-    // sidebar never renders can never be shown.
-    const orphans = [...helpKeys].filter((k) => !liveLinks.includes(k) && !INERT_KEYS.has(k));
+  it("every NAV_HELP key matches a sidebar link, a registry tool, or is declared inert", () => {
+    // This is the direction that actually broke: copy keyed to an href that
+    // nothing renders can never be shown. Registry hrefs count as legitimate
+    // since the rail slim-down (2026-08-09): a demoted page keeps its copy —
+    // the Library/palette are the surfaces that can show it next.
+    const orphans = [...helpKeys].filter(
+      (k) => !liveLinks.includes(k) && !registryHrefs.has(k) && !INERT_KEYS.has(k),
+    );
     expect(
       orphans,
       orphans.length
-        ? `\n\nNAV_HELP key(s) matching no sidebar link:\n  ${orphans.join("\n  ")}\n\n` +
+        ? `\n\nNAV_HELP key(s) matching no sidebar link and no registry tool:\n  ${orphans.join("\n  ")}\n\n` +
             `navHelpFor() matches the href EXACTLY, so this copy can never appear. Either\n` +
-            `re-key it to the href Shell.tsx renders, or add it to INERT_KEYS with a note\n` +
-            `saying which SubNav reaches that page.\n`
+            `re-key it to a real href (see lib/toolRegistry), or add it to INERT_KEYS\n` +
+            `with a note saying which SubNav reaches that page.\n`
         : undefined,
     ).toEqual([]);
   });

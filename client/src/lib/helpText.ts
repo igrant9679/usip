@@ -36,6 +36,7 @@ export interface HelpEntry {
 export const NAV_HELP: Record<string, HelpEntry> = {
   // ── Overview ──
   "/v2/home": { body: "Your starting point: what needs attention today, and how the pipeline moved this week.", article: "navigating-the-app" },
+  "/v2/library": { body: "Every tool in the product, grouped and searchable. The sidebar shows only the daily loop — anything you can't find lives here (or press Ctrl+K)." },
   "/v2/ai-assistant": { body: "Ask questions about your own data in plain English — \"which deals slipped this month?\" — instead of building a report." },
   "/inbox": { body: "Notifications from the autonomous engines: what they did, and anything waiting on your approval." },
   "/mailbox": { body: "Your connected email inbox, inside Velocity. Replies from prospects land here." },
