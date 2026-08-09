@@ -16,6 +16,7 @@ import { Shell, PageHeader, EmptyState } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { loadPerUserPref, savePerUserPref } from "@/lib/perUserPref";
+import { REMINDABLE_MEETING_STATUSES } from "@shared/meetingStatus";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -471,10 +472,16 @@ export default function CalendarPage() {
 
   const isManager = (user as any)?.role === "manager" || (user as any)?.role === "admin" || (user as any)?.role === "super_admin";
 
+  // Velocity's OWN meetings (booked by the autopilots, booking links, or by
+  // hand) overlay the provider events. Without this, the calendar was empty
+  // for everyone who never completed the external-calendar connect flow —
+  // while their actual meetings sat one page away on /v2/meetings, invisible
+  // here. Read-only on the calendar: clicking one opens the Meetings page.
+  const { data: velocityMeetings } = trpc.meetings.list.useQuery({});
+
   // Map DB events to FullCalendar format
   const fcEvents = useMemo(() => {
-    if (!events) return [];
-    return events.map((e: any) => ({
+    const provider = (events ?? []).map((e: any) => ({
       id: String(e.id),
       title: e.title,
       start: new Date(e.startAt),
@@ -483,7 +490,21 @@ export default function CalendarPage() {
       extendedProps: e,
       backgroundColor: e.relatedType === "contact" ? "#3b82f6" : e.relatedType === "opportunity" ? "#10b981" : undefined,
     }));
-  }, [events]);
+    const meetings = ((velocityMeetings ?? []) as any[])
+      .filter((m) => m.scheduledAt && (REMINDABLE_MEETING_STATUSES as readonly string[]).includes(m.status))
+      .map((m) => ({
+        id: `meeting-${m.id}`,
+        title: m.contactName ? `${m.title} — ${m.contactName}` : m.title,
+        start: new Date(m.scheduledAt),
+        end: new Date(new Date(m.scheduledAt).getTime() + (m.durationMin ?? 30) * 60_000),
+        allDay: false,
+        editable: false,
+        extendedProps: { velocityMeeting: true, meetingId: m.id },
+        backgroundColor: "#7C3AED",
+        borderColor: "#7C3AED",
+      }));
+    return [...provider, ...meetings];
+  }, [events, velocityMeetings]);
 
   const handleDateSet = useCallback((info: any) => {
     setDateRange({ from: info.start, to: info.end });
@@ -497,6 +518,12 @@ export default function CalendarPage() {
   }, []);
 
   const handleEventClick = useCallback((info: any) => {
+    // Velocity meetings are managed on /v2/meetings — the edit dialog here
+    // writes provider events and would silently do nothing to a meeting row.
+    if (info.event.extendedProps?.velocityMeeting) {
+      window.location.assign("/v2/meetings");
+      return;
+    }
     setEditingEvent(info.event.extendedProps);
     setNewEventStart(undefined);
     setNewEventEnd(undefined);

@@ -189,4 +189,12 @@ export const graphRouter = router({
     const conn = await requireConnection(ctx.workspace.id, ctx.user.id);
     return runOneNoteSync(conn);
   }),
+
+  /* ── Outlook calendar ─────────────────────────────────────────────── */
+
+  calendarSyncNow: workspaceProcedure.mutation(async ({ ctx }) => {
+    const conn = await requireConnection(ctx.workspace.id, ctx.user.id);
+    const { runGraphCalendarSync } = await import("../services/graphCalendarSync");
+    return runGraphCalendarSync(conn);
+  }),
 });

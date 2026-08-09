@@ -35,6 +35,10 @@ export function MicrosoftGraphCard() {
     onSuccess: () => { utils.graph.status.invalidate(); toast.success("Microsoft account disconnected"); },
     onError: (e) => toast.error(e.message),
   });
+  const calSync = trpc.graph.calendarSyncNow.useMutation({
+    onSuccess: (r) => toast.success(`Calendar synced — ${r.synced} event${r.synced === 1 ? "" : "s"} mirrored to My Calendar`),
+    onError: (e) => toast.error(e.message),
+  });
   const syncNow = trpc.graph.onenoteSyncNow.useMutation({
     onSuccess: (r) => {
       utils.graph.status.invalidate();
@@ -65,9 +69,9 @@ export function MicrosoftGraphCard() {
           )}
         </CardTitle>
         <CardDescription className="text-xs">
-          Your notes mirror into a “Velocity CRM” OneNote notebook (both directions, every 30 minutes),
-          and OneDrive files can be attached to contacts, companies, and deals. Each team member connects
-          their own Microsoft account.
+          Your Outlook calendar appears on My Calendar, notes mirror into a “Velocity CRM” OneNote
+          notebook (both directions), and OneDrive files can be attached to contacts, companies, and
+          deals — all refreshed every 30 minutes. Each team member connects their own Microsoft account.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -100,6 +104,11 @@ export function MicrosoftGraphCard() {
                 onClick={() => syncNow.mutate()}>
                 {syncNow.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
                 Sync OneNote now
+              </Button>
+              <Button size="sm" variant="outline" className="h-8 gap-1.5" disabled={calSync.isPending}
+                onClick={() => calSync.mutate()}>
+                {calSync.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
+                Sync calendar now
               </Button>
               <Button size="sm" variant="ghost" className="h-8 text-muted-foreground" disabled={disconnect.isPending}
                 onClick={() => disconnect.mutate()}>

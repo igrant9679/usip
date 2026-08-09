@@ -65,6 +65,7 @@ import { registerWebsiteTrackingRoutes } from "../websiteTracking";
 import { registerChatWidgetRoutes } from "../chatWidget";
 import { runChatFollowUps } from "../services/chatFollowUp";
 import { runOneNoteSyncSweep } from "../services/onenoteSync";
+import { runGraphCalendarSweep } from "../services/graphCalendarSync";
 import { registerGraphOAuthRoutes } from "../graphOAuth";
 import { registerUnsubscribeRoute } from "../unsubscribe";
 import { registerPasswordAuthRoutes } from "../passwordAuth";
@@ -266,6 +267,12 @@ async function startServer() {
   const runOneNote = guardOverlap("OneNoteSync", () => runOneNoteSyncSweep());
   setTimeout(runOneNote, 180_000); // first tick 3 min after boot
   setInterval(runOneNote, 30 * 60 * 1000); // every 30 minutes
+
+  // Outlook calendar → calendar_events mirror, same cadence, same no-op
+  // cost while no Microsoft connections exist.
+  const runGraphCal = guardOverlap("GraphCalendarSync", () => runGraphCalendarSweep());
+  setTimeout(runGraphCal, 240_000); // first tick 4 min after boot
+  setInterval(runGraphCal, 30 * 60 * 1000);
 
   // Scheduled report emails (daily/weekly/monthly via the system sender).
   const runReports = () => {

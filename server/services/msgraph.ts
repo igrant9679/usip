@@ -22,7 +22,9 @@ import { graphConnections, type GraphConnection } from "../../drizzle/schema";
 import { encryptSecret, tryDecryptSecret } from "../_core/crypto";
 import { appBaseUrl as publicAppOrigin } from "../appUrl";
 
-export const GRAPH_SCOPES = "offline_access User.Read Notes.ReadWrite Files.ReadWrite";
+// Calendars.ReadWrite was added BEFORE any connection existed, so no user
+// ever needs an incremental re-consent — the first connect grants all four.
+export const GRAPH_SCOPES = "offline_access User.Read Notes.ReadWrite Files.ReadWrite Calendars.ReadWrite";
 const AUTH_BASE = "https://login.microsoftonline.com/common/oauth2/v2.0";
 export const GRAPH_BASE = "https://graph.microsoft.com/v1.0";
 
