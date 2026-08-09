@@ -6,52 +6,18 @@
  *   - Rotation Engine (round_robin, weighted, random, daily limit enforcement)
  */
 import { describe, it, expect, vi } from "vitest";
+// The REAL rotation engine — not a local copy. This file used to reimplement
+// pickAccountFromPool inline (with subtly different round-robin semantics:
+// position-value comparison instead of the shipped index-modulo wrap), so
+// every rotation test here was a mirror test passing against itself while the
+// shipped engine went unexercised. If it isn't imported, it isn't tested.
+import {
+  pickAccountFromPool,
+  AccountCreateInput,
+  type PoolMemberWithAccount,
+} from "./routers/sendingAccounts";
 
-// ─── Rotation Engine (pure logic, no DB) ────────────────────────────────────
-
-type PoolMember = {
-  memberId: number;
-  accountId: number;
-  weight: number;
-  position: number;
-  dailySendLimit: number;
-  enabled: boolean;
-  sentToday: number;
-};
-
-function pickAccountFromPool(
-  strategy: "round_robin" | "weighted" | "random",
-  members: PoolMember[],
-  lastUsedIndex: number,
-): { accountId: number; newLastUsedIndex: number } | null {
-  const available = members.filter(
-    (m) => m.enabled && m.sentToday < m.dailySendLimit,
-  );
-  if (available.length === 0) return null;
-
-  if (strategy === "round_robin") {
-    // Pick the next available member after lastUsedIndex (by position order)
-    const sorted = [...available].sort((a, b) => a.position - b.position);
-    const nextIdx = sorted.findIndex((m) => m.position > lastUsedIndex);
-    const chosen = nextIdx === -1 ? sorted[0] : sorted[nextIdx];
-    return { accountId: chosen.accountId, newLastUsedIndex: chosen.position };
-  }
-
-  if (strategy === "weighted") {
-    const totalWeight = available.reduce((sum, m) => sum + m.weight, 0);
-    let rand = Math.random() * totalWeight;
-    for (const m of available) {
-      rand -= m.weight;
-      if (rand <= 0) return { accountId: m.accountId, newLastUsedIndex: m.position };
-    }
-    const last = available[available.length - 1];
-    return { accountId: last.accountId, newLastUsedIndex: last.position };
-  }
-
-  // random
-  const chosen = available[Math.floor(Math.random() * available.length)];
-  return { accountId: chosen.accountId, newLastUsedIndex: chosen.position };
-}
+type PoolMember = PoolMemberWithAccount;
 
 const BASE_MEMBERS: PoolMember[] = [
   { memberId: 1, accountId: 101, weight: 10, position: 0, dailySendLimit: 200, enabled: true, sentToday: 0 },
@@ -208,24 +174,23 @@ describe("Daily limit enforcement", () => {
 
 // ─── Provider Validation ─────────────────────────────────────────────────────
 
-describe("Provider validation", () => {
-  const VALID_PROVIDERS = ["gmail_oauth", "outlook_oauth", "amazon_ses", "generic_smtp"] as const;
-  type Provider = typeof VALID_PROVIDERS[number];
+describe("Provider validation (the real create schema)", () => {
+  // This block used to check a LOCAL list that had drifted badly from the
+  // shipped enum — it contained "gmail_oauth" (never a real provider) and
+  // asserted "sendgrid" was INVALID while the product was selling SendGrid
+  // sending. Validated against AccountCreateInput itself now.
+  const base = { name: "A", fromEmail: "a@x.com" };
 
-  function isValidProvider(p: string): p is Provider {
-    return (VALID_PROVIDERS as readonly string[]).includes(p);
-  }
-
-  it("accepts all four valid providers", () => {
-    for (const p of VALID_PROVIDERS) {
-      expect(isValidProvider(p)).toBe(true);
+  it("accepts every provider the enum ships, sendgrid included", () => {
+    for (const p of ["outlook_oauth", "amazon_ses", "generic_smtp", "google_oauth", "sendgrid"]) {
+      expect(AccountCreateInput.safeParse({ ...base, provider: p }).success).toBe(true);
     }
   });
 
-  it("rejects unknown provider", () => {
-    expect(isValidProvider("sendgrid")).toBe(false);
-    expect(isValidProvider("mailgun")).toBe(false);
-    expect(isValidProvider("")).toBe(false);
+  it("rejects unknown providers", () => {
+    for (const p of ["mailgun", "gmail_oauth", ""]) {
+      expect(AccountCreateInput.safeParse({ ...base, provider: p }).success).toBe(false);
+    }
   });
 });
 
@@ -375,4 +340,34 @@ describe("Pool member weight validation", () => {
   it("rejects weight 101", () => expect(isValidWeight(101)).toBe(false));
   it("rejects negative weight", () => expect(isValidWeight(-1)).toBe(false));
   it("rejects float weight", () => expect(isValidWeight(1.5)).toBe(false));
+});
+
+// ─── Adapter dispatch — a pool member must reach ITS transport ──────────────
+//
+// Pool selection is provider-agnostic (it filters on enabled + daily limit
+// only), so the guarantee that a SendGrid pool member actually sends through
+// SendGrid lives entirely in createEmailAdapter's dispatch order. If that
+// order regresses, a SendGrid account silently falls into the SMTP adapter
+// and every send fails "SMTP not configured" — the pool would look healthy
+// and deliver nothing.
+import { createEmailAdapter, SendGridAdapter, ImapSmtpAdapter } from "./emailAdapter";
+
+const acct = (o: Record<string, unknown>) =>
+  ({ id: 1, workspaceId: 1, name: "t", fromEmail: "t@x.com", enabled: true, ...o }) as never;
+
+describe("Adapter dispatch (createEmailAdapter)", () => {
+  it("provider=sendgrid → SendGridAdapter, even if a unipileAccountId is somehow set", () => {
+    expect(createEmailAdapter(acct({ provider: "sendgrid" }))).toBeInstanceOf(SendGridAdapter);
+    // Ordering is deliberate: the sendgrid check precedes the unipile bridge.
+    expect(
+      createEmailAdapter(acct({ provider: "sendgrid", unipileAccountId: "u1" })),
+    ).toBeInstanceOf(SendGridAdapter);
+  });
+
+  // The unipile branch is not asserted here: its lazy CJS require() does not
+  // resolve under vitest's ESM transform. The two cases below pin the ordering
+  // that matters for pools — sendgrid first, SMTP as the final fallback.
+  it("anything else → ImapSmtpAdapter", () => {
+    expect(createEmailAdapter(acct({ provider: "generic_smtp" }))).toBeInstanceOf(ImapSmtpAdapter);
+  });
 });

@@ -98,7 +98,10 @@ export async function sendViaSendGrid(apiKey: string, msg: SendGridMessage): Pro
   if (!apiKey) return { ok: false, reason: "No SendGrid API key is configured for this account" };
 
   try {
-    const res = await fetch("https://api.sendgrid.net/v3/mail/send", {
+    // api.sendgrid.COM — the .net domain is SendGrid's SMTP/link-tracking
+    // domain and does not serve the Web API at all (the connection fails
+    // before HTTP). With .net here every send failed as "request failed".
+    const res = await fetch("https://api.sendgrid.com/v3/mail/send", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -128,7 +131,7 @@ export async function sendViaSendGrid(apiKey: string, msg: SendGridMessage): Pro
 export async function verifySendGridKey(apiKey: string): Promise<{ ok: boolean; error?: string }> {
   if (!apiKey?.trim()) return { ok: false, error: "API key is required" };
   try {
-    const res = await fetch("https://api.sendgrid.net/v3/scopes", {
+    const res = await fetch("https://api.sendgrid.com/v3/scopes", {
       headers: { Authorization: `Bearer ${apiKey.trim()}` },
     });
     if (!res.ok) {

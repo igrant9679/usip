@@ -178,7 +178,8 @@ export function pickAccountFromPool(
 
 // ─── Input schemas ───────────────────────────────────────────────────────────
 
-const AccountCreateInput = z.object({
+// Exported so provider acceptance is tested against THIS schema, not a copy.
+export const AccountCreateInput = z.object({
   name: z.string().min(1).max(120),
   provider: z.enum(["outlook_oauth", "amazon_ses", "generic_smtp", "google_oauth", "sendgrid"]),
   fromEmail: z.string().email(),
