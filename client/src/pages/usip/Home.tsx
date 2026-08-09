@@ -36,6 +36,11 @@ type Ctx = {
   tasks: any[];
   sequences: any[];
   metrics: any;
+  replies: any[];
+  deals: any[];
+  calls: any[];
+  convStats: any;
+  attention: any;
 };
 
 type WidgetDef = {
@@ -108,24 +113,57 @@ const WIDGETS: Record<string, WidgetDef> = {
       );
     },
   },
+  // These four used to be DEAD — recent-replies was a hardcoded empty hint,
+  // email/call stats rendered literal zeros, pending-deals never queried
+  // deals. A widget that always shows nothing teaches the user the page is
+  // broken ("I don't see any in there"), which is worse than no widget.
   "recent-replies": {
     title: "Recent replies", category: "Execution", icon: MessageSquare,
-    render: () => <EmptyHint text="No replies yet — they'll show up here once your sequences get responses." />,
+    render: (c) => c.replies.length === 0
+      ? <EmptyHint text="No unhandled replies — they'll show up here when prospects respond." />
+      : (
+        <div>{c.replies.slice(0, 5).map((r: any) => (
+          <MiniRow key={r.id} primary={r.fromEmail ?? r.fromName ?? "Unknown sender"}
+            secondary={r.subject ?? r.snippet ?? undefined}
+            right={<Button variant="ghost" size="sm" className="h-7 gap-1" onClick={() => c.nav("/v2/conversations")}>Open <ArrowRight className="size-3" /></Button>} />
+        ))}</div>
+      ),
   },
   "email-stats": {
     title: "Your email stats", category: "Summary", icon: Mail,
     render: (c) => statRow([
-      { l: "Sent", v: 0 }, { l: "Delivered", v: 0 }, { l: "Opened", v: 0 },
-      { l: "Replied", v: 0 }, { l: "With email", v: c.metrics?.withEmail ?? 0 }, { l: "Verified", v: `${c.metrics?.pctVerified ?? 0}%` },
+      { l: "Sent (24h)", v: c.attention?.digest24h.emailsSent ?? 0 },
+      { l: "Replies (24h)", v: c.attention?.digest24h.repliesReceived ?? 0 },
+      { l: "Unhandled", v: c.convStats?.unhandled ?? 0 },
+      { l: "With email", v: c.metrics?.withEmail ?? 0 }, { l: "Verified", v: `${c.metrics?.pctVerified ?? 0}%` },
     ], c.accent),
   },
   "call-stats": {
     title: "Call stats", category: "Summary", icon: Phone,
-    render: (c) => statRow([{ l: "Calls", v: 0 }, { l: "Connected", v: 0 }, { l: "Voicemail", v: 0 }], c.accent),
+    render: (c) => {
+      const calls = c.calls ?? [];
+      const inbound = calls.filter((x: any) => x.direction === "inbound").length;
+      return statRow([
+        { l: "Recent calls", v: calls.length },
+        { l: "Inbound", v: inbound },
+        { l: "Outbound", v: calls.length - inbound },
+      ], c.accent);
+    },
   },
   "pending-deals": {
     title: "Pending deals", category: "Recommended", icon: DollarSign,
-    render: (c) => <div className="flex items-center justify-between"><EmptyHint text="No open deals to action right now." /><Button variant="outline" size="sm" className="h-7" onClick={() => c.nav("/v2/deals")}>View pipeline</Button></div>,
+    render: (c) => {
+      const open = (c.deals ?? []).filter((d: any) => !String(d.stage ?? "").startsWith("closed"));
+      return open.length === 0
+        ? <div className="flex items-center justify-between"><EmptyHint text="No open deals right now." /><Button variant="outline" size="sm" className="h-7" onClick={() => c.nav("/v2/deals")}>View pipeline</Button></div>
+        : (
+          <div>{open.slice(0, 5).map((d: any) => (
+            <MiniRow key={d.id} primary={d.name}
+              secondary={[d.stage?.replace(/_/g, " "), d.amount ? `$${Number(d.amount).toLocaleString()}` : null].filter(Boolean).join(" · ")}
+              right={<Button variant="ghost" size="sm" className="h-7 gap-1" onClick={() => c.nav("/v2/deals")}>Open <ArrowRight className="size-3" /></Button>} />
+          ))}</div>
+        );
+    },
   },
   "sequence-stats": {
     title: "Sequence stats", category: "Reports", icon: Activity,
@@ -183,7 +221,12 @@ export default function Home() {
   const trend = trpc.workspace.trend7d.useQuery().data;
   const convStats = trpc.conversations.stats.useQuery().data as any;
   const notifs = (trpc.notifications.list.useQuery().data ?? []) as any[];
-  const ctx: Ctx = { accent, nav: setLocation, people, companies, tasks, sequences, metrics };
+  // Feed the four widgets that used to render hardcoded emptiness/zeros.
+  const replies = (trpc.conversations.list.useQuery({ filter: "unhandled" }).data ?? []) as any[];
+  const deals = (trpc.opportunities.list.useQuery({}).data ?? []) as any[];
+  const calls = ((trpc.voiceAgents.listCalls.useQuery({ limit: 50 }).data ?? []) as any[]);
+  const attention = trpc.attention.summary.useQuery().data as any;
+  const ctx: Ctx = { accent, nav: setLocation, people, companies, tasks, sequences, metrics, replies, deals, calls, convStats, attention };
 
   const current = editing ? draft : layout;
 
