@@ -6,6 +6,7 @@ import { Brain, ChevronDown, CheckCircle2, Clock, Loader2, Paperclip, Phone, Cal
 import { EmailVerificationBadge } from "./EmailVerificationBadge";
 import { RichTextEditor } from "./RichTextEditor";
 import { isEmptyEmailBody } from "@shared/emailBody";
+import { RecordFiles } from "./MicrosoftGraph";
 import { LEAD_TIERS, leadTierLabel, type LeadTier } from "@shared/leadTier";
 import { ContactOverview } from "./detail/ContactOverview";
 import { AccountOverview } from "./detail/AccountOverview";
@@ -857,6 +858,7 @@ export function RecordDrawer({
             ...((relatedType === "contact" || relatedType === "lead") ? [{ k: "email", label: "Send Email" }] : []),
             ...((relatedType === "contact" || relatedType === "lead") ? [{ k: "linkedin", label: "LinkedIn" }] : []),
             ...(relatedType === "contact" ? [{ k: "verify", label: "Email Verify" }] : []),
+            ...(["contact", "lead", "account", "opportunity"].includes(relatedType) ? [{ k: "files", label: "Files" }] : []),
             ...(relatedType === "contact" ? [{ k: "enrich", label: "AI Enrich" }] : []),
             ...(relatedType === "account" ? [{ k: "brief", label: "AI Brief" }] : []),
           ].map((t) => (
@@ -1099,6 +1101,9 @@ export function RecordDrawer({
             />
           )}
 
+          {tab === "files" && relatedId && ["contact", "lead", "account", "opportunity"].includes(relatedType) && (
+            <RecordFiles relatedType={relatedType as "contact" | "lead" | "account" | "opportunity"} relatedId={relatedId} />
+          )}
           {tab === "verify" && relatedType === "contact" && (
             <ContactVerifyPanel
               contact={contactData.data}

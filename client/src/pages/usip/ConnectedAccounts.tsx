@@ -29,6 +29,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
+import { MicrosoftGraphCard } from "@/components/usip/MicrosoftGraph";
 import {
   Plug,
   RefreshCw,
@@ -200,6 +201,16 @@ function ConnectDialog({
 
 export default function ConnectedAccounts() {
   const [connectOpen, setConnectOpen] = useState(false);
+  // The Graph OAuth callback bounces here with ?graph=connected|error —
+  // surface it once, then clean the URL so refresh doesn't re-toast.
+  useEffect(() => {
+    const p = new URLSearchParams(window.location.search);
+    const g = p.get("graph");
+    if (!g) return;
+    if (g === "connected") toast.success("Microsoft 365 connected — OneNote & OneDrive are live");
+    else toast.error(`Microsoft connection failed: ${p.get("reason") ?? "unknown error"}`);
+    window.history.replaceState({}, "", "/connected-accounts");
+  }, []);
   // True while the user has the Unipile auth tab open (cleared after 5 min or on ?connected=1)
   const [isConnecting, setIsConnecting] = useState(false);
   const connectingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -518,6 +529,9 @@ export default function ConnectedAccounts() {
         </div>
       )}
       <div className="p-4 md:p-5 space-y-6">
+        {/* Microsoft 365 — OneNote + OneDrive (per-member Graph OAuth; the
+            Unipile accounts below carry mail/social only) */}
+        <MicrosoftGraphCard />
         {/* Stats row */}
         <div className="grid grid-cols-3 gap-4">
           <Card className="border-violet-500/30 bg-violet-500/5">

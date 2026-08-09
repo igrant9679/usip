@@ -64,6 +64,8 @@ import { registerVoiceWebhookRoutes } from "../voiceWebhook";
 import { registerWebsiteTrackingRoutes } from "../websiteTracking";
 import { registerChatWidgetRoutes } from "../chatWidget";
 import { runChatFollowUps } from "../services/chatFollowUp";
+import { runOneNoteSyncSweep } from "../services/onenoteSync";
+import { registerGraphOAuthRoutes } from "../graphOAuth";
 import { registerUnsubscribeRoute } from "../unsubscribe";
 import { registerPasswordAuthRoutes } from "../passwordAuth";
 import { registerPublicRateLimits } from "../publicRateLimit";
@@ -127,6 +129,7 @@ async function startServer() {
   registerVoiceWebhookRoutes(app);
   registerUnsubscribeRoute(app);
   registerPasswordAuthRoutes(app);
+  registerGraphOAuthRoutes(app);
   registerLLMStreamRoutes(app);
   registerProposalsStreamRoutes(app);
   registerEmailBuilderStreamRoutes(app);
@@ -256,6 +259,13 @@ async function startServer() {
   const runWarmup = guardOverlap("Warmup", () => runWarmupEngine());
   setTimeout(runWarmup, 120_000); // first tick 2 min after boot
   setInterval(runWarmup, 30 * 60 * 1000); // every 30 minutes
+
+  // OneNote two-way sync (migration 0149) — per-member notebooks. No-ops
+  // instantly while no graph_connections rows exist, so workspaces without
+  // Microsoft 365 pay nothing for this tick.
+  const runOneNote = guardOverlap("OneNoteSync", () => runOneNoteSyncSweep());
+  setTimeout(runOneNote, 180_000); // first tick 3 min after boot
+  setInterval(runOneNote, 30 * 60 * 1000); // every 30 minutes
 
   // Scheduled report emails (daily/weekly/monthly via the system sender).
   const runReports = () => {

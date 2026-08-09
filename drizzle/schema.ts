@@ -5406,3 +5406,65 @@ export const optimizationRecommendations = mysqlTable(
   }),
 );
 export type OptimizationRecommendation = typeof optimizationRecommendations.$inferSelect;
+
+/* ─── Microsoft Graph: OneNote + OneDrive (migration 0149) ─────────────────
+ * Per-USER connections — Unipile bridges mail only, so Notes/Files ride
+ * Velocity's own Graph OAuth app. refreshTokenEnc is AES-256-GCM via
+ * _core/crypto; the access token is never persisted (refreshed on demand). */
+export const graphConnections = mysqlTable(
+  "graph_connections",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    userId: int("userId").notNull(),
+    msEmail: varchar("msEmail", { length: 320 }),
+    refreshTokenEnc: text("refreshTokenEnc"),
+    scopes: varchar("scopes", { length: 500 }),
+    status: varchar("status", { length: 20 }).default("active").notNull(),
+    onenoteNotebookId: varchar("onenoteNotebookId", { length: 191 }),
+    onenoteSyncedAt: timestamp("onenoteSyncedAt"),
+    lastSyncResult: json("lastSyncResult"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({ uqWsUser: uniqueIndex("uq_graph_ws_user").on(t.workspaceId, t.userId) }),
+);
+export type GraphConnection = typeof graphConnections.$inferSelect;
+
+/** OneDrive items linked to CRM records (contact/lead/account/opportunity). */
+export const recordFiles = mysqlTable(
+  "record_files",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    relatedType: varchar("relatedType", { length: 30 }).notNull(),
+    relatedId: int("relatedId").notNull(),
+    source: varchar("source", { length: 20 }).default("onedrive").notNull(),
+    driveItemId: varchar("driveItemId", { length: 191 }),
+    name: varchar("name", { length: 512 }).notNull(),
+    webUrl: text("webUrl"),
+    sizeBytes: bigint("sizeBytes", { mode: "number" }),
+    addedByUserId: int("addedByUserId"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({ byRecord: index("idx_record_files_rec").on(t.workspaceId, t.relatedType, t.relatedId) }),
+);
+export type RecordFile = typeof recordFiles.$inferSelect;
+
+/** Note activity ↔ OneNote page mapping — what makes the two-way sync
+ *  idempotent instead of re-creating pages/notes on every run. */
+export const onenoteLinks = mysqlTable(
+  "onenote_links",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    activityId: int("activityId").notNull(),
+    pageId: varchar("pageId", { length: 191 }).notNull(),
+    lastPushedAt: timestamp("lastPushedAt"),
+    lastPulledAt: timestamp("lastPulledAt"),
+  },
+  (t) => ({
+    uqActivity: uniqueIndex("uq_onenote_activity").on(t.activityId),
+    uqPage: uniqueIndex("uq_onenote_page").on(t.workspaceId, t.pageId),
+  }),
+);
+export type OnenoteLink = typeof onenoteLinks.$inferSelect;

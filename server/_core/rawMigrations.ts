@@ -3166,6 +3166,59 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0149: Microsoft Graph (OneNote + OneDrive) ────────────────────────────
+  // Per-USER Graph connections — Unipile bridges mail only, so Notes/Files
+  // need Velocity's own OAuth app (env MS_GRAPH_CLIENT_ID/SECRET; the flow
+  // fails closed with a clear message until both are set on Railway).
+  // record_files links OneDrive items to CRM records; onenote_links maps a
+  // note activity to its OneNote page so the two-way sync is idempotent
+  // instead of duplicating on every run. VERIFY: the Microsoft 365 card on
+  // /connected-accounts renders its status from graph_connections — the card
+  // loading IS the proof the table exists.
+  {
+    name: "0149_msgraph_onenote_onedrive.sql",
+    statements: [
+      `CREATE TABLE IF NOT EXISTS \`graph_connections\` (
+        \`id\` int AUTO_INCREMENT PRIMARY KEY,
+        \`workspaceId\` int NOT NULL,
+        \`userId\` int NOT NULL,
+        \`msEmail\` varchar(320),
+        \`refreshTokenEnc\` text,
+        \`scopes\` varchar(500),
+        \`status\` varchar(20) NOT NULL DEFAULT 'active',
+        \`onenoteNotebookId\` varchar(191),
+        \`onenoteSyncedAt\` timestamp NULL,
+        \`lastSyncResult\` json,
+        \`createdAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY \`uq_graph_ws_user\` (\`workspaceId\`, \`userId\`)
+      )`,
+      `CREATE TABLE IF NOT EXISTS \`record_files\` (
+        \`id\` int AUTO_INCREMENT PRIMARY KEY,
+        \`workspaceId\` int NOT NULL,
+        \`relatedType\` varchar(30) NOT NULL,
+        \`relatedId\` int NOT NULL,
+        \`source\` varchar(20) NOT NULL DEFAULT 'onedrive',
+        \`driveItemId\` varchar(191),
+        \`name\` varchar(512) NOT NULL,
+        \`webUrl\` text,
+        \`sizeBytes\` bigint,
+        \`addedByUserId\` int,
+        \`createdAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        KEY \`idx_record_files_rec\` (\`workspaceId\`, \`relatedType\`, \`relatedId\`)
+      )`,
+      `CREATE TABLE IF NOT EXISTS \`onenote_links\` (
+        \`id\` int AUTO_INCREMENT PRIMARY KEY,
+        \`workspaceId\` int NOT NULL,
+        \`activityId\` int NOT NULL,
+        \`pageId\` varchar(191) NOT NULL,
+        \`lastPushedAt\` timestamp NULL,
+        \`lastPulledAt\` timestamp NULL,
+        UNIQUE KEY \`uq_onenote_activity\` (\`activityId\`),
+        UNIQUE KEY \`uq_onenote_page\` (\`workspaceId\`, \`pageId\`)
+      )`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

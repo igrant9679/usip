@@ -22,6 +22,7 @@ import { dataCleanupRouter } from "./routers/dataCleanup";
 import { emailTemplatesRouter, snippetsRouter, brandVoiceRouter, emailPromptTemplatesRouter } from "./routers/emailBuilder";
 import { emailAssistRouter } from "./routers/emailAssist";
 import { attentionRouter } from "./routers/attention";
+import { graphRouter } from "./routers/graph";
 import { savedSectionsRouter } from "./routers/savedSections";
 import { importsRouter } from "./routers/imports";
 import { emailVerificationRouter } from "./routers/emailVerification";
@@ -109,6 +110,7 @@ export const appRouter = router({
   emailDrafts: emailDraftsRouter,
   emailAssist: emailAssistRouter,
   attention: attentionRouter,
+  graph: graphRouter,
   sequenceAb: sequenceAbRouter,
   cs: csRouter,
   workflows: workflowsRouter,
