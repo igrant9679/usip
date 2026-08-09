@@ -7,6 +7,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { confirmAction, Field, fmt$, FormDialog, SelectField, Section, StatusPill } from "@/components/usip/Common";
 import { EmptyState, PageHeader, QueryError, Shell, TableSkeleton } from "@/components/usip/Shell";
 import { RecordDrawer } from "@/components/usip/RecordDrawer";
+import { RichTextEditor } from "@/components/usip/RichTextEditor";
+import { isEmptyEmailBody } from "@shared/emailBody";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { trpc } from "@/lib/trpc";
 import { Building2, ChevronRight, Plus, MoreHorizontal, Pencil, Trash2, Tag, Megaphone, Loader2, Send, Wand2, CheckCircle2, Download } from "lucide-react";
@@ -118,13 +120,13 @@ function SendEmailModal({ open, onOpenChange, accountIds, onComplete }: { open: 
             </div>
             <div className="space-y-1.5">
               <label className="text-xs font-medium text-muted-foreground">Body</label>
-              <Textarea placeholder="Email body…" value={body} onChange={(e) => setBody(e.target.value)} rows={8} />
+              <RichTextEditor placeholder="Email body…" value={body} onChange={setBody} minHeight="180px" compact aiContext={{ subject }} />
             </div>
             <div className="flex gap-2 justify-end">
               <Button variant="outline" onClick={() => { reset(); onOpenChange(false); }}>Cancel</Button>
               <Button
                 onClick={() => send.mutate({ contactIds: contactsToSend, subject, body, aiGenerated: generate.isSuccess })}
-                disabled={!subject.trim() || !body.trim() || contactsToSend.length === 0 || send.isPending}
+                disabled={!subject.trim() || isEmptyEmailBody(body) || contactsToSend.length === 0 || send.isPending}
               >
                 {send.isPending ? <Loader2 className="size-4 animate-spin mr-1" /> : <Send className="size-4 mr-1" />}
                 Send to {contactsToSend.length}

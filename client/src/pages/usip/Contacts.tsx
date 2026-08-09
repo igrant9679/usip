@@ -8,6 +8,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { confirmAction, Field, FormDialog, SelectField } from "@/components/usip/Common";
 import { EmptyState, PageHeader, QueryError, Shell, TableSkeleton } from "@/components/usip/Shell";
 import { RecordDrawer } from "@/components/usip/RecordDrawer";
+import { RichTextEditor } from "@/components/usip/RichTextEditor";
+import { isEmptyEmailBody } from "@shared/emailBody";
 import { EmailVerificationBadge } from "@/components/usip/EmailVerificationBadge";
 import { trpc } from "@/lib/trpc";
 import {
@@ -453,18 +455,20 @@ function SendEmailModal({
             </div>
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Body</label>
-              <Textarea
+              <RichTextEditor
                 placeholder="Email body..."
                 value={body}
-                onChange={(e) => setBody(e.target.value)}
-                rows={8}
+                onChange={setBody}
+                minHeight="180px"
+                compact
+                aiContext={{ subject }}
               />
             </div>
             <div className="flex gap-2 justify-end">
               <Button variant="outline" onClick={handleClose}>Cancel</Button>
               <Button
                 onClick={() => sendMut.mutate({ contactIds, subject, body, aiGenerated: false })}
-                disabled={!subject.trim() || !body.trim() || sendMut.isPending}
+                disabled={!subject.trim() || isEmptyEmailBody(body) || sendMut.isPending}
               >
                 {sendMut.isPending ? <Loader2 className="size-4 animate-spin mr-1" /> : <Send className="size-4 mr-1" />}
                 Send to {contactIds.length}

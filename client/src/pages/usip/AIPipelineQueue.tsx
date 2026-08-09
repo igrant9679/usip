@@ -8,6 +8,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { RichTextEditor } from "@/components/usip/RichTextEditor";
+import { isHtmlBody, htmlBodyToText } from "@shared/emailBody";
 import { Separator } from "@/components/ui/separator";
 import {
   Dialog,
@@ -209,15 +211,16 @@ function DraftCard({ draft, onAction }: { draft: any; onAction: () => void }) {
 
         {/* Body */}
         {editMode ? (
-          <Textarea
+          <RichTextEditor
             value={body}
-            onChange={(e) => setBody(e.target.value)}
-            rows={6}
-            className="text-sm resize-none"
+            onChange={setBody}
+            minHeight="140px"
+            compact
+            aiContext={{ subject }}
           />
         ) : (
           <p className="text-sm text-muted-foreground whitespace-pre-wrap leading-relaxed line-clamp-4">
-            {body}
+            {isHtmlBody(body) ? htmlBodyToText(body) : body}
           </p>
         )}
 

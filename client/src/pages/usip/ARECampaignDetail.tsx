@@ -37,6 +37,9 @@ import { Separator } from "@/components/ui/separator";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { trpc } from "@/lib/trpc";
+import { RichTextEditor } from "@/components/usip/RichTextEditor";
+import { sanitizeEmailHtml } from "@/lib/sanitizeHtml";
+import { isHtmlBody } from "@shared/emailBody";
 import { ARE_SOURCES, ARE_DEFAULT_SOURCES, normalizeSources } from "@shared/areSources";
 import {
   Activity,
@@ -1348,7 +1351,10 @@ function SequenceDrawer({ row, onClose, refetch }: { row: any; onClose: () => vo
                 </div>
                 {s.subject && <div className="font-medium text-foreground">Subject: {s.subject}</div>}
                 {body
-                  ? <div className="whitespace-pre-wrap text-foreground/90">{body}</div>
+                  ? isHtmlBody(body)
+                    ? <div className="prose prose-xs dark:prose-invert max-w-none text-foreground/90"
+                        dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(body) }} />
+                    : <div className="whitespace-pre-wrap text-foreground/90">{body}</div>
                   : <div className="italic text-muted-foreground/70">No body yet — click Edit.</div>}
               </div>
             );
@@ -1367,7 +1373,13 @@ function SequenceDrawer({ row, onClose, refetch }: { row: any; onClose: () => vo
               </div>
               <div className="space-y-1.5">
                 <Label className="text-xs">Body</Label>
-                <Textarea rows={10} value={editing.body} onChange={(e) => setEditing({ ...editing, body: e.target.value })} />
+                <RichTextEditor
+                  value={editing.body}
+                  onChange={(html) => setEditing((prev) => (prev ? { ...prev, body: html } : prev))}
+                  minHeight="220px"
+                  compact
+                  aiContext={{ subject: editing.subject }}
+                />
               </div>
             </div>
           )}

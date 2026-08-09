@@ -20,6 +20,7 @@ import { opportunityIntelligenceRouter } from "./routers/opportunityIntelligence
 import { optimizationRouter } from "./routers/optimization";
 import { dataCleanupRouter } from "./routers/dataCleanup";
 import { emailTemplatesRouter, snippetsRouter, brandVoiceRouter, emailPromptTemplatesRouter } from "./routers/emailBuilder";
+import { emailAssistRouter } from "./routers/emailAssist";
 import { savedSectionsRouter } from "./routers/savedSections";
 import { importsRouter } from "./routers/imports";
 import { emailVerificationRouter } from "./routers/emailVerification";
@@ -105,6 +106,7 @@ export const appRouter = router({
   crmTerritoryRules: crmTerritoryRulesRouter,
   sequences: sequencesRouter,
   emailDrafts: emailDraftsRouter,
+  emailAssist: emailAssistRouter,
   sequenceAb: sequenceAbRouter,
   cs: csRouter,
   workflows: workflowsRouter,

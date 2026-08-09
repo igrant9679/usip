@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { RichTextEditor } from "@/components/usip/RichTextEditor";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
@@ -241,13 +242,14 @@ function EmailModePanel({
             />
           </Field>
           <Field label="Email body">
-            <Textarea
+            <RichTextEditor
               value={data.staticBody ?? ""}
               disabled={readOnly}
-              placeholder="Hi {{firstName}},&#10;&#10;…"
-              rows={8}
-              className="font-mono text-xs resize-y"
-              onChange={(e) => onChange({ staticBody: e.target.value })}
+              placeholder="Hi {{firstName}}, …"
+              minHeight="160px"
+              compact
+              aiContext={{ subject: data.staticSubject ?? undefined }}
+              onChange={(html) => onChange({ staticBody: html })}
             />
           </Field>
           <p className="text-[11px] text-muted-foreground">

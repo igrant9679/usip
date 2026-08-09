@@ -15,6 +15,7 @@ import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { RichTextEditor } from "@/components/usip/RichTextEditor";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import {
@@ -348,7 +349,14 @@ function StepEditor({ step, onChange, accent }: { step: Step; onChange: (patch: 
     return (
       <>
         <Input value={step.subject} placeholder="Subject line" onChange={(e) => onChange({ subject: e.target.value } as any)} />
-        <textarea value={step.body ?? ""} placeholder="Write your email… Use {{first_name}} for personalization." rows={6} className={ta} style={ring} onChange={(e) => onChange({ body: e.target.value } as any)} />
+        <RichTextEditor
+          value={step.body ?? ""}
+          placeholder="Write your email… Use {{first_name}} for personalization."
+          minHeight="140px"
+          compact
+          aiContext={{ subject: step.subject }}
+          onChange={(html) => onChange({ body: html } as any)}
+        />
       </>
     );
   }

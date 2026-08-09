@@ -4,6 +4,8 @@ import { trpc } from "@/lib/trpc";
 import { ConfirmButton, fmtDate, StatusPill } from "./Common";
 import { Brain, ChevronDown, CheckCircle2, Clock, Loader2, Paperclip, Phone, Calendar, MessageSquare, RefreshCw, Sparkles, Trash2, Users, XCircle, ShieldCheck, FileText, Download, Send, Wand2, Sparkle, Linkedin, UserPlus } from "lucide-react";
 import { EmailVerificationBadge } from "./EmailVerificationBadge";
+import { RichTextEditor } from "./RichTextEditor";
+import { isEmptyEmailBody } from "@shared/emailBody";
 import { LEAD_TIERS, leadTierLabel, type LeadTier } from "@shared/leadTier";
 import { ContactOverview } from "./detail/ContactOverview";
 import { AccountOverview } from "./detail/AccountOverview";
@@ -1232,12 +1234,12 @@ function LeadEmailTab({
       </div>
       <div className="space-y-1.5">
         <label className="text-xs font-medium text-muted-foreground">Body</label>
-        <Textarea placeholder="Email body…" value={body} onChange={(e) => onBodyChange(e.target.value)} rows={10} />
+        <RichTextEditor placeholder="Email body…" value={body} onChange={onBodyChange} minHeight="200px" compact aiContext={{ subject }} />
       </div>
       <Button
         className="w-full"
         onClick={() => send.mutate({ leadId, subject, body, aiGenerated: generate.isSuccess })}
-        disabled={!subject.trim() || !body.trim() || send.isPending}
+        disabled={!subject.trim() || isEmptyEmailBody(body) || send.isPending}
       >
         {send.isPending ? <Loader2 className="size-4 animate-spin mr-1" /> : <Send className="size-4 mr-1" />}
         Send Email
@@ -1325,12 +1327,12 @@ function ContactEmailTab({
       </div>
       <div className="space-y-1.5">
         <label className="text-xs font-medium text-muted-foreground">Body</label>
-        <Textarea placeholder="Email body…" value={body} onChange={(e) => onBodyChange(e.target.value)} rows={10} />
+        <RichTextEditor placeholder="Email body…" value={body} onChange={onBodyChange} minHeight="200px" compact aiContext={{ subject }} />
       </div>
       <Button
         className="w-full"
         onClick={() => send.mutate({ contactIds: [contactId], subject, body, aiGenerated: false })}
-        disabled={!subject.trim() || !body.trim() || send.isPending}
+        disabled={!subject.trim() || isEmptyEmailBody(body) || send.isPending}
       >
         {send.isPending ? <Loader2 className="size-4 animate-spin mr-1" /> : <Send className="size-4 mr-1" />}
         Send Email

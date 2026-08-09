@@ -7,6 +7,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { EmptyState, PageHeader, QueryError, Shell, TableSkeleton } from "@/components/usip/Shell";
 import { RecordDrawer } from "@/components/usip/RecordDrawer";
+import { RichTextEditor } from "@/components/usip/RichTextEditor";
+import { isEmptyEmailBody } from "@shared/emailBody";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { trpc } from "@/lib/trpc";
 import {
@@ -87,10 +89,10 @@ function SendEmailModal({ open, onOpenChange, leadIds, onComplete }: { open: boo
               )}
             </div>
             <Input placeholder="Subject" value={subject} onChange={(e) => setSubject(e.target.value)} />
-            <Textarea placeholder="Body…" value={body} onChange={(e) => setBody(e.target.value)} rows={6} />
+            <RichTextEditor placeholder="Body…" value={body} onChange={setBody} minHeight="160px" compact aiContext={{ subject }} />
             <div className="flex gap-2 justify-end">
               <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-              <Button onClick={() => send.mutate({ leadIds, subject, body })} disabled={!subject || !body || send.isPending}>
+              <Button onClick={() => send.mutate({ leadIds, subject, body })} disabled={!subject || isEmptyEmailBody(body) || send.isPending}>
                 {send.isPending ? <Loader2 className="size-4 animate-spin mr-1" /> : <Send className="size-4 mr-1" />}
                 Send
               </Button>
