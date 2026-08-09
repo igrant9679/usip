@@ -178,6 +178,11 @@ export default function WorkflowsV2() {
 
   // ── ARE campaigns ──
   const campaigns = trpc.are.campaigns.list.useQuery({ limit: 20 } as any, { retry: false });
+  const areSettings = trpc.settings.getAreSettings.useQuery();
+  const setAreAutonomy = trpc.settings.updateAreSettings.useMutation({
+    onSuccess: () => { utils.settings.getAreSettings.invalidate(); toast.success("Engine autonomy saved"); },
+    onError: (e: any) => toast.error(e.message.includes("FORBIDDEN") ? "Only admins can change engine autonomy" : e.message),
+  });
   const setCampaignStatus = trpc.are.campaigns.setStatus.useMutation({ onSuccess: () => { utils.are.campaigns.list.invalidate(); }, onError: (e) => toast.error(e.message) });
 
   // ── Workflow rules + AI suggestions ──
@@ -329,6 +334,33 @@ export default function WorkflowsV2() {
           {/* ARE campaigns */}
           <Section icon={Activity} title="Autonomous Revenue Engine"
             action={<Link href="/are" className="text-[11px] text-muted-foreground hover:text-foreground inline-flex items-center gap-1"><ExternalLink className="size-3" /> Open ARE hub</Link>}>
+            {/* The engine's autonomy dial uses ITS OWN three-mode vocabulary
+                (full / batch_approval / review_release), older than the
+                Off/Approve/Auto convention above. Surfaced here so this page
+                really is every dial in one place — "All: Off" above does NOT
+                touch this one. Per-campaign overrides live on each campaign. */}
+            <div className="rounded-xl border bg-card p-3 shadow-sm flex items-center gap-3 mb-3">
+              <span className="shrink-0 size-9 rounded-full flex items-center justify-center" style={{ backgroundColor: areSettings.data?.areDefaultAutonomyMode === "full" ? "#7c3aed1f" : "hsl(var(--muted))", color: areSettings.data?.areDefaultAutonomyMode === "full" ? "#7c3aed" : undefined }}>
+                <Bot className="size-4" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <span className="text-sm font-medium">Engine autonomy (new campaigns)</span>
+                <div className="text-[11px] text-muted-foreground">
+                  <b>Full</b> sends without review · <b>Batch approval</b> queues prospects for your OK · <b>Review &amp; release</b> holds every email. Existing campaigns keep their own setting.
+                </div>
+              </div>
+              <Select
+                value={areSettings.data?.areDefaultAutonomyMode ?? "batch_approval"}
+                onValueChange={(v) => setAreAutonomy.mutate({ areDefaultAutonomyMode: v as "full" | "batch_approval" | "review_release" })}
+              >
+                <SelectTrigger className="h-7 w-[150px] text-xs shrink-0"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="full">Full autonomy</SelectItem>
+                  <SelectItem value="batch_approval">Batch approval</SelectItem>
+                  <SelectItem value="review_release">Review &amp; release</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
             <div className="rounded-xl border bg-card overflow-hidden shadow-sm">
               {campaigns.isLoading ? (
                 <div className="p-3 space-y-2">{Array.from({ length: 2 }).map((_, i) => <div key={i} className="h-10 rounded bg-muted/50 animate-pulse" />)}</div>

@@ -14,6 +14,7 @@
 import { useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
+import { AttentionPanel } from "@/components/usip/AttentionPanel";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
@@ -254,6 +255,9 @@ export default function Home() {
             )}
             <div className="h-full overflow-auto p-4 md:p-6">
             <div className="max-w-4xl mx-auto space-y-4">
+              {/* The daily question, answered first: what needs me, and what
+                  did the autopilots do while I was away. Widgets come after. */}
+              {!editing && <AttentionPanel />}
               {current.length === 0 && (
                 <div className="text-center py-16 border border-dashed rounded-xl">
                   <p className="text-sm text-muted-foreground">No widgets on your home.</p>

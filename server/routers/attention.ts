@@ -1,0 +1,150 @@
+/**
+ * attention — the ONE answer to "what needs me?".
+ *
+ * Every human-in-the-loop queue in the product, counted in SQL and returned
+ * in a single call: AI drafts awaiting review, ARE prospects awaiting
+ * approval (cross-campaign — nothing else in the app could answer that),
+ * proposed meetings, unhandled replies, AI-drafted tasks, paused campaigns.
+ * Plus a 24-hour digest of what the autopilots did, so an owner who opens
+ * the app sees "here is what ran, here is the one queue to clear" instead
+ * of 44 nav items.
+ *
+ * ⚠️ emailReplies holds ALL synced inbound mail (tens of thousands of rows),
+ * not just replies to our outreach. Every reply count here is scoped
+ * `draftId IS NOT NULL` — the rows provably tied to something we sent.
+ * Dropping that predicate turns the badge into "your entire inbox".
+ */
+import { and, desc, eq, gte, inArray, isNotNull, isNull, sql } from "drizzle-orm";
+import { getDb } from "../db";
+import {
+  areCampaigns,
+  emailDrafts,
+  emailReplies,
+  meetings,
+  prospectQueue,
+  tasks,
+} from "../../drizzle/schema";
+import { workspaceProcedure } from "../_core/workspace";
+import { router } from "../_core/trpc";
+import { remindableMeetingStatuses } from "@shared/meetingStatus";
+
+const EMPTY = {
+  totalNeedingYou: 0,
+  aiDrafts: { count: 0, items: [] as { id: number; subject: string | null; toEmail: string | null }[] },
+  proposedMeetings: { count: 0, items: [] as { id: number; title: string; contactName: string | null }[] },
+  unhandledReplies: { count: 0, items: [] as { fromEmail: string; subject: string | null; receivedAt: Date }[] },
+  areApprovals: { count: 0, byCampaign: [] as { campaignId: number; name: string; count: number }[] },
+  draftTasks: { count: 0 },
+  pausedCampaigns: [] as { id: number; name: string }[],
+  digest24h: { emailsSent: 0, prospectsDiscovered: 0, repliesReceived: 0, meetingsBooked: 0 },
+};
+
+export const attentionRouter = router({
+  summary: workspaceProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) return EMPTY;
+    const ws = ctx.workspace.id;
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+    const [
+      [draftAgg],
+      draftItems,
+      [meetAgg],
+      meetItems,
+      [replyAgg],
+      replyItems,
+      areByCampaign,
+      [taskAgg],
+      paused,
+      [digestSent],
+      [digestDiscovered],
+      [digestReplies],
+      [digestMeetings],
+    ] = await Promise.all([
+      db.select({ n: sql<number>`count(*)` }).from(emailDrafts)
+        .where(and(eq(emailDrafts.workspaceId, ws), eq(emailDrafts.status, "ai_pending_review"))),
+      db.select({ id: emailDrafts.id, subject: emailDrafts.subject, toEmail: emailDrafts.toEmail })
+        .from(emailDrafts)
+        .where(and(eq(emailDrafts.workspaceId, ws), eq(emailDrafts.status, "ai_pending_review")))
+        .orderBy(desc(emailDrafts.id)).limit(5),
+      db.select({ n: sql<number>`count(*)` }).from(meetings)
+        .where(and(eq(meetings.workspaceId, ws), eq(meetings.status, "proposed"))),
+      db.select({ id: meetings.id, title: meetings.title, contactName: meetings.contactName })
+        .from(meetings)
+        .where(and(eq(meetings.workspaceId, ws), eq(meetings.status, "proposed")))
+        .orderBy(desc(meetings.id)).limit(3),
+      db.select({ n: sql<number>`count(*)` }).from(emailReplies)
+        .where(and(eq(emailReplies.workspaceId, ws), isNotNull(emailReplies.draftId), isNull(emailReplies.handledAt))),
+      db.select({ fromEmail: emailReplies.fromEmail, subject: emailReplies.subject, receivedAt: emailReplies.receivedAt })
+        .from(emailReplies)
+        .where(and(eq(emailReplies.workspaceId, ws), isNotNull(emailReplies.draftId), isNull(emailReplies.handledAt)))
+        .orderBy(desc(emailReplies.receivedAt)).limit(5),
+      db.select({ campaignId: prospectQueue.campaignId, n: sql<number>`count(*)` })
+        .from(prospectQueue)
+        .where(and(
+          eq(prospectQueue.workspaceId, ws),
+          eq(prospectQueue.sequenceStatus, "pending"),
+          eq(prospectQueue.enrichmentStatus, "complete"),
+        ))
+        .groupBy(prospectQueue.campaignId),
+      db.select({ n: sql<number>`count(*)` }).from(tasks)
+        .where(and(eq(tasks.workspaceId, ws), eq(tasks.status, "draft"))),
+      db.select({ id: areCampaigns.id, name: areCampaigns.name }).from(areCampaigns)
+        .where(and(eq(areCampaigns.workspaceId, ws), eq(areCampaigns.status, "paused"))),
+      db.select({ n: sql<number>`count(*)` }).from(emailDrafts)
+        .where(and(eq(emailDrafts.workspaceId, ws), eq(emailDrafts.status, "sent"), gte(emailDrafts.sentAt, since))),
+      db.select({ n: sql<number>`count(*)` }).from(prospectQueue)
+        .where(and(eq(prospectQueue.workspaceId, ws), gte(prospectQueue.createdAt, since))),
+      db.select({ n: sql<number>`count(*)` }).from(emailReplies)
+        .where(and(eq(emailReplies.workspaceId, ws), isNotNull(emailReplies.draftId), gte(emailReplies.receivedAt, since))),
+      // "Booked" = the attendee has a time (invited/scheduled/rescheduled) —
+      // the shared vocabulary's remindable set, NOT a hand-typed list.
+      db.select({ n: sql<number>`count(*)` }).from(meetings)
+        .where(and(
+          eq(meetings.workspaceId, ws),
+          inArray(meetings.status, remindableMeetingStatuses()),
+          gte(meetings.createdAt, since),
+        )),
+    ]);
+
+    // Campaign names for the ARE breakdown — one IN query, not a join in the
+    // aggregate (the group-by result is tiny).
+    const campaignIds = areByCampaign.map((r) => r.campaignId);
+    const names = campaignIds.length
+      ? await db.select({ id: areCampaigns.id, name: areCampaigns.name }).from(areCampaigns)
+          .where(and(eq(areCampaigns.workspaceId, ws), inArray(areCampaigns.id, campaignIds)))
+      : [];
+    const nameOf = new Map(names.map((c) => [c.id, c.name]));
+
+    const aiDrafts = { count: Number(draftAgg?.n ?? 0), items: draftItems };
+    const proposedMeetings = { count: Number(meetAgg?.n ?? 0), items: meetItems };
+    const unhandledReplies = { count: Number(replyAgg?.n ?? 0), items: replyItems };
+    const areApprovals = {
+      count: areByCampaign.reduce((s, r) => s + Number(r.n), 0),
+      byCampaign: areByCampaign.map((r) => ({
+        campaignId: r.campaignId,
+        name: nameOf.get(r.campaignId) ?? `Campaign ${r.campaignId}`,
+        count: Number(r.n),
+      })),
+    };
+    const draftTasks = { count: Number(taskAgg?.n ?? 0) };
+
+    return {
+      totalNeedingYou:
+        aiDrafts.count + proposedMeetings.count + unhandledReplies.count +
+        areApprovals.count + draftTasks.count + paused.length,
+      aiDrafts,
+      proposedMeetings,
+      unhandledReplies,
+      areApprovals,
+      draftTasks,
+      pausedCampaigns: paused,
+      digest24h: {
+        emailsSent: Number(digestSent?.n ?? 0),
+        prospectsDiscovered: Number(digestDiscovered?.n ?? 0),
+        repliesReceived: Number(digestReplies?.n ?? 0),
+        meetingsBooked: Number(digestMeetings?.n ?? 0),
+      },
+    };
+  }),
+});

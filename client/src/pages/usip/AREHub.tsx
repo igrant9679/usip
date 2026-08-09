@@ -221,6 +221,9 @@ function SignalRow({ s }: { s: any }) {
 export default function AREHub() {
   const { data: campaigns, isLoading: loadingCampaigns, refetch } = trpc.are.campaigns.list.useQuery({ limit: 100 });
   const { data: signals, isLoading: loadingSignals } = trpc.are.execution.getSignalLog.useQuery({ limit: 30 });
+  // Cross-campaign approval count — the hub is the natural home for the one
+  // number that says whether the engine is waiting on a human.
+  const { data: attention } = trpc.attention.summary.useQuery(undefined, { refetchInterval: 60_000 });
 
   /* aggregate metrics */
   const totals = (campaigns ?? []).reduce(
@@ -368,6 +371,18 @@ export default function AREHub() {
                   <span className="text-muted-foreground">Opps</span>
                   <span className="font-semibold tabular-nums text-emerald-500">{totals.opps}</span>
                 </div>
+                {(attention?.areApprovals.count ?? 0) > 0 && (
+                  <Link
+                    href={`/are/campaigns/${attention!.areApprovals.byCampaign[0]?.campaignId ?? ""}`}
+                    className="flex items-center gap-1.5 rounded-full border border-amber-400/50 bg-amber-500/10 px-2.5 py-0.5 hover:bg-amber-500/20 transition-colors"
+                    title="Prospects enriched and waiting for your approval before sequencing"
+                  >
+                    <span className="size-1.5 rounded-full bg-amber-500 animate-pulse" />
+                    <span className="text-amber-700 dark:text-amber-400 font-semibold tabular-nums">
+                      {attention!.areApprovals.count} awaiting your approval
+                    </span>
+                  </Link>
+                )}
                 {loadingCampaigns && <Loader2 className="size-3.5 animate-spin text-muted-foreground ml-auto" />}
               </div>
 
