@@ -23,6 +23,7 @@ import { getDb } from "./db";
 import { isActiveMember } from "./_core/activeMembers";
 import { contacts, accounts, leads, prospects, bookingLinks, users } from "../drizzle/schema";
 import { escapeHtml } from "@shared/escapeHtml";
+import { isHtmlBody } from "@shared/emailBody";
 import { slugify } from "@shared/slugify";
 import { buildMergeLookup, isEmptyLinkToken, parseMergeToken, resolveMergeName, stripEmptyLinkCarriers } from "@shared/mergeKeys";
 
@@ -338,6 +339,22 @@ export function textToHtml(text: string): string {
 
   // Wrap in minimal HTML
   return `<!DOCTYPE html><html><body><p>${linked.replace(/\n\n/g, "</p><p>").replace(/\n/g, "<br>")}</p></body></html>`;
+}
+
+/**
+ * Format-aware version of textToHtml: a rich-editor body is ALREADY an HTML
+ * fragment (see shared/emailBody), so it is wrapped in the same document
+ * shell UNESCAPED; plain text keeps the textToHtml contract. Callers that
+ * also send a text/plain part should pair this with htmlBodyToText.
+ *
+ * The <body> wrapper matters: injectTracking appends its open pixel before
+ * </body>, and the opt-out footer replaces on it too.
+ */
+export function bodyToHtmlDocument(body: string): string {
+  if (isHtmlBody(body)) {
+    return `<!DOCTYPE html><html><body>${body}</body></html>`;
+  }
+  return textToHtml(body);
 }
 
 /**

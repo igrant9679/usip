@@ -78,6 +78,7 @@ import {
 } from "./services/sequenceCompletion";
 import { appBaseUrl as publicAppOrigin } from "./appUrl";
 import { escapeHtml } from "@shared/escapeHtml";
+import { isHtmlBody, htmlBodyToText } from "@shared/emailBody";
 import { buildMergeLookup, isEmptyLinkToken, parseMergeToken, resolveMergeName, stripEmptyLinkCarriers } from "@shared/mergeKeys";
 
 /* ─── Per-tick bounds (keep LLM cost + wall-time predictable) ───────────── */
@@ -767,10 +768,19 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
         // Open pixel only — links are NOT click-wrapped here. Cold outbound is
         // deliverability-sensitive and rewriting every URL to a tracking domain
         // is a well-known spam signal; the open pixel is the cheaper trade.
-        const html = injectTracking(textToHtml(body), trackingToken, appBaseUrl, {
-          open: true,
-          click: false,
-        });
+        // Rich-editor step bodies are HTML fragments and pass through as
+        // markup; AI-generated plain text keeps the escape+linkify contract
+        // (shared/emailBody decides, same as every other send path).
+        const bodyIsHtml = isHtmlBody(body);
+        const html = injectTracking(
+          bodyIsHtml ? `<!DOCTYPE html><html><body>${body}</body></html>` : textToHtml(body),
+          trackingToken,
+          appBaseUrl,
+          {
+            open: true,
+            click: false,
+          },
+        );
 
         /**
          * CLAIM THE ROW BEFORE SENDING — this is cold outbound, so a duplicate
@@ -803,7 +813,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
           to: p.email,
           subject,
           html,
-          text: body,
+          text: bodyIsHtml ? htmlBodyToText(body) : body,
         });
         if (sendRes.ok) {
           await db

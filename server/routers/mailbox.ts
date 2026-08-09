@@ -25,6 +25,7 @@ import { createEmailAdapter } from "../emailAdapter";
 import { invokeLLM } from "../_core/llm";
 import { assertSendAllowed } from "../sendLimits";
 import { escapeHtml } from "@shared/escapeHtml";
+import { isHtmlBody, htmlBodyToText } from "@shared/emailBody";
 
 /**
  * Append the rep's email signature to outbound HTML / text if it isn't
@@ -44,6 +45,10 @@ async function appendSignature(
   bodyHtml: string,
   bodyText: string | undefined,
 ): Promise<{ bodyHtml: string; bodyText: string | undefined }> {
+  // The compose editor is Tiptap, and the client historically passed its HTML
+  // as BOTH parts — so the text/plain alternative was raw markup. Normalize
+  // here, at the one seam every mailbox send passes through.
+  if (isHtmlBody(bodyText)) bodyText = htmlBodyToText(bodyText!);
   const db = await getDb();
   if (!db) return { bodyHtml, bodyText };
   const [userRow] = await db

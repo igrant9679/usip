@@ -33,6 +33,7 @@ import { appBaseUrl as publicAppOrigin } from "../appUrl";
 import { utcDayStart } from "@shared/timeWindows";
 import { getSequenceAbVariantStats } from "../services/performanceMetrics";
 import { escapeHtml as sharedEscapeHtml } from "@shared/escapeHtml";
+import { isHtmlBody, htmlBodyToText } from "@shared/emailBody";
 import { renderMergeFields, scrubForSend } from "../mergeVars";
 
 /** One escaper for the whole codebase — @shared/escapeHtml. The comment here
@@ -1611,15 +1612,26 @@ export async function deliverEmailDraft(params: {
   const renderedSubject = scrubForSend(renderMergeFields(draft.subject ?? "", mergeVars), "sequences.autoSend.subject");
   const mergeVarsNoSig = { ...mergeVars, signature: "" };
   const renderedBody = scrubForSend(renderMergeFields(draft.body ?? "", mergeVarsNoSig), "sequences.autoSend.body");
+  // A rich-editor body is ALREADY an HTML fragment — escaping it shipped
+  // literal "<p>" text to recipients. Format decided by shared/emailBody:
+  // HTML passes through as markup, plain text keeps the escape-and-wrap
+  // contract (which also renders a hostile "<script>" harmlessly visible).
+  const bodyIsHtml = isHtmlBody(renderedBody);
+  const renderedBodyPlain = bodyIsHtml ? htmlBodyToText(renderedBody) : renderedBody;
   const renderedBodyText = bodyMentionsSignatureToken
-    ? scrubForSend(renderMergeFields(draft.body ?? "", mergeVars), "sequences.autoSend.bodyText")
+    ? (() => {
+        const withSig = scrubForSend(renderMergeFields(draft.body ?? "", mergeVars), "sequences.autoSend.bodyText");
+        return bodyIsHtml ? htmlBodyToText(withSig) : withSig;
+      })()
     : sig
-      ? `${renderedBody.replace(/\s+$/, "")}\n\n${sig}`
-      : renderedBody;
-  const bodyHtmlBlock = renderedBody
-    .split("\n")
-    .map((line) => `<p style="margin:0 0 8px">${escapeHtmlWithLinks(line)}</p>`)
-    .join("");
+      ? `${renderedBodyPlain.replace(/\s+$/, "")}\n\n${sig}`
+      : renderedBodyPlain;
+  const bodyHtmlBlock = bodyIsHtml
+    ? renderedBody
+    : renderedBody
+        .split("\n")
+        .map((line) => `<p style="margin:0 0 8px">${escapeHtmlWithLinks(line)}</p>`)
+        .join("");
   const sigHtmlBlock = sig
     ? `<div style="margin-top:18px;color:#555;line-height:1.4">${sig.split("\n").map(escapeHtml).join("<br>")}</div>`
     : "";

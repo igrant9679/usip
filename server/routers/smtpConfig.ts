@@ -27,7 +27,8 @@ import { getDb } from "../db";
 import { recordEmailsSent } from "../usageCounters";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { router } from "../_core/trpc";
-import { buildMergeContextFromDb, resolveMergeVars, textToHtml, injectTracking, resolveBookingUrl, renderSequenceOptOut } from "../mergeVars";
+import { buildMergeContextFromDb, resolveMergeVars, bodyToHtmlDocument, injectTracking, resolveBookingUrl, renderSequenceOptOut } from "../mergeVars";
+import { isHtmlBody, htmlBodyToText } from "@shared/emailBody";
 import { isEmailSuppressed } from "./emailSuppressions";
 import { appBaseUrl as publicAppOrigin } from "../appUrl";
 
@@ -385,11 +386,13 @@ export const smtpConfigRouter = router({
           // provider's URL, which made the open pixel AND the RFC 8058
           // one-click unsubscribe link 404 for every recipient.
           const appBaseUrl = publicAppOrigin();
-          let htmlBody = injectTracking(textToHtml(resolvedBody), token, appBaseUrl, {
+          let htmlBody = injectTracking(bodyToHtmlDocument(resolvedBody), token, appBaseUrl, {
             open: openTracking,
             click: clickTracking,
           });
-          let textBody = resolvedBody;
+          // A rich-editor body is HTML — the text/plain part must be its
+          // readable conversion, not the raw markup.
+          let textBody = isHtmlBody(resolvedBody) ? htmlBodyToText(resolvedBody) : resolvedBody;
           // Sequence opt-out footer (workspace_settings): appended AFTER tracking
           // injection so its one-click unsubscribe link isn't click-wrapped.
           if (optOutEnabled) {
@@ -397,7 +400,7 @@ export const smtpConfigRouter = router({
               unsubscribeUrl: `${appBaseUrl}/api/track/unsubscribe/${encodeURIComponent(token)}`,
             });
             if (optOut) {
-              textBody = `${resolvedBody}\n\n${optOut.text}`;
+              textBody = `${textBody}\n\n${optOut.text}`;
               htmlBody = htmlBody.includes("</body>")
                 ? htmlBody.replace("</body>", `${optOut.html}</body>`)
                 : htmlBody + optOut.html;
@@ -537,8 +540,9 @@ export const smtpConfigRouter = router({
       const unresolvedInBody = resolvedBody.match(unresolvedPattern) ?? [];
       const unresolvedTokens = Array.from(new Set([...unresolvedInSubject, ...unresolvedInBody]));
 
-      // Convert to HTML for rendering
-      const htmlBody = textToHtml(resolvedBody);
+      // Convert to HTML for rendering — format-aware, matching the send path
+      // exactly so the preview cannot show a different email than gets sent.
+      const htmlBody = bodyToHtmlDocument(resolvedBody);
 
       return {
         draftId: draft.id,

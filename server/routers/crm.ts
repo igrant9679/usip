@@ -55,6 +55,7 @@ import { appBaseUrl as publicAppOrigin } from "../appUrl";
 // shared/quoteTotals.ts — a deal line and a quote line do the same sum.
 import { centsToDecimal, computeQuoteTotals, toCents } from "@shared/quoteTotals";
 import { escapeHtml as sharedEscapeHtml } from "@shared/escapeHtml";
+import { isHtmlBody, htmlBodyToText } from "@shared/emailBody";
 import { renderMergeFields, scrubForSend } from "../mergeVars";
 
 /** The ONE public origin — see server/appUrl.ts. */
@@ -728,22 +729,33 @@ export const contactsRouter = router({
         const mergeVarsNoSig = { ...mergeVars, signature: "" };
         const renderedBody = scrubForSend(renderMergeFields(input.body, mergeVarsNoSig), "crm.send.body");
 
+        // Rich-editor bodies are HTML fragments and pass through as markup;
+        // plain text keeps the escape-and-wrap contract. shared/emailBody
+        // decides — the same vocabulary every send path uses.
+        const bodyIsHtml = isHtmlBody(renderedBody);
+        const renderedBodyPlain = bodyIsHtml ? htmlBodyToText(renderedBody) : renderedBody;
+
         // The plain-text version always includes the signature inline.
         const renderedBodyText =
           bodyMentionsSignatureToken
-            ? scrubForSend(renderMergeFields(input.body, mergeVars), "crm.send.bodyText")
+            ? (() => {
+                const withSig = scrubForSend(renderMergeFields(input.body, mergeVars), "crm.send.bodyText");
+                return bodyIsHtml ? htmlBodyToText(withSig) : withSig;
+              })()
             : workspaceSignature
-              ? `${renderedBody.replace(/\s+$/, "")}\n\n${workspaceSignature}`
-              : renderedBody;
+              ? `${renderedBodyPlain.replace(/\s+$/, "")}\n\n${workspaceSignature}`
+              : renderedBodyPlain;
 
         // Build the HTML body in two distinct blocks so Outlook doesn't
         // apply paragraph-spacing inside the signature:
         //   <p>body line</p><p>body line</p>... (margin: 0 0 8px)
         //   <div>sig line<br>sig line<br>...</div> (line-height 1.4)
-        const bodyHtmlBlock = renderedBody
-          .split("\n")
-          .map((line) => `<p style="margin:0 0 8px">${escapeHtmlWithLinks(line)}</p>`)
-          .join("");
+        const bodyHtmlBlock = bodyIsHtml
+          ? renderedBody
+          : renderedBody
+              .split("\n")
+              .map((line) => `<p style="margin:0 0 8px">${escapeHtmlWithLinks(line)}</p>`)
+              .join("");
         const sigHtmlBlock = workspaceSignature
           ? `<div style="margin-top:18px;color:#555;line-height:1.4">${workspaceSignature.split("\n").map(escapeHtml).join("<br>")}</div>`
           : "";
@@ -1309,15 +1321,23 @@ export const leadsRouter = router({
       const renderedSubject = renderMergeFields(input.subject, mergeVars);
       const mergeVarsNoSig = { ...mergeVars, signature: "" };
       const renderedBody = renderMergeFields(input.body, mergeVarsNoSig);
+      // Same format contract as the contacts path — see shared/emailBody.
+      const bodyIsHtml = isHtmlBody(renderedBody);
+      const renderedBodyPlain = bodyIsHtml ? htmlBodyToText(renderedBody) : renderedBody;
       const renderedBodyText = bodyMentionsSignatureToken
-        ? renderMergeFields(input.body, mergeVars)
+        ? (() => {
+            const withSig = renderMergeFields(input.body, mergeVars);
+            return bodyIsHtml ? htmlBodyToText(withSig) : withSig;
+          })()
         : workspaceSignature
-          ? `${renderedBody.replace(/\s+$/, "")}\n\n${workspaceSignature}`
-          : renderedBody;
-      const bodyHtmlBlock = renderedBody
-        .split("\n")
-        .map((line) => `<p style="margin:0 0 8px">${escapeHtmlWithLinks(line)}</p>`)
-        .join("");
+          ? `${renderedBodyPlain.replace(/\s+$/, "")}\n\n${workspaceSignature}`
+          : renderedBodyPlain;
+      const bodyHtmlBlock = bodyIsHtml
+        ? renderedBody
+        : renderedBody
+            .split("\n")
+            .map((line) => `<p style="margin:0 0 8px">${escapeHtmlWithLinks(line)}</p>`)
+            .join("");
       const sigHtmlBlock = workspaceSignature
         ? `<div style="margin-top:18px;color:#555;line-height:1.4">${workspaceSignature.split("\n").map(escapeHtml).join("<br>")}</div>`
         : "";
