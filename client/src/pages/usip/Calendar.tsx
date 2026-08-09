@@ -15,6 +15,7 @@ import listPlugin from "@fullcalendar/list";
 import { Shell, PageHeader, EmptyState } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
+import { loadPerUserPref, savePerUserPref } from "@/lib/perUserPref";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -419,24 +420,45 @@ export default function CalendarPage() {
     { accountId: selectedAccountId ?? 0, repUserId },
     { enabled: !!selectedAccountId },
   );
-  // Auto-select the first connected account once accounts load. Without
-  // this, selectedAccountId stays null until the user manually clicks an
-  // account row in the sidebar — which left "New Event" (disabled when
-  // !selectedAccountId) looking permanently broken for anyone who already
-  // has a calendar connected.
+  // Auto-select an account once accounts load — the MEMBER'S REMEMBERED one
+  // when it still exists, else the first. Previously this always took
+  // accounts[0], so a team member with several connected calendars re-picked
+  // theirs on every visit. Keyed by user id (lib/perUserPref), validated
+  // against the live list so a disconnected account falls back cleanly.
   useEffect(() => {
-    if (selectedAccountId == null && accounts && accounts.length > 0) {
-      setSelectedAccountId(accounts[0].id);
-    }
-  }, [accounts, selectedAccountId]);
-  // Auto-pick the primary calendar (is_primary → is_default → first) when the
-  // user selects an account. Only runs once per account change.
+    if (selectedAccountId != null || !accounts || accounts.length === 0) return;
+    const saved = loadPerUserPref<{ accountId: number; calendarByAccount?: Record<string, string> }>(user?.id, "calendar_selection");
+    const remembered = saved && accounts.some((a: any) => a.id === saved.accountId) ? saved.accountId : null;
+    setSelectedAccountId(remembered ?? accounts[0].id);
+  }, [accounts, selectedAccountId, user?.id]);
+  // Persist the selection whenever the user (or hydration) lands on one.
+  useEffect(() => {
+    if (selectedAccountId == null || !user?.id) return;
+    const saved = loadPerUserPref<{ accountId: number; calendarByAccount?: Record<string, string> }>(user.id, "calendar_selection");
+    savePerUserPref(user.id, "calendar_selection", {
+      accountId: selectedAccountId,
+      calendarByAccount: {
+        ...(saved?.calendarByAccount ?? {}),
+        [String(selectedAccountId)]: selectedCalendarId,
+      },
+    });
+  }, [selectedAccountId, selectedCalendarId, user?.id]);
+  // Pick the calendar when an account's calendar list loads: the member's
+  // remembered choice for THIS account when it still exists, else primary
+  // (is_primary → first). Without the remembered branch, the auto-pick
+  // clobbered the stored choice one render after hydration restored it.
   useEffect(() => {
     if (!calendarsForAccount || calendarsForAccount.length === 0) return;
+    const saved = loadPerUserPref<{ accountId: number; calendarByAccount?: Record<string, string> }>(user?.id, "calendar_selection");
+    const rememberedCal = saved?.calendarByAccount?.[String(selectedAccountId)];
+    if (rememberedCal && calendarsForAccount.some((c: any) => (c.id ?? "primary") === rememberedCal)) {
+      setSelectedCalendarId(rememberedCal);
+      return;
+    }
     const primary =
       calendarsForAccount.find((c: any) => c.primary) ?? calendarsForAccount[0];
     setSelectedCalendarId(primary.id ?? "primary");
-  }, [calendarsForAccount, selectedAccountId]);
+  }, [calendarsForAccount, selectedAccountId, user?.id]);
   const { data: teamData } = trpc.team.list.useQuery(undefined, { enabled: true });
   const syncEvents = trpc.calendar.syncEvents.useMutation({
     onSuccess: (d) => { toast.success(`Synced ${d.synced} events`); refetchEvents(); },

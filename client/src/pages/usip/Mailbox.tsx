@@ -19,6 +19,7 @@ import { Shell, PageHeader } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import { sanitizeEmailHtml } from "@/lib/sanitizeHtml";
 import { useAuth } from "@/_core/hooks/useAuth";
+import { loadPerUserPref, savePerUserPref } from "@/lib/perUserPref";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
@@ -941,6 +942,33 @@ export default function MailboxPage() {
   );
 
   const { data: accounts = [], isLoading: accountsLoading } = trpc.mailbox.listAccounts.useQuery({ repUserId }, { enabled: true });
+
+  // ── Per-member persistence ──────────────────────────────────────────────
+  // The mailbox you worked in STAYS selected across visits — previously every
+  // mount reset to the central view and each team member had to re-click
+  // their own account (idris.grant@… every single time). Keyed by user id so
+  // the choice is the member's own, and validated against the live account
+  // list so a disconnected mailbox falls back to central instead of a blank
+  // screen. The ?reply= deep-link wins over the stored view — a link that
+  // says "open THIS conversation" must not be overridden by a preference.
+  const hydratedViewRef = useRef(false);
+  useEffect(() => {
+    if (hydratedViewRef.current || !user?.id || accountsLoading) return;
+    hydratedViewRef.current = true;
+    if (replyId) return;
+    const saved = loadPerUserPref<{ view: SelectedView; folder: string }>(user.id, "mailbox_view");
+    if (!saved) return;
+    if (saved.view?.type === "account" && accounts.some((a: any) => a.id === (saved.view as any).accountId)) {
+      setSelectedView(saved.view);
+      if (saved.folder) setSelectedFolder(saved.folder);
+    }
+  }, [user?.id, accountsLoading, accounts, replyId]);
+  useEffect(() => {
+    // Only after hydration — otherwise the initial "central" default would
+    // overwrite the stored choice before it was ever read.
+    if (!hydratedViewRef.current || !user?.id) return;
+    savePerUserPref(user.id, "mailbox_view", { view: selectedView, folder: selectedFolder });
+  }, [selectedView, selectedFolder, user?.id]);
 
   // When the ?reply= deep-link resolves, jump to that account's inbox and
   // pre-seed the thread search with the sender's email. Runs once.
