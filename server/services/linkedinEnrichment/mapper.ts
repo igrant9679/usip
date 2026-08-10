@@ -11,6 +11,7 @@
  * stay null; enrichment is optional metadata.
  */
 import { extractLinkedInIdentifier } from "../linkedinLookup";
+import { stripNameCredentials } from "../enrichment/personName";
 import type { UnipileUserProfile } from "../../lib/unipile";
 
 /** Normalized internal LinkedIn profile shape persisted by the enrichment service. */
@@ -119,14 +120,14 @@ export function mapSearchHitToProfile(hit: {
   profilePictureUrl?: string | null; networkDistance?: string;
 }): VelocityLinkedInProfile {
   const v = validateLinkedInUrl(hit.linkedinUrl ?? "");
-  const fullName = str(hit.name) ?? ([str(hit.firstName), str(hit.lastName)].filter(Boolean).join(" ") || null);
+  const fullName = stripNameCredentials(str(hit.name) ?? ([str(hit.firstName), str(hit.lastName)].filter(Boolean).join(" ") || null));
   return {
     profileUrl: v.normalizedUrl ?? str(hit.linkedinUrl) ?? "",
     identifier: v.identifier,
     publicId: null,
     fullName,
-    firstName: str(hit.firstName),
-    lastName: str(hit.lastName),
+    firstName: stripNameCredentials(str(hit.firstName)),
+    lastName: stripNameCredentials(str(hit.lastName)),
     headline: str(hit.headline),
     location: str(hit.location),
     industry: null,
@@ -186,9 +187,11 @@ export function mapUnipileProfileToVelocitySchema(
   p: UnipileUserProfile,
   fetchedForUrl?: string,
 ): VelocityLinkedInProfile {
-  const fullName = str(p.name) ?? ([str(p.first_name), str(p.last_name)].filter(Boolean).join(" ") || null);
-  let firstName = str(p.first_name);
-  let lastName = str(p.last_name);
+  // Credentials come off BEFORE the last-space split — "Jane Doe, MBA" must
+  // not become lastName "MBA" (owner rule: no LinkedIn prefixes/suffixes).
+  const fullName = stripNameCredentials(str(p.name) ?? ([str(p.first_name), str(p.last_name)].filter(Boolean).join(" ") || null));
+  let firstName = stripNameCredentials(str(p.first_name));
+  let lastName = stripNameCredentials(str(p.last_name));
   if (!firstName && !lastName && fullName) {
     const sp = fullName.lastIndexOf(" ");
     firstName = sp === -1 ? fullName : fullName.slice(0, sp);

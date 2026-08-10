@@ -23,6 +23,7 @@ import { recordAudit } from "../audit";
 import { runComprehensiveEnrichment } from "../services/enrichment/comprehensivePass";
 import { CONFIDENCE } from "../services/enrichment/fieldMerge";
 import { companyFromHeadline } from "../services/enrichment/headlineCompany";
+import { stripNameCredentials } from "../services/enrichment/personName";
 import { businessDomainFromEmail } from "../services/company/normalize";
 import { lookupContactInfo, type LookupResult } from "../services/scraper";
 // Shared synthetic-name detector — anchored to the lastName sentinel so it
@@ -469,20 +470,20 @@ export const prospectsRouter = router({
       }
 
       /**
-       * READ-REPAIR for company name/domain. The People list renders
-       * prospects.company — but rows can hold a blank while their LinkedIn
-       * enrichment row knows the employer (write-back predated them, or the
-       * 0150 backfill was swallowed by the migration runner, which logs and
-       * continues on failure). The list is the surface the owner keeps
-       * catching this on, so the list is where it self-heals: blanks are
-       * filled from the enrichment row for DISPLAY, and the same values are
-       * persisted fill-if-empty (with provenance) so each page render
-       * permanently repairs the rows it shows.
+       * READ-REPAIR for company name/domain — and credentialed names. The
+       * People list renders prospects.company — but rows can hold a blank
+       * while their LinkedIn enrichment row knows the employer (write-back
+       * predated them, or the 0150 backfill was swallowed by the migration
+       * runner, which logs and continues on failure). The list is the
+       * surface the owner keeps catching this on, so the list is where it
+       * self-heals: blanks are filled from the enrichment row for DISPLAY,
+       * and the same values are persisted fill-if-empty (with provenance) so
+       * each page render permanently repairs the rows it shows. Names stored
+       * with vendor credential suffixes ("Flournoy, PSP") heal the same way.
        */
       const repairCompanyBlanks = async (rowsIn: (typeof prospects.$inferSelect)[]) => {
         const blanks = rowsIn.filter((r) => !r.company?.trim() || !r.companyDomain?.trim());
-        if (blanks.length === 0) return rowsIn;
-        const enrRows = await db
+        const enrRows = blanks.length === 0 ? [] : await db
           .select({
             prospectId: prospectLinkedinEnrichments.prospectId,
             name: prospectLinkedinEnrichments.currentCompanyName,
@@ -531,12 +532,23 @@ export const prospectsRouter = router({
               }
             }
           }
+          // Stored names carry vendor credential suffixes from before the
+          // owner's rule ("Flournoy, PSP") — heal them the same way blanks
+          // heal: on the render that shows them. No ledger entries: names
+          // are not enrichable fields, this is a normalization of the same
+          // value, not a competing source.
+          const cleanFirst = stripNameCredentials(r.firstName);
+          if (cleanFirst && cleanFirst !== r.firstName) patch.firstName = r.firstName = cleanFirst;
+          const cleanLast = stripNameCredentials(r.lastName);
+          if (cleanLast && cleanLast !== r.lastName) patch.lastName = r.lastName = cleanLast;
           if (Object.keys(patch).length > 0) {
-            const ledger = { ...((r.fieldProvenance ?? {}) as Record<string, unknown>) };
-            for (const f of Object.keys(prov)) {
-              ledger[f] = { ...prov[f], at: new Date().toISOString() };
+            if (Object.keys(prov).length > 0) {
+              const ledger = { ...((r.fieldProvenance ?? {}) as Record<string, unknown>) };
+              for (const f of Object.keys(prov)) {
+                ledger[f] = { ...prov[f], at: new Date().toISOString() };
+              }
+              patch.fieldProvenance = ledger;
             }
-            patch.fieldProvenance = ledger;
             heals.push(
               db.update(prospects).set(patch as never)
                 .where(and(eq(prospects.workspaceId, ctx.workspace.id), eq(prospects.id, r.id)))

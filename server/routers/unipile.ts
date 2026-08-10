@@ -39,6 +39,7 @@ import {
 } from "../lib/unipile";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
+import { stripNameCredentials } from "../services/enrichment/personName";
 
 // ─── Provider metadata ────────────────────────────────────────────────────────
 
@@ -893,8 +894,11 @@ export const unipileRouter = router({
       let created = 0;
       let skipped = 0;
       for (const h of input.hits) {
-        const first = (h.first_name || h.name?.split(/\s+/)[0] || "").slice(0, 80).trim();
-        const last = (h.last_name || h.name?.split(/\s+/).slice(1).join(" ") || "").slice(0, 80).trim();
+        // Credentials come off BEFORE the space split — "Jane Doe, MBA" must
+        // not land as lastName "Doe, MBA" (owner rule: no LinkedIn suffixes).
+        const cleanName = stripNameCredentials(h.name) ?? "";
+        const first = (stripNameCredentials(h.first_name) || cleanName.split(/\s+/)[0] || "").slice(0, 80).trim();
+        const last = (stripNameCredentials(h.last_name) || cleanName.split(/\s+/).slice(1).join(" ") || "").slice(0, 80).trim();
         if (!first && !last) { skipped++; continue; }
         const url = h.public_profile_url || h.profile_url || null;
         // Dedupe: same name already a lead in this workspace.

@@ -28,6 +28,7 @@ import { areScrapeJobs, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { tryDecryptSecret } from "../_core/crypto";
 import { normalizeDomain } from "./scraper/domain";
+import { stripNameCredentials } from "./enrichment/personName";
 import { utcDayStart } from "@shared/timeWindows";
 
 export const QUICKENRICH_BASE = "https://app.quickenrich.io";
@@ -202,8 +203,10 @@ export async function quickenrichContactFinder(
     const people: QuickEnrichDiscoveredPerson[] = [];
     for (const r of rows) {
       const linkedinUrl = str(r.linkedin_url) ?? str(r.linkedin) ?? str(r.li_url);
-      const firstName = str(r.first_name) ?? "";
-      const lastName = str(r.last_name) ?? "";
+      // QuickEnrich's DB is LinkedIn-keyed, so its names carry the same
+      // credential suffixes ("…, PMP") — owner rule: they never enter a name.
+      const firstName = stripNameCredentials(str(r.first_name)) ?? "";
+      const lastName = stripNameCredentials(str(r.last_name)) ?? "";
       // No LinkedIn URL means the enrichment lookup has no key to work with —
       // and no name means nothing to address. Either way the row is inert in
       // OUR pipeline, whatever their DB knows about it.

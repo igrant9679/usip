@@ -71,6 +71,7 @@ import {
   quickenrichContactFinder,
   quickenrichPulledToday,
 } from "./services/quickenrich";
+import { stripNameCredentials } from "./services/enrichment/personName";
 import {
   HEALABLE_NO_EMAIL,
   HEALABLE_POOL_PREFIX,
@@ -1662,10 +1663,11 @@ async function discoverViaLinkedIn(
     return items
       .map((h: UnipileLinkedInSearchHit) => {
         // LinkedIn display names routinely carry credential suffixes
-        // ("Rachele Thomas, BSN, RN, CDAL"). Strip everything after the
-        // first comma BEFORE splitting, otherwise the last-space split
-        // turns credentials into surnames (lastName "CDAL", "Belt", …).
-        const stripCreds = (s: string) => s.split(",")[0].trim();
+        // ("Rachele Thomas, BSN, RN, CDAL"). Strip BEFORE splitting,
+        // otherwise the last-space split turns credentials into surnames
+        // (lastName "CDAL", "Belt", …). Shared stripper: unlike the old
+        // first-comma cut it also survives "Doe, Jane" and keeps ", Jr.".
+        const stripCreds = (s: string) => stripNameCredentials(s) ?? "";
         let firstName = stripCreds(h.first_name ?? "");
         let lastName = stripCreds(h.last_name ?? "");
         const fullName = stripCreds((h.name ?? `${firstName} ${lastName}`).trim());

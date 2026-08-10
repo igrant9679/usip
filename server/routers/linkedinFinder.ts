@@ -28,6 +28,7 @@ import {
   LINKEDIN_DAILY_CAP,
 } from "../services/linkedinLookup";
 import { buildScrapedProspectValues } from "../services/prospectFromSource";
+import { stripNameCredentials } from "../services/enrichment/personName";
 
 // isAdminRole comes from _core/workspace.ts — one rank map for the repo.
 
@@ -138,8 +139,9 @@ export const linkedinFinderRouter = router({
           const built = buildScrapedProspectValues({
             workspaceId: ctx.workspace.id,
             source: "linkedin_finder",
-            firstName: hit.firstName,
-            lastName: hit.lastName,
+            // Owner rule: LinkedIn credential prefixes/suffixes never enter a name.
+            firstName: stripNameCredentials(hit.firstName) ?? undefined,
+            lastName: stripNameCredentials(hit.lastName) ?? undefined,
             title: hit.title,
             company: hit.company,
             linkedinUrl: hit.linkedinUrl,
