@@ -1760,9 +1760,28 @@ function DangerTab({ canEdit }: { canEdit: boolean }) {
   const [archiveConfirm, setArchiveConfirm] = useState("");
   const [showTransfer, setShowTransfer] = useState(false);
   const [showArchive, setShowArchive] = useState(false);
+  const [showSample, setShowSample] = useState(false);
 
   const membersQ = trpc.team.list.useQuery();
   const activeMembers = (membersQ.data ?? []).filter((m) => !m.deactivatedAt);
+
+  const utils = trpc.useUtils();
+  const sampleQ = trpc.dangerZone.sampleDataStatus.useQuery();
+  const sampleTotal = Object.values(sampleQ.data ?? {}).reduce((a, b) => a + Number(b || 0), 0);
+  const removeSample = trpc.dangerZone.removeSampleData.useMutation({
+    onSuccess: (r) => {
+      const removed = Object.entries(r.counts).filter(([, v]) => Number(v) > 0);
+      toast.success(
+        removed.length
+          ? `Sample data removed — ${removed.map(([k, v]) => `${v} ${k}`).join(" · ")}`
+          : "No sample data found — nothing to remove",
+      );
+      setShowSample(false);
+      // The demo rows lived on nearly every list surface.
+      utils.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
 
   const exportMut = trpc.dangerZone.exportData.useMutation({
     onSuccess: (data) => {
@@ -1807,6 +1826,51 @@ function DangerTab({ canEdit }: { canEdit: boolean }) {
             {exportMut.isPending ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
             Export
           </Button>
+        </div>
+
+        {/* Remove sample data */}
+        <div className="space-y-2">
+          <div className="flex items-start gap-3">
+            <div className="flex-1">
+              <div className="text-sm font-medium">Remove sample data</div>
+              <div className="text-xs text-muted-foreground">
+                Deletes the demo records seeded into new workspaces — fictional accounts, contacts,
+                leads, deals, sequences, the "[Demo]" outbound campaign, and their activity. Your own
+                data is untouched, and the samples never come back.
+              </div>
+              {sampleQ.data && sampleTotal > 0 && (
+                <div className="mt-1 text-xs text-muted-foreground">
+                  Found: {Object.entries(sampleQ.data).filter(([, v]) => Number(v) > 0).map(([k, v]) => `${v} ${k}`).join(" · ")}
+                </div>
+              )}
+              {sampleQ.data && sampleTotal === 0 && (
+                <div className="mt-1 text-xs text-emerald-600">No sample data in this workspace.</div>
+              )}
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              className="text-rose-700"
+              disabled={!canEdit || sampleTotal === 0 || removeSample.isPending}
+              onClick={() => setShowSample((v) => !v)}
+            >
+              {removeSample.isPending ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
+              Remove
+            </Button>
+          </div>
+          {showSample && (
+            <div className="space-y-2 border border-rose-200 rounded-md p-3 bg-rose-50 dark:bg-rose-950/20">
+              <p className="text-xs text-rose-700">
+                This permanently deletes {sampleTotal} sample record{sampleTotal === 1 ? "" : "s"}. It cannot be undone.
+              </p>
+              <div className="flex gap-2">
+                <Button size="sm" variant="destructive" disabled={removeSample.isPending} onClick={() => removeSample.mutate()}>
+                  {removeSample.isPending ? <Loader2 className="size-4 animate-spin" /> : null} Delete sample data
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setShowSample(false)}>Cancel</Button>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Transfer ownership */}

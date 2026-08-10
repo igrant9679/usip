@@ -5,6 +5,7 @@
 import { and, eq, sql } from "drizzle-orm";
 import {
   accounts,
+  auditLog,
   campaigns,
   contacts,
   contractAmendments,
@@ -63,6 +64,30 @@ const TITLES = ["Chief Executive Officer", "Chief Operating Officer", "Chief Fin
 const STAGES = ["discovery", "qualified", "proposal", "negotiation", "won", "lost"] as const;
 const SOURCES = ["LinkedIn", "Referral", "Inbound", "Event", "CSV import", "Cold outbound"];
 
+const TERRITORY_NAMES = ["Northeast", "Midwest", "South", "West"] as const;
+const SEED_SEQUENCE_NAMES = ["Cold outbound — VP RevOps", "Inbound nurture — pricing page visit", "Champion re-engagement"] as const;
+const SEED_WORKFLOW_NAMES = ["Auto-assign new leads to RevOps", "Flag stalled deals after 14d", "Churn risk escalation"] as const;
+const SEED_CAMPAIGN_NAMES = ["Q2 Renewal Push", "Mid-market expansion", "Spring brand refresh"] as const;
+const SEED_PRODUCT_SKUS = ["USIP-CORE-A", "USIP-CORE-M", "USIP-INTEL", "USIP-SOCIAL", "USIP-CS", "USIP-IMPL-PRO", "USIP-IMPL-ENT"] as const;
+const SEED_DASHBOARD_NAME = "Revenue overview";
+
+/**
+ * The demo data's identity, exported for the sample-data remover
+ * (services/sampleData.ts). The seeder has no marker column — these constants
+ * ARE how a seeded row is recognized, so the remover and the seeder must share
+ * one vocabulary: the loops below consume the same constants. The 24 company
+ * domains are fictional and collision-checked by being, well, fictional.
+ */
+export const SEED_FINGERPRINT = {
+  accountDomains: COMPANIES.map((c) => c.domain),
+  territoryNames: [...TERRITORY_NAMES],
+  sequenceNames: [...SEED_SEQUENCE_NAMES],
+  workflowNames: [...SEED_WORKFLOW_NAMES],
+  campaignNames: [...SEED_CAMPAIGN_NAMES],
+  productSkus: [...SEED_PRODUCT_SKUS],
+  dashboardName: SEED_DASHBOARD_NAME,
+} as const;
+
 export function computeHealth(input: { productUsage: number; engagement: number; supportHealth: number; npsScore: number }): number {
   const { productUsage, engagement, supportHealth, npsScore } = input;
   return Math.round(productUsage * 0.35 + engagement * 0.25 + supportHealth * 0.2 + ((npsScore + 100) / 2) * 0.2);
@@ -87,6 +112,14 @@ function daysFromNow(d: number) {
 export async function isWorkspaceSeeded(workspaceId: number): Promise<boolean> {
   const db = await getDb();
   if (!db) return true;
+  // A workspace whose owner deliberately REMOVED the sample data must never be
+  // re-seeded — deleting every demo account would otherwise flip the count
+  // check back to "unseeded" and the next login would resurrect it all. The
+  // removal's audit row is the durable marker (no schema change, and the
+  // migration runner can't swallow it).
+  const removed = await db.select({ c: sql<number>`count(*)` }).from(auditLog)
+    .where(and(eq(auditLog.workspaceId, workspaceId), eq(auditLog.entityType, "sample_data"), eq(auditLog.action, "delete")));
+  if (Number(removed[0]?.c ?? 0) > 0) return true;
   const r = await db.select({ c: sql<number>`count(*)` }).from(accounts).where(eq(accounts.workspaceId, workspaceId));
   return Number(r[0]?.c ?? 0) > 0;
 }
@@ -107,7 +140,7 @@ export async function seedWorkspace(workspaceId: number, ownerUserId: number) {
 
   // Territories
   const territoryIds: number[] = [];
-  for (const name of ["Northeast", "Midwest", "South", "West"]) {
+  for (const name of TERRITORY_NAMES) {
     const r = await db.insert(territories).values({
       workspaceId, name, ownerUserId,
       rules: { regions: [name] },
@@ -309,9 +342,9 @@ export async function seedWorkspace(workspaceId: number, ownerUserId: number) {
   // Sequences (3)
   const seqIds: number[] = [];
   for (const seq of [
-    { name: "Cold outbound — VP RevOps", steps: [{ type: "email", subject: "Quick question" }, { type: "wait", days: 3 }, { type: "email", subject: "Re: quick question" }, { type: "wait", days: 4 }, { type: "task", body: "LinkedIn connection" }] },
-    { name: "Inbound nurture — pricing page visit", steps: [{ type: "email", subject: "Saw you visited pricing" }, { type: "wait", days: 2 }, { type: "email", subject: "Demo this week?" }] },
-    { name: "Champion re-engagement", steps: [{ type: "email", subject: "Catching up" }, { type: "wait", days: 5 }, { type: "email", subject: "Resource share" }] },
+    { name: SEED_SEQUENCE_NAMES[0], steps: [{ type: "email", subject: "Quick question" }, { type: "wait", days: 3 }, { type: "email", subject: "Re: quick question" }, { type: "wait", days: 4 }, { type: "task", body: "LinkedIn connection" }] },
+    { name: SEED_SEQUENCE_NAMES[1], steps: [{ type: "email", subject: "Saw you visited pricing" }, { type: "wait", days: 2 }, { type: "email", subject: "Demo this week?" }] },
+    { name: SEED_SEQUENCE_NAMES[2], steps: [{ type: "email", subject: "Catching up" }, { type: "wait", days: 5 }, { type: "email", subject: "Resource share" }] },
   ]) {
     const r = await db.insert(sequences).values({
       workspaceId, name: seq.name, status: "active", steps: seq.steps, ownerUserId, enrolledCount: randInt(8, 30),
@@ -357,9 +390,9 @@ export async function seedWorkspace(workspaceId: number, ownerUserId: number) {
 
   // Workflow rules (3)
   for (const wf of [
-    { name: "Auto-assign new leads to RevOps", triggerType: "record_created" as const, triggerConfig: { entity: "lead" }, conditions: [{ field: "score", op: ">=", value: 60 }], actions: [{ type: "update_field", params: { field: "ownerUserId", value: ownerUserId } }] },
-    { name: "Flag stalled deals after 14d", triggerType: "schedule" as const, triggerConfig: { cron: "0 9 * * *" }, conditions: [{ field: "daysInStage", op: ">=", value: 14 }, { field: "stage", op: "in", value: ["proposal", "negotiation"] }], actions: [{ type: "create_task", params: { title: "Re-engage stalled deal", priority: "high" } }, { type: "notify", params: { kind: "system" } }] },
-    { name: "Churn risk escalation", triggerType: "field_equals" as const, triggerConfig: { entity: "customer", field: "healthTier", value: "critical" }, conditions: [], actions: [{ type: "create_task", params: { title: "Churn intervention", priority: "urgent" } }] },
+    { name: SEED_WORKFLOW_NAMES[0], triggerType: "record_created" as const, triggerConfig: { entity: "lead" }, conditions: [{ field: "score", op: ">=", value: 60 }], actions: [{ type: "update_field", params: { field: "ownerUserId", value: ownerUserId } }] },
+    { name: SEED_WORKFLOW_NAMES[1], triggerType: "schedule" as const, triggerConfig: { cron: "0 9 * * *" }, conditions: [{ field: "daysInStage", op: ">=", value: 14 }, { field: "stage", op: "in", value: ["proposal", "negotiation"] }], actions: [{ type: "create_task", params: { title: "Re-engage stalled deal", priority: "high" } }, { type: "notify", params: { kind: "system" } }] },
+    { name: SEED_WORKFLOW_NAMES[2], triggerType: "field_equals" as const, triggerConfig: { entity: "customer", field: "healthTier", value: "critical" }, conditions: [], actions: [{ type: "create_task", params: { title: "Churn intervention", priority: "urgent" } }] },
   ]) {
     await db.insert(workflowRules).values({
       workspaceId, ...wf, enabled: true, fireCount: randInt(3, 25), lastFiredAt: daysFromNow(-randInt(0, 5)),
@@ -368,9 +401,9 @@ export async function seedWorkspace(workspaceId: number, ownerUserId: number) {
 
   // Campaigns (3)
   for (const camp of [
-    { name: "Q2 Renewal Push", objective: "renewal", status: "live" as const, description: "Coordinated campaign to lift Q2 renewals across the watch tier." },
-    { name: "Mid-market expansion", objective: "expansion", status: "scheduled" as const, description: "Cross-sell analytics module to top 50 mid-market accounts." },
-    { name: "Spring brand refresh", objective: "awareness", status: "planning" as const, description: "Multi-channel awareness push around new brand identity." },
+    { name: SEED_CAMPAIGN_NAMES[0], objective: "renewal", status: "live" as const, description: "Coordinated campaign to lift Q2 renewals across the watch tier." },
+    { name: SEED_CAMPAIGN_NAMES[1], objective: "expansion", status: "scheduled" as const, description: "Cross-sell analytics module to top 50 mid-market accounts." },
+    { name: SEED_CAMPAIGN_NAMES[2], objective: "awareness", status: "planning" as const, description: "Multi-channel awareness push around new brand identity." },
   ]) {
     await db.insert(campaigns).values({
       workspaceId,
@@ -395,13 +428,13 @@ export async function seedWorkspace(workspaceId: number, ownerUserId: number) {
 
   // Products
   for (const prod of [
-    { sku: "USIP-CORE-A", name: "USIP Core (Annual)", listPrice: "12000", billingCycle: "annual" as const, category: "Platform" },
-    { sku: "USIP-CORE-M", name: "USIP Core (Monthly)", listPrice: "1200", billingCycle: "monthly" as const, category: "Platform" },
-    { sku: "USIP-INTEL", name: "Revenue Intelligence add-on", listPrice: "6000", billingCycle: "annual" as const, category: "Add-on" },
-    { sku: "USIP-SOCIAL", name: "Social Publishing module", listPrice: "4800", billingCycle: "annual" as const, category: "Add-on" },
-    { sku: "USIP-CS", name: "Customer Success module", listPrice: "5400", billingCycle: "annual" as const, category: "Add-on" },
-    { sku: "USIP-IMPL-PRO", name: "Implementation — Professional", listPrice: "8500", billingCycle: "one_time" as const, category: "Services" },
-    { sku: "USIP-IMPL-ENT", name: "Implementation — Enterprise", listPrice: "22500", billingCycle: "one_time" as const, category: "Services" },
+    { sku: SEED_PRODUCT_SKUS[0], name: "USIP Core (Annual)", listPrice: "12000", billingCycle: "annual" as const, category: "Platform" },
+    { sku: SEED_PRODUCT_SKUS[1], name: "USIP Core (Monthly)", listPrice: "1200", billingCycle: "monthly" as const, category: "Platform" },
+    { sku: SEED_PRODUCT_SKUS[2], name: "Revenue Intelligence add-on", listPrice: "6000", billingCycle: "annual" as const, category: "Add-on" },
+    { sku: SEED_PRODUCT_SKUS[3], name: "Social Publishing module", listPrice: "4800", billingCycle: "annual" as const, category: "Add-on" },
+    { sku: SEED_PRODUCT_SKUS[4], name: "Customer Success module", listPrice: "5400", billingCycle: "annual" as const, category: "Add-on" },
+    { sku: SEED_PRODUCT_SKUS[5], name: "Implementation — Professional", listPrice: "8500", billingCycle: "one_time" as const, category: "Services" },
+    { sku: SEED_PRODUCT_SKUS[6], name: "Implementation — Enterprise", listPrice: "22500", billingCycle: "one_time" as const, category: "Services" },
   ]) {
     try {
       await db.insert(products).values({ workspaceId, ...prod, active: true });
@@ -411,7 +444,7 @@ export async function seedWorkspace(workspaceId: number, ownerUserId: number) {
   // Default dashboard
   const dashRow = await db.insert(dashboards).values({
     workspaceId,
-    name: "Revenue overview",
+    name: SEED_DASHBOARD_NAME,
     description: "Default starter dashboard — pipeline, won, top accounts.",
     isShared: true,
     layout: [],

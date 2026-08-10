@@ -2055,6 +2055,39 @@ export const dangerZoneRouter = router({
     }),
 
   /**
+   * What the sample-data remover WOULD delete — powers the Danger-zone card
+   * so the destructive button states its blast radius before it's pressed.
+   */
+  sampleDataStatus: adminWsProcedure.query(async ({ ctx }) => {
+    const { sampleDataStatus } = await import("../services/sampleData");
+    return sampleDataStatus(ctx.workspace.id);
+  }),
+
+  /**
+   * Delete every row the demo seeders created (CRM demo + "[demo]" ARE
+   * campaign), recognized by the seed's own fingerprint. Super-admin only.
+   * The audit row written here is ALSO the re-seed guard: seed.ts checks for
+   * it, otherwise emptying the demo accounts would mark the workspace
+   * "unseeded" and the next login would bring everything back.
+   */
+  removeSampleData: adminWsProcedure.mutation(async ({ ctx }) => {
+    if (ctx.member.role !== "super_admin") {
+      throw new TRPCError({ code: "FORBIDDEN", message: "Only super admins can remove sample data" });
+    }
+    const { removeSampleData } = await import("../services/sampleData");
+    const counts = await removeSampleData(ctx.workspace.id);
+    await recordAudit({
+      workspaceId: ctx.workspace.id,
+      actorUserId: ctx.user.id,
+      action: "delete",
+      entityType: "sample_data",
+      entityId: ctx.workspace.id,
+      after: counts,
+    });
+    return { ok: true as const, counts };
+  }),
+
+  /**
    * Export workspace data as a JSON summary.
    * Returns counts and a sample of each entity type.
    * Full export (CSV per entity) would require streaming — this returns a JSON blob.
