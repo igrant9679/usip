@@ -66,6 +66,7 @@ import { registerChatWidgetRoutes } from "../chatWidget";
 import { runChatFollowUps } from "../services/chatFollowUp";
 import { runOneNoteSyncSweep } from "../services/onenoteSync";
 import { runGraphCalendarSweep } from "../services/graphCalendarSync";
+import { backfillMicrosoftBridges } from "../services/microsoftBridge";
 import { registerGraphOAuthRoutes } from "../graphOAuth";
 import { registerUnsubscribeRoute } from "../unsubscribe";
 import { registerPasswordAuthRoutes } from "../passwordAuth";
@@ -273,6 +274,14 @@ async function startServer() {
   const runGraphCal = guardOverlap("GraphCalendarSync", () => runGraphCalendarSweep());
   setTimeout(runGraphCal, 240_000); // first tick 4 min after boot
   setInterval(runGraphCal, 30 * 60 * 1000);
+
+  // One-shot heal: bridge every Microsoft Unipile account into
+  // /mailbox + /calendar. The webhook only bridges at CONNECT time, so
+  // accounts connected before the bridge code shipped had none — the owner
+  // saw an empty Mailbox while Connected Accounts said "connected".
+  setTimeout(() => {
+    backfillMicrosoftBridges().catch((e) => console.error("[microsoftBridge] backfill failed:", e));
+  }, 90_000);
 
   // Scheduled report emails (daily/weekly/monthly via the system sender).
   const runReports = () => {

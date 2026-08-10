@@ -32,6 +32,7 @@ import {
   workspaceSettings,
 } from "../drizzle/schema";
 import { processInboundReply } from "./inboundReplyPoller";
+import { ensureMicrosoftBridge } from "./services/microsoftBridge";
 import { processBounceEvent } from "./emailTracking";
 import { bumpCampaignCounter } from "./campaignCounters";
 
@@ -299,100 +300,20 @@ export function registerUnipileWebhookRoutes(app: Express) {
         // surface them. LinkedIn / WhatsApp / etc. are left alone.
         //
         // Unipile uses "OUTLOOK" as the type label for Microsoft 365
-        // accounts (verified via webhook log). "MICROSOFT" is also
-        // accepted to be safe against future renames.
+        // accounts (verified via webhook log); "MICROSOFT" is accepted to be
+        // safe against renames. The bridge itself lives in
+        // services/microsoftBridge — ONE implementation shared with the
+        // boot-time backfill, because when this logic was inline here it ran
+        // only at connect time and every account connected before it shipped
+        // sat unbridged forever (empty /mailbox while Connected Accounts
+        // said "connected").
         if (acct.type === "OUTLOOK" || acct.type === "MICROSOFT") {
-          // displayName may be an email for Microsoft accounts (the
-          // username field in connection_params.MICROSOFT.username is
-          // typically the user's email). Use it as fromEmail; if it
-          // doesn't look like an email, fall back to a placeholder so
-          // the NOT NULL constraint is satisfied.
-          const looksLikeEmail = displayName && /@/.test(displayName);
-          const fromEmail = looksLikeEmail ? displayName! : `${account_id}@unipile.local`;
-          const bridgeName = displayName ?? `Microsoft (${account_id.slice(0, 8)})`;
-
-          // sending_accounts bridge — upsert by unipileAccountId.
-          try {
-            const [existingSend] = await db
-              .select({ id: sendingAccounts.id })
-              .from(sendingAccounts)
-              .where(
-                and(
-                  eq(sendingAccounts.workspaceId, workspaceId),
-                  eq(sendingAccounts.unipileAccountId, account_id),
-                ),
-              )
-              .limit(1);
-            if (existingSend) {
-              await db
-                .update(sendingAccounts)
-                .set({ name: bridgeName, fromEmail })
-                .where(eq(sendingAccounts.id, existingSend.id));
-            } else {
-              await db.insert(sendingAccounts).values({
-                workspaceId,
-                name: bridgeName,
-                // Use the existing 'outlook_oauth' enum value rather than
-                // adding a new one — avoids a MODIFY ENUM migration that
-                // hits MySQL's strict-mode data-truncated check (errno
-                // 1265). The unipileAccountId column is the actual
-                // discriminator the adapter factory reads.
-                provider: "outlook_oauth",
-                fromEmail,
-                unipileAccountId: account_id,
-              });
-              console.log(
-                `[UnipileWebhook] Bridged sending_accounts row for Unipile ${account_id}`,
-              );
-            }
-          } catch (bridgeErr) {
-            console.error(
-              "[UnipileWebhook] sending_accounts bridge failed:",
-              bridgeErr,
-            );
-          }
-
-          // calendar_accounts bridge — upsert by unipileAccountId.
-          try {
-            const [existingCal] = await db
-              .select({ id: calendarAccounts.id })
-              .from(calendarAccounts)
-              .where(
-                and(
-                  eq(calendarAccounts.workspaceId, workspaceId),
-                  eq(calendarAccounts.unipileAccountId, account_id),
-                ),
-              )
-              .limit(1);
-            if (existingCal) {
-              await db
-                .update(calendarAccounts)
-                .set({ label: bridgeName, email: looksLikeEmail ? displayName! : null })
-                .where(eq(calendarAccounts.id, existingCal.id));
-            } else {
-              await db.insert(calendarAccounts).values({
-                workspaceId,
-                userId,
-                // Use the existing 'outlook_oauth' enum value rather than
-                // adding a new one — avoids a MODIFY ENUM migration that
-                // hits MySQL's strict-mode data-truncated check (errno
-                // 1265). The unipileAccountId column is the actual
-                // discriminator the adapter factory reads.
-                provider: "outlook_oauth",
-                label: bridgeName,
-                email: looksLikeEmail ? displayName! : null,
-                unipileAccountId: account_id,
-              });
-              console.log(
-                `[UnipileWebhook] Bridged calendar_accounts row for Unipile ${account_id}`,
-              );
-            }
-          } catch (bridgeErr) {
-            console.error(
-              "[UnipileWebhook] calendar_accounts bridge failed:",
-              bridgeErr,
-            );
-          }
+          await ensureMicrosoftBridge({
+            workspaceId,
+            userId,
+            unipileAccountId: account_id,
+            displayName,
+          });
         }
       } catch (err) {
         console.error("[UnipileWebhook] Error processing account-webhook:", err);
