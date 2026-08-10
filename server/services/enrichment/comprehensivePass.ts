@@ -87,13 +87,63 @@ export async function runComprehensiveEnrichment(opts: {
 
   const candidates: Candidate[] = [];
 
-  /* ── 1. LinkedIn profile data already on file ─────────────────────── */
-  const [enr] = await db.select().from(prospectLinkedinEnrichments)
-    .where(and(
-      eq(prospectLinkedinEnrichments.workspaceId, opts.workspaceId),
-      eq(prospectLinkedinEnrichments.prospectId, opts.prospectId),
-    ))
-    .limit(1);
+  /* ── 1. LinkedIn profile — retrieved IN this pass when triggered on a
+     single prospect. The earlier design queued an async job whose match
+     review could park the result unapplied, so the pass finished with a
+     catch-all email and STILL no company or photo (the owner's report).
+     A user pointing at one specific person is identity confirmation —
+     the same semantics as confirmEnrich — so retrieve + apply now, photo
+     included. Bulk callers (sweep/batch) still skip: 25 rows must not
+     drain the 100/day LinkedIn cap. ─────────────────────────────────── */
+  const loadEnrichment = async () => {
+    const [row] = await db.select().from(prospectLinkedinEnrichments)
+      .where(and(
+        eq(prospectLinkedinEnrichments.workspaceId, opts.workspaceId),
+        eq(prospectLinkedinEnrichments.prospectId, opts.prospectId),
+      ))
+      .limit(1);
+    return row ?? null;
+  };
+  let enr = await loadEnrichment();
+  const enrIsFresh =
+    enr?.linkedinDataStatus === "enriched" &&
+    enr.linkedinLastRetrievedAt &&
+    Date.now() - new Date(enr.linkedinLastRetrievedAt).getTime() < 30 * 86_400_000;
+
+  if (!enrIsFresh && opts.queueLinkedInJob !== false) {
+    try {
+      const { determineLookupStrategy } = await import("../linkedinEnrichment/lookupStrategy");
+      const { retrieveLinkedInProfileByUrl, retrieveByNameCompany } = await import("../linkedinEnrichment/unipileProfile");
+      const { scoreIntendedMatch } = await import("../linkedinEnrichment/matching");
+      const { applyEnrichment } = await import("../linkedinEnrichment/enrichmentService");
+      const { strategy, url } = determineLookupStrategy(p as never, enr?.linkedinProfileUrl ?? null);
+      if (strategy !== "unavailable") {
+        const retrieve = url
+          ? await retrieveLinkedInProfileByUrl({ workspaceId: opts.workspaceId, userId: opts.userId, isAdmin: opts.isAdmin ?? false, linkedinUrl: url })
+          : await retrieveByNameCompany({ workspaceId: opts.workspaceId, userId: opts.userId, isAdmin: opts.isAdmin ?? false, prospect: p as never });
+        if (retrieve.ok && retrieve.profile) {
+          const match = scoreIntendedMatch(p as never, retrieve.profile, { userInitiatedSingle: true });
+          await applyEnrichment({
+            workspaceId: opts.workspaceId, prospectId: opts.prospectId,
+            profile: retrieve.profile, matchStatus: match.status,
+            sourceAccountId: retrieve.viaAccountId,
+            imageAllowed: !!retrieve.profile.profileImageUrl,
+          });
+          enr = await loadEnrichment();
+          phases.linkedinRetrieve = retrieve.profile.profileImageUrl
+            ? "profile retrieved + applied (photo included)"
+            : "profile retrieved + applied (no photo on profile)";
+        } else {
+          phases.linkedinRetrieve = `retrieve failed (${(retrieve.message ?? "unknown").slice(0, 80)})`;
+        }
+      } else {
+        phases.linkedinRetrieve = "no URL and not enough context to look up";
+      }
+    } catch (e) {
+      phases.linkedinRetrieve = `unavailable (${e instanceof Error ? e.message.slice(0, 80) : "error"})`;
+    }
+  }
+
   if (enr && enr.linkedinDataStatus === "enriched") {
     const at = (enr.linkedinLastRetrievedAt ?? new Date(0)).toISOString();
     const li = (field: Candidate["field"], value: string | null | undefined) => {
@@ -201,6 +251,22 @@ export async function runComprehensiveEnrichment(opts: {
     }
   } else {
     phases.scrape = !bestDomain ? "no domain" : "already scraped";
+  }
+
+  /* ── 4b. Company name from the domain root — the last-resort deriver.
+     A prospect can reach here with a found email and STILL no company
+     name (nothing on file, no LinkedIn data, Apollo needs a name to
+     search BY). "acme-corp.com" → "Acme Corp" at low confidence: it
+     fills the blank honestly (the ledger says domain_derived · 40) and
+     any real source replaces it on the next pass. ──────────────────── */
+  const hasCompanyCandidate = candidates.some((c) => c.field === "company") || !!p.company?.trim();
+  if (!hasCompanyCandidate && bestDomain) {
+    const root = bestDomain.split(".")[0]?.replace(/[-_]+/g, " ").trim();
+    if (root && root.length >= 3 && !/^\d+$/.test(root)) {
+      const derived = root.replace(/\b\w/g, (ch) => ch.toUpperCase());
+      candidates.push({ field: "company", value: derived, source: "domain_derived", confidence: 40, at: now });
+      phases.companyName = `derived "${derived}" from domain`;
+    }
   }
 
   /* ── 5. Reconcile + persist ───────────────────────────────────────── */
