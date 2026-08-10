@@ -250,7 +250,19 @@ export const mailboxRouter = router({
       resolveTargetUser(ctx, input.repUserId);
       const acc = await getAccount(input.accountId, ctx.workspace.id);
       const adapter = createEmailAdapter(acc);
-      return adapter.listThreads(input.folder, input.pageToken, input.maxResults);
+      // An adapter failure must NOT render as "This folder is empty" — an
+      // empty folder and a broken fetch are different facts, and collapsing
+      // them cost a whole debugging round-trip on the owner's mailbox
+      // (2026-08-10). The error travels to the UI, which shows it in place
+      // of the empty-state.
+      try {
+        const res = await adapter.listThreads(input.folder, input.pageToken, input.maxResults);
+        return { ...res, error: null as string | null };
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error(`[mailbox.listThreads] account=${input.accountId} folder=${input.folder}: ${msg}`);
+        return { threads: [], nextPageToken: undefined, error: msg.slice(0, 300) };
+      }
     }),
 
   /** Get all messages in a thread */

@@ -827,8 +827,20 @@ function SingleAccountThreadList({ accountId, folder, selectedId, onSelect, init
         <div className="flex-1 flex items-center justify-center"><Loader2 className="size-5 animate-spin text-muted-foreground" /></div>
       ) : !threads.length ? (
         <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground gap-2 p-4">
-          <MailOpen className="size-8 opacity-30" />
-          <p className="text-xs text-center">{debouncedQuery ? `No results for "${debouncedQuery}"` : "This folder is empty."}</p>
+          {(data as any)?.error ? (
+            <>
+              <AlertCircle className="size-8 opacity-40 text-amber-500" />
+              <p className="text-xs text-center font-medium text-foreground">Couldn't load this folder</p>
+              {/* The provider's own error text — an empty folder and a broken
+                  fetch are different facts and must not share an empty-state. */}
+              <p className="text-[11px] text-center break-words max-w-[240px]">{(data as any).error}</p>
+            </>
+          ) : (
+            <>
+              <MailOpen className="size-8 opacity-30" />
+              <p className="text-xs text-center">{debouncedQuery ? `No results for "${debouncedQuery}"` : "This folder is empty."}</p>
+            </>
+          )}
         </div>
       ) : (
         <ScrollArea className="flex-1">
