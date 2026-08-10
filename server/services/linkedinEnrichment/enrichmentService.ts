@@ -121,6 +121,37 @@ export async function applyEnrichment(opts: {
     .values({ workspaceId: ws, prospectId: pid, ...fields } as never)
     .onDuplicateKeyUpdate({ set: fields as never });
 
+  // Write the headline facts BACK to the prospect row — fill-if-empty only,
+  // never overwriting a user-entered value. Without this, enriched company
+  // names lived only in this table: the People LIST reads prospects.company,
+  // so enriched rows showed "—" while the drawer (which joins enrichment)
+  // showed the company — the owner's exact report. Merge tags ({{company}})
+  // and CSV exports read the prospect row too, so the gap was costing more
+  // than a display column.
+  {
+    const back: Record<string, unknown> = {};
+    if (fields.currentCompanyName) back.company = fields.currentCompanyName;
+    if (fields.currentCompanyDomain) back.companyDomain = fields.currentCompanyDomain;
+    if (fields.currentTitle) back.title = clip(p.currentTitle, 120);
+    if (Object.keys(back).length > 0) {
+      const [cur] = await db
+        .select({ company: prospects.company, companyDomain: prospects.companyDomain, title: prospects.title })
+        .from(prospects)
+        .where(and(eq(prospects.workspaceId, ws), eq(prospects.id, pid)))
+        .limit(1);
+      if (cur) {
+        const patch: Record<string, unknown> = {};
+        if (back.company && !cur.company?.trim()) patch.company = back.company;
+        if (back.companyDomain && !cur.companyDomain?.trim()) patch.companyDomain = back.companyDomain;
+        if (back.title && !cur.title?.trim()) patch.title = back.title;
+        if (Object.keys(patch).length > 0) {
+          await db.update(prospects).set(patch as never)
+            .where(and(eq(prospects.workspaceId, ws), eq(prospects.id, pid)));
+        }
+      }
+    }
+  }
+
   const [row] = await db
     .select({ id: prospectLinkedinEnrichments.id })
     .from(prospectLinkedinEnrichments)

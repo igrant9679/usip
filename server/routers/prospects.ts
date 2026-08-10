@@ -347,6 +347,12 @@ export const prospectsRouter = router({
         perPage: z.number().int().min(10).max(200).default(50),
         emailStatus: z.string().optional(),
         hasEmail: z.boolean().optional(),
+        /** Whole-dataset contact-info filters — these were page-local client
+         *  refinements, so ticking "has phone" filtered 25 visible rows while
+         *  the count/pagination ignored it. A filter either narrows the whole
+         *  view or it lies. */
+        hasPhone: z.boolean().optional(),
+        hasLinkedin: z.boolean().optional(),
         promoted: z.boolean().optional(),
         /** Discovery v2: filter by verification status to power the
          *  Needs Review queue and the verified-only feed. */
@@ -387,6 +393,8 @@ export const prospectsRouter = router({
       if (input.emailStatus) conditions.push(eq(prospects.emailStatus, input.emailStatus));
       if (input.hasEmail === true) conditions.push(sql`${prospects.email} IS NOT NULL`);
       if (input.hasEmail === false) conditions.push(isNull(prospects.email));
+      if (input.hasPhone) conditions.push(sql`${prospects.phone} IS NOT NULL AND ${prospects.phone} <> ''`);
+      if (input.hasLinkedin) conditions.push(sql`${prospects.linkedinUrl} IS NOT NULL AND ${prospects.linkedinUrl} <> ''`);
       if (input.promoted === true) conditions.push(sql`${prospects.linkedLeadId} IS NOT NULL`);
       if (input.promoted === false) conditions.push(isNull(prospects.linkedLeadId));
       if (input.verificationStatus) conditions.push(eq(prospects.verificationStatus, input.verificationStatus));

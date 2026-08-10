@@ -129,7 +129,7 @@ function FilterGroup({
   children?: React.ReactNode;
 }) {
   return (
-    <div className="border-b border-border/60">
+    <div className="border-b border-border/60" data-filter-group={id}>
       <div className="group/grp flex items-center gap-1.5 px-3 py-1.5">
         <button
           type="button"
@@ -308,6 +308,8 @@ export default function People() {
     linkedinQ: qText.linkedinQ || undefined,
     tiers: tiers.size ? ([...tiers] as ("high" | "medium" | "low")[]) : undefined,
     seniorities: seniorities.size ? [...seniorities] : undefined,
+    hasPhone: hasPhone || undefined,
+    hasLinkedin: hasLinkedin || undefined,
     sortField: SERVER_SORT[sortField],
     sortDir,
   });
@@ -315,16 +317,11 @@ export default function People() {
   const total = data?.total ?? 0;
   const pageRows = (data?.data ?? []) as Prospect[];
 
-  // ── client refinement ──
-  // Tier / seniority / sort moved SERVER-side (whole-dataset; see the query).
-  // Only the contact-info checkboxes remain page-local refinements.
-  const rows = useMemo(() => {
-    return pageRows.filter((p) => {
-      if (hasPhone && !p.phone) return false;
-      if (hasLinkedin && !p.linkedinUrl) return false;
-      return true;
-    });
-  }, [pageRows, hasPhone, hasLinkedin]);
+  // ── no client refinement ──
+  // EVERY filter is server-side now, including the contact-info checkboxes,
+  // which used to drop rows from the visible page while total/pagination
+  // ignored them — a filter either narrows the whole view or it lies.
+  const rows = pageRows;
 
   const selected = useMemo(() => rows.find((r) => r.id === selectedId) ?? pageRows.find((r) => r.id === selectedId) ?? null, [rows, pageRows, selectedId]);
 
@@ -472,6 +469,16 @@ export default function People() {
 
   /* ── pinned groups render first ── */
   const groupOrder = ["quick", "lists", "sequence", "emailStatus", "verification", "saved", "jobTitles", "seniority", "company", "location", "industry", "education", "linkedinUrl", "fit", "contactInfo"];
+
+  // More Filters "+" → open THAT group in the rail and scroll to it. The
+  // dialog used to be a static catalogue whose + icons did nothing.
+  const pickFilterGroup = (gid: string) => {
+    setMoreOpen(false);
+    setOpenGroups((prev) => { const next = new Set(prev); next.add(gid); return next; });
+    setTimeout(() => {
+      document.querySelector(`[data-filter-group="${gid}"]`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 80);
+  };
   const orderedGroups = [...groupOrder].sort((a, b) => Number(pinned.has(b)) - Number(pinned.has(a)));
 
   /* ── render a single filter group by id ── */
@@ -644,8 +651,8 @@ export default function People() {
       case "contactInfo":
         return (
           <FilterGroup key={id} {...common} label="Contact info" icon={Phone} count={(hasPhone ? 1 : 0) + (hasLinkedin ? 1 : 0)}>
-            <CheckRow checked={hasPhone} onChange={() => setHasPhone(!hasPhone)} label="Has a phone number" />
-            <CheckRow checked={hasLinkedin} onChange={() => setHasLinkedin(!hasLinkedin)} label="Has a LinkedIn profile" />
+            <CheckRow checked={hasPhone} onChange={() => { setHasPhone(!hasPhone); resetPage(); }} label="Has a phone number" />
+            <CheckRow checked={hasLinkedin} onChange={() => { setHasLinkedin(!hasLinkedin); resetPage(); }} label="Has a LinkedIn profile" />
           </FilterGroup>
         );
       default:
@@ -916,7 +923,7 @@ export default function People() {
         </div>
       </div>
 
-      <MoreFiltersDialog open={moreOpen} onClose={() => setMoreOpen(false)} count={total} />
+      <MoreFiltersDialog open={moreOpen} onClose={() => setMoreOpen(false)} count={total} onPick={pickFilterGroup} />
       <BatchPhotoUpload open={photoBatchOpen} onClose={() => setPhotoBatchOpen(false)} />
       <SearchSettingsSheet
         open={settings.open}
@@ -1201,27 +1208,35 @@ function QuickChip({ icon: Icon, label, onClick }: { icon: any; label: string; o
 
 /* ──────────────────────── More Filters dialog ─────────────────────────── */
 
-function MoreFiltersDialog({ open, onClose, count }: { open: boolean; onClose: () => void; count: number }) {
-  const COLUMNS: { title: string; items: { label: string; locked?: boolean }[] }[] = [
+function MoreFiltersDialog({ open, onClose, count, onPick }: { open: boolean; onClose: () => void; count: number; onPick: (groupId: string) => void }) {
+  // Every row maps to a REAL rail filter group — clicking "+" closes this
+  // dialog, opens that group in the rail, and scrolls to it. This used to be
+  // a static catalogue whose + icons did nothing (the owner clicked them and
+  // rightly reported a bug); an option that appears clickable and does
+  // nothing is the worst kind of dead wiring.
+  const COLUMNS: { title: string; items: { label: string; group: string }[] }[] = [
     {
       title: "Person info",
       items: [
-        { label: "Name" }, { label: "Job titles" }, { label: "Management level" },
-        { label: "Seniority" }, { label: "Contact info" }, { label: "Email status" },
-        { label: "Person location" }, { label: "Education" }, { label: "Work URLs" },
+        { label: "Name", group: "quick" }, { label: "Job titles", group: "jobTitles" },
+        { label: "Management level", group: "seniority" }, { label: "Seniority", group: "seniority" },
+        { label: "Contact info", group: "contactInfo" }, { label: "Email status", group: "emailStatus" },
+        { label: "Person location", group: "location" }, { label: "Education", group: "education" },
+        { label: "Work URLs", group: "linkedinUrl" },
       ],
     },
     {
       title: "Company info",
       items: [
-        { label: "Company" }, { label: "Industry & keywords" },
+        { label: "Company", group: "company" }, { label: "Industry & keywords", group: "industry" },
       ],
     },
     {
       title: "Engagement",
       items: [
-        { label: "ICP fit score" }, { label: "Saved status" }, { label: "Stage" },
-        { label: "Lists" }, { label: "Sequence" },
+        { label: "ICP fit score", group: "fit" }, { label: "Saved status", group: "saved" },
+        { label: "Stage", group: "verification" }, { label: "Lists", group: "lists" },
+        { label: "Sequence", group: "sequence" },
       ],
     },
   ];
@@ -1231,14 +1246,8 @@ function MoreFiltersDialog({ open, onClose, count }: { open: boolean; onClose: (
         <DialogHeader>
           <DialogTitle>More filters</DialogTitle>
           <DialogDescription>
-            {/* This claimed "Every filter here is functional" while every row
-                below was a bare div with no handler and "Apply filters" only
-                closed the dialog. It's a catalogue, not a control surface —
-                described as one now rather than implying filtering that
-                doesn't happen. */}
-            Reference list of the filter types Velocity supports. The ones that
-            are wired up live in the filter rail on the left — use those to
-            actually narrow this view.
+            Pick a filter to open it in the rail on the left — it narrows the
+            whole view, not just this page.
           </DialogDescription>
         </DialogHeader>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-5 py-1">
@@ -1247,10 +1256,15 @@ function MoreFiltersDialog({ open, onClose, count }: { open: boolean; onClose: (
               <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-2">{col.title}</div>
               <div className="space-y-1">
                 {col.items.map((it) => (
-                  <div key={it.label} className={cn("flex items-center justify-between rounded-md px-2 py-1.5 text-[13px]", it.locked && "text-muted-foreground")}>
+                  <button
+                    key={it.label}
+                    type="button"
+                    onClick={() => onPick(it.group)}
+                    className="w-full flex items-center justify-between rounded-md px-2 py-1.5 text-[13px] text-left hover:bg-muted transition-colors"
+                  >
                     <span>{it.label}</span>
-                    {it.locked ? <Lock className="size-3.5" /> : <Plus className="size-3.5 text-muted-foreground" />}
-                  </div>
+                    <Plus className="size-3.5 text-muted-foreground" />
+                  </button>
                 ))}
               </div>
             </div>

@@ -3219,6 +3219,38 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0150: backfill prospects.company/title/domain from enrichment ─────────
+  // Enrichment saved currentCompanyName into its OWN table and never wrote it
+  // back to prospects — so the People list ("prospects.company") showed "—"
+  // for enriched rows while the detail drawer showed the company (owner
+  // report, 2026-08-10). The service now writes back on every enrichment;
+  // this one-shot heals rows enriched BEFORE the fix (event-time-only wiring,
+  // dead-wiring shape #8). Fill-if-empty only — a user-entered value wins.
+  // VERIFY: the People list shows company names for previously enriched rows.
+  {
+    name: "0150_backfill_prospect_company_from_enrichment.sql",
+    statements: [
+      `UPDATE \`prospects\` p
+        JOIN \`prospect_linkedin_enrichments\` e
+          ON e.\`prospect_id\` = p.\`id\` AND e.\`workspaceId\` = p.\`workspaceId\`
+        SET p.\`company\` = e.\`current_company_name\`
+        WHERE (p.\`company\` IS NULL OR p.\`company\` = '')
+          AND e.\`current_company_name\` IS NOT NULL AND e.\`current_company_name\` <> ''`,
+      `UPDATE \`prospects\` p
+        JOIN \`prospect_linkedin_enrichments\` e
+          ON e.\`prospect_id\` = p.\`id\` AND e.\`workspaceId\` = p.\`workspaceId\`
+        SET p.\`company_domain\` = e.\`current_company_domain\`
+        WHERE (p.\`company_domain\` IS NULL OR p.\`company_domain\` = '')
+          AND e.\`current_company_domain\` IS NOT NULL AND e.\`current_company_domain\` <> ''`,
+      `UPDATE \`prospects\` p
+        JOIN \`prospect_linkedin_enrichments\` e
+          ON e.\`prospect_id\` = p.\`id\` AND e.\`workspaceId\` = p.\`workspaceId\`
+        SET p.\`title\` = LEFT(e.\`current_title\`, 120)
+        WHERE (p.\`title\` IS NULL OR p.\`title\` = '')
+          AND e.\`current_title\` IS NOT NULL AND e.\`current_title\` <> ''`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------
