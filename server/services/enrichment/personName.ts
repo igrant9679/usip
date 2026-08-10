@@ -100,3 +100,33 @@ export function stripNameCredentials(raw: string | null | undefined): string | n
   const out = kept.filter(Boolean).join(", ").trim();
   return out || input;
 }
+
+/**
+ * Repair a stored first/last pair AS A PAIR.
+ *
+ * Historic imports split "Ron Flournoy, PSP" at the LAST SPACE, landing the
+ * whole name in firstName and the credential alone in lastName — where the
+ * single-field stripper rightly refuses to touch it (never strip to empty).
+ * When lastName is nothing but KNOWN credentials (list only — an all-caps
+ * heuristic would eat real surnames like "LEE") and firstName carries at
+ * least two words, the real name is in firstName: drop the credential and
+ * re-split. Otherwise both fields just get the single-field strip.
+ */
+export function repairNamePair(
+  first: string | null | undefined,
+  last: string | null | undefined,
+): { firstName: string | null; lastName: string | null } {
+  const cf = stripNameCredentials(first);
+  const cl = stripNameCredentials(last);
+  const lastToks = (cl ?? "").split(/\s+/).filter(Boolean);
+  const lastIsCredentialOnly =
+    lastToks.length > 0 && lastToks.every((t) => KNOWN_CREDENTIALS.has(norm(t).replace(/-/g, "")));
+  const firstToks = (cf ?? "").split(/\s+/).filter(Boolean);
+  if (lastIsCredentialOnly && firstToks.length >= 2) {
+    return {
+      firstName: firstToks.slice(0, -1).join(" "),
+      lastName: firstToks[firstToks.length - 1],
+    };
+  }
+  return { firstName: cf, lastName: cl };
+}

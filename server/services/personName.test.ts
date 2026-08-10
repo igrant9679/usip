@@ -4,7 +4,7 @@
  * The credentialed examples are the owner's list plus live workspace rows.
  */
 import { describe, it, expect } from "vitest";
-import { stripNameCredentials } from "./enrichment/personName";
+import { repairNamePair, stripNameCredentials } from "./enrichment/personName";
 
 describe("stripNameCredentials", () => {
   it("strips the owner's example credentials", () => {
@@ -76,5 +76,32 @@ describe("stripNameCredentials", () => {
 
   it("keeps honorific-only strings intact", () => {
     expect(stripNameCredentials("Dr.")).toBe("Dr.");
+  });
+});
+
+describe("repairNamePair", () => {
+  it("re-splits when a last-space import left the credential as the surname", () => {
+    // Ron's live row after the first heal pass: the comma had stranded the
+    // credential alone in lastName, where the single-field strip can't act.
+    expect(repairNamePair("Ron Flournoy,", "PSP")).toEqual({ firstName: "Ron", lastName: "Flournoy" });
+    expect(repairNamePair("Rachele Thomas", "CDAL")).toEqual({ firstName: "Rachele", lastName: "Thomas" });
+  });
+
+  it("known credentials only — an all-caps surname is not a credential", () => {
+    // CDAL is in the list; LEE is somebody's name.
+    expect(repairNamePair("Ron Flournoy", "LEE")).toEqual({ firstName: "Ron Flournoy", lastName: "LEE" });
+  });
+
+  it("leaves a single-word firstName pair alone — nothing safe to re-split", () => {
+    expect(repairNamePair("Cher", "MBA")).toEqual({ firstName: "Cher", lastName: "MBA" });
+  });
+
+  it("strips both fields in the ordinary case", () => {
+    expect(repairNamePair("Ron", "Flournoy, PSP")).toEqual({ firstName: "Ron", lastName: "Flournoy" });
+    expect(repairNamePair("Dr. Jane", "Doe")).toEqual({ firstName: "Jane", lastName: "Doe" });
+  });
+
+  it("null-in, null-out", () => {
+    expect(repairNamePair(null, null)).toEqual({ firstName: null, lastName: null });
   });
 });

@@ -23,7 +23,7 @@ import { recordAudit } from "../audit";
 import { runComprehensiveEnrichment } from "../services/enrichment/comprehensivePass";
 import { CONFIDENCE } from "../services/enrichment/fieldMerge";
 import { companyFromHeadline } from "../services/enrichment/headlineCompany";
-import { stripNameCredentials } from "../services/enrichment/personName";
+import { repairNamePair } from "../services/enrichment/personName";
 import { businessDomainFromEmail } from "../services/company/normalize";
 import { lookupContactInfo, type LookupResult } from "../services/scraper";
 // Shared synthetic-name detector — anchored to the lastName sentinel so it
@@ -534,13 +534,14 @@ export const prospectsRouter = router({
           }
           // Stored names carry vendor credential suffixes from before the
           // owner's rule ("Flournoy, PSP") — heal them the same way blanks
-          // heal: on the render that shows them. No ledger entries: names
-          // are not enrichable fields, this is a normalization of the same
-          // value, not a competing source.
-          const cleanFirst = stripNameCredentials(r.firstName);
-          if (cleanFirst && cleanFirst !== r.firstName) patch.firstName = r.firstName = cleanFirst;
-          const cleanLast = stripNameCredentials(r.lastName);
-          if (cleanLast && cleanLast !== r.lastName) patch.lastName = r.lastName = cleanLast;
+          // heal: on the render that shows them. Repaired AS A PAIR: historic
+          // last-space imports left firstName "Ron Flournoy" + lastName "PSP",
+          // which no single-field strip can see. No ledger entries: names are
+          // not enrichable fields, this is a normalization of the same value,
+          // not a competing source.
+          const pair = repairNamePair(r.firstName, r.lastName);
+          if (pair.firstName && pair.firstName !== r.firstName) patch.firstName = r.firstName = pair.firstName;
+          if (pair.lastName && pair.lastName !== r.lastName) patch.lastName = r.lastName = pair.lastName;
           if (Object.keys(patch).length > 0) {
             if (Object.keys(prov).length > 0) {
               const ledger = { ...((r.fieldProvenance ?? {}) as Record<string, unknown>) };
