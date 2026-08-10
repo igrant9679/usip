@@ -500,6 +500,21 @@ async function startServer() {
   setTimeout(runCompanyBackfill, 18 * 60 * 1000); // stagger: 18 minutes after boot
   setInterval(runCompanyBackfill, 6 * 60 * 60 * 1000); // every 6h; the 20h gap sets the real cadence
 
+  // Profile-photo mirroring. Stored enrichment photos are SIGNED licdn URLs
+  // that lapse ~2 weeks after retrieval; this inlines them as data URIs while
+  // they still resolve, and marks already-expired ones failed_to_load. Free
+  // (no vendor credits, no LinkedIn lookups) — just image GETs.
+  const runImageMirror = () => {
+    import("../services/enrichment/profileImageBackfill")
+      .then((m) => m.mirrorStoredProfileImages())
+      .then((r) => {
+        if (r.scanned > 0) console.log(`[PhotoMirror] scanned=${r.scanned} mirrored=${r.mirrored} expired=${r.expiredMarked} retry=${r.keptForRetry}`);
+      })
+      .catch((e) => console.error("[PhotoMirror] run failed:", e));
+  };
+  setTimeout(runImageMirror, 6 * 60 * 1000); // stagger: 6 minutes after boot
+  setInterval(runImageMirror, 6 * 60 * 60 * 1000); // every 6h; idempotent (mirrored rows leave the predicate)
+
   // Nightly AI pipeline batch: midnight cron for leads above score threshold
   const scheduleNightlyBatch = () => {
     const now = new Date();

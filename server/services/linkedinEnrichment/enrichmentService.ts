@@ -225,17 +225,24 @@ export async function applyEnrichment(opts: {
     } as never);
   }
 
-  // Mirror a permitted photo through the existing compliance gate.
+  // Mirror a permitted photo through the existing compliance gate. The vendor
+  // URL is a SIGNED CDN link that expires in ~2 weeks (licdn `e=` param), so
+  // the pixels are downloaded once and stored as a small inline data URI —
+  // the same self-contained form user uploads use, already whitelisted by
+  // resolveProspectProfileImage. On download failure the https URL is kept:
+  // two weeks of avatar beats none, and the backfill cron retries later.
   if (opts.imageAllowed && p.profileImageUrl && /^https:\/\//i.test(p.profileImageUrl)) {
     const [cur] = await db
       .select({ src: prospects.profileImageSource })
       .from(prospects)
       .where(and(eq(prospects.workspaceId, ws), eq(prospects.id, pid)));
     if (!cur || cur.src !== "user_uploaded") {
+      const { mirrorImageToDataUri } = await import("../enrichment/profileImageMirror");
+      const mirrored = await mirrorImageToDataUri(p.profileImageUrl);
       await db
         .update(prospects)
         .set({
-          profileImageUrl: p.profileImageUrl,
+          profileImageUrl: mirrored.ok ? mirrored.dataUri : p.profileImageUrl,
           profileImageSource: "enrichment_provider",
           profileImageSourceUrl: p.profileUrl,
           profileImageStatus: "available",
