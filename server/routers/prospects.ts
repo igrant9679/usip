@@ -18,7 +18,7 @@ import { TRPCError } from "@trpc/server";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { getDb } from "../db";
-import { contacts, leads, prospects, scoreResults, scoreModels, workspaceSettings } from "../../drizzle/schema";
+import { contacts, leads, prospects, scoreResults, scoreModels, workspaceSettings, prospectLinkedinEnrichments } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
 import { runComprehensiveEnrichment } from "../services/enrichment/comprehensivePass";
 import { lookupContactInfo, type LookupResult } from "../services/scraper";
@@ -465,6 +465,56 @@ export const prospectsRouter = router({
         primaryModelId = m?.id ?? null;
       }
 
+      /**
+       * READ-REPAIR for company name/domain. The People list renders
+       * prospects.company — but rows can hold a blank while their LinkedIn
+       * enrichment row knows the employer (write-back predated them, or the
+       * 0150 backfill was swallowed by the migration runner, which logs and
+       * continues on failure). The list is the surface the owner keeps
+       * catching this on, so the list is where it self-heals: blanks are
+       * filled from the enrichment row for DISPLAY, and the same values are
+       * persisted fill-if-empty (with provenance) so each page render
+       * permanently repairs the rows it shows.
+       */
+      const repairCompanyBlanks = async (rowsIn: (typeof prospects.$inferSelect)[]) => {
+        const blanks = rowsIn.filter((r) => !r.company?.trim() || !r.companyDomain?.trim());
+        if (blanks.length === 0) return rowsIn;
+        const enrRows = await db
+          .select({
+            prospectId: prospectLinkedinEnrichments.prospectId,
+            name: prospectLinkedinEnrichments.currentCompanyName,
+            domain: prospectLinkedinEnrichments.currentCompanyDomain,
+          })
+          .from(prospectLinkedinEnrichments)
+          .where(and(
+            eq(prospectLinkedinEnrichments.workspaceId, ctx.workspace.id),
+            inArray(prospectLinkedinEnrichments.prospectId, blanks.map((r) => r.id)),
+          ));
+        const byId = new Map(enrRows.map((e) => [e.prospectId, e]));
+        const heals: Array<Promise<unknown>> = [];
+        for (const r of rowsIn) {
+          const e = byId.get(r.id);
+          if (!e) continue;
+          const patch: Record<string, unknown> = {};
+          if (!r.company?.trim() && e.name?.trim()) { r.company = e.name.trim(); patch.company = r.company; }
+          if (!r.companyDomain?.trim() && e.domain?.trim()) { r.companyDomain = e.domain.trim(); patch.companyDomain = r.companyDomain; }
+          if (Object.keys(patch).length > 0) {
+            const ledger = { ...((r.fieldProvenance ?? {}) as Record<string, unknown>) };
+            for (const f of Object.keys(patch)) {
+              ledger[f] = { source: "linkedin", confidence: 85, at: new Date().toISOString() };
+            }
+            patch.fieldProvenance = ledger;
+            heals.push(
+              db.update(prospects).set(patch as never)
+                .where(and(eq(prospects.workspaceId, ctx.workspace.id), eq(prospects.id, r.id)))
+                .catch((err) => console.warn(`[prospects.list] read-repair failed for ${r.id}:`, err)),
+            );
+          }
+        }
+        if (heals.length) await Promise.all(heals);
+        return rowsIn;
+      };
+
       // List rows never expose the raw image columns; they carry only the
       // resolved, policy-gated profile_image (same gate as prospects.get) so
       // the People table can render permitted avatars with initials fallback.
@@ -504,6 +554,7 @@ export const prospectsRouter = router({
         const [{ total }] = await db.select({ total: sql<number>`count(*)` })
           .from(prospects).leftJoin(scoreResults, joinCond).where(and(...scoreConds));
 
+        await repairCompanyBlanks(joined.map((row) => row.prospects));
         const data = joined.map((row) => ({
           ...withResolvedImg(row.prospects),
           fitScore: row.score_results ? Number(row.score_results.normalizedScore) : null,
@@ -525,6 +576,7 @@ export const prospectsRouter = router({
         .from(prospects)
         .where(and(...conditions));
 
+      await repairCompanyBlanks(rows);
       // Raw image columns stay server-side; rows carry the resolved image only.
       const data = rows.map(withResolvedImg);
 
