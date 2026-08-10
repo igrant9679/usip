@@ -8,9 +8,12 @@
  * Wired to real backends where Velocity already has them:
  *   - Sequence  → sequences.bulkEnroll(prospectIds)
  *   - Add to list → recordLists.list / create / addMembers(prospectIds)
- * The rest (Save, Email, Export, Enrich, Push to CRM, More menu) are clean
- * placeholders that toast — no backend exists for them yet. Horizontally
- * scrollable so it never wraps at desktop widths.
+ *   - Enrich    → linkedinEnrichment.run (LinkedIn refresh / job changes) and
+ *                 prospects.findContactInfoBatch in chunks of 10 (the full
+ *                 comprehensive pass — the drawer's "Enrich fully", in bulk)
+ * The rest (Save, Email, Push to CRM) are clean placeholders that toast — no
+ * backend exists for them yet. Horizontally scrollable so it never wraps at
+ * desktop widths.
  */
 import { useMemo, useState, type ReactNode } from "react";
 import { trpc } from "@/lib/trpc";
@@ -365,6 +368,7 @@ export function AddToListMenu({ selectedIds, trigger }: { selectedIds: number[];
 /* ───────────────────────────── Enrich / More ──────────────────────────── */
 
 function EnrichMenu({ selectedIds }: { selectedIds: number[] }) {
+  const utils = trpc.useUtils();
   // Real backend: the compliant LinkedIn enrichment orchestrator refreshes each
   // selected person's profile (title/company/location/photo) — which also feeds
   // job-change detection → the Job Change Autopilot. Health-gated server-side.
@@ -373,16 +377,58 @@ function EnrichMenu({ selectedIds }: { selectedIds: number[] }) {
     onError: (e: any) => toast.error(e?.message ?? "Could not start enrichment"),
   });
   const start = () => run.mutate({ prospectIds: selectedIds, triggerType: "people_bulk_action" } as any);
+
+  // Real backend: the comprehensive pass (LinkedIn data on file → Apollo domain
+  // → QuickEnrich → pattern+Reoon → scrape, provenance-merged) — the bulk twin
+  // of the drawer's "Enrich fully (all sources)". Each pass is synchronous and
+  // slow (seconds per person), so the selection goes up in chunks: one request
+  // per 10 people keeps every call comfortably inside the platform timeout no
+  // matter how many rows are selected.
+  const [fullBusy, setFullBusy] = useState(false);
+  const batch = trpc.prospects.findContactInfoBatch.useMutation({
+    onError: (e: any) => toast.error(e?.message ?? "Enrichment chunk failed"),
+  });
+  const startFull = async () => {
+    const CHUNK = 10;
+    setFullBusy(true);
+    let withEmail = 0, credits = 0, failed = 0;
+    const tid = toast.loading(`Enriching 0/${selectedIds.length} — running every source…`);
+    try {
+      for (let i = 0; i < selectedIds.length; i += CHUNK) {
+        const ids = selectedIds.slice(i, i + CHUNK);
+        try {
+          const r: any = await batch.mutateAsync({ prospectIds: ids, skipIfHasEmail: true } as any);
+          withEmail += r?.withEmail ?? 0;
+          credits += r?.reoonCredits ?? 0;
+        } catch {
+          failed += ids.length; // onError already toasted the reason
+        }
+        toast.loading(`Enriching ${Math.min(i + CHUNK, selectedIds.length)}/${selectedIds.length} — running every source…`, { id: tid });
+      }
+      const done = selectedIds.length - failed;
+      toast.success(
+        `Enriched ${done} ${done === 1 ? "person" : "people"} — ${withEmail} with an email${failed ? `, ${failed} failed` : ""}`,
+        { id: tid, description: credits ? `${credits} Reoon credit${credits === 1 ? "" : "s"} spent` : undefined },
+      );
+      utils.prospects.list.invalidate();
+      utils.linkedinEnrichment.getProspectEnrichment.invalidate();
+    } finally {
+      setFullBusy(false);
+    }
+  };
+
+  const busy = run.isPending || fullBusy;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button variant="ghost" size="sm" className="gap-1.5">
-          {run.isPending ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />} Enrich <ChevronDown className="size-3 opacity-60" />
+          {busy ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />} Enrich <ChevronDown className="size-3 opacity-60" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-56">
-        <DropdownMenuItem disabled={run.isPending} onClick={start}><Activity className="size-4 mr-2" /> Refresh LinkedIn data</DropdownMenuItem>
-        <DropdownMenuItem disabled={run.isPending} onClick={start}><Mail className="size-4 mr-2" /> Detect job changes</DropdownMenuItem>
+        <DropdownMenuItem disabled={busy} onClick={startFull}><Sparkles className="size-4 mr-2" /> Enrich fully (all sources)</DropdownMenuItem>
+        <DropdownMenuItem disabled={busy} onClick={start}><Activity className="size-4 mr-2" /> Refresh LinkedIn data</DropdownMenuItem>
+        <DropdownMenuItem disabled={busy} onClick={start}><Mail className="size-4 mr-2" /> Detect job changes</DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );
