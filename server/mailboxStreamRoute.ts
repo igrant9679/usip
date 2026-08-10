@@ -15,6 +15,7 @@
  * prompt construction.
  */
 import type { Express, Request, Response } from "express";
+import { HUMAN_COPY_RULES } from "./services/humanCopy";
 import { and, eq } from "drizzle-orm";
 import { sendingAccounts } from "../drizzle/schema";
 import { runSSEStream } from "./_core/streamHelpers";
@@ -105,7 +106,9 @@ export function registerMailboxStreamRoutes(app: Express) {
           messages: [
             {
               role: "system",
-              content: `You are a professional sales representative named ${senderName} (${senderEmail}). Draft a concise, professional, and friendly reply to the email thread below. Write only the body of the reply — no subject line, no signature placeholder. Keep it under 150 words unless the thread requires more detail. Do not include any preamble like "Here is a draft reply:".`,
+              content: `You are a professional sales representative named ${senderName} (${senderEmail}). Draft a concise, professional, and friendly reply to the email thread below. Write only the body of the reply — no subject line, no signature placeholder. Keep it under 150 words unless the thread requires more detail. Do not include any preamble like "Here is a draft reply:".
+
+${HUMAN_COPY_RULES}`,
             },
             { role: "user", content: `Email thread:\n\n${threadSummary}` },
           ],
@@ -142,7 +145,9 @@ export function registerMailboxStreamRoutes(app: Express) {
           messages: [
             {
               role: "system",
-              content: `You are a professional sales representative named ${senderName}. Write a brief, professional forwarding introduction (2-3 sentences) to accompany the email below when forwarding it to a colleague or prospect. Write only the intro text — no subject line, no signature. Do not include any preamble like "Here is a draft:".`,
+              content: `You are a professional sales representative named ${senderName}. Write a brief, professional forwarding introduction (2-3 sentences) to accompany the email below when forwarding it to a colleague or prospect. Write only the intro text — no subject line, no signature. Do not include any preamble like "Here is a draft:".
+
+${HUMAN_COPY_RULES}`,
             },
             { role: "user", content: `Email to forward:\n\n${threadSummary}` },
           ],

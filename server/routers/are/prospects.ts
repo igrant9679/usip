@@ -52,6 +52,7 @@ import { invokeLLM, isRetryableLLMError } from "../../_core/llm";
 import { router } from "../../_core/trpc";
 import { workspaceProcedure } from "../../_core/workspace";
 import { notifyIfEnabled } from "../../services/policyNotify";
+import { HUMAN_COPY_RULES, humanizeAiCopy } from "../../services/humanCopy";
 import { resolveVerifiedEmail } from "../../services/scraper";
 import { apolloResolveDomain } from "../../services/apollo";
 import { buildBrandContext } from "../../services/brandContext";
@@ -638,6 +639,7 @@ async function personalizeForProspect(
   const brandBlock = await buildBrandContext(campaign.workspaceId);
   const systemContent =
     `You are an elite B2B sales copywriter. You will be given a campaign skeleton and a prospect dossier. Fill in subject+body for each step, keeping the structure, cadence, and CTA pattern from the skeleton. Every message must reference something real about the prospect. Never use generic openers ("I hope this finds you well", "I wanted to reach out").` +
+    `\n\n${HUMAN_COPY_RULES}` +
     (brandBlock ? `\n\n${brandBlock}` : "") +
     (customInstructions ? `\n\n## Campaign-specific instructions\n${customInstructions}` : "") +
     (subjectGuidance ? `\n\n## Subject line instructions\n${subjectGuidance}` : "") +
@@ -699,7 +701,11 @@ async function personalizeForProspect(
   const parsed = parseLlmJson(content, "personalizeForProspect");
   return (parsed.steps ?? []).map((s: any) => {
     const channel = String(s.channel ?? "email").toLowerCase();
-    let body = String(s.body ?? "");
+    // Scrub AI tells (em dashes, curly/straight mixes, markdown leaks) —
+    // the prompt asks, the scrub guarantees. Runs BEFORE the signature
+    // append so the owner's own signature text is never rewritten.
+    s = { ...s, subject: humanizeAiCopy(String(s.subject ?? "")) };
+    let body = humanizeAiCopy(String(s.body ?? ""));
     // Append the literal campaign signature to email steps only. Stored on the
     // generated sequence so it's visible in the viewer and goes out on send.
     // Guard against a re-run double-append (force regen reuses the same step).

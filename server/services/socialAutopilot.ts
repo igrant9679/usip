@@ -32,6 +32,7 @@ import {
 } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { invokeLLM } from "../_core/llm";
+import { HUMAN_COPY_RULES, humanizeAiCopy } from "./humanCopy";
 import { listUserPosts, reactToPost, sendLinkedInInvitation, sendMessage } from "../lib/unipile";
 import { utcDayStart } from "@shared/timeWindows";
 
@@ -63,7 +64,9 @@ Rules:
 - 2 sentences max, under 40 words total.
 - Sound like a real person, not a pitch. No "I hope this finds you well".
 - Thank them for connecting, then one light, genuine, curiosity-driven line that opens a conversation. Do NOT ask for a meeting yet.
-- No emojis, no hashtags, no links. Return ONLY the message text.`;
+- No emojis, no hashtags, no links. Return ONLY the message text.
+
+${HUMAN_COPY_RULES}`;
 
   try {
     const res = await invokeLLM({
@@ -73,7 +76,7 @@ Rules:
     } as never);
     const txt = (res as any)?.choices?.[0]?.message?.content;
     if (typeof txt === "string" && txt.trim()) {
-      return txt.trim().replace(/^["']|["']$/g, "");
+      return humanizeAiCopy(txt.trim().replace(/^["']|["']$/g, ""));
     }
   } catch (err) {
     console.error("[SocialAutopilot] opener generation failed:", err);
@@ -277,11 +280,11 @@ async function generateInviteNote(
   const firstName = who.name.split(/\s+/)[0] || who.name;
   const ctx = [who.title ? `a ${who.title}` : null, who.company ? `at ${who.company}` : null].filter(Boolean).join(" ");
   const prompt = `Write a LinkedIn connection-request note to ${firstName}${ctx ? ` (${ctx})` : ""}.
-Rules: under 180 characters, warm and specific, no pitch, no "I hope this finds you well", no emojis/links. Return ONLY the note text.`;
+Rules: under 180 characters, warm and specific, no pitch, no "I hope this finds you well", no emojis/links, and NEVER an em dash. Return ONLY the note text.`;
   try {
     const res = await invokeLLM({ workspaceId, messages: [{ role: "user", content: prompt }], maxTokens: 120 } as never);
     const txt = (res as any)?.choices?.[0]?.message?.content;
-    if (typeof txt === "string" && txt.trim()) return txt.trim().replace(/^["']|["']$/g, "").slice(0, 195);
+    if (typeof txt === "string" && txt.trim()) return humanizeAiCopy(txt.trim().replace(/^["']|["']$/g, "")).slice(0, 195);
   } catch (err) {
     console.error("[SocialAutopilot] invite note generation failed:", err);
   }

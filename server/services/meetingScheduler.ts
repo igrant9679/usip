@@ -23,6 +23,7 @@ import { and, eq, gte, inArray, isNull, lte, ne, or, sql } from "drizzle-orm";
 import { calendarAccounts, calendarEvents, contacts, leads, meetings, prospects, workspaceMembers, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { invokeLLM } from "../_core/llm";
+import { HUMAN_COPY_RULES, humanizeAiCopy } from "./humanCopy";
 import { createCalendarAdapter } from "../calendarAdapter";
 import { attributeMeetingBookingToAre } from "../routers/are/execution";
 // One slot generator + one timezone rule, shared with the booking link. See
@@ -169,7 +170,9 @@ Return: {
   "inviteMessage": "<2-3 sentence invite proposing the times, warm and specific>",
   "reasoning": "<one sentence: why this meeting, now>",
   "confidence": <integer 0-100>
-}`;
+}
+
+${HUMAN_COPY_RULES}`;
 
   let title = `Intro meeting — ${name}`;
   let inviteMessage = `Hi ${firstName}, I'd love to set up a quick ${durationMin}-minute intro. Would any of these times work?`;
@@ -196,8 +199,8 @@ Return: {
       workspaceId,
     });
     const parsed = JSON.parse(res.choices?.[0]?.message?.content ?? "{}");
-    if (parsed.title) title = String(parsed.title).slice(0, 240);
-    if (parsed.inviteMessage) inviteMessage = String(parsed.inviteMessage).slice(0, 1500);
+    if (parsed.title) title = humanizeAiCopy(String(parsed.title).slice(0, 240));
+    if (parsed.inviteMessage) inviteMessage = humanizeAiCopy(String(parsed.inviteMessage).slice(0, 1500));
     reasoning = String(parsed.reasoning ?? "").slice(0, 500);
     confidence = Math.max(0, Math.min(100, Math.round(Number(parsed.confidence ?? 60)) || 60));
   } catch (e) {

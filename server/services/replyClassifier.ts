@@ -17,6 +17,7 @@ import { and, desc, eq, gte, isNotNull, isNull, sql } from "drizzle-orm";
 import { emailReplies, emailSuppressions, tasks, unipileMessages, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { invokeLLM } from "../_core/llm";
+import { humanizeAiCopy } from "./humanCopy";
 import { createMeetingProposal } from "./meetingScheduler";
 import { sendWorkspaceEmail } from "../emailDelivery";
 import { resolveBookingUrl } from "../mergeVars";
@@ -109,7 +110,7 @@ Return: {
       sentiment: SENTIMENTS.includes(parsed.sentiment) ? parsed.sentiment : "neutral",
       confidence: Math.max(0, Math.min(100, Math.round(Number(parsed.confidence ?? 50)) || 50)),
       reasoning: String(parsed.reasoning ?? "").slice(0, 500),
-      suggestedReply: String(parsed.suggestedReply ?? "").slice(0, 2000),
+      suggestedReply: humanizeAiCopy(String(parsed.suggestedReply ?? "").slice(0, 2000)),
     };
   } catch (e) {
     console.error(`[ReplyClassifier] LLM classify failed for reply ${reply.id}:`, e);
@@ -338,7 +339,7 @@ Classes (pick exactly one):
       sentiment: SENTIMENTS.includes(parsed.sentiment) ? parsed.sentiment : "neutral",
       confidence: Math.max(0, Math.min(100, Math.round(Number(parsed.confidence ?? 50)) || 50)),
       reasoning: String(parsed.reasoning ?? "").slice(0, 500),
-      suggestedReply: String(parsed.suggestedReply ?? "").slice(0, 2000),
+      suggestedReply: humanizeAiCopy(String(parsed.suggestedReply ?? "").slice(0, 2000)),
     };
   } catch (e) {
     console.error(`[SocialClassifier] LLM classify failed for message ${msg.id}:`, e);

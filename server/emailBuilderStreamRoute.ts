@@ -12,6 +12,7 @@
  * tRPC router file.
  */
 import type { Express, Request, Response } from "express";
+import { HUMAN_COPY_RULES } from "./services/humanCopy";
 import { resolveStreamAuth } from "./_core/streamHelpers";
 import { streamLLM } from "./_core/llmStream";
 
@@ -51,7 +52,9 @@ export function registerEmailBuilderStreamRoutes(app: Express) {
       }
       const tone = typeof body.tone === "string" ? body.tone : undefined;
 
-      const systemPrompt = `You are an expert email copywriter. ${tone ? `Write in a ${tone} tone.` : ""} Return only the rewritten content with no extra commentary.`;
+      const systemPrompt = `You are an expert email copywriter. ${tone ? `Write in a ${tone} tone.` : ""} Return only the rewritten content with no extra commentary.
+
+${HUMAN_COPY_RULES}`;
       const userPrompt = `${INSTRUCTION_MAP[body.instruction]}\n\n---\n${body.content}`;
 
       // ── SSE setup ───────────────────────────────────────────────────────

@@ -23,6 +23,7 @@ import { repProcedure } from "../_core/workspace";
 import { router } from "../_core/trpc";
 import { invokeLLM } from "../_core/llm";
 import { buildBrandContext } from "../services/brandContext";
+import { HUMAN_COPY_RULES, humanizeAiCopy } from "../services/humanCopy";
 
 /**
  * The fixed verbs the editor offers. `write` composes from the instruction;
@@ -96,6 +97,8 @@ Rules:
 - Preserve every {{mergeTag}} EXACTLY as written. Never invent new merge tags.
 - Keep the user's language (write in the language of the input).
 - ${format}
+
+${HUMAN_COPY_RULES}
 ${brandBlock ? `\nBrand voice:\n${brandBlock}` : ""}`,
           },
           {
@@ -133,6 +136,9 @@ ${brandBlock ? `\nBrand voice:\n${brandBlock}` : ""}`,
       if (!text.trim()) {
         return { text: input.text, error: "The assistant returned nothing — try again." };
       }
-      return { text, error: null as string | null };
+      // Proofread returns the USER'S text with fixes — scrubbing it would
+      // rewrite punctuation they typed themselves. Every other action's
+      // output is AI prose and gets the tell-scrub.
+      return { text: input.action === "proofread" ? text : humanizeAiCopy(text), error: null as string | null };
     }),
 });

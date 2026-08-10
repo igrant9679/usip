@@ -31,6 +31,7 @@ import {
 import { sendLinkedInInvitation, sendMessage } from "./lib/unipile";
 import { getDb } from "./db";
 import { invokeLLM } from "./_core/llm";
+import { HUMAN_COPY_RULES, humanizeAiCopy } from "./services/humanCopy";
 import { isSuppressed } from "./unsubscribe";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -167,7 +168,9 @@ async function generateDynamicEmail(
           content:
             `You write short B2B outreach emails. Tone: ${tone}. Length: ${length}.\n` +
             `Use {{firstName}}, {{company}} and {{senderName}} as literal placeholder tokens — they are substituted per recipient downstream, so never invent a real name or company.\n` +
-            `Do not fabricate facts, metrics, or customer names. Do not open with "I hope this email finds you well". Do not add a P.S.`,
+            `Do not fabricate facts, metrics, or customer names. Do not open with "I hope this email finds you well". Do not add a P.S.
+
+${HUMAN_COPY_RULES}`,
         },
         { role: "user", content: `Write the email. Goal: ${focus}` },
       ],
@@ -187,8 +190,8 @@ async function generateDynamicEmail(
     });
     const content = out.choices?.[0]?.message?.content;
     const parsed = typeof content === "string" ? JSON.parse(content) : content;
-    const subject = String(parsed?.subject ?? "").trim();
-    const body = String(parsed?.body ?? "").trim();
+    const subject = humanizeAiCopy(String(parsed?.subject ?? "").trim());
+    const body = humanizeAiCopy(String(parsed?.body ?? "").trim());
     if (!body) return null;
     return { subject: subject || "Following up", body };
   } catch (e) {

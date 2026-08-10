@@ -23,6 +23,7 @@ import {
 } from "../_core/workspace";
 import { router } from "../_core/trpc";
 import { invokeLLM } from "../_core/llm";
+import { HUMAN_COPY_RULES } from "../services/humanCopy";
 import { buildBrandContext } from "../services/brandContext";
 import { rankOf } from "../_core/workspace";
 
@@ -444,7 +445,9 @@ export const emailTemplatesRouter = router({
         messages: [
           {
             role: "system",
-            content: `You are an expert email copywriter. ${input.tone ? `Write in a ${input.tone} tone.` : ""} Return only the rewritten content with no extra commentary.`,
+            content: `You are an expert email copywriter. ${input.tone ? `Write in a ${input.tone} tone.` : ""} Return only the rewritten content with no extra commentary.
+
+${HUMAN_COPY_RULES}`,
           },
           { role: "user", content: `${prompt}\n\n---\n${input.content}` },
         ],
@@ -540,7 +543,8 @@ Rules:
           {
             role: "system",
             content: `You are an expert email subject line writer. Given the email body, generate ${input.count} compelling subject line variants.
-Each suggestion: {"subject":"string","rationale":"string (max 15 words)","spamRisk":"low"|"medium"|"high"}.`,
+Each suggestion: {"subject":"string","rationale":"string (max 15 words)","spamRisk":"low"|"medium"|"high"}.
+Subject lines must never contain an em dash and must read like a human typed them.`,
           },
           {
             role: "user",

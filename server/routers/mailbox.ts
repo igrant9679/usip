@@ -26,6 +26,7 @@ import { invokeLLM } from "../_core/llm";
 import { assertSendAllowed } from "../sendLimits";
 import { escapeHtml } from "@shared/escapeHtml";
 import { isHtmlBody, htmlBodyToText } from "@shared/emailBody";
+import { HUMAN_COPY_RULES, humanizeAiCopy } from "../services/humanCopy";
 
 /**
  * Append the rep's email signature to outbound HTML / text if it isn't
@@ -472,12 +473,14 @@ export const mailboxRouter = router({
         messages: [
           {
             role: "system",
-            content: `You are a professional sales representative named ${senderName} (${senderEmail}). Draft a concise, professional, and friendly reply to the email thread below. Write only the body of the reply — no subject line, no signature placeholder. Keep it under 150 words unless the thread requires more detail. Do not include any preamble like "Here is a draft reply:".`,
+            content: `You are a professional sales representative named ${senderName} (${senderEmail}). Draft a concise, professional, and friendly reply to the email thread below. Write only the body of the reply — no subject line, no signature placeholder. Keep it under 150 words unless the thread requires more detail. Do not include any preamble like "Here is a draft reply:".
+
+${HUMAN_COPY_RULES}`,
           },
           { role: "user", content: `Email thread:\n\n${threadSummary}` },
         ],
       });
-      const body = (res as any)?.choices?.[0]?.message?.content ?? "";
+      const body = humanizeAiCopy((res as any)?.choices?.[0]?.message?.content ?? "");
       return { body };
     }),
 
@@ -502,7 +505,9 @@ export const mailboxRouter = router({
         messages: [
           {
             role: "system",
-            content: `You are a professional sales representative named ${senderName}. Write a brief, professional forwarding introduction (2-3 sentences) to accompany the email below when forwarding it to a colleague or prospect. Write only the intro text — no subject line, no signature. Do not include any preamble like "Here is a draft:".`,
+            content: `You are a professional sales representative named ${senderName}. Write a brief, professional forwarding introduction (2-3 sentences) to accompany the email below when forwarding it to a colleague or prospect. Write only the intro text — no subject line, no signature. Do not include any preamble like "Here is a draft:".
+
+${HUMAN_COPY_RULES}`,
           },
           {
             role: "user",
@@ -510,7 +515,7 @@ export const mailboxRouter = router({
           },
         ],
       });
-      const body = (res as any)?.choices?.[0]?.message?.content ?? "";
+      const body = humanizeAiCopy((res as any)?.choices?.[0]?.message?.content ?? "");
       return { body };
     }),
 

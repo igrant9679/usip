@@ -16,6 +16,7 @@ import {
   leads,
 } from "../../drizzle/schema";
 import { invokeLLM } from "../_core/llm";
+import { HUMAN_COPY_RULES, humanizeAiCopy } from "../services/humanCopy";
 
 /* ─── Helpers ─────────────────────────────────────────────────────────── */
 
@@ -218,7 +219,9 @@ Return JSON with these exact fields:
         messages: [
           {
             role: "system",
-            content: `You are an expert B2B sales email writer. ${instruction} Keep emails under 150 words. Return JSON with "subject" and "body" fields only.`,
+            content: `You are an expert B2B sales email writer. ${instruction} Keep emails under 150 words. Return JSON with "subject" and "body" fields only.
+
+${HUMAN_COPY_RULES}`,
           },
           {
             role: "user",
@@ -252,8 +255,8 @@ Org context: ${orgResearch.slice(0, 300)}`,
       try {
         const raw = draftRes.choices?.[0]?.message?.content as string;
         const parsed = JSON.parse(raw);
-        subject = parsed.subject ?? "";
-        body = parsed.body ?? "";
+        subject = humanizeAiCopy(parsed.subject ?? "");
+        body = humanizeAiCopy(parsed.body ?? "");
       } catch {
         subject = `Reaching out to ${companyName}`;
         body = `Hi ${firstName},\n\nI wanted to reach out about how we can help ${companyName}.\n\nBest,`;
@@ -520,7 +523,9 @@ export const aiPipelineRouter = router({
         messages: [
           {
             role: "system",
-            content: `You are an expert B2B sales email writer. ${presetInstructions[input.preset]} Return JSON with "subject" and "body" fields only.`,
+            content: `You are an expert B2B sales email writer. ${presetInstructions[input.preset]} Return JSON with "subject" and "body" fields only.
+
+${HUMAN_COPY_RULES}`,
           },
           {
             role: "user",
@@ -550,8 +555,8 @@ export const aiPipelineRouter = router({
       try {
         const raw = regenRes.choices?.[0]?.message?.content as string;
         const parsed = JSON.parse(raw);
-        newSubject = parsed.subject ?? draft.subject;
-        newBody = parsed.body ?? draft.body;
+        newSubject = humanizeAiCopy(parsed.subject ?? draft.subject);
+        newBody = humanizeAiCopy(parsed.body ?? draft.body);
       } catch {
         // keep original on parse failure
       }

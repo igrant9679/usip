@@ -26,6 +26,7 @@ import { and, eq, isNull, isNotNull } from "drizzle-orm";
 import { getDb } from "../db";
 import { activities, chatAgents, chatSessions, notifications, tasks } from "../../drizzle/schema";
 import { invokeLLM } from "../_core/llm";
+import { HUMAN_COPY_RULES, humanizeAiCopy } from "./humanCopy";
 import { buildBrandContext } from "./brandContext";
 import { scrubUnsupportedClaims, transcriptText, type ChatMessage } from "./chatAgent";
 import { isEmailSuppressed } from "../routers/emailSuppressions";
@@ -161,7 +162,9 @@ Rules:
 - One clear ask: book a time.${opts.bookingUrl ? ` Use this exact link: ${opts.bookingUrl}` : ""}
 - Plain text, no markdown, no signature block — the mail system adds that.
 
-Return JSON: { "subject": "<short, specific, lowercase-ish>", "body": "<the email>" }`;
+Return JSON: { "subject": "<short, specific, lowercase-ish>", "body": "<the email>" }
+
+${HUMAN_COPY_RULES}`;
 
   try {
     const res = await invokeLLM({
@@ -180,8 +183,8 @@ Return JSON: { "subject": "<short, specific, lowercase-ish>", "body": "<the emai
     });
     const content = res.choices?.[0]?.message?.content;
     const parsed = JSON.parse(typeof content === "string" && content ? content : "{}");
-    const subject = String(parsed?.subject ?? "").trim().slice(0, 200);
-    const rawBody = String(parsed?.body ?? "").trim().slice(0, 4000);
+    const subject = humanizeAiCopy(String(parsed?.subject ?? "").trim().slice(0, 200));
+    const rawBody = humanizeAiCopy(String(parsed?.body ?? "").trim().slice(0, 4000));
     if (!subject || !rawBody) return null;
     // Same guard as a chat reply. An email is MORE durable than a chat message,
     // so a fabricated claim in one is worse, not better.

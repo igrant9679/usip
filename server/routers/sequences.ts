@@ -34,6 +34,7 @@ import { utcDayStart } from "@shared/timeWindows";
 import { getSequenceAbVariantStats } from "../services/performanceMetrics";
 import { escapeHtml as sharedEscapeHtml } from "@shared/escapeHtml";
 import { isHtmlBody, htmlBodyToText } from "@shared/emailBody";
+import { HUMAN_COPY_RULES, humanizeAiCopy } from "../services/humanCopy";
 import { renderMergeFields, scrubForSend } from "../mergeVars";
 
 /** One escaper for the whole codebase — @shared/escapeHtml. The comment here
@@ -2008,7 +2009,9 @@ DO NOT
 - Don't fabricate facts, metrics, customer names, or quotes.
 - Don't start the body with "Hi {{firstName}}, I hope this email finds you well" or any near-variant.
 - Don't write "As a [role]..." or "I came across your profile".
-- Don't add "P.S." unless the prompt explicitly asks for one.${brandBlock ? `\n\n${brandBlock}` : ""}`,
+- Don't add "P.S." unless the prompt explicitly asks for one.
+
+${HUMAN_COPY_RULES}${brandBlock ? `\n\n${brandBlock}` : ""}`,
             },
             { role: "user", content: `${contextLine}\n\nGoal: ${input.prompt}` },
           ],
@@ -2028,8 +2031,9 @@ DO NOT
         });
         const content = out.choices?.[0]?.message?.content;
         const parsed = typeof content === "string" ? JSON.parse(content) : content;
-        subject = parsed.subject ?? subject;
-        body = parsed.body ?? "";
+        // Prompt asks for human style; the scrub guarantees it (em dashes etc).
+        subject = humanizeAiCopy(parsed.subject ?? subject);
+        body = humanizeAiCopy(parsed.body ?? "");
       } catch (e) {
         console.warn("[compose] LLM failed; using fallback", e);
         subject = `Quick thought on ${input.prompt.slice(0, 40)}`;
