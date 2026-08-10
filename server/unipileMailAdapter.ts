@@ -213,16 +213,23 @@ function unipileEmailToMessage(email: UnipileEmail): EmailMessage {
 }
 
 /**
- * Canonical alias → Unipile folder-role mapping, and a short-lived
- * per-account cache of the RESOLVED folder id.
+ * What Unipile's GET /emails actually accepts — pinned by its API
+ * reference and one live 422 from the owner's mailbox (2026-08-10):
  *
- * The Mailbox UI (and the Central Inbox aggregation) call listThreads with
- * the alias "INBOX" by default — but Unipile's GET /emails?folder= wants
- * the provider's REAL folder id. For Outlook that id is an opaque string,
- * so the literal "INBOX" matched nothing and the default view showed
- * "0 threads" over a mailbox that was visibly full of folders — the exact
- * screenshot the owner sent. One /folders call resolves the alias by role;
- * the cache keeps the hot path at zero extra requests.
+ *   folder=<the folder's PROVIDER_ID>   ("A filter to target items related
+ *                                         to a certain folder provider_id")
+ *   role=<inbox|sent|archive|drafts|trash|spam|all|important|starred>
+ *
+ * NOT accepted: the Unipile folder id that GET /folders returns as `id` —
+ * that 422s as errors/invalid_folder. Which is exactly what both earlier
+ * shapes sent: the literal alias "INBOX" (default view) and f.id (sidebar
+ * clicks, via listFolders' path). So the mailbox read path had NEVER
+ * worked against this account: the 422 was swallowed as "This folder is
+ * empty" until the error surface (8c2516e) put it on screen.
+ *
+ * The mapping now: canonical aliases → the `role` param (no folder lookup
+ * at all); anything else → resolve through /folders, matching id OR
+ * provider_id OR name, and send the PROVIDER_ID. Cached per account.
  */
 const FOLDER_ALIAS_ROLES: Record<string, string> = {
   inbox: "inbox",
@@ -230,8 +237,10 @@ const FOLDER_ALIAS_ROLES: Record<string, string> = {
   trash: "trash",
   drafts: "drafts",
   spam: "spam",
+  archive: "archive",
 };
-const folderAliasCache = new Map<string, { id: string; exp: number }>();
+type FolderQuery = { role?: string; folder?: string };
+const folderQueryCache = new Map<string, { q: FolderQuery; exp: number }>();
 
 export class UnipileMailAdapter implements EmailAdapter {
   private account: SendingAccount;
@@ -247,28 +256,35 @@ export class UnipileMailAdapter implements EmailAdapter {
     this.unipileAccountId = account.unipileAccountId;
   }
 
-  /** Resolve "INBOX"/"Sent"/… to the provider's real folder id; pass
-   *  opaque ids and unknown names through untouched. Falls back to the
-   *  alias itself if /folders fails — same behavior as before, not worse. */
-  private async resolveFolderAlias(folder: string): Promise<string> {
+  /** Turn whatever folder identifier the caller has (alias, Unipile id,
+   *  provider_id, or display name) into the query /emails accepts. */
+  private async resolveFolderQuery(folder: string): Promise<FolderQuery> {
     const role = FOLDER_ALIAS_ROLES[folder.toLowerCase()];
-    if (!role) return folder;
-    const key = `${this.unipileAccountId}:${role}`;
-    const hit = folderAliasCache.get(key);
-    if (hit && hit.exp > Date.now()) return hit.id;
+    if (role) return { role };
+    const key = `${this.unipileAccountId}:${folder}`;
+    const hit = folderQueryCache.get(key);
+    if (hit && hit.exp > Date.now()) return hit.q;
     try {
       const res = await listFolders(this.unipileAccountId);
-      const match =
-        res.items.find((f: UnipileFolder) => (f.role ?? "").toLowerCase() === role) ??
-        res.items.find((f: UnipileFolder) => f.name?.toLowerCase() === folder.toLowerCase());
+      const match = res.items.find(
+        (f: UnipileFolder) =>
+          f.id === folder ||
+          f.provider_id === folder ||
+          f.name?.toLowerCase() === folder.toLowerCase(),
+      );
       if (match) {
-        folderAliasCache.set(key, { id: match.id, exp: Date.now() + 10 * 60_000 });
-        return match.id;
+        const q: FolderQuery = match.provider_id
+          ? { folder: match.provider_id }
+          : (match.role ?? "").toLowerCase() in FOLDER_ALIAS_ROLES
+            ? { role: (match.role as string).toLowerCase() }
+            : { folder: match.id };
+        folderQueryCache.set(key, { q, exp: Date.now() + 10 * 60_000 });
+        return q;
       }
     } catch {
-      /* fall through to the alias — no worse than before */
+      /* fall through — no worse than before */
     }
-    return folder;
+    return { folder };
   }
 
   /** GET /folders — list inbox / sent / archive / drafts / trash / spam / labels. */
@@ -294,13 +310,13 @@ export class UnipileMailAdapter implements EmailAdapter {
     pageToken?: string,
     maxResults = 50,
   ): Promise<{ threads: EmailThread[]; nextPageToken?: string }> {
-    const resolvedFolder = await this.resolveFolderAlias(folder);
+    const fq = await this.resolveFolderQuery(folder);
     console.log(
-      `[UnipileMailAdapter] listThreads account=${this.unipileAccountId} folder=${folder}${resolvedFolder !== folder ? ` → ${resolvedFolder}` : ""} pageToken=${pageToken ?? "(none)"} max=${maxResults}`,
+      `[UnipileMailAdapter] listThreads account=${this.unipileAccountId} folder=${folder} → ${JSON.stringify(fq)} pageToken=${pageToken ?? "(none)"} max=${maxResults}`,
     );
     const res = await listEmails({
       accountId: this.unipileAccountId,
-      folder: resolvedFolder,
+      ...fq,
       cursor: pageToken,
       limit: maxResults,
       metaOnly: true,
@@ -413,7 +429,7 @@ export class UnipileMailAdapter implements EmailAdapter {
     const looksLikeEmail = /@/.test(query);
     const res = await listEmails({
       accountId: this.unipileAccountId,
-      folder: folder ? await this.resolveFolderAlias(folder) : undefined,
+      ...(folder ? await this.resolveFolderQuery(folder) : {}),
       limit: maxResults,
       metaOnly: true,
       ...(looksLikeEmail ? { any_email: query } : {}),
@@ -487,7 +503,7 @@ export class UnipileMailAdapter implements EmailAdapter {
       const res = await listEmails({
         accountId: this.unipileAccountId,
         threadId,
-        folder: folder ? await this.resolveFolderAlias(folder) : undefined,
+        ...(folder ? await this.resolveFolderQuery(folder) : {}),
         limit: 100,
         metaOnly: false,
       });

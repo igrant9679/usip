@@ -771,7 +771,12 @@ export interface UnipileFolderListResponse {
 /** GET /api/v1/emails — list emails for an account. Cursor-paginated. */
 export async function listEmails(params: {
   accountId: string;
+  /** ⚠️ Unipile wants the folder's PROVIDER_ID here, not the Unipile folder
+   *  id from GET /folders — the wrong one 422s as errors/invalid_folder. */
   folder?: string;
+  /** Role filter: inbox | sent | archive | drafts | trash | spam | all |
+   *  important | starred | unknown. The right tool for canonical views. */
+  role?: string;
   threadId?: string;
   cursor?: string;
   limit?: number;
@@ -788,6 +793,7 @@ export async function listEmails(params: {
   const qs = new URLSearchParams();
   qs.set("account_id", params.accountId);
   if (params.folder) qs.set("folder", params.folder);
+  if (params.role) qs.set("role", params.role);
   if (params.threadId) qs.set("thread_id", params.threadId);
   if (params.cursor) qs.set("cursor", params.cursor);
   if (params.limit !== undefined) qs.set("limit", String(params.limit));
