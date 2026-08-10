@@ -28,6 +28,7 @@ import { Shell, useAccentColor } from "@/components/usip/Shell";
 import { ProspectAvatar } from "@/components/usip/ProspectAvatar";
 import { BatchPhotoUpload } from "@/components/usip/BatchPhotoUpload";
 import { trpc } from "@/lib/trpc";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -47,6 +48,7 @@ import {
   DropdownMenuItem,
 } from "@/components/ui/dropdown-menu";
 import {
+  Loader2,
   Search,
   Upload,
   ChevronDown,
@@ -956,7 +958,27 @@ function DetailPanel({ p, onClose, onOpenFull }: { p: Prospect; onClose: () => v
   // Enrichment record powers Recent activity (field-change history + current
   // company) and the Professional summary (LinkedIn About / headline).
   const { data: enr } = trpc.linkedinEnrichment.getProspectEnrichment.useQuery({ prospectId: p.id });
-  const d = (full ?? p) as Prospect & { profile_image?: any };
+  const utils = trpc.useUtils();
+  const enrichFull = trpc.prospects.enrichFull.useMutation({
+    onSuccess: (r) => {
+      const changed = (r.decisions as Array<{ action: string; field: string }>).filter((x) => x.action === "filled" || x.action === "replaced");
+      const corroborated = (r.decisions as Array<{ action: string }>).filter((x) => x.action === "corroborated").length;
+      toast.success(
+        changed.length
+          ? `Enriched — ${changed.map((x) => x.field).join(", ")} updated${corroborated ? `, ${corroborated} confirmed` : ""}`
+          : corroborated
+            ? `Profile confirmed — ${corroborated} field(s) corroborated, nothing needed changing`
+            : "Nothing new found — all sources checked",
+        { description: Object.entries(r.phases as Record<string, string>).map(([k, v]) => `${k}: ${v}`).join(" · ").slice(0, 200) },
+      );
+      if (r.queuedLinkedInJob) toast("LinkedIn profile lookup queued — profile fields land shortly");
+      utils.prospects.get.invalidate({ id: p.id });
+      utils.prospects.list.invalidate();
+      utils.linkedinEnrichment.getProspectEnrichment.invalidate({ prospectId: p.id });
+    },
+    onError: (e2) => toast.error(e2.message),
+  });
+  const d = (full ?? p) as Prospect & { profile_image?: any; fieldProvenance?: unknown };
   const e = (enr as any)?.enrichment;
   const history = ((enr as any)?.history ?? []) as any[];
   const loc = [d.city, d.state, d.country].filter(Boolean).join(", ");
@@ -1079,11 +1101,42 @@ function DetailPanel({ p, onClose, onOpenFull }: { p: Prospect; onClose: () => v
           </div>
 
           <LinkedInEnrichmentSummaryCard prospectId={d.id} />
+
+          {/* Where each field's value came from — the provenance ledger the
+              comprehensive pass maintains (source · confidence). */}
+          {!!d.fieldProvenance && Object.keys(d.fieldProvenance as Record<string, unknown>).length > 0 && (
+            <Section title="Data sources">
+              <div className="flex flex-wrap gap-1.5">
+                {Object.entries(d.fieldProvenance as Record<string, { source: string; confidence: number; verification?: string; corroboratedBy?: string[] }>).map(([field, prov]) => (
+                  <span
+                    key={field}
+                    className="inline-flex items-center gap-1 rounded-full border border-border bg-muted/40 px-2 py-0.5 text-[10px]"
+                    title={`${field}: ${prov.source}${prov.verification ? ` (${prov.verification})` : ""}${prov.corroboratedBy?.length ? ` · corroborated by ${prov.corroboratedBy.join(", ")}` : ""} · confidence ${prov.confidence}`}
+                  >
+                    <span className="text-foreground/90">{field}</span>
+                    <span className="text-muted-foreground">{prov.source.replace(/_/g, " ")}</span>
+                    <span className="tabular-nums font-semibold" style={{ color: prov.confidence >= 85 ? "#059669" : prov.confidence >= 65 ? "#D97706" : "#DC2626" }}>
+                      {prov.confidence}
+                    </span>
+                  </span>
+                ))}
+              </div>
+            </Section>
+          )}
         </div>
       </div>
 
       <div className="shrink-0 border-t border-border p-3 space-y-2">
         <Button className="w-full gap-1.5" onClick={onOpenFull}><ExternalLink className="size-4" /> Open full record</Button>
+        <Button
+          variant="secondary"
+          className="w-full gap-1.5"
+          disabled={enrichFull.isPending}
+          onClick={() => enrichFull.mutate({ prospectId: p.id })}
+        >
+          {enrichFull.isPending ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
+          {enrichFull.isPending ? "Enriching…" : "Enrich fully (all sources)"}
+        </Button>
         <EnrichButton prospectIds={[p.id]} triggerType="open_profile_action" label="Enrich via LinkedIn" className="w-full" />
         {/* These two rendered as ordinary enabled buttons with NO onClick —
             clicking them did nothing at all. The real menus already existed

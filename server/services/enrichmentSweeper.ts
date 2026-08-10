@@ -33,7 +33,8 @@ import { and, eq, isNotNull, isNull, ne, notLike, or } from "drizzle-orm";
 import { areCampaigns, notifications, prospectQueue, prospects, workspaceSettings, workspaces } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { workspaceNotifyUserId } from "../_core/activeMembers";
-import { lookupContactInfo, resolveVerifiedEmail } from "./scraper";
+import { resolveVerifiedEmail } from "./scraper";
+import { runComprehensiveEnrichment } from "./enrichment/comprehensivePass";
 import { getReoonKey, reoonCheckBalance, reoonStatusToUsip, reoonVerifySingle } from "./reoon";
 import { getQuickEnrichKey, quickenrichFindEmailByLinkedIn } from "./quickenrich";
 import { promoteProspectRow } from "./prospectPromotion";
@@ -839,20 +840,23 @@ export async function sweepWorkspace(
         break;
       }
       try {
-        const r = await lookupContactInfo({
+        // The comprehensive pass — the sweep is just another trigger now.
+        // Runs the whole funnel (LinkedIn data on file, Apollo domain,
+        // QuickEnrich, pattern+Reoon, scrape) with provenance-aware merge.
+        // queueLinkedInJob false: a 25-row sweep must not spawn 25 async
+        // profile jobs; profile lookups stay on their own triggers/caps.
+        const r = await runComprehensiveEnrichment({
           workspaceId,
           prospectId: p.id,
-          firstName: p.firstName ?? "",
-          lastName: p.lastName ?? "",
-          companyDomain: p.companyDomain ?? null,
-          skipIfHasEmail: true,
-          existingPhone: p.phone ?? null,
+          userId: 0, // system sweep — no acting user; no LinkedIn job queued
+          trigger: "sweep",
+          queueLinkedInJob: false,
         });
         result.attempted++;
         result.fromProspects++;
-        result.creditsQuick += r.reoonCreditsQuick ?? 0;
-        result.creditsPower += r.reoonCreditsPower ?? 0;
-        dailyCreditsLeft -= r.reoonCreditsPower ?? 0;
+        result.creditsQuick += r.credits.quick;
+        result.creditsPower += r.credits.power;
+        dailyCreditsLeft -= r.credits.power;
         if (r.email) {
           result.emailsFound++;
           /**

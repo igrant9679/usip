@@ -3833,6 +3833,9 @@ export const prospects = mysqlTable(
     // Full scraper output (emails/phones/socials found, patterns verified, etc.).
     // Shape: see EnrichmentData in server/services/scraper/index.ts.
     enrichmentData: json("enrichment_data"),
+    /** field → {source, confidence, at, verification?} — migration 0151.
+     *  The reconciliation ledger for comprehensive enrichment. */
+    fieldProvenance: json("field_provenance"),
     linkedContactId: int("linked_contact_id"),
     // Set when a prospect is converted to a Lead (funnel: Prospect → Lead).
     // Migration 0088. Mirrors linkedContactId but for the lead-first funnel.

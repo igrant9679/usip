@@ -3251,6 +3251,22 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0151: field-level provenance for comprehensive enrichment ─────────────
+  // One JSON map per prospect: field → { source, confidence, at,
+  // verification?, corroboratedBy? }. This is what lets the comprehensive
+  // pass reconcile multiple sources without ever downgrading stronger data —
+  // a rule can only be enforced if "how do we know this" is stored next to
+  // the value. Absent map = legacy row; the merge layer assigns pre-existing
+  // non-empty values a baseline confidence so they are protected but
+  // correctable. VERIFY: enrich any prospect via "Find contact info" and the
+  // drawer's provenance chips render.
+  {
+    name: "0151_prospect_field_provenance.sql",
+    statements: [
+      "ALTER TABLE `prospects` ADD COLUMN `field_provenance` json NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

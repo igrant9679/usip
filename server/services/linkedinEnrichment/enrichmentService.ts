@@ -22,6 +22,7 @@ import {
   prospectLinkedinFieldChanges,
 } from "../../../drizzle/schema";
 import type { VelocityLinkedInProfile } from "./mapper";
+import { CONFIDENCE, mergeAll, type Candidate, type ProvenanceMap } from "../enrichment/fieldMerge";
 import {
   buildSnapshot,
   snapshotHash,
@@ -121,31 +122,39 @@ export async function applyEnrichment(opts: {
     .values({ workspaceId: ws, prospectId: pid, ...fields } as never)
     .onDuplicateKeyUpdate({ set: fields as never });
 
-  // Write the headline facts BACK to the prospect row — fill-if-empty only,
-  // never overwriting a user-entered value. Without this, enriched company
-  // names lived only in this table: the People LIST reads prospects.company,
-  // so enriched rows showed "—" while the drawer (which joins enrichment)
-  // showed the company — the owner's exact report. Merge tags ({{company}})
-  // and CSV exports read the prospect row too, so the gap was costing more
-  // than a display column.
+  // Write the headline facts BACK to the prospect row — through the SAME
+  // provenance-aware merge every enrichment trigger uses (fieldMerge), so a
+  // fresh LinkedIn read can CORRECT a weaker stale value, corroborate a
+  // matching one, and never displaces something more trustworthy. This is
+  // what makes the People list, {{company}} merge tags, exports, and the
+  // ICP fit scorer see enriched data at all.
   {
-    const back: Record<string, unknown> = {};
-    if (fields.currentCompanyName) back.company = fields.currentCompanyName;
-    if (fields.currentCompanyDomain) back.companyDomain = fields.currentCompanyDomain;
-    if (fields.currentTitle) back.title = clip(p.currentTitle, 120);
-    if (Object.keys(back).length > 0) {
+    const at = now.toISOString();
+    const cand = (field: "company" | "companyDomain" | "title", value: string | null | undefined): Candidate[] =>
+      value?.trim() ? [{ field, value: value.trim(), source: "linkedin", confidence: CONFIDENCE.linkedinProfile, at }] : [];
+    const candidates: Candidate[] = [
+      ...cand("company", fields.currentCompanyName as string | null),
+      ...cand("companyDomain", fields.currentCompanyDomain as string | null),
+      ...cand("title", p.currentTitle ? clip(p.currentTitle, 120) : null),
+    ];
+    if (candidates.length > 0) {
       const [cur] = await db
-        .select({ company: prospects.company, companyDomain: prospects.companyDomain, title: prospects.title })
+        .select({
+          company: prospects.company, companyDomain: prospects.companyDomain,
+          title: prospects.title, fieldProvenance: prospects.fieldProvenance,
+        })
         .from(prospects)
         .where(and(eq(prospects.workspaceId, ws), eq(prospects.id, pid)))
         .limit(1);
       if (cur) {
-        const patch: Record<string, unknown> = {};
-        if (back.company && !cur.company?.trim()) patch.company = back.company;
-        if (back.companyDomain && !cur.companyDomain?.trim()) patch.companyDomain = back.companyDomain;
-        if (back.title && !cur.title?.trim()) patch.title = back.title;
-        if (Object.keys(patch).length > 0) {
-          await db.update(prospects).set(patch as never)
+        const merged = mergeAll(
+          { company: cur.company, companyDomain: cur.companyDomain, title: cur.title },
+          (cur.fieldProvenance ?? {}) as ProvenanceMap,
+          candidates,
+        );
+        if (merged.decisions.some((d) => d.action !== "kept")) {
+          await db.update(prospects)
+            .set({ ...merged.fields, fieldProvenance: merged.ledger } as never)
             .where(and(eq(prospects.workspaceId, ws), eq(prospects.id, pid)));
         }
       }

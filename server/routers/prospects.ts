@@ -20,6 +20,7 @@ import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { getDb } from "../db";
 import { contacts, leads, prospects, scoreResults, scoreModels, workspaceSettings } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
+import { runComprehensiveEnrichment } from "../services/enrichment/comprehensivePass";
 import { lookupContactInfo, type LookupResult } from "../services/scraper";
 // Shared synthetic-name detector — anchored to the lastName sentinel so it
 // keeps working after the scraper overwrites enrichmentData. See
@@ -761,6 +762,35 @@ export const prospectsRouter = router({
    * Synchronous — call site should expect ~5–10s of latency per call.
    * Returns the full LookupResult so the UI can show what was found.
    */
+  /**
+   * The comprehensive pass — one event, the whole funnel. Every source that
+   * applies (LinkedIn profile data, Apollo domain, QuickEnrich, pattern +
+   * Reoon, site scrape), reconciled field-by-field with provenance and
+   * confidence, never downgrading stronger data. Queues the compliant
+   * LinkedIn profile job when the prospect has a URL but no profile yet.
+   */
+  enrichFull: workspaceProcedure
+    .input(z.object({ prospectId: z.number().int() }))
+    .mutation(async ({ ctx, input }) => {
+      const result = await runComprehensiveEnrichment({
+        workspaceId: ctx.workspace.id,
+        prospectId: input.prospectId,
+        userId: ctx.user.id,
+        isAdmin: ctx.member.role === "admin" || ctx.member.role === "super_admin",
+        trigger: "manual_full",
+        queueLinkedInJob: true,
+      });
+      await recordAudit({
+        workspaceId: ctx.workspace.id,
+        actorUserId: ctx.user.id,
+        action: "update",
+        entityType: "prospect",
+        entityId: input.prospectId,
+        after: { enrichFull: result.phases },
+      });
+      return result;
+    }),
+
   findContactInfo: workspaceProcedure
     .input(
       z.object({
@@ -850,21 +880,28 @@ export const prospectsRouter = router({
 
       for (const p of rows) {
         try {
-          const result = await lookupContactInfo({
+          // Comprehensive pass — every trigger runs the whole funnel now
+          // (LinkedIn data on file, Apollo domain, QuickEnrich, pattern+
+          // Reoon, scrape) with field-level provenance. queueLinkedInJob
+          // false: one batch must not spawn 25 async jobs.
+          const comp = await runComprehensiveEnrichment({
             workspaceId: ctx.workspace.id,
             prospectId: p.id,
-            firstName: p.firstName,
-            lastName: p.lastName,
-            companyDomain: p.companyDomain ?? null,
-            existingPhone: p.phone ?? null,
-            skipIfHasEmail: input.skipIfHasEmail && Boolean(p.email),
-            syntheticName: isSyntheticNameProspect(p),
+            userId: ctx.user.id,
+            trigger: "people_batch",
+            queueLinkedInJob: false,
           });
-          creditsQuick += result.reoonCreditsQuick;
-          creditsPower += result.reoonCreditsPower;
-          if (result.email) withEmail++;
+          creditsQuick += comp.credits.quick;
+          creditsPower += comp.credits.power;
+          if (comp.email) withEmail++;
           else withoutEmail++;
-          results.push({ prospectId: p.id, result });
+          results.push({ prospectId: p.id, result: {
+            ok: comp.ok, email: comp.email, emailStatus: comp.emailStatus, phone: null,
+            enrichment: { scrapedDomain: null, scrapedAt: null, emailsFound: [], phonesFound: [], socialUrls: [], patternsVerified: [] },
+            reoonCredits: comp.credits.quick + comp.credits.power,
+            reoonCreditsQuick: comp.credits.quick, reoonCreditsPower: comp.credits.power,
+            message: Object.entries(comp.phases).map(([k, v]) => `${k}: ${v}`).join(" · "),
+          } as unknown as LookupResult });
         } catch (e) {
           // One prospect's failure shouldn't kill the batch
           withoutEmail++;
