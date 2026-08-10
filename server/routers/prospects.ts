@@ -976,6 +976,33 @@ export const prospectsRouter = router({
       let withEmail = 0;
       let withoutEmail = 0;
 
+      // The comprehensive pass below deliberately skips LinkedIn (25 rows must
+      // not drain the 100/day lookup cap mid-request) — but "enrich fully"
+      // still owes the caller profile data + photos. Report which rows have a
+      // LinkedIn URL and no fresh profile, so the CLIENT can queue ONE async
+      // orchestrator job for the union of its chunks (cap-aware, match-gated)
+      // instead of each chunk spawning its own.
+      const FRESH_MS = 30 * 86_400_000;
+      const enrRows = await db
+        .select({
+          prospectId: prospectLinkedinEnrichments.prospectId,
+          status: prospectLinkedinEnrichments.linkedinDataStatus,
+          at: prospectLinkedinEnrichments.linkedinLastRetrievedAt,
+        })
+        .from(prospectLinkedinEnrichments)
+        .where(and(
+          eq(prospectLinkedinEnrichments.workspaceId, ctx.workspace.id),
+          inArray(prospectLinkedinEnrichments.prospectId, input.prospectIds),
+        ));
+      const freshIds = new Set(
+        enrRows
+          .filter((e) => e.status === "enriched" && e.at && Date.now() - new Date(e.at).getTime() < FRESH_MS)
+          .map((e) => e.prospectId),
+      );
+      const needsLinkedIn = rows
+        .filter((p) => !!p.linkedinUrl?.trim() && !freshIds.has(p.id) && p.verificationStatus !== "rejected")
+        .map((p) => p.id);
+
       for (const p of rows) {
         try {
           // Comprehensive pass — every trigger runs the whole funnel now
@@ -1054,6 +1081,7 @@ export const prospectsRouter = router({
         reoonCreditsQuick: creditsQuick,
         reoonCreditsPower: creditsPower,
         results,
+        needsLinkedIn,
       };
     }),
 

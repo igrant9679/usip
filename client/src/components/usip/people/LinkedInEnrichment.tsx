@@ -77,6 +77,11 @@ export function useEnrichJob() {
       utils.linkedinEnrichment.getChangeSummaries.invalidate();
       utils.linkedinEnrichment.getProspectEnrichment.invalidate();
       utils.linkedinEnrichment.getProspectChanges.invalidate();
+      // The job wrote photos/companies/titles onto the prospects themselves —
+      // without these, the People table keeps its stale rows until a manual
+      // reload and enrichment looks like it "didn't stick".
+      utils.prospects.list.invalidate();
+      utils.prospects.get.invalidate();
       setJobId(null);
     }
   }, [jobQ.data?.status]); // eslint-disable-line react-hooks/exhaustive-deps

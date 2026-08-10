@@ -36,6 +36,7 @@ import {
 } from "lucide-react";
 import { ResearchAiMenu } from "./ResearchAiMenu";
 import { WorkflowSelectionMenu } from "./CreateWorkflowMenu";
+import { useEnrichJob } from "./LinkedInEnrichment";
 import { confirmAction } from "@/components/usip/Common";
 
 const CSV_COLS: Array<{ key: string; label: string }> = [
@@ -372,18 +373,19 @@ function EnrichMenu({ selectedIds }: { selectedIds: number[] }) {
   // Real backend: the compliant LinkedIn enrichment orchestrator refreshes each
   // selected person's profile (title/company/location/photo) — which also feeds
   // job-change detection → the Job Change Autopilot. Health-gated server-side.
-  const run = trpc.linkedinEnrichment.run.useMutation({
-    onSuccess: (r: any) => toast.success(`Enrichment started for ${r?.total ?? selectedIds.length} ${selectedIds.length === 1 ? "person" : "people"}`),
-    onError: (e: any) => toast.error(e?.message ?? "Could not start enrichment"),
-  });
-  const start = () => run.mutate({ prospectIds: selectedIds, triggerType: "people_bulk_action" } as any);
+  // useEnrichJob polls the job to completion and invalidates prospects.list —
+  // fire-and-forget left the table stale, which read as "photos don't stick".
+  const enrichJob = useEnrichJob();
+  const start = () => enrichJob.enrich(selectedIds, "people_bulk_action");
 
   // Real backend: the comprehensive pass (LinkedIn data on file → Apollo domain
   // → QuickEnrich → pattern+Reoon → scrape, provenance-merged) — the bulk twin
   // of the drawer's "Enrich fully (all sources)". Each pass is synchronous and
   // slow (seconds per person), so the selection goes up in chunks: one request
   // per 10 people keeps every call comfortably inside the platform timeout no
-  // matter how many rows are selected.
+  // matter how many rows are selected. LinkedIn is deliberately NOT in the
+  // chunked pass (cap discipline) — each chunk reports which rows still need a
+  // profile, and ONE orchestrator job for the union fetches photos + titles.
   const [fullBusy, setFullBusy] = useState(false);
   const batch = trpc.prospects.findContactInfoBatch.useMutation({
     onError: (e: any) => toast.error(e?.message ?? "Enrichment chunk failed"),
@@ -392,6 +394,7 @@ function EnrichMenu({ selectedIds }: { selectedIds: number[] }) {
     const CHUNK = 10;
     setFullBusy(true);
     let withEmail = 0, credits = 0, failed = 0;
+    const needsLinkedIn = new Set<number>();
     const tid = toast.loading(`Enriching 0/${selectedIds.length} — running every source…`);
     try {
       for (let i = 0; i < selectedIds.length; i += CHUNK) {
@@ -400,6 +403,7 @@ function EnrichMenu({ selectedIds }: { selectedIds: number[] }) {
           const r: any = await batch.mutateAsync({ prospectIds: ids, skipIfHasEmail: true } as any);
           withEmail += r?.withEmail ?? 0;
           credits += r?.reoonCredits ?? 0;
+          for (const id of r?.needsLinkedIn ?? []) needsLinkedIn.add(id);
         } catch {
           failed += ids.length; // onError already toasted the reason
         }
@@ -412,12 +416,15 @@ function EnrichMenu({ selectedIds }: { selectedIds: number[] }) {
       );
       utils.prospects.list.invalidate();
       utils.linkedinEnrichment.getProspectEnrichment.invalidate();
+      // Photos/titles ride the async LinkedIn job; useEnrichJob polls it and
+      // re-invalidates the list when profiles land.
+      if (needsLinkedIn.size > 0) enrichJob.enrich(Array.from(needsLinkedIn), "people_bulk_action");
     } finally {
       setFullBusy(false);
     }
   };
 
-  const busy = run.isPending || fullBusy;
+  const busy = enrichJob.running || fullBusy;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
