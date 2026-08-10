@@ -43,6 +43,25 @@ describe("mergeField — the reconciliation rules", () => {
     expect(weak.action).toBe("kept"); // 60 < 70 baseline
   });
 
+  it("email_domain fills a blank domain but never displaces a structured read", () => {
+    // The live starvation this closes: QuickEnrich found ncoulard@msahealthcare.com,
+    // yet companyDomain stayed NULL because nothing read the address's own domain.
+    const filled = mergeField({ value: null }, { field: "companyDomain", value: "msahealthcare.com", source: "email_domain", confidence: CONFIDENCE.emailDomain, at: at("2026-08-10") });
+    expect(filled.action).toBe("filled");
+    expect(filled.provenance).toMatchObject({ source: "email_domain", confidence: CONFIDENCE.emailDomain });
+
+    const kept = mergeField(
+      { value: "acme.com", provenance: { source: "linkedin", confidence: CONFIDENCE.linkedinProfile, at: at("2026-08-01") } },
+      { field: "companyDomain", value: "other.com", source: "email_domain", confidence: CONFIDENCE.emailDomain, at: at("2026-08-10") },
+    );
+    expect(kept.action).toBe("kept");
+
+    // Vocabulary ordering the sources rely on: an address's real domain beats
+    // a domain-root guess, and defers to name-keyed/structured resolution.
+    expect(CONFIDENCE.emailDomain).toBeGreaterThan(40 /* domain_derived */);
+    expect(CONFIDENCE.emailDomain).toBeLessThan(CONFIDENCE.apolloDomain);
+  });
+
   it("cross-source agreement raises confidence instead of churning the value", () => {
     const d = mergeField(
       { value: "acme.com", provenance: { source: "apollo", confidence: 75, at: at("2026-08-01") } },

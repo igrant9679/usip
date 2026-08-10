@@ -36,6 +36,8 @@ import {
   type MergeDecision,
   type ProvenanceMap,
 } from "./fieldMerge";
+import { companyFromHeadline } from "./headlineCompany";
+import { businessDomainFromEmail } from "../company/normalize";
 
 export interface ComprehensiveResult {
   ok: boolean;
@@ -152,6 +154,16 @@ export async function runComprehensiveEnrichment(opts: {
     li("company", enr.currentCompanyName);
     li("companyDomain", enr.currentCompanyDomain);
     li("title", enr.currentTitle);
+    // LinkedIn withholds structured work history outside the connected
+    // account's network, but "CFO at Acme" headlines still name the employer.
+    // Weaker source, honest ledger: headline_parse · 60.
+    if (!enr.currentCompanyName?.trim()) {
+      const guessed = companyFromHeadline(enr.linkedinHeadline ?? enr.currentTitle);
+      if (guessed) {
+        candidates.push({ field: "company", value: guessed, source: "headline_parse", confidence: CONFIDENCE.headlineParse, at });
+        phases.headline = `parsed "${guessed}"`;
+      }
+    }
     // First (most recent) education entry, defensively across shapes.
     const edu = Array.isArray(enr.educationHistoryJson) ? (enr.educationHistoryJson as Array<Record<string, unknown>>)[0] : null;
     const school = edu && (edu.school ?? edu.schoolName ?? edu.name);
@@ -160,6 +172,22 @@ export async function runComprehensiveEnrichment(opts: {
   } else {
     phases.linkedin = enr ? `profile ${enr.linkedinDataStatus}` : "no profile data yet";
   }
+
+  /* ── 1b. Domain off the prospect's own email (free). A row can hold a
+     found address and STILL a blank domain — QuickEnrich returns only the
+     email, so nothing downstream (pattern, scrape, domain_derived) ever
+     saw the domain the pass itself had discovered. The mailbox may be
+     unverified; the domain part is still where their mail lives.
+     Free-mail domains are excluded inside businessDomainFromEmail. ───── */
+  const emailDomainCandidate = (email: string | null | undefined) => {
+    if (p.companyDomain?.trim() || candidates.some((c) => c.field === "companyDomain")) return;
+    const d = businessDomainFromEmail(email);
+    if (d) {
+      candidates.push({ field: "companyDomain", value: d, source: "email_domain", confidence: CONFIDENCE.emailDomain, at: now });
+      phases.emailDomain = `derived ${d}`;
+    }
+  };
+  emailDomainCandidate(p.email);
 
   /* ── 2. Company name → domain (free) ──────────────────────────────── */
   const companyName = (candidates.find((c) => c.field === "company")?.value ?? p.company ?? "").trim();
@@ -178,7 +206,10 @@ export async function runComprehensiveEnrichment(opts: {
 
   /* ── 3. Email — only while we don't hold a Reoon-valid address ────── */
   const emailIsProven = !!p.email && p.emailStatus === "valid";
-  const bestDomain = (candidates.find((c) => c.field === "companyDomain")?.value ?? p.companyDomain ?? "").trim() || null;
+  // Recomputed after QuickEnrich: a QE hit can introduce the very domain
+  // that pattern/scrape/domain_derived below were starving without.
+  const domainNow = () => (candidates.find((c) => c.field === "companyDomain")?.value ?? p.companyDomain ?? "").trim() || null;
+  let bestDomain = domainNow();
 
   if (!emailIsProven) {
     // 3a. QuickEnrich (LinkedIn-keyed database; bills only on a hit).
@@ -204,6 +235,11 @@ export async function runComprehensiveEnrichment(opts: {
     } else {
       phases.quickenrich = qeKey ? "no LinkedIn URL" : "no key";
     }
+
+    // A QuickEnrich hit carries a domain the pass may not have held yet.
+    const qeEmail = candidates.find((c) => c.field === "email" && c.source === "quickenrich")?.value;
+    if (qeEmail) emailDomainCandidate(qeEmail);
+    bestDomain = domainNow();
 
     // 3b. Pattern + Reoon (pure resolver; MX gate lives inside it).
     if (bestDomain && !candidates.some((c) => c.field === "email" && c.verification === "valid")) {

@@ -23,6 +23,7 @@ import {
 } from "../../../drizzle/schema";
 import type { VelocityLinkedInProfile } from "./mapper";
 import { CONFIDENCE, mergeAll, type Candidate, type ProvenanceMap } from "../enrichment/fieldMerge";
+import { companyFromHeadline } from "../enrichment/headlineCompany";
 import {
   buildSnapshot,
   snapshotHash,
@@ -137,6 +138,19 @@ export async function applyEnrichment(opts: {
       ...cand("companyDomain", fields.currentCompanyDomain as string | null),
       ...cand("title", p.currentTitle ? clip(p.currentTitle, 120) : null),
     ];
+    // LinkedIn withholds structured work history for out-of-network profiles
+    // (experience empty, no current_company) — but "CFO at Acme" headlines
+    // still name the employer. Parse it as its own weaker source so the
+    // ledger stays honest: headline_parse · 60, replaceable by any real read.
+    if (!fields.currentCompanyName) {
+      const guessed = companyFromHeadline(p.headline);
+      if (guessed) {
+        candidates.push({
+          field: "company", value: clip(guessed, 200)!,
+          source: "headline_parse", confidence: CONFIDENCE.headlineParse, at,
+        });
+      }
+    }
     if (candidates.length > 0) {
       const [cur] = await db
         .select({

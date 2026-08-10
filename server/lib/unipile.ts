@@ -381,8 +381,13 @@ export async function getLinkedInProfile(
   accountId: string,
   providerId: string,
 ): Promise<UnipileUserProfile> {
+  // Without linkedin_sections, Unipile returns the lightweight profile —
+  // headline and photo but NO work_experience and no current_company — so
+  // every mapped profile came back employer-less even for 1st-degree
+  // connections. Experience only; each extra full section raises LinkedIn's
+  // throttling odds, and experience is the one the company fields need.
   return unipileFetch<UnipileUserProfile>(
-    `/users/${encodeURIComponent(providerId)}?account_id=${encodeURIComponent(accountId)}`,
+    `/users/${encodeURIComponent(providerId)}?account_id=${encodeURIComponent(accountId)}&linkedin_sections=experience`,
   );
 }
 

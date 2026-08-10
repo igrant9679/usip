@@ -72,6 +72,11 @@ export const CONFIDENCE = {
   emailRisky: 50,
   emailUnknown: 45,
   headlineParse: 60,
+  /** Domain lifted off the prospect's own business email address. The mailbox
+   *  may be unverified, but the domain part is where their mail actually
+   *  lives — stronger than a domain-root guess, weaker than Apollo's
+   *  name-keyed resolution. */
+  emailDomain: 70,
 } as const;
 
 /** Normalize for cross-source agreement checks — NOT for storage. */

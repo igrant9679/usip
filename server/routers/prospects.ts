@@ -21,6 +21,9 @@ import { getDb } from "../db";
 import { contacts, leads, prospects, scoreResults, scoreModels, workspaceSettings, prospectLinkedinEnrichments } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
 import { runComprehensiveEnrichment } from "../services/enrichment/comprehensivePass";
+import { CONFIDENCE } from "../services/enrichment/fieldMerge";
+import { companyFromHeadline } from "../services/enrichment/headlineCompany";
+import { businessDomainFromEmail } from "../services/company/normalize";
 import { lookupContactInfo, type LookupResult } from "../services/scraper";
 // Shared synthetic-name detector — anchored to the lastName sentinel so it
 // keeps working after the scraper overwrites enrichmentData. See
@@ -484,6 +487,8 @@ export const prospectsRouter = router({
             prospectId: prospectLinkedinEnrichments.prospectId,
             name: prospectLinkedinEnrichments.currentCompanyName,
             domain: prospectLinkedinEnrichments.currentCompanyDomain,
+            headline: prospectLinkedinEnrichments.linkedinHeadline,
+            title: prospectLinkedinEnrichments.currentTitle,
           })
           .from(prospectLinkedinEnrichments)
           .where(and(
@@ -494,14 +499,42 @@ export const prospectsRouter = router({
         const heals: Array<Promise<unknown>> = [];
         for (const r of rowsIn) {
           const e = byId.get(r.id);
-          if (!e) continue;
           const patch: Record<string, unknown> = {};
-          if (!r.company?.trim() && e.name?.trim()) { r.company = e.name.trim(); patch.company = r.company; }
-          if (!r.companyDomain?.trim() && e.domain?.trim()) { r.companyDomain = e.domain.trim(); patch.companyDomain = r.companyDomain; }
+          // Per-field provenance so a headline guess is never dressed up as a
+          // structured LinkedIn read — weaker sources stay correctable.
+          const prov: Record<string, { source: string; confidence: number }> = {};
+          if (!r.company?.trim()) {
+            if (e?.name?.trim()) {
+              patch.company = r.company = e.name.trim();
+              prov.company = { source: "linkedin", confidence: CONFIDENCE.linkedinProfile };
+            } else {
+              // LinkedIn hid the structured fields; the headline still names
+              // the employer for "CFO at Acme"-shaped profiles.
+              const guessed = companyFromHeadline(e?.headline ?? e?.title);
+              if (guessed) {
+                patch.company = r.company = guessed;
+                prov.company = { source: "headline_parse", confidence: CONFIDENCE.headlineParse };
+              }
+            }
+          }
+          if (!r.companyDomain?.trim()) {
+            if (e?.domain?.trim()) {
+              patch.companyDomain = r.companyDomain = e.domain.trim();
+              prov.companyDomain = { source: "linkedin", confidence: CONFIDENCE.linkedinProfile };
+            } else {
+              // A found email carries its own domain (free-mail excluded) —
+              // needs no enrichment row at all.
+              const d = businessDomainFromEmail(r.email);
+              if (d) {
+                patch.companyDomain = r.companyDomain = d;
+                prov.companyDomain = { source: "email_domain", confidence: CONFIDENCE.emailDomain };
+              }
+            }
+          }
           if (Object.keys(patch).length > 0) {
             const ledger = { ...((r.fieldProvenance ?? {}) as Record<string, unknown>) };
-            for (const f of Object.keys(patch)) {
-              ledger[f] = { source: "linkedin", confidence: 85, at: new Date().toISOString() };
+            for (const f of Object.keys(prov)) {
+              ledger[f] = { ...prov[f], at: new Date().toISOString() };
             }
             patch.fieldProvenance = ledger;
             heals.push(

@@ -64,4 +64,27 @@ describe("companyFromHeadline", () => {
     expect(companyFromHeadline("CFO at Acme Corp -")).toBe("Acme Corp");
     expect(companyFromHeadline("CFO at Acme Corp,")).toBe("Acme Corp");
   });
+
+  it("reads the dash form only when a legal suffix vouches for it", () => {
+    // Live workspace headline (Ron Flournoy): the employer arrives after a
+    // dash, and the LLC suffix is what makes it safe to accept.
+    expect(companyFromHeadline("Vice President of Operations - Lifecycle Construction Services, LLC"))
+      .toBe("Lifecycle Construction Services, LLC");
+    expect(companyFromHeadline("Executive Director - Northwind Foundation")).toBe("Northwind Foundation");
+  });
+
+  it("rejects dash tails without a suffix — they are departments, not employers", () => {
+    expect(companyFromHeadline("Sales Manager - Northeast Region")).toBeNull();
+    expect(companyFromHeadline("Director - Client Services")).toBeNull();
+    // State code after a comma-less dash must not be read as "Co".
+    expect(companyFromHeadline("Consultant - Denver Co")).toBeNull();
+  });
+
+  it("uses the LAST dash so earlier segments read as departments", () => {
+    expect(companyFromHeadline("VP - Operations - Acme Inc.")).toBe("Acme Inc.");
+  });
+
+  it("never lets the dash form preempt the at/@ form", () => {
+    expect(companyFromHeadline("VP - Operations at George Industries")).toBe("George Industries");
+  });
 });
