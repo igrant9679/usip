@@ -421,6 +421,10 @@ export const prospectsRouter = router({
           or(
             like(prospects.firstName, s),
             like(prospects.lastName, s),
+            // Full-name search: "Steven Burke" matches neither name column
+            // alone, so every full-name query returned nothing — the People
+            // search box AND the assistant's people lookup both hit this.
+            sql`CONCAT(${prospects.firstName}, ' ', ${prospects.lastName}) LIKE ${s}`,
             like(prospects.title, s),
             like(prospects.company, s),
             like(prospects.email, s),
