@@ -18,6 +18,7 @@
 import { and, eq, like, sql } from "drizzle-orm";
 import { getDb } from "../db";
 import { accounts, leads, prospects } from "../../drizzle/schema";
+import { normalizedAccountFields } from "./company/normalize";
 
 /** Free-mailbox domains that must never become an account's domain. */
 const FREE_MAIL = new Set([
@@ -69,6 +70,7 @@ export async function bridgeLeadToRecords(workspaceId: number, leadId: number): 
         workspaceId,
         name: company || domain!,
         domain,
+        ...normalizedAccountFields(company || domain!, domain),
         ownerUserId: lead.ownerUserId ?? null,
         notes: "Created automatically from a web-form lead (form-enrichment bridge).",
       } as never);

@@ -83,6 +83,9 @@ export const CONFIDENCE = {
    *  lives — stronger than a domain-root guess, weaker than Apollo's
    *  name-keyed resolution. */
   emailDomain: 70,
+  /** Company name derived from the domain root ("acme-corp.com" → "Acme
+   *  Corp") — the last-resort filler; any real source replaces it. */
+  domainDerived: 40,
 } as const;
 
 /** Normalize for cross-source agreement checks — NOT for storage. */

@@ -558,6 +558,20 @@ async function startServer() {
   setTimeout(runPersonLinkBackfill, 21 * 60 * 1000); // stagger: 21 minutes after boot
   setInterval(runPersonLinkBackfill, 24 * 60 * 60 * 1000); // daily heal; bounded per run
 
+  // Identity-index backfill (roadmap P1.5): accounts created by the old raw
+  // paths get their normalized_name/normalized_domain computed so the
+  // matcher and duplicate report can finally see them.
+  const runNormalizedBackfill = () => {
+    import("../services/company/normalizedBackfill")
+      .then((m) => m.backfillNormalizedAccountFields())
+      .then((r) => {
+        if (r.updated > 0) console.log(`[NormalizedBackfill] scanned=${r.scanned} updated=${r.updated}`);
+      })
+      .catch((e) => console.error("[NormalizedBackfill] run failed:", e));
+  };
+  setTimeout(runNormalizedBackfill, 24 * 60 * 1000); // stagger: 24 minutes after boot
+  setInterval(runNormalizedBackfill, 24 * 60 * 60 * 1000); // daily; bounded per run
+
   // Nightly AI pipeline batch: midnight cron for leads above score threshold
   const scheduleNightlyBatch = () => {
     const now = new Date();

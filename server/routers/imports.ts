@@ -15,6 +15,7 @@ import { parseCSVText } from "../services/csv";
 import { canonicalizeCompanyDisplayName, cleanPlaceholder, normalizeJobTitle } from "../services/enrichment/recordNormalize";
 import { stripNameCredentials } from "../services/enrichment/personName";
 import { buildCompanyCanonicalizer } from "../services/enrichment/companyCanonical";
+import { normalizedAccountFields } from "../services/company/normalize";
 import {
   CONTACT_IMPORT_FIELDS,
   describeDuplicateMappings,
@@ -676,6 +677,9 @@ export const importsRouter = router({
               workspaceId: wsId,
               name: name.slice(0, 200),
               domain: domain ? domain.slice(0, 200) : null,
+              // Identity-index columns (roadmap P1.4): without these the
+              // matcher and the duplicate report can never see this row.
+              ...normalizedAccountFields(name, domain),
               industry: sample.mapped.industry?.trim()?.slice(0, 80) || null,
               region,
               ownerUserId: input.postImportActions?.ownerUserId ?? userId,

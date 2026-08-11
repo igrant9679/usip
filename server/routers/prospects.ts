@@ -927,6 +927,13 @@ export const prospectsRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }): Promise<LookupResult> => {
+      // Roadmap P1.2: this legacy single-prospect path now routes through
+      // the ONE comprehensive pass (merge rules + provenance ledger)
+      // instead of calling the scraper directly — the last unprovenance
+      // write path to prospects is closed. The wire contract (LookupResult)
+      // is preserved for the existing UI; every live caller sends
+      // skipIfHasEmail:true, whose "don't clobber an existing email"
+      // intent is now enforced by fieldMerge's never-downgrade rules.
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const [p] = await db
@@ -941,16 +948,20 @@ export const prospectsRouter = router({
         .limit(1);
       if (!p) throw new TRPCError({ code: "NOT_FOUND" });
 
-      const result = await lookupContactInfo({
+      const { runComprehensiveEnrichment } = await import("../services/enrichment/comprehensivePass");
+      const pass = await runComprehensiveEnrichment({
         workspaceId: ctx.workspace.id,
         prospectId: p.id,
-        firstName: p.firstName,
-        lastName: p.lastName,
-        companyDomain: p.companyDomain ?? null,
-        existingPhone: p.phone ?? null,
-        skipIfHasEmail: input.skipIfHasEmail && Boolean(p.email),
-        syntheticName: isSyntheticNameProspect(p),
+        userId: ctx.user.id,
+        isAdmin: ctx.member.role === "admin" || ctx.member.role === "super_admin",
+        trigger: "find_contact_info",
       });
+
+      // Re-read for the fields the pass persisted (phone via scrape step,
+      // enrichmentData written by the scraper inside the pass).
+      const [after] = await db.select().from(prospects)
+        .where(and(eq(prospects.id, p.id), eq(prospects.workspaceId, ctx.workspace.id)))
+        .limit(1);
 
       await recordAudit({
         workspaceId: ctx.workspace.id,
@@ -959,15 +970,33 @@ export const prospectsRouter = router({
         entityType: "prospect",
         entityId: p.id,
         after: {
-          enrichment: "scraper.findContactInfo",
-          foundEmail: result.email,
-          reoonCredits: result.reoonCredits,
-          reoonCreditsQuick: result.reoonCreditsQuick,
-          reoonCreditsPower: result.reoonCreditsPower,
+          enrichment: "comprehensivePass.findContactInfo",
+          foundEmail: pass.email,
+          phases: pass.phases,
+          reoonCreditsQuick: pass.credits.quick,
+          reoonCreditsPower: pass.credits.power,
         },
       });
 
-      return result;
+      const skipped = pass.skipped === "suppressed"
+        ? "Prospect is suppressed — not enriched"
+        : pass.skipped === "not_found" ? "Prospect not found" : null;
+      const message = skipped
+        ?? (pass.email
+          ? `Found ${pass.emailStatus ?? "unverified"} email`
+          : `No deliverable email (${pass.phases.pattern ?? pass.phases.quickenrich ?? "no source produced one"})`);
+
+      return {
+        ok: pass.ok,
+        email: pass.email,
+        emailStatus: (pass.emailStatus ?? null) as LookupResult["emailStatus"],
+        phone: after?.phone ?? null,
+        enrichment: (after?.enrichmentData ?? {}) as LookupResult["enrichment"],
+        reoonCredits: pass.credits.quick + pass.credits.power,
+        reoonCreditsQuick: pass.credits.quick,
+        reoonCreditsPower: pass.credits.power,
+        message,
+      };
     }),
 
   /**

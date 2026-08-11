@@ -22,6 +22,8 @@
  */
 
 import { normalizeDomain } from "./scraper/domain";
+import { stripNameCredentials } from "./enrichment/personName";
+import { canonicalizeCompanyDisplayName, cleanPlaceholder, normalizeJobTitle } from "./enrichment/recordNormalize";
 
 /* ─── Column-name patterns (case + space + #-tolerant) ─────────────────── */
 
@@ -196,8 +198,12 @@ export function mapLeadRocksRow(
     return h ? (row[h] ?? "").trim() : "";
   };
 
-  const firstName = get("First Name");
-  const lastName = get("Last Name");
+  // Roadmap P1.3: the same house normalization every other import runs —
+  // credential stripping BEFORE any use of the name, placeholder junk
+  // gates, title/company representation repair. LeadRocks was the one
+  // import path outside the recordNormalize regime.
+  const firstName = stripNameCredentials(get("First Name")) ?? "";
+  const lastName = stripNameCredentials(get("Last Name")) ?? "";
   const linkedinUrl = get("Linked Url") || get("LinkedIn URL") || get("LinkedinUrl");
 
   // Hard requirements: must have a name + LinkedIn URL to be a useful prospect
@@ -216,10 +222,10 @@ export function mapLeadRocksRow(
     firstName,
     lastName,
     linkedinUrl,
-    title: get("Job Title") || null,
-    company: get("Company") || null,
+    title: normalizeJobTitle(get("Job Title")),
+    company: canonicalizeCompanyDisplayName(get("Company")),
     companyDomain,
-    industry: get("Industry") || null,
+    industry: cleanPlaceholder(get("Industry")),
     city,
     state,
     country,

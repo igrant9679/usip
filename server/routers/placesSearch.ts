@@ -19,6 +19,7 @@ import { router } from "../_core/trpc";
 import { workspaceProcedure, adminWsProcedure } from "../_core/workspace";
 import { getDb } from "../db";
 import { prospects, accounts } from "../../drizzle/schema";
+import { normalizedAccountFields } from "../services/company/normalize";
 import { recordAudit } from "../audit";
 import {
   textSearch,
@@ -219,6 +220,7 @@ export const placesSearchRouter = router({
             workspaceId: ctx.workspace.id,
             name: hit.name,
             domain: domain ?? undefined,
+            ...normalizedAccountFields(hit.name, domain),
             industry: hit.primaryType ?? undefined,
           } as never);
           created++;

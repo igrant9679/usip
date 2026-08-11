@@ -23,7 +23,12 @@ const UNKNOWN_LAST = "(prospect)";
 export type ScrapedProspectSource =
   | "google_places"
   | "url_scraper"
-  | "linkedin_finder";
+  | "linkedin_finder"
+  // Prospects created from a LinkedIn-URL batch import (batchService).
+  // Was passed as an out-of-union string for months (roadmap P1.6) — the
+  // audit entityType "prospect_from_linkedin_enrichment" it produced is
+  // already in prod audit rows, so the value is legalized, not changed.
+  | "linkedin_enrichment";
 
 export type ScrapedProspectInput = {
   workspaceId: number;

@@ -9,6 +9,7 @@
  */
 import { and, eq, sql } from "drizzle-orm";
 import { accounts, contacts } from "../../drizzle/schema";
+import { normalizedAccountFields } from "./company/normalize";
 
 export interface AccountIdentity {
   companyName: string;
@@ -51,6 +52,7 @@ export async function findOrCreateAccount(
       workspaceId,
       name: identity.companyName,
       domain: identity.companyDomain ?? undefined,
+      ...normalizedAccountFields(identity.companyName, identity.companyDomain),
       industry: identity.industry ?? undefined,
       ownerUserId: identity.ownerUserId,
     })

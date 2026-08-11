@@ -57,6 +57,7 @@ import { centsToDecimal, computeQuoteTotals, toCents } from "@shared/quoteTotals
 import { escapeHtml as sharedEscapeHtml } from "@shared/escapeHtml";
 import { isHtmlBody, htmlBodyToText } from "@shared/emailBody";
 import { renderMergeFields, scrubForSend } from "../mergeVars";
+import { normalizedAccountFields } from "../services/company/normalize";
 
 /** The ONE public origin — see server/appUrl.ts. */
 const getAppBaseUrl = publicAppOrigin;
@@ -296,7 +297,7 @@ export const accountsRouter = router({
           if (routedOwner) resolvedOwnerId = routedOwner;
         }
       }
-      const r = await db.insert(accounts).values({ ...input, workspaceId: ctx.workspace.id, territoryId: resolvedTerritoryId ?? undefined, ownerUserId: resolvedOwnerId });
+      const r = await db.insert(accounts).values({ ...input, ...normalizedAccountFields(input.name, (input as { domain?: string | null }).domain), workspaceId: ctx.workspace.id, territoryId: resolvedTerritoryId ?? undefined, ownerUserId: resolvedOwnerId });
       const id = Number((r as any)[0]?.insertId ?? 0);
       await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "create", entityType: "account", entityId: id, after: { ...input, territoryId: resolvedTerritoryId, ownerUserId: resolvedOwnerId } });
       return { id };
@@ -1084,8 +1085,9 @@ export const leadsRouter = router({
       const [lead] = await db.select().from(leads).where(and(eq(leads.id, input.id), eq(leads.workspaceId, ctx.workspace.id)));
       if (!lead) throw new TRPCError({ code: "NOT_FOUND" });
 
+      const convName = lead.company ?? `${lead.firstName} ${lead.lastName}`;
       const accR = await db.insert(accounts).values({
-        workspaceId: ctx.workspace.id, name: lead.company ?? `${lead.firstName} ${lead.lastName}`, ownerUserId: ctx.user.id,
+        workspaceId: ctx.workspace.id, name: convName, ...normalizedAccountFields(convName, null), ownerUserId: ctx.user.id,
       });
       const accountId = Number((accR as any)[0]?.insertId ?? 0);
 

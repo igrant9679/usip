@@ -23,6 +23,7 @@
  */
 import { and, eq, or } from "drizzle-orm";
 import { canonicalText } from "@shared/canonicalText";
+import { CONFIDENCE, mergeAll, type Candidate, type ProvenanceMap } from "../enrichment/fieldMerge";
 import { getDb } from "../../db";
 import {
   discoveryLogs,
@@ -292,15 +293,43 @@ export async function persistAsProspects(
     const verificationNotes = c.notes.join(" · ");
     const sourceUrlsJson = c.sourceUrls.slice(0, 50) as any;
 
+    // Person fields flow through the SAME merge every enrichment source
+    // uses (roadmap P1.1): discovery is an opportunistic find, so its
+    // candidates enter at the scrape tier and can never displace stronger
+    // provenance — the old direct .set() here could silently overwrite a
+    // Reoon-verified email with a web-scraped one.
+    const at = new Date().toISOString();
+    const discoveryCandidates: Candidate[] = [];
+    const addCand = (field: Candidate["field"], value: string | null | undefined) => {
+      if (value?.trim()) discoveryCandidates.push({ field, value: value.trim(), source: "discovery", confidence: CONFIDENCE.scrapeFound, at });
+    };
+    addCand("title", c.title);
+    addCand("company", c.companyName);
+    addCand("companyDomain", c.companyDomain);
+    addCand("linkedinUrl", c.linkedinUrl);
+    addCand("email", c.email);
+    addCand("phone", c.phone);
+
     if (existingId) {
-      // Merge: keep existing non-null fields, fill in missing ones, refresh provenance.
+      const [existing] = await db.select().from(prospects)
+        .where(and(eq(prospects.id, existingId), eq(prospects.workspaceId, workspaceId)))
+        .limit(1);
+      const merged = mergeAll(
+        {
+          email: existing?.email, phone: existing?.phone, company: existing?.company,
+          companyDomain: existing?.companyDomain, title: existing?.title, linkedinUrl: existing?.linkedinUrl,
+        },
+        (existing?.fieldProvenance ?? {}) as ProvenanceMap,
+        discoveryCandidates,
+      );
+      const WIDTHS: Record<string, number> = { title: 120, email: 320 };
+      const personPatch: Record<string, unknown> = {};
+      for (const [field, value] of Object.entries(merged.fields)) {
+        personPatch[field] = value.slice(0, WIDTHS[field] ?? 200);
+      }
       await db.update(prospects).set({
-        title: c.title ?? undefined,
-        company: c.companyName ?? undefined,
-        companyDomain: c.companyDomain ?? undefined,
-        linkedinUrl: c.linkedinUrl ?? undefined,
-        email: c.email ?? undefined,
-        phone: c.phone ?? undefined,
+        ...personPatch,
+        fieldProvenance: merged.ledger,
         confidenceScore: c.score,
         confidenceTier: c.tier,
         verificationStatus: c.status,
@@ -309,19 +338,22 @@ export async function persistAsProspects(
         linkedinUrlVerified: c.linkedinUrlVerified,
         lastEnrichedAt: new Date(),
         lastDiscoveryRunId: runId,
-      }).where(and(eq(prospects.id, existingId), eq(prospects.workspaceId, workspaceId)));
+      } as never).where(and(eq(prospects.id, existingId), eq(prospects.workspaceId, workspaceId)));
       updated++;
     } else {
+      // Fresh insert keeps its shape and now carries a ledger from birth.
+      const merged = mergeAll({}, {}, discoveryCandidates);
       await db.insert(prospects).values({
         workspaceId,
         firstName: c.firstName,
         lastName: c.lastName,
-        title: c.title,
-        company: c.companyName,
-        companyDomain: c.companyDomain,
-        linkedinUrl: c.linkedinUrl,
-        email: c.email,
-        phone: c.phone,
+        title: merged.fields.title?.slice(0, 120) ?? c.title,
+        company: merged.fields.company?.slice(0, 200) ?? c.companyName,
+        companyDomain: merged.fields.companyDomain?.slice(0, 200) ?? c.companyDomain,
+        linkedinUrl: merged.fields.linkedinUrl ?? c.linkedinUrl,
+        email: merged.fields.email?.slice(0, 320) ?? c.email,
+        phone: merged.fields.phone?.slice(0, 40) ?? c.phone,
+        fieldProvenance: merged.ledger,
         confidenceScore: c.score,
         confidenceTier: c.tier,
         verificationStatus: c.status,

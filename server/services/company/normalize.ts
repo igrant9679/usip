@@ -74,6 +74,20 @@ export function isConsumerDomain(domain?: string | null): boolean {
   return CONSUMER_DOMAINS.has(d);
 }
 
+/** The two identity-index columns every accounts INSERT must carry
+ *  (roadmap P1.4): rows without them are invisible to the matcher
+ *  (`findWorkspaceAccountMatch`) and the duplicate report
+ *  (`findDuplicateAccounts`) — the defect that made CSV-imported accounts
+ *  unmatchable. Spread the result into any accounts insert/update. */
+export function normalizedAccountFields(name?: string | null, domain?: string | null): {
+  normalizedName: string | null;
+  normalizedDomain: string | null;
+} {
+  const n = normalizeCompanyName(name);
+  const d = normalizeDomain(domain);
+  return { normalizedName: n || null, normalizedDomain: d || null };
+}
+
 /** Jaccard token overlap 0..1 for fuzzy name similarity. */
 export function nameSimilarity(a?: string | null, b?: string | null): number {
   const tok = (x: string) => new Set(normalizeCompanyName(x).split(" ").filter(Boolean));

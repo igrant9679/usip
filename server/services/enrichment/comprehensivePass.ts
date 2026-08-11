@@ -318,7 +318,7 @@ export async function runComprehensiveEnrichment(opts: {
     const root = bestDomain.split(".")[0]?.replace(/[-_]+/g, " ").trim();
     if (root && root.length >= 3 && !/^\d+$/.test(root)) {
       const derived = root.replace(/\b\w/g, (ch) => ch.toUpperCase());
-      candidates.push({ field: "company", value: derived, source: "domain_derived", confidence: 40, at: now });
+      candidates.push({ field: "company", value: derived, source: "domain_derived", confidence: CONFIDENCE.domainDerived, at: now });
       phases.companyName = `derived "${derived}" from domain`;
     }
   }

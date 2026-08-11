@@ -108,13 +108,19 @@ export const prospectImportsRouter = router({
         });
       }
 
-      // Map all rows
+      // Map all rows. Company spellings converge on the workspace's
+      // established record via ONE canonicalizer snapshot for the whole run
+      // (roadmap P1.3) — the same contract the generic CSV import holds.
+      const { buildCompanyCanonicalizer } = await import("../services/enrichment/companyCanonical");
+      const canonicalize = await buildCompanyCanonicalizer(ctx.workspace.id);
       const mapped: MappedProspect[] = [];
       let unmappable = 0;
       for (const r of rows) {
         const m = mapLeadRocksRow(r, headers);
-        if (m) mapped.push(m);
-        else unmappable++;
+        if (m) {
+          if (m.company) m.company = canonicalize(m.company, m.companyDomain);
+          mapped.push(m);
+        } else unmappable++;
       }
 
       // Dedup within file (linkedinUrl is the canonical key)
