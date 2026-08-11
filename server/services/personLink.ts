@@ -204,6 +204,8 @@ export async function upsertPersonForRow(
       }
       await db.update(prospects).set(patch as never)
         .where(and(eq(prospects.workspaceId, workspaceId), eq(prospects.id, p.id)));
+      const { recordFieldHistory } = await import("./enrichment/fieldHistory");
+      void recordFieldHistory(workspaceId, p.id, merged.decisions, "person_link");
     }
     return { personId: p.id, created: false, tier: match.tier };
   }
@@ -293,6 +295,8 @@ export async function mergeIntoPerson(
     }
     await db.update(prospects).set(patch as never)
       .where(and(eq(prospects.workspaceId, workspaceId), eq(prospects.id, personId)));
+    const { recordFieldHistory } = await import("./enrichment/fieldHistory");
+    void recordFieldHistory(workspaceId, personId, merged.decisions, data.source);
   } catch (e) {
     console.error(`[personLink] mergeIntoPerson(${personId}) failed:`, (e as Error)?.message ?? e);
   }

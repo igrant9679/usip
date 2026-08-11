@@ -195,6 +195,8 @@ export async function applyEnrichment(opts: {
           await db.update(prospects)
             .set({ ...merged.fields, fieldProvenance: merged.ledger } as never)
             .where(and(eq(prospects.workspaceId, ws), eq(prospects.id, pid)));
+          const { recordFieldHistory } = await import("../enrichment/fieldHistory");
+          void recordFieldHistory(ws, pid, merged.decisions, "linkedin_enrichment");
         }
       }
     }

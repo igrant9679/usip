@@ -29,7 +29,7 @@
  * connected account, so it is NOT folded into sweepWorkspace: quietly draining
  * that inside a run the user thinks is about email would be a surprise.
  */
-import { and, eq, isNotNull, isNull, ne, notLike, or } from "drizzle-orm";
+import { and, eq, isNotNull, isNull, ne, notLike, or, sql } from "drizzle-orm";
 import { areCampaigns, notifications, prospectQueue, prospects, workspaceSettings, workspaces } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { workspaceNotifyUserId } from "../_core/activeMembers";
@@ -172,7 +172,20 @@ async function candidatesFor(workspaceId: number, limit: number, retryFailed: bo
     // Never spend credits on a prospect verification already rejected.
     or(isNull(prospects.verificationStatus), ne(prospects.verificationStatus, "rejected")),
   ];
-  if (!retryFailed) conds.push(isNull(prospects.enrichmentData));
+  // P5.1: lastEnrichedAt finally gates something. Rows attempted long ago
+  // and STILL email-less become candidates again after 60 days — providers'
+  // coverage grows and people change jobs, so a year-old miss is not a
+  // verdict. Bounded by the same cap + credit floor as everything else.
+  const STALE_RETRY_MS = 60 * 86_400_000;
+  if (!retryFailed) {
+    conds.push(or(
+      isNull(prospects.enrichmentData),
+      and(
+        isNotNull(prospects.lastEnrichedAt),
+        sql`${prospects.lastEnrichedAt} < ${new Date(Date.now() - STALE_RETRY_MS)}`,
+      ),
+    )!);
+  }
   return db
     .select({
       id: prospects.id,

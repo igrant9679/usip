@@ -17,6 +17,14 @@ const getConfig = () => {
   return { apiKey, dsn };
 };
 
+/** P5.3: email/calendar calls get the pacing the LinkedIn family already
+ *  has via its slot counter. Min-spacing per path family + ONE retry on 429
+ *  honouring Retry-After. LinkedIn-family paths are untouched — their caps
+ *  live in linkedinLookup/socialAutopilot. */
+const PACED_PATHS = /^\/(emails|folders|calendars)/;
+const PACING_MS = 250;
+let lastPacedCallAt = 0;
+
 async function unipileFetch<T = unknown>(
   path: string,
   options: RequestInit = {},
@@ -24,8 +32,15 @@ async function unipileFetch<T = unknown>(
   const { apiKey, dsn } = getConfig();
   const url = `${dsn}/api/v1${path}`;
   const method = options.method ?? "GET";
+
+  if (PACED_PATHS.test(path)) {
+    const wait = lastPacedCallAt + PACING_MS - Date.now();
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+    lastPacedCallAt = Date.now();
+  }
+
   const startedAt = Date.now();
-  const res = await fetch(url, {
+  let res = await fetch(url, {
     ...options,
     headers: {
       "X-API-KEY": apiKey,
@@ -33,6 +48,16 @@ async function unipileFetch<T = unknown>(
       ...(options.headers ?? {}),
     },
   });
+  if (res.status === 429 && PACED_PATHS.test(path)) {
+    const retryAfter = Number(res.headers.get("retry-after")) || 2;
+    const backoffMs = Math.min(retryAfter, 30) * 1000;
+    console.warn(`[Unipile] ${method} ${path} → 429; retrying once after ${backoffMs}ms`);
+    await new Promise((r) => setTimeout(r, backoffMs));
+    res = await fetch(url, {
+      ...options,
+      headers: { "X-API-KEY": apiKey, Accept: "application/json", ...(options.headers ?? {}) },
+    });
+  }
   const elapsedMs = Date.now() - startedAt;
   if (!res.ok) {
     const body = await res.text().catch(() => "");

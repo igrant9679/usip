@@ -441,6 +441,26 @@ export async function reconcileAccountBrand(
   }
   await db.insert(organizationEnrichmentEvents).values(events);
 
+  // P3.1: a brand change fires the SAME workflow signal shape a job change
+  // does — so rules gated on signal_received can react to rebrands too.
+  if (identityChanged) {
+    try {
+      const { fireWorkflowRules } = await import("../workflowEngine");
+      await fireWorkflowRules(workspaceId, "signal_received", {
+        payload: {
+          signal: "brand_change",
+          entity: "account",
+          oldName: prev!.rawName, oldDomain: prev!.rawDomain,
+          newName: hitName, newDomain: hitDomain,
+        },
+        relatedType: "account",
+        relatedId: accountId,
+      });
+    } catch (e) {
+      console.error(`[BrandReconciler] brand_change rule fire failed:`, (e as Error)?.message ?? e);
+    }
+  }
+
   return {
     accountId,
     action: decision.action,

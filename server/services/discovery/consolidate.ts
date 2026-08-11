@@ -339,6 +339,10 @@ export async function persistAsProspects(
         lastEnrichedAt: new Date(),
         lastDiscoveryRunId: runId,
       } as never).where(and(eq(prospects.id, existingId), eq(prospects.workspaceId, workspaceId)));
+      {
+        const { recordFieldHistory } = await import("../enrichment/fieldHistory");
+        void recordFieldHistory(workspaceId, existingId, merged.decisions, "discovery");
+      }
       updated++;
     } else {
       // Fresh insert keeps its shape and now carries a ledger from birth.

@@ -44,7 +44,7 @@ export const reoonRouter = router({
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const [row] = await db
-      .select({ enc: workspaceSettings.reoonApiKeyEnc })
+      .select({ enc: workspaceSettings.reoonApiKeyEnc, enabled: workspaceSettings.reoonVerificationEnabled })
       .from(workspaceSettings)
       .where(eq(workspaceSettings.workspaceId, ctx.workspace.id))
       .limit(1);
@@ -58,8 +58,25 @@ export const reoonRouter = router({
       masked: maskSecret(effective),
       /** "workspace" = this workspace's own key, "env" = the deploy-wide fallback. */
       source: workspaceKey ? ("workspace" as const) : envKey ? ("env" as const) : ("none" as const),
+      /** Reoon = the optional FINAL verification step (migration 0157). */
+      verificationEnabled: row?.enabled !== false,
     };
   }),
+
+  /** Toggle Reoon as the final verification step. Admins only. Enforced at
+   *  the getReoonKey choke point — OFF behaves exactly as key-absent, so
+   *  unverified addresses are never marked valid and never promote. */
+  setVerificationEnabled: adminWsProcedure
+    .input(z.object({ enabled: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      await ensureSettingsRow(ctx.workspace.id);
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      await db.update(workspaceSettings)
+        .set({ reoonVerificationEnabled: input.enabled })
+        .where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
+      return { ok: true as const, enabled: input.enabled };
+    }),
 
   /**
    * Set or clear the key. Admins only.

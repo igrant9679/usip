@@ -1472,6 +1472,11 @@ export const workspaceSettings = mysqlTable("workspace_settings", {
   // reads this first and falls back to the env var so existing deployments
   // keep working.
   reoonApiKeyEnc: text("reoonApiKeyEnc"),
+  /** Reoon as the FINAL email-verification step is optional (owner ask,
+   *  2026-08-11; migration 0157). OFF ⇒ getReoonKey() returns "" and every
+   *  path degrades exactly as key-absent: candidates carry no verdict, are
+   *  never marked valid, and therefore never promote or auto-send. */
+  reoonVerificationEnabled: boolean("reoon_verification_enabled").default(true).notNull(),
   // ── QuickEnrich (Migration 0146) ──
   // B2B contact database keyed on LinkedIn URLs — evaluated 2026-08-06 as a
   // prospect SOURCE for ARE campaigns (their contact-finder discovery endpoint
@@ -3899,6 +3904,31 @@ export const prospects = mysqlTable(
 );
 export type Prospect = typeof prospects.$inferSelect;
 
+// ── Prospect field-change history (migration 0156, roadmap P3.2) ──────────────
+// One row per REPLACED merge decision — the timeline MergeDecision.previous
+// used to compute and discard. Written best-effort by every mergeAll consumer
+// via recordFieldHistory(); never read on a hot path.
+export const prospectFieldHistory = mysqlTable(
+  "prospect_field_history",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    prospectId: int("prospect_id").notNull(),
+    field: varchar("field", { length: 40 }).notNull(),
+    oldValue: text("old_value"),
+    newValue: text("new_value"),
+    oldSource: varchar("old_source", { length: 40 }),
+    newSource: varchar("new_source", { length: 40 }).notNull(),
+    newConfidence: int("new_confidence").default(0).notNull(),
+    trigger: varchar("trigger", { length: 40 }).notNull(),
+    changedAt: timestamp("changed_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    byProspect: index("ix_pfh_prospect").on(t.workspaceId, t.prospectId, t.changedAt),
+  }),
+);
+export type ProspectFieldHistory = typeof prospectFieldHistory.$inferSelect;
+
 /* ──────────────────────────────────────────────────────────────────────────
    Discovery v2 — unified person/account search with verification
    (see server/services/discovery/ for the runtime; migration 0078).
@@ -3980,59 +4010,7 @@ export const discoveryLogs = mysqlTable(
 );
 export type DiscoveryLog = typeof discoveryLogs.$inferSelect;
 
-// ── Async reveal job tracking ─────────────────────────────────────────────────
-export const cloduraRevealJobs = mysqlTable(
-  "clodura_reveal_jobs",
-  {
-    id: int("id").autoincrement().primaryKey(),
-    trackingId: varchar("tracking_id", { length: 128 }).unique().notNull(),
-    prospectId: int("prospect_id").notNull(),
-    kind: varchar("kind", { length: 10 }).notNull(), // email|phone
-    status: varchar("status", { length: 20 }).notNull().default("pending"),
-    requestedBy: int("requested_by"),
-    requestedAt: timestamp("requested_at").defaultNow().notNull(),
-    completedAt: timestamp("completed_at"),
-    error: text("error"),
-  },
-  (t) => ({
-    byProspect: index("ix_crj_prospect").on(t.prospectId),
-    byTracking: index("ix_crj_tracking").on(t.trackingId),
-  }),
-);
-export type CloduraRevealJob = typeof cloduraRevealJobs.$inferSelect;
-
-// ── Per-user saved search filters ─────────────────────────────────────────────
-export const cloduraSavedSearches = mysqlTable(
-  "clodura_saved_searches",
-  {
-    id: int("id").autoincrement().primaryKey(),
-    userId: int("user_id").notNull(),
-    workspaceId: int("workspaceId").notNull(),
-    name: varchar("name", { length: 120 }),
-    filters: json("filters").notNull(),
-    createdAt: timestamp("createdAt").defaultNow().notNull(),
-    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-  },
-  (t) => ({
-    byUser: index("ix_css_user").on(t.userId, t.workspaceId),
-  }),
-);
-export type CloduraSavedSearch = typeof cloduraSavedSearches.$inferSelect;
-
-// ── 24-hour search response cache ─────────────────────────────────────────────
-export const cloduraSearchCache = mysqlTable(
-  "clodura_search_cache",
-  {
-    cacheKey: varchar("cache_key", { length: 128 }).notNull(),
-    workspaceId: int("workspaceId").notNull(),
-    response: json("response").notNull(),
-    cachedAt: timestamp("cached_at").defaultNow().notNull(),
-  },
-  (t) => ({
-    byWsCached: index("ix_csc_ws_cached").on(t.workspaceId, t.cachedAt),
-  }),
-);
-export type CloduraSearchCache = typeof cloduraSearchCache.$inferSelect;
+// (Clodura execution tables removed 2026-08-11 — integration retired; migration 0155 drops them.)
 
 // ── Domain scrape cache (30-day TTL) ──────────────────────────────────────────
 // Memoizes the company-site scrape (emails/phones/social URLs) so that when
@@ -4052,69 +4030,6 @@ export const domainScrapeCache = mysqlTable(
 );
 export type DomainScrapeCache = typeof domainScrapeCache.$inferSelect;
 
-// ── Enrichment job tracking ────────────────────────────────────────────────────
-export const cloduraEnrichmentJobs = mysqlTable(
-  "clodura_enrichment_jobs",
-  {
-    id: int("id").autoincrement().primaryKey(),
-    workspaceId: int("workspaceId").notNull(),
-    contactId: int("contact_id").notNull(),
-    trigger: varchar("trigger", { length: 20 }).notNull(), // manual|bulk|auto_on_create|scheduled
-    identifierSet: json("identifier_set").notNull(),
-    confidence: varchar("confidence", { length: 20 }),
-    status: varchar("status", { length: 20 }).notNull().default("pending"),
-    creditsConsumed: int("credits_consumed").default(0),
-    rawResponse: json("raw_response"),
-    rawResponsePurgedAt: timestamp("raw_response_purged_at"),
-    requestedBy: int("requested_by"),
-    requestedAt: timestamp("requested_at").defaultNow().notNull(),
-    completedAt: timestamp("completed_at"),
-    error: text("error"),
-  },
-  (t) => ({
-    byContact: index("ix_cej_contact").on(t.contactId),
-    byStatus: index("ix_cej_status").on(t.status, t.requestedAt),
-    byWs: index("ix_cej_ws").on(t.workspaceId),
-  }),
-);
-export type CloduraEnrichmentJob = typeof cloduraEnrichmentJobs.$inferSelect;
-
-// ── Field-level enrichment history ────────────────────────────────────────────
-export const contactEnrichmentHistory = mysqlTable(
-  "contact_enrichment_history",
-  {
-    id: int("id").autoincrement().primaryKey(),
-    workspaceId: int("workspaceId").notNull(),
-    contactId: int("contact_id").notNull(),
-    enrichmentJobId: int("enrichment_job_id"),
-    fieldName: varchar("field_name", { length: 80 }).notNull(),
-    oldValue: text("old_value"),
-    newValue: text("new_value"),
-    appliedBy: int("applied_by"),
-    appliedAt: timestamp("applied_at").defaultNow().notNull(),
-    source: varchar("source", { length: 40 }).notNull().default("clodura_enrich"),
-  },
-  (t) => ({
-    byContact: index("ix_ceh_contact").on(t.contactId, t.appliedAt),
-    byWs: index("ix_ceh_ws").on(t.workspaceId),
-  }),
-);
-export type ContactEnrichmentHistory = typeof contactEnrichmentHistory.$inferSelect;
-
-// ── Per-workspace enrichment settings ─────────────────────────────────────────
-export const cloduraEnrichmentSettings = mysqlTable(
-  "clodura_enrichment_settings",
-  {
-    workspaceId: int("workspaceId").primaryKey(),
-    autoEnrichOnCreate: boolean("auto_enrich_on_create").notNull().default(false),
-    scheduledReenrichEnabled: boolean("scheduled_reenrich_enabled").notNull().default(false),
-    staleThresholdDays: int("stale_threshold_days").notNull().default(90),
-    dailyBudgetCap: int("daily_budget_cap").notNull().default(1500),
-    updatedBy: int("updated_by"),
-    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
-  },
-);
-export type CloduraEnrichmentSettings = typeof cloduraEnrichmentSettings.$inferSelect;
 
 /* ──────────────────────────────────────────────────────────────────────────
    AI Feature Gap Tables (Migration 0050)

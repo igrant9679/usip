@@ -9,13 +9,16 @@
  * mapProviderOrganizationToVelocitySchema + updateCompanyFields are the seam a
  * real provider (or CRM import) plugs into later. Never blocks company creation.
  */
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { getDb } from "../../db";
 import {
   accounts, globalOrganizations, organizationEnrichmentEvents, organizationTechnologies,
+  prospects, prospectLinkedinEnrichments,
 } from "../../../drizzle/schema";
-import { normalizeDomain, normalizeWebsite } from "./normalize";
+import { normalizeCompanyName, normalizeDomain, normalizeWebsite } from "./normalize";
 import { faviconUrlForDomain } from "./logoService";
+import { mergeAccountField, type AccountProvenanceMap } from "./accountProvenance";
+import { CONFIDENCE, type FieldProvenance } from "../enrichment/fieldMerge";
 
 export interface CompanyFields {
   name?: string; domain?: string; websiteUrl?: string; linkedinCompanyUrl?: string;
@@ -97,15 +100,86 @@ export async function enrichCompany(ws: number, accountId: number, opts?: {
     fieldsUpdated = await updateCompanyFields(ws, accountId, mapProviderOrganizationToVelocitySchema(opts.provided));
     status = "enriched";
   } else {
-    // No vendor — derive canonical website + a permitted favicon logo.
+    // No vendor — company IDENTIFICATION comes from the evidence QuickEnrich
+    // and LinkedIn already produced (owner decision 2026-08-11: those two are
+    // the single source of truth for company identification; LinkedIn scoped
+    // to identification only — no firmographics are derived here).
     const patch: Record<string, unknown> = { lastEnrichedAt: new Date() };
-    const domain = acct.normalizedDomain || normalizeDomain(acct.domain) || normalizeDomain(acct.websiteUrl);
+
+    // Evidence: linked prospects' LinkedIn company facts + the domains their
+    // ledgers attribute to quickenrich/email_domain.
+    const linked = await db.select({ id: prospects.id, fieldProvenance: prospects.fieldProvenance, companyDomain: prospects.companyDomain })
+      .from(prospects)
+      .where(and(eq(prospects.workspaceId, ws), eq(prospects.accountId, accountId)))
+      .limit(200);
+    const nameVotes = new Map<string, { display: string; n: number }>();
+    const domainVotes = new Map<string, number>();
+    if (linked.length > 0) {
+      const enrRows = await db
+        .select({ name: prospectLinkedinEnrichments.currentCompanyName, domain: prospectLinkedinEnrichments.currentCompanyDomain })
+        .from(prospectLinkedinEnrichments)
+        .where(and(eq(prospectLinkedinEnrichments.workspaceId, ws), inArray(prospectLinkedinEnrichments.prospectId, linked.map((p) => p.id))));
+      for (const r of enrRows) {
+        const norm = normalizeCompanyName(r.name);
+        if (norm && r.name) {
+          const cur = nameVotes.get(norm);
+          nameVotes.set(norm, { display: cur?.display ?? r.name, n: (cur?.n ?? 0) + 1 });
+        }
+        const d = normalizeDomain(r.domain);
+        if (d) domainVotes.set(d, (domainVotes.get(d) ?? 0) + 1);
+      }
+      for (const p of linked) {
+        const prov = (p.fieldProvenance ?? {}) as Record<string, FieldProvenance | undefined>;
+        const src = prov.companyDomain?.source;
+        if (src === "quickenrich" || src === "email_domain") {
+          const d = normalizeDomain(p.companyDomain);
+          if (d) domainVotes.set(d, (domainVotes.get(d) ?? 0) + 1);
+        }
+      }
+    }
+    const top = <T,>(m: Map<string, T>, count: (v: T) => number): [string, T] | null => {
+      let best: [string, T] | null = null;
+      for (const e of Array.from(m.entries())) if (!best || count(e[1]) > count(best[1])) best = e;
+      return best;
+    };
+
+    // Write identification facts THROUGH the account ledger: ≥2 agreeing
+    // evidence rows earn LinkedIn-tier confidence (85, can replace the
+    // preexisting·70 baseline); a single sighting enters at the candidate
+    // tier (60 — fills blanks, never displaces).
+    const ledger = { ...((acct.fieldProvenance ?? {}) as AccountProvenanceMap) };
+    const nowIso = new Date().toISOString();
+    let ledgerChanged = false;
+    const applyEvidence = (field: "name" | "domain", value: string, votes: number) => {
+      const d = mergeAccountField(field, { value: acct[field], provenance: ledger[field] }, {
+        value, source: "linkedin_quickenrich",
+        confidence: votes >= 2 ? CONFIDENCE.linkedinProfile : CONFIDENCE.headlineParse,
+        at: nowIso,
+      });
+      ledger[field] = d.provenance;
+      ledgerChanged = true;
+      if (d.action === "filled" || d.action === "replaced") {
+        patch[field] = d.value.slice(0, 200);
+        if (field === "name") patch.normalizedName = normalizeCompanyName(d.value);
+        if (field === "domain") patch.normalizedDomain = normalizeDomain(d.value);
+        fieldsUpdated.push(field);
+      }
+    };
+    const topDomain = top(domainVotes, (n) => n);
+    if (topDomain) applyEvidence("domain", topDomain[0], topDomain[1]);
+    const topName = top(nameVotes, (v) => v.n);
+    if (topName) applyEvidence("name", topName[1].display, topName[1].n);
+    if (ledgerChanged) patch.fieldProvenance = ledger;
+
+    // Canonical website + a permitted favicon logo (unchanged behavior).
+    const domain = (patch.normalizedDomain as string | undefined) || acct.normalizedDomain || normalizeDomain(acct.domain) || normalizeDomain(acct.websiteUrl);
     if (domain && !acct.websiteUrl) { patch.websiteUrl = `https://${domain}`; fieldsUpdated.push("websiteUrl"); }
     if (domain && (!acct.logoUrl || acct.logoStatus !== "available")) {
       const fav = faviconUrlForDomain(domain);
       if (fav) { patch.logoUrl = fav; patch.logoSourceType = "website_favicon"; patch.logoStatus = "available"; patch.logoLastVerifiedAt = new Date(); fieldsUpdated.push("logoUrl"); }
     }
     await db.update(accounts).set(patch as never).where(and(eq(accounts.workspaceId, ws), eq(accounts.id, accountId)));
+    if (fieldsUpdated.includes("name") || fieldsUpdated.includes("domain")) status = "enriched";
   }
 
   // Mirror key firmographics onto the shared global org.
@@ -114,9 +188,11 @@ export async function enrichCompany(ws: number, accountId: number, opts?: {
       .where(eq(globalOrganizations.id, acct.globalOrganizationId));
   }
 
+  const identified = fieldsUpdated.includes("name") || fieldsUpdated.includes("domain");
   await db.insert(organizationEnrichmentEvents).values({
     workspaceId: ws, accountId, globalOrganizationId: acct.globalOrganizationId ?? null,
-    sourceVendor: opts?.provided ? "provider" : "internal_derive", sourceType: opts?.provided ? "enrichment_provider" : "website_favicon",
+    sourceVendor: opts?.provided ? "provider" : identified ? "linkedin_quickenrich" : "internal_derive",
+    sourceType: opts?.provided ? "enrichment_provider" : identified ? "company_identification" : "website_favicon",
     status, fieldsUpdated: fieldsUpdated.length ? fieldsUpdated : null, enrichedByUserId: opts?.userId ?? null,
   } as never);
 

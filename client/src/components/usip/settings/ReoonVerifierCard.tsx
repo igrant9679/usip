@@ -55,6 +55,15 @@ export function ReoonVerifierCard({
     onError: (e: any) => toast.error(e?.message ?? "Key test failed"),
   });
 
+  const verificationEnabled = status.data?.verificationEnabled !== false;
+  const setEnabled = trpc.reoon.setVerificationEnabled.useMutation({
+    onSuccess: (r) => {
+      utils.reoon.get.invalidate();
+      toast.success(r.enabled ? "Reoon verification ON — it runs as the final step of every email lookup" : "Reoon verification OFF — found emails stay unverified and never auto-send");
+    },
+    onError: (e: any) => toast.error(e?.message ?? "Could not save"),
+  });
+
   const body = (
     <>
       <div className="flex items-center gap-2 text-[13px]">
@@ -92,6 +101,27 @@ export function ReoonVerifierCard({
           here overrides it for this workspace only.
         </p>
       )}
+
+      {/* Reoon = the OPTIONAL final verification step (migration 0157). */}
+      <div className="flex items-start gap-3 rounded-lg border border-border/70 p-3">
+        <div className="flex-1 min-w-0">
+          <div className="text-[13px] font-medium">Verify found emails with Reoon</div>
+          <div className="mt-0.5 text-[12px] text-muted-foreground">
+            Runs as the <span className="font-medium text-foreground">final step</span> of every email
+            lookup. Off: found addresses are kept but stay unverified — they are never marked valid,
+            never promoted to the CRM, and never auto-sent.
+          </div>
+        </div>
+        <label className="flex shrink-0 cursor-pointer items-center gap-2 pt-0.5">
+          <input
+            type="checkbox"
+            checked={verificationEnabled}
+            disabled={!isAdmin || setEnabled.isPending}
+            onChange={(e) => setEnabled.mutate({ enabled: e.target.checked })}
+          />
+          <span className="text-[12px]">{verificationEnabled ? "On" : "Off"}</span>
+        </label>
+      </div>
 
       <div className="rounded-lg border border-border/70 bg-muted/40 p-3 text-[12px] text-muted-foreground space-y-1">
         <p>

@@ -18,20 +18,13 @@
 import { and, eq, like, sql } from "drizzle-orm";
 import { getDb } from "../db";
 import { accounts, leads, prospects } from "../../drizzle/schema";
-import { normalizedAccountFields } from "./company/normalize";
+import { businessDomainFromEmail, normalizedAccountFields } from "./company/normalize";
 
-/** Free-mailbox domains that must never become an account's domain. */
-const FREE_MAIL = new Set([
-  "gmail.com", "googlemail.com", "yahoo.com", "hotmail.com", "outlook.com",
-  "live.com", "msn.com", "aol.com", "icloud.com", "me.com", "proton.me",
-  "protonmail.com", "gmx.com", "mail.com", "yandex.com", "zoho.com",
-]);
-
+/** ONE free-mail vocabulary (roadmap P5.2): this file kept a private copy
+ *  of the consumer-domain list — now delegated to the shared definition in
+ *  company/normalize (CONSUMER_DOMAINS via businessDomainFromEmail). */
 export function corporateDomainOf(email?: string | null): string | null {
-  const m = (email ?? "").toLowerCase().match(/@([a-z0-9.-]+\.[a-z]{2,})$/);
-  if (!m) return null;
-  const domain = m[1];
-  return FREE_MAIL.has(domain) ? null : domain;
+  return businessDomainFromEmail(email) || null;
 }
 
 export interface BridgeResult {

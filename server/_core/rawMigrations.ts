@@ -3340,6 +3340,61 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0155: retire Clodura (owner-approved removal, 2026-08-11) ─────────────
+  // The integration was removed long ago; these execution tables had ZERO
+  // live references (the last two were cascade-delete lines, now gone).
+  // The legacy clodura_* COLUMNS on `prospects` are left physically in
+  // place (live table; the code layer no longer declares them).
+  {
+    name: "0155_retire_clodura_tables.sql",
+    statements: [
+      "DROP TABLE IF EXISTS `clodura_reveal_jobs`",
+      "DROP TABLE IF EXISTS `clodura_saved_searches`",
+      "DROP TABLE IF EXISTS `clodura_search_cache`",
+      "DROP TABLE IF EXISTS `clodura_enrichment_jobs`",
+      "DROP TABLE IF EXISTS `clodura_enrichment_settings`",
+      "DROP TABLE IF EXISTS `contact_enrichment_history`",
+    ],
+  },
+
+  // ── 0156: prospect field-change history (roadmap P3.2) ────────────────────
+  // MergeDecision.previous was computed and discarded — replaced values had
+  // no timeline. One row per REPLACED merge decision, written best-effort by
+  // every mergeAll consumer. VERIFY: enrich a prospect so a field replaces,
+  // then the row appears here.
+  {
+    name: "0156_prospect_field_history.sql",
+    statements: [
+      `CREATE TABLE IF NOT EXISTS \`prospect_field_history\` (
+        \`id\` int NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        \`workspaceId\` int NOT NULL,
+        \`prospect_id\` int NOT NULL,
+        \`field\` varchar(40) NOT NULL,
+        \`old_value\` text NULL,
+        \`new_value\` text NULL,
+        \`old_source\` varchar(40) NULL,
+        \`new_source\` varchar(40) NOT NULL,
+        \`new_confidence\` int NOT NULL DEFAULT 0,
+        \`trigger\` varchar(40) NOT NULL,
+        \`changed_at\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        INDEX \`ix_pfh_prospect\` (\`workspaceId\`, \`prospect_id\`, \`changed_at\`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+    ],
+  },
+
+  // ── 0157: Reoon verification is optional (owner ask, 2026-08-11) ──────────
+  // Reoon stays the FINAL step of the email chain; this toggle turns it off
+  // per workspace. Enforced at the ONE choke point (getReoonKey → ""), so
+  // every consumer degrades exactly as key-absent and no unverified address
+  // is ever marked valid. VERIFY: toggle off in Settings → Mailboxes, run
+  // "Find contact info" — phases show "no key", email lands unverified.
+  {
+    name: "0157_reoon_verification_toggle.sql",
+    statements: [
+      "ALTER TABLE `workspace_settings` ADD COLUMN `reoon_verification_enabled` boolean NOT NULL DEFAULT true",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

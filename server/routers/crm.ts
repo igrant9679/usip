@@ -37,8 +37,6 @@ import {
   opportunityIntelligence,
   stageApprovals,
   pipelineAlerts,
-  contactEnrichmentHistory,
-  cloduraEnrichmentJobs,
 } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
 import { getDb } from "../db";
@@ -204,8 +202,7 @@ async function cascadeDeleteAccountDependents(
   const contactIds = contactRows.map((c) => c.id);
   if (contactIds.length > 0) {
     await db.delete(opportunityContactRoles).where(inArray(opportunityContactRoles.contactId, contactIds));
-    await db.delete(contactEnrichmentHistory).where(inArray(contactEnrichmentHistory.contactId, contactIds));
-    await db.delete(cloduraEnrichmentJobs).where(inArray(cloduraEnrichmentJobs.contactId, contactIds));
+    // (Clodura execution tables removed 2026-08-11 — nothing to cascade.)
     await db.delete(contacts).where(and(eq(contacts.workspaceId, workspaceId), inArray(contacts.id, contactIds)));
   }
 }

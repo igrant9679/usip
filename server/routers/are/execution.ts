@@ -473,6 +473,24 @@ export async function processSignal(
     sentimentReason,
     actionTaken,
   });
+
+  // P3.3: bridge the HIGH-INTENT ARE signals into the workflow-rule system.
+  // Deliberately a small allow-list — the two signal systems keep their own
+  // vocabularies; this is a producer, not a merge. Rules gated on
+  // signal_received can now react to a booked meeting or a reply.
+  const WORKFLOW_BRIDGED_SIGNALS = new Set(["meeting_booked", "email_reply"]);
+  if (WORKFLOW_BRIDGED_SIGNALS.has(signalType)) {
+    try {
+      const { fireWorkflowRules } = await import("../../services/workflowEngine");
+      await fireWorkflowRules(workspaceId, "signal_received", {
+        payload: { signal: signalType, entity: "are_prospect", campaignId, sentiment: sentiment ?? null },
+        relatedType: "prospect_queue",
+        relatedId: prospectQueueId,
+      });
+    } catch (e) {
+      console.error(`[ARE] workflow bridge for ${signalType} failed:`, (e as Error)?.message ?? e);
+    }
+  }
 }
 
 /**

@@ -253,6 +253,58 @@ function MergeDialog({
 }
 
 /* ─── Main Page ─────────────────────────────────────────────────────────── */
+function ProviderEffectivenessCard() {
+  const { data, isLoading } = trpc.dataHealth.providerEffectiveness.useQuery();
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Provider effectiveness</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <div className="text-sm text-muted-foreground py-4">Loading…</div>
+        ) : !data || data.sources.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            No provenance data yet — enrich prospects and each field's winning source lands here.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            <p className="text-xs text-muted-foreground">
+              Which source holds the CURRENT value, across {data.prospectsWithLedger.toLocaleString()} prospects
+              with provenance. A source that finds a lot but never wins is spending without earning.
+            </p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="text-left text-[11px] uppercase tracking-wide text-muted-foreground border-b">
+                  <tr>
+                    <th className="py-1.5 pr-2 font-medium">Source</th>
+                    <th className="py-1.5 pr-2 font-medium text-right">Fields held</th>
+                    <th className="py-1.5 pr-2 font-medium text-right">Verified emails</th>
+                    <th className="py-1.5 font-medium">Top fields</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.sources.map((s) => (
+                    <tr key={s.source} className="border-b border-border/50">
+                      <td className="py-1.5 pr-2 font-medium">{s.source}</td>
+                      <td className="py-1.5 pr-2 text-right tabular-nums">{s.total.toLocaleString()}</td>
+                      <td className="py-1.5 pr-2 text-right tabular-nums">{s.verifiedEmails.toLocaleString()}</td>
+                      <td className="py-1.5 text-xs text-muted-foreground">
+                        {Object.entries(s.fields).sort((a, b) => b[1] - a[1]).slice(0, 3)
+                          .map(([f, n]) => `${f} (${n})`).join(" · ")}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function DataHealth() {
   const { data: metrics, isLoading: metricsLoading, refetch } = trpc.dataHealth.getMetrics.useQuery();
   const { data: dupes, isLoading: dupesLoading, refetch: refetchDupes } = trpc.dataHealth.getDuplicateGroups.useQuery();
@@ -585,6 +637,12 @@ export default function DataHealth() {
               )}
             </CardContent>
           </Card>
+        </section>
+
+        {/* Provider effectiveness (roadmap P4.1) — which enrichment source
+            actually holds the winning values, straight from the ledger. */}
+        <section>
+          <ProviderEffectivenessCard />
         </section>
       </div>
 

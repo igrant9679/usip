@@ -124,10 +124,17 @@ export async function getReoonKey(workspaceId?: number | null): Promise<string> 
       const db = await getDb();
       if (db) {
         const [row] = await db
-          .select({ enc: workspaceSettings.reoonApiKeyEnc })
+          .select({ enc: workspaceSettings.reoonApiKeyEnc, enabled: workspaceSettings.reoonVerificationEnabled })
           .from(workspaceSettings)
           .where(eq(workspaceSettings.workspaceId, workspaceId))
           .limit(1);
+        // Reoon is the FINAL verification step and it is OPTIONAL (owner
+        // ask 2026-08-11, migration 0157). Toggled off ⇒ behave exactly as
+        // key-absent everywhere: candidates carry no verdict, are never
+        // marked valid, never promote, never auto-send. This is the ONE
+        // choke point — a toggle only some call sites honoured would be
+        // the inert-settings bug all over again.
+        if (row && row.enabled === false) return "";
         const plaintext = tryDecryptSecret(row?.enc);
         if (plaintext) return plaintext;
       }

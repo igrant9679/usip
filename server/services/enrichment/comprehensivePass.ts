@@ -381,6 +381,9 @@ export async function runComprehensiveEnrichment(opts: {
   }
   await db.update(prospects).set(patch as never)
     .where(and(eq(prospects.workspaceId, opts.workspaceId), eq(prospects.id, opts.prospectId)));
+  // Timeline for replaced values (P3.2) — best-effort, never blocks the pass.
+  const { recordFieldHistory } = await import("./fieldHistory");
+  void recordFieldHistory(opts.workspaceId, opts.prospectId, merged.decisions, opts.trigger);
 
   /* ── 6. Queue the compliant LinkedIn job when profile data is absent ─ */
   let queuedLinkedInJob: number | null = null;

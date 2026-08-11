@@ -184,4 +184,41 @@ export const dataHealthRouter = router({
       ...nameRows.map((r: any) => mapGroup(r, "name")),
     ].slice(0, 20);
   }),
+
+  /**
+   * Provider effectiveness (roadmap P4.1) — which source actually EARNS its
+   * keep. Zero new writes: the winning source per field already sits in
+   * every prospect's field_provenance ledger; this is the GROUP BY the
+   * audit said was "one query away". Bounded read of the ledger column only.
+   */
+  providerEffectiveness: workspaceProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    const { prospects } = await import("../../drizzle/schema");
+    const rows = await db
+      .select({ ledger: prospects.fieldProvenance })
+      .from(prospects)
+      .where(and(eq(prospects.workspaceId, ctx.workspace.id), sql`${prospects.fieldProvenance} IS NOT NULL`))
+      .limit(5000);
+
+    // source → field → { holding: rows where this source's value is current,
+    //                    verified: of those, email rows Reoon judged valid }
+    const bySource: Record<string, { total: number; fields: Record<string, number>; verifiedEmails: number }> = {};
+    for (const r of rows) {
+      const ledger = (r.ledger ?? {}) as Record<string, { source?: string; verification?: string } | undefined>;
+      for (const [field, entry] of Object.entries(ledger)) {
+        if (!entry?.source) continue;
+        const s = (bySource[entry.source] ??= { total: 0, fields: {}, verifiedEmails: 0 });
+        s.total++;
+        s.fields[field] = (s.fields[field] ?? 0) + 1;
+        if (field === "email" && entry.verification === "valid") s.verifiedEmails++;
+      }
+    }
+    return {
+      prospectsWithLedger: rows.length,
+      sources: Object.entries(bySource)
+        .map(([source, v]) => ({ source, ...v }))
+        .sort((a, b) => b.total - a.total),
+    };
+  }),
 });
