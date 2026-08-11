@@ -23,8 +23,11 @@
  *    displace a proven mailbox.
  */
 
+import { canonicalizeCompanyDisplayName, cleanPlaceholder, normalizeJobTitle } from "./recordNormalize";
+
 export type EnrichableField =
-  | "email" | "phone" | "company" | "companyDomain" | "title" | "education" | "linkedinUrl";
+  | "email" | "phone" | "company" | "companyDomain" | "title" | "education" | "linkedinUrl"
+  | "city" | "state" | "country";
 
 export interface FieldProvenance {
   /** Where the value came from. */
@@ -175,6 +178,18 @@ export function mergeField(
   return { field: candidate.field, action: "kept", value: curVal, provenance: curProv, previous: { value: curVal, provenance: current.provenance } };
 }
 
+/** Per-field representation repair for incoming candidates. Company names
+ *  and titles get the full treatment; everything else gets the junk gate.
+ *  Emails are deliberately only junk-gated — rewriting a Reoon-verified
+ *  address, even cosmetically, would detach the value from its verdict. */
+function normalizeCandidateValue(field: EnrichableField, value: string): string | null {
+  switch (field) {
+    case "company": return canonicalizeCompanyDisplayName(value);
+    case "title": return normalizeJobTitle(value);
+    default: return cleanPlaceholder(value);
+  }
+}
+
 /** Merge a batch of candidates; later candidates see earlier winners. */
 export function mergeAll(
   fields: Partial<Record<EnrichableField, string | null | undefined>>,
@@ -190,8 +205,16 @@ export function mergeAll(
   const decisions: MergeDecision[] = [];
   for (const cand of candidates) {
     if (!cand.value?.trim()) continue;
-    const cur = state[cand.field] ?? { value: fields[cand.field], provenance: ledger[cand.field] };
-    const d = mergeField(cur, cand);
+    // Normalization + QC gate: every enrichment source funnels through
+    // mergeAll (house rule), so this is the ONE place representation gets
+    // fixed before anything is saved — company display spelling, title
+    // formatting, placeholder junk. A candidate that normalizes to nothing
+    // ("N/A", "-") never merges at all.
+    const normalized = normalizeCandidateValue(cand.field, cand.value);
+    if (!normalized) continue;
+    const normCand = normalized === cand.value ? cand : { ...cand, value: normalized };
+    const cur = state[normCand.field] ?? { value: fields[normCand.field], provenance: ledger[normCand.field] };
+    const d = mergeField(cur, normCand);
     decisions.push(d);
     state[cand.field] = { value: d.value, provenance: d.provenance };
     outLedger[cand.field] = d.provenance;

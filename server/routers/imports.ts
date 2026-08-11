@@ -12,6 +12,9 @@ import {
   prospects,
 } from "../../drizzle/schema";
 import { parseCSVText } from "../services/csv";
+import { canonicalizeCompanyDisplayName, cleanPlaceholder, normalizeJobTitle } from "../services/enrichment/recordNormalize";
+import { stripNameCredentials } from "../services/enrichment/personName";
+import { buildCompanyCanonicalizer } from "../services/enrichment/companyCanonical";
 import {
   CONTACT_IMPORT_FIELDS,
   describeDuplicateMappings,
@@ -54,6 +57,19 @@ function mapRowToContact(
       result[sysField] = row[csvCol];
     }
   }
+  // Normalization + QC before anything downstream sees the row — the same
+  // rules every enrichment source gets in fieldMerge: placeholder junk
+  // ("N/A", "-") becomes empty, names lose vendor credential suffixes,
+  // titles and company names get their representation repaired. Workspace
+  // company-spelling convergence happens once per import in the procedures
+  // (buildCompanyCanonicalizer), not per row here.
+  for (const k of Object.keys(result)) {
+    result[k] = cleanPlaceholder(result[k]) ?? "";
+  }
+  if (result.firstName) result.firstName = stripNameCredentials(result.firstName) ?? result.firstName;
+  if (result.lastName) result.lastName = stripNameCredentials(result.lastName) ?? result.lastName;
+  if (result.title) result.title = normalizeJobTitle(result.title) ?? "";
+  if (result.company) result.company = canonicalizeCompanyDisplayName(result.company) ?? "";
   return result;
 }
 
@@ -383,8 +399,12 @@ export const importsRouter = router({
       /** Of those, how many also produced no name+company key to fall back on. */
       let unmatchableRows = 0;
 
+      // Workspace company-spelling convergence, one snapshot per run. Applied
+      // in BOTH procedures so the preview's dedupe keys match the commit's.
+      const canonicalCompany = await buildCompanyCanonicalizer(ctx.workspace.id);
       rows.forEach((row, idx) => {
         const mapped = mapRowToContact(row, input.fieldMapping as Record<string, string | null>);
+        if (mapped.company) mapped.company = canonicalCompany(mapped.company, mapped.website ?? null);
         const rowIndex = idx + 1;
         // ONE classifier, shared with commit — see classifyImportRow for the
         // three ways these two used to disagree.
@@ -532,10 +552,14 @@ export const importsRouter = router({
       const toInsert: Pending[] = [];
       const importRowValues: Array<Record<string, unknown>> = [];
 
+      // Same convergence snapshot the preview used — the preview describes
+      // the import, spelling included.
+      const canonicalCompany = await buildCompanyCanonicalizer(ctx.workspace.id);
       for (let idx = 0; idx < rows.length; idx++) {
         const row = rows[idx];
         const rowIndex = idx + 1;
         const mapped = mapRowToContact(row, input.fieldMapping as Record<string, string | null>);
+        if (mapped.company) mapped.company = canonicalCompany(mapped.company, mapped.website ?? null);
 
         // ONE classifier, shared with validateRows. It applies the required-field,
         // email AND phone checks in the same order for both, so the preview's

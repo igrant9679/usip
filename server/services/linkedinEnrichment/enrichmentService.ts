@@ -24,6 +24,7 @@ import {
 import type { VelocityLinkedInProfile } from "./mapper";
 import { CONFIDENCE, mergeAll, type Candidate, type ProvenanceMap } from "../enrichment/fieldMerge";
 import { companyFromHeadline } from "../enrichment/headlineCompany";
+import { parseLinkedInLocation } from "../enrichment/recordNormalize";
 import {
   buildSnapshot,
   snapshotHash,
@@ -131,12 +132,22 @@ export async function applyEnrichment(opts: {
   // ICP fit scorer see enriched data at all.
   {
     const at = now.toISOString();
-    const cand = (field: "company" | "companyDomain" | "title", value: string | null | undefined): Candidate[] =>
+    const cand = (field: Candidate["field"], value: string | null | undefined): Candidate[] =>
       value?.trim() ? [{ field, value: value.trim(), source: "linkedin", confidence: CONFIDENCE.linkedinProfile, at }] : [];
+    // Location + canonical profile URL ride the same provenance-aware merge
+    // as company/title — the contact stays synchronized with LinkedIn where
+    // LinkedIn wins on source quality/recency, and keeps stronger data where
+    // it doesn't. Location arrives as one string ("Austin, Texas, United
+    // States") and is split only as far as its shape allows.
+    const loc = parseLinkedInLocation(p.location);
     const candidates: Candidate[] = [
       ...cand("company", fields.currentCompanyName as string | null),
       ...cand("companyDomain", fields.currentCompanyDomain as string | null),
       ...cand("title", p.currentTitle ? clip(p.currentTitle, 120) : null),
+      ...cand("linkedinUrl", p.profileUrl || null),
+      ...cand("city", clip(loc.city, 80)),
+      ...cand("state", clip(loc.state, 80)),
+      ...cand("country", clip(loc.country, 80)),
     ];
     // LinkedIn withholds structured work history for out-of-network profiles
     // (experience empty, no current_company) — but "CFO at Acme" headlines
@@ -152,17 +163,31 @@ export async function applyEnrichment(opts: {
       }
     }
     if (candidates.length > 0) {
+      // Converge the company candidate onto the workspace's established
+      // spelling (account by domain/name, else most common prospect
+      // spelling) before it competes in the merge.
+      for (const c of candidates) {
+        if (c.field === "company") {
+          const { canonicalCompanyNameForWorkspace } = await import("../enrichment/companyCanonical");
+          c.value = await canonicalCompanyNameForWorkspace(ws, c.value, fields.currentCompanyDomain as string | null);
+        }
+      }
       const [cur] = await db
         .select({
           company: prospects.company, companyDomain: prospects.companyDomain,
-          title: prospects.title, fieldProvenance: prospects.fieldProvenance,
+          title: prospects.title, linkedinUrl: prospects.linkedinUrl,
+          city: prospects.city, state: prospects.state, country: prospects.country,
+          fieldProvenance: prospects.fieldProvenance,
         })
         .from(prospects)
         .where(and(eq(prospects.workspaceId, ws), eq(prospects.id, pid)))
         .limit(1);
       if (cur) {
         const merged = mergeAll(
-          { company: cur.company, companyDomain: cur.companyDomain, title: cur.title },
+          {
+            company: cur.company, companyDomain: cur.companyDomain, title: cur.title,
+            linkedinUrl: cur.linkedinUrl, city: cur.city, state: cur.state, country: cur.country,
+          },
           (cur.fieldProvenance ?? {}) as ProvenanceMap,
           candidates,
         );

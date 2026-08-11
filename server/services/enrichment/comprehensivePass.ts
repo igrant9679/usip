@@ -306,6 +306,17 @@ export async function runComprehensiveEnrichment(opts: {
   }
 
   /* ── 5. Reconcile + persist ───────────────────────────────────────── */
+  // Canonical company convergence: if this workspace already knows this
+  // company (an account by domain/name, or other prospects by normalized
+  // name), the candidate adopts the established spelling so variations
+  // never fork into parallel companies. Best-effort by construction.
+  for (const c of candidates) {
+    if (c.field === "company") {
+      const { canonicalCompanyNameForWorkspace } = await import("./companyCanonical");
+      c.value = await canonicalCompanyNameForWorkspace(opts.workspaceId, c.value, domainNow());
+    }
+  }
+
   const merged = mergeAll(
     {
       email: p.email, phone: p.phone, company: p.company,
@@ -317,8 +328,11 @@ export async function runComprehensiveEnrichment(opts: {
   );
 
   const patch: Record<string, unknown> = { fieldProvenance: merged.ledger, lastEnrichedAt: new Date() };
+  // Clamp to column widths — an oversized value must reject THIS field, not
+  // the whole UPDATE (MySQL strict mode rejects, not truncates).
+  const WIDTHS: Record<string, number> = { title: 120, email: 320, city: 80, state: 80, country: 80 };
   for (const [field, value] of Object.entries(merged.fields)) {
-    patch[field] = field === "title" ? value.slice(0, 120) : value.slice(0, field === "email" ? 320 : 200);
+    patch[field] = value.slice(0, WIDTHS[field] ?? 200);
   }
   const emailDecision = merged.decisions.find((d) => d.field === "email" && (d.action === "filled" || d.action === "replaced"));
   if (emailDecision?.provenance.verification) {

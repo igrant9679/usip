@@ -110,8 +110,33 @@ describe("mergeAll — a pass's candidates settle in order", () => {
         { field: "company", value: "Acme Corp", source: "linkedin", confidence: 85, at: at("2026-08-10") },
       ],
     );
-    expect(out.fields.company).toBe("Acme Corp");
+    // "Corp" → "Corp." — mergeAll now runs every candidate through the
+    // recordNormalize representation layer before merging, so the stored
+    // value carries the canonical suffix spelling.
+    expect(out.fields.company).toBe("Acme Corp.");
     expect(out.ledger.company?.source).toBe("linkedin");
     expect(out.decisions.map((d) => d.action)).toEqual(["filled", "replaced"]);
+  });
+
+  it("placeholder junk candidates never merge at all", () => {
+    const out = mergeAll(
+      { company: null, title: null },
+      {},
+      [
+        { field: "company", value: "N/A", source: "apollo", confidence: 75, at: at("2026-08-10") },
+        { field: "title", value: "-", source: "linkedin", confidence: 85, at: at("2026-08-10") },
+      ],
+    );
+    expect(out.fields).toEqual({});
+    expect(out.decisions).toEqual([]);
+  });
+
+  it("titles get formatting repair on the way in, meaning untouched", () => {
+    const out = mergeAll(
+      { title: null },
+      {},
+      [{ field: "title", value: "vp of sales", source: "linkedin", confidence: 85, at: at("2026-08-10") }],
+    );
+    expect(out.fields.title).toBe("VP of Sales");
   });
 });
