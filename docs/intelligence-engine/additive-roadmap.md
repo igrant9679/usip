@@ -34,6 +34,11 @@ Tests: extend existing import/dedup/merge suites; add LeadRocks mapping coverage
 
 ## Phase 2 — Company-side provenance + record sync (small additive schema)
 
+> **STATUS: 2.1–2.3 SHIPPED 2026-08-11 (`5ef9373`, migr 0154); 2.4 stays
+> BLOCKED on the Zernio decision.** Tests in `server/roadmapPhase2.test.ts`
+> (+12). Notable adapter rule added: corroboration never lowers
+> confidence (fieldMerge's 99 cap would have demoted user·100 pins).
+
 | # | Change | Notes |
 |---|---|---|
 | 2.1 | **Migration 0153 (additive):** `accounts.field_provenance` json — same shape as prospects'. Company-writing paths that already reconcile (brandReconciler, future firmographic provider) record per-field entries; legacy values get the `preexisting` baseline exactly as fieldMerge does today. **Not** a new merge engine — reuse `fieldMerge.mergeField` (it is entity-agnostic already: field names are the only prospect-specific part) | Resolves "scalar-only company confidence" without a fourth vocabulary |
