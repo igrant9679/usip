@@ -3307,6 +3307,24 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0153: People-as-master for campaign prospects + catch-all emails ──────
+  // person_prospect_id links every prospect_queue row to its canonical
+  // People (prospects) record — one person, many campaigns, zero duplicate
+  // person records. catch_all_email preserves a generic organizational inbox
+  // (info@/admissions@/…) when a verified person-specific address replaces it
+  // as primary. Both additive; existing rows stay valid (link is nullable,
+  // queue mirror columns keep working for every existing reader).
+  // VERIFY: a campaign Prospects row shows the linked person's data, and
+  // upgrading a generic email leaves it visible as "Catch-all".
+  {
+    name: "0153_person_link_and_catch_all_email.sql",
+    statements: [
+      "ALTER TABLE `prospects` ADD COLUMN `catch_all_email` varchar(320) NULL",
+      "ALTER TABLE `prospect_queue` ADD COLUMN `person_prospect_id` int NULL",
+      "CREATE INDEX `ix_pq_person` ON `prospect_queue` (`person_prospect_id`)",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

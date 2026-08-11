@@ -445,6 +445,16 @@ export async function saveScrapeJobAndQueue(
         );
         if (saved === 0) throw batchErr;
       }
+
+      // People-as-master (migration 0153): every retained campaign prospect
+      // gets a canonical People record. Fire-and-forget — linking must never
+      // fail an ingest; the boot backfill sweeps anything this misses.
+      void import("../../services/personLink")
+        .then((m) => m.linkUnlinkedQueueRows({ workspaceId, campaignId, limit: rows.length + 25 }))
+        .then((r) => {
+          if (r.linked > 0) console.log(`[personLink] campaign ${campaignId}: linked=${r.linked} created=${r.created} skipped=${r.skippedNoIdentity}`);
+        })
+        .catch((e) => console.error("[personLink] ingest link failed:", (e as Error)?.message ?? e));
     }
   }
 }

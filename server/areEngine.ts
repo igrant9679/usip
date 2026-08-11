@@ -105,6 +105,9 @@ const ENRICH_PER_TICK = 5;
  */
 const SEQUENCE_PER_CAMPAIGN_TICK = 3;
 const ENROLL_PER_CAMPAIGN_TICK = 10;
+// Final checks can spend Reoon credits and seconds — bound them per tick so
+// the 3-minute engine cadence never stalls. Unchecked rows still enroll.
+const FINAL_CHECKS_PER_TICK = 5;
 /** icpMatchScore below this is auto-screened out even in human-approval modes. */
 const AUTO_REJECT_FLOOR = 30;
 /** Fallback approve line for `full` autonomy when autoApproveThreshold is null. */
@@ -469,6 +472,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
       .select({
         id: prospectQueue.id,
         email: prospectQueue.email,
+        personProspectId: prospectQueue.personProspectId,
         sequence: prospectIntelligence.generatedSequence,
       })
       .from(prospectQueue)
@@ -486,6 +490,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
       )
       .limit(ENROLL_PER_CAMPAIGN_TICK);
 
+    let finalChecksThisTick = 0;
     for (const row of rows) {
       // Idempotency — if execution rows already exist, just sync the status.
       const [existing] = await db
@@ -498,6 +503,22 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
           .set({ sequenceStatus: "enrolled" })
           .where(eq(prospectQueue.id, row.id));
         continue;
+      }
+
+      // Final record-detail validation via the canonical person (QuickEnrich
+      // + stored LinkedIn + Reoon through the ONE comprehensive pass).
+      // Best-effort and tick-bounded: enrollment NEVER blocks on it. Runs
+      // BEFORE the suppression check so suppression evaluates the address
+      // that will actually be used.
+      if (row.personProspectId && finalChecksThisTick < FINAL_CHECKS_PER_TICK) {
+        finalChecksThisTick++;
+        const { runFinalCheckForQueueRow } = await import("./services/enrichment/finalCheck");
+        const check = await runFinalCheckForQueueRow(wsId, row.id);
+        if (check.mirroredEmail) {
+          row.email = check.mirroredEmail;
+          await emitLog(wsId, campId, "enroll", "info",
+            `Final check upgraded prospect ${row.id} to verified person email before enrollment`);
+        }
       }
 
       // Suppressed? Skip rather than enroll.

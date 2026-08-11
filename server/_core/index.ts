@@ -544,6 +544,20 @@ async function startServer() {
   setTimeout(runBrandReconcile, 12 * 60 * 1000); // stagger: 12 minutes after boot
   setInterval(runBrandReconcile, 6 * 60 * 60 * 1000); // every 6h; bounded per run
 
+  // People-as-master backfill: link historic prospect_queue rows to canonical
+  // People records (never mutates queue person columns — display/link only).
+  // The ingest seam links new rows; this heals anything it missed.
+  const runPersonLinkBackfill = () => {
+    import("../services/personLink")
+      .then((m) => m.linkUnlinkedQueueRows({ limit: 500 }))
+      .then((r) => {
+        if (r.scanned > 0) console.log(`[personLink] backfill: scanned=${r.scanned} linked=${r.linked} created=${r.created} skipped=${r.skippedNoIdentity} failed=${r.failed}`);
+      })
+      .catch((e) => console.error("[personLink] backfill failed:", e));
+  };
+  setTimeout(runPersonLinkBackfill, 21 * 60 * 1000); // stagger: 21 minutes after boot
+  setInterval(runPersonLinkBackfill, 24 * 60 * 60 * 1000); // daily heal; bounded per run
+
   // Nightly AI pipeline batch: midnight cron for leads above score threshold
   const scheduleNightlyBatch = () => {
     const now = new Date();

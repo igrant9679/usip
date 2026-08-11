@@ -99,7 +99,9 @@ export type ResolvedEmail = {
   creditsPower: number;
 };
 
-const ROLE_ACCOUNT = /^(info|contact|hello|help|support|sales|admin|team|office|mail|enquiries|inquiries|marketing|hr|jobs|careers|press|media|billing|accounts|noreply|no-reply)@/i;
+// One definition of "generic organizational inbox" — shared with the
+// enrichment upgrade ladder and the client's Catch-all label.
+import { GENERIC_INBOX_RE as ROLE_ACCOUNT } from "@shared/genericEmail";
 
 export async function resolveVerifiedEmail(input: {
   firstName?: string | null;

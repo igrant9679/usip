@@ -14,6 +14,7 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { ProspectAvatar, type ProfileImage } from "../ProspectAvatar";
+import { isGenericInboxEmail } from "@shared/genericEmail";
 import { CompanyLogo as BrandCompanyLogo } from "../company/CompanyLogo";
 import { LinkedInUpdateIndicator, RowEnrichAction, type LinkedInChangeSummary } from "./LinkedInEnrichment";
 import { AddToListMenu, SequenceMenu } from "./SelectionToolbar";
@@ -64,6 +65,9 @@ export type Prospect = {
   seniority?: string | null;
   email?: string | null;
   emailStatus?: string | null;
+  /** Generic organizational inbox preserved when a person-specific email
+   *  took over as primary (migration 0153). */
+  catchAllEmail?: string | null;
   phone?: string | null;
   linkedinUrl?: string | null;
   city?: string | null;
@@ -98,6 +102,22 @@ export function emailStatusBadge(status?: string | null) {
   };
   const s = map[status] ?? { label: status, variant: "outline" as const };
   return <Badge variant={s.variant} className="text-[10px] px-1.5 py-0">{s.label}</Badge>;
+}
+
+/** "Generic inbox" pill for info@/admissions@-style addresses. Distinct from
+ *  Reoon's accept_all verdict (a DOMAIN property) — this flags the LOCAL
+ *  PART as a shared inbox rather than a person. */
+export function genericInboxBadge(email?: string | null) {
+  if (!isGenericInboxEmail(email)) return null;
+  return (
+    <Badge
+      variant="outline"
+      className="text-[10px] px-1.5 py-0 border-amber-400/60 text-amber-700 dark:text-amber-400"
+      title="Catch-all (generic inbox) — a shared organizational address, not a person-specific one"
+    >
+      Catch-all
+    </Badge>
+  );
 }
 
 /** ICP-fit pill from a 0–100 confidence score. */
@@ -297,9 +317,11 @@ export const COLUMN_REGISTRY: Record<ColumnKey, ColumnDef> = {
     icon: Mail,
     cell: (p) =>
       p.email ? (
-        <div className="group/email flex min-w-0 max-w-[230px] items-center gap-1.5">
+        <div className="min-w-0 max-w-[230px]">
+        <div className="group/email flex min-w-0 items-center gap-1.5">
           <span className="min-w-0 truncate text-[12px]" title={p.email}>{p.email}</span>
           {emailStatusBadge(p.emailStatus)}
+          {genericInboxBadge(p.email)}
           <button
             type="button"
             title="Copy email"
@@ -313,6 +335,13 @@ export const COLUMN_REGISTRY: Record<ColumnKey, ColumnDef> = {
           >
             <Copy className="size-3" />
           </button>
+        </div>
+        {p.catchAllEmail && p.catchAllEmail !== p.email ? (
+          <div className="mt-0.5 flex min-w-0 items-center gap-1 text-[11px] text-muted-foreground" title={`Catch-all (generic inbox): ${p.catchAllEmail}`}>
+            <span className="min-w-0 truncate">{p.catchAllEmail}</span>
+            <span className="shrink-0 text-[9px] uppercase tracking-wide text-amber-700/80 dark:text-amber-400/80">catch-all</span>
+          </div>
+        ) : null}
         </div>
       ) : (
         <span className="text-[12px] text-muted-foreground">—</span>

@@ -90,6 +90,7 @@ import {
   type SavedView,
   fitBadge,
   emailStatusBadge,
+  genericInboxBadge,
   fmtNum,
 
   COLUMN_REGISTRY,
@@ -1076,7 +1077,10 @@ function DetailPanel({ p, onClose, onOpenFull }: { p: Prospect; onClose: () => v
           </Section>
 
           <Section title="Contact info">
-            <Field icon={Mail} label="Email" value={d.email} extra={emailStatusBadge(d.emailStatus)} />
+            <Field icon={Mail} label="Email" value={d.email} extra={<>{emailStatusBadge(d.emailStatus)}{genericInboxBadge(d.email)}</>} />
+            {(d as any).catchAllEmail && (d as any).catchAllEmail !== d.email ? (
+              <Field icon={Mail} label="Catch-all (generic inbox)" value={(d as any).catchAllEmail} />
+            ) : null}
             <Field icon={Phone} label="Phone" value={d.phone} />
             <Field icon={MapPin} label="Location" value={loc || null} />
             {d.linkedinUrl ? (

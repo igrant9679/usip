@@ -27,7 +27,10 @@ import { canonicalizeCompanyDisplayName, cleanPlaceholder, normalizeJobTitle } f
 
 export type EnrichableField =
   | "email" | "phone" | "company" | "companyDomain" | "title" | "education" | "linkedinUrl"
-  | "city" | "state" | "country";
+  | "city" | "state" | "country"
+  // Generic inbox demoted from primary when a person-specific email won —
+  // written by comprehensivePass, carries the demoted value's provenance.
+  | "catchAllEmail";
 
 export interface FieldProvenance {
   /** Where the value came from. */

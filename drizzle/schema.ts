@@ -3463,6 +3463,10 @@ export const prospectQueue = mysqlTable(
     // Linked CRM records (created after positive reply)
     linkedContactId: int("linkedContactId"),
     linkedOpportunityId: int("linkedOpportunityId"),
+    // Canonical People record (migration 0153): every campaign prospect
+    // references ONE prospects row; the person columns above become a
+    // display/engine mirror, never a second source of truth.
+    personProspectId: int("person_prospect_id"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
@@ -3471,6 +3475,7 @@ export const prospectQueue = mysqlTable(
     byWs: index("ix_pq_ws").on(t.workspaceId),
     byEmail: index("ix_pq_email").on(t.email),
     byStatus: index("ix_pq_status").on(t.campaignId, t.enrichmentStatus),
+    byPerson: index("ix_pq_person").on(t.personProspectId),
   }),
 );
 export type ProspectQueue = typeof prospectQueue.$inferSelect;
@@ -3812,6 +3817,10 @@ export const prospects = mysqlTable(
   {
     id: int("id").autoincrement().primaryKey(),
     workspaceId: int("workspaceId").notNull(),
+    // Generic organizational inbox preserved when a verified person-specific
+    // email replaces it (migration 0153). NOT a Reoon verdict — see
+    // shared/genericEmail.ts for the distinction.
+    catchAllEmail: varchar("catch_all_email", { length: 320 }),
     cloduraPersonId: varchar("clodura_person_id", { length: 64 }).unique(),
     cloduraOrgId: varchar("clodura_org_id", { length: 64 }),
     cloduraSyncedAt: timestamp("clodura_synced_at"),

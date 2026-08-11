@@ -42,6 +42,7 @@ import {
   prospectIntelligence,
   prospectNotes,
   prospectQueue,
+  prospects,
   reevalRuns,
   users,
   workspaceMembers,
@@ -445,6 +446,20 @@ Produce:
     if (resolvedEmail) {
       await emitSeqLog(db, workspaceId, prospect.campaignId, "info", "enrich",
         `Found email for ${prospect.firstName ?? ""} ${prospect.lastName ?? ""} → ${resolvedEmail} (${resolvedStatus ?? "unknown"})`.trim());
+    }
+
+    // People-as-master: the agent's findings also land on the canonical
+    // person record (through the merge — never a blind write). Best-effort.
+    if (prospect.personProspectId && (resolvedEmail || effCompanyName || effCompanyDomain)) {
+      void import("../../services/personLink")
+        .then((m) => m.mergeIntoPerson(workspaceId, prospect.personProspectId!, {
+          email: resolvedEmail,
+          emailVerification: resolvedStatus,
+          companyName: effCompanyName,
+          companyDomain: effCompanyDomain,
+          source: "are_enrich_agent",
+        }))
+        .catch((e) => console.error("[personLink] agent writeback failed:", (e as Error)?.message ?? e));
     }
 
   } catch (err) {
@@ -969,7 +984,29 @@ export const prospectsRouter = router({
       )`;
 
       const rows = await db
-        .select({ ...getTableColumns(prospectQueue), intentSignals })
+        .select({
+          ...getTableColumns(prospectQueue),
+          intentSignals,
+          // Canonical person (People-as-master, migration 0153). The queue
+          // columns stay as the engine/display fallback; when a person is
+          // linked the tab renders THESE — one record, N campaigns.
+          personFirstName: prospects.firstName,
+          personLastName: prospects.lastName,
+          personTitle: prospects.title,
+          personCompany: prospects.company,
+          personCompanyDomain: prospects.companyDomain,
+          personEmail: prospects.email,
+          personEmailStatus: prospects.emailStatus,
+          personCatchAllEmail: prospects.catchAllEmail,
+          personPhone: prospects.phone,
+          personLinkedinUrl: prospects.linkedinUrl,
+          personCity: prospects.city,
+          personState: prospects.state,
+          personCountry: prospects.country,
+          personImageUrl: prospects.profileImageUrl,
+          personImageSource: prospects.profileImageSource,
+          personImageStatus: prospects.profileImageStatus,
+        })
         .from(prospectQueue)
         // Scoped on BOTH sides. prospect_intelligence carries its own
         // workspaceId and joining on the queue id alone is the shape that made
@@ -979,6 +1016,13 @@ export const prospectsRouter = router({
           and(
             eq(prospectIntelligence.prospectQueueId, prospectQueue.id),
             eq(prospectIntelligence.workspaceId, prospectQueue.workspaceId),
+          ),
+        )
+        .leftJoin(
+          prospects,
+          and(
+            eq(prospects.id, prospectQueue.personProspectId),
+            eq(prospects.workspaceId, prospectQueue.workspaceId),
           ),
         )
         .where(and(...conditions))
@@ -1005,7 +1049,35 @@ export const prospectsRouter = router({
         .orderBy(desc(prospectQueue.icpMatchScore), desc(intentSignals))
         .limit(input.limit)
         .offset(input.offset);
-      return rows;
+
+      // Shape the person as a nested object with the SAME policy-gated
+      // profile_image resolution People uses; raw image columns never leave
+      // the server (same rule as prospects.list).
+      const { resolveProspectProfileImage } = await import("../../services/profileImage");
+      return rows.map((r) => {
+        const {
+          personFirstName, personLastName, personTitle, personCompany, personCompanyDomain,
+          personEmail, personEmailStatus, personCatchAllEmail, personPhone, personLinkedinUrl,
+          personCity, personState, personCountry, personImageUrl, personImageSource, personImageStatus,
+          ...queue
+        } = r;
+        const person = r.personProspectId && personFirstName !== null
+          ? {
+              id: r.personProspectId,
+              firstName: personFirstName, lastName: personLastName,
+              title: personTitle, company: personCompany, companyDomain: personCompanyDomain,
+              email: personEmail, emailStatus: personEmailStatus, catchAllEmail: personCatchAllEmail,
+              phone: personPhone, linkedinUrl: personLinkedinUrl,
+              city: personCity, state: personState, country: personCountry,
+              profile_image: resolveProspectProfileImage({
+                profileImageUrl: personImageUrl,
+                profileImageSource: personImageSource,
+                profileImageStatus: personImageStatus,
+              }),
+            }
+          : null;
+        return { ...queue, person };
+      });
     }),
 
   getIntelligence: workspaceProcedure

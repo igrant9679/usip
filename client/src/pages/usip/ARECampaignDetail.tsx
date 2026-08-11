@@ -18,6 +18,8 @@
  *   - Signal feed with sentiment colour coding and action badges
  */
 import { Shell, PageHeader, StatCard, EmptyState } from "@/components/usip/Shell";
+import { ProspectAvatar } from "@/components/usip/ProspectAvatar";
+import { emailStatusBadge, genericInboxBadge } from "@/components/usip/people/peopleShared";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
@@ -323,6 +325,19 @@ function ProspectRow({
   const enrichColor = ENRICH_COLOR[p.enrichmentStatus] ?? "#94A3B8";
   const seqColor = SEQ_COLOR[p.sequenceStatus] ?? "#94A3B8";
 
+  // People-as-master: when the row is linked to a canonical People record,
+  // render THAT — same avatar treatment, contact hierarchy and badges as the
+  // People tab. Queue mirror columns remain the fallback for unlinked rows.
+  const person = (p as { person?: any }).person ?? null;
+  const displayFirst = person?.firstName ?? p.firstName;
+  const displayLast = person?.lastName ?? p.lastName;
+  const displayTitle = person?.title ?? p.title;
+  const displayCompany = person?.company ?? p.companyName;
+  const displayEmail = person?.email ?? p.email;
+  const displayPhone = person?.phone ?? p.phone;
+  const displayLinkedin = person?.linkedinUrl ?? p.linkedinUrl;
+  const fullName = `${displayFirst ?? ""} ${displayLast ?? ""}`.trim() || "—";
+
   return (
     <div
       className={`group flex items-center gap-3 rounded-xl border px-3 py-2.5 cursor-pointer transition-all ${
@@ -341,12 +356,38 @@ function ProspectRow({
         </div>
       )}
 
-      {/* Name + company */}
+      {/* Identity — People's avatar + name + title · company hierarchy */}
+      <ProspectAvatar image={person?.profile_image ?? null} name={fullName} size="sm" className="!size-7 !text-[10px] shrink-0" />
       <div className="flex-1 min-w-0">
-        <div className="text-sm font-medium truncate">{p.firstName} {p.lastName}</div>
-        <div className="text-xs text-muted-foreground truncate">
-          {[p.title, p.companyName].filter(Boolean).join(" · ") || "—"}
+        <div className="flex min-w-0 items-center gap-1.5">
+          <span className="text-sm font-medium truncate">{fullName}</span>
+          {displayLinkedin ? (
+            <a
+              href={displayLinkedin}
+              target="_blank" rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              title="Open LinkedIn profile"
+              className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[3px] bg-[#0A66C2] text-[8px] font-bold leading-none text-white hover:opacity-80"
+            >
+              in
+            </a>
+          ) : null}
         </div>
+        <div className="text-xs text-muted-foreground truncate">
+          {[displayTitle, displayCompany].filter(Boolean).join(" · ") || "—"}
+        </div>
+        {(displayEmail || displayPhone) && (
+          <div className="mt-0.5 flex min-w-0 items-center gap-2 text-[11px] text-muted-foreground">
+            {displayEmail ? (
+              <span className="flex min-w-0 items-center gap-1">
+                <span className="min-w-0 truncate" title={displayEmail}>{displayEmail}</span>
+                {person ? emailStatusBadge(person.emailStatus) : null}
+                {genericInboxBadge(displayEmail)}
+              </span>
+            ) : null}
+            {displayPhone ? <span className="shrink-0 tabular-nums">{displayPhone}</span> : null}
+          </div>
+        )}
         {p.enrichmentStatus === "failed" && p.enrichmentError && (
           <div
             className="text-[11px] text-destructive/90 mt-0.5 line-clamp-2"

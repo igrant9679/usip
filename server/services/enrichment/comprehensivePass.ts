@@ -38,6 +38,7 @@ import {
 } from "./fieldMerge";
 import { companyFromHeadline } from "./headlineCompany";
 import { businessDomainFromEmail } from "../company/normalize";
+import { isGenericInboxEmail } from "@shared/genericEmail";
 
 export interface ComprehensiveResult {
   ok: boolean;
@@ -215,8 +216,14 @@ export async function runComprehensiveEnrichment(opts: {
     phases.domain = haveDomain ? "already known" : "no company name to resolve";
   }
 
-  /* ── 3. Email — only while we don't hold a Reoon-valid address ────── */
-  const emailIsProven = !!p.email && p.emailStatus === "valid";
+  /* ── 3. Email — only while we don't hold a Reoon-valid PERSON address.
+     A generic organizational inbox (info@/admissions@/…) can be Reoon-valid
+     and still not be a person — it never blocks the upgrade ladder. If a
+     person-specific address wins below, the generic one is preserved as
+     catchAllEmail rather than lost (owner spec, 2026-08-11). ──────────── */
+  const primaryIsGeneric = isGenericInboxEmail(p.email);
+  const emailIsProven = !!p.email && p.emailStatus === "valid" && !primaryIsGeneric;
+  if (primaryIsGeneric) phases.genericInbox = `primary ${p.email} is a generic inbox — trying person-specific upgrade`;
   // Recomputed after QuickEnrich: a QE hit can introduce the very domain
   // that pattern/scrape/domain_derived below were starving without.
   const domainNow = () => (candidates.find((c) => c.field === "companyDomain")?.value ?? p.companyDomain ?? "").trim() || null;
@@ -328,6 +335,13 @@ export async function runComprehensiveEnrichment(opts: {
     }
   }
 
+  // Belt: a generic-inbox candidate never displaces a person-specific
+  // primary, whatever its confidence. (No current source emits generic
+  // candidates — this guards the seam for future ones.)
+  const guarded = candidates.filter(
+    (c) => !(c.field === "email" && isGenericInboxEmail(c.value) && p.email && !primaryIsGeneric),
+  );
+
   const merged = mergeAll(
     {
       email: p.email, phone: p.phone, company: p.company,
@@ -335,7 +349,7 @@ export async function runComprehensiveEnrichment(opts: {
       education: p.education, linkedinUrl: p.linkedinUrl,
     },
     (p.fieldProvenance ?? {}) as ProvenanceMap,
-    candidates,
+    guarded,
   );
 
   const patch: Record<string, unknown> = { fieldProvenance: merged.ledger, lastEnrichedAt: new Date() };
@@ -349,6 +363,21 @@ export async function runComprehensiveEnrichment(opts: {
   if (emailDecision?.provenance.verification) {
     patch.emailStatus = emailDecision.provenance.verification;
     patch.emailVerifiedAt = new Date();
+  }
+  // A person-specific address just displaced a generic inbox: preserve the
+  // generic one as catchAllEmail (with the provenance it held as primary)
+  // instead of losing it. Fill-if-empty — an existing catch-all is older
+  // truth about the same inbox, not something to churn.
+  if (
+    emailDecision?.action === "replaced" && primaryIsGeneric && p.email &&
+    !isGenericInboxEmail(emailDecision.value) && !p.catchAllEmail
+  ) {
+    patch.catchAllEmail = p.email.slice(0, 320);
+    merged.ledger.catchAllEmail =
+      ((p.fieldProvenance ?? {}) as ProvenanceMap).email ??
+      { source: "preexisting", confidence: CONFIDENCE.preexisting, at: "1970-01-01T00:00:00.000Z" };
+    patch.fieldProvenance = merged.ledger;
+    phases.catchAll = `generic ${p.email} preserved as catch-all`;
   }
   await db.update(prospects).set(patch as never)
     .where(and(eq(prospects.workspaceId, opts.workspaceId), eq(prospects.id, opts.prospectId)));
