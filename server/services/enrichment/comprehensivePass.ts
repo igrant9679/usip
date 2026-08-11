@@ -154,6 +154,17 @@ export async function runComprehensiveEnrichment(opts: {
     li("company", enr.currentCompanyName);
     li("companyDomain", enr.currentCompanyDomain);
     li("title", enr.currentTitle);
+    // Location + canonical URL sync from the STORED profile — rows enriched
+    // before the sync shipped converge on the next pass without re-spending
+    // a LinkedIn lookup.
+    {
+      const { parseLinkedInLocation } = await import("./recordNormalize");
+      const loc = parseLinkedInLocation(enr.linkedinLocation);
+      li("city", loc.city?.slice(0, 80));
+      li("state", loc.state?.slice(0, 80));
+      li("country", loc.country?.slice(0, 80));
+      li("linkedinUrl", enr.linkedinProfileUrl);
+    }
     // LinkedIn withholds structured work history outside the connected
     // account's network, but "CFO at Acme" headlines still name the employer.
     // Weaker source, honest ledger: headline_parse · 60.
