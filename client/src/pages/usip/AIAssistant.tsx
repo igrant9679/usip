@@ -1,27 +1,40 @@
 /**
  * AIAssistant — the "AI Assistant" top-nav surface (/v2/ai-assistant).
  *
- * A full-page conversational assistant grounded in the workspace's Help
- * articles. Tied to the existing helpCenter chat backend:
- *   - helpCenter.startConversation → { conversationId }
- *   - helpCenter.askAI            → { answer, citedArticleIds, confidence }
- * (the same endpoints the in-app Help drawer uses), so this is a real,
- * working assistant rather than a placeholder.
+ * A full-page conversational assistant with a BOUNDED action tool set
+ * (assistant.chat): it looks things up through the app's own procedures,
+ * hands out in-app links, and PROPOSES actions — a proposed action renders
+ * as a confirmation card and runs only when the user presses Confirm
+ * (assistant.confirmAction). It cannot send email or LinkedIn messages;
+ * sends stay behind the autopilot dials and approval queues.
+ *
+ * Conversations persist through the same helpCenter conversation store the
+ * Help drawer uses (helpCenter.startConversation).
  */
 import { useEffect, useRef, useState } from "react";
+import { Link } from "wouter";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
-import { Sparkles, Send, Loader2, RotateCcw, BookOpen } from "lucide-react";
+import { Sparkles, Send, Loader2, RotateCcw, Wrench, ArrowRight, ShieldCheck, X } from "lucide-react";
 import { toast } from "sonner";
 
-type Message = { role: "user" | "assistant"; body: string; citedArticleIds?: number[]; confidence?: number };
+type PendingAction = { tool: string; args: Record<string, unknown>; description: string };
+type Message = {
+  role: "user" | "assistant";
+  body: string;
+  toolEvents?: Array<{ tool: string; summary: string }>;
+  navigations?: Array<{ href: string; label: string }>;
+  pendingAction?: PendingAction | null;
+  /** Set once the pending action was confirmed/declined so the card disarms. */
+  actionResolved?: "done" | "declined";
+};
 
 const SUGGESTED = [
-  "How do I enroll prospects into a sequence?",
-  "What's a good SDR morning routine?",
-  "How does the pipeline board work?",
-  "How do I work the Needs Review queue?",
+  "What's waiting on me today?",
+  "Find everyone at Amentum",
+  "Walk me through onboarding step by step",
+  "Create follow-up tasks for my newest prospects",
 ];
 
 export default function AIAssistant() {
@@ -33,7 +46,8 @@ export default function AIAssistant() {
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const startConv = trpc.helpCenter.startConversation.useMutation({ onError: (e) => toast.error(e.message) });
-  const askAI = trpc.helpCenter.askAI.useMutation({ onError: (e) => toast.error(e.message) });
+  const chat = trpc.assistant.chat.useMutation({ onError: (e) => toast.error(e.message) });
+  const confirm = trpc.assistant.confirmAction.useMutation({ onError: (e) => toast.error(e.message) });
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -52,14 +66,37 @@ export default function AIAssistant() {
         convId = res.conversationId;
         setConversationId(convId);
       }
-      const res = await askAI.mutateAsync({ conversationId: convId, message: userMsg });
-      setMessages((m) => [...m, { role: "assistant", body: res.answer, citedArticleIds: res.citedArticleIds, confidence: res.confidence }]);
+      const res = await chat.mutateAsync({ conversationId: convId, message: userMsg });
+      setMessages((m) => [...m, {
+        role: "assistant",
+        body: res.answer,
+        toolEvents: res.toolEvents,
+        navigations: res.navigations,
+        pendingAction: res.pendingAction,
+      }]);
     } catch {
       setMessages((m) => [...m, { role: "assistant", body: "Sorry, I couldn't process that. Please try again." }]);
     } finally {
       setIsLoading(false);
     }
   }
+
+  async function runPending(index: number, action: PendingAction) {
+    setIsLoading(true);
+    try {
+      const r = await confirm.mutateAsync({ tool: action.tool, args: action.args });
+      setMessages((m) => m.map((msg, i) => (i === index ? { ...msg, actionResolved: "done" as const } : msg))
+        .concat([{ role: "assistant", body: `Done — ${r.summary}.` }]));
+    } catch (e: any) {
+      setMessages((m) => m.concat([{ role: "assistant", body: `That didn't work: ${e?.message ?? "unknown error"}` }]));
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
+  const declinePending = (index: number) => {
+    setMessages((m) => m.map((msg, i) => (i === index ? { ...msg, actionResolved: "declined" as const } : msg)));
+  };
 
   const reset = () => { setMessages([]); setConversationId(null); setInput(""); };
 
@@ -71,7 +108,7 @@ export default function AIAssistant() {
           <span aria-hidden className="absolute inset-x-0 top-0 h-0.5" style={{ backgroundColor: accent }} />
           <Sparkles className="size-4" style={{ color: accent }} />
           <h1 className="text-[15px] font-semibold tracking-tight">AI Assistant</h1>
-          <span className="text-[11px] text-muted-foreground hidden sm:inline">· grounded in your Help Center</span>
+          <span className="text-[11px] text-muted-foreground hidden sm:inline">· looks things up, proposes actions, runs them only when you confirm</span>
           <div className="flex-1" />
           {messages.length > 0 && (
             <Button variant="ghost" size="sm" className="h-7 gap-1.5" onClick={reset}><RotateCcw className="size-3.5" /> New chat</Button>
@@ -87,7 +124,9 @@ export default function AIAssistant() {
                   <Sparkles className="size-6" />
                 </div>
                 <h2 className="text-lg font-semibold">Ask the Velocity Assistant</h2>
-                <p className="text-sm text-muted-foreground mt-1">Your in-app coach — answers grounded in the Help Center, with sources.</p>
+                <p className="text-sm text-muted-foreground mt-1">
+                  It can search your workspace, guide you step-by-step, and take bounded actions — always confirming with you first. It never sends outreach.
+                </p>
                 <div className="mt-5 grid sm:grid-cols-2 gap-2 text-left">
                   {SUGGESTED.map((p) => (
                     <button
@@ -109,13 +148,46 @@ export default function AIAssistant() {
                       className="max-w-[85%] rounded-2xl px-3.5 py-2 text-sm"
                       style={m.role === "user" ? { backgroundColor: accent, color: "white" } : { backgroundColor: "hsl(var(--muted))" }}
                     >
+                      {/* what the assistant looked up on the way to this answer */}
+                      {m.role === "assistant" && (m.toolEvents?.length ?? 0) > 0 && (
+                        <div className="mb-1.5 flex flex-wrap gap-1">
+                          {m.toolEvents!.map((t, j) => (
+                            <span key={j} className="inline-flex items-center gap-1 rounded-full border border-border/60 bg-background/60 px-2 py-0.5 text-[10px] text-muted-foreground">
+                              <Wrench className="size-2.5" /> {t.summary}
+                            </span>
+                          ))}
+                        </div>
+                      )}
                       <p className="whitespace-pre-wrap leading-relaxed">{m.body}</p>
-                      {m.role === "assistant" && (m.citedArticleIds?.length || m.confidence != null) && (
-                        <div className="mt-1.5 flex items-center gap-2 text-[11px] text-muted-foreground">
-                          {m.citedArticleIds && m.citedArticleIds.length > 0 && (
-                            <span className="inline-flex items-center gap-1"><BookOpen className="size-3" /> {m.citedArticleIds.length} source{m.citedArticleIds.length > 1 ? "s" : ""}</span>
+                      {/* in-app links it handed out */}
+                      {m.role === "assistant" && (m.navigations?.length ?? 0) > 0 && (
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          {m.navigations!.map((n, j) => (
+                            <Link key={j} href={n.href} className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[12px] font-medium hover:bg-background transition-colors" style={{ borderColor: `${accent}55`, color: accent }}>
+                              {n.label} <ArrowRight className="size-3" />
+                            </Link>
+                          ))}
+                        </div>
+                      )}
+                      {/* a proposed action awaiting the human */}
+                      {m.role === "assistant" && m.pendingAction && (
+                        <div className="mt-2 rounded-lg border bg-background/70 p-2.5" style={{ borderColor: `${accent}55` }}>
+                          <div className="flex items-center gap-1.5 text-[12px] font-medium">
+                            <ShieldCheck className="size-3.5" style={{ color: accent }} /> Proposed action
+                          </div>
+                          <p className="mt-1 text-[13px]">{m.pendingAction.description}</p>
+                          {m.actionResolved ? (
+                            <p className="mt-1.5 text-[11px] text-muted-foreground">{m.actionResolved === "done" ? "Confirmed and run." : "Declined."}</p>
+                          ) : (
+                            <div className="mt-2 flex gap-2">
+                              <Button size="sm" className="h-7 text-[12px]" style={{ backgroundColor: accent }} disabled={isLoading} onClick={() => runPending(i, m.pendingAction!)}>
+                                {isLoading ? <Loader2 className="size-3.5 animate-spin" /> : null} Confirm
+                              </Button>
+                              <Button size="sm" variant="ghost" className="h-7 text-[12px]" disabled={isLoading} onClick={() => declinePending(i)}>
+                                <X className="size-3.5" /> Not now
+                              </Button>
+                            </div>
                           )}
-                          {m.confidence != null && <span>· {m.confidence}% confidence</span>}
                         </div>
                       )}
                     </div>
@@ -145,7 +217,7 @@ export default function AIAssistant() {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
-              placeholder="Ask anything about using Velocity…"
+              placeholder="Ask for anything — search, guidance, or an action…"
               rows={1}
               className="flex-1 resize-none rounded-lg border bg-background px-3 py-2 text-sm outline-none focus:ring-2 max-h-32"
               style={{ ["--tw-ring-color" as any]: `${accent}66` }}
@@ -154,7 +226,7 @@ export default function AIAssistant() {
               {isLoading ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />} Send
             </Button>
           </div>
-          <p className="max-w-2xl mx-auto mt-1.5 text-[11px] text-muted-foreground">Answers are grounded in your Help Center articles and may be imperfect.</p>
+          <p className="max-w-2xl mx-auto mt-1.5 text-[11px] text-muted-foreground">Actions run only after you confirm, under your own permissions. The assistant cannot send outreach.</p>
         </div>
       </div>
     </Shell>

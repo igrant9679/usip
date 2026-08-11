@@ -71,6 +71,7 @@ import { personasRouter } from "./routers/personas";
 import { discoveryRouter } from "./routers/discovery";
 import { scoringRouter } from "./routers/scoring";
 import { companiesRouter } from "./routers/companies";
+import { assistantRouter } from "./routers/assistant";
 
 export const appRouter = router({
   system: systemRouter,
@@ -84,6 +85,7 @@ export const appRouter = router({
   }),
 
   workspace: workspaceRouter,
+  assistant: assistantRouter,
   scoring: scoringRouter,
   companies: companiesRouter,
   accounts: accountsRouter,
