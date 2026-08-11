@@ -17,6 +17,7 @@ import {
   MUTATING_TOOLS,
   READ_TOOLS,
   TOOL_ARGS,
+  buildToolDigest,
   describeAction,
   isMutatingTool,
   parseToolArgs,
@@ -100,5 +101,25 @@ describe("describeAction", () => {
     expect(describeAction("set_campaign_status", { campaignId: 13, status: "active" }))
       .toContain("ACTIVE");
     expect(describeAction("enrich_prospects", { prospectIds: [1] })).toContain("credits");
+  });
+});
+
+describe("buildToolDigest — ids must survive into later turns", () => {
+  it("carries tool results (including ids) into the stored message", () => {
+    const d = buildToolDigest([{ tool: "search_people", result: { people: [{ id: 140, name: "Steven Burke" }] } }]);
+    expect(d).toContain("[assistant_context");
+    expect(d).toContain('"id":140');
+  });
+
+  it("is empty when no tools ran — no noise in pure-chat turns", () => {
+    expect(buildToolDigest([])).toBe("");
+  });
+
+  it("is bounded — a huge tool result cannot bloat the conversation store", () => {
+    const big = buildToolDigest([
+      { tool: "a", result: { blob: "x".repeat(5000) } },
+      { tool: "b", result: { blob: "y".repeat(5000) } },
+    ]);
+    expect(big.length).toBeLessThan(2300);
   });
 });

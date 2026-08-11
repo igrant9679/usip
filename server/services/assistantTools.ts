@@ -95,6 +95,22 @@ export function validateNavigateHref(href: string): boolean {
   );
 }
 
+/**
+ * Compact digest of a turn's tool results, appended to the STORED assistant
+ * message (not the displayed answer). Later turns rebuild their context from
+ * stored messages, and without this the ids a lookup returned are gone by the
+ * next turn — which is exactly how the first live verify produced a proposal
+ * for a hallucinated prospect id: the model, asked to act on a person one
+ * turn after finding him, had no id left to act with and invented one.
+ */
+export function buildToolDigest(entries: Array<{ tool: string; result: unknown }>): string {
+  if (entries.length === 0) return "";
+  const parts = entries.map((e) => `${e.tool}: ${JSON.stringify(e.result)}`.slice(0, 700));
+  let digest = parts.join("\n");
+  if (digest.length > 2000) digest = digest.slice(0, 2000);
+  return `\n\n[assistant_context — tool results from this turn, for later turns; not shown to the user]\n${digest}`;
+}
+
 /** Human sentence for the confirmation card — states the blast radius. */
 export function describeAction(name: AssistantToolName, args: Record<string, unknown>): string {
   const n = (v: unknown) => (Array.isArray(v) ? v.length : 0);

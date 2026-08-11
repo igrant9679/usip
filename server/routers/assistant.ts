@@ -23,14 +23,16 @@ import { TRPCError } from "@trpc/server";
 import { and, eq } from "drizzle-orm";
 import { router } from "../_core/trpc";
 import { workspaceProcedure } from "../_core/workspace";
+import { inArray } from "drizzle-orm";
 import { getDb } from "../db";
-import { aiHelpConversations, aiHelpMessages, helpArticles } from "../../drizzle/schema";
+import { aiHelpConversations, aiHelpMessages, helpArticles, prospects } from "../../drizzle/schema";
 import { invokeLLM, type Message } from "../_core/llm";
 import { recordAudit } from "../audit";
 import {
   ASSISTANT_TOOLS,
   TOOL_ARGS,
   type AssistantToolName,
+  buildToolDigest,
   describeAction,
   isKnownTool,
   isMutatingTool,
@@ -39,6 +41,24 @@ import {
 } from "../services/assistantTools";
 
 const MAX_ROUNDS = 5;
+
+/** Refuse any action whose prospectIds are not real rows in THIS workspace —
+ *  the model can hallucinate an id, and the underlying procs create dangling
+ *  references rather than checking. */
+async function assertProspectsExist(workspaceId: number, ids: number[]): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+  const rows = await db.select({ id: prospects.id }).from(prospects)
+    .where(and(eq(prospects.workspaceId, workspaceId), inArray(prospects.id, ids)));
+  const found = new Set(rows.map((r) => r.id));
+  const missing = ids.filter((id) => !found.has(id));
+  if (missing.length > 0) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `Unknown prospect id(s): ${missing.join(", ")} — ask the assistant to look the people up again.`,
+    });
+  }
+}
 
 type Caller = ReturnType<Awaited<typeof getCaller>>;
 async function getCaller(ctx: unknown) {
@@ -159,6 +179,7 @@ const SYSTEM_PROMPT = (pageKey: string | undefined) => `You are Velocity's in-ap
 
 Rules:
 - Use tools for facts. Never invent prospect ids, sequence names, or counts — search first. For "how do I…" questions call help_lookup and answer from what it returns.
+- Numeric ids may ONLY come from tool results — either this turn's, or an [assistant_context …] block at the end of an earlier assistant message (that block holds prior turns' tool results). If no real id is in context, look the person or object up again before proposing an action. The server rejects actions naming ids that don't exist.
 - Mutating tools (enroll_in_sequence, create_tasks, add_to_list, enrich_prospects, set_campaign_status) only PROPOSE: calling one shows the user a confirmation card. Call at most ONE per turn, only when the user asked for that action, and with ids you obtained from lookups this conversation.
 - You cannot send email or LinkedIn messages, and must not promise to. Sends live behind the user's approval queues.
 - Use navigate to hand the user a link when the answer is "go to this page".
@@ -197,6 +218,7 @@ export const assistantRouter = router({
       ];
 
       const toolEvents: Array<{ tool: string; summary: string }> = [];
+      const toolResults: Array<{ tool: string; result: unknown }> = [];
       const navigations: Array<{ href: string; label: string }> = [];
       let pendingAction: { tool: string; args: Record<string, unknown>; description: string } | null = null;
       let answer = "";
@@ -248,6 +270,7 @@ export const assistantRouter = router({
           try {
             const { result, summary } = await runReadTool(name, args, ctx, caller);
             toolEvents.push({ tool: name, summary });
+            toolResults.push({ tool: name, result });
             messages.push({ role: "user", content: `[tool_result ${name}]: ${JSON.stringify(result).slice(0, 6000)}` });
           } catch (e) {
             const emsg = (e as Error).message?.slice(0, 200) ?? "failed";
@@ -263,7 +286,14 @@ export const assistantRouter = router({
 
       if (!answer) answer = "I couldn't produce an answer — try rephrasing.";
 
-      await db.insert(aiHelpMessages).values({ conversationId: input.conversationId, role: "assistant", body: answer });
+      // Store the answer PLUS a tool digest: later turns rebuild context from
+      // stored messages, and ids the model looked up this turn must survive
+      // into the next or it will act on invented ones.
+      await db.insert(aiHelpMessages).values({
+        conversationId: input.conversationId,
+        role: "assistant",
+        body: answer + buildToolDigest(toolResults),
+      });
       await db.update(aiHelpConversations).set({ lastMessageAt: new Date() } as never)
         .where(and(eq(aiHelpConversations.workspaceId, ctx.workspace.id), eq(aiHelpConversations.id, input.conversationId)));
 
@@ -285,6 +315,11 @@ export const assistantRouter = router({
       }
       const name = input.tool as AssistantToolName;
       const args = (TOOL_ARGS[name] as z.ZodTypeAny).parse(input.args) as Record<string, unknown>;
+      // Hallucinated-id guard: every prospect the action names must be a real
+      // row in this workspace before anything executes.
+      if (Array.isArray(args.prospectIds)) {
+        await assertProspectsExist(ctx.workspace.id, args.prospectIds as number[]);
+      }
       const caller = await getCaller(ctx);
 
       let summary = "";
