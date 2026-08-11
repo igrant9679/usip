@@ -282,7 +282,7 @@ export default function Companies() {
                           </td>
                           <td className="px-2 py-1.5">
                             <div className="flex items-center gap-2 min-w-0">
-                              <CompanyAvatar name={a.name} logoUrl={a.logo?.url} faviconUrl={a.logo?.faviconUrl} size="md" />
+                              <CompanyAvatar name={a.name} domain={a.domain} logoUrl={a.logo?.url} faviconUrl={a.logo?.faviconUrl} size="md" />
                               <div className="min-w-0">
                                 <div className="font-medium truncate max-w-[190px]" title={a.name}>{a.name}</div>
                                 {a.domain && <span className="text-[11px] text-muted-foreground truncate block max-w-[190px]">{a.domain}</span>}

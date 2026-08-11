@@ -26,6 +26,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
 import { ProspectAvatar } from "@/components/usip/ProspectAvatar";
+import { CompanyLogo } from "@/components/usip/company/CompanyLogo";
 import { BatchPhotoUpload } from "@/components/usip/BatchPhotoUpload";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
@@ -1105,6 +1106,12 @@ function DetailPanel({ p, onClose, onOpenFull }: { p: Prospect; onClose: () => v
           </Section>
 
           <Section title="Company">
+            {d.company ? (
+              <div className="flex items-center gap-2 px-1 pb-1.5">
+                <CompanyLogo name={d.company} domain={d.companyDomain} size="sm" />
+                <span className="truncate text-[13px] font-medium">{d.company}</span>
+              </div>
+            ) : null}
             <Field icon={Building2} label="Company" value={d.company} />
             <Field icon={Globe} label="Domain" value={d.companyDomain} />
             <Field icon={Briefcase} label="Industry" value={d.industry} />

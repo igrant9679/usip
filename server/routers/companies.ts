@@ -54,6 +54,26 @@ const sort = z.object({
 }).optional();
 
 export const companiesRouter = router({
+  /**
+   * Manual Brandfetch brand search — the ONLY caller of the Brand Search API
+   * today. Deliberately not wired into any enrichment path (owner decision:
+   * the future company-enrichment stack owns automated brand reconciliation);
+   * this exists for an admin explicitly resolving a company's brand/domain.
+   * Results are transient by Brandfetch's terms (icon URLs expire in 24h) —
+   * display them, derive from them, never store them wholesale.
+   */
+  brandSearch: workspaceProcedure
+    .input(z.object({ query: z.string().min(2).max(120) }))
+    .query(async ({ ctx, input }) => {
+      requireMinRole(ctx.member.role, "admin", "Only admins can run brand searches.");
+      const { createBrandfetchProvider } = await import("../services/brand/brandfetch");
+      const provider = createBrandfetchProvider();
+      if (!provider.searchReady()) {
+        throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Brand search is not configured — set BRANDFETCH_SEARCH_CLIENT_ID." });
+      }
+      return provider.searchBrand(input.query);
+    }),
+
   /* ── search / list ── */
   search: workspaceProcedure
     .input(z.object({ filters, sort, page: z.number().int().min(1).default(1), perPage: z.number().int().min(10).max(200).default(50) }))

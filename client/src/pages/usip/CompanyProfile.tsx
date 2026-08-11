@@ -74,7 +74,7 @@ export default function CompanyProfile() {
           <span aria-hidden className="absolute inset-x-0 top-0 h-0.5" style={{ backgroundColor: accent }} />
           <button onClick={() => setLocation("/v2/companies")} className="text-[12px] text-muted-foreground hover:text-foreground inline-flex items-center gap-1 mb-3"><ArrowLeft className="size-3.5" /> Companies</button>
           <div className="flex items-start gap-4">
-            <CompanyAvatar name={c.name} logoUrl={c.logo?.url} faviconUrl={c.logo?.faviconUrl} size="lg" />
+            <CompanyAvatar name={c.name} domain={c.domain} logoUrl={c.logo?.url} faviconUrl={c.logo?.faviconUrl} size="lg" />
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2 flex-wrap">
                 <h1 className="text-xl font-semibold tracking-tight truncate">{c.name}</h1>

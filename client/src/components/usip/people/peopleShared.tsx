@@ -14,6 +14,7 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { ProspectAvatar, type ProfileImage } from "../ProspectAvatar";
+import { CompanyLogo as BrandCompanyLogo } from "../company/CompanyLogo";
 import { LinkedInUpdateIndicator, RowEnrichAction, type LinkedInChangeSummary } from "./LinkedInEnrichment";
 import { AddToListMenu, SequenceMenu } from "./SelectionToolbar";
 import { ScoreBadge, ScorePopover } from "../scoring/ScoreBadge";
@@ -138,45 +139,18 @@ function LinkedInChip({ url, className }: { url: string; className?: string }) {
   );
 }
 
-/** Deterministic hue for the company letter-tile fallback (mirrors the
- *  initials-avatar approach — original palette, not copied from anywhere). */
-function hueFor(s: string): number {
-  let h = 0;
-  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 360;
-  return h;
-}
-
-/** Company logo tile: favicon when a domain is known, letter tile otherwise.
- *  Never breaks row alignment — every state renders the same 20px square. */
+/** Company logo tile for table rows: the shared brand cascade (Brandfetch →
+ *  stored logo → favicon → lettermark) at row size. Never breaks row
+ *  alignment — every state renders the same 20px square. */
 function CompanyLogo({ name, domain }: { name?: string | null; domain?: string | null }) {
-  const [failed, setFailed] = useState(false);
-  if (domain && !failed) {
-    return (
-      <img
-        src={`https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=32`}
-        onError={() => setFailed(true)}
-        alt=""
-        loading="lazy"
-        className="size-5 shrink-0 rounded-[4px] bg-white object-contain ring-1 ring-border/60"
-      />
-    );
-  }
-  if (name) {
-    const hue = hueFor(name);
-    return (
-      <div
-        aria-hidden
-        className="flex size-5 shrink-0 items-center justify-center rounded-[4px] text-[10px] font-semibold ring-1 ring-border/60 select-none"
-        style={{ backgroundColor: `hsl(${hue} 45% 92%)`, color: `hsl(${hue} 55% 32%)` }}
-      >
-        {name.trim().charAt(0).toUpperCase()}
-      </div>
-    );
-  }
   return (
-    <div className="flex size-5 shrink-0 items-center justify-center rounded-[4px] bg-muted ring-1 ring-border/60">
-      <Building2 className="size-3 text-muted-foreground" />
-    </div>
+    <BrandCompanyLogo
+      name={name ?? "?"}
+      domain={domain}
+      faviconUrl={domain ? `https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=32` : null}
+      size="xs"
+      className="rounded-[4px]"
+    />
   );
 }
 
