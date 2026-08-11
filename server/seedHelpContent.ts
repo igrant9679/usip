@@ -743,7 +743,100 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     summary: "The three super-admin-only actions, and which of them you cannot undo.",
     readingTimeMinutes: 3,
     tags: ["admin", "workspace", "export", "ownership", "danger-zone"],
-    bodyMarkdown: `**Settings → Danger Zone** holds three workspace-level actions. All three are **super admin only** — being an admin is not enough, and the page will say so rather than failing quietly.\n\n**Transfer ownership.** Hands the workspace to another active member. Two things happen together: the owner column moves, and the new owner is **promoted to super admin**. Half of that would be a workspace whose owner cannot administer it. You cannot transfer to yourself, to somebody who is not a member, or to a deactivated member.\n\nThis is the deliberate way to move the owner seat, and it is what the product points you at when it refuses to delete the current owner — the owner is the standing recipient for everything the autonomous engines report when nobody is present.\n\n**Export workspace data.** Returns a summary of your contacts, leads, accounts, opportunities, customers and tasks. Beyond the super-admin requirement, this one also honours the per-member **export data** permission, so it can be withheld from an individual super admin.\n\n**Archive workspace.** Marks the workspace archived and stamps the date.\n\n> ⚠️ **There is no un-archive.** Because of that, archiving is currently recorded rather than enforced — the workspace keeps working after you archive it. That is the honest state of it: making the flag bite without an un-archive procedure would be a one-way lockout with no way back, so enforcement waits until both ship together.`,
+    bodyMarkdown: `**Settings → Danger Zone** holds three workspace-level actions. All three are **super admin only** — being an admin is not enough, and the page will say so rather than failing quietly.\n\n**Transfer ownership.** Hands the workspace to another active member. Two things happen together: the owner column moves, and the new owner is **promoted to super admin**. Half of that would be a workspace whose owner cannot administer it. You cannot transfer to yourself, to somebody who is not a member, or to a deactivated member.\n\nThis is the deliberate way to move the owner seat, and it is what the product points you at when it refuses to delete the current owner — the owner is the standing recipient for everything the autonomous engines report when nobody is present.\n\n**Export workspace data.** Returns a summary of your contacts, leads, accounts, opportunities, customers and tasks. Beyond the super-admin requirement, this one also honours the per-member **export data** permission, so it can be withheld from an individual super admin.\n\n**Archive workspace.** Marks the workspace archived and stamps the date.\n\n> ⚠️ **There is no un-archive.** Because of that, archiving is currently recorded rather than enforced — the workspace keeps working after you archive it. That is the honest state of it: making the flag bite without an un-archive procedure would be a one-way lockout with no way back, so enforcement waits until both ship together.\n\n**Remove sample data.** New workspaces are seeded with demo records so every page has something to show — fictional companies, contacts, leads, deals, a "[Demo]" outbound campaign. This button deletes all of it, shows you exactly what it found before it arms, and leaves your own data untouched. It is permanent, it is audited, and the samples never re-seed afterwards.`,
+  },
+  {
+    slug: "onboarding-first-week",
+    categorySlug: "getting-started",
+    title: "Onboarding: from empty workspace to first meeting",
+    summary: "The setup steps in the order they unblock each other, and how to know each one worked.",
+    readingTimeMinutes: 6,
+    tags: ["onboarding", "setup", "getting-started", "checklist"],
+    bodyMarkdown: `Velocity works as a chain: connections feed sourcing, sourcing feeds enrichment, enrichment feeds scoring and copy, and everything the machines want you to look at lands in one panel on Home. Set it up in that order and each step proves the one before it.
+
+## 1. Connect the accounts (Settings)
+
+- **A mailbox or SendGrid** — *Settings → Mailboxes*. Nothing sends without one. If you use SendGrid, press **Test key** and believe it: it verifies both the key and the Mail Send permission.
+- **LinkedIn** — *Settings → Integrations*. Powers profile enrichment, photos, job-change detection and Social outreach, all through the authorized vendor connection with a daily lookup budget (about 100/day).
+- **Microsoft 365** (if your admin has configured it) — the Connected Accounts card. One connect gets calendar sync, OneDrive files on records, and OneNote.
+- **Verification credits** — *Settings → Data enrichment*: a Reoon key for email verification, and optionally your own QuickEnrich key.
+
+## 2. Clear the demo, keep your bearings
+
+*Settings → Danger zone → Remove sample data* deletes the fictional records new workspaces ship with — it lists what it found before you press, and the samples never come back. Do this before importing so you never mistake a demo row for a real one.
+
+## 3. Get people in
+
+Three doors, use any or all:
+
+- **Import a CSV** — *Data → Import*. Column mapping is exact-match and refuses duplicates; required fields are enforced per destination, so a bad file fails loudly at mapping time rather than quietly at send time.
+- **Find prospects** — *Data → Find Prospects* searches by role and company shape.
+- **Let a campaign source itself** — an Autonomous Revenue Engine campaign (*Autopilot & AI → ARE Campaigns*) discovers prospects on its own once its queue runs low; pick which sources it may use per campaign under its Settings → Prospect Sources.
+
+## 4. Enrich and score
+
+Select people on *Data → People* and run **Enrich ▾ → Enrich fully (all sources)**: LinkedIn profile data on file, company-name-to-domain resolution, QuickEnrich, pattern+verification, and a site scrape, reconciled field-by-field with a provenance ledger (the "Data sources" chips in a person's drawer show where each fact came from). Profiles and photos ride an async LinkedIn pass and appear when they land.
+
+Then open *Configuration → Lead Scoring*, make sure a fit model is installed and primary, and press **Recalculate** — scores read the enriched company/title/domain fields, so recalculate after any big enrichment wave.
+
+## 5. Choose your autonomy
+
+*Autopilot & AI → Autonomy Center* is every dial in one place. Each autopilot is **Off / Approve / Auto**:
+
+- **Approve** means the work happens and queues for a human — nothing reaches a prospect.
+- **Auto** means it executes unattended.
+
+A sane starting posture: everything that only *does work* (tasks, deals, enrichment sweeps, job-change detection, the inbound chat agent) on Auto; everything that *sends* (meetings, conversation replies, social touches, chat follow-up email, and the engine's own releases) on Approve until you have read a week of its output and trust it.
+
+## 6. Open the inbound doors
+
+- **Your booking link** (*Scheduling → Meetings*) — check the timezone before sharing it; it defaults to UTC.
+- **The chat agent** (*Inbound → Chat Agents*, admin) — write down what it is allowed to know, start it on Approve, read transcripts, then promote it.
+- **Landing pages** (*Inbound → Landing Pages*, admin) — capture forms feed straight into leads and the CRM bridge.
+
+## 7. Learn the two habits
+
+Press **Ctrl+K** anywhere to jump to any tool. And make *Home* your first stop each morning — its attention panel is the single list of everything waiting on a human: AI drafts, engine approvals, unhandled replies, proposed meetings, draft tasks, paused campaigns. If that panel is empty, the machines are handling the rest. The companion article *The operating rhythm: daily, weekly, monthly* turns this into a schedule.`,
+  },
+  {
+    slug: "operating-rhythm",
+    categorySlug: "playbooks",
+    title: "The operating rhythm: daily, weekly, monthly",
+    summary: "What to check every day, what only needs a weekly look, and the monthly housekeeping that keeps the engines honest.",
+    readingTimeMinutes: 5,
+    tags: ["routine", "playbook", "daily", "weekly", "monthly", "operations"],
+    bodyMarkdown: `Velocity's autopilots are built so the product runs while you are elsewhere. What that buys you is not "no work" — it is work compressed into a short, predictable review. This is that review.
+
+## Daily — about ten minutes
+
+1. **Open Home.** The attention panel is the one aggregator of everything waiting on a human. Work it top to bottom:
+   - **AI drafts** — approve, edit, or discard outreach the engines wrote (*Autopilot & AI → AI Pipeline*).
+   - **Engine approvals** — release the day's batch if your engine runs in batch-approval mode. This is the gate outbound sends wait behind.
+   - **Unhandled replies** — a human answer within a day is worth more than any sequence step. Handling a reply also stops the sequence for that person.
+   - **Proposed meetings** — confirm times the Meeting Autopilot suggested.
+   - **Draft tasks** — accept or dismiss the next-best-actions.
+2. **Glance at Conversations** (*Scheduling → Conversations*) for anything the classifier flagged but could not act on.
+3. **Check today's meetings** (*Scheduling → Meetings*) — prep notes live on the meeting record.
+
+If the panel is empty, you are done. That is the system working, not something you missed.
+
+## Weekly — about thirty minutes
+
+- **Performance** (*Autopilot & AI → ARE Performance*): which subject lines and hooks are winning, which A/B variants got promoted, reply and meeting rates per campaign. Kill or rewrite what is losing; the optimisation autopilot tunes within limits, but retiring a whole angle is a human call.
+- **Sequences** (*Engage → Sequences*): enrollment counts and stuck steps.
+- **Data health** (*Data → Data Enrichment* and the sweep card): what the last sweeps found, credits spent, how many prospects still lack an email or a company. The People list self-heals blanks as you browse it, and the backfills run on their own schedule — what you are checking for is a stall, not doing the work yourself.
+- **Pipeline** (*Scheduling → Deals*): stage-by-stage review; the Deal Autopilot advances what it can and flags what it cannot.
+- **Workflow suggestions** (*Autopilot & AI → Autonomy Center*): the AI proposes new automation rules from what it sees; adopt the ones that describe something you actually do.
+
+## Monthly — an hour, calendar it
+
+- **Budgets.** Check the LLM token usage card and set or adjust the **Monthly AI budget** (tokens, not dollars; 0 means unlimited). Verification credits (Reoon, QuickEnrich) reset on their own monthly cycles with no rollover — if a cycle ended with credits unspent, raise the sweep's daily cap; if it ran dry early, lower it.
+- **Recalculate lead scoring** (*Configuration → Lead Scoring → Recalculate*) — a month of enrichment has changed the fields the model reads.
+- **Prune.** Archive campaigns that finished, retire sequences nobody enrolls into, and clear lists that served their purpose.
+- **Autonomy review** (*Autonomy Center*): anything that spent a clean month on Approve with you approving everything unchanged is a candidate for Auto. Promote one dial at a time, not all of them at once — you want to notice which change caused whatever changes.
+- **Export a backup** (*Settings → Danger zone → Export*) if your compliance posture wants an offline copy of record counts.
+
+The pattern underneath all three cadences is the same: the machines act, the attention panel confesses, and your job is to read the confession — daily for sends, weekly for trends, monthly for budgets and trust.`,
   },
 ];
 
