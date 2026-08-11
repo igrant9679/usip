@@ -74,6 +74,67 @@ export const companiesRouter = router({
       return provider.searchBrand(input.query);
     }),
 
+  /* ── Brand identity reconciliation (company-enrichment stack) ──
+     The reconciler is the ONLY automated Brand Search caller; these actions
+     let an admin run/inspect/override it per account. */
+  reconcileBrand: workspaceProcedure
+    .input(z.object({ accountId: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      requireRole(ctx.member.role, "admin");
+      const { reconcileAccountBrand } = await import("../services/company/brandReconciler");
+      const result = await reconcileAccountBrand(ctx.workspace.id, input.accountId, { byUserId: ctx.user.id });
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "brand_reconcile", entityId: input.accountId, after: { action: result.action, changes: result.changes } });
+      return result;
+    }),
+  brandObservations: workspaceProcedure
+    .input(z.object({ accountId: z.number().int().positive() }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb(); if (!db) return [];
+      const { brandObservations } = await import("../../drizzle/schema");
+      const { desc } = await import("drizzle-orm");
+      return db.select().from(brandObservations)
+        .where(and(eq(brandObservations.workspaceId, ctx.workspace.id), eq(brandObservations.accountId, input.accountId)))
+        .orderBy(desc(brandObservations.observedAt)).limit(20);
+    }),
+  setBrandOverride: workspaceProcedure
+    .input(z.object({
+      accountId: z.number().int().positive(),
+      name: z.string().trim().min(1).max(200).optional(),
+      domain: z.string().trim().min(3).max(200).optional(),
+      reason: z.string().trim().max(300).optional(),
+    }).refine((v) => v.name || v.domain, { message: "Override at least one of name or domain." }))
+    .mutation(async ({ ctx, input }) => {
+      requireRole(ctx.member.role, "admin");
+      const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const override = {
+        ...(input.name ? { name: input.name } : {}),
+        ...(input.domain ? { domain: input.domain } : {}),
+        byUserId: ctx.user.id, at: new Date().toISOString(),
+        ...(input.reason ? { reason: input.reason } : {}),
+      };
+      // The override IS the value: pin the fields it names so display matches.
+      const { normalizeCompanyName, normalizeDomain } = await import("../services/company/normalize");
+      const set: Record<string, unknown> = { brandOverride: override };
+      if (input.name) { set.name = input.name; set.normalizedName = normalizeCompanyName(input.name); }
+      if (input.domain) {
+        const d = normalizeDomain(input.domain);
+        if (!d) throw new TRPCError({ code: "BAD_REQUEST", message: "That doesn't look like a domain." });
+        set.domain = d; set.normalizedDomain = d;
+      }
+      await db.update(accounts).set(set as never).where(and(eq(accounts.workspaceId, ctx.workspace.id), eq(accounts.id, input.accountId)));
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "brand_override", entityId: input.accountId, after: override });
+      return { ok: true };
+    }),
+  removeBrandOverride: workspaceProcedure
+    .input(z.object({ accountId: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      requireRole(ctx.member.role, "admin");
+      const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      await db.update(accounts).set({ brandOverride: null } as never).where(and(eq(accounts.workspaceId, ctx.workspace.id), eq(accounts.id, input.accountId)));
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "delete", entityType: "brand_override", entityId: input.accountId });
+      return { ok: true };
+    }),
+
   /* ── search / list ── */
   search: workspaceProcedure
     .input(z.object({ filters, sort, page: z.number().int().min(1).default(1), perPage: z.number().int().min(10).max(200).default(50) }))

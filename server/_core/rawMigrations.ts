@@ -3267,6 +3267,46 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0152: brand identity reconciliation (company-enrichment stack) ────────
+  // brand_observations = one row per provider sighting of an account's brand;
+  // the reconciler scores them (observations → score → reconcile → canonical,
+  // never newest-wins) and writes derived canonical facts onto accounts:
+  // legal_name (suffixed legal form), brand_confidence (0–100, fieldMerge
+  // vocabulary), brand_verified_at, brand_override (manual override — the
+  // reconciler never touches overridden fields). Only facts WE derive are
+  // stored — never Brandfetch bytes or their 24h-expiring icon URLs (terms).
+  // VERIFY: Companies → a profile → Brand identity card → "Resolve brand"
+  // writes an observation row and an Enrichment History event.
+  {
+    name: "0152_brand_identity_reconciliation.sql",
+    statements: [
+      "ALTER TABLE `accounts` ADD COLUMN `legal_name` varchar(240) NULL",
+      "ALTER TABLE `accounts` ADD COLUMN `brand_confidence` int NULL",
+      "ALTER TABLE `accounts` ADD COLUMN `brand_verified_at` timestamp NULL",
+      "ALTER TABLE `accounts` ADD COLUMN `brand_override` json NULL",
+      `CREATE TABLE IF NOT EXISTS \`brand_observations\` (
+        \`id\` int NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        \`workspaceId\` int NOT NULL,
+        \`account_id\` int NOT NULL,
+        \`provider\` varchar(32) NOT NULL,
+        \`raw_name\` varchar(240) NULL,
+        \`normalized_name\` varchar(200) NULL,
+        \`raw_domain\` varchar(200) NULL,
+        \`normalized_domain\` varchar(200) NULL,
+        \`logo_ref\` text NULL,
+        \`claimed\` boolean NOT NULL DEFAULT false,
+        \`match_confidence\` int NOT NULL DEFAULT 0,
+        \`match_basis\` varchar(32) NOT NULL DEFAULT 'none',
+        \`content_hash\` varchar(64) NULL,
+        \`query_hash\` varchar(64) NULL,
+        \`evidence\` json NULL,
+        \`observed_at\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        INDEX \`ix_bo_account\` (\`workspaceId\`, \`account_id\`),
+        INDEX \`ix_bo_account_time\` (\`account_id\`, \`observed_at\`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

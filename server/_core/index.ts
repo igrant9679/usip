@@ -530,6 +530,20 @@ async function startServer() {
   setTimeout(runLogoBackfill, 9 * 60 * 1000); // stagger: 9 minutes after boot
   setInterval(runLogoBackfill, 6 * 60 * 60 * 1000); // every 6h; bounded per run
 
+  // Brand identity reconciliation: bounded Brand Search sweep over accounts
+  // never verified / gone stale / renamed. Dormant without
+  // BRANDFETCH_SEARCH_CLIENT_ID; throttled far under their 200 req/5min.
+  const runBrandReconcile = () => {
+    import("../services/company/brandReconciler")
+      .then((m) => m.runBrandReconciliation())
+      .then((r) => {
+        if (r.searched > 0) console.log(`[BrandReconciler] searched=${r.searched} applied=${r.applied} corroborated=${r.corroborated} candidates=${r.candidates} noMatch=${r.noMatch}`);
+      })
+      .catch((e) => console.error("[BrandReconciler] run failed:", e));
+  };
+  setTimeout(runBrandReconcile, 12 * 60 * 1000); // stagger: 12 minutes after boot
+  setInterval(runBrandReconcile, 6 * 60 * 60 * 1000); // every 6h; bounded per run
+
   // Nightly AI pipeline batch: midnight cron for leads above score threshold
   const scheduleNightlyBatch = () => {
     const now = new Date();

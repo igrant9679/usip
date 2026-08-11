@@ -6,7 +6,7 @@
  * via the company association layer), enrichment history and the activity
  * timeline. Reads via the `companies` router; logo falls back to favicon/initials.
  */
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useRoute, useLocation } from "wouter";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
@@ -18,8 +18,9 @@ import { CompanyAvatar } from "@/components/usip/company/CompanyAvatar";
 import { confirmAction } from "@/components/usip/Common";
 import {
   Globe, Link2, ExternalLink, Users, Building2, MapPin, DollarSign, Briefcase,
-  RefreshCw, Archive, ArrowLeft, Sparkles, Calendar, Gauge,
+  RefreshCw, Archive, ArrowLeft, Sparkles, Calendar, Gauge, BadgeCheck, Lock,
 } from "lucide-react";
+import { Input } from "@/components/ui/input";
 
 const RANK: Record<string, number> = { super_admin: 4, admin: 3, manager: 2, rep: 1 };
 const RATING_STYLE: Record<string, string> = {
@@ -110,9 +111,13 @@ export default function CompanyProfile() {
               <Detail icon={Building2} label="Founded" value={c.foundedYear ? String(c.foundedYear) : null} />
               <Detail icon={Gauge} label="Company score" value={score?.value != null ? `${Math.round(score.value)} (${score.rating?.replace("_", " ")})` : null} />
               <Detail icon={Calendar} label="Last enriched" value={c.lastEnrichedAt ? new Date(c.lastEnrichedAt).toLocaleDateString() : null} />
+              <Detail icon={Building2} label="Legal name" value={(c as any).legalName} />
             </div>
             {c.description && <p className="mt-3 text-[13px] text-muted-foreground whitespace-pre-wrap">{c.description}</p>}
           </section>
+
+          {/* brand identity (company-enrichment stack) */}
+          <BrandIdentityCard accountId={id} account={c as any} isAdmin={isAdmin} />
 
           {/* contacts */}
           <section className="rounded-lg border border-border">
@@ -170,6 +175,115 @@ export default function CompanyProfile() {
         </div>
       </div>
     </Shell>
+  );
+}
+
+/**
+ * Brand identity — the reconciler's face on the profile. Shows the verified
+ * confidence + any manual override; admins can run a reconcile now, pin an
+ * override (fields the reconciler must never touch), or clear it. The
+ * observation list is the audit trail behind the canonical record.
+ */
+function BrandIdentityCard({ accountId, account, isAdmin }: {
+  accountId: number;
+  account: { brandConfidence?: number | null; brandVerifiedAt?: string | Date | null; brandOverride?: { name?: string; domain?: string; reason?: string } | null; name: string; domain?: string | null };
+  isAdmin: boolean;
+}) {
+  const utils = trpc.useUtils();
+  const [editing, setEditing] = useState(false);
+  const [ovName, setOvName] = useState("");
+  const [ovDomain, setOvDomain] = useState("");
+  const { data: observations } = trpc.companies.brandObservations.useQuery({ accountId }, { enabled: Number.isFinite(accountId) });
+
+  const invalidate = () => {
+    utils.companies.get.invalidate({ accountId });
+    utils.companies.brandObservations.invalidate({ accountId });
+    utils.companies.enrichmentHistory.invalidate({ accountId });
+  };
+  const reconcile = trpc.companies.reconcileBrand.useMutation({
+    onSuccess: (r) => {
+      const label = r.action === "applied" ? `verified (${r.confidence})${r.changes.length ? ` — updated ${r.changes.join(", ")}` : ""}`
+        : r.action === "corroborated" ? `corroborated (${r.confidence})${r.changes.length ? ` — updated ${r.changes.join(", ")}` : ""}`
+        : r.action === "candidate" ? `candidate only (${r.confidence}) — nothing changed`
+        : r.action === "skipped_no_search" ? "brand search not configured"
+        : "no confident match";
+      toast.success(`Brand reconcile: ${label}`);
+      invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const setOverride = trpc.companies.setBrandOverride.useMutation({
+    onSuccess: () => { toast.success("Brand override pinned"); setEditing(false); invalidate(); },
+    onError: (e) => toast.error(e.message),
+  });
+  const removeOverride = trpc.companies.removeBrandOverride.useMutation({
+    onSuccess: () => { toast.success("Brand override removed"); invalidate(); },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const override = account.brandOverride ?? null;
+  return (
+    <section className="rounded-lg border border-border p-4">
+      <div className="flex items-center justify-between flex-wrap gap-2 mb-2">
+        <div className="flex items-center gap-2">
+          <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Brand identity</div>
+          {account.brandConfidence != null && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 text-emerald-800 px-2 py-0.5 text-[11px] font-medium">
+              <BadgeCheck className="size-3" /> {account.brandConfidence}
+              {account.brandVerifiedAt ? ` · ${new Date(account.brandVerifiedAt).toLocaleDateString()}` : ""}
+            </span>
+          )}
+          {override && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 text-amber-800 px-2 py-0.5 text-[11px] font-medium" title={override.reason || "Manually pinned — the reconciler never touches these fields"}>
+              <Lock className="size-3" /> {[override.name && "name", override.domain && "domain"].filter(Boolean).join(" + ")} pinned
+            </span>
+          )}
+        </div>
+        {isAdmin && (
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="outline" className="gap-1.5 h-7 text-[12px]" disabled={reconcile.isPending}
+              onClick={() => reconcile.mutate({ accountId })}>
+              <RefreshCw className={`size-3 ${reconcile.isPending ? "animate-spin" : ""}`} /> Resolve brand
+            </Button>
+            {override
+              ? <Button size="sm" variant="ghost" className="h-7 text-[12px]" disabled={removeOverride.isPending} onClick={() => removeOverride.mutate({ accountId })}>Unpin</Button>
+              : <Button size="sm" variant="ghost" className="h-7 text-[12px]" onClick={() => { setEditing((v) => !v); setOvName(account.name); setOvDomain(account.domain ?? ""); }}>Pin…</Button>}
+          </div>
+        )}
+      </div>
+      {editing && isAdmin && (
+        <div className="mb-3 flex items-end gap-2 flex-wrap rounded-md bg-muted/40 p-2.5">
+          <div className="min-w-[180px]">
+            <div className="text-[11px] text-muted-foreground mb-1">Name</div>
+            <Input className="h-7 text-[12px]" value={ovName} onChange={(e) => setOvName(e.target.value)} placeholder={account.name} />
+          </div>
+          <div className="min-w-[180px]">
+            <div className="text-[11px] text-muted-foreground mb-1">Domain</div>
+            <Input className="h-7 text-[12px]" value={ovDomain} onChange={(e) => setOvDomain(e.target.value)} placeholder="acme.com" />
+          </div>
+          <Button size="sm" className="h-7 text-[12px]" disabled={setOverride.isPending || (!ovName.trim() && !ovDomain.trim())}
+            onClick={() => setOverride.mutate({ accountId, ...(ovName.trim() ? { name: ovName.trim() } : {}), ...(ovDomain.trim() ? { domain: ovDomain.trim() } : {}) })}>
+            Pin
+          </Button>
+          <Button size="sm" variant="ghost" className="h-7 text-[12px]" onClick={() => setEditing(false)}>Cancel</Button>
+        </div>
+      )}
+      {observations && observations.length > 0 ? (
+        <div className="space-y-1.5">
+          {observations.slice(0, 5).map((o: any) => (
+            <div key={o.id} className="flex items-center justify-between text-[12px]">
+              <span className="text-muted-foreground truncate max-w-[70%]">
+                {o.provider} · {o.matchBasis.replace("_", " ")} · {o.matchConfidence}
+                {o.rawName ? ` · ${o.rawName}` : ""}{o.normalizedDomain ? ` (${o.normalizedDomain})` : ""}
+              </span>
+              <span className="text-muted-foreground/60 shrink-0">{new Date(o.observedAt).toLocaleDateString()}</span>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="text-[13px] text-muted-foreground">No brand observations yet{isAdmin ? " — Resolve brand queries Brand Search and records what it finds" : ""}.</p>
+      )}
+    </section>
   );
 }
 

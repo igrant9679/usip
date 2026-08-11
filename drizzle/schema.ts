@@ -185,6 +185,13 @@ export const accounts = mysqlTable(
     crmExternalId: varchar("crm_external_id", { length: 128 }),
     sourceType: varchar("source_type", { length: 32 }),
     dataStatus: varchar("data_status", { length: 16 }).default("partial").notNull(),
+    // ── Brand identity reconciliation (migration 0152) — canonical facts the
+    //    reconciler derives from brand_observations; `name` stays the display
+    //    name, `legal_name` keeps the suffixed legal form when known. ──
+    legalName: varchar("legal_name", { length: 240 }),
+    brandConfidence: int("brand_confidence"), // 0–100, same vocabulary as fieldMerge CONFIDENCE
+    brandVerifiedAt: timestamp("brand_verified_at"),
+    brandOverride: json("brand_override"), // { name?, domain?, byUserId, at, reason? } — reconciler never touches overridden fields
     lastEnrichedAt: timestamp("last_enriched_at"),
     archivedAt: timestamp("archived_at"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
@@ -5197,6 +5204,42 @@ export const companyLogoAssets = mysqlTable(
   }),
 );
 export type CompanyLogoAsset = typeof companyLogoAssets.$inferSelect;
+
+// ── Brand identity observations (migration 0152) — one row per provider
+//    sighting of an account's brand. The reconciler scores these
+//    (observations → score → reconcile → canonical), never newest-wins.
+//    Only facts WE derive are stored: names, domains, a constructed CDN URL,
+//    hashes. Never provider bytes or expiring icon URLs (Brandfetch terms).
+export const brandObservations = mysqlTable(
+  "brand_observations",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    accountId: int("account_id").notNull(),
+    provider: varchar("provider", { length: 32 }).notNull(),
+    rawName: varchar("raw_name", { length: 240 }),
+    normalizedName: varchar("normalized_name", { length: 200 }),
+    rawDomain: varchar("raw_domain", { length: 200 }),
+    normalizedDomain: varchar("normalized_domain", { length: 200 }),
+    /** Constructed Logo Link CDN URL (metadata, hotlinked client-side only). */
+    logoRef: text("logo_ref"),
+    claimed: boolean("claimed").default(false).notNull(),
+    /** 0–100, same vocabulary as fieldMerge CONFIDENCE. 0 = no match found. */
+    matchConfidence: int("match_confidence").default(0).notNull(),
+    matchBasis: varchar("match_basis", { length: 32 }).default("none").notNull(), // domain_exact|name_exact|name_fuzzy|none
+    /** Hash of the normalized identity (name|domain) — change detection key. */
+    contentHash: varchar("content_hash", { length: 64 }),
+    /** Identity hash of the account AS QUERIED — staleness/negative-cache key. */
+    queryHash: varchar("query_hash", { length: 64 }),
+    evidence: json("evidence"),
+    observedAt: timestamp("observed_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    byAccount: index("ix_bo_account").on(t.workspaceId, t.accountId),
+    byAccountTime: index("ix_bo_account_time").on(t.accountId, t.observedAt),
+  }),
+);
+export type BrandObservation = typeof brandObservations.$inferSelect;
 
 /* ──────────────────────────────────────────────────────────────────────────
    Website visitor tracking (Migration 0108)
