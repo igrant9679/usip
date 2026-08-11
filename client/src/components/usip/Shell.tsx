@@ -310,6 +310,9 @@ const TOP_LINKS: NavLink[] = [
 // listed ~44 items across 8 architecture-named sections — a feature catalog
 // the owner told us they got lost in.
 const GROUP_META: { group: ToolGroup; label: string; icon: any; color: string; darkColor: string }[] = [
+  // CRM leads: the records themselves (people, companies, deals, leads) —
+  // the owner asked for the record layer as its own nav grouping (2026-08-11).
+  { group: "CRM", label: "CRM", icon: Database, color: "#0891B2", darkColor: "#22D3EE" },
   { group: "Prospect & enrich", label: "Prospect", icon: Search, color: "#3B82F6", darkColor: "#60A5FA" },
   { group: "Engage", label: "Engage", icon: Send, color: "#9333EA", darkColor: "#D8B4FE" },
   { group: "Win deals", label: "Win deals", icon: DollarSign, color: "#10B981", darkColor: "#34D399" },

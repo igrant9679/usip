@@ -26,6 +26,7 @@ import {
 
 export type ToolGroup =
   | "Daily"
+  | "CRM"
   | "Prospect & enrich"
   | "Engage"
   | "Win deals"
@@ -51,6 +52,7 @@ export interface Tool {
 
 export const TOOL_GROUPS: ToolGroup[] = [
   "Daily",
+  "CRM",
   "Prospect & enrich",
   "Engage",
   "Win deals",
@@ -74,21 +76,31 @@ export const TOOLS: Tool[] = [
   { href: "/calendar", label: "My Calendar", icon: CalendarDays, group: "Daily", primary: true,
     description: "Your schedule, synced with your calendar provider." },
 
-  /* ── Prospect & enrich ─────────────────────────────────────────────── */
-  { href: "/v2/people", label: "People", icon: Users, group: "Prospect & enrich", primary: true,
+  /* ── CRM — the records themselves ──────────────────────────────────── */
+  { href: "/v2/people", label: "People", icon: Users, group: "CRM", primary: true,
     description: "Every person record — search, filter, act.", keywords: ["contacts", "prospects"] },
-  { href: "/v2/companies", label: "Companies", icon: Building2, group: "Prospect & enrich", primary: true,
+  { href: "/v2/companies", label: "Companies", icon: Building2, group: "CRM", primary: true,
     description: "Every company record with its people and activity.", keywords: ["accounts"] },
-  { href: "/v2/lists", label: "Lists", icon: ListChecks, group: "Prospect & enrich",
+  { href: "/v2/deals", label: "Deals", icon: KanbanSquare, group: "CRM", primary: true,
+    description: "Your pipeline board — every open opportunity.", keywords: ["pipeline", "opportunities"] },
+  { href: "/leads", label: "Leads", icon: Target, group: "CRM", primary: true,
+    description: "Scored, routable leads awaiting qualification." },
+  { href: "/v2/lists", label: "Lists", icon: ListChecks, group: "CRM",
     description: "Named sets of people or companies for targeting." },
-  { href: "/find-prospects", label: "Find Prospects", icon: Radar, group: "Prospect & enrich",
+  { href: "/v2/tasks", label: "Tasks", icon: ListChecks, group: "CRM",
+    description: "Your to-dos, including AI-proposed drafts." },
+  { href: "/v2/calls", label: "Calls", icon: Phone, group: "CRM",
+    description: "Call logs, outcomes, and AI call summaries." },
+  { href: "/import", label: "Import Contacts", icon: Upload, group: "CRM", primary: true,
+    description: "Bring in a CSV of people or prospects.", keywords: ["csv", "upload"] },
+
+  /* ── Prospect & enrich ─────────────────────────────────────────────── */
+  { href: "/find-prospects", label: "Find Prospects", icon: Radar, group: "Prospect & enrich", primary: true,
     description: "Source new prospects from external databases.", keywords: ["apollo", "search"] },
-  { href: "/v2/data-enrichment", label: "Data Enrichment", icon: Database, group: "Prospect & enrich",
+  { href: "/v2/data-enrichment", label: "Data Enrichment", icon: Database, group: "Prospect & enrich", primary: true,
     description: "Fill in missing emails, titles, and companies.", keywords: ["quickenrich", "linkedin"] },
   { href: "/data-health", label: "Data Health", icon: BarChart3, group: "Prospect & enrich",
     description: "Duplicates, gaps, and import-mapping audits." },
-  { href: "/import", label: "Import Contacts", icon: Upload, group: "Prospect & enrich", primary: true,
-    description: "Bring in a CSV of people or prospects.", keywords: ["csv", "upload"] },
   { href: "/v2/saved-people", label: "Saved People", icon: Users, group: "Prospect & enrich",
     description: "People you bookmarked while sourcing." },
   { href: "/v2/saved-companies", label: "Saved Companies", icon: Building2, group: "Prospect & enrich",
@@ -103,10 +115,6 @@ export const TOOLS: Tool[] = [
     description: "Outbound email activity and drafts in one stream." },
   { href: "/unified-inbox", label: "Unified Inbox", icon: MessageSquare, group: "Engage", primary: true,
     description: "LinkedIn, WhatsApp and social DMs in one place." },
-  { href: "/v2/calls", label: "Calls", icon: Phone, group: "Engage",
-    description: "Call logs, outcomes, and AI call summaries." },
-  { href: "/v2/tasks", label: "Tasks", icon: ListChecks, group: "Engage",
-    description: "Your to-dos, including AI-proposed drafts." },
   { href: "/social", label: "Social", icon: Share2, group: "Engage",
     description: "LinkedIn outreach: invites, DMs, and replies.", keywords: ["linkedin"] },
   { href: "/email-builder", label: "Email Builder", icon: LayoutTemplate, group: "Engage",
@@ -119,14 +127,10 @@ export const TOOLS: Tool[] = [
     description: "Review, edit, and send queued email drafts." },
 
   /* ── Win deals ─────────────────────────────────────────────────────── */
-  { href: "/v2/deals", label: "Deals", icon: KanbanSquare, group: "Win deals", primary: true,
-    description: "Your pipeline board — every open opportunity.", keywords: ["pipeline", "opportunities"] },
   { href: "/v2/meetings", label: "Meetings", icon: CalendarDays, group: "Win deals", primary: true,
     description: "Booked and proposed meetings; approve AI proposals.", keywords: ["demo"] },
   { href: "/v2/conversations", label: "Conversations", icon: MessageSquare, group: "Win deals", primary: true,
     description: "Inbound replies that need a human answer." },
-  { href: "/leads", label: "Leads", icon: Target, group: "Win deals", primary: true,
-    description: "Scored, routable leads awaiting qualification." },
   { href: "/pipeline-alerts", label: "Pipeline Alerts", icon: AlertTriangle, group: "Win deals",
     description: "Stuck-deal and at-risk warnings." },
   { href: "/proposals", label: "Proposals", icon: ClipboardList, group: "Win deals",
