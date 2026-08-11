@@ -34,10 +34,12 @@ Tests: extend existing import/dedup/merge suites; add LeadRocks mapping coverage
 
 ## Phase 2 — Company-side provenance + record sync (small additive schema)
 
-> **STATUS: 2.1–2.3 SHIPPED 2026-08-11 (`5ef9373`, migr 0154); 2.4 stays
-> BLOCKED on the Zernio decision.** Tests in `server/roadmapPhase2.test.ts`
-> (+12). Notable adapter rule added: corroboration never lowers
-> confidence (fieldMerge's 99 cap would have demoted user·100 pins).
+> **STATUS: FULLY SHIPPED 2026-08-11** — 2.1–2.3 in `5ef9373` (migr 0154);
+> 2.4 UNBLOCKED and shipped in `65bcc1b`: no new vendor — QuickEnrich +
+> LinkedIn (company identification only) are the single source of truth,
+> derived from linked-prospect evidence through the account ledger.
+> Notable adapter rule: corroboration never lowers confidence (fieldMerge's
+> 99 cap would have demoted user·100 pins).
 
 | # | Change | Notes |
 |---|---|---|
@@ -48,6 +50,10 @@ Tests: extend existing import/dedup/merge suites; add LeadRocks mapping coverage
 
 ## Phase 3 — Signal unification (wiring, not architecture)
 
+> **STATUS: SHIPPED 2026-08-11 (`65bcc1b`, migr 0156).** Decision #3 resolved:
+> `contact_enrichment_history` was Clodura-shaped and is dropped (0155);
+> prospect history lives in the new `prospect_field_history`.
+
 | # | Change | Notes |
 |---|---|---|
 | 3.1 | `brand_change_detected` also fires `fireWorkflowRules(ws, "signal_received", {signal:"brand_change", …})` — mirrors exactly what job-change already does | `brandReconciler.ts` (+1 test); rules UI already supports signal-gated rules |
@@ -56,12 +62,20 @@ Tests: extend existing import/dedup/merge suites; add LeadRocks mapping coverage
 
 ## Phase 4 — Provider benchmarking (read-layer only)
 
+> **STATUS: 4.1 SHIPPED 2026-08-11 (`65bcc1b`).** 4.2 deliberately not built
+> — revisit only if 4.1 proves insufficient.
+
 | # | Change | Notes |
 |---|---|---|
 | 4.1 | Hit-rate report over data that already exists: GROUP BY `field_provenance.source` (winning values) + sweeper result JSONs + `linkedin_lookup_log` statuses → one tRPC query + one Data Health card | Zero new writes; answers "which provider earns its keep" |
 | 4.2 | (Optional) persist per-pass outcomes: `comprehensivePass` returns `phases` — add a compact counters row (per workspace/day/provider: attempts, hits, credits) written where the sweeper already persists its result | Only if 4.1 proves insufficient; still additive |
 
 ## Phase 5 — Freshness + housekeeping (each item independently approvable)
+
+> **STATUS: 5.1–5.4 SHIPPED 2026-08-11 (`65bcc1b`).** 5.5 dispositions:
+> Clodura REMOVED (owner-approved, migr 0155). The other dead-inventory
+> items (dataCleanup router, uncalled companies.* procedures,
+> organization_locations) still await individual approval.
 
 | # | Change | Notes |
 |---|---|---|
@@ -87,7 +101,7 @@ Tests: extend existing import/dedup/merge suites; add LeadRocks mapping coverage
 
 ## Open decisions (blocking specific items only)
 
-1. **Zernio** (blocks 2.4): zero references in the repo. What does it provide, where are the API docs, and where should it sit in the waterfall? Needs credentials + docs.
-2. **Clodura** (blocks 5.5 disposition): reinstate as a live source (new adapter emitting Candidates through `mergeAll`) or formally retire (tables stay, register it as retired)?
-3. **Prospect field-history store** (blocks 3.2 shape): reuse dead `contact_enrichment_history` or add a `prospect_field_changes` sibling?
+1. ~~**Zernio**~~ RESOLVED 2026-08-11: no new vendor. QuickEnrich + LinkedIn (company identification only) are the single source of truth; 2.4 shipped as evidence-derived identification through the account ledger (`65bcc1b`).
+2. ~~**Clodura**~~ RESOLVED 2026-08-11: removed (migr 0155 drops the execution tables; legacy prospect columns stay physically).
+3. ~~**Prospect field-history store**~~ RESOLVED 2026-08-11: new `prospect_field_history` (0156); `contact_enrichment_history` dropped with Clodura.
 4. **`findContactInfo` legacy path** (blocks 1.2 approach): reroute its body, or retire the button in favor of `enrichFull`?
