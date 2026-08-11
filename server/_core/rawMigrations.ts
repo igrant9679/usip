@@ -3325,6 +3325,21 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0154: company-side field provenance (roadmap P2.1) ────────────────────
+  // The same ledger prospects got in 0151, for accounts: field →
+  // {source, confidence, at, corroboratedBy?}. Written by the paths that
+  // reconcile (brand reconciler, manual brand pins at user·100); legacy
+  // values get the `preexisting` baseline exactly as fieldMerge does.
+  // Absent map = legacy row — protected but correctable, never rewritten
+  // by the migration itself. VERIFY: "Resolve brand" on a company, then
+  // its accounts row carries field_provenance entries for what changed.
+  {
+    name: "0154_account_field_provenance.sql",
+    statements: [
+      "ALTER TABLE `accounts` ADD COLUMN `field_provenance` json NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

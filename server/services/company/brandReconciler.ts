@@ -313,6 +313,7 @@ export async function reconcileAccountBrand(
     .select({
       id: accounts.id, name: accounts.name, domain: accounts.domain, legalName: accounts.legalName,
       brandOverride: accounts.brandOverride, websiteUrl: accounts.websiteUrl,
+      fieldProvenance: accounts.fieldProvenance,
     })
     .from(accounts)
     .where(and(eq(accounts.workspaceId, workspaceId), eq(accounts.id, accountId)))
@@ -374,19 +375,43 @@ export async function reconcileAccountBrand(
     },
   } as typeof brandObservations.$inferInsert);
 
-  // Apply the decision.
+  // Apply the decision THROUGH the account provenance ledger (roadmap
+  // P2.1): the reconciler's bands decide what to attempt; the ledger's
+  // never-downgrade rule decides whether stronger provenance (a user pin
+  // at 100, a corroborated prior entry) blocks the write. Same 0151
+  // semantics — legacy values get the `preexisting` baseline.
   const changedFields: string[] = [];
   if (Object.keys(decision.changes).length > 0 || decision.verified) {
+    const { mergeAccountField } = await import("./accountProvenance");
+    const nowIso = new Date().toISOString();
+    const ledger = { ...((acc.fieldProvenance ?? {}) as Record<string, unknown>) } as import("./accountProvenance").AccountProvenanceMap;
+    let ledgerChanged = false;
     const set: Record<string, unknown> = {};
-    if (decision.changes.name) { set.name = decision.changes.name; changedFields.push("name"); }
-    if (decision.changes.domain) { set.domain = decision.changes.domain; set.normalizedDomain = normalizeDomain(decision.changes.domain); changedFields.push("domain"); }
-    if (decision.changes.legalName) { set.legalName = decision.changes.legalName; changedFields.push("legalName"); }
-    if (decision.changes.name) set.normalizedName = normalizeCompanyName(decision.changes.name);
+    for (const field of ["name", "domain", "legalName"] as const) {
+      const proposed = decision.changes[field];
+      if (!proposed) continue;
+      const d = mergeAccountField(field, { value: acc[field], provenance: ledger[field] }, {
+        value: proposed, source: BRAND_PROVIDER, confidence: decision.brandConfidence, at: nowIso,
+      });
+      ledger[field] = d.provenance;
+      ledgerChanged = true;
+      if (d.action === "filled" || d.action === "replaced") {
+        set[field] = d.value;
+        if (field === "name") set.normalizedName = normalizeCompanyName(d.value);
+        if (field === "domain") set.normalizedDomain = normalizeDomain(d.value);
+        changedFields.push(field);
+      } else if (d.action === "kept") {
+        decision.notes.push(`${field} kept — existing provenance outranks this observation`);
+      }
+    }
     if (decision.verified) {
       set.brandConfidence = decision.brandConfidence;
       set.brandVerifiedAt = new Date();
     }
-    await db.update(accounts).set(set as never).where(and(eq(accounts.workspaceId, workspaceId), eq(accounts.id, accountId)));
+    if (ledgerChanged) set.fieldProvenance = ledger;
+    if (Object.keys(set).length > 0) {
+      await db.update(accounts).set(set as never).where(and(eq(accounts.workspaceId, workspaceId), eq(accounts.id, accountId)));
+    }
   }
 
   // Enrichment-history events: the reconcile itself, plus a `changed` event

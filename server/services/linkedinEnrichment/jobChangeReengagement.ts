@@ -90,6 +90,33 @@ export async function onJobChangeDetected(
 
   // 2) Built-in autopilot re-engagement (respects Off/Approve/Auto).
   await maybeCreateJobChangeReengagement(workspaceId, prospectId, changes).catch(() => { /* best-effort */ });
+
+  // 3) Re-run company association with the NEW employer (roadmap P2.3).
+  // associateUnlinkedProspects only sweeps accountId IS NULL rows, so a
+  // linked prospect whose employer changed stayed on the old account
+  // forever. The per-prospect associator re-evaluates regardless of the
+  // existing link (scored matcher, conflict-aware, never throws) — the
+  // enrichment write-back has already put the new company/domain on the
+  // prospect row by the time this hook fires.
+  if (companyChange) {
+    try {
+      const db = await getDb();
+      if (db) {
+        const [p] = await db.select().from(prospects)
+          .where(and(eq(prospects.workspaceId, workspaceId), eq(prospects.id, prospectId)))
+          .limit(1);
+        if (p) {
+          const { associateProspectToCompany } = await import("../company/associationService");
+          const r = await associateProspectToCompany(p, { sourceType: "job_change" });
+          if (r.accountId) {
+            console.log(`[JobChangeReengage] prospect ${prospectId} re-associated to account ${r.accountId} (${r.status})`);
+          }
+        }
+      }
+    } catch (e) {
+      console.error(`[JobChangeReengage] ws ${workspaceId} re-association failed:`, (e as Error).message);
+    }
+  }
 }
 
 /**

@@ -8,7 +8,8 @@ import { and, eq } from "drizzle-orm";
 import { getDb } from "../../db";
 import {
   accounts, prospects, contacts, contactAccountLinks, opportunities, customers,
-  accountDomains, activities,
+  accountDomains, activities, brandObservations, organizationEnrichmentEvents,
+  companyLogoAssets,
 } from "../../../drizzle/schema";
 
 export async function findDuplicateAccounts(ws: number): Promise<Array<{ key: string; accountIds: number[] }>> {
@@ -41,6 +42,12 @@ export async function mergeAccounts(ws: number, primaryAccountId: number, duplic
   await db.update(opportunities).set(reassign).where(and(eq(opportunities.workspaceId, ws), eq(opportunities.accountId, duplicateAccountId)));
   await db.update(customers).set(reassign).where(and(eq(customers.workspaceId, ws), eq(customers.accountId, duplicateAccountId)));
   await db.update(accountDomains).set(reassign).where(and(eq(accountDomains.workspaceId, ws), eq(accountDomains.accountId, duplicateAccountId)));
+  // Evidence/history tables (roadmap P2.2) — a merged account must not
+  // orphan its brand observations, enrichment events, or logo assets.
+  // (prospect_linkedin_field_changes is prospect-scoped — nothing to repoint.)
+  await db.update(brandObservations).set(reassign).where(and(eq(brandObservations.workspaceId, ws), eq(brandObservations.accountId, duplicateAccountId)));
+  await db.update(organizationEnrichmentEvents).set({ accountId: primaryAccountId } as never).where(and(eq(organizationEnrichmentEvents.workspaceId, ws), eq(organizationEnrichmentEvents.accountId, duplicateAccountId)));
+  await db.update(companyLogoAssets).set({ accountId: primaryAccountId } as never).where(and(eq(companyLogoAssets.workspaceId, ws), eq(companyLogoAssets.accountId, duplicateAccountId)));
 
   await db.update(accounts).set({ archivedAt: new Date(), dataStatus: "merged" } as never)
     .where(and(eq(accounts.workspaceId, ws), eq(accounts.id, duplicateAccountId)));

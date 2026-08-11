@@ -192,6 +192,9 @@ export const accounts = mysqlTable(
     brandConfidence: int("brand_confidence"), // 0–100, same vocabulary as fieldMerge CONFIDENCE
     brandVerifiedAt: timestamp("brand_verified_at"),
     brandOverride: json("brand_override"), // { name?, domain?, byUserId, at, reason? } — reconciler never touches overridden fields
+    /** field → {source, confidence, at, corroboratedBy?} — migration 0154.
+     *  The company-side provenance ledger (same shape as prospects'). */
+    fieldProvenance: json("field_provenance"),
     lastEnrichedAt: timestamp("last_enriched_at"),
     archivedAt: timestamp("archived_at"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),

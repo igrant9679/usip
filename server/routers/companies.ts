@@ -113,14 +113,21 @@ export const companiesRouter = router({
         ...(input.reason ? { reason: input.reason } : {}),
       };
       // The override IS the value: pin the fields it names so display matches.
+      // The pin is also recorded in the account ledger at user·100 (roadmap
+      // P2.1) — no automated source can ever outrank it.
       const { normalizeCompanyName, normalizeDomain } = await import("../services/company/normalize");
+      const { userPinProvenance } = await import("../services/company/accountProvenance");
+      const [cur] = await db.select({ fieldProvenance: accounts.fieldProvenance }).from(accounts)
+        .where(and(eq(accounts.workspaceId, ctx.workspace.id), eq(accounts.id, input.accountId))).limit(1);
+      const ledger = { ...((cur?.fieldProvenance ?? {}) as Record<string, unknown>) };
       const set: Record<string, unknown> = { brandOverride: override };
-      if (input.name) { set.name = input.name; set.normalizedName = normalizeCompanyName(input.name); }
+      if (input.name) { set.name = input.name; set.normalizedName = normalizeCompanyName(input.name); ledger.name = userPinProvenance(override.at); }
       if (input.domain) {
         const d = normalizeDomain(input.domain);
         if (!d) throw new TRPCError({ code: "BAD_REQUEST", message: "That doesn't look like a domain." });
-        set.domain = d; set.normalizedDomain = d;
+        set.domain = d; set.normalizedDomain = d; ledger.domain = userPinProvenance(override.at);
       }
+      set.fieldProvenance = ledger;
       await db.update(accounts).set(set as never).where(and(eq(accounts.workspaceId, ctx.workspace.id), eq(accounts.id, input.accountId)));
       await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "brand_override", entityId: input.accountId, after: override });
       return { ok: true };
