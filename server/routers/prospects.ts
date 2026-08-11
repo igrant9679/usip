@@ -400,8 +400,17 @@ export const prospectsRouter = router({
       if (input.hasEmail === false) conditions.push(isNull(prospects.email));
       if (input.hasPhone) conditions.push(sql`${prospects.phone} IS NOT NULL AND ${prospects.phone} <> ''`);
       if (input.hasLinkedin) conditions.push(sql`${prospects.linkedinUrl} IS NOT NULL AND ${prospects.linkedinUrl} <> ''`);
-      if (input.promoted === true) conditions.push(sql`${prospects.linkedLeadId} IS NOT NULL`);
-      if (input.promoted === false) conditions.push(isNull(prospects.linkedLeadId));
+      // "Saved" means promoted to a lead OR a contact — the People page has
+      // always counted both, while this filter checked only linkedLeadId and
+      // silently dropped contact-only rows from the Saved view. One
+      // vocabulary now, and the tiles below share it. Kept OUT of
+      // `conditions` so the Total/Net new/Saved tiles can be computed across
+      // the whole filtered dataset regardless of which tile is active.
+      const savedExpr = sql`(${prospects.linkedLeadId} IS NOT NULL OR ${prospects.linkedContactId} IS NOT NULL)`;
+      const promotedConds =
+        input.promoted === true ? [savedExpr]
+          : input.promoted === false ? [sql`(${prospects.linkedLeadId} IS NULL AND ${prospects.linkedContactId} IS NULL)`]
+            : [];
       if (input.verificationStatus) conditions.push(eq(prospects.verificationStatus, input.verificationStatus));
       if (input.discoveryRunId) conditions.push(eq(prospects.lastDiscoveryRunId, input.discoveryRunId));
       // Sequence membership — join via enrollments.prospectId (migration 0085).
@@ -574,6 +583,22 @@ export const prospectsRouter = router({
         return { ...rest, profile_image: resolveProspectProfileImage(r) };
       };
 
+      /** Tile counts for the stats strip: Total / Net new / Saved across the
+       *  WHOLE filtered dataset — deliberately excluding the saved-status
+       *  filter itself, so the three tiles partition the same population and
+       *  clicking one shows exactly the number it promised. (The old strip
+       *  computed Net new/Saved on the loaded page only: "Net new 50" was
+       *  just the page size.) Score-join filters are not reflected here. */
+      const [tileAgg] = await db
+        .select({
+          all: sql<number>`count(*)`,
+          saved: sql<number>`coalesce(sum(case when ${prospects.linkedLeadId} is not null or ${prospects.linkedContactId} is not null then 1 else 0 end), 0)`,
+        })
+        .from(prospects)
+        .where(and(...conditions));
+      const savedCount = Number(tileAgg?.saved ?? 0);
+      const netNewCount = Number(tileAgg?.all ?? 0) - savedCount;
+
       if (wantsScore && primaryModelId != null) {
         const joinCond = and(
           eq(scoreResults.objectId, prospects.id),
@@ -581,7 +606,7 @@ export const prospectsRouter = router({
           eq(scoreResults.workspaceId, ctx.workspace.id),
           eq(scoreResults.scoreModelId, primaryModelId),
         );
-        const scoreConds = [...conditions];
+        const scoreConds = [...conditions, ...promotedConds];
         if (input.scoreMinRating) {
           const set = input.scoreMinRating === "excellent" ? ["excellent"]
             : input.scoreMinRating === "good" ? ["good", "excellent"]
@@ -610,13 +635,13 @@ export const prospectsRouter = router({
           fitScore: row.score_results ? Number(row.score_results.normalizedScore) : null,
           fitRating: row.score_results?.rating ?? null,
         }));
-        return { data, total: Number(total), page: input.page, perPage: input.perPage };
+        return { data, total: Number(total), page: input.page, perPage: input.perPage, savedCount, netNewCount };
       }
 
       const rows = await db
         .select()
         .from(prospects)
-        .where(and(...conditions))
+        .where(and(...conditions, ...promotedConds))
         .orderBy(...sortExprs)
         .limit(input.perPage)
         .offset(offset);
@@ -624,13 +649,13 @@ export const prospectsRouter = router({
       const [{ total }] = await db
         .select({ total: sql<number>`count(*)` })
         .from(prospects)
-        .where(and(...conditions));
+        .where(and(...conditions, ...promotedConds));
 
       await repairCompanyBlanks(rows);
       // Raw image columns stay server-side; rows carry the resolved image only.
       const data = rows.map(withResolvedImg);
 
-      return { data, total: Number(total), page: input.page, perPage: input.perPage };
+      return { data, total: Number(total), page: input.page, perPage: input.perPage, savedCount, netNewCount };
     }),
 
   /**

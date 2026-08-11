@@ -351,9 +351,12 @@ export default function People() {
     [scoreData],
   );
 
-  // stats (Total = whole dataset; net-new / saved computed on the loaded page)
-  const savedOnPage = pageRows.filter((p) => p.linkedLeadId || p.linkedContactId).length;
-  const netNewOnPage = pageRows.length - savedOnPage;
+  // stats — whole-dataset counts from the server (they exclude the
+  // saved-status filter itself, so the three tiles always partition the same
+  // population). The old version counted Net new/Saved on the LOADED PAGE
+  // while Total spanned the dataset: "Net new 50" was just the page size.
+  const savedCount = (data as any)?.savedCount ?? 0;
+  const netNewCount = (data as any)?.netNewCount ?? 0;
 
   // whether any *server-backed* filter is set — distinguishes "no results for
   // this query" (show the adjust-filters state) from "empty workspace".
@@ -694,21 +697,33 @@ export default function People() {
           {/* ── filter rail (the fulcrum) ── */}
           {!hideFilters && (
             <aside className="w-64 shrink-0 border-r border-border flex flex-col min-h-0 bg-card/30">
-              {/* stats strip */}
+              {/* stats strip — each tile IS the saved-status filter: Total
+                  clears it, Net new / Saved apply it, and the counts come
+                  from the server across the whole filtered dataset so the
+                  number on the tile is exactly what clicking it shows. */}
               <div className="grid grid-cols-3 gap-px bg-border/60 shrink-0">
                 {[
-                  { l: "Total", v: fmtNum(total) },
-                  { l: "Net new", v: fmtNum(netNewOnPage) },
-                  { l: "Saved", v: fmtNum(savedOnPage) },
+                  { l: "Total", v: fmtNum(netNewCount + savedCount), mode: "all" as const, title: "Show everyone" },
+                  { l: "Net new", v: fmtNum(netNewCount), mode: "not" as const, title: "Show people not yet saved as a lead or contact" },
+                  { l: "Saved", v: fmtNum(savedCount), mode: "promoted" as const, title: "Show people already saved as a lead or contact" },
                 ].map((s) => (
-                  <div
+                  <button
                     key={s.l}
-                    className="bg-card px-2 py-1.5 text-center leading-tight"
-                    style={{ backgroundImage: `linear-gradient(180deg, ${accent}1f, transparent)` }}
+                    type="button"
+                    title={s.title}
+                    onClick={() => { setPromoted(s.mode); resetPage(); }}
+                    className={cn(
+                      "bg-card px-2 py-1.5 text-center leading-tight transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-1",
+                      promoted === s.mode && "ring-1 ring-inset",
+                    )}
+                    style={{
+                      backgroundImage: `linear-gradient(180deg, ${accent}${promoted === s.mode ? "33" : "1f"}, transparent)`,
+                      ...(promoted === s.mode ? { ["--tw-ring-color" as string]: accent } : {}),
+                    }}
                   >
                     <div className="text-[13px] font-bold tabular-nums" style={{ color: accent }}>{s.v}</div>
                     <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{s.l}</div>
-                  </div>
+                  </button>
                 ))}
               </div>
 
