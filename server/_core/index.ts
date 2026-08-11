@@ -515,6 +515,21 @@ async function startServer() {
   setTimeout(runImageMirror, 6 * 60 * 1000); // stagger: 6 minutes after boot
   setInterval(runImageMirror, 6 * 60 * 60 * 1000); // every 6h; idempotent (mirrored rows leave the predicate)
 
+  // Company logo backfill. Fetches official assets from each account's OWN
+  // domain (manifest icons / apple-touch-icons), processes them to clean
+  // transparent squares, and stores them inline. Free; terminal states stop
+  // re-fetching dead domains.
+  const runLogoBackfill = () => {
+    import("../services/company/logoBackfill")
+      .then((m) => m.backfillCompanyLogos())
+      .then((r) => {
+        if (r.scanned > 0) console.log(`[LogoBackfill] scanned=${r.scanned} set=${r.set} unavailable=${r.unavailable} skipped=${r.skipped}`);
+      })
+      .catch((e) => console.error("[LogoBackfill] run failed:", e));
+  };
+  setTimeout(runLogoBackfill, 9 * 60 * 1000); // stagger: 9 minutes after boot
+  setInterval(runLogoBackfill, 6 * 60 * 60 * 1000); // every 6h; bounded per run
+
   // Nightly AI pipeline batch: midnight cron for leads above score threshold
   const scheduleNightlyBatch = () => {
     const now = new Date();

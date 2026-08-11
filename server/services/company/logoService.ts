@@ -41,7 +41,11 @@ export async function updateCompanyLogo(ws: number, accountId: number, logo: {
   logoUrl: string; sourceType: string; sourceUrl?: string | null;
 }): Promise<{ ok: boolean; reason?: string }> {
   if (!PERMITTED.has(logo.sourceType)) return { ok: false, reason: "logo source not permitted" };
-  if (!/^https:\/\//i.test(logo.logoUrl)) return { ok: false, reason: "logo url must be https" };
+  // https URL, or a self-contained processed image from the logo pipeline —
+  // the same inline form user-uploaded avatars use.
+  if (!/^https:\/\//i.test(logo.logoUrl) && !/^data:image\//i.test(logo.logoUrl)) {
+    return { ok: false, reason: "logo url must be https or an inline image" };
+  }
   const db = await getDb();
   if (!db) return { ok: false, reason: "db unavailable" };
   await db.update(accounts).set({
