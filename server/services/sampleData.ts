@@ -135,6 +135,13 @@ export async function sampleDataStatus(workspaceId: number): Promise<SampleDataC
   if (areIds.length) {
     c.areQueueRows = await count(db.select({ c: sql<number>`count(*)` }).from(prospectQueue).where(and(eq(prospectQueue.workspaceId, ws), inArray(prospectQueue.campaignId, areIds))));
   }
+  // Orphaned seed tasks — same predicate the remover uses.
+  c.tasks += await count(db.select({ c: sql<number>`count(*)` }).from(tasks).where(and(
+    eq(tasks.workspaceId, ws),
+    inArray(tasks.title, SEED_FINGERPRINT.taskTitles as unknown as string[]),
+    eq(tasks.relatedType, "opportunity"),
+    sql`NOT EXISTS (SELECT 1 FROM \`opportunities\` \`o\` WHERE \`o\`.\`id\` = ${tasks.relatedId} AND \`o\`.\`workspaceId\` = ${ws})`,
+  )));
   return c;
 }
 
@@ -213,6 +220,20 @@ export async function removeSampleData(workspaceId: number): Promise<SampleDataC
     counts.enrollments += affected(await db.delete(enrollments).where(and(eq(enrollments.workspaceId, ws), inArray(enrollments.leadId, leadIds))));
     counts.leads = affected(await db.delete(leads).where(and(eq(leads.workspaceId, ws), inArray(leads.id, leadIds))));
   }
+
+  /* ── Orphaned seed tasks ──────────────────────────────────────────────
+     The FK cascade above deletes tasks through their demo parents, but a
+     task whose opportunity was ALREADY gone before removal ran has no
+     parent to cascade from (caught live on CommunityForce: 16 seed tasks
+     survived because only 6 of the seeder's 32 opportunities still
+     existed). A seed-titled, opportunity-typed task whose relatedId no
+     longer resolves is unambiguously seed residue. ─────────────────────── */
+  counts.tasks += affected(await db.delete(tasks).where(and(
+    eq(tasks.workspaceId, ws),
+    inArray(tasks.title, SEED_FINGERPRINT.taskTitles as unknown as string[]),
+    eq(tasks.relatedType, "opportunity"),
+    sql`NOT EXISTS (SELECT 1 FROM \`opportunities\` \`o\` WHERE \`o\`.\`id\` = ${tasks.relatedId} AND \`o\`.\`workspaceId\` = ${ws})`,
+  )));
 
   /* ── Seed-named singletons ────────────────────────────────────────── */
   const seqRows = await db.select({ id: sequences.id }).from(sequences)

@@ -16,6 +16,7 @@ import { getDb } from "./db";
 import {
   workspaces,
   areCampaigns,
+  auditLog,
   prospectQueue,
   prospectIntelligence,
   areAbVariants,
@@ -98,6 +99,21 @@ export async function seedAreDemoForAllWorkspaces(): Promise<void> {
 
   for (const ws of allWorkspaces) {
     try {
+      // A workspace whose owner REMOVED the sample data must never get the
+      // demo campaign back. The absence-of-campaign check alone re-seeded it
+      // on every boot after removal (caught live on CommunityForce,
+      // 2026-08-11) — the removal's audit marker is the durable veto, same
+      // guard seedWorkspace uses.
+      const [{ removed }] = await db
+        .select({ removed: sql<number>`count(*)` })
+        .from(auditLog)
+        .where(and(
+          eq(auditLog.workspaceId, ws.id),
+          eq(auditLog.entityType, "sample_data"),
+          eq(auditLog.action, "delete"),
+        ));
+      if (Number(removed) > 0) continue;
+
       // Idempotency guard — skip if the demo campaign already exists.
       const [{ n }] = await db
         .select({ n: sql<number>`count(*)` })

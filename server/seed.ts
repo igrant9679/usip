@@ -70,6 +70,7 @@ const SEED_WORKFLOW_NAMES = ["Auto-assign new leads to RevOps", "Flag stalled de
 const SEED_CAMPAIGN_NAMES = ["Q2 Renewal Push", "Mid-market expansion", "Spring brand refresh"] as const;
 const SEED_PRODUCT_SKUS = ["USIP-CORE-A", "USIP-CORE-M", "USIP-INTEL", "USIP-SOCIAL", "USIP-CS", "USIP-IMPL-PRO", "USIP-IMPL-ENT"] as const;
 const SEED_DASHBOARD_NAME = "Revenue overview";
+const SEED_TASK_TITLES = ["Call champion", "Send pricing breakdown", "Confirm security review timing", "Schedule QBR", "Draft renewal proposal"] as const;
 
 /**
  * The demo data's identity, exported for the sample-data remover
@@ -86,6 +87,7 @@ export const SEED_FINGERPRINT = {
   campaignNames: [...SEED_CAMPAIGN_NAMES],
   productSkus: [...SEED_PRODUCT_SKUS],
   dashboardName: SEED_DASHBOARD_NAME,
+  taskTitles: [...SEED_TASK_TITLES],
 } as const;
 
 export function computeHealth(input: { productUsage: number; engagement: number; supportHealth: number; npsScore: number }): number {
@@ -377,7 +379,7 @@ export async function seedWorkspace(workspaceId: number, ownerUserId: number) {
   for (let i = 0; i < 20; i++) {
     await db.insert(tasks).values({
       workspaceId,
-      title: rand(["Call champion", "Send pricing breakdown", "Confirm security review timing", "Schedule QBR", "Draft renewal proposal"]),
+      title: rand(SEED_TASK_TITLES),
       type: rand(["call", "email", "meeting", "todo"] as const),
       priority: rand(["normal", "normal", "high", "urgent"] as const),
       status: "open",

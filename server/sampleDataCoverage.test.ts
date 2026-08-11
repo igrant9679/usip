@@ -46,7 +46,9 @@ describe("sample-data removal coverage", () => {
   it("covers every table the ARE demo seeder writes", () => {
     const seederTables = schemaImports(read("seedAreDemo.ts"));
     const removerTables = schemaImports(read("services/sampleData.ts"));
-    const notSampleData = new Set(["workspaces"]); // per-workspace iteration only
+    // workspaces: per-workspace iteration; auditLog: the reseed guard READS
+    // the removal marker (it re-seeded on every boot without it).
+    const notSampleData = new Set(["workspaces", "auditLog"]);
     const missing = [...seederTables].filter((t) => !notSampleData.has(t) && !removerTables.has(t));
     expect(missing).toEqual([]);
   });
