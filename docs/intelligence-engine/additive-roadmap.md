@@ -12,6 +12,11 @@
 
 ## Phase 1 — Route existing flows through existing machinery (no new infrastructure)
 
+> **STATUS: SHIPPED 2026-08-11 (`6fcd917`).** All seven items, tested
+> (`server/roadmapPhase1.test.ts`, +14). Open decision #4 resolved as
+> "reroute the body" — the UI workflow was preserved. tsc baseline moved
+> 331 → 330 (1.6 fixed a pre-existing type error).
+
 The merge/normalize/dedup engines are built and tested; the work is closing the bypasses.
 Highest value in the whole roadmap, near-zero new surface area.
 
