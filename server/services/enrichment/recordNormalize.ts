@@ -24,7 +24,11 @@ const JUNK = new Set([
   "not available", "not applicable", "self", "self employed", "self-employed",
 ]);
 
-/** Null out obvious placeholder junk; trim + collapse whitespace otherwise. */
+/** Null out obvious placeholder junk; trim + collapse whitespace otherwise.
+ *  This is the CSV-IMPORT junk vocabulary (human-typed cells). Its sibling
+ *  for scraped/LLM fields — bracket-wrapped "<UNKNOWN>" tokens, email/phone
+ *  shape rules — is @shared/fieldHygiene; see the note there before adding
+ *  a third. */
 export function cleanPlaceholder(v: string | null | undefined): string | null {
   const s = (v ?? "").replace(/\s+/g, " ").trim();
   if (!s) return null;

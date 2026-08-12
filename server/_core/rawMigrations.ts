@@ -3406,6 +3406,33 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0159: scrub scraper placeholder tokens out of stored rows ─────────────
+  // LLM scrapers wrote literal "<UNKNOWN>"/"N/A" into prospect_queue fields
+  // (only NAMES were cleaned at ingest until 2026-08-12 — @shared/fieldHygiene
+  // now cleans every field). Shape rules, matching that module: an email must
+  // contain an @, a phone must contain a digit, a domain must contain a dot;
+  // free-text fields match the placeholder token list. Nulling a garbage
+  // email is what returns the row to the enrichment candidate pool — every
+  // "has an email" gate is a truthiness check, so these rows were stuck.
+  // prospects gets the shape-based repairs only: its text fields are managed
+  // by the provenance merge and are not touched behind its back.
+  // Idempotent; names are deliberately excluded (the "(unknown)" first-name
+  // sentinel is load-bearing for isSyntheticNameProspect).
+  {
+    name: "0159_scrub_placeholder_fields.sql",
+    statements: [
+      "UPDATE `prospect_queue` SET `email` = NULL WHERE `email` IS NOT NULL AND `email` NOT LIKE '%@%'",
+      "UPDATE `prospect_queue` SET `phone` = NULL WHERE `phone` IS NOT NULL AND `phone` NOT REGEXP '[0-9]'",
+      "UPDATE `prospect_queue` SET `companyDomain` = NULL WHERE `companyDomain` IS NOT NULL AND `companyDomain` NOT LIKE '%.%'",
+      "UPDATE `prospect_queue` SET `title` = NULL WHERE `title` IS NOT NULL AND LOWER(TRIM(REPLACE(REPLACE(REPLACE(REPLACE(`title`, '<', ''), '>', ''), '(', ''), ')', ''))) IN ('unknown','n/a','na','none','null','not available','not found','not known','-','--','---')",
+      "UPDATE `prospect_queue` SET `companyName` = NULL WHERE `companyName` IS NOT NULL AND LOWER(TRIM(REPLACE(REPLACE(REPLACE(REPLACE(`companyName`, '<', ''), '>', ''), '(', ''), ')', ''))) IN ('unknown','n/a','na','none','null','not available','not found','not known','-','--','---')",
+      "UPDATE `prospect_queue` SET `industry` = NULL WHERE `industry` IS NOT NULL AND LOWER(TRIM(REPLACE(REPLACE(REPLACE(REPLACE(`industry`, '<', ''), '>', ''), '(', ''), ')', ''))) IN ('unknown','n/a','na','none','null','not available','not found','not known','-','--','---')",
+      "UPDATE `prospect_queue` SET `geography` = NULL WHERE `geography` IS NOT NULL AND LOWER(TRIM(REPLACE(REPLACE(REPLACE(REPLACE(`geography`, '<', ''), '>', ''), '(', ''), ')', ''))) IN ('unknown','n/a','na','none','null','not available','not found','not known','-','--','---')",
+      "UPDATE `prospects` SET `email` = NULL, `email_status` = NULL WHERE `email` IS NOT NULL AND `email` <> '' AND `email` NOT LIKE '%@%'",
+      "UPDATE `prospects` SET `phone` = NULL WHERE `phone` IS NOT NULL AND `phone` <> '' AND `phone` NOT REGEXP '[0-9]'",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

@@ -20,6 +20,7 @@ import { parseLlmJson } from "./llmJson";
 import { invokeLLM } from "../../_core/llm";
 import { router } from "../../_core/trpc";
 import { workspaceProcedure, isAdminRole } from "../../_core/workspace";
+import { cleanScrapedField, isPlaceholderToken, usableDomainOrNull, usableEmailOrNull, usablePhoneOrNull } from "@shared/fieldHygiene";
 import { searchLinkedInProfiles } from "../../services/linkedinLookup";
 
 // isAdminRole comes from _core/workspace.ts — one rank map for the repo.
@@ -310,29 +311,20 @@ export async function scrapeIndustryEvents(
 
 /* ─── Shared: save scrape job + queue prospects ─────────────────────────── */
 
-/**
- * Column-width guards. Scraped values regularly exceed the prospect_queue
- * varchar widths — LinkedIn headlines run up to ~220 chars vs title's
- * varchar(120) — and MySQL strict mode then rejects the ENTIRE multi-row
- * INSERT ("Data too long for column 'title' at row N"), silently discarding
- * every prospect found that tick. Clamp before insert; never trust source
- * lengths. (Documented enum/varchar runtime-insert bug class.)
- */
-function clampStr(v: unknown, max: number): string | undefined {
-  const s = String(v ?? "").trim();
-  if (!s) return undefined;
-  return s.length > max ? s.slice(0, max) : s;
-}
-
-/** LLM scrapers emit placeholder names ("<UNKNOWN>", "N/A") when a source
- *  doesn't reveal one — those must become empty strings, not greet-able
- *  "Hi <UNKNOWN>" personalization inputs. */
-const PLACEHOLDER_NAME =
-  /^[\s<>[\]()"'.-]*(unknown|n\/?a|none|null|not\s*(available|found|known)|-+)[\s<>[\]()"'.-]*$/i;
+/** Column-width guards live inside @shared/fieldHygiene's cleaners now:
+ *  scraped values regularly exceed the prospect_queue varchar widths
+ *  (LinkedIn headlines ~220 chars vs title's varchar(120)), and MySQL strict
+ *  mode rejects the ENTIRE multi-row INSERT — so every cleaner clamps too.
+ *
+ *  LLM scrapers emit placeholder tokens ("<UNKNOWN>", "N/A") when a source
+ *  doesn't reveal a value. Names were cleaned from day one (a greet-able
+ *  "Hi <UNKNOWN>" was the original bug); since 2026-08-12 EVERY scraped
+ *  string field goes through @shared/fieldHygiene — the owner's screenshot
+ *  showed "<UNKNOWN>" living in email/phone, where it blocked enrichment
+ *  ("has an email" checks are truthiness checks) and hid the row from the
+ *  sweeper. Migration 0159 repaired the rows already stored. */
 function cleanName(v: unknown, max: number): string {
-  const s = String(v ?? "").trim();
-  if (!s || PLACEHOLDER_NAME.test(s)) return "";
-  return s.length > max ? s.slice(0, max) : s;
+  return cleanScrapedField(v, max) ?? "";
 }
 
 export async function saveScrapeJobAndQueue(
@@ -407,15 +399,17 @@ export async function saveScrapeJobAndQueue(
       sourceUrl: String(p.sourceUrl ?? ""), // text column — no clamp needed
       firstName: cleanName(p.firstName, 80),
       lastName: cleanName(p.lastName, 80),
-      email: clampStr(p.email, 320),
-      linkedinUrl: p.linkedinUrl ? String(p.linkedinUrl) : undefined, // text column
-      phone: clampStr(p.phone, 40),
-      title: clampStr(p.title, 120),
-      companyName: clampStr(p.companyName, 200),
-      companyDomain: clampStr(p.companyDomain, 200),
-      companySize: clampStr(p.companySize, 40),
-      industry: clampStr(p.industry, 80),
-      geography: clampStr(p.geography, 120),
+      // Shape rules, not just token cleaning: an email without an @ or a
+      // phone without a digit is scraper garbage whatever it says.
+      email: usableEmailOrNull(p.email) ?? undefined,
+      linkedinUrl: p.linkedinUrl && !isPlaceholderToken(p.linkedinUrl) ? String(p.linkedinUrl) : undefined, // text column
+      phone: usablePhoneOrNull(p.phone) ?? undefined,
+      title: cleanScrapedField(p.title, 120),
+      companyName: cleanScrapedField(p.companyName, 200),
+      companyDomain: usableDomainOrNull(p.companyDomain) ?? undefined,
+      companySize: cleanScrapedField(p.companySize, 40),
+      industry: cleanScrapedField(p.industry, 80),
+      geography: cleanScrapedField(p.geography, 120),
       // int column 0-100 — round and clamp (scores can arrive as floats)
       icpMatchScore: Math.max(0, Math.min(100, Math.round(Number((p as any).icpMatchScore ?? 0) || 0))),
       enrichmentStatus: "pending" as const,

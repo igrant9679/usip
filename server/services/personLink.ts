@@ -32,6 +32,7 @@ import { prospects, prospectQueue, prospectLinkedinEnrichments } from "../../dri
 import { CONFIDENCE, mergeAll, type Candidate, type ProvenanceMap } from "./enrichment/fieldMerge";
 import { stripNameCredentials } from "./enrichment/personName";
 import { cleanPlaceholder, normalizeJobTitle } from "./enrichment/recordNormalize";
+import { usableEmailOrNull } from "@shared/fieldHygiene";
 import { normalizeCompanyName, normalizeDomain } from "./company/normalize";
 import { extractLinkedInIdentifier } from "./linkedinLookup";
 
@@ -57,7 +58,8 @@ export function hasPersonIdentity(row: {
 }): boolean {
   const named = !!(row.firstName?.trim() || row.lastName?.trim());
   if (!named) return false;
-  return !!(row.email?.trim() || row.linkedinUrl?.trim() || (row.firstName?.trim() && row.lastName?.trim() && row.companyName?.trim()));
+  // A placeholder "email" is not identity — shape-gate it like the tiers do.
+  return !!(usableEmailOrNull(row.email) || row.linkedinUrl?.trim() || (row.firstName?.trim() && row.lastName?.trim() && row.companyName?.trim()));
 }
 
 type PersonRow = typeof prospects.$inferSelect;
@@ -68,8 +70,10 @@ export function keysConflict(
   row: { email?: string | null; linkedinUrl?: string | null },
   person: { email: string | null; linkedinUrl: string | null },
 ): boolean {
-  const rowEmail = row.email?.trim().toLowerCase();
-  const personEmail = person.email?.trim().toLowerCase();
+  // Shape-gated like tier (a): a placeholder "email" must neither conflict
+  // nor corroborate.
+  const rowEmail = usableEmailOrNull(row.email);
+  const personEmail = usableEmailOrNull(person.email);
   if (rowEmail && personEmail && rowEmail !== personEmail) return true;
   const rowSlug = row.linkedinUrl ? extractLinkedInIdentifier(row.linkedinUrl) : null;
   const personSlug = person.linkedinUrl ? extractLinkedInIdentifier(person.linkedinUrl) : null;
@@ -88,8 +92,13 @@ export async function findPersonForRow(
   const db = await getDb();
   if (!db) return { person: null, tier: "none" };
 
-  // (a) email — the strongest key; accept outright.
-  const email = row.email?.trim().toLowerCase();
+  // (a) email — the strongest key; accept outright. Shape-gated: the key is
+  // only as strong as it is REAL. Before 2026-08-12 any non-empty string
+  // qualified, so two scraped rows both carrying the literal "<UNKNOWN>"
+  // matched each other here and linked to the same person. The ingest seam
+  // now cleans placeholders and 0159 repaired stored rows, but a key tier
+  // must not depend on every producer staying clean.
+  const email = usableEmailOrNull(row.email);
   if (email) {
     const [hit] = await db.select().from(prospects)
       .where(and(eq(prospects.workspaceId, workspaceId), sql`LOWER(${prospects.email}) = ${email}`))
