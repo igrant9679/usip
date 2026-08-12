@@ -93,7 +93,7 @@ export const TOOLS: Tool[] = [
     description: "Call logs, outcomes, and AI call summaries." },
   { href: "/import", label: "Import Contacts", icon: Upload, group: "CRM", primary: true,
     description: "Bring in a CSV of people or prospects.", keywords: ["csv", "upload"] },
-  { href: "/customers", label: "Customers", icon: Heart, group: "CRM",
+  { href: "/customers", label: "Customers", icon: Heart, group: "CRM", primary: true,
     description: "Won accounts — health, notes, and expansion.", keywords: ["customer success", "accounts"] },
 
   /* ── Prospect & enrich ─────────────────────────────────────────────── */
