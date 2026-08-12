@@ -93,6 +93,8 @@ export const TOOLS: Tool[] = [
     description: "Call logs, outcomes, and AI call summaries." },
   { href: "/import", label: "Import Contacts", icon: Upload, group: "CRM", primary: true,
     description: "Bring in a CSV of people or prospects.", keywords: ["csv", "upload"] },
+  { href: "/customers", label: "Customers", icon: Heart, group: "CRM",
+    description: "Won accounts — health, notes, and expansion.", keywords: ["customer success", "accounts"] },
 
   /* ── Prospect & enrich ─────────────────────────────────────────────── */
   { href: "/find-prospects", label: "Find Prospects", icon: Radar, group: "Prospect & enrich", primary: true,
@@ -143,8 +145,6 @@ export const TOOLS: Tool[] = [
     description: "Projected revenue from the open pipeline." },
 
   /* ── Customer success ──────────────────────────────────────────────── */
-  { href: "/customers", label: "Customers", icon: Heart, group: "Customer success",
-    description: "Won accounts — health, notes, and expansion." },
   { href: "/renewals", label: "Renewals", icon: CalendarClock, group: "Customer success",
     description: "Contract end dates and renewal risk." },
   { href: "/qbrs", label: "QBRs", icon: ClipboardCheck, group: "Customer success",
