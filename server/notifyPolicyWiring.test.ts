@@ -26,7 +26,9 @@ import {
   defaultNotifyPolicy,
   isEmailEnabled,
   isInAppEnabled,
+  memberWantsEmail,
   memberWantsEvent,
+  memberWantsInApp,
   pickKnownNotifyPrefs,
   wiredNotifyEventKeys,
 } from "@shared/notifyPolicy";
@@ -262,12 +264,18 @@ describe("the shared gate", () => {
     expect(src).toMatch(/if \(!userId\) return false;/);
   });
 
-  it("consults the workspace policy before inserting", () => {
+  it("consults the workspace policy before inserting, per channel", () => {
     const gate = src.indexOf("isInAppEnabled(");
     const insert = src.indexOf("db.insert(notifications)");
     expect(gate, "the policy is not consulted at all").toBeGreaterThan(-1);
     expect(insert).toBeGreaterThan(gate);
-    expect(src).toMatch(/if \(!isInAppEnabled\(settings\?\.policy, notice\.event\)\) return false;/);
+    // Each channel = workspace policy AND the member's own channel switch;
+    // the insert runs only under wantInApp, the mail only under wantEmail.
+    expect(src).toMatch(/const wantInApp = isInAppEnabled\(settings\?\.policy, notice\.event\)\s*&& memberWantsInApp\(member\?\.prefs, notice\.event\);/);
+    expect(src).toMatch(/const wantEmail = isEmailEnabled\(settings\?\.policy, notice\.event\)\s*&& memberWantsEmail\(member\?\.prefs, notice\.event\);/);
+    expect(src).toMatch(/if \(!wantInApp && !wantEmail\) return false;/);
+    expect(src).toMatch(/if \(wantInApp\) \{\s*await db\.insert\(notifications\)/);
+    expect(src).toMatch(/if \(wantEmail\) \{\s*void sendPolicyEmail/);
   });
 
   it("an extra per-event veto is ANDed, never ignored", () => {
@@ -322,25 +330,41 @@ describe("the shared gate", () => {
 /* ── Per-member overrides ────────────────────────────────────────────────── */
 
 describe("a member's own switches", () => {
-  it("only an EXPLICIT false mutes", () => {
+  it("only an EXPLICIT false mutes — and a legacy boolean still mutes BOTH channels", () => {
     /**
      * Absent means "follow the workspace", never "off". That is what makes the
      * old stored vocabulary harmless — a row full of `sequence_reply` keys has
      * no entry for any of the five events, so each defers to the policy exactly
      * as an untouched member does, rather than muting everything.
      */
-    expect(memberWantsEvent(undefined, "mention")).toBe(true);
-    expect(memberWantsEvent(null, "mention")).toBe(true);
-    expect(memberWantsEvent({}, "mention")).toBe(true);
-    expect(memberWantsEvent({ sequence_reply: false, workflow_alert: false }, "mention")).toBe(true);
-    expect(memberWantsEvent({ mention: true }, "mention")).toBe(true);
-    expect(memberWantsEvent({ mention: false }, "mention")).toBe(false);
+    for (const wants of [memberWantsInApp, memberWantsEmail, memberWantsEvent]) {
+      expect(wants(undefined, "mention")).toBe(true);
+      expect(wants(null, "mention")).toBe(true);
+      expect(wants({}, "mention")).toBe(true);
+      expect(wants({ sequence_reply: false, workflow_alert: false }, "mention")).toBe(true);
+      expect(wants({ mention: true }, "mention")).toBe(true);
+      // The pre-channel switch: one false silences the event everywhere.
+      expect(wants({ mention: false }, "mention")).toBe(false);
+    }
   });
 
-  it("defaults every event ON", () => {
+  it("per-channel prefs mute exactly the named channel", () => {
+    // The whole point of the second column: in-app off, email still on…
+    expect(memberWantsInApp({ mention: { inApp: false } }, "mention")).toBe(false);
+    expect(memberWantsEmail({ mention: { inApp: false } }, "mention")).toBe(true);
+    // …and the mirror.
+    expect(memberWantsInApp({ mention: { email: false } }, "mention")).toBe(true);
+    expect(memberWantsEmail({ mention: { email: false } }, "mention")).toBe(false);
+    // An empty object mutes nothing; memberWantsEvent is the OR of the two.
+    expect(memberWantsEvent({ mention: {} }, "mention")).toBe(true);
+    expect(memberWantsEvent({ mention: { inApp: false, email: false } }, "mention")).toBe(false);
+    expect(memberWantsEvent({ mention: { inApp: false } }, "mention")).toBe(true);
+  });
+
+  it("defaults every event ON, both channels", () => {
     const p = defaultMemberNotifyPrefs();
     expect(Object.keys(p).sort()).toEqual(NOTIFY_EVENTS.map((e) => e.key).sort());
-    expect(Object.values(p).every((v) => v === true)).toBe(true);
+    expect(Object.values(p).every((v) => v.inApp === true && v.email === true)).toBe(true);
   });
 
   it("the allowlist drops anything outside the five events", () => {
@@ -360,6 +384,18 @@ describe("a member's own switches", () => {
     expect(cleaned).toEqual({ dealMoved: true, mention: false });
   });
 
+  it("the allowlist sanitises channel objects the same way", () => {
+    const cleaned = pickKnownNotifyPrefs({
+      mention: { inApp: false, email: true, extra: "nope" },
+      dealMoved: { inApp: "false" }, // nothing boolean survives → dropped
+      taskOverdue: { email: false },
+    } as any);
+    expect(cleaned).toEqual({
+      mention: { inApp: false, email: true },
+      taskOverdue: { email: false },
+    });
+  });
+
   it("ignores non-boolean values rather than coercing them", () => {
     expect(pickKnownNotifyPrefs({ mention: "false" } as any)).toEqual({});
     expect(pickKnownNotifyPrefs({ mention: 0 } as any)).toEqual({});
@@ -367,18 +403,14 @@ describe("a member's own switches", () => {
 
   it("can only NARROW the workspace policy, never widen it", () => {
     /**
-     * The ordering that enforces it lives in policyNotify: the workspace gate
-     * runs first and returns, so a member's `true` is never consulted for an
-     * event the admin switched off. Asserted structurally because the two reads
-     * are DB-backed.
+     * The AND that enforces it lives in policyNotify: each channel's want is
+     * `workspacePolicy && memberSwitch`, so a member's `true` cannot deliver
+     * an event the admin switched off. Asserted structurally because the two
+     * reads are DB-backed.
      */
     const src = strip(read("server/services/policyNotify.ts"));
-    const policyGate = src.indexOf("if (!isInAppEnabled(settings?.policy, notice.event)) return false;");
-    const memberGate = src.indexOf("memberWantsEvent(member?.prefs, notice.event)");
-    expect(policyGate, "the workspace gate was not found").toBeGreaterThan(-1);
-    expect(memberGate, "the member gate was not found").toBeGreaterThan(-1);
-    expect(memberGate, "the member override is consulted before the workspace policy")
-      .toBeGreaterThan(policyGate);
+    expect(src).toMatch(/isInAppEnabled\(settings\?\.policy, notice\.event\)\s*&& memberWantsInApp\(member\?\.prefs, notice\.event\)/);
+    expect(src).toMatch(/isEmailEnabled\(settings\?\.policy, notice\.event\)\s*&& memberWantsEmail\(member\?\.prefs, notice\.event\)/);
   });
 
   it("the member's prefs are read from their own membership row", () => {
@@ -396,21 +428,23 @@ describe("a member's own switches", () => {
     const src = strip(read("server/services/policyNotify.ts"));
     const at = src.indexOf(".select({ prefs: workspaceMembers.notifPrefs })");
     expect(at, "the prefs lookup was not found — re-anchor this test").toBeGreaterThan(-1);
-    const end = src.indexOf("memberWantsEvent(member?.prefs", at);
+    const end = src.indexOf("memberWantsInApp(member?.prefs", at);
     expect(end, "could not bound the prefs lookup").toBeGreaterThan(at);
     const lookup = src.slice(at, end);
 
     expect(lookup, "the prefs lookup is not scoped to the workspace")
       .toMatch(/eq\(workspaceMembers\.workspaceId, notice\.workspaceId\)/);
     expect(lookup).toMatch(/eq\(workspaceMembers\.userId, userId\)/);
-    expect(src).toMatch(/if \(!memberWantsEvent\(member\?\.prefs, notice\.event\)\) return false;/);
   });
 
   it("the server accepts and returns the FIVE events, not the old vocabulary", () => {
     const admin = strip(read("server/routers/admin.ts"));
-    expect(admin).toMatch(/notifPrefs: z\.record\(z\.string\(\), z\.boolean\(\)\)\.optional\(\)/);
+    // The zod value is legacy-boolean OR the strict per-channel object.
+    expect(admin).toMatch(/notifPrefs: z\.record\(z\.string\(\), z\.union\(\[\s*z\.boolean\(\),\s*z\.object\(\{ inApp: z\.boolean\(\)\.optional\(\), email: z\.boolean\(\)\.optional\(\) \}\)\.strict\(\),\s*\]\)\)\.optional\(\)/);
     expect(admin).toMatch(/patch\.notifPrefs = pickKnownNotifyPrefs\(input\.notifPrefs\)/);
-    expect(admin).toMatch(/\.\.\.defaultMemberNotifyPrefs\(\), \.\.\.pickKnownNotifyPrefs\(stored \?\? \{\}\)/);
+    // getNotifPrefs normalises whatever is stored to five events x two channels.
+    expect(admin).toMatch(/inApp: memberWantsInApp\(stored, key\)/);
+    expect(admin).toMatch(/email: memberWantsEmail\(stored, key\)/);
     for (const stale of ["sequence_reply", "social_response", "workflow_alert"]) {
       expect(admin, `${stale} is still in the prefs vocabulary`).not.toMatch(
         new RegExp(`${stale}: z\\.boolean`),
@@ -435,21 +469,23 @@ describe("a member's own switches", () => {
 describe("the email leg", () => {
   const src = strip(read("server/services/policyNotify.ts"));
 
-  it("sends only AFTER the in-app row exists", () => {
+  it("the mail DISPATCH still runs after the in-app write, when both are wanted", () => {
     /**
-     * Order, not just presence. Email is strictly a SECOND channel: if it went
-     * first, an SMTP failure would cost the recipient the notification itself,
-     * and the two channels could disagree about whether anything happened.
+     * Order, not just presence — but the guarantee narrowed on 2026-08-12:
+     * with per-channel prefs a member may choose email-only, so "a row always
+     * precedes mail" became "the in-app write, when wanted, happens first".
+     * An SMTP failure still can never cost anyone an in-app notice.
      */
     const insert = src.indexOf("db.insert(notifications)");
-    const email = src.indexOf("isEmailEnabled(");
+    const send = src.indexOf("void sendPolicyEmail(");
     expect(insert, "the in-app insert was not found").toBeGreaterThan(-1);
-    expect(email, "the email gate was not found").toBeGreaterThan(-1);
-    expect(email, "email is decided before the notification is written").toBeGreaterThan(insert);
+    expect(send, "the email dispatch was not found").toBeGreaterThan(-1);
+    expect(send, "mail is dispatched before the notification is written").toBeGreaterThan(insert);
   });
 
-  it("is gated on the policy's email flag, not the in-app one", () => {
-    expect(src).toMatch(/if \(isEmailEnabled\(settings\?\.policy, notice\.event\)\)/);
+  it("is gated on the policy's email flag AND the member's email switch, not the in-app pair", () => {
+    expect(src).toMatch(/const wantEmail = isEmailEnabled\(settings\?\.policy, notice\.event\)\s*&& memberWantsEmail\(member\?\.prefs, notice\.event\);/);
+    expect(src).toMatch(/if \(wantEmail\) \{\s*void sendPolicyEmail/);
   });
 
   it("cannot break the caller when SMTP fails", () => {

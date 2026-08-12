@@ -147,41 +147,86 @@ export function isEmailEnabled(policy: unknown, eventKey: string): boolean {
  * stored garbage harmless: a row full of `sequence_reply` keys has no entry for
  * any of the five, so every one of them defers to the policy exactly as an
  * untouched member does.
+ *
+ * 🆕 PER-CHANNEL (2026-08-12, owner-approved): an entry may now be a
+ * `{ inApp?, email? }` object so "in-app but no email" is expressible — the
+ * second column the page never had. A LEGACY BOOLEAN STAYS MEANINGFUL: `false`
+ * mutes both channels (exactly what that switch always did), `true` follows
+ * the workspace on both. Absent members and absent keys behave as before.
  */
-export type MemberNotifyPrefs = Record<string, boolean>;
+export interface MemberChannelPref {
+  inApp?: boolean;
+  email?: boolean;
+}
+export type MemberNotifyPrefs = Record<string, boolean | MemberChannelPref>;
 
-/** Every event on, which is what "I have never touched this page" means. */
-export function defaultMemberNotifyPrefs(): MemberNotifyPrefs {
-  const out: MemberNotifyPrefs = {};
-  for (let i = 0; i < NOTIFY_EVENTS.length; i++) out[NOTIFY_EVENTS[i]!.key] = true;
+/** Both channels on for every event — "I have never touched this page". */
+export function defaultMemberNotifyPrefs(): Record<string, { inApp: boolean; email: boolean }> {
+  const out: Record<string, { inApp: boolean; email: boolean }> = {};
+  for (let i = 0; i < NOTIFY_EVENTS.length; i++) {
+    out[NOTIFY_EVENTS[i]!.key] = { inApp: true, email: true };
+  }
   return out;
 }
 
 /**
- * Does this member still want this event?
+ * Does this member still want this event's IN-APP notification?
  *
- * Only an EXPLICIT `false` mutes. Anything else — absent key, absent object,
- * a stale key from the old vocabulary — defers to the workspace policy.
+ * Only an EXPLICIT `false` mutes — legacy boolean false (the old both-channel
+ * switch) or `{ inApp: false }`. Anything else — absent key, absent object, a
+ * stale key from the old vocabulary — defers to the workspace policy.
  */
-export function memberWantsEvent(prefs: unknown, eventKey: string): boolean {
+export function memberWantsInApp(prefs: unknown, eventKey: string): boolean {
   const p = prefs as MemberNotifyPrefs | null | undefined;
   if (!p || typeof p !== "object") return true;
-  return p[eventKey] !== false;
+  const entry = p[eventKey];
+  if (entry === false) return false;
+  if (entry && typeof entry === "object") return entry.inApp !== false;
+  return true;
+}
+
+/** Same contract for the email copy. */
+export function memberWantsEmail(prefs: unknown, eventKey: string): boolean {
+  const p = prefs as MemberNotifyPrefs | null | undefined;
+  if (!p || typeof p !== "object") return true;
+  const entry = p[eventKey];
+  if (entry === false) return false;
+  if (entry && typeof entry === "object") return entry.email !== false;
+  return true;
 }
 
 /**
- * Drop anything that is not one of the five events.
+ * Does this member still want this event on ANY channel? Kept because "muted
+ * entirely" is a real question (and the pre-channel tests pin the legacy
+ * boolean semantics through it).
+ */
+export function memberWantsEvent(prefs: unknown, eventKey: string): boolean {
+  return memberWantsInApp(prefs, eventKey) || memberWantsEmail(prefs, eventKey);
+}
+
+/**
+ * Drop anything that is not one of the five events, and inside a channel
+ * object anything that is not a boolean inApp/email.
  *
  * An allowlist rather than a passthrough, because `notifPrefs` is a JSON blob
  * on a shared row and `z.record(z.string(), …)` would otherwise let a
  * hand-made call write arbitrary keys into it — the hole `a278a39` closed on
  * `customFields`. Also cleans stale keys out on the next save.
  */
-export function pickKnownNotifyPrefs(input: Record<string, boolean>): MemberNotifyPrefs {
+export function pickKnownNotifyPrefs(input: Record<string, unknown>): MemberNotifyPrefs {
   const out: MemberNotifyPrefs = {};
   for (let i = 0; i < NOTIFY_EVENTS.length; i++) {
     const k = NOTIFY_EVENTS[i]!.key;
-    if (typeof input[k] === "boolean") out[k] = input[k]!;
+    const v = input[k];
+    if (typeof v === "boolean") {
+      out[k] = v;
+    } else if (v && typeof v === "object") {
+      const entry: MemberChannelPref = {};
+      const { inApp, email } = v as MemberChannelPref;
+      if (typeof inApp === "boolean") entry.inApp = inApp;
+      if (typeof email === "boolean") entry.email = email;
+      if (Object.keys(entry).length > 0) out[k] = entry;
+    }
   }
   return out;
 }

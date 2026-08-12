@@ -19,7 +19,7 @@
  * One gate, so a sixth event cannot be added with a fifth spelling of it.
  */
 import { and, eq } from "drizzle-orm";
-import { isEmailEnabled, isInAppEnabled, memberWantsEvent } from "@shared/notifyPolicy";
+import { isEmailEnabled, isInAppEnabled, memberWantsEmail, memberWantsInApp } from "@shared/notifyPolicy";
 import { escapeHtml } from "@shared/escapeHtml";
 import { notifications, users, workspaceMembers, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
@@ -62,8 +62,9 @@ export interface PolicyNotice {
  *
  * BEST-EFFORT AND NON-THROWING. Several call sites are public submit handlers
  * or unattended crons; a notification failing must never break the thing that
- * triggered it. Returns whether a row was written, so a caller (or a test) can
- * tell "policy said no" from "it worked".
+ * triggered it. Returns whether ANY channel dispatched (in-app row written
+ * and/or email queued), so a caller (or a test) can tell "policy said no"
+ * from "it worked".
  */
 export async function notifyIfEnabled(notice: PolicyNotice): Promise<boolean> {
   try {
@@ -87,17 +88,16 @@ export async function notifyIfEnabled(notice: PolicyNotice): Promise<boolean> {
       .from(workspaceSettings)
       .where(eq(workspaceSettings.workspaceId, notice.workspaceId))
       .limit(1);
-    if (!isInAppEnabled(settings?.policy, notice.event)) return false;
 
     /**
-     * The member's own switch, which can only NARROW the workspace policy —
-     * checked after it, so muting is possible and un-muting is not. Absent
+     * The member's own switches, which can only NARROW the workspace policy —
+     * ANDed under it, so muting is possible and un-muting is not. Absent
      * defers to the policy, which is what makes the old stored vocabulary
      * (`sequence_reply` and friends) harmless rather than an accidental mute.
      *
-     * Mutes BOTH channels: the page offers one switch per event, and "stop
-     * telling me about this" is the only reading of it that does not need a
-     * second column the UI has never had.
+     * PER CHANNEL since 2026-08-12 (owner-approved): the page grew the second
+     * column, so "in-app but no email" — and its mirror — are now real
+     * states. A legacy boolean false still mutes both.
      */
     const [member] = await db
       .select({ prefs: workspaceMembers.notifPrefs })
@@ -107,24 +107,33 @@ export async function notifyIfEnabled(notice: PolicyNotice): Promise<boolean> {
         eq(workspaceMembers.userId, userId),
       ))
       .limit(1);
-    if (!memberWantsEvent(member?.prefs, notice.event)) return false;
 
-    await db.insert(notifications).values({
-      workspaceId: notice.workspaceId,
-      userId,
-      kind: notice.kind,
-      title: notice.title.slice(0, 240),
-      body: notice.body ?? null,
-      relatedType: notice.relatedType ?? null,
-      relatedId: notice.relatedId ?? null,
-    } as never);
+    const wantInApp = isInAppEnabled(settings?.policy, notice.event)
+      && memberWantsInApp(member?.prefs, notice.event);
+    const wantEmail = isEmailEnabled(settings?.policy, notice.event)
+      && memberWantsEmail(member?.prefs, notice.event);
+    if (!wantInApp && !wantEmail) return false;
+
+    if (wantInApp) {
+      await db.insert(notifications).values({
+        workspaceId: notice.workspaceId,
+        userId,
+        kind: notice.kind,
+        title: notice.title.slice(0, 240),
+        body: notice.body ?? null,
+        relatedType: notice.relatedType ?? null,
+        relatedId: notice.relatedId ?? null,
+      } as never);
+    }
 
     /**
-     * The email column. Strictly a SECOND channel, sent only after the in-app
-     * row exists — so a mail failure can never cost anyone the notification
-     * itself, and the two can never disagree about whether something happened.
+     * The email column — still fire-and-forget so SMTP latency and failures
+     * never touch the caller. Historically it only ever sent after an in-app
+     * row existed; with per-channel prefs a member may choose email-only, so
+     * the ordering guarantee is now "in-app write, when wanted, happens
+     * first", not "always precedes".
      */
-    if (isEmailEnabled(settings?.policy, notice.event)) {
+    if (wantEmail) {
       void sendPolicyEmail(notice, userId).catch((e) =>
         console.error(`[policyNotify] ${notice.event} email failed:`, (e as Error).message),
       );

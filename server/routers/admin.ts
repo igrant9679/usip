@@ -48,7 +48,7 @@ import {
   type OwnedWork,
 } from "@shared/ownedWork";
 import { liveMeetingStatuses } from "@shared/meetingStatus";
-import { defaultMemberNotifyPrefs, defaultNotifyPolicy, pickKnownNotifyPrefs } from "@shared/notifyPolicy";
+import { defaultMemberNotifyPrefs, defaultNotifyPolicy, memberWantsEmail, memberWantsInApp, pickKnownNotifyPrefs } from "@shared/notifyPolicy";
 
 /**
  * `status IN (…)` over the LIVE-work set, as bound parameters.
@@ -1016,11 +1016,16 @@ export const teamRouter = router({
          * `sequence_reply / social_response / workflow_alert / system` — a set
          * the UI never sent and nothing ever read, so every save wrote `{}`.
          *
-         * A record rather than a fixed object so the list can grow in one
-         * place; `pickKnownNotifyPrefs` is the allowlist that keeps it from
-         * becoming the arbitrary-key hole `a278a39` closed on customFields.
+         * A value is either the legacy both-channel boolean or the
+         * per-channel object (2026-08-12). A record rather than a fixed
+         * object so the list can grow in one place; `pickKnownNotifyPrefs`
+         * is the allowlist that keeps it from becoming the arbitrary-key
+         * hole `a278a39` closed on customFields.
          */
-        notifPrefs: z.record(z.string(), z.boolean()).optional(),
+        notifPrefs: z.record(z.string(), z.union([
+          z.boolean(),
+          z.object({ inApp: z.boolean().optional(), email: z.boolean().optional() }).strict(),
+        ])).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -1759,16 +1764,21 @@ export const teamRouter = router({
         ),
       );
     /**
-     * Normalised to the five events before it leaves the server, so the page
-     * renders one switch per real event whatever the row happens to contain.
-     * A stored blob full of the old `sequence_reply` keys simply produces all
-     * defaults — absent means "follow the workspace", never "off".
+     * Normalised to the five events × two channels before it leaves the
+     * server, so the page renders two switches per real event whatever the
+     * row happens to contain: a legacy boolean fans out to both channels, an
+     * absent key means "follow the workspace" (both on), and a stored blob
+     * full of the old `sequence_reply` keys simply produces all defaults.
      */
-    const stored = (row?.notifPrefs as Record<string, boolean> | null) ?? null;
-    return {
-      notifEmail: row?.notifEmail ?? null,
-      notifPrefs: { ...defaultMemberNotifyPrefs(), ...pickKnownNotifyPrefs(stored ?? {}) },
-    };
+    const stored = (row?.notifPrefs as Record<string, unknown> | null) ?? {};
+    const prefs = defaultMemberNotifyPrefs();
+    for (const key of Object.keys(prefs)) {
+      prefs[key] = {
+        inApp: memberWantsInApp(stored, key),
+        email: memberWantsEmail(stored, key),
+      };
+    }
+    return { notifEmail: row?.notifEmail ?? null, notifPrefs: prefs };
   }),
 
   /**
