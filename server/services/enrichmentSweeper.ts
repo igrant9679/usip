@@ -28,6 +28,7 @@
  * into sweepWorkspace: quietly draining that inside a run the user thinks is
  * about email would be a surprise.
  */
+import { archivedWorkspaceIds } from "../_core/workspaceArchive";
 import { and, eq, isNotNull, isNull, ne, notLike, or, sql } from "drizzle-orm";
 import { areCampaigns, notifications, prospectQueue, prospects, workspaceSettings, workspaces } from "../../drizzle/schema";
 import { getDb } from "../db";
@@ -825,7 +826,9 @@ export async function runCompanyBackfillAllWorkspaces(): Promise<{ workspaces: n
     .leftJoin(workspaceSettings, eq(workspaceSettings.workspaceId, workspaces.id));
 
   let touched = 0, filled = 0;
+    const archivedWs = await archivedWorkspaceIds();
   for (const ws of rows) {
+    if (archivedWs.has(ws.id)) continue; // archived workspaces are frozen (2026-08-12)
     if (ws.mode !== "auto") continue;
     /**
      * Resolved once and used for all three: the run gate, the acting user, and
@@ -893,7 +896,9 @@ export async function runEnrichmentSweepAllWorkspaces(): Promise<{ swept: number
 
   let swept = 0;
   let emailsFound = 0;
+    const archivedWs = await archivedWorkspaceIds();
   for (const ws of rows) {
+    if (archivedWs.has(ws.id)) continue; // archived workspaces are frozen (2026-08-12)
     if (ws.mode !== "auto") continue;
     // Daily means daily: the cron ticks more often than that so a restart
     // cannot turn the cap into "cap per boot".

@@ -19,6 +19,7 @@
  * Auto-send is opt-in per workspace (default 'off') — the toggle is the user's
  * explicit authorization for the outward action of sending an invite.
  */
+import { archivedWorkspaceIds } from "../_core/workspaceArchive";
 import { and, eq, gte, inArray, isNull, lte, ne, or, sql } from "drizzle-orm";
 import { calendarAccounts, calendarEvents, contacts, leads, meetings, prospects, workspaceMembers, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
@@ -430,7 +431,9 @@ export async function runMeetingAutopilotAllWorkspaces(): Promise<{ workspaces: 
   const dayStart = startOfUtcDay();
   let workspaces = 0, proposed = 0;
 
+    const archivedWs = await archivedWorkspaceIds();
   for (const ws of rows) {
+    if (archivedWs.has(ws.workspaceId)) continue; // archived workspaces are frozen (2026-08-12)
     const mode = ws.meetingAutopilotMode as "approval" | "auto";
     const cap = ws.meetingAutopilotDailyCap ?? 10;
     try {

@@ -13,6 +13,7 @@
  *     daily email cap (100 by default) before creating drafts.
  */
 
+import { archivedWorkspaceIds } from "./_core/workspaceArchive";
 import { and, eq, isNull, lte, or, sql } from "drizzle-orm";
 import {
   activities,
@@ -300,7 +301,9 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
     )
     .limit(200); // process up to 200 per tick to avoid overload
 
+    const archivedWs = await archivedWorkspaceIds();
   for (const enrollment of due) {
+    if (archivedWs.has(enrollment.workspaceId)) continue; // archived workspaces are frozen (2026-08-12)
     try {
       // Fetch the sequence
       const [seq] = await db

@@ -9,6 +9,7 @@
  *
  * The runEnrollment procedure is also called by the hourly cron in server/_core/index.ts
  */
+import { archivedWorkspaceIds } from "../_core/workspaceArchive";
 import { TRPCError } from "@trpc/server";
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import { notifyOwner } from "../_core/notification";
@@ -253,7 +254,9 @@ export async function runSegmentEnrollmentForAllWorkspaces(): Promise<{ workspac
   let totalEnrolled = 0;
   let totalSkipped = 0;
 
+    const archivedWs = await archivedWorkspaceIds();
   for (const workspaceId of workspaceIds) {
+    if (archivedWs.has(workspaceId)) continue; // archived workspaces are frozen (2026-08-12)
     try {
       const result = await runSegmentEnrollmentForWorkspace(workspaceId);
       totalEnrolled += result.enrolled;

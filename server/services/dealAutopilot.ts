@@ -14,6 +14,7 @@
  *
  * Best-effort: one deal failing never aborts the batch.
  */
+import { archivedWorkspaceIds } from "../_core/workspaceArchive";
 import { and, asc, eq, gte, inArray, lt, notInArray, sql } from "drizzle-orm";
 import { activeTaskStatuses } from "@shared/taskStatus";
 import { opportunities, tasks, workspaceSettings } from "../../drizzle/schema";
@@ -162,7 +163,9 @@ export async function runDealAutopilotAllWorkspaces(): Promise<{ workspaces: num
   const dayStart = startOfUtcDay();
   let workspaces = 0, analyzed = 0;
 
+    const archivedWs = await archivedWorkspaceIds();
   for (const ws of rows) {
+    if (archivedWs.has(ws.workspaceId)) continue; // archived workspaces are frozen (2026-08-12)
     const mode = ws.dealAutopilotMode as "approval" | "auto";
     const cap = ws.dealAutopilotDailyCap ?? 50;
     try {

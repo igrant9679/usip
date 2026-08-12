@@ -49,6 +49,7 @@ import {
 } from "@shared/ownedWork";
 import { liveMeetingStatuses } from "@shared/meetingStatus";
 import { defaultMemberNotifyPrefs, defaultNotifyPolicy, memberWantsEmail, memberWantsInApp, pickKnownNotifyPrefs } from "@shared/notifyPolicy";
+import { invalidateArchivedWorkspaceCache } from "../_core/workspaceArchive";
 
 /**
  * `status IN (…)` over the LIVE-work set, as bound parameters.
@@ -1992,20 +1993,12 @@ export const dangerZoneRouter = router({
     }),
 
   /**
-   * Soft-archive the workspace: stamps `workspaces.archivedAt` and audits who
-   * did it. Super-admin only.
-   *
-   * It does NOTHING ELSE, and this docstring used to claim otherwise ("the
-   * workspace is hidden from workspace switcher"). It is not: `workspace.list`
-   * has no archivedAt filter, `resolveWorkspace` never reads the column, and
-   * NOTHING in the codebase does — every autopilot selects workspaces by mode
-   * from workspace_settings without joining workspaces, so an archived
-   * workspace keeps sending, spending and creating records exactly as before.
-   *
-   * Enforcement is deliberately not switched on: there is no un-archive
-   * procedure, so making this bite would be a one-way lockout. The Settings
-   * copy is already accurate about the limitation — see the note there. If
-   * enforcement is ever added, add un-archive in the same change.
+   * Archive the workspace — ENFORCED since 2026-08-12 (owner-approved).
+   * Stamps `workspaces.archivedAt`; from the next request every member below
+   * super_admin is refused by the workspaceProcedure middleware, and every
+   * autonomous engine skips the workspace (_core/workspaceArchive). Shipped
+   * in the same change as unarchiveWorkspace, per the standing rule that
+   * enforcement without a way back is a one-way lockout. Super-admin only.
    */
   archiveWorkspace: adminWsProcedure.mutation(async ({ ctx }) => {
     const db = await getDb();
@@ -2016,6 +2009,7 @@ export const dangerZoneRouter = router({
     }
     const { workspaces } = await import("../../drizzle/schema");
     await db.update(workspaces).set({ archivedAt: new Date() }).where(eq(workspaces.id, ctx.workspace.id));
+    invalidateArchivedWorkspaceCache();
     await recordAudit({
       workspaceId: ctx.workspace.id,
       actorUserId: ctx.user.id,
@@ -2023,6 +2017,31 @@ export const dangerZoneRouter = router({
       entityType: "workspace",
       entityId: ctx.workspace.id,
       after: { archived: true },
+    });
+    return { ok: true };
+  }),
+
+  /**
+   * The way back — restores member access and lets the engines resume on
+   * their next tick. Super-admin only, same bar as archiving: this re-opens
+   * outbound sending and credit spend for the whole workspace.
+   */
+  unarchiveWorkspace: adminWsProcedure.mutation(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    if (ctx.member.role !== "super_admin") {
+      throw new TRPCError({ code: "FORBIDDEN", message: "Only super admins can restore a workspace" });
+    }
+    const { workspaces } = await import("../../drizzle/schema");
+    await db.update(workspaces).set({ archivedAt: null }).where(eq(workspaces.id, ctx.workspace.id));
+    invalidateArchivedWorkspaceCache();
+    await recordAudit({
+      workspaceId: ctx.workspace.id,
+      actorUserId: ctx.user.id,
+      action: "update",
+      entityType: "workspace",
+      entityId: ctx.workspace.id,
+      after: { archived: false },
     });
     return { ok: true };
   }),

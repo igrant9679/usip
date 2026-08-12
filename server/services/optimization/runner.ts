@@ -14,6 +14,7 @@
  *     user rejected every night is how a "smart" feature becomes noise the user
  *     turns off. Only `reverted` and `superseded` rows allow a fresh proposal.
  */
+import { archivedWorkspaceIds } from "../../_core/workspaceArchive";
 import { and, eq, gte, inArray } from "drizzle-orm";
 import { getDb } from "../../db";
 import { optimizationRecommendations, workspaceSettings } from "../../../drizzle/schema";
@@ -225,7 +226,9 @@ export async function runOptimizationForAllWorkspaces(): Promise<{ workspaces: n
 
   let count = 0;
   let proposed = 0;
+    const archivedWs = await archivedWorkspaceIds();
   for (const ws of rows) {
+    if (archivedWs.has(ws.id)) continue; // archived workspaces are frozen (2026-08-12)
     try {
       const r = await runOptimizationAnalyzers(ws.id);
       proposed += r.proposed;

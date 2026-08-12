@@ -124,6 +124,21 @@ export const workspaceProcedure = protectedProcedure.use(async ({ ctx, next }) =
   const { workspace, member } = await resolveWorkspace(ctx.user.id, headerStr);
 
   /**
+   * Archive ENFORCEMENT (2026-08-12, owner-approved — shipped together with
+   * un-archive, per the standing rule that enforcement without a way back is
+   * a one-way lockout). An archived workspace is frozen for members; only a
+   * super_admin may still enter — they are the ones who can restore it from
+   * Danger Zone, and a lock nobody can open is not a lock, it is a loss.
+   * The autonomous engines enforce the same freeze via _core/workspaceArchive.
+   */
+  if (workspace.archivedAt && member.role !== "super_admin") {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "This workspace is archived. A super admin can restore it from Settings → Danger Zone.",
+    });
+  }
+
+  /**
    * Touch `workspace_members.lastActiveAt`.
    *
    * The Team page has always rendered a "Last active" column for every member.

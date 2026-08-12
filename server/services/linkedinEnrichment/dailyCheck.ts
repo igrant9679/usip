@@ -11,6 +11,7 @@
  * Compliance: Unipile-only retrieval (no scraping); rate-limited; never
  * refreshes a suppressed prospect.
  */
+import { archivedWorkspaceIds } from "../../_core/workspaceArchive";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { getDb } from "../../db";
 import {
@@ -140,7 +141,9 @@ export async function runDailyCheckAllWorkspaces(): Promise<void> {
     .from(prospectLinkedinEnrichments);
   const workspaceIds = rows.map((r) => r.ws);
   console.log(`[linkedinDailyCheck] starting for ${workspaceIds.length} workspace(s)`);
+    const archivedWs = await archivedWorkspaceIds();
   for (const ws of workspaceIds) {
+    if (archivedWs.has(ws)) continue; // archived workspaces are frozen (2026-08-12)
     try {
       const r = await runDailyCheckForWorkspace({ workspaceId: ws, trigger: "scheduled" });
       console.log(`[linkedinDailyCheck] ws ${ws}: checked=${r.checked} changed=${r.changed} failed=${r.failed} skipped=${r.skipped}`);

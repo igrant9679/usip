@@ -1,3 +1,4 @@
+import { archivedWorkspaceIds } from "../_core/workspaceArchive";
 import { TRPCError } from "@trpc/server";
 import { and, asc, count, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { z } from "zod";
@@ -1785,7 +1786,9 @@ export async function autoSendForAllWorkspaces(): Promise<{
   let skippedLowScore = 0;
   let failed = 0;
 
+    const archivedWs = await archivedWorkspaceIds();
   for (const ws of enabledWs) {
+    if (archivedWs.has(ws.workspaceId)) continue; // archived workspaces are frozen (2026-08-12)
     const scoreMin = ws.aiAutoSendScoreMin ?? 70;
 
     const candidateDrafts = await db

@@ -19,6 +19,7 @@
  * Per-user identity: the opener is sent from the REP'S OWN connected account
  * (the one that received the acceptance), never a shared/system identity.
  */
+import { archivedWorkspaceIds } from "../_core/workspaceArchive";
 import { and, desc, eq, gte, like, ne, sql } from "drizzle-orm";
 import {
   activities,
@@ -428,7 +429,9 @@ export async function runSocialAutopilotAllWorkspaces(): Promise<{ workspaces: n
     .from(workspaceSettings)
     .where(ne(workspaceSettings.socialAutopilotMode, "off"));
   let workspaces = 0, sent = 0, tasked = 0;
+    const archivedWs = await archivedWorkspaceIds();
   for (const r of rows) {
+    if (archivedWs.has(r.workspaceId)) continue; // archived workspaces are frozen (2026-08-12)
     try {
       const res = await runSocialAutopilotInvitesForWorkspace(r.workspaceId);
       workspaces++; sent += res.sent; tasked += res.tasked;

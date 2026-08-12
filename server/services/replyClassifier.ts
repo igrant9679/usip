@@ -13,6 +13,7 @@
  *   approval — AI classifies replies + suggests actions; a human applies them.
  *   auto     — AI classifies AND executes the per-class action automatically.
  */
+import { archivedWorkspaceIds } from "../_core/workspaceArchive";
 import { and, desc, eq, gte, isNotNull, isNull, sql } from "drizzle-orm";
 import { emailReplies, emailSuppressions, tasks, unipileMessages, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
@@ -465,7 +466,9 @@ export async function runConversationAutopilotAllWorkspaces(): Promise<{ workspa
   const dayStart = startOfUtcDay();
   let workspaces = 0, classified = 0;
 
+    const archivedWs = await archivedWorkspaceIds();
   for (const ws of rows) {
+    if (archivedWs.has(ws.workspaceId)) continue; // archived workspaces are frozen (2026-08-12)
     const mode = ws.conversationAutopilotMode as "approval" | "auto";
     const cap = ws.conversationAutopilotDailyCap ?? 100;
     try {

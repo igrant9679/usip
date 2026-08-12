@@ -64,6 +64,7 @@ import { ARE_DEFAULT_SOURCES, normalizeSources } from "@shared/areSources";
 // upsert in routers/are/prospects.ts — see shared/areSequenceSteps.ts.
 import { normalizeSequence } from "@shared/areSequenceSteps";
 import { apolloPulledToday, apolloSearchPeople, getApolloDailyCap } from "./services/apollo";
+import { archivedWorkspaceIds } from "./_core/workspaceArchive";
 import {
   buildQuickenrichFilters,
   getQuickEnrichKey,
@@ -272,7 +273,9 @@ export async function runAreEngine(): Promise<AreEngineResult> {
       .from(areCampaigns)
       .where(eq(areCampaigns.status, "active"));
 
+    const archivedWs = await archivedWorkspaceIds();
     for (const campaign of active) {
+      if (archivedWs.has(campaign.workspaceId)) continue; // archived workspaces are frozen (2026-08-12)
       try {
         await tickCampaign(campaign, result);
         result.campaignsProcessed++;
@@ -340,8 +343,10 @@ async function enrichPendingGlobally(result: AreEngineResult): Promise<void> {
   if (pending.length === 0) return;
 
   // One enrichment at a time. A single prospect failing must not abort the rest.
+  const archivedWs = await archivedWorkspaceIds();
   const perCampaign = new Map<number, { ws: number; ok: number; total: number }>();
   for (const p of pending) {
+    if (archivedWs.has(p.workspaceId)) continue; // archived workspaces are frozen (2026-08-12)
     const bucket = perCampaign.get(p.campaignId) ?? { ws: p.workspaceId, ok: 0, total: 0 };
     bucket.total++;
     try {

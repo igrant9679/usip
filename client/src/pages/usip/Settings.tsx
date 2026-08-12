@@ -1803,8 +1803,14 @@ function DangerTab({ canEdit }: { canEdit: boolean }) {
     onError: (e) => toast.error(e.message),
   });
 
+  const current = trpc.workspace.current.useQuery();
+  const isArchived = !!(current.data as any)?.workspace?.archivedAt;
   const archiveMut = trpc.dangerZone.archiveWorkspace.useMutation({
-    onSuccess: () => { toast.success("Workspace archived"); setShowArchive(false); },
+    onSuccess: () => { toast.success("Workspace archived"); setShowArchive(false); current.refetch(); },
+    onError: (e) => toast.error(e.message),
+  });
+  const unarchiveMut = trpc.dangerZone.unarchiveWorkspace.useMutation({
+    onSuccess: () => { toast.success("Workspace restored"); current.refetch(); },
     onError: (e) => toast.error(e.message),
   });
 
@@ -1908,29 +1914,41 @@ function DangerTab({ canEdit }: { canEdit: boolean }) {
           )}
         </div>
 
-        {/* Archive workspace */}
+        {/* Archive workspace — ENFORCED since 2026-08-12: members are locked
+            out and every autopilot/engine skips the workspace. Restore is the
+            way back, super_admin only, same card. */}
         <div className="space-y-2">
+          {isArchived ? (
+            <div className="flex items-start gap-3">
+              <div className="flex-1">
+                <div className="text-sm font-medium text-amber-700">This workspace is archived</div>
+                <div className="text-xs text-muted-foreground">
+                  Members are locked out and all autonomous activity (campaigns, sequences,
+                  autopilots, enrichment) is frozen. No data has been deleted. Restoring
+                  re-opens access and lets the engines resume on their next run.
+                </div>
+              </div>
+              <Button variant="outline" size="sm" disabled={!canEdit || unarchiveMut.isPending} onClick={() => unarchiveMut.mutate()}>
+                {unarchiveMut.isPending ? <Loader2 className="size-4 animate-spin" /> : null}
+                Restore workspace
+              </Button>
+            </div>
+          ) : (
           <div className="flex items-start gap-3">
             <div className="flex-1">
               <div className="text-sm font-medium text-rose-700">Archive workspace</div>
-              {/* Was: "Members lose access. Data is retained for 90 days then
-                  purged." Neither happens — archiveWorkspace only stamps
-                  workspaces.archivedAt, resolveWorkspace never reads it, and no
-                  job purges anything. The type-ARCHIVE gate implied a serious
-                  irreversible action that in fact has no operational effect.
-                  Note there is also no un-archive procedure, which is why the
-                  honest fix here is accurate copy rather than switching on
-                  enforcement — that would be a one-way lockout. */}
               <div className="text-xs text-muted-foreground">
-                Marks the workspace archived and records who did it. Members keep their access and
-                no data is deleted — access revocation and the retention purge aren't built yet.
+                Locks members out and freezes all autonomous activity — campaigns, sequences,
+                autopilots and enrichment stop sending and spending. No data is deleted, and a
+                super admin can restore the workspace from this card at any time.
               </div>
             </div>
             <Button variant="outline" size="sm" disabled={!canEdit} className="text-rose-700" onClick={() => setShowArchive((v) => !v)}>
               Archive
             </Button>
           </div>
-          {showArchive && (
+          )}
+          {!isArchived && showArchive && (
             <div className="space-y-2 border border-rose-200 rounded-md p-3 bg-rose-50 dark:bg-rose-950/20">
               <p className="text-xs text-rose-700">Type <strong>ARCHIVE</strong> to confirm:</p>
               <div className="flex gap-2">

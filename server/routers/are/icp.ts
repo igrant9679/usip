@@ -12,6 +12,7 @@
  *   icp.regenerate   — trigger immediate AI re-inference
  *   icp.override     — manually adjust ICP weights
  */
+import { archivedWorkspaceIds } from "../../_core/workspaceArchive";
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
@@ -378,7 +379,9 @@ export async function runIcpInferenceAllWorkspaces(): Promise<{ regenerated: num
 
   let regenerated = 0;
   let skipped = 0;
+    const archivedWs = await archivedWorkspaceIds();
   for (const ws of rows) {
+    if (archivedWs.has(ws.id)) continue; // archived workspaces are frozen (2026-08-12)
     try {
       const [closed] = await db
         .select({ n: sql<number>`count(*)` })

@@ -18,6 +18,7 @@
  * NEVER targeted. The engine is best-effort — a single LLM/DB failure for one
  * candidate never aborts the batch, and failures never surface to the user.
  */
+import { archivedWorkspaceIds } from "../_core/workspaceArchive";
 import { and, desc, eq, gte, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { activeTaskStatuses } from "@shared/taskStatus";
 import { prospects, tasks, workspaceSettings } from "../../drizzle/schema";
@@ -203,7 +204,9 @@ export async function runTaskAutopilotAllWorkspaces(): Promise<{ workspaces: num
   let created = 0;
   const dayStart = startOfUtcDay();
 
+    const archivedWs = await archivedWorkspaceIds();
   for (const ws of settingsRows) {
+    if (archivedWs.has(ws.workspaceId)) continue; // archived workspaces are frozen (2026-08-12)
     const mode = ws.taskAutopilotMode as "approval" | "auto";
     const cap = ws.taskAutopilotDailyCap ?? 25;
     try {
