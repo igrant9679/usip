@@ -122,3 +122,74 @@ describe("upsertPersonForContact fast path", () => {
     expect(src.slice(at, at + 300)).toContain("isNull(prospects.linkedContactId)");
   });
 });
+
+describe("name-only contacts still fold in — the owner's 900 had no keys", () => {
+  /**
+   * The historic contact base has email = null across the board (the
+   * dataCleanup finding), no LinkedIn, and often no company column. The
+   * queue rows' key requirement would have skipped every one of them,
+   * FOREVER — "not appearing in People" with extra steps. Curated CRM
+   * contacts qualify on a real name alone; placeholder names do not.
+   */
+  function makeDb(rec: { inserts: unknown[]; updates: Array<{ table: unknown; values: Record<string, unknown> }> }) {
+    const builder = () => {
+      const st: { table?: unknown } = {};
+      const b: any = {
+        from(t: unknown) { st.table = t; return b; },
+        where() { return b; },
+        orderBy() { return b; },
+        limit() { return b; },
+        then(res: (v: unknown) => void) { res([]); }, // no claimed person, no matches
+      };
+      return b;
+    };
+    return {
+      select: () => builder(),
+      insert(table: unknown) {
+        return {
+          values(v: unknown) {
+            rec.inserts.push({ table, values: v });
+            return { $returningId: async () => [{ id: 901 }] };
+          },
+        };
+      },
+      update(table: unknown) {
+        return { set(values: Record<string, unknown>) { rec.updates.push({ table, values }); return { where: () => Promise.resolve([]) }; } };
+      },
+    };
+  }
+
+  it("a real name with zero identity keys creates a People record and links it", async () => {
+    const rec = { inserts: [] as any[], updates: [] as any[] };
+    h.db = makeDb(rec);
+    const r = await upsertPersonForContact(1, {
+      id: 42, firstName: "Dana", lastName: "Whitfield",
+      email: null, linkedinUrl: null, phone: null, title: "Grants Director",
+      companyName: null, companyDomain: null,
+    });
+    expect(r).toMatchObject({ personId: 901, created: true });
+    expect(rec.inserts.some((i) => i.table === prospects)).toBe(true);
+    expect(rec.updates.some((u) => u.table === contacts && u.values.personProspectId === 901)).toBe(true);
+  });
+
+  it("a placeholder-named contact is skipped — an 'Unknown Prospect' card is noise, not a person", async () => {
+    const rec = { inserts: [] as any[], updates: [] as any[] };
+    h.db = makeDb(rec);
+    const r = await upsertPersonForContact(1, {
+      id: 43, firstName: "Unknown", lastName: "Unknown",
+      email: null, linkedinUrl: null, phone: null, title: null,
+      companyName: null, companyDomain: null,
+    });
+    expect(r).toBeNull();
+    expect(rec.inserts).toHaveLength(0);
+  });
+
+  it("the backfill drains by keyset pages, so 900 imports do not wait two daily ticks", () => {
+    const src = read("server/services/personLink.ts");
+    const fn = src.slice(src.indexOf("export async function linkUnlinkedContacts"));
+    // Keyset, not OFFSET: skipped rows stay NULL and would repeat a page.
+    expect(fn).toContain("gt(contacts.id, lastId)");
+    expect(fn).toContain("if (rows.length < pageSize) break;");
+    expect(fn).toMatch(/maxPages/);
+  });
+});

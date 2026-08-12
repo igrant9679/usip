@@ -26,13 +26,13 @@
  * pattern. It never mutates queue person columns: emails a sequence already
  * used stay byte-identical (owner risk-reconciliation, 2026-08-11).
  */
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, eq, gt, isNull, sql } from "drizzle-orm";
 import { getDb } from "../db";
 import { contacts, prospects, prospectQueue, prospectLinkedinEnrichments } from "../../drizzle/schema";
 import { CONFIDENCE, mergeAll, type Candidate, type ProvenanceMap } from "./enrichment/fieldMerge";
 import { stripNameCredentials } from "./enrichment/personName";
 import { cleanPlaceholder, normalizeJobTitle } from "./enrichment/recordNormalize";
-import { usableEmailOrNull } from "@shared/fieldHygiene";
+import { isPlaceholderToken, usableEmailOrNull } from "@shared/fieldHygiene";
 import { normalizeCompanyName, normalizeDomain } from "./company/normalize";
 import { extractLinkedInIdentifier } from "./linkedinLookup";
 
@@ -192,8 +192,17 @@ export async function upsertPersonForRow(
   workspaceId: number,
   row: QueuePersonShape,
   provenance?: { source: string; confidence: number },
+  opts?: {
+    /**
+     * Curated CRM contacts qualify on a real name alone (owner intent:
+     * "my contacts belong on the People tab"), while scraped queue rows
+     * keep the key requirement — a keyless scraped row is more likely
+     * garbage than a person. The caller vouches for name quality.
+     */
+    allowNameOnly?: boolean;
+  },
 ): Promise<{ personId: number; created: boolean; tier: string } | null> {
-  if (!hasPersonIdentity(row)) return null;
+  if (!hasPersonIdentity(row) && !opts?.allowNameOnly) return null;
   const db = await getDb();
   if (!db) return null;
   const now = new Date().toISOString();
@@ -418,12 +427,18 @@ export async function upsertPersonForContact(
     return { personId: claimed.id, created: false, tier: "promoted_pair" };
   }
 
+  // A curated contact with a REAL name belongs on People even with no
+  // email/LinkedIn/company key — the exact shape of the owner's historic
+  // import (emails all null). Placeholder names ("Unknown Prospect", the
+  // execution-seam default) stay out: a person card that says Unknown
+  // Prospect is noise, not a person.
+  const hasRealName = !isPlaceholderToken(c.firstName) || !isPlaceholderToken(c.lastName);
   const result = await upsertPersonForRow(workspaceId, {
     id: c.id, campaignId: 0, sourceType: "contact",
     firstName: c.firstName, lastName: c.lastName,
     email: c.email, linkedinUrl: c.linkedinUrl, phone: c.phone,
     title: c.title, companyName: c.companyName, companyDomain: c.companyDomain,
-  }, CONTACT_PROVENANCE);
+  }, CONTACT_PROVENANCE, { allowNameOnly: hasRealName });
   if (!result) return null;
 
   await db.update(contacts).set({ personProspectId: result.personId } as never)
@@ -441,37 +456,54 @@ export async function upsertPersonForContact(
   return result;
 }
 
-/** Backfill: heal contacts that predate the 0160 seams. Bounded, idempotent,
- *  daily + boot — the exact shape of linkUnlinkedQueueRows above. */
+/**
+ * Backfill: heal contacts that predate the 0160 seams. Unlike the queue
+ * backfill's single daily slice, this DRAINS — keyset-paginated pages until
+ * a pass comes back short (or the page cap, a runaway backstop). An owner
+ * who just imported 900 contacts must not wait two days to see them; the
+ * work is pure DB matching, no credits, no rate limits.
+ */
 export async function linkUnlinkedContacts(opts: {
   workspaceId?: number;
+  /** Page size per pass, not a total cap. */
   limit?: number;
+  maxPages?: number;
 } = {}): Promise<LinkSummary> {
   const summary: LinkSummary = { scanned: 0, linked: 0, created: 0, skippedNoIdentity: 0, failed: 0 };
   const db = await getDb();
   if (!db) return summary;
 
-  const conds = [isNull(contacts.personProspectId)];
-  if (opts.workspaceId) conds.push(eq(contacts.workspaceId, opts.workspaceId));
+  const pageSize = opts.limit ?? 500;
+  const maxPages = opts.maxPages ?? 20;
+  // Keyset pagination, not OFFSET: skipped rows keep personProspectId NULL,
+  // so a plain re-select would return the same page forever.
+  let lastId = 0;
 
-  const rows = await db.select({
-    id: contacts.id, workspaceId: contacts.workspaceId,
-    firstName: contacts.firstName, lastName: contacts.lastName,
-    email: contacts.email, linkedinUrl: contacts.linkedinUrl, phone: contacts.phone,
-    title: contacts.title, companyName: contacts.companyName, companyDomain: contacts.companyDomain,
-  }).from(contacts).where(and(...conds)).limit(opts.limit ?? 200);
+  for (let page = 0; page < maxPages; page++) {
+    const conds = [isNull(contacts.personProspectId), gt(contacts.id, lastId)];
+    if (opts.workspaceId) conds.push(eq(contacts.workspaceId, opts.workspaceId));
 
-  summary.scanned = rows.length;
-  for (const row of rows) {
-    try {
-      const result = await upsertPersonForContact(row.workspaceId, row);
-      if (!result) { summary.skippedNoIdentity++; continue; }
-      summary.linked++;
-      if (result.created) summary.created++;
-    } catch (e) {
-      summary.failed++;
-      console.error(`[personLink] contact ${row.id} failed:`, (e as Error)?.message ?? e);
+    const rows = await db.select({
+      id: contacts.id, workspaceId: contacts.workspaceId,
+      firstName: contacts.firstName, lastName: contacts.lastName,
+      email: contacts.email, linkedinUrl: contacts.linkedinUrl, phone: contacts.phone,
+      title: contacts.title, companyName: contacts.companyName, companyDomain: contacts.companyDomain,
+    }).from(contacts).where(and(...conds)).orderBy(contacts.id).limit(pageSize);
+
+    summary.scanned += rows.length;
+    for (const row of rows) {
+      lastId = row.id;
+      try {
+        const result = await upsertPersonForContact(row.workspaceId, row);
+        if (!result) { summary.skippedNoIdentity++; continue; }
+        summary.linked++;
+        if (result.created) summary.created++;
+      } catch (e) {
+        summary.failed++;
+        console.error(`[personLink] contact ${row.id} failed:`, (e as Error)?.message ?? e);
+      }
     }
+    if (rows.length < pageSize) break;
   }
   return summary;
 }
