@@ -154,3 +154,29 @@ describe("no file re-declares a merge renderer", () => {
     }
   });
 });
+
+describe("the CLIENT preview uses the shared matcher too — it was the fifth implementation", () => {
+  /**
+   * Owner-caught on the CommunityForce sequences (2026-08-12): templates
+   * written with {{first_name}}/{{sender_name}} rendered correctly at send
+   * time but showed as raw braces in the Prospect Preview, whose footer says
+   * raw braces mean a typo. A preview must miscall the send result in
+   * NEITHER direction.
+   */
+  const { readFileSync } = require("node:fs") as typeof import("node:fs");
+  const preview = readFileSync("client/src/components/usip/EmailClientPreview.tsx", "utf8");
+
+  it("imports the shared matcher and resolves through it", () => {
+    expect(preview).toContain('from "@shared/mergeKeys"');
+    expect(preview).toContain("resolveMergeName(lookup, name)");
+    // The bare exact-match lookup is what made it the fifth vocabulary.
+    expect(preview).not.toContain("varMap.get(varName)");
+  });
+
+  it("its variable map covers every token the send maps advertise", () => {
+    for (const token of ["senderTitle", "senderCompany", "bookingLink", "signature"]) {
+      expect(preview.includes(`"${token}"`), `preview map missing ${token} — it would render as a raw brace and read as a typo`).toBe(true);
+    }
+  });
+});
+

@@ -16,6 +16,7 @@
  *   app is in dark mode: that's what the prospect actually sees.
  */
 import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { buildMergeLookup, parseMergeToken, resolveMergeName } from "@shared/mergeKeys";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -67,17 +68,34 @@ function buildVarMap(p: PreviewPersona, sender: { name: string; email: string })
   m.set("region", "");
   m.set("senderName", sender.name);
   m.set("senderEmail", sender.email);
+  // Send-map tokens the preview previously did not know — it showed them as
+  // raw braces, which the footer told the user meant a TYPO. Sample values,
+  // clearly marked as such where the real value depends on the workspace.
+  m.set("senderTitle", "");
+  m.set("senderCompany", "");
+  m.set("bookingLink", "https://example.com/b/your-booking-link");
+  m.set("signature", "");
   return m;
 }
 
+/**
+ * 🔴 THIS WAS THE FIFTH MATCHER. The four server-side substitution paths were
+ * unified on @shared/mergeKeys (exact spelling first, then the normalized
+ * form, so {{first_name}} finds firstName) — and this client mirror kept a
+ * bare exact-match Map lookup. Live effect, owner-caught on the CommunityForce
+ * sequences: templates written with {{first_name}}/{{sender_name}} rendered
+ * PERFECTLY at send time and showed as raw braces in the preview, under a
+ * footer claiming raw braces mean a typo. A preview that miscalls the send
+ * result in either direction defeats the copy review it exists for.
+ */
 function resolveMergeVarsClient(text: string, p: PreviewPersona, sender: { name: string; email: string }): string {
-  const varMap = buildVarMap(p, sender);
+  const lookup = buildMergeLookup(buildVarMap(p, sender));
   return text.replace(/\{\{([^}]+)\}\}/g, (match, inner: string) => {
-    const [varName, fallback] = inner.split("|").map((s: string) => s.trim());
-    if (!varName) return match;
-    const resolved = varMap.get(varName);
+    const { name, fallback } = parseMergeToken(inner);
+    if (!name) return match;
+    const resolved = resolveMergeName(lookup, name);
     if (resolved !== undefined) return resolved || fallback || resolved;
-    return match; // unknown token — leave visible, same as the server
+    return match; // genuinely unknown token — leave visible, same as the server
   });
 }
 
