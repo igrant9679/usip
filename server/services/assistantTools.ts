@@ -26,6 +26,49 @@ import type { Tool } from "../_core/llm";
 
 const idList = z.array(z.number().int().positive()).min(1).max(50);
 
+/**
+ * The described-filter vocabulary, shared by preview_people_filter (READ) and
+ * create_list_from_filter (MUTATING) so what the model previews is exactly
+ * what the confirmed action selects. A strict subset of prospects.list's
+ * server-side filters — additions here must exist there.
+ */
+export const PEOPLE_FILTER = z.object({
+  search: z.string().trim().min(1).max(200).optional(),
+  titleQ: z.string().trim().min(1).max(200).optional(),
+  companyQ: z.string().trim().min(1).max(200).optional(),
+  locationQ: z.string().trim().min(1).max(200).optional(),
+  industryQ: z.string().trim().min(1).max(200).optional(),
+  hasEmail: z.boolean().optional(),
+  hasPhone: z.boolean().optional(),
+  hasLinkedin: z.boolean().optional(),
+  emailStatus: z.string().trim().min(1).max(40).optional(),
+  tiers: z.array(z.enum(["high", "medium", "low"])).min(1).max(3).optional(),
+  seniorities: z.array(z.string().trim().min(1).max(40)).min(1).max(12).optional(),
+  scoreMinRating: z.enum(["fair", "good", "excellent"]).optional(),
+});
+export type PeopleFilter = z.infer<typeof PEOPLE_FILTER>;
+
+const filterIsNonEmpty = (f: Record<string, unknown>) =>
+  Object.values(f).some((v) => v !== undefined);
+
+/** Human sentence for a filter — used in previews and confirmation cards. */
+export function describePeopleFilter(f: PeopleFilter): string {
+  const parts: string[] = [];
+  if (f.search) parts.push(`matching "${f.search}"`);
+  if (f.titleQ) parts.push(`title contains "${f.titleQ}"`);
+  if (f.companyQ) parts.push(`company contains "${f.companyQ}"`);
+  if (f.locationQ) parts.push(`location contains "${f.locationQ}"`);
+  if (f.industryQ) parts.push(`industry contains "${f.industryQ}"`);
+  if (f.hasEmail) parts.push("has an email");
+  if (f.hasPhone) parts.push("has a phone");
+  if (f.hasLinkedin) parts.push("has LinkedIn");
+  if (f.emailStatus) parts.push(`email status ${f.emailStatus}`);
+  if (f.tiers?.length) parts.push(`${f.tiers.join("/")} fit`);
+  if (f.seniorities?.length) parts.push(`seniority ${f.seniorities.join("/")}`);
+  if (f.scoreMinRating) parts.push(`score ${f.scoreMinRating}+`);
+  return parts.join(", ") || "no filter";
+}
+
 export const TOOL_ARGS = {
   // READ
   search_people: z.object({
@@ -38,6 +81,8 @@ export const TOOL_ARGS = {
   list_campaigns: z.object({}).optional().or(z.object({}).passthrough()),
   whats_waiting: z.object({}).optional().or(z.object({}).passthrough()),
   help_lookup: z.object({ question: z.string().min(3).max(300) }),
+  deals_pipeline: z.object({}).optional().or(z.object({}).passthrough()),
+  preview_people_filter: z.object({ filter: PEOPLE_FILTER.refine(filterIsNonEmpty, { message: "At least one filter field is required" }) }),
   // NAVIGATE
   navigate: z.object({ href: z.string().min(1).max(200), label: z.string().min(1).max(80) }),
   // MUTATING
@@ -59,15 +104,25 @@ export const TOOL_ARGS = {
     campaignId: z.number().int().positive(),
     status: z.enum(["active", "paused"]),
   }),
+  propose_meetings: z.object({
+    prospectIds: z.array(z.number().int().positive()).min(1).max(5),
+  }),
+  create_list_from_filter: z.object({
+    newListName: z.string().trim().min(1).max(120),
+    filter: PEOPLE_FILTER.refine(filterIsNonEmpty, { message: "At least one filter field is required" }),
+    limit: z.number().int().min(1).max(1000).default(500),
+  }),
 } as const;
 
 export type AssistantToolName = keyof typeof TOOL_ARGS;
 
 export const READ_TOOLS: AssistantToolName[] = [
   "search_people", "get_person", "list_sequences", "list_lists", "list_campaigns", "whats_waiting", "help_lookup",
+  "deals_pipeline", "preview_people_filter",
 ];
 export const MUTATING_TOOLS: AssistantToolName[] = [
   "enroll_in_sequence", "create_tasks", "add_to_list", "enrich_prospects", "set_campaign_status",
+  "propose_meetings", "create_list_from_filter",
 ];
 
 export function isMutatingTool(name: string): name is AssistantToolName {
@@ -127,6 +182,10 @@ export function describeAction(name: AssistantToolName, args: Record<string, unk
       return `Run the full enrichment pass for ${n(args.prospectIds)} ${n(args.prospectIds) === 1 ? "person" : "people"} (may spend verification credits)`;
     case "set_campaign_status":
       return `Set campaign #${args.campaignId} to ${String(args.status).toUpperCase()}`;
+    case "propose_meetings":
+      return `Draft ${n(args.prospectIds)} meeting proposal${n(args.prospectIds) === 1 ? "" : "s"} — they land in your approval queue; nothing is scheduled or mailed until you approve each one`;
+    case "create_list_from_filter":
+      return `Create list "${args.newListName}" from everyone ${describePeopleFilter((args.filter ?? {}) as PeopleFilter)} (up to ${args.limit ?? 500} people)`;
     default:
       return `Run ${name}`;
   }
@@ -138,6 +197,26 @@ const t = (name: string, description: string, parameters: Record<string, unknown
   type: "function",
   function: { name, description, parameters },
 });
+
+/** LLM-facing mirror of PEOPLE_FILTER — keep the two in sync. */
+const FILTER_SCHEMA = {
+  type: "object",
+  description: "People filter. Set only the fields the user described; at least one is required.",
+  properties: {
+    search: { type: "string", description: "Free text across name/company/title/email" },
+    titleQ: { type: "string", description: "Job title contains (e.g. 'CFO')" },
+    companyQ: { type: "string", description: "Company name contains" },
+    locationQ: { type: "string", description: "City/state/country contains" },
+    industryQ: { type: "string", description: "Industry contains" },
+    hasEmail: { type: "boolean" },
+    hasPhone: { type: "boolean" },
+    hasLinkedin: { type: "boolean" },
+    emailStatus: { type: "string", description: "e.g. 'valid'" },
+    tiers: { type: "array", items: { type: "string", enum: ["high", "medium", "low"] }, description: "ICP fit tier(s)" },
+    seniorities: { type: "array", items: { type: "string" }, description: "Seniority tokens, e.g. ['vp','c-level']" },
+    scoreMinRating: { type: "string", enum: ["fair", "good", "excellent"], description: "Minimum fit-score rating" },
+  },
+};
 
 export const ASSISTANT_TOOLS: Tool[] = [
   t("search_people", "Search the workspace's prospects by name, company, title, or email fragment. Returns compact rows with ids.", {
@@ -161,6 +240,12 @@ export const ASSISTANT_TOOLS: Tool[] = [
     type: "object",
     properties: { question: { type: "string" } },
     required: ["question"],
+  }),
+  t("deals_pipeline", "Summarize the deals pipeline: opportunity count and total value per stage, overall totals, and the biggest open deals.", { type: "object", properties: {} }),
+  t("preview_people_filter", "Count who matches a described people filter and show a small sample. Use this BEFORE create_list_from_filter so the user hears a real number.", {
+    type: "object",
+    properties: { filter: FILTER_SCHEMA },
+    required: ["filter"],
   }),
   t("navigate", "Offer the user a link to an in-app page. Use after explaining where to go. href must be an in-app path starting with /.", {
     type: "object",
@@ -204,5 +289,19 @@ export const ASSISTANT_TOOLS: Tool[] = [
     type: "object",
     properties: { campaignId: { type: "number" }, status: { type: "string", enum: ["active", "paused"] } },
     required: ["campaignId", "status"],
+  }),
+  t("propose_meetings", "PROPOSE drafting a meeting proposal for up to 5 prospects. Each draft lands in the user's approval queue — nothing is scheduled or mailed until they approve it there. The user must confirm.", {
+    type: "object",
+    properties: { prospectIds: { type: "array", items: { type: "number" } } },
+    required: ["prospectIds"],
+  }),
+  t("create_list_from_filter", "PROPOSE creating a people list from a described filter (everyone matching, up to a limit — not just looked-up ids). Preview with preview_people_filter first. The user must confirm.", {
+    type: "object",
+    properties: {
+      newListName: { type: "string" },
+      filter: FILTER_SCHEMA,
+      limit: { type: "number", description: "Max people to add (default 500, max 1000)" },
+    },
+    required: ["newListName", "filter"],
   }),
 ];

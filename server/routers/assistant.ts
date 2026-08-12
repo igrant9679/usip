@@ -142,6 +142,42 @@ async function runReadTool(
       // Bound the context cost — the summary is small, but never trust that.
       return { result: JSON.parse(JSON.stringify(s).slice(0, 4000)), summary: "Fetched the attention summary" };
     }
+    case "deals_pipeline": {
+      const board = (await caller.opportunities.board()) as Array<Record<string, unknown>>;
+      const open = board.filter((o) => !/closed/i.test(String(o.stage ?? "")));
+      const byStage = new Map<string, { count: number; value: number }>();
+      for (const o of board) {
+        const s = String(o.stage ?? "unknown");
+        const agg = byStage.get(s) ?? { count: 0, value: 0 };
+        agg.count++; agg.value += Number(o.value ?? 0);
+        byStage.set(s, agg);
+      }
+      const topOpen = open
+        .sort((a, b) => Number(b.value ?? 0) - Number(a.value ?? 0))
+        .slice(0, 5)
+        .map((o) => ({ id: o.id, name: o.name, account: o.accountName, stage: o.stage, value: Number(o.value ?? 0), winProb: o.winProb ?? null, closeDate: o.closeDate ?? null }));
+      return {
+        result: {
+          totalDeals: board.length,
+          openDeals: open.length,
+          openValue: open.reduce((s, o) => s + Number(o.value ?? 0), 0),
+          stages: Array.from(byStage.entries()).map(([stage, a]) => ({ stage, count: a.count, value: a.value })),
+          topOpen,
+        },
+        summary: `Summarized the pipeline — ${open.length} open deal(s)`,
+      };
+    }
+    case "preview_people_filter": {
+      const filter = (args.filter ?? {}) as Record<string, unknown>;
+      const res = (await caller.prospects.list({ page: 1, perPage: 10, ...filter } as never)) as { total: number; data: Record<string, unknown>[] };
+      return {
+        result: {
+          total: res.total,
+          sample: res.data.slice(0, 10).map((p) => ({ id: p.id, name: `${p.firstName ?? ""} ${p.lastName ?? ""}`.trim(), title: p.title ?? null, company: p.company ?? null })),
+        },
+        summary: `Previewed a people filter — ${res.total} match(es)`,
+      };
+    }
     case "help_lookup": {
       const db = await getDb();
       if (!db) return { result: { articles: [] }, summary: "Help lookup unavailable" };
@@ -180,7 +216,8 @@ const SYSTEM_PROMPT = (pageKey: string | undefined) => `You are Velocity's in-ap
 Rules:
 - Use tools for facts. Never invent prospect ids, sequence names, or counts — search first. For "how do I…" questions call help_lookup and answer from what it returns.
 - Numeric ids may ONLY come from tool results — either this turn's, or an [assistant_context …] block at the end of an earlier assistant message (that block holds prior turns' tool results). If no real id is in context, look the person or object up again before proposing an action. The server rejects actions naming ids that don't exist.
-- Mutating tools (enroll_in_sequence, create_tasks, add_to_list, enrich_prospects, set_campaign_status) only PROPOSE: calling one shows the user a confirmation card. Call at most ONE per turn, only when the user asked for that action, and with ids you obtained from lookups this conversation.
+- Mutating tools (enroll_in_sequence, create_tasks, add_to_list, enrich_prospects, set_campaign_status, propose_meetings, create_list_from_filter) only PROPOSE: calling one shows the user a confirmation card. Call at most ONE per turn, only when the user asked for that action, and with ids you obtained from lookups this conversation.
+- For "make a list of everyone who…" requests, call preview_people_filter first and tell the user the real count, then propose create_list_from_filter with the same filter.
 - You cannot send email or LinkedIn messages, and must not promise to. Sends live behind the user's approval queues.
 - Use navigate to hand the user a link when the answer is "go to this page".
 - Tool results arrive as [tool_result …] messages. After reading one, either call another tool or give your final answer as plain text.
@@ -365,6 +402,44 @@ export const assistantRouter = router({
         case "set_campaign_status": {
           await caller.are.campaigns.setStatus({ id: args.campaignId, status: args.status } as never);
           summary = `Campaign #${args.campaignId} is now ${String(args.status)}`;
+          break;
+        }
+        case "propose_meetings": {
+          // meetings.propose drafts into the approval queue; approveAndSend is
+          // a separate human step, so this stays on the right side of the
+          // no-sends line even though a meeting invite is ultimately an email.
+          let drafted = 0;
+          const failed: number[] = [];
+          for (const id of args.prospectIds as number[]) {
+            try {
+              await caller.meetings.propose({ relatedId: id, relatedType: "prospect" } as never);
+              drafted++;
+            } catch {
+              failed.push(id);
+            }
+          }
+          summary = `Drafted ${drafted} meeting proposal(s) — review them in the approval queue`
+            + (failed.length ? `; ${failed.length} failed (#${failed.join(", #")})` : "");
+          break;
+        }
+        case "create_list_from_filter": {
+          const filter = args.filter as Record<string, unknown>;
+          const limit = Number(args.limit ?? 500);
+          const ids: number[] = [];
+          // Page through the SAME query the preview used; the cap bounds the
+          // blast radius the confirmation card promised.
+          for (let page = 1; ids.length < limit && page <= 10; page++) {
+            const res = (await caller.prospects.list({ page, perPage: 200, ...filter } as never)) as { total: number; data: Array<{ id: number }> };
+            ids.push(...res.data.map((p) => p.id));
+            if (page * 200 >= res.total) break;
+          }
+          const capped = ids.slice(0, limit);
+          if (capped.length === 0) { summary = "No one matched the filter — no list created"; break; }
+          const created = (await caller.recordLists.create({ name: args.newListName, entityType: "people" } as never)) as { id: number };
+          const r = (await caller.recordLists.addMembers({
+            listId: created.id, recordType: "prospect", recordIds: capped,
+          } as never)) as { added?: number };
+          summary = `Created list "${args.newListName}" (#${created.id}) with ${r.added ?? capped.length} people`;
           break;
         }
         default:

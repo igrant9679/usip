@@ -76,6 +76,25 @@ describe("argument gates", () => {
   it("malformed JSON from the model throws instead of executing", () => {
     expect(() => parseToolArgs("create_tasks", "{not json")).toThrow();
   });
+
+  it("propose_meetings is capped at 5 — a meeting draft per prospect is not a bulk operation", () => {
+    expect(() => parseToolArgs("propose_meetings", JSON.stringify({ prospectIds: [1, 2, 3, 4, 5, 6] }))).toThrow();
+    expect(parseToolArgs("propose_meetings", JSON.stringify({ prospectIds: [1] }))).toMatchObject({ prospectIds: [1] });
+  });
+
+  it("create_list_from_filter refuses an empty filter and caps the blast radius", () => {
+    // "Make a list of everyone" needs at least one stated criterion.
+    expect(() => parseToolArgs("create_list_from_filter", JSON.stringify({ newListName: "All", filter: {} }))).toThrow();
+    expect(() => parseToolArgs("create_list_from_filter", JSON.stringify({ newListName: "Big", filter: { hasEmail: true }, limit: 5000 }))).toThrow();
+    expect(parseToolArgs("create_list_from_filter", JSON.stringify({ newListName: "Verified CFOs", filter: { titleQ: "CFO", emailStatus: "valid" } })))
+      .toMatchObject({ newListName: "Verified CFOs", limit: 500 });
+  });
+
+  it("preview_people_filter needs a non-empty filter too — same vocabulary as the mutation", () => {
+    expect(() => parseToolArgs("preview_people_filter", JSON.stringify({ filter: {} }))).toThrow();
+    expect(parseToolArgs("preview_people_filter", JSON.stringify({ filter: { seniorities: ["vp"] } })))
+      .toMatchObject({ filter: { seniorities: ["vp"] } });
+  });
 });
 
 describe("validateNavigateHref", () => {
@@ -101,6 +120,25 @@ describe("describeAction", () => {
     expect(describeAction("set_campaign_status", { campaignId: 13, status: "active" }))
       .toContain("ACTIVE");
     expect(describeAction("enrich_prospects", { prospectIds: [1] })).toContain("credits");
+  });
+
+  it("propose_meetings says out loud that nothing is sent without approval", () => {
+    const d = describeAction("propose_meetings", { prospectIds: [1, 2] });
+    expect(d).toContain("2 meeting proposals");
+    expect(d).toContain("approval queue");
+    expect(d.toLowerCase()).toContain("nothing is scheduled or mailed");
+  });
+
+  it("create_list_from_filter card names the list, the criteria, and the cap", () => {
+    const d = describeAction("create_list_from_filter", {
+      newListName: "Verified CFOs",
+      filter: { titleQ: "CFO", emailStatus: "valid" },
+      limit: 500,
+    });
+    expect(d).toContain('"Verified CFOs"');
+    expect(d).toContain('title contains "CFO"');
+    expect(d).toContain("email status valid");
+    expect(d).toContain("up to 500");
   });
 });
 
