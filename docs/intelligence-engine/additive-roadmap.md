@@ -72,10 +72,13 @@ Tests: extend existing import/dedup/merge suites; add LeadRocks mapping coverage
 
 ## Phase 5 — Freshness + housekeeping (each item independently approvable)
 
-> **STATUS: 5.1–5.4 SHIPPED 2026-08-11 (`65bcc1b`).** 5.5 dispositions:
-> Clodura REMOVED (owner-approved, migr 0155). The other dead-inventory
-> items (dataCleanup router, uncalled companies.* procedures,
-> organization_locations) still await individual approval.
+> **STATUS: 5.1–5.4 SHIPPED 2026-08-11 (`65bcc1b`).** 5.5 dispositions —
+> ALL individually owner-approved and executed 2026-08-12: Clodura REMOVED
+> (migr 0155); `dataCleanup` router + `apolloEnrich` module REMOVED (paid
+> Apollo ruled out permanently; `isEnrichableCampaign` moved to the sweeper,
+> zero-credit guard now in `apolloSearchOnly.test.ts`); uncalled
+> `companies.*` procedures REMOVED except `duplicates`+`merge`, which got
+> the merge-review surface; `organization_locations` DROPPED (migr 0158).
 
 | # | Change | Notes |
 |---|---|---|

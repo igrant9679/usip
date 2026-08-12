@@ -4,7 +4,7 @@
  * customers, domains) to the surviving primary and archiving the duplicate.
  * Preserves history (rows are re-pointed, not deleted).
  */
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { getDb } from "../../db";
 import {
   accounts, prospects, contacts, contactAccountLinks, opportunities, customers,
@@ -12,18 +12,48 @@ import {
   companyLogoAssets,
 } from "../../../drizzle/schema";
 
-export async function findDuplicateAccounts(ws: number): Promise<Array<{ key: string; accountIds: number[] }>> {
+export interface DuplicateGroup {
+  /** The shared normalized domain the accounts collide on. */
+  key: string;
+  accounts: Array<{ id: number; name: string; domain: string | null; createdAt: Date | null; contactCount: number }>;
+}
+
+/**
+ * Accounts sharing a normalized domain, with enough detail to review which
+ * should survive. Archived accounts are excluded — a merged duplicate keeps
+ * its normalizedDomain, so without this filter every completed merge would
+ * resurface in the list forever.
+ */
+export async function findDuplicateAccounts(ws: number): Promise<DuplicateGroup[]> {
   const db = await getDb();
   if (!db) return [];
-  const rows = await db.select({ id: accounts.id, key: accounts.normalizedDomain })
-    .from(accounts).where(and(eq(accounts.workspaceId, ws)));
-  const byKey = new Map<string, number[]>();
+  const rows = await db
+    .select({ id: accounts.id, key: accounts.normalizedDomain, name: accounts.name, domain: accounts.domain, createdAt: accounts.createdAt })
+    .from(accounts)
+    .where(and(eq(accounts.workspaceId, ws), isNull(accounts.archivedAt)));
+  const byKey = new Map<string, typeof rows>();
   for (const r of rows) {
     if (!r.key) continue;
     const arr = byKey.get(r.key) ?? [];
-    arr.push(r.id); byKey.set(r.key, arr);
+    arr.push(r); byKey.set(r.key, arr);
   }
-  return [...byKey.entries()].filter(([, ids]) => ids.length > 1).map(([key, accountIds]) => ({ key, accountIds }));
+  // Array.from, not a spread — iterator spreads are TS2802 under this tsconfig.
+  const groups = Array.from(byKey.entries()).filter(([, g]) => g.length > 1);
+  if (groups.length === 0) return [];
+
+  // Linked-contact counts inform which account should be the primary.
+  const ids = groups.flatMap(([, g]) => g.map((r) => r.id));
+  const counts = await db
+    .select({ accountId: contacts.accountId, c: sql<number>`count(*)` })
+    .from(contacts)
+    .where(and(eq(contacts.workspaceId, ws), inArray(contacts.accountId, ids)))
+    .groupBy(contacts.accountId);
+  const byAccount = new Map(counts.map((r) => [Number(r.accountId), Number(r.c)]));
+
+  return groups.map(([key, g]) => ({
+    key,
+    accounts: g.map((r) => ({ id: r.id, name: r.name, domain: r.domain, createdAt: r.createdAt, contactCount: byAccount.get(r.id) ?? 0 })),
+  }));
 }
 
 export async function mergeAccounts(ws: number, primaryAccountId: number, duplicateAccountId: number): Promise<{ ok: boolean; reason?: string }> {

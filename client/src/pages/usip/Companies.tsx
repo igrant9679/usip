@@ -22,6 +22,7 @@ import {
   DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
   DropdownMenuSeparator, DropdownMenuRadioGroup, DropdownMenuRadioItem,
 } from "@/components/ui/dropdown-menu";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { CompanyAvatar } from "@/components/usip/company/CompanyAvatar";
 import { confirmAction } from "@/components/usip/Common";
 import {
@@ -76,6 +77,108 @@ function FacetList({ options, selected, onToggle, empty }: { options: [string, n
         ))}
       </div>
     </div>
+  );
+}
+
+/**
+ * Duplicate review — companies.duplicates groups active accounts by shared
+ * normalized domain (CSV-imported accounts became visible to the matcher via
+ * the normalized-fields backfill). Reviewer picks which account survives;
+ * every other account in the group merges into it via the existing
+ * companies.merge (admin-gated server-side, like the manual 2-selection
+ * merge in the toolbar below).
+ */
+function DuplicateReview() {
+  const utils = trpc.useUtils();
+  const [open, setOpen] = useState(false);
+  const { data: groups, isLoading } = trpc.companies.duplicates.useQuery(undefined, { enabled: open });
+  // Per-group primary choice; default = most linked contacts, then oldest.
+  const [primaries, setPrimaries] = useState<Record<string, number>>({});
+  const [mergingKey, setMergingKey] = useState<string | null>(null);
+  const merge = trpc.companies.merge.useMutation();
+
+  const defaultPrimary = (g: NonNullable<typeof groups>[number]) =>
+    [...g.accounts].sort((a, b) => (b.contactCount - a.contactCount) || (new Date(a.createdAt ?? 0).getTime() - new Date(b.createdAt ?? 0).getTime()))[0]?.id;
+
+  const mergeGroup = async (g: NonNullable<typeof groups>[number]) => {
+    const primaryId = primaries[g.key] ?? defaultPrimary(g);
+    const dups = g.accounts.filter((a) => a.id !== primaryId);
+    setMergingKey(g.key);
+    try {
+      // Sequential on purpose: each merge re-points rows the next one reads.
+      for (const d of dups) {
+        await merge.mutateAsync({ primaryAccountId: primaryId, duplicateAccountId: d.id });
+      }
+      toast.success(`Merged ${dups.length} duplicate${dups.length === 1 ? "" : "s"} into the surviving account`);
+      utils.companies.duplicates.invalidate();
+      utils.companies.search.invalidate();
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setMergingKey(null);
+    }
+  };
+
+  return (
+    <>
+      <Button variant="outline" size="sm" className="h-7 gap-1.5" onClick={() => setOpen(true)} title="Find accounts sharing a domain and merge them">
+        <GitMerge className="size-3.5" /> Review duplicates
+      </Button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="max-w-[calc(100%-2rem)] sm:max-w-2xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Duplicate companies</DialogTitle>
+            <DialogDescription>
+              Accounts sharing a domain. Pick the one that survives — contacts, prospects and deals from the others move onto it, and the empties are archived. Merging needs an admin role.
+            </DialogDescription>
+          </DialogHeader>
+          {isLoading ? (
+            <div className="space-y-2">{Array.from({ length: 3 }).map((_, i) => <div key={i} className="h-16 rounded-md bg-muted/50 animate-pulse" />)}</div>
+          ) : !groups || groups.length === 0 ? (
+            <p className="py-6 text-center text-sm text-muted-foreground">No duplicates — every active account has its own domain.</p>
+          ) : (
+            <div className="space-y-4">
+              {groups.map((g) => {
+                const primaryId = primaries[g.key] ?? defaultPrimary(g);
+                return (
+                  <div key={g.key} className="rounded-lg border border-border">
+                    <div className="flex items-center justify-between border-b border-border/60 bg-muted/30 px-3 py-1.5">
+                      <span className="text-[12px] font-medium">{g.key}</span>
+                      <Button size="sm" className="h-7 gap-1.5" disabled={mergingKey !== null} onClick={() => mergeGroup(g)}>
+                        {mergingKey === g.key ? <RefreshCw className="size-3.5 animate-spin" /> : <GitMerge className="size-3.5" />}
+                        Merge {g.accounts.length - 1} into selected
+                      </Button>
+                    </div>
+                    <div className="divide-y divide-border/60">
+                      {g.accounts.map((a) => (
+                        <label key={a.id} className="flex cursor-pointer items-center gap-3 px-3 py-2">
+                          <input
+                            type="radio"
+                            name={`primary-${g.key}`}
+                            checked={primaryId === a.id}
+                            onChange={() => setPrimaries((p) => ({ ...p, [g.key]: a.id }))}
+                            className="size-3.5"
+                          />
+                          <CompanyAvatar name={a.name} domain={a.domain} size="sm" />
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate text-[13px] font-medium">{a.name}</div>
+                            <div className="text-[11px] text-muted-foreground">
+                              {a.contactCount} contact{a.contactCount === 1 ? "" : "s"}
+                              {a.createdAt ? ` · added ${new Date(a.createdAt).toLocaleDateString()}` : ""}
+                            </div>
+                          </div>
+                          {primaryId === a.id && <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-medium text-emerald-800">survives</span>}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 
@@ -156,6 +259,7 @@ export default function Companies() {
           <Building2 className="size-4" style={{ color: accent }} />
           <h1 className="text-[15px] font-semibold tracking-tight">Find companies</h1>
           <div className="flex-1" />
+          <DuplicateReview />
           <Button variant="outline" size="sm" className="h-7 gap-1.5" disabled={backfill.isPending} onClick={() => backfill.mutate({})} title="Create/link companies from uploaded prospects">
             <RefreshCw className={`size-3.5 ${backfill.isPending ? "animate-spin" : ""}`} /> Sync from prospects
           </Button>

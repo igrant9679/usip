@@ -174,7 +174,7 @@ favicon → initials. Tier advance on `onError`. `CompanyAvatar` is a documented
 | **Reoon** | LIVE | BYOK `reoonApiKeyEnc` → env fallback | quick/power ladder in scraper, comprehensive pass, sweeper; balance-aware budgeting |
 | **QuickEnrich** | LIVE | BYOK + daily pull cap | comprehensive pass, sweeper, ARE discovery source |
 | **Apollo (search)** | LIVE, 0-credit only | BYOK + daily cap | domain resolve ×3 call sites; ARE people search |
-| **Apollo (paid match)** | EXISTS BUT UNUSED | same key | only `dataCleanup.ts` router — **no client caller anywhere**; `dryRun` defaults true |
+| **Apollo (paid match)** | REMOVED 2026-08-12 (owner-approved) | — | `dataCleanup.ts` + `apolloEnrich.ts` deleted; `apolloSearchOnly.test.ts` keeps the zero-credit guarantee structural |
 | **LeadRocks** | LIVE (CSV parser, no API) | none | `prospectImports` — see §2B normalization gap |
 | **Brandfetch** | LIVE (logo) / config-dependent (search) | 2 client IDs; logo verified live on prod | logo = client hotlink only; search = admin action + brand reconciler |
 | **Google Places** | LIVE, budget-enforced | 2¢/call ledger + notifications | placesSearch router |
@@ -221,10 +221,10 @@ favicon → initials. Tier advance on `onError`. `CompanyAvatar` is a documented
 |---|---|
 | `clodura_search_cache`, `clodura_saved_searches`, `clodura_reveal_jobs`, `clodura_enrichment_settings` | 0 references |
 | `clodura_enrichment_jobs`, `contact_enrichment_history` | cascade-delete references only |
-| `organization_locations` | 0 readers, 0 writers |
+| `organization_locations` | DROPPED 2026-08-12 (migr 0158, owner-approved) |
 | `organization_funding_events` | read by profile, **zero writers** |
 | `organization_technologies` | writer unreachable (needs `provided.technologies`; no caller sends it); the fit-score comment claiming it's consumed is wrong — scoring reads JSON fields instead |
-| `routers/dataCleanup.ts` | entire router: no client caller |
-| 16 `companies.*` procedures | no client caller (incl. `update`, `duplicates`, `linkContact`, logo mutations) |
+| `routers/dataCleanup.ts` | REMOVED 2026-08-12 (owner-approved) |
+| 16 `companies.*` procedures | dispositioned 2026-08-12: `duplicates`+`merge` wired to the merge-review surface, the rest removed (owner-approved) |
 | `lastEnrichedAt` ×3 tables | written, never read |
 | `retrieveLinkedInProfileByIdentifier`, `reoonCreateBulkTask/GetBulkResult`, `companyLogoAssets.creditsUsed`, LeadRocks `hasPhone`/`emailRawStatus` | computed/exported, unused |

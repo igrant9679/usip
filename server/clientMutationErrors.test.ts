@@ -57,6 +57,9 @@ const HANDLED_ELSEWHERE = new Set<string>([
   "components/usip/settings/SocialAccountsSection.tsx::unipile.disconnectAccount",
   "pages/usip/SettingsHub.tsx::profile.updateMe",
   "pages/usip/SettingsHub.tsx::settings.save",
+  // Duplicate review: sequential mutateAsync loop in a try/catch whose catch
+  // toasts once for the whole group (per-merge toasts would stack).
+  "pages/usip/Companies.tsx::companies.merge",
 
   // Public, visitor-facing pages. These render the failure INLINE next to the
   // form (`book.error && <p>…`) rather than as a toast, which is right: a
