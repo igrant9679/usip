@@ -67,9 +67,3 @@ export async function setCompanyLogoStatus(ws: number, accountId: number, status
     .where(and(eq(accounts.workspaceId, ws), eq(accounts.id, accountId)));
 }
 
-export async function clearCompanyLogo(ws: number, accountId: number): Promise<void> {
-  const db = await getDb();
-  if (!db) return;
-  await db.update(accounts).set({ logoUrl: null, logoSourceType: null, logoSourceUrl: null, logoStatus: "removed" } as never)
-    .where(and(eq(accounts.workspaceId, ws), eq(accounts.id, accountId)));
-}

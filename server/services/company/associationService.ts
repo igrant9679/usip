@@ -13,7 +13,7 @@
 import { and, eq, isNull } from "drizzle-orm";
 import { getDb } from "../../db";
 import {
-  accounts, prospects, contacts, contactAccountLinks,
+  accounts, prospects, contactAccountLinks,
   globalOrganizations, organizationDomains, accountDomains, activities,
 } from "../../../drizzle/schema";
 import {
@@ -204,27 +204,6 @@ export async function associateProspectToCompany(prospect: {
   }
 }
 
-/** Associate many prospects (backfill / bulk import). */
-export async function associateBulkProspectsToCompanies(
-  workspaceId: number, prospectIds: number[], sourceType = "bulk_import",
-): Promise<{ processed: number; linked: number; created: number; needsReview: number; missing: number }> {
-  const db = await getDb();
-  const stats = { processed: 0, linked: 0, created: 0, needsReview: 0, missing: 0 };
-  if (!db) return stats;
-  for (const id of prospectIds) {
-    const [p] = await db.select().from(prospects)
-      .where(and(eq(prospects.workspaceId, workspaceId), eq(prospects.id, id))).limit(1);
-    if (!p) continue;
-    const r = await associateProspectToCompany(p as never, { sourceType });
-    stats.processed++;
-    if (r.created) stats.created++;
-    if (r.status === "linked") stats.linked++;
-    else if (r.status === "needs_review") stats.needsReview++;
-    else if (r.status === "missing") stats.missing++;
-  }
-  return stats;
-}
-
 /**
  * Associate every prospect in the workspace that isn't linked yet (account_id
  * IS NULL) and has usable company data. Serves both post-import sweeps and the
@@ -249,24 +228,3 @@ export async function associateUnlinkedProspects(
   return stats;
 }
 
-/** Manually link a contact to an account. */
-export async function linkContactToAccount(ws: number, contactId: number, accountId: number, sourceType = "manually_linked"): Promise<void> {
-  const db = await getDb();
-  if (!db) return;
-  const [acct] = await db.select({ orgId: accounts.globalOrganizationId }).from(accounts)
-    .where(and(eq(accounts.workspaceId, ws), eq(accounts.id, accountId))).limit(1);
-  await db.update(contacts).set({ accountId, globalOrganizationId: acct?.orgId ?? null } as never)
-    .where(and(eq(contacts.workspaceId, ws), eq(contacts.id, contactId)));
-  await linkPerson({ ws, personType: "contact", personId: contactId, accountId, globalOrganizationId: acct?.orgId ?? null, relationshipType: "manually_linked", sourceType, confidence: 100 });
-  await emitCompanyActivity(ws, accountId, "Contact linked to company");
-}
-
-export async function unlinkContactFromAccount(ws: number, contactId: number, accountId: number): Promise<void> {
-  const db = await getDb();
-  if (!db) return;
-  await db.delete(contactAccountLinks).where(and(
-    eq(contactAccountLinks.workspaceId, ws), eq(contactAccountLinks.personType, "contact"),
-    eq(contactAccountLinks.personId, contactId), eq(contactAccountLinks.accountId, accountId)));
-  await db.update(contacts).set({ accountId: null } as never)
-    .where(and(eq(contacts.workspaceId, ws), eq(contacts.id, contactId)));
-}

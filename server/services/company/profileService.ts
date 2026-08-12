@@ -7,7 +7,7 @@ import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { getDb } from "../../db";
 import {
   accounts, contacts, prospects, contactAccountLinks, activities,
-  organizationEnrichmentEvents, organizationTechnologies, organizationFundingEvents,
+  organizationEnrichmentEvents,
   scoreResults, priorityScoreResults,
 } from "../../../drizzle/schema";
 import { resolveCompanyLogo, faviconUrlForDomain } from "./logoService";
@@ -70,18 +70,6 @@ export async function getCompanyEnrichmentHistory(ws: number, accountId: number)
   return db.select().from(organizationEnrichmentEvents)
     .where(and(eq(organizationEnrichmentEvents.workspaceId, ws), eq(organizationEnrichmentEvents.accountId, accountId)))
     .orderBy(desc(organizationEnrichmentEvents.createdAt)).limit(50);
-}
-
-export async function getCompanyTechnologies(orgId: number | null) {
-  const db = await getDb();
-  if (!db || !orgId) return [];
-  return db.select().from(organizationTechnologies).where(eq(organizationTechnologies.globalOrganizationId, orgId));
-}
-
-export async function getCompanyFunding(orgId: number | null) {
-  const db = await getDb();
-  if (!db || !orgId) return [];
-  return db.select().from(organizationFundingEvents).where(eq(organizationFundingEvents.globalOrganizationId, orgId)).orderBy(desc(organizationFundingEvents.announcedAt));
 }
 
 export async function getCompanyScore(ws: number, accountId: number) {

@@ -1,32 +1,32 @@
 /**
  * Companies router — the Apollo-style company/account layer.
  *
- * Search + profile reads, prospect→company association + backfill, contact
- * linking, enrichment, logo management, and merge. `accounts` is the workspace-
- * account record; global_organizations is the shared layer. Every query is
- * workspace-scoped. Permission map: view → any member · create/edit/enrich/link
- * → manager+ · merge/archive/logo → admin+.
+ * Search + profile reads, prospect→company backfill, enrichment, brand
+ * reconciliation, and duplicate review/merge. `accounts` is the workspace-
+ * account record. Every query is workspace-scoped. Permission map: view → any
+ * member · enrich/backfill → manager+ · merge/archive/brand-override → admin+.
+ *
+ * 2026-08-12 owner-approved trim: 15 procedures nothing called were removed
+ * (brandSearch, technologies, funding, score, update, associateProspect,
+ * associateBulk, createFromProspect, matchCandidates, link/unlinkContact,
+ * the three logo mutations, organization). The services behind the removed
+ * procedures largely stay — enrichment/association/logo paths call them; the
+ * router just stopped pretending to be their UI.
  */
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router } from "../_core/trpc";
-import { workspaceProcedure, requireMinRole} from "../_core/workspace";
+import { workspaceProcedure, requireMinRole } from "../_core/workspace";
 import { getDb } from "../db";
 import { and, eq } from "drizzle-orm";
-import { accounts, globalOrganizations, prospects } from "../../drizzle/schema";
+import { accounts } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
 import { searchWorkspaceAccounts } from "../services/company/searchService";
 import {
   getCompanyProfile, getCompanyContacts, getCompanyActivity, getCompanyEnrichmentHistory,
-  getCompanyTechnologies, getCompanyFunding, getCompanyScore,
 } from "../services/company/profileService";
-import {
-  associateProspectToCompany, associateBulkProspectsToCompanies, associateUnlinkedProspects,
-  linkContactToAccount, unlinkContactFromAccount, createWorkspaceAccount, companyInputFromProspect,
-} from "../services/company/associationService";
-import { findWorkspaceAccountMatch } from "../services/company/matchingService";
+import { associateUnlinkedProspects } from "../services/company/associationService";
 import { enrichCompany, bulkEnrichCompanies } from "../services/company/enrichmentService";
-import { updateCompanyLogo, clearCompanyLogo, setCompanyLogoStatus } from "../services/company/logoService";
 import { findDuplicateAccounts, mergeAccounts } from "../services/company/mergeService";
 
 // One rank map — _core/workspace.ts. Four routers had their own copy.
@@ -54,26 +54,6 @@ const sort = z.object({
 }).optional();
 
 export const companiesRouter = router({
-  /**
-   * Manual Brandfetch brand search — the ONLY caller of the Brand Search API
-   * today. Deliberately not wired into any enrichment path (owner decision:
-   * the future company-enrichment stack owns automated brand reconciliation);
-   * this exists for an admin explicitly resolving a company's brand/domain.
-   * Results are transient by Brandfetch's terms (icon URLs expire in 24h) —
-   * display them, derive from them, never store them wholesale.
-   */
-  brandSearch: workspaceProcedure
-    .input(z.object({ query: z.string().min(2).max(120) }))
-    .query(async ({ ctx, input }) => {
-      requireMinRole(ctx.member.role, "admin", "Only admins can run brand searches.");
-      const { createBrandfetchProvider } = await import("../services/brand/brandfetch");
-      const provider = createBrandfetchProvider();
-      if (!provider.searchReady()) {
-        throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Brand search is not configured — set BRANDFETCH_SEARCH_CLIENT_ID." });
-      }
-      return provider.searchBrand(input.query);
-    }),
-
   /* ── Brand identity reconciliation (company-enrichment stack) ──
      The reconciler is the ONLY automated Brand Search caller; these actions
      let an admin run/inspect/override it per account. */
@@ -164,42 +144,8 @@ export const companiesRouter = router({
   enrichmentHistory: workspaceProcedure
     .input(z.object({ accountId: z.number().int().positive() }))
     .query(async ({ ctx, input }) => getCompanyEnrichmentHistory(ctx.workspace.id, input.accountId)),
-  technologies: workspaceProcedure
-    .input(z.object({ accountId: z.number().int().positive() }))
-    .query(async ({ ctx, input }) => {
-      const db = await getDb(); if (!db) return [];
-      const [a] = await db.select({ orgId: accounts.globalOrganizationId }).from(accounts).where(and(eq(accounts.workspaceId, ctx.workspace.id), eq(accounts.id, input.accountId))).limit(1);
-      return getCompanyTechnologies(a?.orgId ?? null);
-    }),
-  funding: workspaceProcedure
-    .input(z.object({ accountId: z.number().int().positive() }))
-    .query(async ({ ctx, input }) => {
-      const db = await getDb(); if (!db) return [];
-      const [a] = await db.select({ orgId: accounts.globalOrganizationId }).from(accounts).where(and(eq(accounts.workspaceId, ctx.workspace.id), eq(accounts.id, input.accountId))).limit(1);
-      return getCompanyFunding(a?.orgId ?? null);
-    }),
-  score: workspaceProcedure
-    .input(z.object({ accountId: z.number().int().positive() }))
-    .query(async ({ ctx, input }) => getCompanyScore(ctx.workspace.id, input.accountId)),
 
-  /* ── mutations: edit / archive ── */
-  update: workspaceProcedure
-    .input(z.object({
-      accountId: z.number().int().positive(),
-      name: z.string().max(200).optional(), industry: z.string().max(80).nullable().optional(),
-      websiteUrl: z.string().max(500).nullable().optional(), linkedinCompanyUrl: z.string().max(500).nullable().optional(),
-      employeeCount: z.number().int().nullable().optional(), accountStage: z.string().max(64).nullable().optional(),
-      ownerUserId: z.number().int().nullable().optional(), description: z.string().max(4000).nullable().optional(),
-    }))
-    .mutation(async ({ ctx, input }) => {
-      requireRole(ctx.member.role, "manager");
-      const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      const { accountId, ...rest } = input;
-      const patch: Record<string, unknown> = {};
-      for (const [k, v] of Object.entries(rest)) if (v !== undefined) patch[k] = v;
-      if (Object.keys(patch).length) await db.update(accounts).set(patch as never).where(and(eq(accounts.workspaceId, ctx.workspace.id), eq(accounts.id, accountId)));
-      return { ok: true as const };
-    }),
+  /* ── mutations: archive ── */
   archive: workspaceProcedure
     .input(z.object({ accountId: z.number().int().positive() }))
     .mutation(async ({ ctx, input }) => {
@@ -209,53 +155,11 @@ export const companiesRouter = router({
       return { ok: true as const };
     }),
 
-  /* ── association / linking ── */
-  associateProspect: workspaceProcedure
-    .input(z.object({ prospectId: z.number().int().positive() }))
-    .mutation(async ({ ctx, input }) => {
-      requireRole(ctx.member.role, "manager");
-      const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      const [p] = await db.select().from(prospects).where(and(eq(prospects.workspaceId, ctx.workspace.id), eq(prospects.id, input.prospectId))).limit(1);
-      if (!p) throw new TRPCError({ code: "NOT_FOUND" });
-      return associateProspectToCompany(p as never, { sourceType: "manual" });
-    }),
+  /* ── association ── */
   backfill: workspaceProcedure.mutation(async ({ ctx }) => {
     requireRole(ctx.member.role, "manager");
     return associateUnlinkedProspects(ctx.workspace.id);
   }),
-  associateBulk: workspaceProcedure
-    .input(z.object({ prospectIds: z.array(z.number().int().positive()).min(1).max(2000) }))
-    .mutation(async ({ ctx, input }) => {
-      requireRole(ctx.member.role, "manager");
-      return associateBulkProspectsToCompanies(ctx.workspace.id, input.prospectIds, "manual_bulk");
-    }),
-  createFromProspect: workspaceProcedure
-    .input(z.object({ prospectId: z.number().int().positive() }))
-    .mutation(async ({ ctx, input }) => {
-      requireRole(ctx.member.role, "manager");
-      const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      const [p] = await db.select().from(prospects).where(and(eq(prospects.workspaceId, ctx.workspace.id), eq(prospects.id, input.prospectId))).limit(1);
-      if (!p) throw new TRPCError({ code: "NOT_FOUND" });
-      const accountId = await createWorkspaceAccount(ctx.workspace.id, companyInputFromProspect(p as never), "manual");
-      return { accountId };
-    }),
-  matchCandidates: workspaceProcedure
-    .input(z.object({ name: z.string().optional(), domain: z.string().optional(), website: z.string().optional(), linkedinCompanyUrl: z.string().optional() }))
-    .query(async ({ ctx, input }) => findWorkspaceAccountMatch(ctx.workspace.id, input)),
-  linkContact: workspaceProcedure
-    .input(z.object({ contactId: z.number().int().positive(), accountId: z.number().int().positive() }))
-    .mutation(async ({ ctx, input }) => {
-      requireRole(ctx.member.role, "manager");
-      await linkContactToAccount(ctx.workspace.id, input.contactId, input.accountId);
-      return { ok: true as const };
-    }),
-  unlinkContact: workspaceProcedure
-    .input(z.object({ contactId: z.number().int().positive(), accountId: z.number().int().positive() }))
-    .mutation(async ({ ctx, input }) => {
-      requireRole(ctx.member.role, "manager");
-      await unlinkContactFromAccount(ctx.workspace.id, input.contactId, input.accountId);
-      return { ok: true as const };
-    }),
 
   /* ── enrichment ── */
   enrich: workspaceProcedure
@@ -273,29 +177,6 @@ export const companiesRouter = router({
       return bulkEnrichCompanies(ctx.workspace.id, input.accountIds, ctx.user.id);
     }),
 
-  /* ── logo ── */
-  updateLogo: workspaceProcedure
-    .input(z.object({ accountId: z.number().int().positive(), logoUrl: z.string().url(), sourceType: z.enum(["user_uploaded", "crm_import", "enrichment_provider", "permitted_public_url", "website_logo", "manual_entry"]), sourceUrl: z.string().optional() }))
-    .mutation(async ({ ctx, input }) => {
-      requireRole(ctx.member.role, "admin");
-      const res = await updateCompanyLogo(ctx.workspace.id, input.accountId, { logoUrl: input.logoUrl, sourceType: input.sourceType, sourceUrl: input.sourceUrl });
-      if (!res.ok) throw new TRPCError({ code: "BAD_REQUEST", message: res.reason });
-      return res;
-    }),
-  verifyLogo: workspaceProcedure
-    .input(z.object({ accountId: z.number().int().positive(), status: z.enum(["available", "failed_to_load", "blocked_by_policy", "removed", "unavailable"]) }))
-    .mutation(async ({ ctx, input }) => {
-      await setCompanyLogoStatus(ctx.workspace.id, input.accountId, input.status);
-      return { ok: true as const };
-    }),
-  deleteLogo: workspaceProcedure
-    .input(z.object({ accountId: z.number().int().positive() }))
-    .mutation(async ({ ctx, input }) => {
-      requireRole(ctx.member.role, "admin");
-      await clearCompanyLogo(ctx.workspace.id, input.accountId);
-      return { ok: true as const };
-    }),
-
   /* ── merge ── */
   duplicates: workspaceProcedure.query(async ({ ctx }) => findDuplicateAccounts(ctx.workspace.id)),
   merge: workspaceProcedure
@@ -306,14 +187,5 @@ export const companiesRouter = router({
       if (!res.ok) throw new TRPCError({ code: "BAD_REQUEST", message: res.reason });
       await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "account_merge", entityId: input.primaryAccountId, after: { merged: input.duplicateAccountId } });
       return res;
-    }),
-
-  /* ── global organizations (shared layer) ── */
-  organization: workspaceProcedure
-    .input(z.object({ organizationId: z.number().int().positive() }))
-    .query(async ({ input }) => {
-      const db = await getDb(); if (!db) return null;
-      const [org] = await db.select().from(globalOrganizations).where(eq(globalOrganizations.id, input.organizationId)).limit(1);
-      return org ?? null;
     }),
 });
