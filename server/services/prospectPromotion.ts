@@ -142,7 +142,7 @@ export async function promoteProspectRow(
       .limit(1);
     contactId = byPerson?.id;
   }
-  if (!contactId) contactId = await findContactByEmail(db, workspaceId, p.email);
+  if (!contactId) contactId = (await findContactByEmail(db, workspaceId, p.email)) ?? undefined;
   if (!contactId) {
     const [created] = await db
       .insert(contacts)
