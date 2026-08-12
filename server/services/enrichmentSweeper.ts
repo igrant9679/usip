@@ -38,12 +38,25 @@ import { runComprehensiveEnrichment } from "./enrichment/comprehensivePass";
 import { getReoonKey, reoonCheckBalance, reoonStatusToUsip, reoonVerifySingle } from "./reoon";
 import { getQuickEnrichKey, quickenrichFindEmailByLinkedIn } from "./quickenrich";
 import { promoteProspectRow } from "./prospectPromotion";
-// Pure name predicate only — importing it does NOT reach any paid Apollo path.
-// It is the one definition of "this campaign is a demo, don't work it".
-import { isEnrichableCampaign } from "./apolloEnrich";
 import { clampSweepCap, SWEEP_DAILY_CAP_DEFAULT } from "@shared/enrichmentLimits";
 
 export type SweepMode = "off" | "approval" | "auto";
+
+/**
+ * The one definition of "this campaign is a demo, don't work it". Lived in
+ * apolloEnrich.ts until that module (the only paid-Apollo surface) was removed
+ * with the dataCleanup router; the sweeper was its sole remaining caller.
+ *
+ * Learned the hard way: the first paid pilot spent 17 credits on prospects
+ * that belong to NO listed campaign (prospect_queue held 559 rows; the live
+ * campaigns accounted for 177). Seeded demo campaigns are worse than useless
+ * to work — their people are invented.
+ */
+export function isEnrichableCampaign(name?: string | null): boolean {
+  const n = (name ?? "").trim();
+  if (!n) return false; // orphaned prospect: no campaign, no reason to work it
+  return !/^\[demo\]/i.test(n);
+}
 
 /**
  * Enrichability, expressed in SQL for the LIMITed candidate queries.

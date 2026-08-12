@@ -49,11 +49,8 @@ vi.mock("./quickenrich", () => ({
   getQuickEnrichKey: mocks.getQuickEnrichKey,
   quickenrichFindEmailByLinkedIn: mocks.quickenrichFindEmailByLinkedIn,
 }));
-// getApolloKey is here only because apolloEnrich (imported for its pure
-// campaign predicate) names it at module load.
 vi.mock("./apollo", () => ({
   apolloResolveDomain: mocks.apolloResolveDomain,
-  getApolloKey: vi.fn(),
 }));
 vi.mock("./scraper", () => ({
   resolveVerifiedEmail: mocks.resolveVerifiedEmail,

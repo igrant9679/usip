@@ -18,7 +18,6 @@ import { dashboardLayoutsRouter } from "./routers/dashboardLayouts";
 import { researchPipelineRouter } from "./routers/researchPipeline";
 import { opportunityIntelligenceRouter } from "./routers/opportunityIntelligence";
 import { optimizationRouter } from "./routers/optimization";
-import { dataCleanupRouter } from "./routers/dataCleanup";
 import { emailTemplatesRouter, snippetsRouter, brandVoiceRouter, emailPromptTemplatesRouter } from "./routers/emailBuilder";
 import { emailAssistRouter } from "./routers/emailAssist";
 import { attentionRouter } from "./routers/attention";
@@ -136,7 +135,6 @@ export const appRouter = router({
   researchPipeline: researchPipelineRouter,
   oppIntelligence: opportunityIntelligenceRouter,
   optimization: optimizationRouter,
-  dataCleanup: dataCleanupRouter,
   emailTemplates: emailTemplatesRouter,
   snippets: snippetsRouter,
   brandVoice: brandVoiceRouter,
