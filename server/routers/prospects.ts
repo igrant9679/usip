@@ -18,7 +18,7 @@ import { TRPCError } from "@trpc/server";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { getDb } from "../db";
-import { contacts, leads, prospects, scoreResults, scoreModels, workspaceSettings, prospectLinkedinEnrichments } from "../../drizzle/schema";
+import { contacts, leads, prospects, scoreResults, scoreModels, workspaceSettings, prospectLinkedinEnrichments, prospectFieldHistory } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
 import { runComprehensiveEnrichment } from "../services/enrichment/comprehensivePass";
 import { CONFIDENCE } from "../services/enrichment/fieldMerge";
@@ -51,6 +51,28 @@ export const prospectsRouter = router({
       // Full profile only: attach resolved profile-image metadata (compliance
       // gate decides whether the URL is exposed). Search/list never get this.
       return { ...row, profile_image: resolveProspectProfileImage(row) };
+    }),
+
+  /**
+   * Field-change timeline for one prospect — first reader of the 0156 audit
+   * table (written best-effort by every mergeAll consumer). Powers the History
+   * section in the People drawer; newest first, capped so a heavily-enriched
+   * row can't flood the panel.
+   */
+  fieldHistory: workspaceProcedure
+    .input(z.object({ prospectId: z.number().int() }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      return db
+        .select()
+        .from(prospectFieldHistory)
+        .where(and(
+          eq(prospectFieldHistory.workspaceId, ctx.workspace.id),
+          eq(prospectFieldHistory.prospectId, input.prospectId),
+        ))
+        .orderBy(desc(prospectFieldHistory.changedAt), desc(prospectFieldHistory.id))
+        .limit(100);
     }),
 
   /**

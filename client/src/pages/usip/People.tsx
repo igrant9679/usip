@@ -1149,6 +1149,8 @@ function DetailPanel({ p, onClose, onOpenFull }: { p: Prospect; onClose: () => v
               </div>
             </Section>
           )}
+
+          <FieldHistorySection prospectId={p.id} />
         </div>
       </div>
 
@@ -1180,6 +1182,46 @@ function DetailPanel({ p, onClose, onOpenFull }: { p: Prospect; onClose: () => v
         </div>
       </div>
     </aside>
+  );
+}
+
+/**
+ * Old→new change timeline from prospect_field_history (migration 0156).
+ * The section disappears entirely for rows with no recorded changes — the
+ * table only starts filling once an enrichment REPLACES a value, so most
+ * prospects legitimately have nothing to show.
+ */
+function FieldHistorySection({ prospectId }: { prospectId: number }) {
+  const SHOWN = 12;
+  const { data } = trpc.prospects.fieldHistory.useQuery({ prospectId });
+  if (!data || data.length === 0) return null;
+  return (
+    <Section title="Field history">
+      <div className="space-y-2">
+        {data.slice(0, SHOWN).map((h) => (
+          <div key={h.id} className="flex gap-2">
+            <span aria-hidden className="mt-1.5 size-1.5 shrink-0 rounded-full bg-border" />
+            <div className="min-w-0">
+              <div
+                className="truncate text-[12px] leading-snug"
+                title={`${h.oldValue ?? "—"} → ${h.newValue ?? "—"}`}
+              >
+                <span className="font-medium">{cap(h.field)}</span>{" "}
+                <span className="text-muted-foreground line-through">{h.oldValue || "—"}</span>
+                {" → "}
+                <span>{h.newValue || "—"}</span>
+              </div>
+              <div className="text-[11px] text-muted-foreground">
+                {h.newSource.replace(/_/g, " ")} · {h.newConfidence} · {fmtShortDate(h.changedAt)}
+              </div>
+            </div>
+          </div>
+        ))}
+        {data.length > SHOWN ? (
+          <div className="text-[11px] text-muted-foreground">+{data.length - SHOWN} earlier changes</div>
+        ) : null}
+      </div>
+    </Section>
   );
 }
 
