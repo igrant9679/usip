@@ -54,7 +54,7 @@ import { appBaseUrl as publicAppOrigin } from "../appUrl";
 import { centsToDecimal, computeQuoteTotals, toCents } from "@shared/quoteTotals";
 import { escapeHtml as sharedEscapeHtml } from "@shared/escapeHtml";
 import { isHtmlBody, htmlBodyToText } from "@shared/emailBody";
-import { renderMergeFields, scrubForSend } from "../mergeVars";
+import { renderMergeFields, resolveBookingUrl, scrubForSend } from "../mergeVars";
 import { normalizedAccountFields } from "../services/company/normalize";
 
 /** The ONE public origin — see server/appUrl.ts. */
@@ -689,6 +689,11 @@ export const contactsRouter = router({
       }[] = [];
 
       // ── 3. Send + record per contact ──────────────────────────────────
+      // One sender ⇒ one booking link for the whole batch. In the map so the
+      // token set stays in parity with every other send path
+      // (mergeVarCoverage.test.ts) — an advertised token missing from ONE
+      // map is deleted at that path's send boundary and nowhere else.
+      const bookingLink = await resolveBookingUrl(ctx.workspace.id, ctx.user.id);
       for (const contact of rows) {
         if (!contact.email) {
           results.push({
@@ -725,6 +730,7 @@ export const contactsRouter = router({
           senderEmail,
           senderTitle,
           senderCompany,
+          bookingLink,
           signature: workspaceSignature,
         };
         // scrubForSend: the renderer leaves unknown tokens visible for
@@ -1333,6 +1339,7 @@ export const leadsRouter = router({
         senderEmail,
         senderTitle: adHocSenderMember?.title ?? "",
         senderCompany: ctx.workspace.name ?? "",
+        bookingLink: await resolveBookingUrl(ctx.workspace.id, ctx.user.id),
         signature: workspaceSignature,
       };
       const renderedSubject = renderMergeFields(input.subject, mergeVars);

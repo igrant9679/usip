@@ -36,7 +36,7 @@ import { getSequenceAbVariantStats } from "../services/performanceMetrics";
 import { escapeHtml as sharedEscapeHtml } from "@shared/escapeHtml";
 import { isHtmlBody, htmlBodyToText } from "@shared/emailBody";
 import { HUMAN_COPY_RULES, humanizeAiCopy } from "../services/humanCopy";
-import { renderMergeFields, scrubForSend } from "../mergeVars";
+import { renderMergeFields, resolveBookingUrl, scrubForSend } from "../mergeVars";
 
 /** One escaper for the whole codebase — @shared/escapeHtml. The comment here
  *  used to read "duplicated from crm.ts — separate router", and duplication is
@@ -1355,6 +1355,93 @@ export const sequencesRouter = router({
  * `userId` is the actor — the manual path passes ctx.user.id; the
  * auto-send worker passes draft.createdByUserId.
  */
+/**
+ * The person a draft addresses, resolved to the fields the merge variables
+ * feed on. A draft names its recipient by exactly one of toContactId /
+ * toLeadId / toProspectId (plus an optional pre-stamped toEmail).
+ *
+ * 🔴 toProspectId WAS NEVER READ HERE (owner-reported 2026-08-12, "test the
+ * sequence variables"). Sequence enrollments target PROSPECTS (migration
+ * 0085 added the column for exactly that), the engine stamps toEmail at
+ * draft time, and this resolver only knew contacts and leads — so every
+ * prospect-enrolled send rendered {{firstName}}/{{company}} from nulls:
+ * "Hi ," to the entire campaign, while the same template mail-merged
+ * perfectly for contact recipients. Exported for the regression test.
+ */
+export async function resolveDraftRecipient(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  workspaceId: number,
+  draft: { toEmail?: string | null; toContactId?: number | null; toLeadId?: number | null; toProspectId?: number | null },
+): Promise<{ toEmail: string | null; firstName: string | null; lastName: string | null; title: string | null; company: string | null }> {
+  const out = {
+    toEmail: draft.toEmail ?? null,
+    firstName: null as string | null,
+    lastName: null as string | null,
+    title: null as string | null,
+    company: null as string | null,
+  };
+  if (draft.toContactId) {
+    const [c] = await db
+      .select({
+        email: contacts.email,
+        firstName: contacts.firstName,
+        lastName: contacts.lastName,
+        title: contacts.title,
+        accountName: accounts.name,
+      })
+      .from(contacts)
+      .leftJoin(accounts, eq(accounts.id, contacts.accountId))
+      .where(and(eq(contacts.id, draft.toContactId), eq(contacts.workspaceId, workspaceId)))
+      .limit(1);
+    if (c) {
+      out.toEmail = out.toEmail ?? c.email ?? null;
+      out.firstName = c.firstName ?? null;
+      out.lastName = c.lastName ?? null;
+      out.title = c.title ?? null;
+      out.company = c.accountName ?? null;
+    }
+  } else if (draft.toLeadId) {
+    const [l] = await db
+      .select({
+        email: leads.email,
+        firstName: leads.firstName,
+        lastName: leads.lastName,
+        title: leads.title,
+        company: leads.company,
+      })
+      .from(leads)
+      .where(and(eq(leads.id, draft.toLeadId), eq(leads.workspaceId, workspaceId)))
+      .limit(1);
+    if (l) {
+      out.toEmail = out.toEmail ?? l.email ?? null;
+      out.firstName = l.firstName ?? null;
+      out.lastName = l.lastName ?? null;
+      out.title = l.title ?? null;
+      out.company = l.company ?? null;
+    }
+  } else if (draft.toProspectId) {
+    const [p] = await db
+      .select({
+        email: prospects.email,
+        firstName: prospects.firstName,
+        lastName: prospects.lastName,
+        title: prospects.title,
+        company: prospects.company,
+      })
+      .from(prospects)
+      .where(and(eq(prospects.id, draft.toProspectId), eq(prospects.workspaceId, workspaceId)))
+      .limit(1);
+    if (p) {
+      out.toEmail = out.toEmail ?? p.email ?? null;
+      out.firstName = p.firstName ?? null;
+      out.lastName = p.lastName ?? null;
+      out.title = p.title ?? null;
+      out.company = p.company ?? null;
+    }
+  }
+  return out;
+}
+
 export async function deliverEmailDraft(params: {
   workspaceId: number;
   userId: number;
@@ -1375,80 +1462,9 @@ export async function deliverEmailDraft(params: {
   }
 
   // ── Resolve recipient ─────────────────────────────────────────────
-  let toEmail = draft.toEmail ?? null;
-  let firstName: string | null = null;
-  let lastName: string | null = null;
-  let title: string | null = null;
-  let company: string | null = null;
-  if (!toEmail && draft.toContactId) {
-    const [c] = await db
-      .select({
-        email: contacts.email,
-        firstName: contacts.firstName,
-        lastName: contacts.lastName,
-        title: contacts.title,
-        accountName: accounts.name,
-      })
-      .from(contacts)
-      .leftJoin(accounts, eq(accounts.id, contacts.accountId))
-      .where(and(eq(contacts.id, draft.toContactId), eq(contacts.workspaceId, workspaceId)))
-      .limit(1);
-    if (c) {
-      toEmail = c.email ?? null;
-      firstName = c.firstName ?? null;
-      lastName = c.lastName ?? null;
-      title = c.title ?? null;
-      company = c.accountName ?? null;
-    }
-  } else if (!toEmail && draft.toLeadId) {
-    const [l] = await db
-      .select()
-      .from(leads)
-      .where(and(eq(leads.id, draft.toLeadId), eq(leads.workspaceId, workspaceId)))
-      .limit(1);
-    if (l) {
-      toEmail = l.email ?? null;
-      firstName = l.firstName ?? null;
-      lastName = l.lastName ?? null;
-      title = l.title ?? null;
-      company = l.company ?? null;
-    }
-  } else if (draft.toContactId) {
-    const [c] = await db
-      .select({
-        firstName: contacts.firstName,
-        lastName: contacts.lastName,
-        title: contacts.title,
-        accountName: accounts.name,
-      })
-      .from(contacts)
-      .leftJoin(accounts, eq(accounts.id, contacts.accountId))
-      .where(and(eq(contacts.id, draft.toContactId), eq(contacts.workspaceId, workspaceId)))
-      .limit(1);
-    if (c) {
-      firstName = c.firstName ?? null;
-      lastName = c.lastName ?? null;
-      title = c.title ?? null;
-      company = c.accountName ?? null;
-    }
-  } else if (draft.toLeadId) {
-    const [l] = await db
-      .select({
-        firstName: leads.firstName,
-        lastName: leads.lastName,
-        title: leads.title,
-        company: leads.company,
-      })
-      .from(leads)
-      .where(and(eq(leads.id, draft.toLeadId), eq(leads.workspaceId, workspaceId)))
-      .limit(1);
-    if (l) {
-      firstName = l.firstName ?? null;
-      lastName = l.lastName ?? null;
-      title = l.title ?? null;
-      company = l.company ?? null;
-    }
-  }
+  const recipient = await resolveDraftRecipient(db, workspaceId, draft);
+  const toEmail = recipient.toEmail;
+  const { firstName, lastName, title, company } = recipient;
   if (!toEmail) {
     throw new TRPCError({
       code: "BAD_REQUEST",
@@ -1593,6 +1609,14 @@ export async function deliverEmailDraft(params: {
     .limit(1);
 
   // Render merge fields.
+  //
+  // {{bookingLink}} was ADVERTISED to the copy generator (the prompt tells
+  // it to link meeting asks to the token) but never added to this map —
+  // renderMergeFields left it unresolved and scrubForSend then DELETED it,
+  // so the booking CTA silently vanished from every sent email. Resolved
+  // through the same gate every other path uses (active-member check, lazy
+  // provision, "" when deactivated — the scrub drops empty-link carriers).
+  const bookingLink = await resolveBookingUrl(workspaceId, userId);
   const mergeVars: Record<string, string> = {
     firstName: firstName ?? "",
     lastName: lastName ?? "",
@@ -1605,6 +1629,7 @@ export async function deliverEmailDraft(params: {
     senderEmail,
     senderTitle: senderMember?.title ?? "",
     senderCompany: senderWorkspace?.name ?? "",
+    bookingLink,
     signature: sig,
   };
   // scrubForSend: renderMergeFields leaves unknown tokens VISIBLE by design
