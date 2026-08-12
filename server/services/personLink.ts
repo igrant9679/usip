@@ -443,16 +443,13 @@ export async function upsertPersonForContact(
 
   await db.update(contacts).set({ personProspectId: result.personId } as never)
     .where(and(eq(contacts.workspaceId, workspaceId), eq(contacts.id, c.id)));
-  // Complete the pair only when the person is unclaimed: two contacts
-  // matching one person is legitimate (duplicated contact), and the first
-  // claim must not be silently reassigned.
-  await db.update(prospects)
-    .set({ linkedContactId: c.id } as never)
-    .where(and(
-      eq(prospects.workspaceId, workspaceId),
-      eq(prospects.id, result.personId),
-      isNull(prospects.linkedContactId),
-    ));
+  // Deliberately ONE-directional (owner call, 2026-08-12): the People tab
+  // defines "Saved" as linkedLeadId/linkedContactId being set, and that
+  // status must mean a DELIBERATE save (promotion), not fold-in
+  // bookkeeping — freshly folded contacts belong in the Net-new triage
+  // pool. Promotion stays duplicate-safe without the back-pointer:
+  // promoteProspectRow also reuses a contact that points at the person
+  // via personProspectId.
   return result;
 }
 

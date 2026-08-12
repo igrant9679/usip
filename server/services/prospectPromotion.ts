@@ -129,8 +129,20 @@ export async function promoteProspectRow(
   });
 
   // Match an existing contact before creating one: the same person may already
-  // be in the CRM from an earlier import or a reply.
-  let contactId = await findContactByEmail(db, workspaceId, p.email);
+  // be in the CRM from an earlier import or a reply. The person-link column
+  // is checked FIRST — a contact folded into People (0160) points at this
+  // person without the prospect carrying linkedContactId (fold-in is
+  // one-directional so "Saved" keeps meaning a deliberate save), and
+  // creating a second contact for it would be the duplicate the email
+  // match alone cannot see for the email-less import base.
+  let contactId: number | undefined;
+  {
+    const [byPerson] = await db.select({ id: contacts.id }).from(contacts)
+      .where(and(eq(contacts.workspaceId, workspaceId), eq(contacts.personProspectId, prospectId)))
+      .limit(1);
+    contactId = byPerson?.id;
+  }
+  if (!contactId) contactId = await findContactByEmail(db, workspaceId, p.email);
   if (!contactId) {
     const [created] = await db
       .insert(contacts)

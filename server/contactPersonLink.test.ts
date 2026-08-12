@@ -113,13 +113,24 @@ describe("upsertPersonForContact fast path", () => {
     expect(updates[0]).toMatchObject({ table: contacts, values: { personProspectId: 777 } });
   });
 
-  it("never steals a person already paired with a different contact", () => {
-    // The pair-completion update is guarded by isNull(linkedContactId) —
-    // structural, because the guard lives in the WHERE a fake cannot read.
+  it("the fold-in never writes prospects.linkedContactId — Saved must mean a deliberate save", () => {
+    /**
+     * People's Saved/Net-new split keys on linkedContactId. The first drain
+     * completed the pair bidirectionally and flipped 900 fresh imports to
+     * "Saved"; owner call: fold-in is one-directional, promotion alone
+     * writes the prospect-side link (and 0161 repaired the flipped rows).
+     */
     const src = read("server/services/personLink.ts");
-    const at = src.indexOf("set({ linkedContactId: c.id }");
-    expect(at).toBeGreaterThan(-1);
-    expect(src.slice(at, at + 300)).toContain("isNull(prospects.linkedContactId)");
+    const section = src.slice(src.indexOf("CRM contacts → People"));
+    expect(section).not.toContain("set({ linkedContactId");
+    // The duplicate-contact hole that pair used to close is closed at the
+    // OTHER end instead: promotion reuses a person-linked contact.
+    const promo = read("server/services/prospectPromotion.ts");
+    expect(promo).toContain("eq(contacts.personProspectId, prospectId)");
+    // And the repair migration exists with the email-less signature.
+    const mig = read("server/_core/rawMigrations.ts");
+    expect(mig).toContain("0161_unlink_foldin_saved_status.sql");
+    expect(mig).toContain("c.`person_prospect_id` = p.`id`");
   });
 });
 

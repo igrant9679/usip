@@ -3447,6 +3447,23 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0161: fold-in pairs must not read as "Saved" on People ────────────────
+  // The People tab's Saved/Net-new split keys on prospects.linkedContactId,
+  // and af54ddc's fold-in completed the pair bidirectionally — flipping
+  // freshly folded contacts to "Saved". Owner call: Saved means a DELIBERATE
+  // save (promotion), so the fold-in is now one-directional and this repairs
+  // any pairs the first drain created. The email-less signature is the
+  // distinguisher: promotion REQUIRES a promotable (verified) email, so a
+  // pair where BOTH sides lack one can only have come from the fold-in.
+  {
+    name: "0161_unlink_foldin_saved_status.sql",
+    statements: [
+      "UPDATE `prospects` p JOIN `contacts` c ON p.`linkedContactId` = c.`id` AND c.`person_prospect_id` = p.`id` " +
+      "SET p.`linkedContactId` = NULL " +
+      "WHERE (p.`email` IS NULL OR p.`email` = '') AND (c.`email` IS NULL OR c.`email` = '')",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------
