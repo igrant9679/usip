@@ -28,7 +28,7 @@
  */
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { getDb } from "../db";
-import { prospects, prospectQueue, prospectLinkedinEnrichments } from "../../drizzle/schema";
+import { contacts, prospects, prospectQueue, prospectLinkedinEnrichments } from "../../drizzle/schema";
 import { CONFIDENCE, mergeAll, type Candidate, type ProvenanceMap } from "./enrichment/fieldMerge";
 import { stripNameCredentials } from "./enrichment/personName";
 import { cleanPlaceholder, normalizeJobTitle } from "./enrichment/recordNormalize";
@@ -165,11 +165,16 @@ export async function findPersonForRow(
  *  confidence: campaign scrapes are opportunistic finds — the final
  *  enrichment check is what verifies. All values pass through mergeAll,
  *  so normalization + never-downgrade rules apply exactly as everywhere. */
-function candidatesFromRow(row: QueuePersonShape, at: string): Candidate[] {
-  const source = `are_${row.sourceType}`;
+function candidatesFromRow(
+  row: QueuePersonShape,
+  at: string,
+  provenance?: { source: string; confidence: number },
+): Candidate[] {
+  const source = provenance?.source ?? `are_${row.sourceType}`;
+  const confidence = provenance?.confidence ?? CONFIDENCE.scrapeFound;
   const out: Candidate[] = [];
   const add = (field: Candidate["field"], value: string | null | undefined) => {
-    if (value?.trim()) out.push({ field, value: value.trim(), source, confidence: CONFIDENCE.scrapeFound, at });
+    if (value?.trim()) out.push({ field, value: value.trim(), source, confidence, at });
   };
   add("email", row.email);
   add("phone", row.phone);
@@ -186,6 +191,7 @@ function candidatesFromRow(row: QueuePersonShape, at: string): Candidate[] {
 export async function upsertPersonForRow(
   workspaceId: number,
   row: QueuePersonShape,
+  provenance?: { source: string; confidence: number },
 ): Promise<{ personId: number; created: boolean; tier: string } | null> {
   if (!hasPersonIdentity(row)) return null;
   const db = await getDb();
@@ -203,7 +209,7 @@ export async function upsertPersonForRow(
         companyDomain: p.companyDomain, title: p.title, linkedinUrl: p.linkedinUrl,
       },
       (p.fieldProvenance ?? {}) as ProvenanceMap,
-      candidatesFromRow(row, now),
+      candidatesFromRow(row, now, provenance),
     );
     if (Object.keys(merged.fields).length > 0) {
       const WIDTHS: Record<string, number> = { title: 120, email: 320 };
@@ -222,7 +228,7 @@ export async function upsertPersonForRow(
   // New person — normalized through the same seams every import uses.
   const first = (stripNameCredentials(row.firstName ?? "") ?? row.firstName ?? "").trim().slice(0, 80);
   const last = (stripNameCredentials(row.lastName ?? "") ?? row.lastName ?? "").trim().slice(0, 80);
-  const merged = mergeAll({}, {}, candidatesFromRow(row, now));
+  const merged = mergeAll({}, {}, candidatesFromRow(row, now, provenance));
   const values: typeof prospects.$inferInsert = {
     workspaceId,
     firstName: first || "(unknown)",
@@ -359,6 +365,112 @@ export async function linkUnlinkedQueueRows(opts: {
     } catch (e) {
       summary.failed++;
       console.error(`[personLink] queue row ${row.id} failed:`, (e as Error)?.message ?? e);
+    }
+  }
+  return summary;
+}
+
+/* ─── CRM contacts → People (migration 0160, owner-approved 2026-08-12) ────
+   The People tab lists only `prospects`; contacts lived in a disjoint table
+   and never appeared there. Same fold-in as the 0153 queue work: every
+   contact gets a canonical People record via the tiered match, through the
+   merge, with a link column pointing home. */
+
+export interface ContactPersonShape {
+  id: number;
+  firstName: string | null;
+  lastName: string | null;
+  email: string | null;
+  linkedinUrl: string | null;
+  phone: string | null;
+  title: string | null;
+  companyName: string | null;
+  companyDomain: string | null;
+}
+
+/** CRM contacts are curated records, so their values enter the merge at the
+ *  `preexisting` tier (70) under one named source — above scraped finds,
+ *  below anything verified. */
+export const CONTACT_PROVENANCE = { source: "crm_contact", confidence: CONFIDENCE.preexisting } as const;
+
+/**
+ * Find-or-create the canonical person for a CRM contact and write the link
+ * column. Fast path first: a person that already claims this contact via
+ * `prospects.linkedContactId` (the promotion pair) IS its person — no
+ * matching, no merge, no risk of a near-duplicate. Otherwise the same
+ * tiered upsert the queue rows use. Also completes the bidirectional pair
+ * (person.linkedContactId) when the person is unclaimed — and never steals
+ * a person already paired with a different contact.
+ */
+export async function upsertPersonForContact(
+  workspaceId: number,
+  c: ContactPersonShape,
+): Promise<{ personId: number; created: boolean; tier: string } | null> {
+  const db = await getDb();
+  if (!db) return null;
+
+  const [claimed] = await db.select({ id: prospects.id }).from(prospects)
+    .where(and(eq(prospects.workspaceId, workspaceId), eq(prospects.linkedContactId, c.id)))
+    .limit(1);
+  if (claimed) {
+    await db.update(contacts).set({ personProspectId: claimed.id } as never)
+      .where(and(eq(contacts.workspaceId, workspaceId), eq(contacts.id, c.id)));
+    return { personId: claimed.id, created: false, tier: "promoted_pair" };
+  }
+
+  const result = await upsertPersonForRow(workspaceId, {
+    id: c.id, campaignId: 0, sourceType: "contact",
+    firstName: c.firstName, lastName: c.lastName,
+    email: c.email, linkedinUrl: c.linkedinUrl, phone: c.phone,
+    title: c.title, companyName: c.companyName, companyDomain: c.companyDomain,
+  }, CONTACT_PROVENANCE);
+  if (!result) return null;
+
+  await db.update(contacts).set({ personProspectId: result.personId } as never)
+    .where(and(eq(contacts.workspaceId, workspaceId), eq(contacts.id, c.id)));
+  // Complete the pair only when the person is unclaimed: two contacts
+  // matching one person is legitimate (duplicated contact), and the first
+  // claim must not be silently reassigned.
+  await db.update(prospects)
+    .set({ linkedContactId: c.id } as never)
+    .where(and(
+      eq(prospects.workspaceId, workspaceId),
+      eq(prospects.id, result.personId),
+      isNull(prospects.linkedContactId),
+    ));
+  return result;
+}
+
+/** Backfill: heal contacts that predate the 0160 seams. Bounded, idempotent,
+ *  daily + boot — the exact shape of linkUnlinkedQueueRows above. */
+export async function linkUnlinkedContacts(opts: {
+  workspaceId?: number;
+  limit?: number;
+} = {}): Promise<LinkSummary> {
+  const summary: LinkSummary = { scanned: 0, linked: 0, created: 0, skippedNoIdentity: 0, failed: 0 };
+  const db = await getDb();
+  if (!db) return summary;
+
+  const conds = [isNull(contacts.personProspectId)];
+  if (opts.workspaceId) conds.push(eq(contacts.workspaceId, opts.workspaceId));
+
+  const rows = await db.select({
+    id: contacts.id, workspaceId: contacts.workspaceId,
+    firstName: contacts.firstName, lastName: contacts.lastName,
+    email: contacts.email, linkedinUrl: contacts.linkedinUrl, phone: contacts.phone,
+    title: contacts.title, companyName: contacts.companyName, companyDomain: contacts.companyDomain,
+  }).from(contacts).where(and(...conds)).limit(opts.limit ?? 200);
+
+  summary.scanned = rows.length;
+  for (const row of rows) {
+    try {
+      const result = await upsertPersonForContact(row.workspaceId, row);
+      if (!result) { summary.skippedNoIdentity++; continue; }
+      summary.linked++;
+      if (result.created) summary.created++;
+    } catch (e) {
+      summary.failed++;
+      console.error(`[personLink] contact ${row.id} failed:`, (e as Error)?.message ?? e);
     }
   }
   return summary;

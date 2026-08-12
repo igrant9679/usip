@@ -161,5 +161,14 @@ export async function promoteProspectRow(
     .set({ linkedContactId: contactId, accountId })
     .where(and(eq(prospects.id, prospectId), eq(prospects.workspaceId, workspaceId)));
 
+  // People-as-master (0160): in promotion the person is KNOWN — it is the
+  // prospect being promoted — so the contact's link column is a direct
+  // write, no matching. Best-effort: the pair above is the load-bearing one.
+  await db
+    .update(contacts)
+    .set({ personProspectId: prospectId })
+    .where(and(eq(contacts.id, contactId), eq(contacts.workspaceId, workspaceId)))
+    .catch((e: unknown) => console.error(`[promotion] person link for contact ${contactId} failed:`, (e as Error).message));
+
   return { promoted: true, contactId, accountId, alreadyLinked: false };
 }

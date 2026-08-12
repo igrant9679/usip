@@ -849,6 +849,17 @@ export const importsRouter = router({
         })
         .where(eq(contactImports.id, importId));
 
+      // People-as-master (0160): contacts imported here must appear on the
+      // People tab, so link the batch to canonical People records now.
+      // Fire-and-forget, same as the post-import company association above —
+      // never blocks the import response; the daily backfill heals misses.
+      if (!toProspects && importedRows > 0) {
+        void import("../services/personLink")
+          .then((m) => m.linkUnlinkedContacts({ workspaceId: wsId, limit: 3000 }))
+          .then((s) => console.log(`[personLink] post-import contacts: scanned=${s.scanned} linked=${s.linked} created=${s.created}`))
+          .catch((e) => console.error("[personLink] post-import contact link failed:", (e as Error).message));
+      }
+
       return {
         importId,
         totalRows: rows.length,

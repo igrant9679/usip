@@ -390,6 +390,15 @@ export const contactsRouter = router({
       const r = await db.insert(contacts).values({ ...input, workspaceId: ctx.workspace.id, ownerUserId: ctx.user.id });
       const id = Number((r as any)[0]?.insertId ?? 0);
       await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "create", entityType: "contact", entityId: id, after: input });
+      // People-as-master (0160): every new contact gets its canonical People
+      // record. Fire-and-forget — the daily backfill heals a miss.
+      void import("../services/personLink")
+        .then((m) => m.upsertPersonForContact(ctx.workspace.id, {
+          id, firstName: input.firstName, lastName: input.lastName,
+          email: input.email ?? null, phone: input.phone ?? null, title: input.title ?? null,
+          linkedinUrl: null, companyName: null, companyDomain: null,
+        }))
+        .catch((e) => console.error("[personLink] contact create link failed:", (e as Error).message));
       return { id };
     }),
 
@@ -1092,6 +1101,15 @@ export const leadsRouter = router({
         workspaceId: ctx.workspace.id, accountId, firstName: lead.firstName, lastName: lead.lastName, email: lead.email, phone: lead.phone, title: lead.title, isPrimary: true, ownerUserId: ctx.user.id,
       });
       const contactId = Number((conR as any)[0]?.insertId ?? 0);
+      // People-as-master (0160): the converted lead's contact links to a
+      // canonical People record too. Fire-and-forget; backfill heals misses.
+      void import("../services/personLink")
+        .then((m) => m.upsertPersonForContact(ctx.workspace.id, {
+          id: contactId, firstName: lead.firstName, lastName: lead.lastName,
+          email: lead.email ?? null, phone: lead.phone ?? null, title: lead.title ?? null,
+          linkedinUrl: null, companyName: lead.company ?? null, companyDomain: null,
+        }))
+        .catch((e) => console.error("[personLink] lead-convert link failed:", (e as Error).message));
 
       let opportunityId: number | null = null;
       if (input.createOpportunity) {

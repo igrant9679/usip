@@ -3433,6 +3433,20 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0160: People-as-master for CRM contacts (owner-approved 2026-08-12) ──
+  // The People tab lists only `prospects`; contacts lived in a disjoint
+  // table and never appeared there. This is the contacts-side mirror of
+  // 0153's prospect_queue.person_prospect_id: every contact gets a linked
+  // canonical People record (personLink tiered matching; promotion pairs
+  // reuse prospects.linkedContactId), backfilled daily + at boot.
+  {
+    name: "0160_contacts_person_link.sql",
+    statements: [
+      "ALTER TABLE `contacts` ADD COLUMN `person_prospect_id` int NULL",
+      "CREATE INDEX `ix_contacts_person` ON `contacts` (`person_prospect_id`)",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

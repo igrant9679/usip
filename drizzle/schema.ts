@@ -239,12 +239,18 @@ export const contacts = mysqlTable(
     globalOrganizationId: int("global_organization_id"),
     companyName: varchar("company_name", { length: 200 }),
     companyDomain: varchar("company_domain", { length: 200 }),
+    /** People-as-master (migration 0160): the canonical People record this
+     *  contact is linked to — the contacts-side mirror of
+     *  prospect_queue.person_prospect_id. Written by personLink's contact
+     *  seams + backfill; the People tab is where the person renders. */
+    personProspectId: int("person_prospect_id"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
   (t) => ({
     byWs: index("ix_con_ws").on(t.workspaceId),
     byAcc: index("ix_con_acc").on(t.accountId),
+    byPerson: index("ix_contacts_person").on(t.personProspectId),
   }),
 );
 export type Contact = typeof contacts.$inferSelect;

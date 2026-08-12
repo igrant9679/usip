@@ -196,6 +196,22 @@ export async function promoteProspectToCrm(
       ownerUserId: owner,
     }).$returningId();
     contactId = newContact.id;
+    // People-as-master (0160): the queue row usually already knows its
+    // person (0153 ingest seam) — direct write; otherwise the tiered upsert.
+    // Fire-and-forget either way; the daily backfill heals misses.
+    if (prospect.personProspectId) {
+      void db.update(contacts).set({ personProspectId: prospect.personProspectId } as never)
+        .where(and(eq(contacts.workspaceId, workspaceId), eq(contacts.id, contactId)))
+        .catch((e: unknown) => console.error("[personLink] signal-contact link failed:", (e as Error).message));
+    } else {
+      void import("../../services/personLink")
+        .then((m) => m.upsertPersonForContact(workspaceId, {
+          id: contactId!, firstName: prospect.firstName, lastName: prospect.lastName,
+          email: prospect.email, phone: prospect.phone, title: prospect.title,
+          linkedinUrl: prospect.linkedinUrl, companyName: prospect.companyName, companyDomain: prospect.companyDomain,
+        }))
+        .catch((e) => console.error("[personLink] signal-contact link failed:", (e as Error).message));
+    }
   }
 
   let opportunityId: number | undefined;

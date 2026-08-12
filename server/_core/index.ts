@@ -549,9 +549,13 @@ async function startServer() {
   // The ingest seam links new rows; this heals anything it missed.
   const runPersonLinkBackfill = () => {
     import("../services/personLink")
-      .then((m) => m.linkUnlinkedQueueRows({ limit: 500 }))
-      .then((r) => {
+      .then(async (m) => {
+        const r = await m.linkUnlinkedQueueRows({ limit: 500 });
         if (r.scanned > 0) console.log(`[personLink] backfill: scanned=${r.scanned} linked=${r.linked} created=${r.created} skipped=${r.skippedNoIdentity} failed=${r.failed}`);
+        // 0160: CRM contacts fold into People the same way (serial, after
+        // the queue pass — both write prospects, keep them off each other).
+        const c = await m.linkUnlinkedContacts({ limit: 500 });
+        if (c.scanned > 0) console.log(`[personLink] contact backfill: scanned=${c.scanned} linked=${c.linked} created=${c.created} skipped=${c.skippedNoIdentity} failed=${c.failed}`);
       })
       .catch((e) => console.error("[personLink] backfill failed:", e));
   };

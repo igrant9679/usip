@@ -85,8 +85,13 @@ describe("the flow is wired (structural)", () => {
   });
   it("linkUnlinkedQueueRows only ever writes the link column to the queue", () => {
     // The backfill promise: person columns on the queue are never mutated.
+    // Bounded to the FUNCTION, not end-of-file — the 0160 contact section
+    // below it legitimately writes other link columns.
     const src = read("server/services/personLink.ts");
-    const fn = src.slice(src.indexOf("export async function linkUnlinkedQueueRows"));
+    const start = src.indexOf("export async function linkUnlinkedQueueRows");
+    const end = src.indexOf("CRM contacts → People", start);
+    expect(end, "contact section marker moved — re-anchor").toBeGreaterThan(start);
+    const fn = src.slice(start, end);
     const sets = fn.match(/\.set\(([^)]*)\)/g) ?? [];
     expect(sets.length).toBeGreaterThan(0);
     for (const s of sets) expect(s).toContain("personProspectId");
