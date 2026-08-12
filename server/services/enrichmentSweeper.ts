@@ -13,21 +13,20 @@
  * implementation of "find this person's address" would drift from the one the
  * ARE engine uses.
  *
- * THREE passes, each feeding the next, because measuring the live workspace
- * showed every one of them was load-bearing:
+ * TWO passes, each feeding the next (a third — Apollo name→domain via
+ * resolveMissingDomains — sat between them until 2026-08-12, when the owner
+ * removed Apollo from the prospect waterfall; LinkedIn+QuickEnrich are the
+ * single source of truth for company identity):
  *
  *   LinkedIn → company name   (backfillQueueCompanies — most sourced rows have
  *                              a LinkedIn URL and nothing else usable)
- *   company name → domain     (resolveMissingDomains — only 4 of 234 no-email
- *                              prospects had a domain)
  *   name + domain → email     (the scraper + Reoon finder)
  *
  * Cost differs per pass, which is why they are separately controlled. The
- * domain pass uses Apollo ORGANIZATION search — **zero Apollo credits**, and
- * never the paid /people/match path. The email pass spends Reoon credits. The
- * LinkedIn pass spends from a separate hard daily cap on the user's own
- * connected account, so it is NOT folded into sweepWorkspace: quietly draining
- * that inside a run the user thinks is about email would be a surprise.
+ * email pass spends Reoon credits. The LinkedIn pass spends from a separate
+ * hard daily cap on the user's own connected account, so it is NOT folded
+ * into sweepWorkspace: quietly draining that inside a run the user thinks is
+ * about email would be a surprise.
  */
 import { and, eq, isNotNull, isNull, ne, notLike, or, sql } from "drizzle-orm";
 import { areCampaigns, notifications, prospectQueue, prospects, workspaceSettings, workspaces } from "../../drizzle/schema";
@@ -101,9 +100,6 @@ export interface SweepResult {
   /** Where the attempts landed. The backlog lives in prospect_queue, not prospects. */
   fromQueue: number;
   fromProspects: number;
-  /** Domain pre-pass. Free (Apollo org search), and usually the pass that matters. */
-  domainsAttempted: number;
-  domainsResolved: number;
   emailsFound: number;
   /**
    * QuickEnrich pass: lookups by LinkedIn URL for rows the pattern path can
@@ -133,7 +129,7 @@ export interface SweepResult {
 
 /** A run that did nothing, shaped so callers never special-case null. */
 const emptyResult = (stoppedBecause: SweepResult["stoppedBecause"]): SweepResult => ({
-  attempted: 0, fromQueue: 0, fromProspects: 0, domainsAttempted: 0, domainsResolved: 0,
+  attempted: 0, fromQueue: 0, fromProspects: 0,
   emailsFound: 0,
   quickenrichAttempted: 0, quickenrichFound: 0, quickenrichCredits: 0,
   qeKeyPresent: false, patternCandidates: 0, qeCandidates: 0,
@@ -265,10 +261,10 @@ async function queueCandidatesFor(workspaceId: number, limit: number, retryFaile
  *
  * The predicate is the exact complement of queueCandidatesFor's domain
  * requirement, so no row is ever eligible for both passes in one run — the
- * pattern path stays the cheaper choice wherever a domain exists, and a row
- * the domain pre-pass just repaired moves OUT of this set before it is read
- * (both queries run after that pass). Measured 2026-08-07: 59 of these rows,
- * 0 pattern candidates — this set IS the stuck backlog.
+ * pattern path stays the cheaper choice wherever a domain exists. Measured
+ * 2026-08-07: 59 of these rows, 0 pattern candidates — this set IS the
+ * stuck backlog. (Since the Apollo domain pre-pass was removed 2026-08-12,
+ * QuickEnrich is also the main way a stuck row ever gains an email at all.)
  */
 async function quickenrichCandidatesFor(workspaceId: number, limit: number, retryFailed: boolean) {
   const db = await getDb();
@@ -319,74 +315,11 @@ async function quickenrichCandidatesFor(workspaceId: number, limit: number, retr
   return rows.filter((r) => isEnrichableCampaign(r.campaignName));
 }
 
-/**
- * Resolve missing company domains, so the email finder has anything to work with.
- *
- * Measured on the live workspace: of 234 sourced prospects with no email, only
- * 4 carried a company domain. The finder builds address patterns from
- * name + domain, so the other 230 were unworkable — the bottleneck was never
- * verification, it was the domain.
- *
- * Uses Apollo's ORGANIZATION search via apolloResolveDomain: name → domain, and
- * **zero Apollo credits**, the same free tier as people search. This does not
- * touch the paid /people/match path, which is permanently off the table.
- *
- * Writes the domain AND clears the stale attempt marker. Those two belong
- * together: a row attempted at sourcing time failed precisely because it had no
- * domain, so once one is found the old failure says nothing about whether the
- * finder could succeed. Leaving enrichedAt set would permanently exclude the
- * rows this pass just repaired.
- */
-export async function resolveMissingDomains(
-  workspaceId: number,
-  limit = 100,
-): Promise<{ attempted: number; resolved: number }> {
-  const db = await getDb();
-  if (!db) return { attempted: 0, resolved: 0 };
-
-  const rows = await db
-    .select({ id: prospectQueue.id, companyName: prospectQueue.companyName, campaignName: areCampaigns.name })
-    .from(prospectQueue)
-    .innerJoin(areCampaigns, eq(prospectQueue.campaignId, areCampaigns.id))
-    .where(and(
-      eq(prospectQueue.workspaceId, workspaceId),
-      or(isNull(prospectQueue.email), eq(prospectQueue.email, "")),
-      or(isNull(prospectQueue.companyDomain), eq(prospectQueue.companyDomain, "")),
-      isNotNull(prospectQueue.companyName),
-      ne(prospectQueue.companyName, ""),
-      notRejected(),
-      ...enrichableCampaignSql(),
-    ))
-    .orderBy(prospectQueue.id)
-    .limit(clampSweepCap(limit));
-
-  const live = rows.filter((r) => isEnrichableCampaign(r.campaignName));
-  const { apolloResolveDomain } = await import("./apollo");
-
-  let attempted = 0;
-  let resolved = 0;
-  for (const r of live) {
-    attempted++;
-    try {
-      const out = await apolloResolveDomain(workspaceId, r.companyName ?? "");
-      if (out.domain) {
-        // Clearing enrichedAt is the point, not a detail. These rows were
-        // attempted at SOURCING time, before they had a domain, and failed for
-        // exactly that reason — so the attempt marker records "we tried" while
-        // saying nothing about whether it could have worked. Leaving it set
-        // permanently excludes the rows this pass just repaired, which is what
-        // made the first real run sweep 22 domains and verify none of them.
-        await db.update(prospectQueue)
-          .set({ companyDomain: out.domain, enrichedAt: null, enrichmentStatus: "pending" } as never)
-          .where(eq(prospectQueue.id, r.id));
-        resolved++;
-      }
-    } catch (e) {
-      console.error(`[EnrichmentSweep] domain resolve for queue ${r.id} failed:`, (e as Error).message);
-    }
-  }
-  return { attempted, resolved };
-}
+/* The Apollo name→domain pre-pass (resolveMissingDomains) lived here until
+   2026-08-12 — owner removed Apollo from the prospect waterfall entirely
+   (LinkedIn+QuickEnrich are the single source of truth). Queue rows with a
+   company name but no domain now gain one only through the comprehensive
+   pass's LinkedIn-profile and email-domain paths. */
 
 /**
  * Tell the owner what an unattended run actually did.
@@ -625,32 +558,13 @@ export async function countQuickenrichCandidates(workspaceId: number, retryFaile
  */
 export async function sweepWorkspace(
   workspaceId: number,
-  opts: { limit?: number; retryFailed?: boolean; resolveDomains?: boolean } = {},
+  opts: { limit?: number; retryFailed?: boolean } = {},
 ): Promise<SweepResult> {
   const db = await getDb();
   if (!db) return emptyResult("no_key");
 
   const cap = clampSweepCap(opts.limit ?? SWEEP_DAILY_CAP_DEFAULT);
   const retry = opts.retryFailed ?? false;
-
-  // Domain pre-pass. Costs no Apollo credits and no Reoon credits, and without
-  // it almost every sourced prospect is unworkable — so it runs first, and its
-  // results are visible to the candidate query immediately below. It also runs
-  // BEFORE the Reoon key check: the key gates only the paid email pass, and a
-  // workspace with no key configured should still get the free work. (Until
-  // 2026-08-06 the key check sat above this pass, so a keyless workspace's
-  // sweep did nothing at all — including the part that costs nothing.)
-  let domains = { attempted: 0, resolved: 0 };
-  if (opts.resolveDomains !== false) {
-    try {
-      domains = await resolveMissingDomains(workspaceId, cap);
-      if (domains.attempted > 0) {
-        console.log(`[EnrichmentSweep] ws=${workspaceId} domains attempted=${domains.attempted} resolved=${domains.resolved}`);
-      }
-    } catch (e) {
-      console.error("[EnrichmentSweep] domain pre-pass failed:", (e as Error).message);
-    }
-  }
 
   // Every exit from here on stamps the run (the `finally` below), or the
   // cron's 20-hour gate never engages for exactly the runs that end early —
@@ -670,7 +584,7 @@ export async function sweepWorkspace(
     if (!key) {
       // The key gates the email pass only; report what the free pass did so
       // the caller can tell "did nothing" from "did the unpaid half".
-      return (outcome = { ...emptyResult("no_key"), domainsAttempted: domains.attempted, domainsResolved: domains.resolved });
+      return (outcome = emptyResult("no_key"));
     }
 
     // Queue first: it is where the ARE backlog lives, and those rows are the ones
@@ -690,7 +604,7 @@ export async function sweepWorkspace(
       qeCandidates: qeRows.length,
     };
     if (rows.length === 0 && queueRows.length === 0 && qeRows.length === 0) {
-      return (outcome = { ...emptyResult("no_candidates"), ...counts, domainsAttempted: domains.attempted, domainsResolved: domains.resolved });
+      return (outcome = { ...emptyResult("no_candidates"), ...counts });
     }
 
     // One balance read up front, then decremented locally. Re-reading per
@@ -707,8 +621,6 @@ export async function sweepWorkspace(
     const result: SweepResult = {
       ...emptyResult("done"),
       ...counts,
-      domainsAttempted: domains.attempted,
-      domainsResolved: domains.resolved,
     };
 
     // ── QuickEnrich rows (LinkedIn URL, no domain) ──
@@ -988,24 +900,18 @@ export async function runEnrichmentSweepAllWorkspaces(): Promise<{ swept: number
     if (ws.lastRunAt && Date.now() - new Date(ws.lastRunAt).getTime() < 20 * 60 * 60 * 1000) continue;
     try {
       const r = await sweepWorkspace(ws.id, { limit: ws.cap ?? 50 });
-      if (r.attempted > 0 || r.domainsResolved > 0) {
+      if (r.attempted > 0) {
         swept++;
         emailsFound += r.emailsFound;
         console.log(`[EnrichmentSweep] ws=${ws.id} attempted=${r.attempted} found=${r.emailsFound} stopped=${r.stoppedBecause}`);
-        // A run with no Reoon key can still resolve domains (the free pass runs
-        // before the key check). Titling that "0 emails found" reads as failure
-        // when the run did exactly what it could — lead with what it did do.
-        const title = r.attempted > 0
-          ? `Enrichment Sweep: ${r.emailsFound} email${r.emailsFound === 1 ? "" : "s"} found`
-          : `Enrichment Sweep: ${r.domainsResolved} company domain${r.domainsResolved === 1 ? "" : "s"} resolved`;
+        const title = `Enrichment Sweep: ${r.emailsFound} email${r.emailsFound === 1 ? "" : "s"} found`;
         await notifyOwner(
           ws.id, await workspaceNotifyUserId(ws.id), title,
           [
             r.attempted > 0 ? `Checked ${r.attempted} prospect${r.attempted === 1 ? "" : "s"} and resolved ${r.emailsFound} address${r.emailsFound === 1 ? "" : "es"}.` : "",
-            r.domainsResolved > 0 ? `Resolved ${r.domainsResolved} company domain${r.domainsResolved === 1 ? "" : "s"} at no cost.` : "",
             r.creditsPower > 0 ? `Spent ${r.creditsPower} verification credit${r.creditsPower === 1 ? "" : "s"}.` : "",
             r.stoppedBecause === "no_credits" ? "Stopped early — verification credits ran low." : "",
-            r.stoppedBecause === "no_key" ? "Email lookups were skipped — add a Reoon API key in Settings → Data enrichment to turn resolved domains into verified addresses." : "",
+            r.stoppedBecause === "no_key" ? "Email lookups were skipped — add a Reoon API key in Settings → Data enrichment to verify found addresses." : "",
           ].filter(Boolean).join(" "),
         );
       }

@@ -173,7 +173,7 @@ favicon → initials. Tier advance on `onError`. `CompanyAvatar` is a documented
 | **Unipile** | LIVE, broadest surface | `UNIPILE_API_KEY`+`UNIPILE_DSN` (+optional `UNIPILE_WEBHOOK_SECRET` — endpoints accept unauthenticated POSTs when unset) | LinkedIn profile/search/invites/relations/posts, email adapter, calendar adapter, 7 webhooks, social autopilot, sequences, ARE sourcing, MS bridge. Caps: 100/day profile fetch (atomic), 20/day invites, 50/day openers. **No cap/backoff on email or calendar calls.** |
 | **Reoon** | LIVE | BYOK `reoonApiKeyEnc` → env fallback | quick/power ladder in scraper, comprehensive pass, sweeper; balance-aware budgeting |
 | **QuickEnrich** | LIVE | BYOK + daily pull cap | comprehensive pass, sweeper, ARE discovery source |
-| **Apollo (search)** | LIVE, 0-credit only | BYOK + daily cap | domain resolve ×3 call sites; ARE people search |
+| **Apollo (search)** | LIVE, 0-credit, SOURCING-ONLY since 2026-08-12 | BYOK + daily cap | ARE people search + Discovery only; all 3 domain-resolve call sites removed (owner: LinkedIn+QuickEnrich single source of truth) |
 | **Apollo (paid match)** | REMOVED 2026-08-12 (owner-approved) | — | `dataCleanup.ts` + `apolloEnrich.ts` deleted; `apolloSearchOnly.test.ts` keeps the zero-credit guarantee structural |
 | **LeadRocks** | LIVE (CSV parser, no API) | none | `prospectImports` — see §2B normalization gap |
 | **Brandfetch** | LIVE (logo) / config-dependent (search) | 2 client IDs; logo verified live on prod | logo = client hotlink only; search = admin action + brand reconciler |

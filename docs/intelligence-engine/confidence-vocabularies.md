@@ -16,7 +16,7 @@ One table, `server/services/enrichment/fieldMerge.ts`:
 | quickenrichVerified | 92 | QuickEnrich hit, Reoon-verified |
 | patternReoonValid | 90 | pattern-derived, Reoon-verified |
 | linkedinProfile | 85 | LinkedIn profile fact — **also the company-identification tier** (owner decision 2026-08-11: QuickEnrich + LinkedIn are the single source of truth for company identification) |
-| apolloDomain | 75 | Apollo name→domain resolution |
+| apolloDomain | 75 | HISTORICAL — Apollo name→domain; no emitter since 2026-08-12 (owner removed Apollo from the waterfall); stored ledger rows keep it |
 | preexisting | 70 | legacy value with no ledger entry — protected, correctable |
 | emailDomain | 70 | domain lifted from the prospect's own business email |
 | emailAcceptAll | 62 | Reoon `accept_all` |

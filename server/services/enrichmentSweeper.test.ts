@@ -27,7 +27,6 @@ const mocks = vi.hoisted(() => ({
   getReoonKey: vi.fn(),
   reoonCheckBalance: vi.fn(),
   reoonVerifySingle: vi.fn(),
-  apolloResolveDomain: vi.fn(),
   resolveVerifiedEmail: vi.fn(),
   lookupContactInfo: vi.fn(),
   promoteProspectRow: vi.fn(),
@@ -48,9 +47,6 @@ vi.mock("./reoon", async (importOriginal) => ({
 vi.mock("./quickenrich", () => ({
   getQuickEnrichKey: mocks.getQuickEnrichKey,
   quickenrichFindEmailByLinkedIn: mocks.quickenrichFindEmailByLinkedIn,
-}));
-vi.mock("./apollo", () => ({
-  apolloResolveDomain: mocks.apolloResolveDomain,
 }));
 vi.mock("./scraper", () => ({
   resolveVerifiedEmail: mocks.resolveVerifiedEmail,
@@ -139,10 +135,6 @@ const callOrder: string[] = [];
 beforeEach(() => {
   vi.resetAllMocks();
   callOrder.length = 0;
-  mocks.apolloResolveDomain.mockImplementation(async () => {
-    callOrder.push("domain");
-    return { domain: "acme.io" };
-  });
   mocks.resolveVerifiedEmail.mockImplementation(async () => {
     callOrder.push("email");
     return { email: "ada@acme.io", creditsQuick: 1, creditsPower: 1 };
@@ -160,25 +152,19 @@ beforeEach(() => {
 });
 
 describe("sweepWorkspace pass ordering", () => {
-  it("runs the free domain pass even when there is no Reoon key, and spends nothing", async () => {
+  it("a keyless run does nothing and says so — the free Apollo pre-pass is gone (2026-08-12)", async () => {
     const { db, writes } = makeDb(new Map([[prospectQueue, [queueRow()]]]));
     mocks.getDb.mockResolvedValue(db);
 
     const r = await sweepWorkspace(1);
 
-    // The whole point of the ordering: the free pass ran…
-    expect(mocks.apolloResolveDomain).toHaveBeenCalledWith(1, "Acme");
-    expect(r.domainsAttempted).toBe(1);
-    expect(r.domainsResolved).toBe(1);
-    const domainWrite = writes.find((w) => w.op === "update" && w.table === prospectQueue);
-    expect(domainWrite?.payload).toMatchObject({ companyDomain: "acme.io", enrichedAt: null });
-
-    // …and the paid half did not, in any form.
     expect(r.stoppedBecause).toBe("no_key");
     expect(r.attempted).toBe(0);
     expect(mocks.reoonCheckBalance).not.toHaveBeenCalled();
     expect(mocks.resolveVerifiedEmail).not.toHaveBeenCalled();
     expect(mocks.lookupContactInfo).not.toHaveBeenCalled();
+    // No queue row is touched — the old domain pre-pass wrote here.
+    expect(writes.some((w) => w.op === "update" && w.table === prospectQueue)).toBe(false);
   });
 
   it("stamps lastRunAt on a keyless run, so the cron's 20-hour gate still engages", async () => {
@@ -209,7 +195,6 @@ describe("sweepWorkspace pass ordering", () => {
     // What the card shows must be what the caller was told — same object.
     expect(persisted).toMatchObject({ ...returned });
     expect(persisted.stoppedBecause).toBe("no_key");
-    expect(persisted.domainsResolved).toBe(1);
     expect(Number.isNaN(Date.parse(String(persisted.at))), "at is not a parseable timestamp").toBe(false);
   });
 
@@ -250,16 +235,15 @@ describe("sweepWorkspace pass ordering", () => {
     expect(stamp?.payload.enrichmentSweepLastRunAt).toBeInstanceOf(Date);
   });
 
-  it("with a key, resolves domains first and then works the email pass", async () => {
+  it("with a key, works the email pass (no Apollo domain step anywhere in the run)", async () => {
     const { db, writes } = makeDb(new Map([[prospectQueue, [queueRow()]]]));
     mocks.getDb.mockResolvedValue(db);
     mocks.getReoonKey.mockResolvedValue("rk");
 
     const r = await sweepWorkspace(1);
 
-    expect(callOrder).toEqual(["domain", "email"]);
+    expect(callOrder).toEqual(["email"]);
     expect(r.stoppedBecause).toBe("done");
-    expect(r.domainsResolved).toBe(1);
     expect(r.fromQueue).toBe(1);
     expect(r.emailsFound).toBe(1);
     expect(
@@ -346,50 +330,39 @@ describe("sweepWorkspace pass ordering", () => {
     expect(r.stoppedBecause).toBe("done");
   });
 
-  it("resolveDomains:false still short-circuits a keyless run entirely", async () => {
-    const { db } = makeDb(new Map([[prospectQueue, [queueRow()]]]));
-    mocks.getDb.mockResolvedValue(db);
-
-    const r = await sweepWorkspace(1, { resolveDomains: false });
-
-    expect(mocks.apolloResolveDomain).not.toHaveBeenCalled();
-    expect(r.stoppedBecause).toBe("no_key");
-    expect(r.domainsAttempted).toBe(0);
-    expect(r.attempted).toBe(0);
-  });
 });
 
 describe("the manual sweep UI matches what the engine actually does", () => {
   /**
-   * 64f8ba3 moved the Reoon key check below the free domain pass, but the
-   * WorkflowsV2 "Sweep 25" button stayed disabled without a key behind the
-   * caption "nothing can be verified" — locking keyless workspaces out of work
-   * the server would happily do. A UI gate is a claim about the engine, and
-   * this suite is where the engine's behaviour is pinned, so the claim is
-   * checked here too. Boolean asserts, not toMatch: a failure must not dump
-   * the client file into the report (it contains strings guardAudit reads as
-   * build breaks).
+   * A UI gate is a claim about the engine, and this suite is where the
+   * engine's behaviour is pinned, so the claims are checked here too. The
+   * claims FLIPPED on 2026-08-12: 64f8ba3 had un-gated the button because a
+   * keyless run still did the free Apollo domain pass — that pass is gone
+   * (owner removed Apollo from the waterfall), a keyless sweep now does
+   * nothing, so the key-gate is honest again. Boolean asserts, not toMatch:
+   * a failure must not dump the client file into the report (it contains
+   * strings guardAudit reads as build breaks).
    */
   const { readFileSync } = require("node:fs") as typeof import("node:fs");
   const { join } = require("node:path") as typeof import("node:path");
   const ui = readFileSync(join(__dirname, "../../client/src/pages/usip/WorkflowsV2.tsx"), "utf8");
 
-  it("does not disable the sweep button on a missing Reoon key", () => {
+  it("disables the sweep button without a Reoon key — a keyless run does nothing now", () => {
     const at = ui.indexOf("onClick={() => runSweep.mutate({ limit: 25 })}");
     expect(at, "sweep button not found — re-anchor").toBeGreaterThan(-1);
     const block = ui.slice(Math.max(0, at - 600), at);
     const disabled = /disabled=\{([^}]*)\}/.exec(block)?.[1] ?? "";
     expect(disabled.length > 0, "disabled expression not found — re-anchor").toBe(true);
-    expect(disabled.includes("reoonConfigured"), "button is key-gated again — the free domain pass runs without a key").toBe(false);
+    expect(disabled.includes("reoonConfigured"), "button lost its key-gate — but the free domain pass it once justified is gone").toBe(true);
   });
 
-  it("the keyless caption says what still happens, not that nothing can", () => {
-    expect(ui.includes("nothing can be verified"), "the overclaiming caption is back").toBe(false);
-    expect(ui.includes("resolves domains only, email lookups skipped"), "keyless caption missing").toBe(true);
+  it("the keyless caption asks for the key instead of promising free work", () => {
+    expect(ui.includes("resolves domains only, email lookups skipped"), "stale free-pass caption is back").toBe(false);
+    expect(ui.includes("add a Reoon key to run the sweep"), "keyless caption missing").toBe(true);
   });
 
-  it("the result toast reports resolved domains, so a keyless run never reads as a no-op", () => {
-    expect(ui.includes("domainsResolved"), "toast ignores the free pass's output").toBe(true);
+  it("the summariser still reads domainsResolved — persisted results from before the removal carry it", () => {
+    expect(ui.includes("domainsResolved"), "historical sweep results would lose their domain counts").toBe(true);
   });
 
   it("the card renders the persisted last result, and shares ONE summariser with the toast", () => {
@@ -473,7 +446,7 @@ describe("the manual sweep UI matches what the engine actually does", () => {
      */
     const src = readFileSync(join(__dirname, "enrichmentSweeper.ts"), "utf8");
     expect(src.includes("function enrichableCampaignSql()"), "the SQL predicate helper is gone").toBe(true);
-    for (const fn of ["queueCandidatesFor", "quickenrichCandidatesFor", "resolveMissingDomains"]) {
+    for (const fn of ["queueCandidatesFor", "quickenrichCandidatesFor"]) {
       const at = src.indexOf(`async function ${fn}`);
       expect(at, `${fn} not found — re-anchor`).toBeGreaterThan(-1);
       /**
@@ -576,7 +549,10 @@ describe("the manual sweep UI matches what the engine actually does", () => {
 describe("runEnrichmentSweepAllWorkspaces", () => {
   const autoWorkspace = (): Row => ({ id: 1, mode: "auto", cap: 100, lastRunAt: null });
 
-  it("notifies a keyless workspace about the domains it did resolve, and says why emails were skipped", async () => {
+  it("stays quiet for a keyless workspace — with the Apollo pre-pass gone there is nothing to report", async () => {
+    // Until 2026-08-12 this test asserted the opposite: a keyless run still
+    // resolved domains for free and the cron said so. That pass was removed
+    // with Apollo; a notification about a run that did nothing would be noise.
     const { db, writes } = makeDb(new Map<unknown, Row[]>([
       [workspaces, [autoWorkspace()]],
       [prospectQueue, [queueRow()]],
@@ -585,10 +561,8 @@ describe("runEnrichmentSweepAllWorkspaces", () => {
 
     const out = await runEnrichmentSweepAllWorkspaces();
 
-    expect(out.swept).toBe(1);
-    const note = writes.find((w) => w.op === "insert" && w.table === notifications);
-    expect(note?.payload.title).toBe("Enrichment Sweep: 1 company domain resolved");
-    expect(String(note?.payload.body)).toContain("Reoon");
+    expect(out.swept).toBe(0);
+    expect(writes.some((w) => w.op === "insert" && w.table === notifications)).toBe(false);
   });
 
   it("stays quiet when a keyless run had nothing to resolve", async () => {

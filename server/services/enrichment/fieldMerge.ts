@@ -61,8 +61,12 @@ export interface Candidate {
  *  - user-entered data outranks everything (they know their own pipeline);
  *  - verified emails outrank found-but-unverified ones by a wide margin;
  *  - LinkedIn profile facts are high (self-reported but current);
- *  - Apollo name→domain resolution is good but fuzzy on common names;
  *  - site-scrape phones/emails are opportunistic finds.
+ *
+ * `apolloDomain` (75) stays in the table although nothing EMITS it since
+ * 2026-08-12 (owner removed Apollo from the waterfall): stored ledger rows
+ * carry the numeric value, but keeping the named tier documents what those
+ * historical rows meant and keeps the ordering reasoning legible.
  */
 export const CONFIDENCE = {
   user: 100,
@@ -70,6 +74,7 @@ export const CONFIDENCE = {
   quickenrichVerified: 92,
   patternReoonValid: 90,
   linkedinProfile: 85,
+  /** HISTORICAL — no emitter since 2026-08-12; see the header note. */
   apolloDomain: 75,
   /** Legacy value with no ledger entry — protected, but correctable. */
   preexisting: 70,
@@ -80,8 +85,7 @@ export const CONFIDENCE = {
   headlineParse: 60,
   /** Domain lifted off the prospect's own business email address. The mailbox
    *  may be unverified, but the domain part is where their mail actually
-   *  lives — stronger than a domain-root guess, weaker than Apollo's
-   *  name-keyed resolution. */
+   *  lives — stronger than a domain-root guess. */
   emailDomain: 70,
   /** Company name derived from the domain root ("acme-corp.com" → "Acme
    *  Corp") — the last-resort filler; any real source replaces it. */

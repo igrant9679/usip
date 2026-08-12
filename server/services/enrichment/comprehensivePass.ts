@@ -7,8 +7,11 @@
  * button, batch, sweeper row) calls THIS, which:
  *
  *   1. harvests candidates from every applicable source, cheapest first:
- *      existing LinkedIn profile data → Apollo name→domain → QuickEnrich
- *      (verified) → pattern+Reoon (verified) → site scrape (phone/socials);
+ *      existing LinkedIn profile data → email-domain derivation → QuickEnrich
+ *      (verified) → pattern+Reoon (verified) → site scrape (phone/socials).
+ *      (Apollo name→domain sat between LinkedIn and QuickEnrich until
+ *      2026-08-12 — owner removed it: LinkedIn+QuickEnrich are the single
+ *      source of truth for company identity at the prospect level too.);
  *   2. reconciles them field-by-field through fieldMerge (source quality,
  *      recency, cross-source agreement — never downgrading stronger data);
  *   3. persists winners + the provenance ledger (prospects.field_provenance)
@@ -17,15 +20,13 @@
  *      the compliant LinkedIn job (async — its own caps and match review);
  *      that job's write-back flows through the same merge rules.
  *
- * Cost discipline is inherited, not reinvented: Apollo domain is free,
- * the MX gate inside the resolvers still guards Reoon spend, QuickEnrich
- * only bills on a hit, and the LinkedIn daily cap is enforced one layer
- * down in linkedinLookup.
+ * Cost discipline is inherited, not reinvented: the MX gate inside the
+ * resolvers still guards Reoon spend, QuickEnrich only bills on a hit, and
+ * the LinkedIn daily cap is enforced one layer down in linkedinLookup.
  */
 import { and, eq } from "drizzle-orm";
 import { getDb } from "../../db";
 import { prospects, prospectLinkedinEnrichments } from "../../../drizzle/schema";
-import { apolloResolveDomain } from "../apollo";
 import { getQuickEnrichKey, quickenrichFindEmailByLinkedIn } from "../quickenrich";
 import { getReoonKey, reoonVerifySingle, reoonStatusToUsip } from "../reoon";
 import { resolveVerifiedEmail, lookupContactInfo } from "../scraper";
@@ -201,20 +202,12 @@ export async function runComprehensiveEnrichment(opts: {
   };
   emailDomainCandidate(p.email);
 
-  /* ── 2. Company name → domain (free) ──────────────────────────────── */
-  const companyName = (candidates.find((c) => c.field === "company")?.value ?? p.company ?? "").trim();
-  const haveDomain = !!(p.companyDomain?.trim() || candidates.some((c) => c.field === "companyDomain"));
-  if (!haveDomain && companyName) {
-    const r = await apolloResolveDomain(opts.workspaceId, companyName);
-    if (r.domain) {
-      candidates.push({ field: "companyDomain", value: r.domain, source: "apollo", confidence: CONFIDENCE.apolloDomain, at: now });
-      phases.domain = `resolved ${r.domain}`;
-    } else {
-      phases.domain = `no domain (${r.error ?? "no match"})`;
-    }
-  } else {
-    phases.domain = haveDomain ? "already known" : "no company name to resolve";
-  }
+  /* ── 2. (removed 2026-08-12, owner directive) Apollo name→domain used to
+     run here. Domain acquisition is now LinkedIn profile data, the email-
+     domain derivation above, and the QuickEnrich-hit recomputation below —
+     the same LinkedIn+QuickEnrich single-source-of-truth rule company
+     identification adopted on 08-11. Historical ledger rows keep their
+     `apollo` provenance; nothing writes new ones. ─────────────────────── */
 
   /* ── 3. Email — only while we don't hold a Reoon-valid PERSON address.
      A generic organizational inbox (info@/admissions@/…) can be Reoon-valid

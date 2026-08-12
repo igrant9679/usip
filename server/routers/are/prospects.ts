@@ -55,7 +55,6 @@ import { workspaceProcedure } from "../../_core/workspace";
 import { notifyIfEnabled } from "../../services/policyNotify";
 import { HUMAN_COPY_RULES, humanizeAiCopy } from "../../services/humanCopy";
 import { resolveVerifiedEmail } from "../../services/scraper";
-import { apolloResolveDomain } from "../../services/apollo";
 import { buildBrandContext } from "../../services/brandContext";
 // The A/B metadata row must be keyed by the same step index + variant key the
 // execution queue uses, so both sides read one rule. See shared/variantKeys.ts.
@@ -393,28 +392,21 @@ Produce:
     // ── Email acquisition ────────────────────────────────────────────────
     // ARE's dispatch phase hard-requires an email, but scraped prospects
     // (esp. LinkedIn) arrive without one — often without even a company
-    // field, just an org name buried in the headline. Chain the full
-    // resolution: headline → inferredCompanyName (from the dossier LLM call
-    // above, no extra call) → Apollo org search resolves the DOMAIN (zero
-    // credits) → first-party finder (site scrape → name patterns → Reoon
-    // two-stage verify) produces a deliverable address. Every recovered
-    // field is persisted so later passes and the UI see it. Best-effort:
-    // a failure here never fails the enrichment.
+    // field, just an org name buried in the headline. The first-party finder
+    // (site scrape → name patterns → Reoon two-stage verify) produces a
+    // deliverable address WHEN a domain is known. Apollo org search used to
+    // resolve name→domain here; removed 2026-08-12 (owner directive —
+    // LinkedIn+QuickEnrich are the single source of truth), so rows with a
+    // name but no domain now wait for the comprehensive pass's LinkedIn/
+    // email-domain paths instead. Best-effort: a failure here never fails
+    // the enrichment.
     const inferredCompany = String((enrichData as Record<string, unknown>).inferredCompanyName ?? "").trim();
     const effCompanyName = prospect.companyName ?? (inferredCompany || null);
-    let effCompanyDomain: string | null = prospect.companyDomain ?? null;
+    const effCompanyDomain: string | null = prospect.companyDomain ?? null;
     let resolvedEmail: string | null = null;
     let resolvedStatus: string | null = null;
     if (!prospect.email) {
       try {
-        if (!effCompanyDomain && effCompanyName) {
-          const r = await apolloResolveDomain(workspaceId, effCompanyName);
-          if (r.domain) {
-            effCompanyDomain = r.domain;
-            await emitSeqLog(db, workspaceId, prospect.campaignId, "info", "enrich",
-              `Resolved company domain for ${prospect.firstName ?? ""} ${prospect.lastName ?? ""}: "${effCompanyName}" → ${r.domain}`.trim());
-          }
-        }
         if (effCompanyDomain) {
           const found = await resolveVerifiedEmail({
             firstName: prospect.firstName,
@@ -440,7 +432,6 @@ Produce:
       enrichmentStatus: "complete",
       enrichedAt: new Date(),
       ...(resolvedEmail ? { email: resolvedEmail } : {}),
-      ...(effCompanyDomain && !prospect.companyDomain ? { companyDomain: effCompanyDomain.slice(0, 200) } : {}),
       ...(effCompanyName && !prospect.companyName ? { companyName: effCompanyName.slice(0, 200) } : {}),
     }).where(eq(prospectQueue.id, prospectId));
     if (resolvedEmail) {

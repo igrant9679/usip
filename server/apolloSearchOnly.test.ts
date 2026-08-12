@@ -47,6 +47,33 @@ describe("zero-credit structural guarantee", () => {
   });
 });
 
+describe("Apollo is sourcing-only — removed from the prospect waterfall 2026-08-12", () => {
+  it("only the sourcing surfaces import services/apollo", () => {
+    // Owner directive: LinkedIn+QuickEnrich are the single source of truth
+    // for company identity, prospect-level included. Apollo remains ONLY as
+    // a people-search prospect source (ARE + Discovery) and its own settings
+    // router. An import appearing in enrichment/sweeper/router code means
+    // the waterfall grew an Apollo step back.
+    // execFileSync, not execSync: the pattern quoting must not pass through
+    // cmd.exe, whose escaping rules differ from POSIX shells.
+    const { execFileSync } = require("node:child_process") as typeof import("node:child_process");
+    const importers = execFileSync("git", [
+      "grep", "-l",
+      "-e", 'services/apollo"',
+      "-e", 'from "../apollo"',
+      "-e", 'from "./apollo"',
+      "--", "server",
+    ], { encoding: "utf8" })
+      .split("\n").filter(Boolean)
+      .filter((f) => !f.endsWith(".test.ts") && f !== "server/services/apollo.ts");
+    expect(importers.sort()).toEqual([
+      "server/areEngine.ts",
+      "server/routers/apollo.ts",
+      "server/services/discovery/index.ts",
+    ]);
+  });
+});
+
 describe("campaign targeting — added after the pilot mis-spent", () => {
   it("refuses to work a prospect with no campaign", () => {
     // The first paid pilot spent 17 credits on orphaned rows: prospect_queue

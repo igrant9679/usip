@@ -38,9 +38,10 @@ const MODE_LABEL: Record<string, string> = { off: "Off", approval: "Approve", au
 /**
  * One sentence for a sweep result, used by BOTH the toast and the persistent
  * "Last sweep" line on the card — one definition so the two surfaces cannot
- * describe the same run differently. Domains are always mentioned when any
- * were resolved: on a keyless run the free pass is the ONLY work done, and
- * omitting it made "Swept 0 — found 0 emails" describe that run as a no-op.
+ * describe the same run differently. `domainsResolved` no longer exists on
+ * NEW results (the Apollo domain pre-pass was removed 2026-08-12), but the
+ * persisted last-result of an older run can still carry it — keep reading it
+ * so history stays described accurately.
  */
 function describeSweepResult(r: any): string {
   const why = r?.stoppedBecause === "no_key" ? "no Reoon key — email lookups skipped"
@@ -291,13 +292,12 @@ export default function WorkflowsV2() {
                   <div className="text-[11px] text-muted-foreground">
                     {(sweepAp.data as any).candidates} ready to verify
                     {(sweepAp.data as any).quickenrichReady ? ` · ${(sweepAp.data as any).quickenrichReady} reachable via QuickEnrich (LinkedIn lookup, 1 credit per hit)` : ""}
-                    {(sweepAp.data as any).queue?.needsDomain ? ` · ${(sweepAp.data as any).queue.needsDomain} need a company domain first (free to resolve)` : ""}
-                    {/* A keyless sweep still runs the free domain pass (the key
-                        gates only the paid email pass), so the button stays
-                        enabled. The previous caption claimed a keyless run could
-                        do nothing at all, and gated the button on it — locking
-                        keyless workspaces out of work the server would do. */}
-                    {!(sweepAp.data as any).reoonConfigured ? " · no Reoon key — resolves domains only, email lookups skipped" : ""}
+                    {(sweepAp.data as any).queue?.needsDomain ? ` · ${(sweepAp.data as any).queue.needsDomain} waiting on a company domain (found via LinkedIn/QuickEnrich enrichment)` : ""}
+                    {/* Key-gated again since 2026-08-12: the free Apollo domain
+                        pre-pass is gone (owner removed Apollo from the
+                        waterfall), so a keyless sweep now genuinely does
+                        nothing — the gate is honest, not overclaiming. */}
+                    {!(sweepAp.data as any).reoonConfigured ? " · add a Reoon key to run the sweep — every found address is verified before it is stored" : ""}
                   </div>
                   {(sweepAp.data as any).lastResult && (
                     <div className="text-[11px] text-muted-foreground mt-0.5">
@@ -311,7 +311,7 @@ export default function WorkflowsV2() {
                   size="sm"
                   variant="outline"
                   className="shrink-0 gap-1.5"
-                  disabled={runSweep.isPending}
+                  disabled={runSweep.isPending || !(sweepAp.data as any).reoonConfigured}
                   onClick={() => runSweep.mutate({ limit: 25 })}
                 >
                   {runSweep.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Play className="size-3.5" />}

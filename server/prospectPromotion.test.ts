@@ -415,8 +415,9 @@ describe("the sweep daily cap", () => {
 
   it("the engine clamps through the shared helper", () => {
     expect(sweeper).toMatch(/import \{ clampSweepCap, SWEEP_DAILY_CAP_DEFAULT \} from "@shared\/enrichmentLimits"/);
-    // Both clamp sites: the run cap and the domain pass's row limit.
-    expect((sweeper.match(/clampSweepCap\(/g) ?? []).length, "run cap + domain pass").toBe(2);
+    // ONE clamp site since 2026-08-12: the run cap. (The second was the
+    // Apollo domain pre-pass's row limit — pass removed with Apollo.)
+    expect((sweeper.match(/clampSweepCap\(/g) ?? []).length, "run cap").toBe(1);
   });
 
   it("the setter's bound comes from the same constants", () => {
