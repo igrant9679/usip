@@ -3395,6 +3395,17 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0158: drop organization_locations (owner-approved removal, 2026-08-12) ─
+  // Zero readers, zero writers since it was created — the roadmap 5.5
+  // disposition chose drop over feed. The `organization_locations` string in
+  // apollo.ts is Apollo's own API request parameter, not this table.
+  {
+    name: "0158_drop_organization_locations.sql",
+    statements: [
+      "DROP TABLE IF EXISTS `organization_locations`",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

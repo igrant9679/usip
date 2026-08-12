@@ -129,4 +129,10 @@ describe("P5 — housekeeping", () => {
       expect(doc).toContain(anchor);
     }
   });
+  it("5.5 organization_locations is dropped and undeclared (owner-approved, 0158)", () => {
+    const src = read("server/_core/rawMigrations.ts");
+    expect(src).toContain("0158_drop_organization_locations.sql");
+    expect(src).toContain("DROP TABLE IF EXISTS `organization_locations`");
+    expect(read("drizzle/schema.ts")).not.toContain("organizationLocations = mysqlTable");
+  });
 });

@@ -5039,23 +5039,8 @@ export const accountDomains = mysqlTable(
 );
 export type AccountDomain = typeof accountDomains.$inferSelect;
 
-export const organizationLocations = mysqlTable(
-  "organization_locations",
-  {
-    id: int("id").autoincrement().primaryKey(),
-    globalOrganizationId: int("global_organization_id").notNull(),
-    locationType: varchar("location_type", { length: 24 }),
-    city: varchar("city", { length: 80 }),
-    state: varchar("state", { length: 80 }),
-    country: varchar("country", { length: 80 }),
-    addressRaw: text("address_raw"),
-    isHeadquarters: boolean("is_headquarters").default(false).notNull(),
-    sourceType: varchar("source_type", { length: 32 }).notNull(),
-    createdAt: timestamp("createdAt").defaultNow().notNull(),
-  },
-  (t) => ({ byOrg: index("ix_ol_org").on(t.globalOrganizationId) }),
-);
-export type OrganizationLocation = typeof organizationLocations.$inferSelect;
+// (organization_locations removed 2026-08-12 — zero readers/writers since
+// creation; migration 0158 drops it. Roadmap 5.5 disposition, owner-approved.)
 
 export const organizationTechnologies = mysqlTable(
   "organization_technologies",
