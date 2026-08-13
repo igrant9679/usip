@@ -31,7 +31,7 @@
  * brandfetch.test.ts) — this stack owns company-level reconciliation.
  */
 import { createHash } from "node:crypto";
-import { and, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { getDb } from "../../db";
 import { accounts, brandObservations, contacts, organizationEnrichmentEvents } from "../../../drizzle/schema";
 import { businessDomainFromEmail, nameSimilarity, normalizeCompanyName, normalizeDomain } from "./normalize";
@@ -476,6 +476,9 @@ export async function reconcileAccountBrand(
 /** Brand Search allows 200 req/5min/IP — stay far under it per run. */
 const SWEEP_MAX_SEARCHES = 40;
 const SWEEP_SPACING_MS = 1_500;
+/** Keyset page size and hard page cap for the candidate scan. */
+const CANDIDATE_PAGE = 400;
+const CANDIDATE_MAX_PAGES = 25;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -497,8 +500,59 @@ export interface SweepSummary {
  * keeps the owner's "prospect enrichment never queries Brandfetch" guard
  * structurally intact).
  */
+export interface BrandCandidateRow {
+  id: number;
+  workspaceId: number;
+  name: string;
+  domain: string | null;
+  brandVerifiedAt: Date | null;
+}
+
+/**
+ * Gather accounts worth searching, by KEYSET PAGE rather than one capped
+ * window.
+ *
+ * This is the difference between a sweep that finishes and one that stalls. A
+ * row held back by the negative cache keeps matching the candidate WHERE for a
+ * week — `no_match` leaves brand_verified_at NULL — so a single `LIMIT 400`
+ * window fills with rows that will only ever be skipped, and every account
+ * behind them becomes unreachable: never searched, so never resolved, so never
+ * out of the way. Paging walks PAST the skipped rows, which is what lets a
+ * repeated caller (companies.resolveBrandsBatch) drive a workspace to done.
+ *
+ * Split out from the sweep so this is testable without a database: it takes
+ * the page fetch and the observation lookup as callbacks.
+ */
+export async function collectBrandCandidates(
+  fetchPage: (afterId: number, pageSize: number) => Promise<BrandCandidateRow[]>,
+  latestObservations: (ids: number[]) => Promise<Map<number, { observedAt: Date; queryHash: string | null }>>,
+  opts: { limit: number; now: Date; pageSize?: number; maxPages?: number },
+): Promise<{ eligible: BrandCandidateRow[]; scanned: number; skipped: number }> {
+  const pageSize = opts.pageSize ?? CANDIDATE_PAGE;
+  const maxPages = opts.maxPages ?? CANDIDATE_MAX_PAGES;
+  const eligible: BrandCandidateRow[] = [];
+  let scanned = 0;
+  let skipped = 0;
+  let afterId = 0;
+
+  for (let page = 0; page < maxPages && eligible.length < opts.limit; page++) {
+    const rows = await fetchPage(afterId, pageSize);
+    if (rows.length === 0) break;
+    afterId = rows[rows.length - 1]!.id;
+    const latest = await latestObservations(rows.map((r) => r.id));
+    for (const acc of rows) {
+      if (eligible.length >= opts.limit) break;
+      scanned++;
+      if (!needsBrandRefresh(acc, latest.get(acc.id) ?? null, opts.now)) { skipped++; continue; }
+      eligible.push(acc);
+    }
+    if (rows.length < pageSize) break; // last page
+  }
+  return { eligible, scanned, skipped };
+}
+
 export async function runBrandReconciliation(
-  opts: { provider?: ProviderLike; limit?: number; spacingMs?: number } = {},
+  opts: { provider?: ProviderLike; limit?: number; spacingMs?: number; workspaceId?: number } = {},
 ): Promise<SweepSummary> {
   const summary: SweepSummary = { scanned: 0, searched: 0, applied: 0, corroborated: 0, candidates: 0, noMatch: 0, skipped: 0 };
   const provider = opts.provider ?? (await loadProvider());
@@ -508,35 +562,45 @@ export async function runBrandReconciliation(
 
   const now = new Date();
   const staleBefore = new Date(now.getTime() - REFRESH_TTL_MS);
-  const candidates = await db
-    .select({ id: accounts.id, workspaceId: accounts.workspaceId, name: accounts.name, domain: accounts.domain, brandVerifiedAt: accounts.brandVerifiedAt })
-    .from(accounts)
-    .where(and(
-      isNull(accounts.archivedAt),
-      sql`${accounts.name} <> ''`,
-      or(isNull(accounts.brandVerifiedAt), lt(accounts.brandVerifiedAt, staleBefore)),
-    ))
-    .orderBy(accounts.brandVerifiedAt, accounts.id)
-    .limit(400);
-  summary.scanned = candidates.length;
-  if (candidates.length === 0) return summary;
-
-  // One query for every candidate's latest observation (negative cache + identity change).
-  const latestByAccount = new Map<number, { observedAt: Date; queryHash: string | null }>();
-  const obsRows = await db
-    .select({ accountId: brandObservations.accountId, observedAt: brandObservations.observedAt, queryHash: brandObservations.queryHash })
-    .from(brandObservations)
-    .where(and(inArray(brandObservations.accountId, candidates.map((c) => c.id)), eq(brandObservations.provider, BRAND_PROVIDER)))
-    .orderBy(desc(brandObservations.observedAt));
-  for (const o of obsRows) {
-    if (!latestByAccount.has(o.accountId)) latestByAccount.set(o.accountId, { observedAt: o.observedAt, queryHash: o.queryHash });
-  }
-
   const limit = opts.limit ?? SWEEP_MAX_SEARCHES;
   const spacing = opts.spacingMs ?? SWEEP_SPACING_MS;
-  for (const acc of candidates) {
-    if (summary.searched >= limit) break;
-    if (!needsBrandRefresh(acc, latestByAccount.get(acc.id) ?? null, now)) { summary.skipped++; continue; }
+
+  const { eligible, scanned, skipped } = await collectBrandCandidates(
+    (afterId, pageSize) => db
+      .select({ id: accounts.id, workspaceId: accounts.workspaceId, name: accounts.name, domain: accounts.domain, brandVerifiedAt: accounts.brandVerifiedAt })
+      .from(accounts)
+      .where(and(
+        isNull(accounts.archivedAt),
+        sql`${accounts.name} <> ''`,
+        or(isNull(accounts.brandVerifiedAt), lt(accounts.brandVerifiedAt, staleBefore)),
+        gt(accounts.id, afterId),
+        // Scoped when a caller is driving ONE workspace to zero; the 6h cron
+        // passes nothing and stays cross-workspace as before.
+        ...(opts.workspaceId ? [eq(accounts.workspaceId, opts.workspaceId)] : []),
+      ))
+      .orderBy(accounts.id)
+      .limit(pageSize),
+    async (ids) => {
+      // One query per page for those rows' latest observation (negative cache +
+      // identity change — a renamed account re-qualifies despite a fresh row).
+      const latestByAccount = new Map<number, { observedAt: Date; queryHash: string | null }>();
+      const obsRows = await db
+        .select({ accountId: brandObservations.accountId, observedAt: brandObservations.observedAt, queryHash: brandObservations.queryHash })
+        .from(brandObservations)
+        .where(and(inArray(brandObservations.accountId, ids), eq(brandObservations.provider, BRAND_PROVIDER)))
+        .orderBy(desc(brandObservations.observedAt));
+      for (const o of obsRows) {
+        if (!latestByAccount.has(o.accountId)) latestByAccount.set(o.accountId, { observedAt: o.observedAt, queryHash: o.queryHash });
+      }
+      return latestByAccount;
+    },
+    { limit, now },
+  );
+  summary.scanned = scanned;
+  summary.skipped = skipped;
+  if (eligible.length === 0) return summary;
+
+  for (const acc of eligible) {
     if (summary.searched > 0 && spacing > 0) await sleep(spacing);
     summary.searched++;
     try {

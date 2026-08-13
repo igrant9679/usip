@@ -179,6 +179,46 @@ export const companiesRouter = router({
 
   /* ── merge ── */
   duplicates: workspaceProcedure.query(async ({ ctx }) => findDuplicateAccounts(ctx.workspace.id)),
+
+  /**
+   * Bulk brand resolution (owner ask 2026-08-13: every company gets its
+   * domain + icon). One call = repair URL-shaped account names in THIS
+   * workspace, then run one bounded Brandfetch sweep pass (the same
+   * runBrandReconciliation the 6h cron uses — bands, negative cache and
+   * spacing all apply), SCOPED to this workspace so the spend and the
+   * remaining-count below describe the same set of accounts.
+   * Returns how many unverified accounts remain in this workspace so a
+   * caller can loop. Note the remainder plateaus above zero: a no_match
+   * account stays unverified for the 7-day negative cache. "Stops falling"
+   * is the finish line, not zero. Admin only: this spends the Brandfetch
+   * search allowance.
+   */
+  resolveBrandsBatch: workspaceProcedure
+    .input(z.object({ searchLimit: z.number().int().min(1).max(50).default(30) }).optional())
+    .mutation(async ({ ctx, input }) => {
+      requireRole(ctx.member.role, "admin");
+      const { repairUrlNamedAccounts } = await import("../services/company/nameRepair");
+      const urlNames = await repairUrlNamedAccounts(ctx.workspace.id);
+      const { runBrandReconciliation } = await import("../services/company/brandReconciler");
+      const sweep = await runBrandReconciliation({ limit: input?.searchLimit ?? 30, workspaceId: ctx.workspace.id });
+      const db = await getDb();
+      let remainingUnverified = 0;
+      if (db) {
+        const { isNull, ne, sql: dsql } = await import("drizzle-orm");
+        const [row] = await db
+          .select({ n: dsql<number>`COUNT(*)` })
+          .from(accounts)
+          .where(and(
+            eq(accounts.workspaceId, ctx.workspace.id),
+            isNull(accounts.archivedAt),
+            ne(accounts.name, ""),
+            isNull(accounts.brandVerifiedAt),
+          ));
+        remainingUnverified = Number(row?.n ?? 0);
+      }
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "brand_bulk_resolve", entityId: 0, after: { urlNames, sweep, remainingUnverified } });
+      return { urlNames, sweep, remainingUnverified };
+    }),
   merge: workspaceProcedure
     .input(z.object({ primaryAccountId: z.number().int().positive(), duplicateAccountId: z.number().int().positive() }))
     .mutation(async ({ ctx, input }) => {

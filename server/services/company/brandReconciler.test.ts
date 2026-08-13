@@ -25,7 +25,7 @@ import { join } from "node:path";
 import {
   BRAND_THRESHOLDS, NEGATIVE_TTL_MS, REFRESH_TTL_MS,
   brandContentHash, decideBrandReconcile, deriveLegalName, needsBrandRefresh,
-  pickBestHit, scoreBrandHit, runBrandReconciliation,
+  pickBestHit, scoreBrandHit, runBrandReconciliation, collectBrandCandidates,
 } from "./brandReconciler";
 import type { BrandSearchHit } from "../brand/brandfetch";
 
@@ -237,6 +237,71 @@ describe("the sweep is wired and dormant-safe", () => {
       provider: { searchReady: () => false, searchBrand: async () => [], logoUrl: () => null },
     });
     expect(summary).toEqual({ scanned: 0, searched: 0, applied: 0, corroborated: 0, candidates: 0, noMatch: 0, skipped: 0 });
+  });
+});
+
+describe("candidate collection pages past the negative cache", () => {
+  const now = new Date("2026-08-13T16:00:00Z");
+  const recent = new Date(now.getTime() - 60_000);
+
+  /** A row the negative cache holds back: fresh sighting, identity unchanged. */
+  const cached = (id: number) => ({ id, workspaceId: 1, name: `Co ${id}`, domain: null, brandVerifiedAt: null });
+  const obsFor = (rows: Array<{ id: number; name: string; domain: string | null }>) =>
+    new Map(rows.map((r) => [r.id, { observedAt: recent, queryHash: brandContentHash(r.name, r.domain) }]));
+
+  it("walks PAST a full page of negative-cached rows to reach eligible ones behind them", async () => {
+    // 400 held-back rows then 5 fresh ones — the shape that made a single
+    // capped window return "nothing to do" forever while 5 accounts waited.
+    const pageOne = Array.from({ length: 400 }, (_, i) => cached(i + 1));
+    const pageTwo = Array.from({ length: 5 }, (_, i) => cached(i + 401));
+    const held = obsFor(pageOne); // page two has NO observations → eligible
+
+    const { eligible, scanned, skipped } = await collectBrandCandidates(
+      async (afterId, pageSize) => [...pageOne, ...pageTwo].filter((r) => r.id > afterId).slice(0, pageSize),
+      async (ids) => new Map(ids.filter((id) => held.has(id)).map((id) => [id, held.get(id)!])),
+      { limit: 30, now },
+    );
+
+    expect(eligible.map((e) => e.id)).toEqual([401, 402, 403, 404, 405]);
+    expect(skipped).toBe(400);
+    expect(scanned).toBe(405);
+  });
+
+  it("stops at the limit and does not read further pages", async () => {
+    const all = Array.from({ length: 900 }, (_, i) => cached(i + 1));
+    let pagesRead = 0;
+    const { eligible } = await collectBrandCandidates(
+      async (afterId, pageSize) => { pagesRead++; return all.filter((r) => r.id > afterId).slice(0, pageSize); },
+      async () => new Map(),
+      { limit: 30, now },
+    );
+    expect(eligible).toHaveLength(30);
+    expect(pagesRead).toBe(1);
+  });
+
+  it("gives up after maxPages instead of scanning a whole table of held-back rows", async () => {
+    const all = Array.from({ length: 10_000 }, (_, i) => cached(i + 1));
+    let pagesRead = 0;
+    const { eligible, skipped } = await collectBrandCandidates(
+      async (afterId, pageSize) => { pagesRead++; return all.filter((r) => r.id > afterId).slice(0, pageSize); },
+      async (ids) => new Map(ids.map((id) => [id, { observedAt: recent, queryHash: brandContentHash(`Co ${id}`, null) }])),
+      { limit: 30, now, pageSize: 100, maxPages: 4 },
+    );
+    expect(pagesRead).toBe(4);
+    expect(eligible).toHaveLength(0);
+    expect(skipped).toBe(400);
+  });
+
+  it("a RENAMED account re-qualifies even with a fresh sighting (repair → re-search)", async () => {
+    // repairUrlNamedAccounts rewrites names; those rows must not sit behind
+    // the negative cache with their old query hash.
+    const row = { id: 7, workspaceId: 1, name: "fanatics", domain: null, brandVerifiedAt: null };
+    const { eligible } = await collectBrandCandidates(
+      async (afterId) => (afterId === 0 ? [row] : []),
+      async () => new Map([[7, { observedAt: recent, queryHash: brandContentHash("https://facebook.com/fanatics", null) }]]),
+      { limit: 30, now },
+    );
+    expect(eligible.map((e) => e.id)).toEqual([7]);
   });
 });
 
