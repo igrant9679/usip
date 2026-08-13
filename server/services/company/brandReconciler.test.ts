@@ -234,9 +234,9 @@ describe("the sweep is wired and dormant-safe", () => {
 
   it("runBrandReconciliation is a no-op without search config", async () => {
     const summary = await runBrandReconciliation({
-      provider: { searchReady: () => false, searchBrand: async () => [], logoUrl: () => null },
+      provider: { searchReady: () => false, searchBrand: async () => ({ ok: false, reason: "not_configured" }), logoUrl: () => null },
     });
-    expect(summary).toEqual({ scanned: 0, searched: 0, applied: 0, corroborated: 0, candidates: 0, noMatch: 0, skipped: 0 });
+    expect(summary).toEqual({ scanned: 0, searched: 0, applied: 0, corroborated: 0, candidates: 0, noMatch: 0, skipped: 0, failed: 0 });
   });
 });
 

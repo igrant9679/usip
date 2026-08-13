@@ -36,7 +36,7 @@ import { getDb } from "../../db";
 import { accounts, brandObservations, contacts, organizationEnrichmentEvents } from "../../../drizzle/schema";
 import { businessDomainFromEmail, nameSimilarity, normalizeCompanyName, normalizeDomain } from "./normalize";
 import { canonicalizeCompanyDisplayName } from "../enrichment/recordNormalize";
-import type { BrandSearchHit } from "../brand/brandfetch";
+import type { BrandSearchHit, BrandSearchOutcome } from "../brand/brandfetch";
 
 /* ─── vocabulary ─────────────────────────────────────────────────────────── */
 
@@ -257,7 +257,7 @@ export function needsBrandRefresh(
 
 export interface ReconcileResult {
   accountId: number;
-  action: ReconcileDecision["action"] | "skipped_no_search" | "skipped_override_all";
+  action: ReconcileDecision["action"] | "skipped_no_search" | "skipped_override_all" | "search_failed";
   confidence: number;
   basis: MatchBasis | null;
   changes: string[];
@@ -266,7 +266,7 @@ export interface ReconcileResult {
 
 type ProviderLike = {
   searchReady(): boolean;
-  searchBrand(q: string): Promise<BrandSearchHit[]>;
+  searchBrand(q: string): Promise<BrandSearchOutcome>;
   logoUrl(domain: string | null | undefined, opts?: { type?: "icon" | "symbol" | "logo" }): string | null;
 };
 
@@ -331,7 +331,17 @@ export async function reconcileAccountBrand(
     return { accountId, action: "skipped_no_search", confidence: 0, basis: null, changes: [], notes: ["BRANDFETCH_SEARCH_CLIENT_ID not set"] };
   }
 
-  const hits = await provider.searchBrand(acc.name);
+  const outcome = await provider.searchBrand(acc.name);
+  if (!outcome.ok) {
+    // We learned NOTHING about this brand. Recording an observation here would
+    // negative-cache the account for a week on the strength of an expired key
+    // or a 429 — so record nothing, stamp nothing, and let the caller see it.
+    return {
+      accountId, action: "search_failed", confidence: 0, basis: null, changes: [],
+      notes: [`brand search failed: ${outcome.reason}${outcome.status ? ` (HTTP ${outcome.status})` : ""}`],
+    };
+  }
+  const hits = outcome.hits;
   const scored = pickBestHit({ name: acc.name, domain: acc.domain }, hits);
   const corroborators = await corroboratorDomainsFor(workspaceId, accountId, acc.websiteUrl);
   const decision = decideBrandReconcile(
@@ -479,6 +489,8 @@ const SWEEP_SPACING_MS = 1_500;
 /** Keyset page size and hard page cap for the candidate scan. */
 const CANDIDATE_PAGE = 400;
 const CANDIDATE_MAX_PAGES = 25;
+/** Consecutive search failures that mean the provider, not the brand, is the problem. */
+const SWEEP_FAILURE_ABORT = 3;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -490,6 +502,8 @@ export interface SweepSummary {
   candidates: number;
   noMatch: number;
   skipped: number;
+  /** Searches that never got an answer (auth/rate-limit/network). NOT no_match. */
+  failed: number;
 }
 
 /**
@@ -554,7 +568,7 @@ export async function collectBrandCandidates(
 export async function runBrandReconciliation(
   opts: { provider?: ProviderLike; limit?: number; spacingMs?: number; workspaceId?: number } = {},
 ): Promise<SweepSummary> {
-  const summary: SweepSummary = { scanned: 0, searched: 0, applied: 0, corroborated: 0, candidates: 0, noMatch: 0, skipped: 0 };
+  const summary: SweepSummary = { scanned: 0, searched: 0, applied: 0, corroborated: 0, candidates: 0, noMatch: 0, skipped: 0, failed: 0 };
   const provider = opts.provider ?? (await loadProvider());
   if (!provider.searchReady()) return summary; // dormant without config — never broken, never touches the DB
   const db = await getDb();
@@ -600,6 +614,7 @@ export async function runBrandReconciliation(
   summary.skipped = skipped;
   if (eligible.length === 0) return summary;
 
+  let consecutiveFailures = 0;
   for (const acc of eligible) {
     if (summary.searched > 0 && spacing > 0) await sleep(spacing);
     summary.searched++;
@@ -609,7 +624,17 @@ export async function runBrandReconciliation(
       else if (r.action === "corroborated") summary.corroborated++;
       else if (r.action === "candidate") summary.candidates++;
       else if (r.action === "no_match") summary.noMatch++;
+      else if (r.action === "search_failed") summary.failed++;
       else summary.skipped++;
+
+      // A key that stopped working fails for every account alike. Stop rather
+      // than walk the whole table hammering a 401 or deepening a 429.
+      if (r.action === "search_failed") {
+        if (++consecutiveFailures >= SWEEP_FAILURE_ABORT) {
+          console.error(`[BrandReconciler] aborting sweep after ${consecutiveFailures} consecutive search failures: ${r.notes[0] ?? ""}`);
+          break;
+        }
+      } else consecutiveFailures = 0;
     } catch (e) {
       console.error(`[BrandReconciler] account ${acc.id} failed:`, (e as Error)?.message ?? e);
       summary.skipped++;

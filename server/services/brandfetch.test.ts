@@ -48,12 +48,12 @@ describe("brandfetchLogoUrl", () => {
 });
 
 describe("createBrandfetchProvider — searchBrand", () => {
-  it("is dormant without config: not ready, returns [] without fetching", async () => {
+  it("is dormant without config: not ready, no fetch, and says so", async () => {
     const fetchSpy = vi.fn();
     vi.stubGlobal("fetch", fetchSpy);
     const p = createBrandfetchProvider({ logoClientId: null, searchClientId: null });
     expect(p.searchReady()).toBe(false);
-    expect(await p.searchBrand("acme")).toEqual([]);
+    expect(await p.searchBrand("acme")).toEqual({ ok: false, reason: "not_configured" });
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
@@ -62,18 +62,32 @@ describe("createBrandfetchProvider — searchBrand", () => {
     vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => hits }) as unknown as Response));
     const p = createBrandfetchProvider({ searchClientId: "sid" });
     const out = await p.searchBrand("acme");
-    expect(out).toHaveLength(10);
-    expect(out[0]).toEqual({ name: "Acme 0", domain: "acme0.com", icon: "https://x/i.png", brandId: "id0", claimed: true });
+    expect(out.ok).toBe(true);
+    expect(out.ok && out.hits).toHaveLength(10);
+    expect(out.ok && out.hits[0]).toEqual({ name: "Acme 0", domain: "acme0.com", icon: "https://x/i.png", brandId: "id0", claimed: true });
   });
 
-  it("never throws: non-OK, malformed, and network failures all return []", async () => {
+  it("an empty result set is a real answer: ok with no hits", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => [] }) as unknown as Response));
     const p = createBrandfetchProvider({ searchClientId: "sid" });
+    expect(await p.searchBrand("nosuchbrand")).toEqual({ ok: true, hits: [] });
+  });
+
+  it("never throws, and never disguises a failure as an empty result", async () => {
+    // This is the whole point: a dead key, a 429 and a network blip must not
+    // look like "this brand does not exist" — that answer gets negative-cached
+    // for a week by the reconciler.
+    const p = createBrandfetchProvider({ searchClientId: "sid" });
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 401, json: async () => ({}) }) as unknown as Response));
+    expect(await p.searchBrand("acme")).toEqual({ ok: false, reason: "auth", status: 401 });
     vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 429, json: async () => ({}) }) as unknown as Response));
-    expect(await p.searchBrand("acme")).toEqual([]);
+    expect(await p.searchBrand("acme")).toEqual({ ok: false, reason: "rate_limit", status: 429 });
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 503, json: async () => ({}) }) as unknown as Response));
+    expect(await p.searchBrand("acme")).toEqual({ ok: false, reason: "http", status: 503 });
     vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ not: "an array" }) }) as unknown as Response));
-    expect(await p.searchBrand("acme")).toEqual([]);
+    expect(await p.searchBrand("acme")).toEqual({ ok: false, reason: "malformed" });
     vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("boom"); }));
-    expect(await p.searchBrand("acme")).toEqual([]);
+    expect(await p.searchBrand("acme")).toEqual({ ok: false, reason: "network" });
   });
 });
 

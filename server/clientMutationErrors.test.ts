@@ -48,6 +48,10 @@ const HANDLED_ELSEWHERE = new Set<string>([
   // Hook exposes `logoutMutation.error` in its public state (useAuth.ts:48).
   "_core/hooks/useAuth.ts::auth.logout",
 
+  // Looped with mutateAsync inside a try/catch that toasts on the loading
+  // toast id; a per-pass failure also breaks the loop with its own message.
+  "pages/usip/Companies.tsx::companies.resolveBrandsBatch",
+
   // Settings sections: awaited in a try/catch whose catch toasts.
   "components/usip/settings/BrandingSection.tsx::settings.save",
   "components/usip/settings/BrandingSection.tsx::brandVoice.save",

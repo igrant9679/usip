@@ -232,6 +232,9 @@ export default function Companies() {
   const allChecked = rows.length > 0 && rows.every((r) => checked.has(r.id));
   const toggleAll = () => setChecked((prev) => { const n = new Set(prev); if (allChecked) rows.forEach((r) => n.delete(r.id)); else rows.forEach((r) => n.add(r.id)); return n; });
 
+  const me = trpc.profile.getMe.useQuery();
+  const isAdmin = me.data?.role === "admin" || me.data?.role === "super_admin";
+
   const bulkEnrich = trpc.companies.bulkEnrich.useMutation({
     onSuccess: (r) => { toast.success(`Enriched ${r.ok}/${r.processed} companies`); utils.companies.search.invalidate(); },
     onError: (e) => toast.error(e.message),
@@ -244,6 +247,50 @@ export default function Companies() {
     onSuccess: (r) => { toast.success(`Synced companies — ${r.created} created, ${r.linked} linked from prospects`); utils.companies.search.invalidate(); },
     onError: (e) => toast.error(e.message),
   });
+
+  /**
+   * Resolve brands in bulk: repair URL-shaped account names, then search
+   * Brandfetch for the accounts still missing a verified identity. One call is
+   * one bounded pass, so the loop lives here — it stops when the remaining
+   * count STOPS FALLING, which is the real finish line: an account Brandfetch
+   * can't match stays unverified until its 7-day negative cache expires, so
+   * waiting for zero would spin forever.
+   */
+  const resolveBrands = trpc.companies.resolveBrandsBatch.useMutation();
+  const [resolving, setResolving] = useState(false);
+  const runResolveBrands = async () => {
+    setResolving(true);
+    const t = toast.loading("Resolving company brands…");
+    let renamed = 0, applied = 0, searched = 0, passes = 0, prev = Infinity;
+    try {
+      for (let i = 0; i < 40; i++) {
+        const r = await resolveBrands.mutateAsync({ searchLimit: 50 });
+        passes++;
+        renamed += r.urlNames.renamed;
+        applied += r.sweep.applied;
+        searched += r.sweep.searched;
+        toast.loading(`Pass ${passes} — ${applied} resolved, ${r.remainingUnverified} left to check`, { id: t });
+        // A failed search means the lookup service didn't answer (bad key, rate
+        // limit) — not that the company is unknown. Stop and say so rather than
+        // grinding through the rest.
+        if (r.sweep.failed > 0) {
+          toast.error(`Brand lookup is not answering — ${r.sweep.failed} search${r.sweep.failed === 1 ? "" : "es"} failed. Check the Brandfetch key in Settings → Data sources.`, { id: t });
+          utils.companies.search.invalidate();
+          return;
+        }
+        // Nothing searched means every remaining account is negative-cached or
+        // already verified; another pass would repeat the same no-op.
+        if (r.sweep.searched === 0 || r.remainingUnverified >= prev) break;
+        prev = r.remainingUnverified;
+      }
+      toast.success(`Brands resolved — ${applied} identified, ${renamed} names repaired (${searched} searches over ${passes} passes)`, { id: t });
+      utils.companies.search.invalidate();
+    } catch (e) {
+      toast.error((e as Error).message || "Brand resolution failed", { id: t });
+    } finally {
+      setResolving(false);
+    }
+  };
 
   const doMerge = () => {
     const ids = [...checked];
@@ -263,6 +310,11 @@ export default function Companies() {
           <Button variant="outline" size="sm" className="h-7 gap-1.5" disabled={backfill.isPending} onClick={() => backfill.mutate({})} title="Create/link companies from uploaded prospects">
             <RefreshCw className={`size-3.5 ${backfill.isPending ? "animate-spin" : ""}`} /> Sync from prospects
           </Button>
+          {isAdmin && (
+            <Button variant="outline" size="sm" className="h-7 gap-1.5" disabled={resolving} onClick={runResolveBrands} title="Repair URL-shaped company names, then look up domains and logos for companies missing them">
+              <Sparkles className={`size-3.5 ${resolving ? "animate-pulse" : ""}`} /> {resolving ? "Resolving…" : "Resolve brands"}
+            </Button>
+          )}
           <Button variant="outline" size="sm" className="h-7 gap-1.5" onClick={() => setLocation("/import")}><Upload className="size-3.5" /> Import</Button>
         </div>
 

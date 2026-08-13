@@ -43,8 +43,22 @@ export interface BrandIdentityProvider {
   logoUrl(domain: string | null | undefined, opts?: BrandLogoOptions): string | null;
   /** True when brand search can be used (config present). */
   searchReady(): boolean;
-  searchBrand(query: string): Promise<BrandSearchHit[]>;
+  searchBrand(query: string): Promise<BrandSearchOutcome>;
 }
+
+/**
+ * A search either answered or it didn't — and the difference matters.
+ *
+ * Collapsing both into `[]` (what this did until 2026-08-13) makes a dead key,
+ * a 429, and a genuine "no such brand" identical to the caller. The reconciler
+ * then stores a no_match observation and negative-caches it for a WEEK, so one
+ * bad afternoon of 401s quietly blocks every affected account from being
+ * retried. `ok: false` means "we learned nothing" and must never be recorded
+ * as evidence about the brand.
+ */
+export type BrandSearchOutcome =
+  | { ok: true; hits: BrandSearchHit[] }
+  | { ok: false; reason: "not_configured" | "auth" | "rate_limit" | "http" | "malformed" | "network"; status?: number };
 
 const SEARCH_TIMEOUT_MS = 8_000;
 
@@ -60,8 +74,9 @@ export function createBrandfetchProvider(env: {
     logoReady: () => !!env.logoClientId,
     logoUrl: (domain, opts) => brandfetchLogoUrl(domain, env.logoClientId, opts),
     searchReady: () => !!env.searchClientId,
-    async searchBrand(query: string): Promise<BrandSearchHit[]> {
-      if (!env.searchClientId || !query.trim()) return [];
+    async searchBrand(query: string): Promise<BrandSearchOutcome> {
+      if (!env.searchClientId) return { ok: false, reason: "not_configured" };
+      if (!query.trim()) return { ok: true, hits: [] };
       try {
         const ctrl = new AbortController();
         const timer = setTimeout(() => ctrl.abort(), SEARCH_TIMEOUT_MS);
@@ -74,10 +89,13 @@ export function createBrandfetchProvider(env: {
         } finally {
           clearTimeout(timer);
         }
-        if (!res.ok) return [];
+        if (!res.ok) {
+          const reason = res.status === 401 || res.status === 403 ? "auth" : res.status === 429 ? "rate_limit" : "http";
+          return { ok: false, reason, status: res.status };
+        }
         const json = (await res.json()) as unknown;
-        if (!Array.isArray(json)) return [];
-        return json.slice(0, 10).map((r) => {
+        if (!Array.isArray(json)) return { ok: false, reason: "malformed" };
+        const hits = json.slice(0, 10).map((r) => {
           const hit = r as Record<string, unknown>;
           return {
             name: typeof hit.name === "string" ? hit.name : null,
@@ -87,8 +105,9 @@ export function createBrandfetchProvider(env: {
             claimed: hit.claimed === true,
           };
         });
+        return { ok: true, hits };
       } catch {
-        return [];
+        return { ok: false, reason: "network" };
       }
     },
   };
