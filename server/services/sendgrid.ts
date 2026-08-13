@@ -149,3 +149,99 @@ export async function verifySendGridKey(apiKey: string): Promise<{ ok: boolean; 
     return { ok: false, error: `Could not reach SendGrid: ${(e as Error).message}` };
   }
 }
+
+/* ─── verified senders ──────────────────────────────────────────────────── */
+
+export interface SendGridSender {
+  /** The address mail is sent FROM. The identity, and our dedupe key. */
+  email: string;
+  name: string | null;
+  replyTo: string | null;
+  /** SendGrid's own label for the identity, shown to help the owner recognise it. */
+  nickname: string | null;
+  /** False for an identity that exists but has not completed verification. */
+  verified: boolean;
+}
+
+/**
+ * A listing either happened or it didn't — never both collapsed into `[]`.
+ * (Same rule as the brand provider: an empty list is a real answer, a 401 is
+ * not, and a caller that cannot tell them apart will show "no senders" for a
+ * key that simply lacks a scope.)
+ */
+export type SendGridSenderList =
+  | { ok: true; senders: SendGridSender[] }
+  | { ok: false; error: string };
+
+const asStr = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim() : null);
+
+/** Normalize the two shapes SendGrid returns for a sender identity. */
+function toSender(raw: Record<string, unknown>): SendGridSender | null {
+  // /v3/verified_senders → flat: { from_email, from_name, reply_to, nickname, verified }
+  // /v3/senders          → nested: { from: { email, name }, reply_to: { email }, verified }
+  const from = (raw.from ?? null) as Record<string, unknown> | null;
+  const email = asStr(raw.from_email) ?? asStr(from?.email);
+  if (!email) return null;
+  const replyToRaw = raw.reply_to;
+  const replyTo = asStr(replyToRaw) ?? asStr((replyToRaw as Record<string, unknown> | null)?.email);
+  const verifiedRaw = raw.verified;
+  const verified = typeof verifiedRaw === "boolean"
+    ? verifiedRaw
+    : (verifiedRaw as Record<string, unknown> | null)?.status === true;
+  return {
+    email: email.toLowerCase(),
+    name: asStr(raw.from_name) ?? asStr(from?.name),
+    replyTo: replyTo ? replyTo.toLowerCase() : null,
+    nickname: asStr(raw.nickname),
+    verified,
+  };
+}
+
+/**
+ * Every sender identity this key can send from.
+ *
+ * Two endpoints, because SendGrid moved: `/v3/verified_senders` is the current
+ * Sender Verification list, `/v3/senders` the legacy Marketing one. Accounts
+ * commonly have identities under only one, and a restricted key may be scoped
+ * to only one, so we ask both and merge by address. A 403 from one is NOT a
+ * failure while the other answers — only both failing is.
+ */
+export async function listSendGridSenders(apiKey: string): Promise<SendGridSenderList> {
+  const key = apiKey?.trim();
+  if (!key) return { ok: false, error: "API key is required" };
+
+  const endpoints = [
+    { url: "https://api.sendgrid.com/v3/verified_senders", pick: (b: unknown) => (b as { results?: unknown[] })?.results },
+    { url: "https://api.sendgrid.com/v3/senders", pick: (b: unknown) => (Array.isArray(b) ? b : (b as { results?: unknown[] })?.results) },
+  ];
+
+  const byEmail = new Map<string, SendGridSender>();
+  const errors: string[] = [];
+  for (const ep of endpoints) {
+    try {
+      const res = await fetch(ep.url, { headers: { Authorization: `Bearer ${key}` } });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        errors.push(describeSendGridError(res.status, body));
+        continue;
+      }
+      const body = await res.json().catch(() => null);
+      const rows = ep.pick(body);
+      if (!Array.isArray(rows)) { errors.push("SendGrid returned an unexpected response shape"); continue; }
+      for (const r of rows) {
+        const s = toSender((r ?? {}) as Record<string, unknown>);
+        // First endpoint wins on conflict, but a verified sighting always
+        // beats an unverified one for the same address.
+        if (!s) continue;
+        const prev = byEmail.get(s.email);
+        if (!prev || (!prev.verified && s.verified)) byEmail.set(s.email, s);
+      }
+      errors.length = 0; // this endpoint answered — earlier scope errors are moot
+    } catch (e) {
+      errors.push(`Could not reach SendGrid: ${(e as Error).message}`);
+    }
+  }
+
+  if (byEmail.size === 0 && errors.length > 0) return { ok: false, error: errors[0]! };
+  return { ok: true, senders: Array.from(byEmail.values()).sort((a, b) => a.email.localeCompare(b.email)) };
+}

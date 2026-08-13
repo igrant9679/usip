@@ -19,6 +19,7 @@ import { router } from "../_core/trpc";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { buildTransporter } from "./smtpConfig";
 import { encryptSecret, tryDecryptSecret } from "../_core/crypto";
+import { recordAudit } from "../audit";
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -244,6 +245,34 @@ const PoolCreateInput = z.object({
 
 // ─── Sending Accounts Router ─────────────────────────────────────────────────
 
+/**
+ * The SendGrid key to talk to SendGrid with, in preference order:
+ * a key typed right now (the owner is mid-setup and has saved nothing yet),
+ * a named account's stored key, then any SendGrid mailbox in the workspace.
+ *
+ * Returns plaintext for immediate use — never store or return it to a client.
+ */
+async function resolveSendgridKey(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  workspaceId: number,
+  apiKey?: string,
+  accountId?: number,
+): Promise<string | null> {
+  if (apiKey?.trim()) return apiKey.trim();
+  const rows = await db
+    .select({ id: sendingAccounts.id, enc: sendingAccounts.sendgridApiKeyEnc })
+    .from(sendingAccounts)
+    .where(and(
+      eq(sendingAccounts.workspaceId, workspaceId),
+      ...(accountId ? [eq(sendingAccounts.id, accountId)] : [eq(sendingAccounts.provider, "sendgrid")]),
+    ));
+  for (const r of rows) {
+    const k = tryDecryptSecret(r.enc);
+    if (k) return k;
+  }
+  return null;
+}
+
 export const sendingAccountsRouter = router({
   /**
    * SendGrid inbound-reply routing (owner ask 2026-08-13): replies to
@@ -383,6 +412,108 @@ export const sendingAccountsRouter = router({
 
   // Sending accounts hold SMTP/IMAP credentials + per-account daily
   // send caps. Admin-gated to match the SMTP-config peer endpoints.
+  /**
+   * Every sender identity a SendGrid key can send from, marked with whether
+   * it is already a mailbox here.
+   *
+   * The key comes from an existing SendGrid mailbox, or is passed directly
+   * for the moment BEFORE the first one is saved — that is the case the
+   * owner asked for ("when I add a SendGrid API key, pull the senders in").
+   * An entered key is used and discarded; it is never written by this call.
+   */
+  sendgridSenders: adminWsProcedure
+    .input(z.object({ apiKey: z.string().max(500).optional(), accountId: z.number().int().positive().optional() }).optional())
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+
+      const key = await resolveSendgridKey(db, ctx.workspace.id, input?.apiKey, input?.accountId);
+      if (!key) {
+        return { ok: false as const, error: "No SendGrid API key is saved yet. Enter one to see your senders.", senders: [] };
+      }
+      const { listSendGridSenders } = await import("../services/sendgrid");
+      const result = await listSendGridSenders(key);
+      if (!result.ok) return { ok: false as const, error: result.error, senders: [] };
+
+      const existing = await db
+        .select({ fromEmail: sendingAccounts.fromEmail })
+        .from(sendingAccounts)
+        .where(eq(sendingAccounts.workspaceId, ctx.workspace.id));
+      const linked = new Set(existing.map((e) => e.fromEmail.toLowerCase()));
+      return {
+        ok: true as const,
+        error: null,
+        senders: result.senders.map((s) => ({ ...s, alreadyLinked: linked.has(s.email) })),
+      };
+    }),
+
+  /**
+   * Turn chosen SendGrid senders into mailboxes. Each becomes an ordinary
+   * sending account, which is what makes them available to Sender Pools —
+   * pools take any sending account, so nothing pool-side needs to change.
+   *
+   * Every created mailbox carries its own encrypted copy of the key, matching
+   * how a hand-made SendGrid account already works (the key lives per account,
+   * not per workspace).
+   */
+  importSendgridSenders: adminWsProcedure
+    .input(z.object({
+      apiKey: z.string().max(500).optional(),
+      accountId: z.number().int().positive().optional(),
+      emails: z.array(z.string().email()).min(1).max(100),
+      dailySendLimit: z.number().int().min(1).max(10000).default(50),
+      hourlySendLimit: z.number().int().min(1).max(1000).default(6),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+
+      const key = await resolveSendgridKey(db, ctx.workspace.id, input.apiKey, input.accountId);
+      if (!key) throw new TRPCError({ code: "BAD_REQUEST", message: "No SendGrid API key available" });
+
+      // Re-list rather than trusting the client's names: the caller sends
+      // addresses, and what we store must be what SendGrid actually holds.
+      const { listSendGridSenders } = await import("../services/sendgrid");
+      const result = await listSendGridSenders(key);
+      if (!result.ok) throw new TRPCError({ code: "BAD_REQUEST", message: result.error });
+
+      const wanted = new Set(input.emails.map((e) => e.trim().toLowerCase()));
+      const chosen = result.senders.filter((s) => wanted.has(s.email));
+      if (chosen.length === 0) throw new TRPCError({ code: "BAD_REQUEST", message: "None of those senders exist on this SendGrid account" });
+
+      const existing = await db
+        .select({ fromEmail: sendingAccounts.fromEmail })
+        .from(sendingAccounts)
+        .where(eq(sendingAccounts.workspaceId, ctx.workspace.id));
+      const linked = new Set(existing.map((e) => e.fromEmail.toLowerCase()));
+
+      const created: Array<{ id: number; email: string }> = [];
+      const skipped: string[] = [];
+      for (const s of chosen) {
+        if (linked.has(s.email)) { skipped.push(s.email); continue; }
+        const [res] = await db.insert(sendingAccounts).values({
+          workspaceId: ctx.workspace.id,
+          name: s.nickname || s.name || s.email,
+          provider: "sendgrid",
+          fromEmail: s.email,
+          fromName: s.name ?? undefined,
+          replyTo: s.replyTo ?? undefined,
+          sendgridApiKeyEnc: encryptSecret(key),
+          dailySendLimit: input.dailySendLimit,
+          hourlySendLimit: input.hourlySendLimit,
+          connectionStatus: "untested",
+        } as never);
+        created.push({ id: Number((res as { insertId?: number }).insertId ?? 0), email: s.email });
+        linked.add(s.email);
+      }
+      await recordAudit({
+        workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "create",
+        entityType: "sendgrid_sender_import", entityId: 0,
+        after: { created: created.length, skipped: skipped.length },
+      });
+      return { created, skipped };
+    }),
+
   create: adminWsProcedure
     .input(AccountCreateInput)
     .mutation(async ({ ctx, input }) => {

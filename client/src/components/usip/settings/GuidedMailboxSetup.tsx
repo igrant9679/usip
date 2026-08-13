@@ -28,6 +28,7 @@ import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { SendgridSenderPicker } from "./SendgridSenderPicker";
 import {
   Dialog,
   DialogContent,
@@ -201,9 +202,9 @@ export function GuidedMailboxSetup({
   const utils = trpc.useUtils();
   const [step, setStep] = useState<WizardStep>(initialStep ?? "provider");
   const [acct, setAcct] = useState<MailboxAccount | null>(account ?? null);
-  const [provider, setProvider] = useState<"google" | "outlook" | "imap" | null>(null);
+  const [provider, setProvider] = useState<"google" | "outlook" | "imap" | "sendgrid" | null>(null);
   const [tos, setTos] = useState(false);
-  const [modal, setModal] = useState<null | "choice" | "smtp" | "csv" | "oauth">(null);
+  const [modal, setModal] = useState<null | "choice" | "smtp" | "csv" | "oauth" | "sendgrid">(null);
 
   // Reset when (re)opened.
   useEffect(() => {
@@ -306,7 +307,7 @@ export function GuidedMailboxSetup({
                 setProvider={setProvider}
                 tos={tos}
                 setTos={setTos}
-                onLink={() => setModal(provider === "imap" ? "choice" : "oauth")}
+                onLink={() => setModal(provider === "imap" ? "choice" : provider === "sendgrid" ? "sendgrid" : "oauth")}
               />
             )}
             {step === "linked" && acct && <LinkedStep acct={acct} onCloseWizard={onClose} />}
@@ -410,6 +411,11 @@ export function GuidedMailboxSetup({
           onSingle={() => setModal("smtp")}
           onBulk={() => setModal("csv")}
         />
+        <SendgridSenderPicker
+          open={modal === "sendgrid"}
+          onOpenChange={(v) => { if (!v) setModal(null); }}
+          onLinked={() => { setModal(null); utils.sendingAccounts.list.invalidate(); onClose(); }}
+        />
         <SmtpImapFormDialog open={modal === "smtp"} onCancel={() => setModal("choice")} onLinked={onLinked} />
         <CsvImportDialog open={modal === "csv"} onCancel={() => setModal("choice")} onLinked={onLinked} />
       </div>
@@ -509,8 +515,8 @@ function StepBar({
 function ProviderStep({
   provider, setProvider, tos, setTos, onLink,
 }: {
-  provider: "google" | "outlook" | "imap" | null;
-  setProvider: (p: "google" | "outlook" | "imap") => void;
+  provider: "google" | "outlook" | "imap" | "sendgrid" | null;
+  setProvider: (p: "google" | "outlook" | "imap" | "sendgrid") => void;
   tos: boolean;
   setTos: (v: boolean) => void;
   onLink: () => void;
@@ -520,6 +526,9 @@ function ProviderStep({
     { id: "google" as const, title: "Google", sub: "Gmail / GSuite", icon: <GoogleGlyph className="size-9" /> },
     { id: "outlook" as const, title: "Outlook", sub: "Hotmail, Live, MSN", icon: <OutlookGlyph className="size-9" /> },
     { id: "imap" as const, title: "Other", sub: "Any provider, IMAP", icon: <Mail className="size-9 text-foreground/80" strokeWidth={1.25} />, lock: true },
+    // SendGrid does not link ONE mailbox — it exposes every sender identity
+    // the key may send from, so this card opens a picker instead of a form.
+    { id: "sendgrid" as const, title: "SendGrid", sub: "Pick from your senders", icon: <Send className="size-9 text-foreground/80" strokeWidth={1.25} /> },
   ];
   return (
     <div className="mx-auto w-full max-w-3xl px-6 py-10">
@@ -531,7 +540,7 @@ function ProviderStep({
       </p>
 
       <h2 className="mt-8 text-[14px] font-semibold">Choose your email provider</h2>
-      <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
+      <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {cards.map((c) => (
           <button
             key={c.id}

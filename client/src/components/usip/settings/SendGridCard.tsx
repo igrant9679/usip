@@ -24,7 +24,8 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Send, Loader2, CheckCircle2, AlertTriangle } from "lucide-react";
+import { Send, Loader2, CheckCircle2, AlertTriangle, Users } from "lucide-react";
+import { SendgridSenderPicker } from "./SendgridSenderPicker";
 
 export function SendGridCard({
   variant = "standalone",
@@ -43,6 +44,7 @@ export function SendGridCard({
   const [fromName, setFromName] = useState("");
   const [replyTo, setReplyTo] = useState("");
   const [apiKey, setApiKey] = useState("");
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   // Reflect the saved account once it loads. The key is never echoed back —
   // only the ciphertext is stored, and the server does not return even that.
@@ -191,8 +193,26 @@ export function SendGridCard({
             {test.isPending ? <Loader2 className="size-3.5 mr-1.5 animate-spin" /> : null}
             Test key
           </Button>
+          {/* The senders a key can send from are the mailboxes — offer them as
+              soon as there is a key to ask with, saved or just typed. */}
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-8"
+            disabled={!apiKey.trim() && !existing}
+            onClick={() => setPickerOpen(true)}
+            title="Pull the verified senders from SendGrid and link them as mailboxes"
+          >
+            <Users className="size-3.5 mr-1.5" /> Import senders
+          </Button>
         </div>
       )}
+      <SendgridSenderPicker
+        open={pickerOpen}
+        onOpenChange={setPickerOpen}
+        apiKey={apiKey.trim() || undefined}
+        accountId={!apiKey.trim() ? existing?.id : undefined}
+      />
       {!isAdmin && (
         <p className="text-[11px] text-muted-foreground">Only workspace admins can change sending settings.</p>
       )}

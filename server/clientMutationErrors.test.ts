@@ -52,6 +52,12 @@ const HANDLED_ELSEWHERE = new Set<string>([
   // toast id; a per-pass failure also breaks the loop with its own message.
   "pages/usip/Companies.tsx::companies.resolveBrandsBatch",
 
+  // Both awaited in a try/catch. The listing renders its failure INLINE (with
+  // a retry) rather than toasting, because the dialog's whole content is that
+  // result — a toast over an empty dialog reads as "you have no senders".
+  "components/usip/settings/SendgridSenderPicker.tsx::sendingAccounts.sendgridSenders",
+  "components/usip/settings/SendgridSenderPicker.tsx::sendingAccounts.importSendgridSenders",
+
   // Settings sections: awaited in a try/catch whose catch toasts.
   "components/usip/settings/BrandingSection.tsx::settings.save",
   "components/usip/settings/BrandingSection.tsx::brandVoice.save",
