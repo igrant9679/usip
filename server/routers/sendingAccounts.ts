@@ -13,6 +13,7 @@ import {
   senderPools,
   sendingAccountDailyStats,
   sendingAccounts,
+  workspaceSettings,
 } from "../../drizzle/schema";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
@@ -244,6 +245,58 @@ const PoolCreateInput = z.object({
 // ─── Sending Accounts Router ─────────────────────────────────────────────────
 
 export const sendingAccountsRouter = router({
+  /**
+   * SendGrid inbound-reply routing (owner ask 2026-08-13): replies to
+   * SendGrid-sent mail collect ONLY in Velocity. Read the current config +
+   * the exact values the SendGrid dashboard needs.
+   */
+  getInboundReplyConfig: workspaceProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    const [ws] = await db
+      .select({ domain: workspaceSettings.sendgridInboundDomain, token: workspaceSettings.sendgridInboundToken })
+      .from(workspaceSettings)
+      .where(eq(workspaceSettings.workspaceId, ctx.workspace.id))
+      .limit(1);
+    const { appBaseUrl } = await import("../appUrl");
+    const configured = !!(ws?.domain && ws?.token);
+    return {
+      configured,
+      domain: ws?.domain ?? null,
+      replyAddress: configured ? `r-${ws!.token}@${ws!.domain}` : null,
+      webhookUrl: `${appBaseUrl().replace(/\/+$/, "")}/api/sendgrid/inbound`,
+      mxTarget: "mx.sendgrid.net",
+    };
+  }),
+
+  /**
+   * Enable/change/disable inbound reply routing. Setting a domain mints the
+   * unguessable token on first use (the token IS the webhook's auth — the
+   * endpoint is public because Inbound Parse cannot sign). Clearing the
+   * domain stops the auto Reply-To; the token is kept so re-enabling does
+   * not orphan mail already in flight carrying the old address.
+   */
+  setInboundReplyDomain: adminWsProcedure
+    .input(z.object({
+      /** e.g. "reply.lsimedia.com" — the subdomain whose MX points at SendGrid. Null disables. */
+      domain: z.string().trim().toLowerCase().regex(/^[a-z0-9.-]+\.[a-z]{2,}$/, "Enter a bare domain like reply.yourcompany.com").nullable(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [ws] = await db
+        .select({ token: workspaceSettings.sendgridInboundToken })
+        .from(workspaceSettings)
+        .where(eq(workspaceSettings.workspaceId, ctx.workspace.id))
+        .limit(1);
+      const { randomBytes } = await import("node:crypto");
+      const token = ws?.token ?? randomBytes(16).toString("hex");
+      await db.update(workspaceSettings)
+        .set({ sendgridInboundDomain: input.domain, sendgridInboundToken: token } as never)
+        .where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
+      return { ok: true as const, replyAddress: input.domain ? `r-${token}@${input.domain}` : null };
+    }),
+
   list: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });

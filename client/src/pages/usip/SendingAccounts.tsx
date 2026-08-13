@@ -404,6 +404,12 @@ function AccountFormDialog({
                 value={form.replyTo}
                 onChange={(e) => set("replyTo", e.target.value)}
               />
+              {isSendGrid && (
+                <p className="text-[11px] text-muted-foreground">
+                  Leave blank to collect replies inside Velocity (no inbox required) — configure the
+                  reply domain in the <span className="font-medium">Inbound replies</span> card below.
+                </p>
+              )}
             </div>
 
             {/* OAuth fields */}
@@ -837,6 +843,70 @@ function AccountCard({ account, onEdit }: { account: any; onEdit: (id: number) =
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
+/**
+ * SendGrid inbound replies (owner ask 2026-08-13): a SendGrid API key has no
+ * mailbox, so replies used to need a human Reply-To inbox — which then
+ * filled up. With a reply domain configured, every SendGrid send carries an
+ * auto Reply-To at that domain, SendGrid Inbound Parse posts the replies to
+ * Velocity, and they exist ONLY here: Unified Inbox, classification,
+ * pause-on-reply — no human inbox anywhere in the loop.
+ */
+function InboundRepliesCard() {
+  const cfg = trpc.sendingAccounts.getInboundReplyConfig.useQuery();
+  const setDomain = trpc.sendingAccounts.setInboundReplyDomain.useMutation({
+    onSuccess: (r) => {
+      toast.success(r.replyAddress ? `Inbound replies enabled — campaign mail now replies to ${r.replyAddress}` : "Inbound reply routing disabled");
+      cfg.refetch();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const [domain, setDomainInput] = useState("");
+  useEffect(() => { if (cfg.data) setDomainInput(cfg.data.domain ?? ""); }, [cfg.data]);
+  const c = cfg.data;
+  if (!c) return null;
+
+  return (
+    <Card>
+      <CardContent className="p-4 space-y-3">
+        <div className="flex items-center gap-2">
+          <p className="text-sm font-medium">Inbound replies (SendGrid)</p>
+          {c.configured
+            ? <span className="text-[10px] rounded-full bg-emerald-100 text-emerald-700 px-2 py-0.5">active</span>
+            : <span className="text-[10px] rounded-full bg-muted text-muted-foreground px-2 py-0.5">not configured</span>}
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Collect replies to SendGrid-sent campaigns inside Velocity only — no Reply-To inbox to
+          fill up. Enter a subdomain you can add DNS records for (e.g. <code>reply.yourcompany.com</code>).
+        </p>
+        <div className="flex gap-2 max-w-xl">
+          <Input
+            placeholder="reply.yourcompany.com"
+            value={domain}
+            onChange={(e) => setDomainInput(e.target.value)}
+          />
+          <Button size="sm" disabled={setDomain.isPending || !domain.trim()} onClick={() => setDomain.mutate({ domain: domain.trim() })}>
+            {setDomain.isPending ? "Saving…" : c.configured ? "Update" : "Enable"}
+          </Button>
+          {c.configured && (
+            <Button size="sm" variant="ghost" disabled={setDomain.isPending} onClick={() => { setDomain.mutate({ domain: null }); setDomainInput(""); }}>
+              Disable
+            </Button>
+          )}
+        </div>
+        {c.configured && (
+          <div className="rounded-md border bg-muted/30 p-3 text-xs space-y-1.5">
+            <p><span className="font-medium">Reply address</span> (added automatically to every SendGrid send): <code className="break-all">{c.replyAddress}</code></p>
+            <p className="font-medium pt-1">One-time setup, in this order:</p>
+            <p>1. DNS: add an <code>MX</code> record for <code>{c.domain}</code> → <code>{c.mxTarget}</code> (priority 10).</p>
+            <p>2. SendGrid → Settings → <span className="font-medium">Inbound Parse</span> → Add Host &amp; URL: host <code>{c.domain}</code>, URL <code className="break-all">{c.webhookUrl}</code>, and tick <span className="font-medium">“POST the raw, full MIME message”</span>.</p>
+            <p className="text-muted-foreground">Replies then appear in the Unified Inbox, pause sequences, and notify you — without touching any real mailbox.</p>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function SendingAccounts() {
   const [showForm, setShowForm] = useState(false);
   const [editId, setEditId] = useState<number | undefined>(undefined);
@@ -939,6 +1009,9 @@ export default function SendingAccounts() {
             ))}
           </div>
         )}
+
+        {/* Inbound replies (SendGrid): replies collect in Velocity, no inbox */}
+        <InboundRepliesCard />
 
         {/* Sender Pools CTA */}
         {accounts.length >= 2 && (

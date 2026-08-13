@@ -125,6 +125,10 @@ async function startServer() {
   registerOAuthRoutes(app);
   registerScimRoutes(app);
   registerEmailTrackingRoutes(app);
+  // SendGrid Inbound Parse webhook — replies to SendGrid-sent campaign mail
+  // collect in Velocity instead of a human inbox (owner ask 2026-08-13).
+  const { registerSendGridInboundRoute } = await import("../sendgridInbound");
+  registerSendGridInboundRoute(app);
   registerWebsiteTrackingRoutes(app);
   registerChatWidgetRoutes(app);
   registerUnipileWebhookRoutes(app);

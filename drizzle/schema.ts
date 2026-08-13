@@ -1483,6 +1483,16 @@ export const workspaceSettings = mysqlTable("workspace_settings", {
    *  path degrades exactly as key-absent: candidates carry no verdict, are
    *  never marked valid, and therefore never promote or auto-send. */
   reoonVerificationEnabled: boolean("reoon_verification_enabled").default(true).notNull(),
+  // ── SendGrid inbound replies (migration 0162, owner ask 2026-08-13) ──
+  // A SendGrid API key has no mailbox; replies to campaign mail used to
+  // need a human Reply-To inbox. With these set, SendGrid sends carry
+  // Reply-To r-{token}@{domain}, that subdomain's MX routes to SendGrid
+  // Inbound Parse, and /api/sendgrid/inbound feeds processInboundReply —
+  // replies exist ONLY in Velocity. The token is the auth: the webhook is
+  // public, so an unguessable local part is what separates real inbound
+  // mail from junk posts.
+  sendgridInboundDomain: varchar("sendgrid_inbound_domain", { length: 200 }),
+  sendgridInboundToken: varchar("sendgrid_inbound_token", { length: 64 }),
   // ── QuickEnrich (Migration 0146) ──
   // B2B contact database keyed on LinkedIn URLs — evaluated 2026-08-06 as a
   // prospect SOURCE for ARE campaigns (their contact-finder discovery endpoint

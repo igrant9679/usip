@@ -321,6 +321,34 @@ export class SendGridAdapter implements EmailAdapter {
     const apiKey = tryDecryptSecret((this.account as any).sendgridApiKeyEnc);
     if (!apiKey) throw new Error("No SendGrid API key is configured for this sending account.");
 
+    // Reply-To precedence: explicit input → the account's stored Reply-To →
+    // the workspace's INBOUND reply address (owner ask 2026-08-13: replies
+    // collect only in Velocity, no human inbox required). Resolved per send
+    // because the inbound config is a workspace setting the admin can add
+    // or clear at any time.
+    let replyTo = input.replyTo ?? this.account.replyTo ?? null;
+    if (!replyTo) {
+      try {
+        const { getDb } = await import("./db");
+        const db = await getDb();
+        if (db) {
+          const { workspaceSettings } = await import("../drizzle/schema");
+          const { eq } = await import("drizzle-orm");
+          const [ws] = await db
+            .select({ domain: workspaceSettings.sendgridInboundDomain, token: workspaceSettings.sendgridInboundToken })
+            .from(workspaceSettings)
+            .where(eq(workspaceSettings.workspaceId, this.account.workspaceId))
+            .limit(1);
+          if (ws?.domain && ws?.token) {
+            const { inboundReplyAddress } = await import("./sendgridInbound");
+            replyTo = inboundReplyAddress(ws.token, ws.domain);
+          }
+        }
+      } catch (e) {
+        console.error("[SendGridAdapter] inbound reply-to lookup failed:", (e as Error).message);
+      }
+    }
+
     const res = await sendViaSendGrid(apiKey, {
       to: input.to,
       subject: input.subject,
@@ -328,7 +356,7 @@ export class SendGridAdapter implements EmailAdapter {
       text: input.bodyText,
       fromEmail: input.fromEmail || this.account.fromEmail,
       fromName: input.fromName ?? this.account.fromName,
-      replyTo: input.replyTo ?? this.account.replyTo,
+      replyTo,
     });
     // Throw rather than return a sentinel: the pool sender counts a resolved
     // sendEmail as a delivered send and increments the daily quota on it.

@@ -3464,6 +3464,18 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0162: SendGrid inbound-reply routing (owner ask 2026-08-13) ───────────
+  // Replies to SendGrid-sent campaign mail collect ONLY in Velocity: sends
+  // carry Reply-To r-{token}@{domain}; the domain's MX points at SendGrid
+  // Inbound Parse which POSTs to /api/sendgrid/inbound.
+  {
+    name: "0162_sendgrid_inbound_reply.sql",
+    statements: [
+      "ALTER TABLE `workspace_settings` ADD COLUMN `sendgrid_inbound_domain` varchar(200) NULL",
+      "ALTER TABLE `workspace_settings` ADD COLUMN `sendgrid_inbound_token` varchar(64) NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------
