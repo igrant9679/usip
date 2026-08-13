@@ -566,7 +566,7 @@ export async function collectBrandCandidates(
 }
 
 export async function runBrandReconciliation(
-  opts: { provider?: ProviderLike; limit?: number; spacingMs?: number; workspaceId?: number } = {},
+  opts: { provider?: ProviderLike; limit?: number; spacingMs?: number; workspaceId?: number; domainlessOnly?: boolean } = {},
 ): Promise<SweepSummary> {
   const summary: SweepSummary = { scanned: 0, searched: 0, applied: 0, corroborated: 0, candidates: 0, noMatch: 0, skipped: 0, failed: 0 };
   const provider = opts.provider ?? (await loadProvider());
@@ -591,6 +591,11 @@ export async function runBrandReconciliation(
         // Scoped when a caller is driving ONE workspace to zero; the 6h cron
         // passes nothing and stays cross-workspace as before.
         ...(opts.workspaceId ? [eq(accounts.workspaceId, opts.workspaceId)] : []),
+        // Spend the search budget where it changes something. An account that
+        // already HAS a domain renders an icon and resolves fine; searching it
+        // only upgrades its identity to verified, which the 6h cron does for
+        // free. A domain-less account is the actual gap.
+        ...(opts.domainlessOnly ? [or(isNull(accounts.domain), sql`${accounts.domain} = ''`)!] : []),
       ))
       .orderBy(accounts.id)
       .limit(pageSize),

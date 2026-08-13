@@ -194,13 +194,23 @@ export const companiesRouter = router({
    * search allowance.
    */
   resolveBrandsBatch: workspaceProcedure
-    .input(z.object({ searchLimit: z.number().int().min(1).max(50).default(30) }).optional())
+    .input(z.object({
+      searchLimit: z.number().int().min(1).max(50).default(30),
+      /** "domainless" (the default) spends searches only where a domain is
+       *  missing — the point of the batch. "all" also re-verifies accounts
+       *  that already have one, which the 6h cron otherwise does for free. */
+      target: z.enum(["domainless", "all"]).default("domainless"),
+    }).optional())
     .mutation(async ({ ctx, input }) => {
       requireRole(ctx.member.role, "admin");
       const { repairUrlNamedAccounts } = await import("../services/company/nameRepair");
       const urlNames = await repairUrlNamedAccounts(ctx.workspace.id);
       const { runBrandReconciliation } = await import("../services/company/brandReconciler");
-      const sweep = await runBrandReconciliation({ limit: input?.searchLimit ?? 30, workspaceId: ctx.workspace.id });
+      const sweep = await runBrandReconciliation({
+        limit: input?.searchLimit ?? 30,
+        workspaceId: ctx.workspace.id,
+        domainlessOnly: (input?.target ?? "domainless") === "domainless",
+      });
       // The sweep only STORES what it saw; a name-only hit writes nothing by
       // the reconciler's spec. Adoption is the separate, lower-trust step that
       // turns those stored name matches into domains for accounts that have
