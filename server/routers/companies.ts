@@ -240,6 +240,22 @@ export const companiesRouter = router({
       await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "brand_bulk_resolve", entityId: 0, after: { urlNames, sweep, adopted, remainingUnverified, remainingWithoutDomain } });
       return { urlNames, sweep, adopted, remainingUnverified, remainingWithoutDomain };
     }),
+  /**
+   * Reverse an association run within a stated time window. Dry run unless
+   * `apply` is passed — the plan tells you exactly how many accounts get
+   * archived and how many people get detached before anything moves.
+   */
+  undoAssociation: workspaceProcedure
+    .input(z.object({ since: z.string().datetime(), apply: z.boolean().default(false) }))
+    .mutation(async ({ ctx, input }) => {
+      requireRole(ctx.member.role, "admin");
+      const { undoAssociationRun } = await import("../services/company/associationUndo");
+      const plan = await undoAssociationRun(ctx.workspace.id, { since: new Date(input.since), apply: input.apply });
+      if (input.apply) {
+        await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "association_undo", entityId: 0, after: plan });
+      }
+      return plan;
+    }),
   merge: workspaceProcedure
     .input(z.object({ primaryAccountId: z.number().int().positive(), duplicateAccountId: z.number().int().positive() }))
     .mutation(async ({ ctx, input }) => {

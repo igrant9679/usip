@@ -10,10 +10,10 @@
  * as needs_review · conflict → leave unlinked (needs_review) · no_match → create
  * new account. Prospects with no usable company identity are marked "missing".
  */
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import { getDb } from "../../db";
 import {
-  accounts, prospects, contactAccountLinks,
+  accounts, prospects, contactAccountLinks, prospectLinkedinEnrichments,
   globalOrganizations, organizationDomains, accountDomains, activities,
 } from "../../../drizzle/schema";
 import {
@@ -34,22 +34,42 @@ export interface AssociationResult {
   score: number;
 }
 
-/** Build a CompanyInput from a prospect-like row. */
-export function companyInputFromProspect(p: {
-  company?: string | null; companyDomain?: string | null; email?: string | null;
-  city?: string | null; state?: string | null; country?: string | null;
-}): CompanyInput {
+/**
+ * Build a CompanyInput from a prospect-like row.
+ *
+ * LinkedIn first (owner directive 2026-08-13: "you must fall back on the
+ * person's LinkedIn for their attached company record"). Their LinkedIn
+ * profile states where they actually work; their mailbox does not. A parent,
+ * board member or partner carries dc.gov, ftc.gov or a spouse's employer, and
+ * treating that as their company is what split one org into six accounts.
+ */
+export function companyInputFromProspect(
+  p: {
+    company?: string | null; companyDomain?: string | null; email?: string | null;
+    city?: string | null; state?: string | null; country?: string | null;
+  },
+  linkedin?: { companyName?: string | null; companyDomain?: string | null } | null,
+): CompanyInput {
   return {
-    name: p.company ?? null,
-    domain: p.companyDomain ?? null,
-    website: p.companyDomain ?? null,
+    name: (linkedin?.companyName?.trim() || null) ?? p.company ?? null,
+    domain: (linkedin?.companyDomain?.trim() || null) ?? p.companyDomain ?? null,
+    website: (linkedin?.companyDomain?.trim() || null) ?? p.companyDomain ?? null,
+    // Kept ONLY so matching can recognise an existing account that already
+    // owns this domain. It is no longer allowed to name or create a company —
+    // see createWorkspaceAccount and hasUsableIdentity.
     emailDomain: businessDomainFromEmail(p.email) || null,
     hqCity: p.city ?? null, hqState: p.state ?? null, hqCountry: p.country ?? null,
   };
 }
 
+/**
+ * A mailbox domain alone is NOT a company identity. If it were, every person
+ * whose employer we don't know would mint a company named after their mail
+ * host — which is exactly how the 2026-08-13 run produced hundreds of
+ * accounts. Identity means a name, or a domain we believe is the company's.
+ */
 function hasUsableIdentity(input: CompanyInput): boolean {
-  return !!(normalizeCompanyName(input.name) || normalizeDomain(input.domain) || normalizeDomain(input.website) || input.emailDomain);
+  return !!(normalizeCompanyName(input.name) || normalizeDomain(input.domain) || normalizeDomain(input.website));
 }
 
 async function emitCompanyActivity(ws: number, accountId: number, subject: string, actorUserId?: number | null) {
@@ -63,6 +83,44 @@ async function emitCompanyActivity(ws: number, accountId: number, subject: strin
   } catch { /* best-effort */ }
 }
 
+export interface LinkedInCompanyFacts {
+  companyName?: string | null;
+  companyDomain?: string | null;
+}
+
+/**
+ * The company each person's LinkedIn profile says they work for, batched.
+ * This is the source of truth for "who does this person work for" — a mailbox
+ * domain is not (owner directive 2026-08-13).
+ */
+export async function linkedInCompanyFactsFor(
+  workspaceId: number, prospectIds: number[],
+): Promise<Map<number, LinkedInCompanyFacts>> {
+  const out = new Map<number, LinkedInCompanyFacts>();
+  if (prospectIds.length === 0) return out;
+  const db = await getDb();
+  if (!db) return out;
+  for (let i = 0; i < prospectIds.length; i += 500) {
+    const chunk = prospectIds.slice(i, i + 500);
+    const rows = await db
+      .select({
+        prospectId: prospectLinkedinEnrichments.prospectId,
+        companyName: prospectLinkedinEnrichments.currentCompanyName,
+        companyDomain: prospectLinkedinEnrichments.currentCompanyDomain,
+      })
+      .from(prospectLinkedinEnrichments)
+      .where(and(
+        eq(prospectLinkedinEnrichments.workspaceId, workspaceId),
+        inArray(prospectLinkedinEnrichments.prospectId, chunk),
+      ));
+    for (const r of rows) {
+      if (!r.companyName && !r.companyDomain) continue;
+      if (!out.has(r.prospectId)) out.set(r.prospectId, { companyName: r.companyName, companyDomain: r.companyDomain });
+    }
+  }
+  return out;
+}
+
 /** Find or create the shared global organization for a company identity. */
 export async function upsertGlobalOrganization(input: CompanyInput): Promise<number | null> {
   const db = await getDb();
@@ -73,7 +131,12 @@ export async function upsertGlobalOrganization(input: CompanyInput): Promise<num
   if (match.organizationId && (match.confidence === "exact_match" || match.confidence === "high_confidence")) {
     return match.organizationId;
   }
-  const domain = normalizeDomain(input.domain) || normalizeDomain(input.website) || input.emailDomain || null;
+  // No emailDomain fallback: a company's domain must come from a company
+  // source (LinkedIn, or the record's own companyDomain), never from where
+  // one person happens to collect mail. A blank domain is honest and the
+  // brand/adopt path fills it later; a mailbox domain is a wrong answer that
+  // then poisons matching, linking and email-pattern enrichment.
+  const domain = normalizeDomain(input.domain) || normalizeDomain(input.website) || null;
   const name = (input.name && input.name.trim()) || domain || "Unknown company";
   const res = await db.insert(globalOrganizations).values({
     name: name.slice(0, 200), normalizedName: normalizeCompanyName(name) || name.toLowerCase(),
@@ -95,7 +158,12 @@ export async function upsertGlobalOrganization(input: CompanyInput): Promise<num
 export async function createWorkspaceAccount(ws: number, input: CompanyInput, sourceType: string): Promise<number> {
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
-  const domain = normalizeDomain(input.domain) || normalizeDomain(input.website) || input.emailDomain || null;
+  // No emailDomain fallback: a company's domain must come from a company
+  // source (LinkedIn, or the record's own companyDomain), never from where
+  // one person happens to collect mail. A blank domain is honest and the
+  // brand/adopt path fills it later; a mailbox domain is a wrong answer that
+  // then poisons matching, linking and email-pattern enrichment.
+  const domain = normalizeDomain(input.domain) || normalizeDomain(input.website) || null;
   const name = (input.name && input.name.trim()) || domain || "Unknown company";
   const orgId = await upsertGlobalOrganization(input);
   const res = await db.insert(accounts).values({
@@ -144,13 +212,18 @@ async function linkPerson(opts: {
 export async function associateProspectToCompany(prospect: {
   id: number; workspaceId: number; company?: string | null; companyDomain?: string | null;
   email?: string | null; title?: string | null; city?: string | null; state?: string | null; country?: string | null;
-}, opts?: { sourceType?: string }): Promise<AssociationResult> {
+}, opts?: { sourceType?: string; linkedin?: LinkedInCompanyFacts | null }): Promise<AssociationResult> {
   const sourceType = opts?.sourceType ?? "prospect_import";
   const db = await getDb();
   if (!db) return { accountId: null, globalOrganizationId: null, created: false, status: "missing", score: 0 };
 
   try {
-    const input = companyInputFromProspect(prospect);
+    // The caller may pass LinkedIn facts it already batched; otherwise read
+    // them here. Either way LinkedIn is what says where this person works.
+    const linkedin = opts?.linkedin !== undefined
+      ? opts.linkedin
+      : (await linkedInCompanyFactsFor(prospect.workspaceId, [prospect.id])).get(prospect.id) ?? null;
+    const input = companyInputFromProspect(prospect, linkedin);
     if (!hasUsableIdentity(input)) {
       await db.update(prospects).set({ companyMatchStatus: "missing" } as never)
         .where(and(eq(prospects.workspaceId, prospect.workspaceId), eq(prospects.id, prospect.id)));
@@ -217,8 +290,10 @@ export async function associateUnlinkedProspects(
   if (!db) return stats;
   const rows = await db.select().from(prospects)
     .where(and(eq(prospects.workspaceId, workspaceId), isNull(prospects.accountId))).limit(limit);
+  // One batched read instead of a LinkedIn lookup per prospect.
+  const linkedin = await linkedInCompanyFactsFor(workspaceId, rows.map((p) => p.id));
   for (const p of rows) {
-    const r = await associateProspectToCompany(p as never, { sourceType });
+    const r = await associateProspectToCompany(p as never, { sourceType, linkedin: linkedin.get(p.id) ?? null });
     stats.processed++;
     if (r.created) stats.created++;
     if (r.status === "linked") stats.linked++;
