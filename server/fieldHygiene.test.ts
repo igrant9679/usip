@@ -24,6 +24,15 @@ describe("the placeholder vocabulary", () => {
     }
   });
 
+  it("em/en dashes are placeholder dashes too — the '—' names the owner saw", () => {
+    for (const v of ["—", "–", "― ―", " — "]) {
+      expect(isPlaceholderToken(v), `${JSON.stringify(v)} not treated as placeholder`).toBe(true);
+    }
+    // A dash INSIDE a real value stays real.
+    expect(isPlaceholderToken("Anne-Marie")).toBe(false);
+    expect(isPlaceholderToken("Smith — Jones Consulting")).toBe(false);
+  });
+
   it("does not eat real values that merely contain the words", () => {
     for (const v of ["Unknown Worlds Entertainment", "NA Sales Director", "Nonexecutive Director", "Null Island Coffee"]) {
       expect(isPlaceholderToken(v), `${v} wrongly treated as placeholder`).toBe(false);

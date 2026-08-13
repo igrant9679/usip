@@ -233,10 +233,12 @@ function ProspectQualityCard() {
     onSuccess: (r) => {
       toast.success(
         `Reconciled ${r.scanned} prospects — ${r.linksScrubbed} links scrubbed, ${r.personsLinked} linked, ` +
-        `${r.linkedinFound} LinkedIn profiles found, ${r.duplicatesSkipped} duplicates collapsed, ` +
+        `${r.linkedinFound} LinkedIn profiles found, ${r.profileRetrievesQueued} profile retrieves queued ` +
+        `(names + photos fill as they complete), ${r.duplicatesSkipped} duplicates collapsed, ` +
         `${r.flaggedUnreconcilable} flagged to Rejections.`,
-        { duration: 10000 },
+        { duration: 12000 },
       );
+      for (const n of r.notes.slice(0, 3)) toast.warning(n, { duration: 12000 });
       if (r.notes.length > 0) console.log("[reconcile] edge-case notes:", r.notes);
       audit.refetch();
     },

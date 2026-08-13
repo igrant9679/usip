@@ -353,6 +353,24 @@ export async function saveScrapeJobAndQueue(
     }
   }
 
+  // A queue row with NO name, NO LinkedIn and NO email is not a prospect —
+  // it is a scrape artifact (news pages produce them) that renders as "—"
+  // and can never be reconciled, enriched, or mailed. Refuse at ingest
+  // (owner directive 2026-08-13); the audit used to flag these AFTER they
+  // appeared, which meant every engine tick could mint new ones.
+  {
+    const before = prospects.length;
+    prospects = prospects.filter((p) =>
+      cleanName(p.firstName, 80) || cleanName(p.lastName, 80)
+      || usableEmailOrNull(p.email)
+      || (p.linkedinUrl && !isPlaceholderToken(p.linkedinUrl)),
+    );
+    const dropped = before - prospects.length;
+    if (dropped > 0) {
+      console.log(`[scraper] ws=${workspaceId} campaign=${campaignId ?? "-"}: ${dropped} identity-less row(s) refused (no name, no LinkedIn, no email)`);
+    }
+  }
+
   // A scrape that returned zero prospects is a *failed* run from the
   // user's perspective — typically the source returned nothing (blocked,
   // rate-limited, query too narrow) or every result was filtered out by

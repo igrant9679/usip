@@ -166,6 +166,9 @@ export interface ReconcileResult {
   requeuedForEnrichment: number;
   linkedinFound: number;
   linkedinSearched: number;
+  /** Person-level LinkedIn retrieves queued — what actually fills names and
+   *  profile photos on the campaign tab (capped by the existing daily cap). */
+  profileRetrievesQueued: number;
   duplicatesSkipped: number;
   flaggedUnreconcilable: number;
   /** Edge cases a human should read — the "document what couldn't be fixed" half. */
@@ -183,7 +186,7 @@ export async function reconcileQueueProspects(opts: {
   const result: ReconcileResult = {
     scanned: 0, linksScrubbed: 0, personsLinked: 0, personsCreated: 0,
     requeuedForEnrichment: 0, linkedinFound: 0, linkedinSearched: 0,
-    duplicatesSkipped: 0, flaggedUnreconcilable: 0, notes: [],
+    profileRetrievesQueued: 0, duplicatesSkipped: 0, flaggedUnreconcilable: 0, notes: [],
   };
   if (!db) return result;
   const { workspaceId } = opts;
@@ -245,6 +248,14 @@ export async function reconcileQueueProspects(opts: {
           workspaceId, userId: opts.userId, isAdmin: opts.isAdmin,
           keywords: `${first} ${last} ${company}`.trim(), limit: 3,
         });
+        if (!res.ok && res.hits.length === 0 && /bridged/i.test(res.message)) {
+          // No bridged LinkedIn account in THIS workspace — every further
+          // search would fail the same way. Say so ONCE, loudly: this was
+          // silently swallowed on the first run and read as "found nothing".
+          result.notes.push(`LinkedIn discovery unavailable: ${res.message}`);
+          searchBudget = 0;
+          continue;
+        }
         if (res.ok) {
           const wantName = canonicalText(`${first} ${last}`);
           const companyToks = canonicalTokens(company);
@@ -273,6 +284,52 @@ export async function reconcileQueueProspects(opts: {
         .where(eq(prospectQueue.id, r.id));
       result.flaggedUnreconcilable++;
       result.notes.push(`row ${r.id}: flagged — no name, no LinkedIn, no email (source: ${r.sourceUrl ?? "unknown"})`);
+    }
+  }
+
+  // ── 3b. The VISIBLE fix: queue person-level LinkedIn retrieves ──
+  // Names, profile photos and the LinkedIn chip on the campaign tab all
+  // come from the linked person's enrichment. A row can carry a profile URL
+  // for months while the person stays unnamed and photo-less because
+  // nothing ever RAN the retrieve. Queue it here for every person that has
+  // a URL but no enrichment yet (or still no real name) — the orchestrator
+  // enforces the daily cap and 30-day freshness itself.
+  {
+    rows = await loadRows(workspaceId);
+    const targets = new Map<number, true>();
+    const liveRows = rows.filter((r) => r.sequenceStatus !== "skipped");
+    const pids = Array.from(new Set(liveRows.map((r) => r.personProspectId).filter((x): x is number => !!x)));
+    if (pids.length > 0) {
+      const people = await db.select({ id: prospects.id, firstName: prospects.firstName, lastName: prospects.lastName, linkedinUrl: prospects.linkedinUrl })
+        .from(prospects).where(and(eq(prospects.workspaceId, workspaceId), inArray(prospects.id, pids)));
+      const { prospectLinkedinEnrichments } = await import("../../../drizzle/schema");
+      const enrichedRows = await db.select({ prospectId: prospectLinkedinEnrichments.prospectId })
+        .from(prospectLinkedinEnrichments)
+        .where(and(eq(prospectLinkedinEnrichments.workspaceId, workspaceId), inArray(prospectLinkedinEnrichments.prospectId, pids)));
+      const enriched = new Set(enrichedRows.map((e) => e.prospectId));
+      const rowLiByPerson = new Map<number, string | null>();
+      for (const r of liveRows) {
+        if (r.personProspectId && r.linkedinUrl && !badLinkedin(r.linkedinUrl)) rowLiByPerson.set(r.personProspectId, r.linkedinUrl);
+      }
+      for (const p of people) {
+        const li = (p.linkedinUrl && !badLinkedin(p.linkedinUrl) && p.linkedinUrl) || rowLiByPerson.get(p.id) || null;
+        if (li && (!hasRealName(p) || !enriched.has(p.id))) targets.set(p.id, true);
+        if (targets.size >= 25) break;
+      }
+    }
+    if (targets.size > 0) {
+      try {
+        const { runForProspects } = await import("../linkedinEnrichment/orchestrator");
+        const handle = await runForProspects({
+          workspaceId, userId: opts.userId, isAdmin: opts.isAdmin,
+          prospectIds: Array.from(targets.keys()),
+          triggerType: "manual_admin_run",
+          options: { includeProfileImage: true },
+        });
+        result.profileRetrievesQueued = handle.total ?? targets.size;
+      } catch (e) {
+        result.notes.push(`LinkedIn profile retrieve unavailable in this workspace: ${(e as Error).message.slice(0, 160)}`);
+      }
     }
   }
 

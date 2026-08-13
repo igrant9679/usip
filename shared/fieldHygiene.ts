@@ -21,6 +21,10 @@
  * an @, a phone must contain a digit, a domain must contain a dot. The token
  * list covers free-text fields (title, company, industry…) that have no
  * shape. Migration 0159 applies the same rules to rows already stored.
+ *
+ * Em/en dashes (– — ―) count as placeholder dashes too — owner-caught
+ * 2026-08-13: ARE rows arrived with a literal "—" as the name, which the
+ * ASCII-only dash rule waved through as a "real" name.
  */
 
 /**
@@ -34,7 +38,7 @@
  * adding a third vocabulary, stop and widen one of these instead.
  */
 export const PLACEHOLDER_TOKEN =
-  /^[\s<>[\]()"'.-]*(unknown|n\/?a|none|null|not\s*(available|found|known)|-+)[\s<>[\]()"'.-]*$/i;
+  /^[\s<>[\]()"'.\-–—―]*(unknown|n\/?a|none|null|not\s*(available|found|known)|[-–—―]+)[\s<>[\]()"'.\-–—―]*$/i;
 
 export function isPlaceholderToken(value: unknown): boolean {
   const s = String(value ?? "").trim();

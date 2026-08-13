@@ -132,6 +132,17 @@ describe("exclusivity is enforced at every ingest seam", () => {
   });
 });
 
+describe("identity-less rows are refused at INGEST — not merely flagged after", () => {
+  it("saveScrapeJobAndQueue drops rows with no name, no LinkedIn, no email", () => {
+    // The audit's flag half runs on demand; the engine ticks every 3 minutes.
+    // Without this filter every tick could mint fresh "—" rows faster than
+    // anyone reconciles them — exactly what the owner reported on 08-13.
+    const src = readFileSync("server/routers/are/scraper.ts", "utf8");
+    expect(src).toContain("identity-less row(s) refused");
+    expect(src).toMatch(/cleanName\(p\.firstName, 80\) \|\| cleanName\(p\.lastName, 80\)\s*\|\| usableEmailOrNull\(p\.email\)/);
+  });
+});
+
 describe("the reconcile pass keeps its promises (structural)", () => {
   const src = readFileSync("server/services/are/prospectReconcile.ts", "utf8");
 
@@ -148,6 +159,18 @@ describe("the reconcile pass keeps its promises (structural)", () => {
   it("LinkedIn discovery is confidence-gated: exact name AND company mention", () => {
     expect(src).toContain("canonicalText(h.name) === wantName");
     expect(src).toContain("companyMentioned");
+  });
+
+  it("an unbridged workspace is reported loudly, not read as 'found nothing'", () => {
+    expect(src).toContain("LinkedIn discovery unavailable");
+    expect(src).toContain("searchBudget = 0");
+  });
+
+  it("the VISIBLE fix runs: person-level retrieves are queued for URL-carrying, unnamed/unenriched persons", () => {
+    expect(src).toContain("runForProspects");
+    expect(src).toContain('triggerType: "manual_admin_run"');
+    expect(src).toContain("includeProfileImage: true");
+    expect(src).toContain("profileRetrievesQueued");
   });
 
   it("never writes name/email person columns onto queue rows (the 0153 rule)", () => {
