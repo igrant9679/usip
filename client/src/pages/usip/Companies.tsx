@@ -97,8 +97,25 @@ function DuplicateReview() {
   const [mergingKey, setMergingKey] = useState<string | null>(null);
   const merge = trpc.companies.merge.useMutation();
 
+  /** Does this domain plausibly belong to a company of this name?
+   *  "Takoma Children's School" + takomachildren.org → yes; + dc.gov → no. */
+  const domainFitsName = (name: string, domain: string | null) => {
+    if (!domain) return false;
+    const root = domain.replace(/^www\./, "").split(".")[0].toLowerCase();
+    const squashed = name.toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (!root || root.length < 3) return false;
+    return squashed.includes(root) || root.includes(squashed.slice(0, Math.max(4, Math.min(12, squashed.length))));
+  };
+
   const defaultPrimary = (g: NonNullable<typeof groups>[number]) =>
-    [...g.accounts].sort((a, b) => (b.contactCount - a.contactCount) || (new Date(a.createdAt ?? 0).getTime() - new Date(b.createdAt ?? 0).getTime()))[0]?.id;
+    [...g.accounts].sort((a, b) =>
+      // For a same-NAME collision the accounts hold different domains and only
+      // one is likely the company's own — that beats popularity. (For a
+      // same-domain collision this is a no-op: the domains are identical.)
+      (Number(domainFitsName(b.name, b.domain)) - Number(domainFitsName(a.name, a.domain)))
+      || (b.contactCount - a.contactCount)
+      || (new Date(a.createdAt ?? 0).getTime() - new Date(b.createdAt ?? 0).getTime()),
+    )[0]?.id;
 
   const mergeGroup = async (g: NonNullable<typeof groups>[number]) => {
     const primaryId = primaries[g.key] ?? defaultPrimary(g);
@@ -129,7 +146,7 @@ function DuplicateReview() {
           <DialogHeader>
             <DialogTitle>Duplicate companies</DialogTitle>
             <DialogDescription>
-              Accounts sharing a domain. Pick the one that survives — contacts, prospects and deals from the others move onto it, and the empties are archived. Merging needs an admin role.
+              Accounts that look like the same company — either sharing a domain, or sharing a name while holding different domains (one company's people can carry unrelated mailbox domains, which creates an account per domain). Pick the one that survives — contacts, prospects and deals from the others move onto it, and the empties are archived. Merging needs an admin role.
             </DialogDescription>
           </DialogHeader>
           {isLoading ? (
@@ -143,7 +160,12 @@ function DuplicateReview() {
                 return (
                   <div key={g.key} className="rounded-lg border border-border">
                     <div className="flex items-center justify-between border-b border-border/60 bg-muted/30 px-3 py-1.5">
-                      <span className="text-[12px] font-medium">{g.key}</span>
+                      <span className="text-[12px] font-medium">
+                        {g.reason === "name" ? g.key.replace(/^name:/, "") : g.key}
+                        <span className="ml-2 rounded bg-muted px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground">
+                          {g.reason === "name" ? "same name, different domains" : "same domain"}
+                        </span>
+                      </span>
                       <Button size="sm" className="h-7 gap-1.5" disabled={mergingKey !== null} onClick={() => mergeGroup(g)}>
                         {mergingKey === g.key ? <RefreshCw className="size-3.5 animate-spin" /> : <GitMerge className="size-3.5" />}
                         Merge {g.accounts.length - 1} into selected

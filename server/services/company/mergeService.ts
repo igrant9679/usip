@@ -13,22 +13,35 @@ import {
 } from "../../../drizzle/schema";
 
 export interface DuplicateGroup {
-  /** The shared normalized domain the accounts collide on. */
+  /** The shared normalized domain, or name, the accounts collide on. */
   key: string;
+  /** Which collision this is — the two shapes need different judgement. */
+  reason: "domain" | "name";
   accounts: Array<{ id: number; name: string; domain: string | null; createdAt: Date | null; contactCount: number }>;
 }
 
 /**
- * Accounts sharing a normalized domain, with enough detail to review which
- * should survive. Archived accounts are excluded — a merged duplicate keeps
- * its normalizedDomain, so without this filter every completed merge would
- * resurface in the list forever.
+ * Accounts that are probably the same company, with enough detail to review
+ * which should survive. Archived accounts are excluded — a merged duplicate
+ * keeps its normalizedDomain, so without this filter every completed merge
+ * would resurface in the list forever.
+ *
+ * TWO collision shapes, because they arise from opposite mistakes:
+ *
+ *  - `domain`: same domain, different names — the classic import duplicate.
+ *  - `name`: same name, DIFFERENT domains. This is what association produces
+ *    when one company's people carry unrelated mailbox domains: the matcher
+ *    reads each distinct domain as a distinct company and creates an account
+ *    per domain. Seen 2026-08-13 after the first association run — "Verizon
+ *    Enterprise" fragmented into 28 accounts, and a school picked up dc.gov,
+ *    ftc.gov and its own takomachildren.org as three separate companies.
+ *    Grouping only by domain made these structurally invisible.
  */
 export async function findDuplicateAccounts(ws: number): Promise<DuplicateGroup[]> {
   const db = await getDb();
   if (!db) return [];
   const rows = await db
-    .select({ id: accounts.id, key: accounts.normalizedDomain, name: accounts.name, domain: accounts.domain, createdAt: accounts.createdAt })
+    .select({ id: accounts.id, key: accounts.normalizedDomain, nameKey: accounts.normalizedName, name: accounts.name, domain: accounts.domain, createdAt: accounts.createdAt })
     .from(accounts)
     .where(and(eq(accounts.workspaceId, ws), isNull(accounts.archivedAt)));
   const byKey = new Map<string, typeof rows>();
@@ -38,7 +51,22 @@ export async function findDuplicateAccounts(ws: number): Promise<DuplicateGroup[
     arr.push(r); byKey.set(r.key, arr);
   }
   // Array.from, not a spread — iterator spreads are TS2802 under this tsconfig.
-  const groups = Array.from(byKey.entries()).filter(([, g]) => g.length > 1);
+  const domainGroups = Array.from(byKey.entries()).filter(([, g]) => g.length > 1);
+
+  // Same-name groups, minus any set already reported as a domain collision.
+  const alreadyGrouped = new Set(domainGroups.flatMap(([, g]) => g.map((r) => r.id)));
+  const byName = new Map<string, typeof rows>();
+  for (const r of rows) {
+    if (!r.nameKey || alreadyGrouped.has(r.id)) continue;
+    const arr = byName.get(r.nameKey) ?? [];
+    arr.push(r); byName.set(r.nameKey, arr);
+  }
+  const nameGroups = Array.from(byName.entries()).filter(([, g]) => g.length > 1);
+
+  const groups: Array<[string, typeof rows, DuplicateGroup["reason"]]> = [
+    ...domainGroups.map(([k, g]) => [k, g, "domain"] as [string, typeof rows, DuplicateGroup["reason"]]),
+    ...nameGroups.map(([k, g]) => [k, g, "name"] as [string, typeof rows, DuplicateGroup["reason"]]),
+  ];
   if (groups.length === 0) return [];
 
   // Linked-contact counts inform which account should be the primary.
@@ -50,8 +78,9 @@ export async function findDuplicateAccounts(ws: number): Promise<DuplicateGroup[
     .groupBy(contacts.accountId);
   const byAccount = new Map(counts.map((r) => [Number(r.accountId), Number(r.c)]));
 
-  return groups.map(([key, g]) => ({
-    key,
+  return groups.map(([key, g, reason]) => ({
+    key: reason === "name" ? `name:${key}` : key,
+    reason,
     accounts: g.map((r) => ({ id: r.id, name: r.name, domain: r.domain, createdAt: r.createdAt, contactCount: byAccount.get(r.id) ?? 0 })),
   }));
 }
