@@ -51,7 +51,8 @@ import { getDb } from "../../db";
 import { parseLlmJson } from "./llmJson";
 import { invokeLLM, isRetryableLLMError } from "../../_core/llm";
 import { router } from "../../_core/trpc";
-import { workspaceProcedure } from "../../_core/workspace";
+import { isAdminRole, requireMinRole, workspaceProcedure } from "../../_core/workspace";
+import { recordAudit } from "../../audit";
 import { notifyIfEnabled } from "../../services/policyNotify";
 import { HUMAN_COPY_RULES, humanizeAiCopy } from "../../services/humanCopy";
 import { resolveVerifiedEmail } from "../../services/scraper";
@@ -1457,6 +1458,44 @@ export const prospectsRouter = router({
     }),
 
   /** Add a prospect manually */
+  /**
+   * Read-only data-quality audit over the whole workspace queue (all
+   * campaigns): missing names, broken links, unlinked persons, duplicates,
+   * cross-campaign claims, unreconcilable rows. Feeds the Audit card; the
+   * fix half is `reconcile` below.
+   */
+  audit: workspaceProcedure.query(async ({ ctx }) => {
+    const { auditQueueProspects } = await import("../../services/are/prospectReconcile");
+    return auditQueueProspects(ctx.workspace.id);
+  }),
+
+  /**
+   * The fix pass (manager+): scrub broken links, link/create canonical
+   * persons, re-queue name-less rows that have a profile to enrich from,
+   * confidence-gated LinkedIn discovery (bounded — spends bridged-account
+   * search allowance), flag unreconcilable rows to Rejections, and enforce
+   * one-campaign-per-prospect over historic rows (keeper = most engaged).
+   * Audited; returns the run's numbers plus human-readable edge-case notes.
+   */
+  reconcile: workspaceProcedure
+    .input(z.object({ linkedinSearchBudget: z.number().int().min(0).max(50).default(10) }).optional())
+    .mutation(async ({ ctx, input }) => {
+      requireMinRole(ctx.member.role, "manager", "Reconciling prospects requires manager access.");
+      const { reconcileQueueProspects } = await import("../../services/are/prospectReconcile");
+      const res = await reconcileQueueProspects({
+        workspaceId: ctx.workspace.id,
+        userId: ctx.user.id,
+        isAdmin: isAdminRole(ctx.member.role),
+        linkedinSearchBudget: input?.linkedinSearchBudget ?? 10,
+      });
+      await recordAudit({
+        workspaceId: ctx.workspace.id, actorUserId: ctx.user.id,
+        action: "update", entityType: "are_prospect_reconcile", entityId: 0,
+        after: { ...res, notes: res.notes.slice(0, 20) },
+      });
+      return res;
+    }),
+
   addManual: workspaceProcedure
     .input(z.object({
       campaignId: z.number(),
@@ -1476,6 +1515,19 @@ export const prospectsRouter = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const { campaignId, ...rest } = input;
+      // Campaign exclusivity: refuse loudly rather than silently creating the
+      // workspace's second copy of a person — the message names where they
+      // already live so the user can go act on THAT row.
+      const { workspaceQueueIdentityIndex, existingClaim } = await import("../../services/are/queueIdentity");
+      const claim = existingClaim(await workspaceQueueIdentityIndex(ctx.workspace.id), rest);
+      if (claim) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: claim.campaignId === campaignId
+            ? "This prospect is already in this campaign."
+            : `This prospect already belongs to another campaign (id ${claim.campaignId ?? "—"}). A prospect can only be in one campaign at a time.`,
+        });
+      }
       const [row] = await db.insert(prospectQueue).values({
         workspaceId: ctx.workspace.id,
         campaignId,
@@ -1530,18 +1582,14 @@ export const prospectsRouter = router({
         return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s) ? s.slice(0, 320) : undefined;
       };
 
-      // Dedup against what's already in this campaign (by email + linkedin URL).
-      const existing = await db.select({ email: prospectQueue.email, linkedinUrl: prospectQueue.linkedinUrl })
-        .from(prospectQueue)
-        .where(and(eq(prospectQueue.campaignId, input.campaignId), eq(prospectQueue.workspaceId, ctx.workspace.id)));
-      const seen = new Set<string>();
-      for (const e of existing) {
-        if (e.email) seen.add("e:" + e.email.toLowerCase());
-        if (e.linkedinUrl) seen.add("u:" + e.linkedinUrl.toLowerCase());
-      }
+      // Dedup against the WHOLE workspace queue, not just this campaign —
+      // campaign exclusivity (2026-08-12) means a row claimed by a sibling
+      // campaign is skipped too, and reported under its own counter.
+      const { workspaceQueueIdentityIndex, existingClaim, queueIdentityKeys } = await import("../../services/are/queueIdentity");
+      const index = await workspaceQueueIdentityIndex(ctx.workspace.id);
 
       const rows: Array<typeof prospectQueue.$inferInsert> = [];
-      let skippedDup = 0, skippedEmpty = 0;
+      let skippedDup = 0, skippedEmpty = 0, skippedOtherCampaign = 0;
       for (const r of input.rows) {
         const first = clamp(r.firstName, 80);
         const last = clamp(r.lastName, 80);
@@ -1549,11 +1597,16 @@ export const prospectsRouter = router({
         const linkedinUrl = r.linkedinUrl ? String(r.linkedinUrl).trim() : undefined;
         // Need at least a name or an email to be worth anything.
         if (!first && !last && !email) { skippedEmpty++; continue; }
-        const ek = email ? "e:" + email : null;
-        const uk = linkedinUrl ? "u:" + linkedinUrl.toLowerCase() : null;
-        if ((ek && seen.has(ek)) || (uk && seen.has(uk))) { skippedDup++; continue; }
-        if (ek) seen.add(ek);
-        if (uk) seen.add(uk);
+        const shape = { firstName: first, lastName: last, email, linkedinUrl, companyName: clamp(r.companyName, 200), companyDomain: clamp(r.companyDomain, 200) };
+        const claim = existingClaim(index, shape);
+        if (claim) {
+          if (claim.campaignId === input.campaignId) skippedDup++;
+          else skippedOtherCampaign++;
+          continue;
+        }
+        for (const k of queueIdentityKeys(shape)) {
+          index.set(k, { rowId: -1, campaignId: input.campaignId });
+        }
         rows.push({
           workspaceId: ctx.workspace.id,
           campaignId: input.campaignId,
@@ -1586,7 +1639,7 @@ export const prospectsRouter = router({
           }
         }
       }
-      return { imported, skippedDuplicates: skippedDup, skippedEmpty, withEmail: rows.filter((r) => r.email).length };
+      return { imported, skippedDuplicates: skippedDup, skippedEmpty, skippedOtherCampaign, withEmail: rows.filter((r) => r.email).length };
     }),
 
   /** Reject a prospect with an optional reason */

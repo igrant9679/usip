@@ -337,6 +337,22 @@ export async function saveScrapeJobAndQueue(
   const db = await getDb();
   if (!db) return;
 
+  // Campaign exclusivity belt (owner directive 2026-08-12): a person already
+  // in ANY campaign's queue is never queued again — not for a sibling
+  // campaign (one campaign per prospect) and not for the same one (dedup).
+  // The engine pre-filters its own discovery; this is the choke point that
+  // covers every other caller, so a new ingest path cannot skip the rule.
+  if (campaignId && prospects.length > 0) {
+    const { workspaceQueueIdentityIndex, existingClaim } = await import("../../services/are/queueIdentity");
+    const index = await workspaceQueueIdentityIndex(workspaceId);
+    const before = prospects.length;
+    prospects = prospects.filter((p) => !existingClaim(index, p));
+    const dropped = before - prospects.length;
+    if (dropped > 0) {
+      console.log(`[scraper] ws=${workspaceId} campaign=${campaignId}: ${dropped} prospect(s) dropped — identity already claimed in this workspace's queue`);
+    }
+  }
+
   // A scrape that returned zero prospects is a *failed* run from the
   // user's perspective — typically the source returned nothing (blocked,
   // rate-limited, query too narrow) or every result was filtered out by

@@ -32,7 +32,6 @@
  * Per-campaign and per-phase try/catch so one failure never blocks the rest.
  */
 import { createHash } from "node:crypto";
-import { canonicalText } from "@shared/canonicalText";
 import { and, desc, eq, gte, inArray, isNotNull, like, lte, notInArray, or, sql } from "drizzle-orm";
 import { getDb } from "./db";
 import {
@@ -65,6 +64,7 @@ import { ARE_DEFAULT_SOURCES, normalizeSources } from "@shared/areSources";
 import { normalizeSequence } from "@shared/areSequenceSteps";
 import { apolloPulledToday, apolloSearchPeople, getApolloDailyCap } from "./services/apollo";
 import { archivedWorkspaceIds } from "./_core/workspaceArchive";
+import { queueIdentityKeys } from "./services/are/queueIdentity";
 import {
   buildQuickenrichFilters,
   getQuickEnrichKey,
@@ -1097,10 +1097,15 @@ async function runDiscovery(campaign: Campaign): Promise<number> {
   const configured = normalizeSources(campaign.prospectSources);
   const sources: string[] = configured.length > 0 ? configured : [...ARE_DEFAULT_SOURCES];
 
-  // Seed the dedup set with everything already in the queue for this
-  // campaign — keeps subsequent ticks from re-adding the same people.
+  // Seed the dedup index with everything already in the queue for the WHOLE
+  // workspace, remembering which campaign owns each identity. Two jobs in
+  // one pass: same-campaign dedup (keeps subsequent ticks from re-adding the
+  // same people — the original behavior) and CAMPAIGN EXCLUSIVITY (owner
+  // directive 2026-08-12: a prospect may belong to only one ARE campaign, so
+  // a person already claimed by a sibling campaign is never added here).
   const existing = await db
     .select({
+      campaignId: prospectQueue.campaignId,
       email: prospectQueue.email,
       linkedinUrl: prospectQueue.linkedinUrl,
       firstName: prospectQueue.firstName,
@@ -1109,19 +1114,15 @@ async function runDiscovery(campaign: Campaign): Promise<number> {
       companyName: prospectQueue.companyName,
     })
     .from(prospectQueue)
-    .where(
-      and(
-        eq(prospectQueue.campaignId, campaign.id),
-        eq(prospectQueue.workspaceId, campaign.workspaceId),
-      ),
-    );
-  const seen = new Set<string>();
+    .where(eq(prospectQueue.workspaceId, campaign.workspaceId))
+    .orderBy(prospectQueue.id);
+  const claimed = new Map<string, number | null>();
   for (const e of existing) {
-    if (e.email) seen.add("e:" + e.email.toLowerCase());
-    if (e.linkedinUrl) seen.add("u:" + e.linkedinUrl.toLowerCase());
-    const nk = nameOrgDedupKey(e);
-    if (nk) seen.add(nk);
+    for (const k of queueIdentityKeys(e)) {
+      if (!claimed.has(k)) claimed.set(k, e.campaignId);
+    }
   }
+  let excludedOtherCampaign = 0;
 
   type SourceType =
     | "google_business"
@@ -1219,19 +1220,18 @@ async function runDiscovery(campaign: Campaign): Promise<number> {
       continue;
     }
     const { sourceType, query: q, raw } = s.value;
-    // Within-tick + cross-tick dedup by email and LinkedIn URL.
+    // Within-tick + cross-tick dedup AND cross-campaign exclusivity, one
+    // vocabulary (services/are/queueIdentity).
     const unique = raw.filter((p) => {
-      const email = String(p.email ?? "").toLowerCase().trim();
-      const url = String(p.linkedinUrl ?? "").toLowerCase().trim();
-      const keyE = email ? "e:" + email : null;
-      const keyU = url ? "u:" + url : null;
-      const keyN = nameOrgDedupKey(p);
-      if (keyE && seen.has(keyE)) return false;
-      if (keyU && seen.has(keyU)) return false;
-      if (keyN && seen.has(keyN)) return false;
-      if (keyE) seen.add(keyE);
-      if (keyU) seen.add(keyU);
-      if (keyN) seen.add(keyN);
+      const keys = queueIdentityKeys(p);
+      for (const k of keys) {
+        const owner = claimed.get(k);
+        if (owner !== undefined) {
+          if (owner !== campaign.id) excludedOtherCampaign++;
+          return false;
+        }
+      }
+      for (const k of keys) claimed.set(k, campaign.id);
       return true;
     });
     // Validate + score before queueing. Drop rows with no anchor at all
@@ -1253,6 +1253,11 @@ async function runDiscovery(campaign: Campaign): Promise<number> {
         `Failed to save ${sourceType} results: ${(e as Error)?.message ?? e}`, errorDetails(e));
     }
   }
+  if (excludedOtherCampaign > 0) {
+    await emitLog(campaign.workspaceId, campaign.id, "discovery", "info",
+      `${excludedOtherCampaign} prospect${excludedOtherCampaign === 1 ? "" : "s"} excluded — already active in another campaign in this workspace (one campaign per prospect).`);
+  }
+
   // Persist slice rotation state — bump lastSearchedAt + lastNewCount
   // for the slice we just ran so the next tick picks a different angle.
   const now = Date.now();
@@ -1380,22 +1385,10 @@ function scoreIcpMatch(
   return Math.min(100, score);
 }
 
-/**
- * Conservative dedup key on normalized name + company/domain, used alongside
- * exact email/LinkedIn-URL keys so the same person is caught even when their
- * email is missing or differs between sources. Deliberately a normalized
- * EXACT match (not edit-distance) to avoid false-merging two different people
- * at the same company. Returns null when there isn't enough to key on.
- */
-function nameOrgDedupKey(p: Record<string, unknown>): string | null {
-  // @shared/canonicalText. The trailing collapse this used to carry was a
-  // no-op — [^a-z0-9]+ has already collapsed every run of separators.
-  const norm = canonicalText;
-  const name = `${norm(p.firstName)} ${norm(p.lastName)}`.trim();
-  const org = norm(p.companyDomain) || norm(p.companyName);
-  if (!name || !org) return null;
-  return `n:${name}@${org}`;
-}
+/* nameOrgDedupKey moved to services/are/queueIdentity.ts (2026-08-12): the
+   dedup and the campaign-exclusivity check must share ONE identity
+   vocabulary, and two copies of a normalization rule is how they stop
+   agreeing. */
 
 /**
  * Apollo.io discovery — structured people search against the campaign's ICP.

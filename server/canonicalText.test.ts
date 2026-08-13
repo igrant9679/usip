@@ -168,7 +168,9 @@ describe("nobody re-declares the rule", () => {
     for (const rel of [
       "server/services/linkedinEnrichment/snapshot.ts",
       "server/services/linkedinEnrichment/matching.ts",
-      "server/areEngine.ts",
+      // nameOrgDedupKey moved out of areEngine into the shared identity
+      // module (2026-08-12, campaign exclusivity) — the import moved with it.
+      "server/services/are/queueIdentity.ts",
       "server/services/discovery/consolidate.ts",
       "server/services/scoring/operators.ts",
     ]) {
