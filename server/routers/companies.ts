@@ -201,23 +201,34 @@ export const companiesRouter = router({
       const urlNames = await repairUrlNamedAccounts(ctx.workspace.id);
       const { runBrandReconciliation } = await import("../services/company/brandReconciler");
       const sweep = await runBrandReconciliation({ limit: input?.searchLimit ?? 30, workspaceId: ctx.workspace.id });
+      // The sweep only STORES what it saw; a name-only hit writes nothing by
+      // the reconciler's spec. Adoption is the separate, lower-trust step that
+      // turns those stored name matches into domains for accounts that have
+      // none — see domainAdopt.ts for why it is deliberately weak.
+      const { adoptBrandDomains } = await import("../services/company/domainAdopt");
+      const adopted = await adoptBrandDomains(ctx.workspace.id);
       const db = await getDb();
       let remainingUnverified = 0;
+      let remainingWithoutDomain = 0;
       if (db) {
-        const { isNull, ne, sql: dsql } = await import("drizzle-orm");
-        const [row] = await db
-          .select({ n: dsql<number>`COUNT(*)` })
-          .from(accounts)
-          .where(and(
-            eq(accounts.workspaceId, ctx.workspace.id),
-            isNull(accounts.archivedAt),
-            ne(accounts.name, ""),
-            isNull(accounts.brandVerifiedAt),
-          ));
-        remainingUnverified = Number(row?.n ?? 0);
+        const { isNull, ne, or: dor, sql: dsql } = await import("drizzle-orm");
+        const base = [
+          eq(accounts.workspaceId, ctx.workspace.id),
+          isNull(accounts.archivedAt),
+          ne(accounts.name, ""),
+        ];
+        const [unverified] = await db.select({ n: dsql<number>`COUNT(*)` }).from(accounts)
+          .where(and(...base, isNull(accounts.brandVerifiedAt)));
+        remainingUnverified = Number(unverified?.n ?? 0);
+        // The metric that actually tracks the owner's ask. `remainingUnverified`
+        // plateaus by design (a name match never verifies), so a loop watching
+        // only that would stop while domains were still being filled.
+        const [domainless] = await db.select({ n: dsql<number>`COUNT(*)` }).from(accounts)
+          .where(and(...base, dor(isNull(accounts.domain), dsql`${accounts.domain} = ''`)));
+        remainingWithoutDomain = Number(domainless?.n ?? 0);
       }
-      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "brand_bulk_resolve", entityId: 0, after: { urlNames, sweep, remainingUnverified } });
-      return { urlNames, sweep, remainingUnverified };
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "brand_bulk_resolve", entityId: 0, after: { urlNames, sweep, adopted, remainingUnverified, remainingWithoutDomain } });
+      return { urlNames, sweep, adopted, remainingUnverified, remainingWithoutDomain };
     }),
   merge: workspaceProcedure
     .input(z.object({ primaryAccountId: z.number().int().positive(), duplicateAccountId: z.number().int().positive() }))

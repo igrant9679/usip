@@ -90,6 +90,13 @@ export const CONFIDENCE = {
   /** Company name derived from the domain root ("acme-corp.com" → "Acme
    *  Corp") — the last-resort filler; any real source replaces it. */
   domainDerived: 40,
+  /** Domain taken from a brand-directory NAME match, with nothing else known
+   *  about the company. Deliberately below `preexisting` and every evidence
+   *  source: a name match is a good guess, not a fact — searching "aarp"
+   *  returns aarp.info, whose real domain is aarp.org. It fills an EMPTY
+   *  field so the record becomes usable, and yields to the first real
+   *  evidence (an email domain, LinkedIn, QuickEnrich) that disagrees. */
+  brandSearchName: 60,
 } as const;
 
 /** Normalize for cross-source agreement checks — NOT for storage. */

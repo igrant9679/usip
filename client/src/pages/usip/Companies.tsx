@@ -261,15 +261,16 @@ export default function Companies() {
   const runResolveBrands = async () => {
     setResolving(true);
     const t = toast.loading("Resolving company brands…");
-    let renamed = 0, applied = 0, searched = 0, passes = 0, prev = Infinity;
+    let renamed = 0, applied = 0, filled = 0, searched = 0, passes = 0, prev = Infinity;
     try {
       for (let i = 0; i < 40; i++) {
         const r = await resolveBrands.mutateAsync({ searchLimit: 50 });
         passes++;
         renamed += r.urlNames.renamed;
-        applied += r.sweep.applied;
+        applied += r.sweep.applied + r.sweep.corroborated;
+        filled += r.adopted.filled;
         searched += r.sweep.searched;
-        toast.loading(`Pass ${passes} — ${applied} resolved, ${r.remainingUnverified} left to check`, { id: t });
+        toast.loading(`Pass ${passes} — ${filled + applied} companies resolved, ${r.remainingWithoutDomain} still without a domain`, { id: t });
         // A failed search means the lookup service didn't answer (bad key, rate
         // limit) — not that the company is unknown. Stop and say so rather than
         // grinding through the rest.
@@ -280,10 +281,13 @@ export default function Companies() {
         }
         // Nothing searched means every remaining account is negative-cached or
         // already verified; another pass would repeat the same no-op.
-        if (r.sweep.searched === 0 || r.remainingUnverified >= prev) break;
-        prev = r.remainingUnverified;
+        if (r.sweep.searched === 0) break;
+        // Track domains, not verification: a name match fills a domain without
+        // ever verifying, so remainingUnverified would stall this immediately.
+        if (r.remainingWithoutDomain >= prev && r.adopted.filled === 0 && r.sweep.applied === 0) break;
+        prev = r.remainingWithoutDomain;
       }
-      toast.success(`Brands resolved — ${applied} identified, ${renamed} names repaired (${searched} searches over ${passes} passes)`, { id: t });
+      toast.success(`Brands resolved — ${filled + applied} companies got a domain, ${renamed} names repaired (${searched} searches over ${passes} passes)`, { id: t });
       utils.companies.search.invalidate();
     } catch (e) {
       toast.error((e as Error).message || "Brand resolution failed", { id: t });
