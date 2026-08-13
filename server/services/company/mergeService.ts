@@ -29,13 +29,21 @@ export interface DuplicateGroup {
  * TWO collision shapes, because they arise from opposite mistakes:
  *
  *  - `domain`: same domain, different names — the classic import duplicate.
- *  - `name`: same name, DIFFERENT domains. This is what association produces
- *    when one company's people carry unrelated mailbox domains: the matcher
- *    reads each distinct domain as a distinct company and creates an account
- *    per domain. Seen 2026-08-13 after the first association run — "Verizon
- *    Enterprise" fragmented into 28 accounts, and a school picked up dc.gov,
- *    ftc.gov and its own takomachildren.org as three separate companies.
- *    Grouping only by domain made these structurally invisible.
+ *  - `name`: same name, and the domains do NOT agree — either none of them
+ *    has one, or they hold different ones. Both arise from association, and
+ *    grouping by domain made both structurally invisible: a group with no
+ *    domains has no key at all, and a group with conflicting domains lands
+ *    in a different bucket per member.
+ *
+ *    Measured 2026-08-13, on the first association run over ~2,500 prospects:
+ *    556 same-name groups, of which 459 have no domain conflict to resolve
+ *    (all blank, or all the same) — those are plain duplicate creation. The
+ *    other 97 hold genuinely different domains, because a company's people
+ *    carry unrelated mailbox domains and each one reads as its own company:
+ *    Takoma Children's School came out as six accounts — takomachildren.org
+ *    (right) plus dc.gov, ftc.gov, htgc.com and afterschoolalliance.org, all
+ *    lifted from somebody's mailbox. Those need a human, which is why the
+ *    review dialog sorts the name-matching domain to the top.
  */
 export async function findDuplicateAccounts(ws: number): Promise<DuplicateGroup[]> {
   const db = await getDb();
