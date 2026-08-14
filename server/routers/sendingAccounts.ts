@@ -208,8 +208,14 @@ export const AccountCreateInput = z.object({
   imapSecure: z.boolean().optional(),
   imapUsername: z.string().max(255).optional(),
   imapPassword: z.string().optional(),
-  dailySendLimit: z.number().int().min(1).max(10000).default(500),
-  warmupStatus: z.enum(["not_started", "in_progress", "complete"]).default("not_started"),
+  // NO .default() here, deliberately. This schema is also the basis of the
+  // UPDATE input via .partial(), and in this Zod version .partial() does NOT
+  // strip a default: parsing {id, name} still yields dailySendLimit: 500.
+  // That made every partial update rewrite the field — set the limit to 50 in
+  // the wizard, then save the signature step, and the limit silently went back
+  // to 500. Defaults now live at the create site, where they belong.
+  dailySendLimit: z.number().int().min(1).max(10000).optional(),
+  warmupStatus: z.enum(["not_started", "in_progress", "complete"]).optional(),
   /* Mailbox setup flow (migration 0118) */
   isDefault: z.boolean().optional(),
   hourlySendLimit: z.number().int().min(1).max(1000).optional(),
@@ -575,6 +581,10 @@ export const sendingAccountsRouter = router({
       const [result] = await db.insert(sendingAccounts).values({
         workspaceId: ctx.workspace.id,
         ...cols,
+        // Defaults applied HERE rather than on the shared schema — see the
+        // note on AccountCreateInput. Same values as before for a create.
+        dailySendLimit: cols.dailySendLimit ?? 500,
+        warmupStatus: cols.warmupStatus ?? "not_started",
         ...(sendgridApiKey?.trim() ? { sendgridApiKeyEnc: encryptSecret(sendgridApiKey.trim()) } : {}),
         connectionStatus: "untested",
       });
@@ -587,7 +597,11 @@ export const sendingAccountsRouter = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const { id, sendgridApiKey, ...rest } = input;
-      const patch: Record<string, unknown> = { ...rest };
+      // Only fields the caller actually sent. `undefined` in a drizzle .set()
+      // is not a no-op everywhere, and this is the last line of defence
+      // against a schema-level default leaking back into a partial update.
+      const patch: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(rest)) if (v !== undefined) patch[k] = v;
       // A BLANK key means "keep the stored one", not "clear it". The UI never
       // receives the existing key back (it cannot — only the ciphertext is
       // stored), so an empty field is the absence of a change. Without this,
