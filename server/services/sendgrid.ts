@@ -304,9 +304,13 @@ export async function listSendGridAuthenticatedDomains(apiKey: string): Promise<
       .filter((d) => (d as { valid?: unknown })?.valid === true || (d as { valid?: unknown })?.valid === "true")
       .map((d) => {
         const r = d as Record<string, unknown>;
-        const sub = typeof r.subdomain === "string" ? r.subdomain : null;
-        const domain = typeof r.domain === "string" ? r.domain : null;
-        return domain ? (sub ? `${sub}.${domain}` : domain).toLowerCase() : null;
+        // The ROOT domain, not `subdomain.domain`. SendGrid's `subdomain`
+        // ("em7171") is only the CNAME host carrying its DKIM/return-path
+        // records — nobody sends from it. Authenticating cforcefederal.com
+        // permits any address AT cforcefederal.com, which is the whole point
+        // of Domain Authentication. Building "em7171.cforcefederal.com" and
+        // matching against it rejects every real address on the domain.
+        return typeof r.domain === "string" && r.domain.trim() ? r.domain.trim().toLowerCase() : null;
       })
       .filter((d): d is string => !!d);
     return { ok: true, domains: Array.from(new Set(domains)).sort() };

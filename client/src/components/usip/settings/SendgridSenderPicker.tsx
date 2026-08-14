@@ -93,8 +93,15 @@ export function SendgridSenderPicker({
     const host = email.trim().toLowerCase().split("@")[1] ?? "";
     return domains.some((d) => host === d || host.endsWith(`.${d}`));
   };
+  /** Several addresses at once — commas, semicolons, spaces or newlines. */
+  const typedEmails = customEmail
+    .split(/[\s,;]+/)
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean);
+  const validTyped = typedEmails.filter((e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e));
+  const rejectedTyped = validTyped.filter((e) => !domainAllows(e));
   const link = async () => {
-    const emails = customEmail.trim() ? [customEmail.trim().toLowerCase()] : Array.from(checked);
+    const emails = typedEmails.length ? validTyped : Array.from(checked);
     if (emails.length === 0) { toast.error("Pick at least one sender"); return; }
     try {
       const r = await importSenders.mutateAsync({ apiKey, accountId, emails });
@@ -149,17 +156,24 @@ export function SendgridSenderPicker({
               {" "}— any address there can send. Enter the one to link.
             </p>
             <div className="flex gap-2">
-              <Input
+              <textarea
                 autoFocus
-                placeholder={`you@${domains[0]}`}
+                rows={3}
+                placeholder={`you@${domains[0]}
+another@${domains[0]}`}
                 value={customEmail}
                 onChange={(e) => setCustomEmail(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") void link(); }}
+                className="w-full rounded-md border border-border bg-background px-3 py-2 text-[13px] outline-none focus:border-foreground/40"
               />
             </div>
-            {customEmail.trim() && !domainAllows(customEmail) && (
+            <p className="text-[12px] text-muted-foreground">
+              One per line, or separated by commas — several at once is fine.
+              {validTyped.length > 0 && ` ${validTyped.length - rejectedTyped.length} of ${validTyped.length} ready to link.`}
+            </p>
+            {rejectedTyped.length > 0 && (
               <p className="text-[12px] text-amber-700 dark:text-amber-400">
-                SendGrid hasn't authenticated that domain, so it will reject sends from it.
+                SendGrid hasn't authenticated {rejectedTyped.length === 1 ? "this address's domain" : "these addresses' domains"}, so it will reject sends from{" "}
+                {rejectedTyped.join(", ")}. They'll be skipped.
               </p>
             )}
           </div>
@@ -215,14 +229,17 @@ export function SendgridSenderPicker({
           <Button
             disabled={
               loading || importSenders.isPending ||
-              (customEmail.trim()
-                ? !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(customEmail.trim())
+              (typedEmails.length
+                ? validTyped.length - rejectedTyped.length === 0
                 : checked.size === 0 || linkable.length === 0)
             }
             onClick={link}
           >
             {importSenders.isPending ? <Loader2 className="mr-1.5 size-4 animate-spin" /> : <Link2 className="mr-1.5 size-4" />}
-            Link {customEmail.trim() ? "mailbox" : `${checked.size || ""} ${checked.size === 1 ? "mailbox" : "mailboxes"}`}
+            {(() => {
+              const n = typedEmails.length ? validTyped.length - rejectedTyped.length : checked.size;
+              return `Link ${n || ""} ${n === 1 ? "mailbox" : "mailboxes"}`.replace("  ", " ");
+            })()}
           </Button>
         </DialogFooter>
       </DialogContent>

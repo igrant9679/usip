@@ -168,17 +168,21 @@ describe("the picker is wired to the surfaces the owner named", () => {
 });
 
 describe("Domain Authentication accounts (no sender identities at all)", () => {
-  it("lists the authenticated domains", async () => {
+  it("reports the ROOT domain, not SendGrid's CNAME host", async () => {
+    // Live bug: authenticating cforcefederal.com returns subdomain "em7171",
+    // and building "em7171.cforcefederal.com" rejected every real address on
+    // the domain. The subdomain only carries SendGrid's DNS records.
     vi.stubGlobal("fetch", vi.fn(async (url: string) =>
       url.includes("whitelabel/domains")
         ? okJson([
-            { domain: "acme.com", subdomain: "em123", valid: true },
+            { domain: "cforcefederal.com", subdomain: "em7171", valid: true },
+            { domain: "communityforce.com", subdomain: "em4951", valid: true },
             { domain: "old.com", subdomain: null, valid: false },
           ])
         : okJson({ results: [] })));
     const { listSendGridAuthenticatedDomains } = await import("./services/sendgrid");
     const r = await listSendGridAuthenticatedDomains("SG.key");
-    expect(r).toEqual({ ok: true, domains: ["em123.acme.com"] });
+    expect(r).toEqual({ ok: true, domains: ["cforcefederal.com", "communityforce.com"] });
   });
 
   it("an unvalidated domain does not count", async () => {
