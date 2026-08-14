@@ -806,6 +806,12 @@ const PROVIDER_META: Record<string, { name: string; hint: string; builtIn?: bool
       { key: "secretKey", label: "Secret key", type: "password" },
     ],
   },
+  sendgrid: {
+    name: "SendGrid",
+    hint: "One API key for the whole workspace — sends campaigns and lists the senders you can link as mailboxes. Needs Mail Send permission.",
+    docsUrl: "https://app.sendgrid.com/settings/api_keys",
+    configFields: [{ key: "apiKey", label: "API Key", type: "password" }],
+  },
   webhook: {
     name: "Custom Webhook",
     hint: "POST JSON events to an external URL on CRM triggers.",
@@ -935,7 +941,13 @@ function IntegrationsTab() {
                           type={f.type ?? "text"}
                           value={configDraft[f.key] ?? ""}
                           onChange={(e) => setConfigDraft((d) => ({ ...d, [f.key]: e.target.value }))}
-                          placeholder={f.type === "password" ? "••••••••" : ""}
+                          placeholder={
+                            f.type === "password"
+                              ? (rowMap[provider]?.config?.[`has${f.key[0].toUpperCase()}${f.key.slice(1)}`]
+                                  ? "••••••••  (saved — leave blank to keep it)"
+                                  : "••••••••")
+                              : ""
+                          }
                           className="h-8 text-xs"
                         />
                       </div>

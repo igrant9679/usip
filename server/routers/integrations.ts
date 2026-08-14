@@ -11,6 +11,9 @@ import { workspaceIntegrations } from "../../drizzle/schema";
 import { checkPermission, getDb } from "../db";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { router } from "../_core/trpc";
+import {
+  SENDGRID_PROVIDER, getWorkspaceSendgridKey, redactIntegrationConfig, setWorkspaceSendgridKey,
+} from "../services/sendgridKey";
 const PROVIDERS = [
   "manus_oauth",
   "scim",
@@ -19,6 +22,7 @@ const PROVIDERS = [
   "llm",
   "google_maps",
   "webhook",
+  "sendgrid",
 ] as const;
 type Provider = (typeof PROVIDERS)[number];
 
@@ -49,10 +53,14 @@ export const integrationsRouter = router({
     const db = await getDb();
     if (!db) return [];
     await ensureDefaults(ctx.workspace.id);
-    return db
+    const rows = await db
       .select()
       .from(workspaceIntegrations)
       .where(eq(workspaceIntegrations.workspaceId, ctx.workspace.id));
+    // `list` is a workspaceProcedure — ANY member reaches it. Config holds
+    // live credentials (a SendGrid key, Stripe's secret key, a webhook signing
+    // secret), so secrets are replaced with a has* boolean on the way out.
+    return rows.map((r) => ({ ...r, config: redactIntegrationConfig(r.config) }));
   }),
 
   // manage_integrations is one of the six per-member permission toggles in
@@ -74,6 +82,27 @@ export const integrationsRouter = router({
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
 
       await checkPermission(ctx, "manage_integrations");
+
+      // The SendGrid key is a live credential: encrypt it, and never let the
+      // plaintext reach the generic config column.
+      if (input.provider === SENDGRID_PROVIDER) {
+        const raw = (input.config ?? {}) as Record<string, unknown>;
+        if ("apiKey" in raw) {
+          const v = raw.apiKey;
+          // "" clears it; undefined leaves whatever is stored alone, so the
+          // form can be saved without retyping a key it never displays.
+          await setWorkspaceSendgridKey(ctx.workspace.id, typeof v === "string" ? v : null);
+        }
+        if (input.status !== undefined) {
+          await db.update(workspaceIntegrations).set({ status: input.status } as never)
+            .where(and(
+              eq(workspaceIntegrations.workspaceId, ctx.workspace.id),
+              eq(workspaceIntegrations.provider, SENDGRID_PROVIDER),
+            ));
+        }
+        return { ok: true };
+      }
+
       const [existing] = await db
         .select()
         .from(workspaceIntegrations)
@@ -165,6 +194,20 @@ export const integrationsRouter = router({
           const key = (row?.config as any)?.publishableKey;
           result = key ? "Stripe publishable key is set." : "No Stripe keys configured.";
           success = Boolean(key);
+        } else if (input.provider === SENDGRID_PROVIDER) {
+          // A real authenticated call, not a "is a key present" check: a key
+          // that authenticates but lacks Mail Send passes the naive test and
+          // then fails on the first campaign.
+          const key = await getWorkspaceSendgridKey(ctx.workspace.id);
+          if (!key) {
+            result = "No SendGrid API key configured.";
+            success = false;
+          } else {
+            const { verifySendGridKey } = await import("../services/sendgrid");
+            const v = await verifySendGridKey(key);
+            success = v.ok;
+            result = v.ok ? "SendGrid key is valid and can send mail." : (v.error ?? "SendGrid key test failed.");
+          }
         } else {
           result = `No test handler for provider "${input.provider}".`;
           success = false;

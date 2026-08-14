@@ -318,8 +318,16 @@ export class SendGridAdapter implements EmailAdapter {
   async sendEmail(input: SendEmailInput): Promise<{ messageId: string; threadId?: string }> {
     const { sendViaSendGrid } = await import("./services/sendgrid");
     const { tryDecryptSecret } = await import("./_core/crypto");
-    const apiKey = tryDecryptSecret((this.account as any).sendgridApiKeyEnc);
-    if (!apiKey) throw new Error("No SendGrid API key is configured for this sending account.");
+    // The account's own key, else the workspace's single key from Settings →
+    // Integrations. Without this fallback a mailbox linked from the sender
+    // picker would depend on a copy of the key taken at link time, and
+    // rotating the key in one place would silently break sending.
+    let apiKey = tryDecryptSecret((this.account as any).sendgridApiKeyEnc);
+    if (!apiKey) {
+      const { getWorkspaceSendgridKey } = await import("./services/sendgridKey");
+      apiKey = (await getWorkspaceSendgridKey(this.account.workspaceId)) ?? "";
+    }
+    if (!apiKey) throw new Error("No SendGrid API key is configured. Add one in Settings → Integrations.");
 
     // Reply-To precedence: explicit input → the account's stored Reply-To →
     // the workspace's INBOUND reply address (owner ask 2026-08-13: replies

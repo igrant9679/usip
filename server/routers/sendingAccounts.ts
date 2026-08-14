@@ -248,7 +248,11 @@ const PoolCreateInput = z.object({
 /**
  * The SendGrid key to talk to SendGrid with, in preference order:
  * a key typed right now (the owner is mid-setup and has saved nothing yet),
- * a named account's stored key, then any SendGrid mailbox in the workspace.
+ * a named account's stored key, the WORKSPACE key from Settings →
+ * Integrations, then any SendGrid mailbox's own copy.
+ *
+ * The workspace key is the one the owner manages in one place; the per-account
+ * copies are legacy/explicit overrides and still win when asked for by id.
  *
  * Returns plaintext for immediate use — never store or return it to a client.
  */
@@ -259,13 +263,23 @@ async function resolveSendgridKey(
   accountId?: number,
 ): Promise<string | null> {
   if (apiKey?.trim()) return apiKey.trim();
+  if (accountId) {
+    const [row] = await db
+      .select({ enc: sendingAccounts.sendgridApiKeyEnc })
+      .from(sendingAccounts)
+      .where(and(eq(sendingAccounts.workspaceId, workspaceId), eq(sendingAccounts.id, accountId)))
+      .limit(1);
+    const k = tryDecryptSecret(row?.enc);
+    if (k) return k;
+  }
+  const { getWorkspaceSendgridKey } = await import("../services/sendgridKey");
+  const wsKey = await getWorkspaceSendgridKey(workspaceId);
+  if (wsKey) return wsKey;
+
   const rows = await db
-    .select({ id: sendingAccounts.id, enc: sendingAccounts.sendgridApiKeyEnc })
+    .select({ enc: sendingAccounts.sendgridApiKeyEnc })
     .from(sendingAccounts)
-    .where(and(
-      eq(sendingAccounts.workspaceId, workspaceId),
-      ...(accountId ? [eq(sendingAccounts.id, accountId)] : [eq(sendingAccounts.provider, "sendgrid")]),
-    ));
+    .where(and(eq(sendingAccounts.workspaceId, workspaceId), eq(sendingAccounts.provider, "sendgrid")));
   for (const r of rows) {
     const k = tryDecryptSecret(r.enc);
     if (k) return k;
@@ -487,6 +501,13 @@ export const sendingAccountsRouter = router({
         .where(eq(sendingAccounts.workspaceId, ctx.workspace.id));
       const linked = new Set(existing.map((e) => e.fromEmail.toLowerCase()));
 
+      // When the workspace holds the key (Settings → Integrations), the
+      // mailboxes must NOT take their own copy: the send path falls back to
+      // the workspace key, so one place to rotate stays one place. A copy
+      // would take precedence and go stale on the first rotation.
+      const { getWorkspaceSendgridKey } = await import("../services/sendgridKey");
+      const workspaceKeyOwnsIt = (await getWorkspaceSendgridKey(ctx.workspace.id)) === key;
+
       const created: Array<{ id: number; email: string }> = [];
       const skipped: string[] = [];
       for (const s of chosen) {
@@ -498,7 +519,7 @@ export const sendingAccountsRouter = router({
           fromEmail: s.email,
           fromName: s.name ?? undefined,
           replyTo: s.replyTo ?? undefined,
-          sendgridApiKeyEnc: encryptSecret(key),
+          ...(workspaceKeyOwnsIt ? {} : { sendgridApiKeyEnc: encryptSecret(key) }),
           dailySendLimit: input.dailySendLimit,
           hourlySendLimit: input.hourlySendLimit,
           connectionStatus: "untested",
