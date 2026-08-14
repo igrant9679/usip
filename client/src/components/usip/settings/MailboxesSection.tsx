@@ -48,7 +48,6 @@ import {
   limeBtn,
   type MailboxAccount,
 } from "./GuidedMailboxSetup";
-import { SendGridCard } from "./SendGridCard";
 
 const HEADER_TIPS: Record<string, string> = {
   Setup:
@@ -193,12 +192,6 @@ export function MailboxesSection() {
           )}
         </div>
 
-        {/* Bulk sending via API, not a linked mailbox. Kept out of the wizard
-            above on purpose: that flow links a person's mailbox and walks
-            through signature/IMAP/opt-out, none of which apply to an API key. */}
-        <div className="mt-4">
-          <SendGridCard />
-        </div>
       </div>
 
       <GuidedMailboxSetup

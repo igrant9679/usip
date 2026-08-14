@@ -126,10 +126,14 @@ describe("the picker is wired to the surfaces the owner named", () => {
     expect(wizard).toContain('id: "sendgrid" as const');
   });
 
-  it("the SendGrid settings card can import senders with a key that is not saved yet", () => {
-    const card = readFileSync("client/src/components/usip/settings/SendGridCard.tsx", "utf8");
-    expect(card).toContain("<SendgridSenderPicker");
-    expect(card).toContain("apiKey={apiKey.trim() || undefined}");
+  it("the picker is reachable from a surface that is actually rendered", () => {
+    // SendGridCard was unmounted from the Mailboxes page on 2026-08-14 (owner
+    // ask). Asserting ITS wiring would pin a component nobody can open — the
+    // wizard is the live path, and the key now lives in Settings → Integrations.
+    const section = readFileSync("client/src/components/usip/settings/MailboxesSection.tsx", "utf8");
+    expect(section).not.toContain("<SendGridCard");
+    const wizard = readFileSync("client/src/components/usip/settings/GuidedMailboxSetup.tsx", "utf8");
+    expect(wizard).toContain("<SendgridSenderPicker");
   });
 
   it("links through importSendgridSenders and refreshes the mailbox list", () => {
