@@ -703,6 +703,235 @@ export function computeVariantCells(
   return cells;
 }
 
+/* ─── Step funnel (Sankey) ───────────────────────────────────────────────── */
+
+/**
+ * What the funnel needs from a send. Deliberately NOT `VariantSendRow`: the
+ * funnel groups by prospect and step and never looks at a variant, so it must
+ * not have to invent a variant key to describe a row (`areAbVariantWiring`
+ * rightly rejects a hardcoded one — a variant label is a value this system
+ * ASSIGNS, and inventing one here would put a fictional "A" in a type that
+ * flows on to code which does care).
+ */
+export interface FunnelSendRow {
+  prospectQueueId: number;
+  stepIndex: number;
+  openedAt?: Date | string | null;
+  trackingToken?: string | null;
+}
+
+export interface FunnelNode {
+  /** Stable id, referenced by links. */
+  id: string;
+  name: string;
+  /** step | opened | unopened | replied | meeting | dormant */
+  kind: "step" | "opened" | "unopened" | "replied" | "meeting" | "dormant";
+  /** Present on step/opened/unopened nodes. Zero-based, as stored. */
+  stepIndex: number | null;
+  value: number;
+}
+
+export interface FunnelLink {
+  source: string;
+  target: string;
+  value: number;
+}
+
+export interface StepFunnel {
+  nodes: FunnelNode[];
+  links: FunnelLink[];
+  /** Prospects with at least one dispatched send — the funnel's entry width. */
+  totalProspects: number;
+  /**
+   * True when NO send in this campaign carries a tracking pixel, so the
+   * opened/not-opened split cannot mean anything and the chart says so instead
+   * of drawing every prospect as unopened.
+   */
+  opensTracked: boolean;
+}
+
+/**
+ * Per-prospect journey through the sequence, as Sankey nodes and links.
+ *
+ * Pure, and separate from `computeVariantCells`, because this answers a
+ * different question. The cards count per step ("how did step 2 do"); this
+ * follows PEOPLE ("of those who did not open step 1, how many got step 2, and
+ * how many of those replied"). The two use the same attribution rule — a
+ * signal names a prospect, not a message, so a reply is credited to that
+ * prospect's most recent send — so their totals reconcile.
+ *
+ * Shape, left to right:
+ *
+ *   Step 1 ─▶ Opened ─▶ Step 2 ─▶ … ─▶ Replied ─▶ Meeting booked
+ *          └▶ Not opened ─┘              └▶ No further contact
+ *
+ * A prospect leaves the flow at their LAST send: into `Replied` if a reply or
+ * meeting was attributed to them, else into `No further contact` — which
+ * includes people still mid-sequence, so it reads as "not yet", not "lost".
+ *
+ * Every link is a real count of real prospects. Nothing is inferred: a
+ * prospect who received step 3 without step 2 flows straight from 1 to 3.
+ */
+export function computeStepFunnel(
+  sends: FunnelSendRow[],
+  signals: VariantSignalRow[],
+): StepFunnel {
+  const opensTracked = sends.some((s) => !!s.trackingToken);
+
+  // Plain records rather than Maps throughout: this project's tsconfig target
+  // predates downlevel Map iteration, so `for…of` over one is a type error.
+  const byProspect: Record<string, FunnelSendRow[]> = {};
+  for (const s of sends) {
+    const pid = String(s.prospectQueueId);
+    (byProspect[pid] ??= []).push(s);
+  }
+  const prospectIds = Object.keys(byProspect);
+  for (const pid of prospectIds) {
+    byProspect[pid].sort(
+      (a: FunnelSendRow, b: FunnelSendRow) => Number(a.stepIndex ?? 0) - Number(b.stepIndex ?? 0),
+    );
+  }
+
+  const replied: Record<string, true> = {};
+  const booked: Record<string, true> = {};
+  for (const sig of signals) {
+    const t = String(sig.signalType);
+    if (t === "email_reply") replied[String(sig.prospectQueueId)] = true;
+    if (t === "meeting_booked") booked[String(sig.prospectQueueId)] = true;
+  }
+
+  const linkTotals: Record<string, number> = {};
+  const addLink = (source: string, target: string) => {
+    const k = `${source}|${target}`;
+    linkTotals[k] = (linkTotals[k] ?? 0) + 1;
+  };
+
+  const stepCount: Record<number, number> = {};
+  const openedCount: Record<number, number> = {};
+  const unopenedCount: Record<number, number> = {};
+  let repliedTotal = 0;
+  let meetingTotal = 0;
+  let dormantTotal = 0;
+
+  for (const pid of prospectIds) {
+    const timeline = byProspect[pid];
+    for (let i = 0; i < timeline.length; i++) {
+      const send = timeline[i];
+      const step = Number(send.stepIndex ?? 0);
+      stepCount[step] = (stepCount[step] ?? 0) + 1;
+
+      // The engagement branch. With no pixel on the send there is no honest
+      // split to draw, so everyone takes the "not opened" side and the caller
+      // is told opens are untracked rather than shown a 0% open rate.
+      const opened = !!send.openedAt;
+      const branch = opened ? `opened:${step}` : `unopened:${step}`;
+      if (opened) openedCount[step] = (openedCount[step] ?? 0) + 1;
+      else unopenedCount[step] = (unopenedCount[step] ?? 0) + 1;
+      addLink(`step:${step}`, branch);
+
+      const next = timeline[i + 1];
+      if (next) {
+        addLink(branch, `step:${Number(next.stepIndex ?? 0)}`);
+        continue;
+      }
+      // Last send for this prospect — where do they end up?
+      if (replied[pid] || booked[pid]) {
+        addLink(branch, "replied");
+        repliedTotal++;
+        if (booked[pid]) {
+          addLink("replied", "meeting");
+          meetingTotal++;
+        }
+      } else {
+        addLink(branch, "dormant");
+        dormantTotal++;
+      }
+    }
+  }
+
+  const nodes: FunnelNode[] = [];
+  const steps = Object.keys(stepCount).map(Number).sort((a, b) => a - b);
+  for (const step of steps) {
+    nodes.push({ id: `step:${step}`, name: `Step ${step + 1}`, kind: "step", stepIndex: step, value: stepCount[step] ?? 0 });
+    if ((openedCount[step] ?? 0) > 0) {
+      nodes.push({ id: `opened:${step}`, name: `Opened step ${step + 1}`, kind: "opened", stepIndex: step, value: openedCount[step] });
+    }
+    if ((unopenedCount[step] ?? 0) > 0) {
+      nodes.push({
+        id: `unopened:${step}`,
+        name: opensTracked ? `No open on step ${step + 1}` : `Step ${step + 1} — opens untracked`,
+        kind: "unopened",
+        stepIndex: step,
+        value: unopenedCount[step],
+      });
+    }
+  }
+  if (repliedTotal > 0) nodes.push({ id: "replied", name: "Replied", kind: "replied", stepIndex: null, value: repliedTotal });
+  if (meetingTotal > 0) nodes.push({ id: "meeting", name: "Meeting booked", kind: "meeting", stepIndex: null, value: meetingTotal });
+  if (dormantTotal > 0) nodes.push({ id: "dormant", name: "No reply yet", kind: "dormant", stepIndex: null, value: dormantTotal });
+
+  const present: Record<string, true> = {};
+  for (const n of nodes) present[n.id] = true;
+  const links: FunnelLink[] = [];
+  for (const k of Object.keys(linkTotals)) {
+    const [source, target] = k.split("|");
+    // A link to a node that was never emitted would break the chart.
+    if (present[source] && present[target]) links.push({ source, target, value: linkTotals[k] });
+  }
+
+  return { nodes, links, totalProspects: prospectIds.length, opensTracked };
+}
+
+/**
+ * The step funnel for one ARE campaign, from live execution rows.
+ *
+ * Reads the same two tables `getAbVariantStats` does, so the Sankey and the
+ * step cards can never disagree about what happened.
+ */
+export async function getStepFunnel(
+  workspaceId: number,
+  campaignId: number,
+): Promise<StepFunnel> {
+  const db = await getDb();
+  if (!db) return { nodes: [], links: [], totalProspects: 0, opensTracked: false };
+
+  const sends = await db
+    .select({
+      prospectQueueId: areExecutionQueue.prospectQueueId,
+      stepIndex: areExecutionQueue.stepIndex,
+      executedAt: areExecutionQueue.executedAt,
+      openedAt: areExecutionQueue.openedAt,
+      trackingToken: areExecutionQueue.trackingToken,
+    })
+    .from(areExecutionQueue)
+    .where(and(
+      eq(areExecutionQueue.workspaceId, workspaceId),
+      eq(areExecutionQueue.campaignId, campaignId),
+      eq(areExecutionQueue.status, "sent" as never),
+    ));
+
+  const signals = await db
+    .select({
+      prospectQueueId: areSignalLog.prospectQueueId,
+      signalType: areSignalLog.signalType,
+    })
+    .from(areSignalLog)
+    .where(and(
+      eq(areSignalLog.workspaceId, workspaceId),
+      eq(areSignalLog.campaignId, campaignId),
+    ));
+
+  return computeStepFunnel(
+    sends.map((s) => ({
+      prospectQueueId: Number(s.prospectQueueId),
+      stepIndex: Number(s.stepIndex ?? 0),
+      openedAt: (s.openedAt as Date | null) ?? null,
+      trackingToken: (s.trackingToken as string | null) ?? null,
+    })),
+    signals.map((s) => ({ prospectQueueId: Number(s.prospectQueueId), signalType: String(s.signalType) })),
+  );
+}
+
 /**
  * Live A/B performance for one ARE campaign.
  *
@@ -752,11 +981,25 @@ export async function getAbVariantStats(
     ));
 
   const cells = computeVariantCells(
+    /**
+     * ⚠️ `openedAt` and `trackingToken` MUST be carried through here.
+     *
+     * They were selected above (with a comment explaining why), read by
+     * computeVariantCells (`if (s.trackingToken) bump(…, "trackable")`), and
+     * dropped by this object literal in between — so `trackable` and `opens`
+     * were structurally always 0 and every ARE step card read
+     * "Opens: not tracked", no matter how many opens had been recorded.
+     * Nothing failed; the seam between producer and consumer just lost two
+     * fields. Owner spotted the contradiction: a step showing "not tracked"
+     * beside a Signals feed showing that very message opened (2026-08-14).
+     */
     sends.map((s) => ({
       prospectQueueId: Number(s.prospectQueueId),
       stepIndex: Number(s.stepIndex ?? 0),
       variantKey: String(s.variantKey ?? "A"),
       executedAt: (s.executedAt as Date | null) ?? null,
+      openedAt: (s.openedAt as Date | null) ?? null,
+      trackingToken: (s.trackingToken as string | null) ?? null,
     })),
     signals.map((s) => ({ prospectQueueId: Number(s.prospectQueueId), signalType: String(s.signalType) })),
   );

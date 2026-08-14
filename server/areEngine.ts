@@ -869,6 +869,12 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
               // showed "send state unknown" on a message with three recorded
               // opens (owner report 2026-08-14).
               failureReason: null,
+              // WHICH MAILBOX SENT IT (migration 0166). The pool has always
+              // returned this and it was always discarded, so "Sent from" was
+              // blank on every campaign message and nothing could say which
+              // inbox a prospect had heard from.
+              sendingAccountId: sendRes.accountId ?? null,
+              fromEmail: sendRes.fromEmail ?? null,
             })
             .where(eq(areExecutionQueue.id, step.id));
           result.sent++;

@@ -3695,6 +3695,16 @@ export const areExecutionQueue = mysqlTable(
     /** Fetches classified as machines (0165) — see @shared/openTracking. */
     machineOpenCount: int("machineOpenCount").default(0).notNull(),
     externalId: varchar("externalId", { length: 256 }), // message ID from sending provider
+    /**
+     * Which mailbox actually sent it (migration 0166).
+     *
+     * The sender pool picks an account per send and returned it all along —
+     * nothing stored it, so "Sent from" on the Emails page was blank for every
+     * campaign message and the campaign tabs could not say which inbox a
+     * prospect had heard from.
+     */
+    sendingAccountId: int("sendingAccountId"),
+    fromEmail: varchar("fromEmail", { length: 320 }),
     failureReason: text("failureReason"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },

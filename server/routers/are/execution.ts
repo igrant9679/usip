@@ -37,6 +37,7 @@ import {
   opportunities,
   prospectQueue,
   prospectIntelligence,
+  sendingAccounts,
 } from "../../../drizzle/schema";
 import { getDb } from "../../db";
 import { findOrCreateAccount } from "../../services/crmMatching";
@@ -698,6 +699,136 @@ export const executionRouter = router({
         .where(and(...conditions))
         .orderBy(desc(areSignalLog.processedAt))
         .limit(input.limit);
+    }),
+
+  /**
+   * One dispatched message, with everything known about it.
+   *
+   * Backs the preview modal opened from the Signals feed and the Step
+   * performance cards: the copy that actually went out (not the stored
+   * template), who it went to, which inbox sent it, and every signal it
+   * produced. Assembled here rather than in the client so the modal cannot
+   * show a different open count from the tab behind it.
+   */
+  getMessage: workspaceProcedure
+    .input(z.object({ executionQueueId: z.number() }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [row] = await db
+        .select({
+          q: areExecutionQueue,
+          firstName: prospectQueue.firstName,
+          lastName: prospectQueue.lastName,
+          email: prospectQueue.email,
+          title: prospectQueue.title,
+          companyName: prospectQueue.companyName,
+          linkedContactId: prospectQueue.linkedContactId,
+          personProspectId: prospectQueue.personProspectId,
+          campaignName: areCampaigns.name,
+          accountName: sendingAccounts.name,
+          accountEmail: sendingAccounts.fromEmail,
+        })
+        .from(areExecutionQueue)
+        .leftJoin(prospectQueue, eq(prospectQueue.id, areExecutionQueue.prospectQueueId))
+        .leftJoin(areCampaigns, eq(areCampaigns.id, areExecutionQueue.campaignId))
+        .leftJoin(sendingAccounts, eq(sendingAccounts.id, areExecutionQueue.sendingAccountId))
+        .where(and(
+          eq(areExecutionQueue.id, input.executionQueueId),
+          eq(areExecutionQueue.workspaceId, ctx.workspace.id),
+        ))
+        .limit(1);
+      if (!row) throw new TRPCError({ code: "NOT_FOUND" });
+
+      const signals = await db
+        .select({
+          id: areSignalLog.id,
+          signalType: areSignalLog.signalType,
+          sentiment: areSignalLog.sentiment,
+          sentimentReason: areSignalLog.sentimentReason,
+          actionTaken: areSignalLog.actionTaken,
+          processedAt: areSignalLog.processedAt,
+          rawPayload: areSignalLog.rawPayload,
+        })
+        .from(areSignalLog)
+        .where(and(
+          eq(areSignalLog.workspaceId, ctx.workspace.id),
+          eq(areSignalLog.prospectQueueId, row.q.prospectQueueId),
+        ))
+        .orderBy(desc(areSignalLog.processedAt))
+        .limit(50);
+
+      const mc = (row.q.messageContent ?? null) as { subject?: string; body?: string; variantKey?: string } | null;
+      return {
+        id: row.q.id,
+        campaignId: row.q.campaignId,
+        campaignName: row.campaignName ?? null,
+        prospectQueueId: row.q.prospectQueueId,
+        stepIndex: row.q.stepIndex,
+        channel: row.q.channel,
+        status: row.q.status,
+        // A sent row cannot also carry a failure reason — the dispatcher's
+        // pre-mark used to leave one behind (migration 0164).
+        failureReason: row.q.status === "sent" ? null : row.q.failureReason,
+        scheduledAt: row.q.scheduledAt,
+        executedAt: row.q.executedAt,
+        subject: mc?.subject ?? null,
+        body: mc?.body ?? null,
+        variantKey: mc?.variantKey ?? "A",
+        // Engagement. openCount is HUMAN opens since migration 0165;
+        // machineOpenCount is the prefetch traffic, shown separately so the
+        // split is visible rather than hidden.
+        openedAt: row.q.openedAt,
+        openCount: row.q.openCount,
+        machineOpenCount: (row.q as { machineOpenCount?: number }).machineOpenCount ?? 0,
+        /** False when this send predates open tracking — no token, no opens ever. */
+        opensTracked: !!row.q.trackingToken,
+        recipient: {
+          firstName: row.firstName,
+          lastName: row.lastName,
+          email: row.email,
+          title: row.title,
+          companyName: row.companyName,
+          linkedContactId: row.linkedContactId,
+          personProspectId: row.personProspectId,
+        },
+        sentFrom: {
+          accountId: row.q.sendingAccountId ?? null,
+          name: row.accountName ?? null,
+          email: row.accountEmail ?? row.q.fromEmail ?? null,
+        },
+        signals,
+      };
+    }),
+
+  /**
+   * The most recent dispatched message for a (step, variant) cell.
+   *
+   * The Step performance cards describe a STEP, not one message, so opening
+   * one has to resolve an example to show. Newest first, because that is the
+   * copy the engine is currently producing.
+   */
+  findStepMessage: workspaceProcedure
+    .input(z.object({
+      campaignId: z.number(),
+      stepIndex: z.number(),
+      variantKey: z.string().default("A"),
+    }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [row] = await db
+        .select({ id: areExecutionQueue.id })
+        .from(areExecutionQueue)
+        .where(and(
+          eq(areExecutionQueue.workspaceId, ctx.workspace.id),
+          eq(areExecutionQueue.campaignId, input.campaignId),
+          eq(areExecutionQueue.stepIndex, input.stepIndex),
+          eq(areExecutionQueue.status, "sent" as never),
+        ))
+        .orderBy(desc(areExecutionQueue.executedAt), desc(areExecutionQueue.id))
+        .limit(1);
+      return { executionQueueId: row?.id ?? null };
     }),
 
   /**

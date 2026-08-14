@@ -18,6 +18,7 @@ import {
   getReplyMix,
   getSequenceStepStats,
   getSourceYieldStats,
+  getStepFunnel,
   MIN_VARIANT_SAMPLE,
 } from "../../services/performanceMetrics";
 
@@ -43,6 +44,15 @@ export const metricsRouter = router({
   abVariants: workspaceProcedure
     .input(z.object({ campaignId: z.number().int() }))
     .query(async ({ ctx, input }) => getAbVariantStats(ctx.workspace.id, input.campaignId)),
+
+  /**
+   * The step funnel, as Sankey nodes and links — how prospects actually moved
+   * through the sequence. Reads the same two tables abVariants does, so the
+   * chart and the step cards cannot disagree about what happened.
+   */
+  stepFunnel: workspaceProcedure
+    .input(z.object({ campaignId: z.number().int() }))
+    .query(async ({ ctx, input }) => getStepFunnel(ctx.workspace.id, input.campaignId)),
 
   /** Thresholds the UI must respect so it never implies a winner from noise. */
   thresholds: workspaceProcedure.query(async () => ({ minVariantSample: MIN_VARIANT_SAMPLE })),

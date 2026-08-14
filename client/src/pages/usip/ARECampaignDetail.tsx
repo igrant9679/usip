@@ -41,6 +41,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { trpc } from "@/lib/trpc";
 import { AddExistingProspectsDialog } from "@/components/usip/are/AddExistingProspectsDialog";
 import { ActiveSequenceTimeline } from "@/components/usip/are/ActiveSequenceTimeline";
+import { AreMessageDialog } from "@/components/usip/are/AreMessageDialog";
+import { StepFunnelSankey } from "@/components/usip/are/StepFunnelSankey";
 import { RichTextEditor } from "@/components/usip/RichTextEditor";
 import { sanitizeEmailHtml } from "@/lib/sanitizeHtml";
 import { isHtmlBody } from "@shared/emailBody";
@@ -1751,7 +1753,7 @@ function SignalTypeChip({ label, count, active, onClick }: {
  * derived from data the row already carried: the two joins, and rawPayload,
  * which held the clicked URL and the reply text and was never read.
  */
-function SignalRow({ s }: { s: SignalFeedRow }) {
+function SignalRow({ s, onOpen }: { s: SignalFeedRow; onOpen?: (execId: number) => void }) {
   const meta = signalMeta(s.signalType);
   const Icon = SIGNAL_CHANNEL_ICON[meta.channel] ?? Activity;
   const sentiment = typeof s.sentiment === "string" ? s.sentiment : "";
@@ -1778,8 +1780,29 @@ function SignalRow({ s }: { s: SignalFeedRow }) {
   const action = actionLabel(s.actionTaken);
   const via = signalSourceLabel(s.rawPayload);
 
+  // Reply and meeting signals carry no executionQueueId — the inbound poller
+  // matches on the person, not on a specific send — so those rows have no
+  // message to open and must not pretend to be clickable.
+  const openable = !!s.executionQueueId && !!onOpen;
+
   return (
-    <div className="rounded-xl border bg-card px-4 py-3">
+    <div
+      className={`rounded-xl border bg-card px-4 py-3 ${openable ? "cursor-pointer transition-colors hover:border-primary/40" : ""}`}
+      {...(openable
+        ? {
+            role: "button" as const,
+            tabIndex: 0,
+            title: "Open the email this signal came from",
+            onClick: () => onOpen!(s.executionQueueId!),
+            onKeyDown: (e: React.KeyboardEvent) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onOpen!(s.executionQueueId!);
+              }
+            },
+          }
+        : {})}
+    >
       <div className="flex items-start gap-3">
         <span
           className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full"
@@ -1916,6 +1939,25 @@ export default function ARECampaignDetail() {
     ...(signalSearchDebounced ? { search: signalSearchDebounced } : {}),
   });
   const { data: signalCounts } = trpc.are.execution.getSignalCounts.useQuery({ campaignId });
+  const { data: stepFunnel } = trpc.are.metrics.stepFunnel.useQuery({ campaignId });
+  /**
+   * The message preview modal, opened from the Signals feed and from the
+   * Step performance cards and Sankey. Both used to be dead ends: they
+   * described a message and gave no way to read it.
+   */
+  const [previewExecId, setPreviewExecId] = useState<number | null>(null);
+  const utilsForPreview = trpc.useUtils();
+  /** A step is not a message — resolve its most recent send, then open it. */
+  const openStepPreview = async (stepIndex: number | null, variantKey = "A") => {
+    if (stepIndex === null) return;
+    try {
+      const res = await utilsForPreview.are.execution.findStepMessage.fetch({ campaignId, stepIndex, variantKey });
+      if (res.executionQueueId) setPreviewExecId(res.executionQueueId);
+      else toast.info("That step hasn't dispatched a message yet.");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Couldn't open that step's message");
+    }
+  };
   const signalTotal = useMemo(
     () => (signalCounts ?? []).reduce((n, c) => n + c.count, 0),
     [signalCounts],
@@ -2565,6 +2607,9 @@ export default function ARECampaignDetail() {
                     Nothing has ever produced a variant B, so the page described
                     an experiment that was not running — and a reader compares
                     the two labels it was promised. */}
+                {stepFunnel && stepFunnel.nodes.length > 0 && (
+                  <StepFunnelSankey funnel={stepFunnel} onSelectStep={(i) => void openStepPreview(i)} />
+                )}
                 <p className="text-sm text-muted-foreground">
                   The engine writes uniquely personalised copy for every prospect, so it produces a single variant (<strong>A</strong>) per step — there is no shared message to split-test, and a second variant only ever appears on the seeded <strong>[Demo]</strong> campaign. These cards show how each <strong>step</strong> performed, counted from real dispatches; the subject and preview are the most recently generated prospect's opener, shown as an example of that step's copy.
                 </p>
@@ -2576,7 +2621,20 @@ export default function ARECampaignDetail() {
                     const replyRate = v.replyRate;
                     const isA = v.variantKey === "A";
                     return (
-                      <Card key={`${v.stepIndex}-${v.variantKey}`} className="bg-card border">
+                      <Card
+                        key={`${v.stepIndex}-${v.variantKey}`}
+                        className="bg-card border cursor-pointer transition-colors hover:border-primary/40"
+                        role="button"
+                        tabIndex={0}
+                        title="Open this step's message and its stats"
+                        onClick={() => void openStepPreview(v.stepIndex, v.variantKey)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            void openStepPreview(v.stepIndex, v.variantKey);
+                          }
+                        }}
+                      >
                         <CardHeader className="pb-2 pt-4 px-4">
                           <div className="flex items-center gap-2">
                             <Badge variant="outline" className={`text-[10px] px-2 py-0.5 border font-bold ${isA ? "border-emerald-500/30 text-emerald-600 bg-emerald-500/10" : "border-blue-500/30 text-blue-600 bg-blue-500/10"}`}>
@@ -2683,7 +2741,9 @@ export default function ARECampaignDetail() {
               />
             ) : (
               <div className="space-y-2">
-                {signals.map((s) => <SignalRow key={s.id} s={s} />)}
+                {signals.map((s) => (
+                  <SignalRow key={s.id} s={s} onOpen={(id) => setPreviewExecId(id)} />
+                ))}
                 {signals.length >= 200 && (
                   <p className="text-[11px] text-muted-foreground px-1">
                     Showing the 200 most recent of {signalTotal.toLocaleString()} signals. Filter by type or search for a
@@ -3415,6 +3475,10 @@ export default function ARECampaignDetail() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* The message preview, shared by the Signals feed, the Step performance
+          cards and the funnel. One dialog, one source of truth for its stats. */}
+      <AreMessageDialog executionQueueId={previewExecId} onClose={() => setPreviewExecId(null)} />
     </Shell>
   );
 }

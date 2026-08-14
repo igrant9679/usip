@@ -45,6 +45,7 @@ import {
   sequences,
   users,
 } from "../../drizzle/schema";
+import { alias } from "drizzle-orm/mysql-core";
 import { getDb } from "../db";
 import { workspaceProcedure } from "../_core/workspace";
 import {
@@ -66,6 +67,12 @@ const listInput = z.object({
 });
 
 type ListInput = z.infer<typeof listInput>;
+
+/**
+ * The sending account reached through the EXECUTION row rather than the log
+ * row. Aliased because both joins hit `sending_accounts` in the same query.
+ */
+const execAccount = alias(sendingAccounts, "exec_account");
 
 function num(v: unknown): number {
   const n = Number(v);
@@ -541,6 +548,9 @@ export const emailActivityRouter = {
             log: emailLog,
             accountName: sendingAccounts.name,
             accountEmail: sendingAccounts.fromEmail,
+            execAccountName: execAccount.name,
+            execAccountEmail: execAccount.fromEmail,
+            execFromEmail: areExecutionQueue.fromEmail,
             userName: users.name,
             campaignName: areCampaigns.name,
             draftBody: emailDrafts.body,
@@ -548,6 +558,11 @@ export const emailActivityRouter = {
           })
           .from(emailLog)
           .leftJoin(sendingAccounts, eq(sendingAccounts.id, emailLog.sendingAccountId))
+          // Second chance at the sending account for CAMPAIGN rows: the log
+          // records it only for sends made after 0163, while the execution row
+          // records it for every send made after 0166. Neither covers the
+          // other's gap alone.
+          .leftJoin(execAccount, eq(execAccount.id, areExecutionQueue.sendingAccountId))
           .leftJoin(users, eq(users.id, emailLog.userId))
           .leftJoin(areCampaigns, eq(areCampaigns.id, emailLog.campaignId))
           .leftJoin(emailDrafts, eq(emailDrafts.id, emailLog.draftId))
@@ -561,8 +576,8 @@ export const emailActivityRouter = {
           // The log keeps a preview; the full body still lives on the row that
           // owns it, so the drawer shows the real thing when there is one.
           body: row.draftBody ?? exec?.body ?? row.log.bodyPreview ?? null,
-          accountName: row.accountName ?? null,
-          accountEmail: row.accountEmail ?? null,
+          accountName: row.accountName ?? row.execAccountName ?? null,
+          accountEmail: row.accountEmail ?? row.execAccountEmail ?? row.execFromEmail ?? row.log.fromEmail ?? null,
           userName: row.userName ?? null,
           campaignName: row.campaignName ?? null,
         };

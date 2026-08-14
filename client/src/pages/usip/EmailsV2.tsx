@@ -138,8 +138,23 @@ function EmailDetail({ row, onClose }: { row: EmailFeedRow | null; onClose: () =
               </Fact>
               {row.direction === "inbound" ? null : (
                 <Fact label="Sent from">
-                  {d?.accountEmail || row.fromEmail || "—"}
-                  {d?.accountName ? <span className="text-muted-foreground"> · {d.accountName}</span> : null}
+                  {d?.accountEmail || row.fromEmail ? (
+                    <>
+                      {d?.accountEmail || row.fromEmail}
+                      {d?.accountName ? <span className="text-muted-foreground"> · {d.accountName}</span> : null}
+                    </>
+                  ) : (
+                    /* The sender pool picks a mailbox per send and nothing
+                       stored the choice until migration 0166, so past campaign
+                       sends genuinely cannot say which of several inboxes went
+                       out. A dash reads as "no sender"; this says why. */
+                    <span
+                      className="text-muted-foreground italic"
+                      title="The sending mailbox wasn't recorded for messages sent before Velocity started storing it."
+                    >
+                      Not recorded for this send
+                    </span>
+                  )}
                 </Fact>
               )}
               <Fact label="Source">

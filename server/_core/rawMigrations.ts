@@ -3623,6 +3623,27 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0166: record which mailbox sent each campaign message ────────────────
+  // sendCampaignEmailViaPool picks an account per send and has always RETURNED
+  // it ({accountId, fromEmail}); areEngine threw the value away. So "Sent from"
+  // on the Emails page was blank for every campaign message, and no campaign
+  // surface could say which inbox a given prospect had heard from — which also
+  // makes a reply impossible to route back by hand.
+  //
+  // Historical rows stay NULL on purpose. The information was never written
+  // anywhere and there is nothing to recover it from: a pool with four
+  // mailboxes gives no way to tell which one a past send used, and guessing
+  // would put a specific wrong address in front of the owner. The UI says "not
+  // recorded" for those rather than inventing one.
+  {
+    name: "0166_execution_queue_sender.sql",
+    statements: [
+      "ALTER TABLE `are_execution_queue` ADD COLUMN `sendingAccountId` int NULL",
+      "ALTER TABLE `are_execution_queue` ADD COLUMN `fromEmail` varchar(320) NULL",
+      "CREATE INDEX `ix_aeq_account` ON `are_execution_queue` (`sendingAccountId`)",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------
