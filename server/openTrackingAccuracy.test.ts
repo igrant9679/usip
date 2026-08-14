@@ -191,6 +191,40 @@ describe("unsubscribing takes a deliberate act", () => {
   });
 });
 
+describe("the confirmation page is a promise about a row", () => {
+  it("does not claim success when the write failed", () => {
+    // It used to render the success page from the catch — "don't leak failures
+    // into UX". Defensible for a cosmetic failure; not for a compliance act
+    // whose failure the recipient discovers by continuing to receive mail.
+    const post = unsub.slice(unsub.indexOf('app.post("/api/unsubscribe/:token"'));
+    const catchBlock = post.slice(post.indexOf("} catch (err) {"));
+    expect(catchBlock).toContain("FAILED_PAGE");
+    expect(catchBlock).not.toContain("CONFIRM_PAGE");
+    expect(catchBlock).toContain("status(500)");
+  });
+
+  it("refuses to conflate 'already on the list' with 'could not write'", () => {
+    const fn = unsub.slice(unsub.indexOf("async function suppressIfNew"), unsub.indexOf("/** True if this email"));
+    // Returning false for both is what let a dead database read as success.
+    expect(fn).toContain('"added" | "already"');
+    expect(fn).toContain("throw new Error");
+    expect(fn).not.toMatch(/if \(!db\) return false/);
+  });
+
+  it("reads the suppression back before anyone is told it exists", () => {
+    const fn = unsub.slice(unsub.indexOf("async function suppressIfNew"), unsub.indexOf("/** True if this email"));
+    const insertAt = fn.indexOf("db.insert(emailSuppressions)");
+    const verifyAt = fn.indexOf("await isSuppressed(");
+    expect(insertAt).toBeGreaterThan(0);
+    expect(verifyAt).toBeGreaterThan(insertAt);
+    expect(fn).toContain("refusing to confirm it");
+  });
+
+  it("gives the recipient a route that does not depend on our database", () => {
+    expect(unsub).toMatch(/reply to any message[\s\S]{0,80}unsubscribe/i);
+  });
+});
+
 describe("RFC 8058 one-click headers", () => {
   it("emits both headers, and the URL matches the in-body link", () => {
     const h = unsubscribeHeaders("https://app.example.com", 4, "Dana@Acme.com");

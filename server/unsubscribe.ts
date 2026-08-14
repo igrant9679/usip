@@ -102,20 +102,26 @@ function decodeToken(token: string): DecodedToken | null {
 
 /**
  * Idempotent suppression — insert if not present, no-op if already there.
- * Returns whether this was a new suppression.
  *
  * `source` records HOW the opt-out arrived (migration 0165). A suppression
  * list is only as good as its provenance: until the GET endpoint stopped
  * acting, some share of this list was mail scanners following a link.
+ *
+ * THROWS if the suppression could not be established, and the caller must not
+ * swallow it. Returning `false` for "already on the list" AND for "the
+ * database was unreachable" is what let the confirmation page tell a recipient
+ * they had been unsubscribed when nothing had been written — the page's text
+ * is a promise about a row, so it may only be shown once the row is there.
  */
 async function suppressIfNew(
   workspaceId: number,
   email: string,
   source: "link_confirmed" | "one_click_header" | "reply" | "manual",
-): Promise<boolean> {
+): Promise<"added" | "already"> {
   const db = await getDb();
-  if (!db) return false;
+  if (!db) throw new Error("Database unavailable — suppression not recorded");
   const lower = normalizeSuppressionEmail(email);
+  if (!lower) throw new Error("Empty address — suppression not recorded");
   const existing = await db
     .select({ id: emailSuppressions.id })
     .from(emailSuppressions)
@@ -126,14 +132,26 @@ async function suppressIfNew(
       ),
     )
     .limit(1);
-  if (existing.length > 0) return false;
+  if (existing.length > 0) return "already";
   await db.insert(emailSuppressions).values({
     workspaceId,
     email: lower,
     reason: "unsubscribe",
     source,
   });
-  return true;
+  /**
+   * Read it back before anyone is told it exists.
+   *
+   * An insert that throws is the common failure and is already covered — this
+   * catches the quieter ones (a column the migration never added, a replica
+   * that accepted the write and lost it). One extra query on a path that runs
+   * once per recipient, in exchange for never lying about a compliance
+   * action.
+   */
+  if (!(await isSuppressed(workspaceId, lower))) {
+    throw new Error("Suppression did not persist — refusing to confirm it");
+  }
+  return "added";
 }
 
 /** True if this email is currently suppressed for the given workspace. */
@@ -195,6 +213,27 @@ const CONFIRM_PAGE = (email: string, ok: boolean) => `<!doctype html>
   <h1>${ok ? "You've been unsubscribed" : "Already unsubscribed"}</h1>
   <p>${ok ? "We won't send marketing emails to" : "No more marketing emails will be sent to"} <code>${escapeHtml(email)}</code>.</p>
   <p style="margin-top:24px;font-size:13px;color:#6b7280">If this was a mistake, just reply to any past message from us and we'll get you re-added.</p>
+</div></body></html>`;
+
+/**
+ * Shown when the suppression could NOT be written.
+ *
+ * The old behaviour was to render the success page anyway — "don't leak
+ * failures into UX". That is defensible for a cosmetic failure and indefensible
+ * for this one: an opt-out is a compliance act, and a recipient who is told
+ * they are unsubscribed will reasonably expect the mail to stop. If it did not
+ * persist, they need to know, and they need a route that does not depend on us
+ * having a working database.
+ */
+const FAILED_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>Something went wrong</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;background:#f9fafb;color:#111827;padding:48px 24px;}
+.card{max-width:480px;margin:0 auto;background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:32px;text-align:center;}
+p{color:#4b5563;line-height:1.55;}</style></head>
+<body><div class="card"><h1 style="color:#dc2626;font-size:20px;margin:0 0 8px">We couldn't complete that</h1>
+<p>Your unsubscribe request didn't go through, and we'd rather tell you than pretend it did.</p>
+<p style="margin-top:16px">Please try again in a few minutes, or simply reply to any message from us with "unsubscribe" — we'll take you off the list by hand.</p>
 </div></body></html>`;
 
 const INVALID_PAGE = `<!doctype html>
@@ -288,21 +327,33 @@ export function registerUnsubscribeRoute(app: Express) {
     const body = req.body as Record<string, unknown> | undefined;
     const oneClick = String(body?.["List-Unsubscribe"] ?? "").trim() === "One-Click";
     try {
-      const isNew = await suppressIfNew(
+      const outcome = await suppressIfNew(
         decoded.workspaceId,
         decoded.email,
         oneClick ? "one_click_header" : "link_confirmed",
       );
       console.log(
         `[Unsubscribe] ws=${decoded.workspaceId} email=${decoded.email} ` +
-          `via=${oneClick ? "one-click-header" : "confirm-form"} ${isNew ? "added" : "already-suppressed"}`,
+          `via=${oneClick ? "one-click-header" : "confirm-form"} ${outcome}`,
       );
       // RFC 8058 clients want a 200 and ignore the body; humans get the page.
-      res.type("html").send(CONFIRM_PAGE(decoded.email, isNew));
+      res.type("html").send(CONFIRM_PAGE(decoded.email, outcome === "added"));
     } catch (err) {
-      console.error("[Unsubscribe] error processing:", err);
-      // Still confirm to the recipient — don't leak failures into UX.
-      res.type("html").send(CONFIRM_PAGE(decoded.email, true));
+      /**
+       * Loud, and honest to the recipient. This used to render the success
+       * page regardless, so a failed write told someone their opt-out had
+       * been recorded when it had not — and they would find out only by
+       * continuing to receive mail they had asked to stop.
+       *
+       * 500 also matters for the one-click path: an RFC 8058 client that gets
+       * a 200 considers the job done, while a 500 leaves it free to retry or
+       * to fall back to showing the recipient the link.
+       */
+      console.error(
+        `[Unsubscribe] FAILED to record ws=${decoded.workspaceId} email=${decoded.email}:`,
+        err,
+      );
+      res.status(500).type("html").send(FAILED_PAGE);
     }
   });
 }
