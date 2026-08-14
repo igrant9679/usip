@@ -111,6 +111,20 @@ export interface SendEmailInput {
    * explicitly.
    */
   logMeta?: EmailLogMeta;
+  /**
+   * Extra RFC 5322 headers.
+   *
+   * Exists for List-Unsubscribe + List-Unsubscribe-Post (RFC 8058): Gmail and
+   * Yahoo require one-click unsubscribe from bulk senders, and without the
+   * headers a recipient using their mail client's own Unsubscribe button
+   * either achieves nothing or is offered "report spam" instead — which we
+   * never see and which costs domain reputation. With them, the opt-out lands
+   * in our suppression list as the deliberate act it was.
+   *
+   * Honoured by the SMTP and SendGrid adapters. Unipile's send API takes no
+   * custom headers, so bridged mailboxes silently keep the in-body link only.
+   */
+  headers?: Record<string, string>;
 }
 
 export interface EmailAdapter {
@@ -228,6 +242,7 @@ export class ImapSmtpAdapter implements EmailAdapter {
       to: input.to, cc: input.cc, bcc: input.bcc,
       subject: input.subject, text: input.bodyText, html: input.bodyHtml,
       inReplyTo: input.inReplyTo, references: input.references,
+      headers: input.headers,
       attachments: input.attachments?.map((a) => ({
         filename: a.filename,
         content: Buffer.from(a.content, "base64"),
@@ -379,6 +394,8 @@ export class SendGridAdapter implements EmailAdapter {
       fromEmail: input.fromEmail || this.account.fromEmail,
       fromName: input.fromName ?? this.account.fromName,
       replyTo,
+      // List-Unsubscribe / List-Unsubscribe-Post (RFC 8058) travel here.
+      headers: input.headers ?? null,
     });
     // Throw rather than return a sentinel: the pool sender counts a resolved
     // sendEmail as a delivered send and increments the daily quota on it.

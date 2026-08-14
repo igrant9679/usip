@@ -27,6 +27,13 @@ export interface SendGridMessage {
   fromEmail: string;
   fromName?: string | null;
   replyTo?: string | null;
+  /**
+   * Extra RFC 5322 headers. Used for List-Unsubscribe and
+   * List-Unsubscribe-Post (RFC 8058), which Gmail and Yahoo require of bulk
+   * senders and which is what makes a mail client's own Unsubscribe button
+   * reach us instead of becoming an invisible spam complaint.
+   */
+  headers?: Record<string, string> | null;
 }
 
 export interface SendGridResult {
@@ -57,6 +64,8 @@ export function buildSendGridPayload(msg: SendGridMessage): Record<string, unkno
     content,
   };
   if (msg.replyTo) payload.reply_to = { email: msg.replyTo };
+  // SendGrid rejects an empty headers object, so only send one when populated.
+  if (msg.headers && Object.keys(msg.headers).length > 0) payload.headers = { ...msg.headers };
   return payload;
 }
 

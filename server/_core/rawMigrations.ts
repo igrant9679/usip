@@ -3559,6 +3559,70 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0164: a sent row cannot also carry a failure reason ──────────────────
+  // The ARE dispatcher pre-marks its execution row `failed` with "Dispatch
+  // interrupted — send state unknown" BEFORE sending — deliberately, so an
+  // interrupted dispatch settles as a visible failure nobody auto-retries
+  // rather than as a silent resend. The success branch then overwrote
+  // `status` and LEFT THE REASON IN PLACE, so every successfully sent row has
+  // carried that sentence ever since.
+  //
+  // Invisible until 2026-08-14: the ARE tabs read `status`, and nothing read
+  // `failureReason` on a sent row. The Emails page (0163) reads both, and put
+  // "send state unknown" on a message with three recorded opens — which is
+  // how the owner found it. Fixed at the source in areEngine's success branch;
+  // this repairs the rows already written, in both tables.
+  //
+  // Scoped to rows that contradict themselves, so a genuine failure keeps its
+  // reason. Idempotent.
+  {
+    name: "0164_clear_stale_dispatch_failure.sql",
+    statements: [
+      "UPDATE `are_execution_queue` SET `failureReason` = NULL " +
+        "WHERE `status` = 'sent' AND `failureReason` IS NOT NULL",
+      "UPDATE `email_log` SET `failureReason` = NULL " +
+        "WHERE `status` = 'sent' AND `failureReason` IS NOT NULL",
+    ],
+  },
+
+  // ── 0165: open tracking that measures reading, not fetching ──────────────
+  // An open pixel records IMAGE FETCHES. Most are not people: Apple Mail
+  // Privacy Protection fetches every remote image at DELIVERY for every Apple
+  // Mail user on the default setting; corporate mail security (Proofpoint,
+  // Mimecast, Barracuda, Defender) fetches everything it scans; link
+  // previewers fetch on forward. All three land within seconds of the send,
+  // and every one of them was counted as a human opening the email — and, on
+  // the ARE side, fired the signal that runs an LLM and notifies the owner.
+  //
+  // openCount now means human opens. Machine fetches are counted separately
+  // rather than discarded, so nothing is lost and the split is auditable.
+  // @shared/openTracking owns the rule; both open paths import it.
+  //
+  // email_tracking_events gains the ARE side it never had: draftId becomes
+  // nullable and executionQueueId appears, so campaign opens finally produce
+  // an event row with a user agent instead of just a counter bump.
+  //
+  // Existing openCount values are LEFT ALONE. They are a mix of human and
+  // machine fetches with no stored user agent to re-decide from, so there is
+  // nothing to recompute — inventing a split would be worse than an honest
+  // discontinuity dated to this migration.
+  {
+    name: "0165_open_tracking_accuracy.sql",
+    statements: [
+      "ALTER TABLE `email_tracking_events` MODIFY COLUMN `draftId` int NULL",
+      "ALTER TABLE `email_tracking_events` ADD COLUMN `executionQueueId` int NULL",
+      "ALTER TABLE `email_tracking_events` ADD COLUMN `isMachine` boolean NOT NULL DEFAULT false",
+      "ALTER TABLE `email_tracking_events` ADD COLUMN `machineReason` varchar(32) NULL",
+      "CREATE INDEX `ix_ete_exec` ON `email_tracking_events` (`executionQueueId`)",
+      "ALTER TABLE `email_drafts` ADD COLUMN `machineOpenCount` int NOT NULL DEFAULT 0",
+      "ALTER TABLE `are_execution_queue` ADD COLUMN `machineOpenCount` int NOT NULL DEFAULT 0",
+      // How an unsubscribe arrived — see the column comment in schema.ts.
+      "ALTER TABLE `email_suppressions` ADD COLUMN `source` varchar(32) NULL",
+      // Everything already on the list came through the old GET-only link.
+      "UPDATE `email_suppressions` SET `source` = 'legacy' WHERE `source` IS NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

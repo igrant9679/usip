@@ -8,7 +8,7 @@ import { checkPermission, getDb } from "../db";
 import { createEmailAdapter } from "../emailAdapter";
 import { invokeLLM } from "../_core/llm";
 import { buildBrandContext } from "../services/brandContext";
-import { isSuppressed, makeUnsubscribeUrl } from "../unsubscribe";
+import { isSuppressed, makeUnsubscribeUrl, unsubscribeHeaders } from "../unsubscribe";
 import { bumpCampaignCounter } from "../campaignCounters";
 import { assertSendAllowed } from "../sendLimits";
 
@@ -1699,6 +1699,7 @@ export async function deliverEmailDraft(params: {
         leadId: draft.toLeadId ?? null,
         userId: userId ?? null,
       },
+      headers: unsubscribeHeaders(getAppBaseUrl(), workspaceId, toEmail),
     });
     sentMessageId = sendRes.messageId;
   } catch (err) {

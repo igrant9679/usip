@@ -46,7 +46,7 @@ import { router } from "../_core/trpc";
 import { repProcedure, workspaceProcedure } from "../_core/workspace";
 import { activeOwnerOrNull } from "../_core/activeMembers";
 import { notifyIfEnabled } from "../services/policyNotify";
-import { isSuppressed, makeUnsubscribeUrl } from "../unsubscribe";
+import { isSuppressed, makeUnsubscribeUrl, unsubscribeHeaders } from "../unsubscribe";
 import { assertSendAllowed } from "../sendLimits";
 import { ensureCustomerForWonOpp } from "../services/wonToCustomer";
 import { appBaseUrl as publicAppOrigin } from "../appUrl";
@@ -803,6 +803,9 @@ export const contactsRouter = router({
               contactId: contact.id,
               userId: ctx.user.id,
             },
+            // RFC 8058 one-click unsubscribe, same recipient and token as the
+            // in-body footer above.
+            headers: unsubscribeHeaders(getAppBaseUrl(), ctx.workspace.id, contact.email),
           });
           sentMessageId = sendRes.messageId;
         } catch (err) {
@@ -1402,6 +1405,7 @@ export const leadsRouter = router({
             leadId: lead.id,
             userId: ctx.user.id,
           },
+          headers: unsubscribeHeaders(getAppBaseUrl(), ctx.workspace.id, lead.email),
         });
         sentMessageId = sendRes.messageId;
       } catch (err) {

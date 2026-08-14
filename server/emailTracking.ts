@@ -3,8 +3,12 @@
  *
  * GET /api/track/open/:token
  *   - Returns a 1×1 transparent GIF
- *   - Inserts an "open" event into email_tracking_events
- *   - Increments emailDrafts.openCount, sets lastOpenedAt
+ *   - Inserts an "open" event into email_tracking_events, CLASSIFIED as a
+ *     person or a machine (migration 0165 — @shared/openTracking). Apple Mail
+ *     Privacy Protection and mail-security scanners fetch this pixel at
+ *     delivery time for messages nobody has looked at.
+ *   - Increments emailDrafts.openCount + lastOpenedAt for a human open, or
+ *     machineOpenCount for a fetch
  *
  * GET /api/track/click/:token?url=...
  *   - Inserts a "click" event into email_tracking_events
@@ -15,6 +19,7 @@
 import type { Express, Request, Response } from "express";
 import { eq, inArray, sql } from "drizzle-orm";
 import { activeTaskStatuses } from "@shared/taskStatus";
+import { classifyOpen, type OpenSignal } from "@shared/openTracking";
 import { getDb } from "./db";
 import { appUrl } from "./appUrl";
 import { emailDrafts, emailTrackingEvents } from "../drizzle/schema";
@@ -35,17 +40,21 @@ export function registerEmailTrackingRoutes(app: Express) {
   /**
    * Record an open against an ARE campaign send (are_execution_queue).
    *
-   * Deliberately fires the ARE `email_open` signal ONLY on the first open of a
-   * given message. Two reasons, both cost/noise:
+   * Deliberately fires the ARE `email_open` signal ONLY on the first HUMAN
+   * open of a given message. Two reasons, both cost/noise:
    *   • processSignal("email_open") runs the Signal Enhancement Agent, which
    *     makes an LLM call — and Apple Mail Privacy Protection plus security
    *     scanners prefetch pixels, so a single send can produce many hits.
    *   • It also notifies the campaign owner. Per-hit firing would spam them.
-   * openCount still increments on every hit, so raw curiosity is preserved
-   * without paying for it repeatedly.
+   *
+   * Since migration 0165 the prefetches do not reach that point at all: they
+   * are classified first and counted as machine fetches. Before, "first open"
+   * meant "first fetch", which for any Apple Mail recipient was a delivery
+   * prefetch — so the owner was told a prospect had opened their email, and an
+   * LLM ran, on the strength of nobody having read anything.
    */
-  async function recordAreOpen(db: any, token: string): Promise<void> {
-    const { areExecutionQueue } = await import("../drizzle/schema");
+  async function recordAreOpen(db: any, token: string, signal: OpenSignal & { ip?: string | null }): Promise<void> {
+    const { areExecutionQueue, emailTrackingEvents: events } = await import("../drizzle/schema");
     const [row] = await db
       .select({
         id: areExecutionQueue.id,
@@ -54,11 +63,46 @@ export function registerEmailTrackingRoutes(app: Express) {
         prospectQueueId: areExecutionQueue.prospectQueueId,
         stepIndex: areExecutionQueue.stepIndex,
         openedAt: areExecutionQueue.openedAt,
+        executedAt: areExecutionQueue.executedAt,
       })
       .from(areExecutionQueue)
       .where(eq(areExecutionQueue.trackingToken, token))
       .limit(1);
     if (!row) return; // unknown token — nothing to attribute
+
+    /**
+     * Classify BEFORE counting (migration 0165). Apple Mail Privacy Protection
+     * fetches this pixel at delivery for every Apple Mail recipient on the
+     * default setting, and mail-security scanners fetch it to scan the
+     * message. Both used to land here as "opened", set openedAt, and — worse —
+     * fire the ARE signal below, which runs an LLM and notifies the campaign
+     * owner about an open that never happened.
+     */
+    const verdict = classifyOpen({
+      ...signal,
+      msSinceSend: row.executedAt ? Date.now() - new Date(row.executedAt).getTime() : null,
+      msSinceLastOpen: row.openedAt ? Date.now() - new Date(row.openedAt).getTime() : null,
+    });
+
+    // The raw event, machine or not. ARE opens produced no event row at all
+    // before 0165, so nothing recorded WHO fetched a campaign pixel.
+    await db.insert(events).values({
+      workspaceId: row.workspaceId,
+      executionQueueId: row.id,
+      type: "open",
+      userAgent: signal.userAgent?.slice(0, 512) ?? null,
+      ip: signal.ip?.slice(0, 64) ?? null,
+      isMachine: verdict.machine,
+      machineReason: verdict.reason,
+    });
+
+    if (verdict.machine) {
+      await db
+        .update(areExecutionQueue)
+        .set({ machineOpenCount: sql`${areExecutionQueue.machineOpenCount} + 1` })
+        .where(eq(areExecutionQueue.id, row.id));
+      return;
+    }
 
     const isFirstOpen = !row.openedAt;
     await db
@@ -98,6 +142,14 @@ export function registerEmailTrackingRoutes(app: Express) {
     const { token } = req.params;
     if (!token) return;
 
+    // What the classifier gets to work with. Captured before any await, since
+    // the response has already been sent.
+    const signal = {
+      userAgent: req.headers["user-agent"] ?? null,
+      method: req.method,
+      ip: (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() ?? req.socket.remoteAddress ?? null,
+    };
+
     try {
       const db = await getDb();
       if (!db) return;
@@ -111,6 +163,8 @@ export function registerEmailTrackingRoutes(app: Express) {
           // and openCount to tell a first open from a re-open.
           abVariantId: emailDrafts.abVariantId,
           openCount: emailDrafts.openCount,
+          sentAt: emailDrafts.sentAt,
+          lastOpenedAt: emailDrafts.lastOpenedAt,
         })
         .from(emailDrafts)
         .where(eq(emailDrafts.trackingToken, token))
@@ -120,18 +174,45 @@ export function registerEmailTrackingRoutes(app: Express) {
         // Not a draft token — it may be an ARE campaign send (migration 0129).
         // ARE mail goes out through the sending pool, not email_drafts, so it
         // carries its own token on are_execution_queue.
-        await recordAreOpen(db, token);
+        await recordAreOpen(db, token, signal);
         return;
       }
 
-      // Insert tracking event
+      /**
+       * Is this a person, or an image prefetch? (Migration 0165.)
+       *
+       * Apple Mail Privacy Protection fetches every remote image at DELIVERY
+       * for every Apple Mail recipient on the default setting; mail-security
+       * scanners fetch to scan. Counting those as opens is what made the open
+       * rate on this product a measure of how many recipients use Apple Mail.
+       * @shared/openTracking owns the rule, so this path and the ARE path
+       * cannot drift into disagreeing about what an open is.
+       */
+      const verdict = classifyOpen({
+        ...signal,
+        msSinceSend: draft.sentAt ? Date.now() - new Date(draft.sentAt).getTime() : null,
+        msSinceLastOpen: draft.lastOpenedAt ? Date.now() - new Date(draft.lastOpenedAt).getTime() : null,
+      });
+
+      // The raw event either way — the classification is stored beside it, so
+      // a wrong call can be found and the rule corrected against real data.
       await db.insert(emailTrackingEvents).values({
         workspaceId: draft.workspaceId,
         draftId: draft.id,
         type: "open",
-        userAgent: req.headers["user-agent"]?.slice(0, 512) ?? null,
-        ip: (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() ?? req.socket.remoteAddress ?? null,
+        userAgent: signal.userAgent?.slice(0, 512) ?? null,
+        ip: signal.ip?.slice(0, 64) ?? null,
+        isMachine: verdict.machine,
+        machineReason: verdict.reason,
       });
+
+      if (verdict.machine) {
+        await db
+          .update(emailDrafts)
+          .set({ machineOpenCount: sql`${emailDrafts.machineOpenCount} + 1` })
+          .where(eq(emailDrafts.id, draft.id));
+        return;
+      }
 
       // Increment counter + set lastOpenedAt
       await db

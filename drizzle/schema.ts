@@ -806,7 +806,15 @@ export const emailDrafts = mysqlTable(
      */
     firstReplyAt: timestamp("firstReplyAt"),
     trackingToken: varchar("trackingToken", { length: 64 }), // unique token for open/click tracking
+    /**
+     * HUMAN opens only, since migration 0165. Machine fetches — Apple Mail
+     * Privacy Protection, mail scanners, link previewers — are counted
+     * separately below rather than inflating this number, which is the one
+     * every open rate on the product is computed from.
+     */
     openCount: int("openCount").default(0).notNull(),
+    /** Fetches classified as machines (0165). Kept so nothing is lost. */
+    machineOpenCount: int("machineOpenCount").default(0).notNull(),
     clickCount: int("clickCount").default(0).notNull(),
     lastOpenedAt: timestamp("lastOpenedAt"),
     lastClickedAt: timestamp("lastClickedAt"),
@@ -2754,16 +2762,36 @@ export const emailTrackingEvents = mysqlTable(
   {
     id: int("id").autoincrement().primaryKey(),
     workspaceId: int("workspaceId").notNull(),
-    draftId: int("draftId").notNull(),
+    /**
+     * Nullable since migration 0165: ARE campaign mail has no draft, and its
+     * opens previously produced no event row at all — so the one table that
+     * could have shown WHO fetched a pixel covered only half the sends.
+     */
+    draftId: int("draftId"),
+    /** The ARE send this event belongs to, when it is not a draft (0165). */
+    executionQueueId: int("executionQueueId"),
     type: mysqlEnum("type", ["open", "click"]).notNull(),
     url: varchar("url", { length: 2048 }), // for click events
     userAgent: varchar("userAgent", { length: 512 }),
     ip: varchar("ip", { length: 64 }),
+    /**
+     * Migration 0165 — was this fetch a machine rather than a person?
+     *
+     * A pixel measures image fetches, and most are Apple Mail Privacy
+     * Protection, mail-security scanners, or link previewers, all firing
+     * within seconds of the send. The raw event is still stored either way;
+     * this flag is what keeps them out of the open counters.
+     * @shared/openTracking owns the rule.
+     */
+    isMachine: boolean("isMachine").default(false).notNull(),
+    /** Slug naming why it was classified a machine — the call is auditable. */
+    machineReason: varchar("machineReason", { length: 32 }),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
   (t) => ({
     byDraft: index("ix_ete_draft").on(t.draftId),
     byWs: index("ix_ete_ws").on(t.workspaceId),
+    byExec: index("ix_ete_exec").on(t.executionQueueId),
   }),
 );
 export type EmailTrackingEvent = typeof emailTrackingEvents.$inferSelect;
@@ -2778,6 +2806,18 @@ export const emailSuppressions = mysqlTable(
     workspaceId: int("workspaceId").notNull(),
     email: varchar("email", { length: 320 }).notNull(),
     reason: mysqlEnum("reason", ["unsubscribe", "bounce", "spam_complaint", "manual"]).notNull(),
+    /**
+     * HOW the unsubscribe arrived (migration 0165):
+     *   link_confirmed   the recipient clicked through and confirmed
+     *   one_click_header their mail client's native Unsubscribe (RFC 8058)
+     *   reply            asked in a reply, classified by the reply agent
+     *   webhook | manual | import
+     *
+     * Recorded because the accuracy of this list depends on being able to
+     * tell a deliberate opt-out from a mail scanner following a link — which
+     * is precisely what a bare GET endpoint could not do.
+     */
+    source: varchar("source", { length: 32 }),
     draftId: int("draftId"), // the draft that triggered the suppression (if applicable)
     contactId: int("contactId"), // linked contact (if found)
     notes: text("notes"),
@@ -3649,8 +3689,11 @@ export const areExecutionQueue = mysqlTable(
        "did this message get opened" is far more trustworthy than a raw count,
        and the ARE signal fires once per message rather than once per pixel hit. */
     trackingToken: varchar("trackingToken", { length: 64 }),
+    /** First HUMAN open — machine prefetches no longer set it (0165). */
     openedAt: timestamp("openedAt"),
     openCount: int("openCount").default(0).notNull(),
+    /** Fetches classified as machines (0165) — see @shared/openTracking. */
+    machineOpenCount: int("machineOpenCount").default(0).notNull(),
     externalId: varchar("externalId", { length: 256 }), // message ID from sending provider
     failureReason: text("failureReason"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
