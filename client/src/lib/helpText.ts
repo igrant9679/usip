@@ -61,7 +61,7 @@ export const NAV_HELP: Record<string, HelpEntry> = {
   "/sending-accounts": { body: "The mailboxes and services that actually send your email, with per-account daily limits.", article: "email-sending-preferences" },
   "/email-builder": { body: "Design reusable email templates and snippets.", article: "email-builder-templates" },
   "/unified-inbox": { body: "Every reply across all your sending accounts in one thread list.", article: "unified-inbox" },
-  "/v2/emails": { body: "Individual emails sent and drafted, including anything awaiting your approval.", article: "email-drafts-sending" },
+  "/v2/emails": { body: "Every email sitewide — campaign and sequence steps, CRM sends, Inbox mail, proposals, system notifications and inbound replies — with what it was part of and what came back.", article: "email-drafts-sending" },
   "/v2/calls": { body: "Call logs and outcomes, including AI voice-agent calls.", article: "calls-page" },
   "/v2/tasks": { body: "Your to-do queue. AI-proposed tasks land here for approval before they become real work.", article: "autonomy-control-center" },
   "/social": { body: "LinkedIn outreach — connection requests, messages and replies.", article: "linkedin-social-outreach" },

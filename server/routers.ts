@@ -34,6 +34,7 @@ import { accountBriefsRouter } from "./routers/accountBriefs";
 import { smtpConfigRouter } from "./routers/smtpConfig";
 import { segmentRulesRouter } from "./routers/segmentRules";
 import { emailSuppressionsRouter } from "./routers/emailSuppressions";
+import { emailActivityRouter } from "./routers/emailActivity";
 import { sendingAccountsRouter, senderPoolsRouter } from "./routers/sendingAccounts";
 import { mailboxRouter } from "./routers/mailbox";
 import { calendarRouter } from "./routers/calendar";
@@ -109,6 +110,7 @@ export const appRouter = router({
   crmTerritoryRules: crmTerritoryRulesRouter,
   sequences: sequencesRouter,
   emailDrafts: emailDraftsRouter,
+  emailActivity: emailActivityRouter,
   emailAssist: emailAssistRouter,
   attention: attentionRouter,
   graph: graphRouter,

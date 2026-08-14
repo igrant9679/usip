@@ -41,6 +41,7 @@ import {
 import { recordAudit } from "../audit";
 import { getDb } from "../db";
 import { createEmailAdapter } from "../emailAdapter";
+import { linkEmailLogToDraft } from "../services/email/logSend";
 import { router } from "../_core/trpc";
 import { repProcedure, workspaceProcedure } from "../_core/workspace";
 import { activeOwnerOrNull } from "../_core/activeMembers";
@@ -794,6 +795,14 @@ export const contactsRouter = router({
             // flow back via /api/unipile/email-tracking-webhook and bump
             // openCount / clickCount on the matching emailDrafts row.
             track: true,
+            // Sitewide email log (migration 0163). The draft is written below,
+            // only on success, so the log row is linked to it afterwards by
+            // message id — see linkEmailLogToDraft.
+            logMeta: {
+              source: input.aiGenerated ? "ai_draft" : "crm",
+              contactId: contact.id,
+              userId: ctx.user.id,
+            },
           });
           sentMessageId = sendRes.messageId;
         } catch (err) {
@@ -810,7 +819,7 @@ export const contactsRouter = router({
         // (future migration); for now, failures surface only in the API
         // response + audit log so the user can retry.
         if (sentMessageId) {
-          await db.insert(emailDrafts).values({
+          const inserted = await db.insert(emailDrafts).values({
             workspaceId: ctx.workspace.id,
             toContactId: contact.id,
             subject: renderedSubject,
@@ -825,6 +834,10 @@ export const contactsRouter = router({
             // we've seen are 22 chars but column is varchar(64).
             trackingToken: sentMessageId.slice(0, 64),
           });
+          // Join the log row to the draft that owns this send's open/click
+          // counters, so the Emails page can show them (migration 0163).
+          const draftId = Number((inserted as unknown as { insertId?: number })?.insertId ?? 0);
+          if (draftId) await linkEmailLogToDraft(ctx.workspace.id, sentMessageId, draftId);
           await db.insert(activities).values({
             workspaceId: ctx.workspace.id,
             type: "email",
@@ -1381,6 +1394,14 @@ export const leadsRouter = router({
           bodyHtml: fullBodyHtml,
           bodyText: fullBodyText,
           track: true,
+          // Sitewide email log (migration 0163). The draft is written below,
+          // only on success, so the log row is linked to it afterwards by
+          // message id — see linkEmailLogToDraft.
+          logMeta: {
+            source: input.aiGenerated ? "ai_draft" : "crm",
+            leadId: lead.id,
+            userId: ctx.user.id,
+          },
         });
         sentMessageId = sendRes.messageId;
       } catch (err) {
@@ -1391,7 +1412,7 @@ export const leadsRouter = router({
       }
 
       if (sentMessageId) {
-        await db.insert(emailDrafts).values({
+        const inserted = await db.insert(emailDrafts).values({
           workspaceId: ctx.workspace.id,
           toLeadId: lead.id,
           toEmail: lead.email,
@@ -1403,6 +1424,10 @@ export const leadsRouter = router({
           sentAt: new Date(),
           trackingToken: sentMessageId.slice(0, 64),
         });
+        // Join the log row to the draft that owns this send's open/click
+        // counters, so the Emails page can show them (migration 0163).
+        const draftId = Number((inserted as unknown as { insertId?: number })?.insertId ?? 0);
+        if (draftId) await linkEmailLogToDraft(ctx.workspace.id, sentMessageId, draftId);
         await db.insert(activities).values({
           workspaceId: ctx.workspace.id,
           type: "email",

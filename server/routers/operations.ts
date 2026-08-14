@@ -32,6 +32,7 @@ import {
 } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
 import { recordEmailsSent } from "../usageCounters";
+import { logEmailSend } from "../services/email/logSend";
 import { getDb } from "../db";
 import { invokeLLM } from "../_core/llm";
 import { router } from "../_core/trpc";
@@ -844,8 +845,24 @@ export const dashboardsRouter = router({
      * factory cannot see this send. `recipients` may be several addresses in
      * one message — counted as the ONE message that was transmitted, which is
      * what the other two points count too.
+     *
+     * The email_log row (migration 0163) follows the same rule and for the
+     * same reason: scheduled reports left the building with no record on the
+     * Emails page.
      */
     await recordEmailsSent(ctx.workspace.id, 1);
+    await logEmailSend({
+      workspaceId: ctx.workspace.id,
+      meta: { source: "transactional", sourceLabel: `${dash.name} — Dashboard Report`, userId: ctx.user.id },
+      fromEmail: cfg.fromEmail,
+      fromName: cfg.fromName,
+      to: recipients,
+      cc: recipients.length > 1 ? recipients.slice(1).join(", ") : null,
+      subject: `${dash.name} — Dashboard Report (${sentAt.toLocaleDateString()})`,
+      bodyHtml: html,
+      status: "sent",
+      sentAt,
+    });
     await db.update(reportSchedules).set({ lastSentAt: sentAt }).where(eq(reportSchedules.id, sched.id));
     return { ok: true, sentAt };
   }),

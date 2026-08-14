@@ -27,6 +27,7 @@ import {
   sendingAccountDailyStats,
 } from "../drizzle/schema";
 import { getDb } from "./db";
+import { logEmailSend, type EmailLogMeta, type EmailLogSource } from "./services/email/logSend";
 import { recordEmailsSent } from "./usageCounters";
 import { buildTransporter, decrypt } from "./routers/smtpConfig";
 import { scrubForSend } from "./mergeVars";
@@ -37,6 +38,14 @@ export interface SendEmailOptions {
   html: string;
   text?: string;
   replyTo?: string;
+  /**
+   * How this message should be classified on the Emails page (migration 0163).
+   * Defaults to `transactional`, which is what everything on this path is
+   * unless the caller says otherwise.
+   */
+  logSource?: EmailLogSource | string;
+  /** Human label for the source — "Weekly pipeline report", a campaign name. */
+  logLabel?: string | null;
 }
 
 export interface SendEmailResult {
@@ -82,7 +91,7 @@ function scrubTemplateOpts<T extends SendEmailOptions>(opts: T, where: string): 
  */
 export async function sendCampaignEmailViaPool(
   workspaceId: number,
-  opts: SendEmailOptions & { fromName?: string },
+  opts: SendEmailOptions & { fromName?: string; logMeta?: EmailLogMeta },
 ): Promise<SendEmailResult & { accountId?: number; fromEmail?: string }> {
   opts = scrubTemplateOpts(opts, "emailDelivery.pool");
   try {
@@ -122,8 +131,14 @@ export async function sendCampaignEmailViaPool(
         .where(and(eq(sendingAccounts.workspaceId, workspaceId), eq(sendingAccounts.enabled, true)));
     }
     // No sending accounts at all → fall back to the single Email-Delivery config.
+    // The classification travels with it: a campaign email that went out
+    // through the fallback is still a campaign email on the Emails page.
     if (accounts.length === 0) {
-      const r = await sendWorkspaceEmail(workspaceId, opts);
+      const r = await sendWorkspaceEmail(workspaceId, {
+        ...opts,
+        logSource: opts.logMeta?.source ?? opts.logSource ?? "campaign",
+        logLabel: opts.logMeta?.sourceLabel ?? opts.logLabel ?? null,
+      });
       return r;
     }
 
@@ -185,6 +200,10 @@ export async function sendCampaignEmailViaPool(
       fromEmail: (chosen as any).fromEmail,
       fromName: opts.fromName ?? (chosen as any).fromName ?? undefined,
       replyTo: opts.replyTo ?? (chosen as any).replyTo ?? undefined,
+      // Carried through to the email_log row the adapter writes, so campaign
+      // mail lands on the Emails page naming its campaign, step and prospect
+      // rather than as an anonymous "other".
+      logMeta: opts.logMeta ?? { source: opts.logSource ?? "campaign", sourceLabel: opts.logLabel ?? null },
     } as any);
 
     // 5. Record usage (no unique key on the table → read-then-write).
@@ -275,11 +294,38 @@ export async function sendWorkspaceEmail(
      * The adapter branch of this same function (sendCampaignEmailViaPool) is
      * already counted by the factory — counting again here would double every
      * pooled send.
+     *
+     * The email_log row (migration 0163) is written for exactly the same
+     * reason and with the same split: this branch logs itself, the adapter
+     * branch is logged by the factory.
      */
     await recordEmailsSent(workspaceId, 1);
+    await logEmailSend({
+      workspaceId,
+      meta: { source: opts.logSource ?? "transactional", sourceLabel: opts.logLabel ?? null },
+      fromEmail,
+      fromName,
+      to: opts.to,
+      subject: opts.subject,
+      bodyHtml: opts.html,
+      bodyText: opts.text,
+      status: "sent",
+    });
     return { ok: true };
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
+    // Logged as a failure so "the invite never arrived" is answerable from the
+    // Emails page instead of only from the server console.
+    await logEmailSend({
+      workspaceId,
+      meta: { source: opts.logSource ?? "transactional", sourceLabel: opts.logLabel ?? null },
+      to: opts.to,
+      subject: opts.subject,
+      bodyHtml: opts.html,
+      bodyText: opts.text,
+      status: "failed",
+      failureReason: msg,
+    });
     return { ok: false, reason: `SMTP send failed: ${msg}` };
   }
 }

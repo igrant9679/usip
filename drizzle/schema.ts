@@ -821,6 +821,84 @@ export const emailDrafts = mysqlTable(
 );
 
 /* ──────────────────────────────────────────────────────────────────────────
+   Email Log — the ONE record of every email this workspace sends
+   (migration 0163, owner ask 2026-08-14: "all emails sitewide … should appear
+   in the Emails sidebar")
+
+   Before this table, an email's record depended entirely on which code path
+   sent it, and three of the paths kept no record at all:
+
+     • CRM ad-hoc sends wrote an `email_drafts` row (status 'sent')
+     • ARE campaign sends wrote only an `are_execution_queue` row
+     • Inbox composes and replies (mailbox.sendNew / sendReply), proposal
+       emails, and every transactional message wrote NOTHING — the mail left
+       the building and Velocity retained no evidence it ever existed
+
+   …and the Emails page read `email_drafts` alone, so it showed one of the
+   five. This table is written at the transmission chokepoints (see
+   services/email/logSend.ts), which is the same place `usage_counters`
+   is incremented and for the same reason: a per-call-site record misses the
+   twelfth call site.
+
+   It is a LOG, not a source of truth for engagement. Opens, clicks and bounces
+   continue to live on the row that owns them (`email_drafts`,
+   `are_execution_queue`) and are joined back on read — copying them here would
+   create a second set of counters to keep in step, which is how
+   `are_ab_variants` ended up with columns nothing ever wrote.
+   ────────────────────────────────────────────────────────────────────────── */
+export const emailLog = mysqlTable(
+  "email_log",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    /**
+     * Which part of the product sent it. Free-form varchar rather than an
+     * enum: a new send path must be able to appear in the log the day it
+     * ships, and an unrecognised value renders as itself rather than failing
+     * the insert (an enum insert failing at runtime is its own bug class here).
+     */
+    source: varchar("source", { length: 32 }).notNull(),
+    /** Human label for the source — campaign name, sequence name, "Proposal #12". */
+    sourceLabel: varchar("sourceLabel", { length: 200 }),
+    /* Back-references — each nullable, each pointing at the row that owns the
+       richer record. The reader joins through these for live engagement. */
+    draftId: int("draftId"),
+    executionQueueId: int("executionQueueId"),
+    campaignId: int("campaignId"),
+    prospectQueueId: int("prospectQueueId"),
+    contactId: int("contactId"),
+    leadId: int("leadId"),
+    sequenceId: int("sequenceId"),
+    sendingAccountId: int("sendingAccountId"),
+    /** Who triggered it. NULL means autonomous — the engine, not a person. */
+    userId: int("userId"),
+    fromEmail: varchar("fromEmail", { length: 320 }),
+    fromName: varchar("fromName", { length: 200 }),
+    toEmail: varchar("toEmail", { length: 320 }),
+    cc: varchar("cc", { length: 500 }),
+    bcc: varchar("bcc", { length: 500 }),
+    subject: varchar("subject", { length: 500 }),
+    /** Plain-text preview. Deliberately not the whole body: this is a log. */
+    bodyPreview: text("bodyPreview"),
+    status: varchar("status", { length: 16 }).default("sent").notNull(), // sent | failed
+    failureReason: text("failureReason"),
+    /** Provider message id, where the adapter returns one. */
+    messageId: varchar("messageId", { length: 500 }),
+    sentAt: timestamp("sentAt").defaultNow().notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    // The feed's own ordering: workspace, newest first.
+    byWsSent: index("ix_elog_ws_sent").on(t.workspaceId, t.sentAt),
+    bySource: index("ix_elog_source").on(t.workspaceId, t.source),
+    byDraft: index("ix_elog_draft").on(t.draftId),
+    byExec: index("ix_elog_exec").on(t.executionQueueId),
+    byTo: index("ix_elog_to").on(t.toEmail),
+  }),
+);
+export type EmailLog = typeof emailLog.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
    Customer Success
    ────────────────────────────────────────────────────────────────────────── */
 

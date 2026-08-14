@@ -118,9 +118,13 @@ describe("emailsSent", () => {
     // 11 createEmailAdapter call sites, 3 adapter implementations, one wrapper.
     // Window widened 400 → 1400 on 2026-08-14: the wrapper also applies the
     // inbox's signature/opt-out defaults now, which is a legitimate ~600 chars
-    // between the factory opening and the meter. The property under test is
-    // that the meter is INSIDE this factory, not how tightly it is packed.
-    expect(adapter).toMatch(/export function createEmailAdapter\(account: SendingAccount\): EmailAdapter \{[\s\S]{0,1400}?await recordEmailsSent\(account\.workspaceId, 1\)/);
+    // between the factory opening and the meter. Widened again 1400 → 2600
+    // later the same day, when the wrapper also became the sitewide email
+    // log's write point (migration 0163) — another legitimate ~1000 chars,
+    // there for the same reason the meter is: every adapter is built here, so
+    // one record here covers every caller. The property under test is that the
+    // meter is INSIDE this factory, not how tightly it is packed.
+    expect(adapter).toMatch(/export function createEmailAdapter\(account: SendingAccount\): EmailAdapter \{[\s\S]{0,2600}?await recordEmailsSent\(account\.workspaceId, 1\)/);
     // Wrapped, not replaced: the other adapter methods must still be the
     // adapter's own, and the factory must still build all three kinds.
     expect(adapter).toMatch(/function buildEmailAdapter/);
@@ -139,12 +143,18 @@ describe("emailsSent", () => {
      */
     const factory = adapter.slice(adapter.indexOf("export function createEmailAdapter"));
     // `send(decorated)` since 2026-08-14 — the body is decorated with the
-    // inbox's defaults first, then sent. Still the awaited send.
-    const sent = factory.indexOf("const result = await send(decorated)");
+    // inbox's defaults first, then sent. Still the awaited send. Since the
+    // email-log wiring (0163) it sits inside a try/catch that logs the failure
+    // and rethrows, so the anchor lost its `const` — the ordering property is
+    // unchanged, and the rethrow is what still skips the increment.
+    const sent = factory.indexOf("await send(decorated)");
     const recorded = factory.indexOf("recordEmailsSent(");
+    const rethrown = factory.indexOf("throw err");
     expect(sent, "the awaited send is gone — the ordering below would be vacuous").toBeGreaterThan(0);
     expect(recorded, "the increment is gone").toBeGreaterThan(0);
+    expect(rethrown, "the catch no longer rethrows — a failed send would be counted").toBeGreaterThan(0);
     expect(sent).toBeLessThan(recorded);
+    expect(rethrown).toBeLessThan(recorded);
   });
 
   it("the two raw-transporter paths record their own", () => {

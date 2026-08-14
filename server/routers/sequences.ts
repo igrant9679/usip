@@ -1688,6 +1688,17 @@ export async function deliverEmailDraft(params: {
       bodyHtml: fullBodyHtml,
       bodyText: fullBodyText,
       track: true,
+      // Sitewide email log (migration 0163). The draft exists before the send
+      // on this path, so the log row can point straight at it — which is what
+      // lets the Emails page show this row's live opens and clicks.
+      logMeta: {
+        source: draft.sequenceId ? "sequence" : draft.aiGenerated ? "ai_draft" : "crm",
+        draftId: draft.id,
+        sequenceId: draft.sequenceId ?? null,
+        contactId: draft.toContactId ?? null,
+        leadId: draft.toLeadId ?? null,
+        userId: userId ?? null,
+      },
     });
     sentMessageId = sendRes.messageId;
   } catch (err) {

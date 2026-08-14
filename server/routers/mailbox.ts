@@ -315,6 +315,10 @@ export const mailboxRouter = router({
         cc: input.cc,
         bcc: input.bcc,
         attachments: input.attachments,
+        // Sitewide email log (migration 0163). Inbox composes previously left
+        // NO trace anywhere in Velocity — the message existed only in the
+        // provider's Sent folder.
+        logMeta: { source: "mailbox", userId: ctx.user.id },
       });
     }),
 
@@ -356,6 +360,8 @@ export const mailboxRouter = router({
         references: input.references,
         replyToThreadId: input.threadId,
         attachments: input.attachments,
+        // As sendNew: replies sent from the Inbox were recorded nowhere.
+        logMeta: { source: "mailbox", sourceLabel: "Reply", userId: ctx.user.id },
       });
     }),
 

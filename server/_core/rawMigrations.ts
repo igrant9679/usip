@@ -3476,6 +3476,89 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0163: email_log — every email sitewide, in one place ─────────────────
+  // Owner ask 2026-08-14: "all emails sitewide, especially ARE Hub emails,
+  // should appear in the Emails sidebar with all of the relevant data and
+  // records." The page read `email_drafts` and nothing else, so it showed CRM
+  // ad-hoc sends and AI drafts only: ARE campaign mail lived in
+  // are_execution_queue, and Inbox composes, proposal mail and every
+  // transactional message were recorded NOWHERE.
+  //
+  // Going forward the transmission chokepoints write this table (see
+  // services/email/logSend.ts). The two INSERT…SELECTs below give the page a
+  // history to show on day one rather than starting empty — without them the
+  // fix would look like it had not worked.
+  //
+  // Engagement counters are deliberately NOT copied: opens/clicks/bounces stay
+  // on the row that owns them and are joined on read.
+  {
+    name: "0163_email_log.sql",
+    statements: [
+      "CREATE TABLE IF NOT EXISTS `email_log` (" +
+        "`id` int NOT NULL AUTO_INCREMENT PRIMARY KEY," +
+        "`workspaceId` int NOT NULL," +
+        "`source` varchar(32) NOT NULL," +
+        "`sourceLabel` varchar(200) NULL," +
+        "`draftId` int NULL," +
+        "`executionQueueId` int NULL," +
+        "`campaignId` int NULL," +
+        "`prospectQueueId` int NULL," +
+        "`contactId` int NULL," +
+        "`leadId` int NULL," +
+        "`sequenceId` int NULL," +
+        "`sendingAccountId` int NULL," +
+        "`userId` int NULL," +
+        "`fromEmail` varchar(320) NULL," +
+        "`fromName` varchar(200) NULL," +
+        "`toEmail` varchar(320) NULL," +
+        "`cc` varchar(500) NULL," +
+        "`bcc` varchar(500) NULL," +
+        "`subject` varchar(500) NULL," +
+        "`bodyPreview` text NULL," +
+        "`status` varchar(16) NOT NULL DEFAULT 'sent'," +
+        "`failureReason` text NULL," +
+        "`messageId` varchar(500) NULL," +
+        "`sentAt` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP," +
+        "`createdAt` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP" +
+        ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+      "CREATE INDEX `ix_elog_ws_sent` ON `email_log` (`workspaceId`, `sentAt`)",
+      "CREATE INDEX `ix_elog_source` ON `email_log` (`workspaceId`, `source`)",
+      "CREATE INDEX `ix_elog_draft` ON `email_log` (`draftId`)",
+      "CREATE INDEX `ix_elog_exec` ON `email_log` (`executionQueueId`)",
+      "CREATE INDEX `ix_elog_to` ON `email_log` (`toEmail`)",
+
+      // History 1/2 — sent drafts. `sequenceId` distinguishes a sequence step
+      // from a one-off; `aiGenerated` distinguishes an AI draft a human
+      // released from mail a human wrote.
+      "INSERT INTO `email_log` (`workspaceId`, `source`, `draftId`, `sequenceId`, `contactId`, `leadId`, " +
+        "`sendingAccountId`, `userId`, `toEmail`, `subject`, `bodyPreview`, `status`, `messageId`, `sentAt`) " +
+        "SELECT d.`workspaceId`, " +
+        "CASE WHEN d.`sequenceId` IS NOT NULL THEN 'sequence' " +
+        "     WHEN d.`aiGenerated` = 1 THEN 'ai_draft' ELSE 'crm' END, " +
+        "d.`id`, d.`sequenceId`, d.`toContactId`, d.`toLeadId`, d.`sendingAccountId`, d.`createdByUserId`, " +
+        "d.`toEmail`, LEFT(d.`subject`, 500), LEFT(d.`body`, 2000), 'sent', d.`trackingToken`, " +
+        "COALESCE(d.`sentAt`, d.`createdAt`) " +
+        "FROM `email_drafts` d WHERE d.`status` = 'sent' " +
+        "AND NOT EXISTS (SELECT 1 FROM `email_log` l WHERE l.`draftId` = d.`id`)",
+
+      // History 2/2 — ARE campaign mail. Failed sends are included on purpose:
+      // "it never went out, and here is why" is the single most useful row on
+      // this page, and it existed only inside the campaign's own tab.
+      "INSERT INTO `email_log` (`workspaceId`, `source`, `sourceLabel`, `executionQueueId`, `campaignId`, " +
+        "`prospectQueueId`, `toEmail`, `subject`, `bodyPreview`, `status`, `failureReason`, `sentAt`) " +
+        "SELECT q.`workspaceId`, 'campaign', c.`name`, q.`id`, q.`campaignId`, q.`prospectQueueId`, " +
+        "p.`email`, LEFT(JSON_UNQUOTE(JSON_EXTRACT(q.`messageContent`, '$.subject')), 500), " +
+        "LEFT(JSON_UNQUOTE(JSON_EXTRACT(q.`messageContent`, '$.body')), 2000), " +
+        "CASE WHEN q.`status` = 'sent' THEN 'sent' ELSE 'failed' END, q.`failureReason`, " +
+        "COALESCE(q.`executedAt`, q.`scheduledAt`) " +
+        "FROM `are_execution_queue` q " +
+        "LEFT JOIN `prospect_queue` p ON p.`id` = q.`prospectQueueId` " +
+        "LEFT JOIN `are_campaigns` c ON c.`id` = q.`campaignId` " +
+        "WHERE q.`channel` = 'email' AND q.`status` IN ('sent', 'failed') " +
+        "AND NOT EXISTS (SELECT 1 FROM `email_log` l WHERE l.`executionQueueId` = q.`id`)",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

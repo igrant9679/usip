@@ -9,6 +9,7 @@ import { ImapFlow } from "imapflow";
 import { simpleParser } from "mailparser";
 import type { SendingAccount } from "../drizzle/schema";
 import { applyAccountSendDefaults } from "./services/sending/accountDefaults";
+import type { EmailLogMeta } from "./services/email/logSend";
 import { recordEmailsSent } from "./usageCounters";
 import { createDecipheriv, createCipheriv, randomBytes } from "crypto";
 
@@ -98,6 +99,18 @@ export interface SendEmailInput {
    * sequence sends) should opt in by passing track:true.
    */
   track?: boolean;
+  /**
+   * Where this send came from, for the sitewide email log (migration 0163).
+   *
+   * Optional on purpose: the wrapper in `createEmailAdapter` logs the send
+   * either way, so an untagged caller appears as `other` rather than
+   * disappearing. Tagging it is what puts the campaign, sequence, contact or
+   * proposal beside the row on the Emails page.
+   *
+   * Adapters ignore this field — every implementation maps the wire fields
+   * explicitly.
+   */
+  logMeta?: EmailLogMeta;
 }
 
 export interface EmailAdapter {
@@ -465,8 +478,47 @@ export function createEmailAdapter(account: SendingAccount): EmailAdapter {
       },
       input,
     );
-    const result = await send(decorated);
+    /**
+     * The email_log row (migration 0163). Written HERE for the reason the
+     * usage meter is: every adapter is built by this factory, so one record
+     * here covers all three implementations and every caller — including the
+     * ones that keep no record of their own (Inbox composes, proposal mail),
+     * which is why the Emails page could only ever show a minority of what
+     * this workspace sent.
+     *
+     * FAILURES ARE LOGGED TOO, then rethrown unchanged. "It never went out,
+     * and here is why" is the row a user most needs and the one an
+     * only-on-success log would never write.
+     */
+    const logMeta = input.logMeta;
+    const logCommon = {
+      workspaceId: account.workspaceId,
+      meta: logMeta,
+      sendingAccountId: account.id,
+      fromEmail: decorated.fromEmail ?? account.fromEmail,
+      fromName: decorated.fromName ?? account.fromName,
+      to: decorated.to,
+      cc: decorated.cc,
+      bcc: decorated.bcc,
+      subject: decorated.subject,
+      bodyHtml: decorated.bodyHtml,
+      bodyText: decorated.bodyText,
+    };
+    let result: Awaited<ReturnType<typeof send>>;
+    try {
+      result = await send(decorated);
+    } catch (err) {
+      const { logEmailSend } = await import("./services/email/logSend");
+      await logEmailSend({
+        ...logCommon,
+        status: "failed",
+        failureReason: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
     await recordEmailsSent(account.workspaceId, 1);
+    const { logEmailSend } = await import("./services/email/logSend");
+    await logEmailSend({ ...logCommon, status: "sent", messageId: result?.messageId ?? null });
     return result;
   };
   return adapter;

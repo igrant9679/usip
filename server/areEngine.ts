@@ -841,6 +841,18 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
           subject,
           html,
           text: bodyIsHtml ? htmlBodyToText(body) : body,
+          // What puts this send on the Emails page as campaign mail, named,
+          // and linked back to its campaign, step and prospect (migration
+          // 0163). Campaign mail used to be recorded ONLY on the execution
+          // queue row, so the Emails page — which read email_drafts — showed
+          // none of it.
+          logMeta: {
+            source: "campaign",
+            sourceLabel: campaign.name ?? null,
+            campaignId: campId,
+            prospectQueueId: p.id,
+            executionQueueId: step.id,
+          },
         });
         if (sendRes.ok) {
           await db

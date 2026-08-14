@@ -677,6 +677,13 @@ export const proposalsRouter = router({
             to: proposal.clientEmail!,
             subject: emailSubject,
             bodyHtml: emailHtml,
+            // Sitewide email log (migration 0163) — proposal mail kept no
+            // record of its own.
+            logMeta: {
+              source: "proposal",
+              sourceLabel: `Proposal #${proposal.id}`,
+              userId: ctx.user.id,
+            },
           });
           senderEmail = sendingAcc.fromEmail;
           emailOk = true;
@@ -687,6 +694,8 @@ export const proposalsRouter = router({
             to: proposal.clientEmail!,
             subject: emailSubject,
             html: emailHtml,
+            logSource: "proposal",
+            logLabel: `Proposal #${proposal.id}`,
           });
           emailOk = result.ok;
         }
@@ -1379,10 +1388,18 @@ ${proposal.shareToken ? `<p><a href="${appUrl(`/p/${proposal.shareToken}`)}">Vie
               to: proposal.clientEmail,
               subject,
               bodyHtml: html,
+              logMeta: {
+                source: "proposal",
+                sourceLabel: `Proposal #${proposal.id}`,
+                userId: ctx.user.id,
+              },
             });
           } else {
             const { sendWorkspaceEmail } = await import("../emailDelivery");
-            await sendWorkspaceEmail(ctx.workspace.id, { to: proposal.clientEmail, subject, html });
+            await sendWorkspaceEmail(ctx.workspace.id, {
+              to: proposal.clientEmail, subject, html,
+              logSource: "proposal", logLabel: `Proposal #${proposal.id}`,
+            });
           }
         } catch (_e) {
           // Non-fatal
@@ -1435,10 +1452,18 @@ ${input.reason ? `<p>${input.reason}</p>` : ""}
               to: proposal.clientEmail,
               subject,
               bodyHtml: html,
+              logMeta: {
+                source: "proposal",
+                sourceLabel: `Proposal #${proposal.id}`,
+                userId: ctx.user.id,
+              },
             });
           } else {
             const { sendWorkspaceEmail } = await import("../emailDelivery");
-            await sendWorkspaceEmail(ctx.workspace.id, { to: proposal.clientEmail, subject, html });
+            await sendWorkspaceEmail(ctx.workspace.id, {
+              to: proposal.clientEmail, subject, html,
+              logSource: "proposal", logLabel: `Proposal #${proposal.id}`,
+            });
           }
         } catch (_e) {
           // Non-fatal
