@@ -116,7 +116,11 @@ describe("emailsSent", () => {
    */
   it("the adapter factory meters every send it makes", () => {
     // 11 createEmailAdapter call sites, 3 adapter implementations, one wrapper.
-    expect(adapter).toMatch(/export function createEmailAdapter\(account: SendingAccount\): EmailAdapter \{[\s\S]{0,400}?await recordEmailsSent\(account\.workspaceId, 1\)/);
+    // Window widened 400 → 1400 on 2026-08-14: the wrapper also applies the
+    // inbox's signature/opt-out defaults now, which is a legitimate ~600 chars
+    // between the factory opening and the meter. The property under test is
+    // that the meter is INSIDE this factory, not how tightly it is packed.
+    expect(adapter).toMatch(/export function createEmailAdapter\(account: SendingAccount\): EmailAdapter \{[\s\S]{0,1400}?await recordEmailsSent\(account\.workspaceId, 1\)/);
     // Wrapped, not replaced: the other adapter methods must still be the
     // adapter's own, and the factory must still build all three kinds.
     expect(adapter).toMatch(/function buildEmailAdapter/);
@@ -134,7 +138,9 @@ describe("emailsSent", () => {
      * that catalogued it. Anchors are proven found before they are compared.
      */
     const factory = adapter.slice(adapter.indexOf("export function createEmailAdapter"));
-    const sent = factory.indexOf("const result = await send(input)");
+    // `send(decorated)` since 2026-08-14 — the body is decorated with the
+    // inbox's defaults first, then sent. Still the awaited send.
+    const sent = factory.indexOf("const result = await send(decorated)");
     const recorded = factory.indexOf("recordEmailsSent(");
     expect(sent, "the awaited send is gone — the ordering below would be vacuous").toBeGreaterThan(0);
     expect(recorded, "the increment is gone").toBeGreaterThan(0);

@@ -152,7 +152,27 @@ export async function sendCampaignEmailViaPool(
     if (eligible.length === 0) {
       return { ok: false, reason: "All sending accounts have hit their daily limit" };
     }
-    const chosen = eligible[0].a;
+
+    // 3b. …and under its HOURLY limit, for accounts whose owner configured one
+    //     (owner ask 2026-08-14: inbox sending limits are global defaults for
+    //     that inbox). Campaign sends pick their account HERE, so a limit
+    //     enforced only in sendLimits.assertSendAllowed never reached them.
+    //     Skipping the account is better than failing the send — that is what
+    //     a pool is for.
+    const { getAccountSentLastHour } = await import("./sendLimits");
+    let chosen = eligible[0].a;
+    let hourlyBlocked = 0;
+    for (const cand of eligible) {
+      const limit = (cand.a as { hourlySendLimit?: number }).hourlySendLimit ?? 0;
+      const configured = (cand.a as { sendingLimitsCompleted?: boolean }).sendingLimitsCompleted === true;
+      if (!configured || limit <= 0) { chosen = cand.a; break; }
+      const lastHour = await getAccountSentLastHour(cand.a.id, workspaceId);
+      if (lastHour < limit) { chosen = cand.a; break; }
+      hourlyBlocked++;
+    }
+    if (hourlyBlocked === eligible.length) {
+      return { ok: false, reason: "Every eligible sending account has hit its hourly limit — it will resume within the hour" };
+    }
 
     // 4. Send via the account's adapter (SMTP/IMAP/OAuth).
     const { createEmailAdapter } = await import("./emailAdapter");

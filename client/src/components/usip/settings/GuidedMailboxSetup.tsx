@@ -271,20 +271,32 @@ export function GuidedMailboxSetup({
             <h2 className="text-[17px] font-semibold leading-snug">Welcome to the guided mailbox setup!</h2>
           </div>
           <nav className="flex-1 space-y-1 px-4">
-            <SidebarStep label="Link mailbox" state={acct ? "done" : "active"} />
+            {/* Clickable once a mailbox exists (owner ask 2026-08-14). Values
+                are not lost by jumping: every step persists on unmount or blur
+                — which is exactly why the limits step had to be fixed first. */}
+            <SidebarStep
+              label="Link mailbox"
+              state={acct ? "done" : "active"}
+              onClick={acct ? () => setStep("linked") : undefined}
+            />
             <SidebarStep
               label="Configure mailbox"
               state={configuring ? "active" : step === "complete" ? "done" : "todo"}
               chevron={configuring || step === "complete"}
+              onClick={acct ? () => setStep(setupComplete(acct) ? "overview" : "signature") : undefined}
             />
             {(configuring || step === "complete") && (
               <div className="ml-[17px] space-y-0.5 border-l border-slate-700 pl-3">
-                <SidebarSubstep label="Signature" done={!!acct?.signatureCompleted} active={step === "signature"} />
-                <SidebarSubstep label="Sending limits" done={!!acct?.sendingLimitsCompleted} active={step === "limits"} />
-                <SidebarSubstep label="Opt out link" done={!!acct?.optOutCompleted} active={step === "optout"} />
+                <SidebarSubstep label="Signature" done={!!acct?.signatureCompleted} active={step === "signature"} onClick={acct ? () => setStep("signature") : undefined} />
+                <SidebarSubstep label="Sending limits" done={!!acct?.sendingLimitsCompleted} active={step === "limits"} onClick={acct ? () => setStep("limits") : undefined} />
+                <SidebarSubstep label="Opt out link" done={!!acct?.optOutCompleted} active={step === "optout"} onClick={acct ? () => setStep("optout") : undefined} />
               </div>
             )}
-            <SidebarStep label="Finish setup" state={step === "complete" ? "active" : "todo"} />
+            <SidebarStep
+              label="Finish setup"
+              state={step === "complete" ? "active" : "todo"}
+              onClick={acct ? () => setStep("complete") : undefined}
+            />
           </nav>
           <div className="px-5 pb-6 space-y-3">
             <div className="relative rounded-lg rounded-bl-none bg-slate-800/80 p-3.5 text-[12px] leading-relaxed text-slate-300">
@@ -461,14 +473,24 @@ const STEP_TIPS: Record<string, string> = {
 };
 
 function SidebarStep({
-  label, state, chevron,
+  label, state, chevron, onClick,
 }: {
   label: string;
   state: "done" | "active" | "todo";
   chevron?: boolean;
+  /** Jump straight to this step. Omitted while the step is unreachable. */
+  onClick?: () => void;
 }) {
+  const Tag = onClick ? "button" : "div";
   return (
-    <div className={cn("flex items-center gap-2.5 rounded-md px-2.5 py-2", state === "active" && "bg-slate-800")}>
+    <Tag
+      {...(onClick ? { type: "button" as const, onClick } : {})}
+      className={cn(
+        "flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left",
+        state === "active" && "bg-slate-800",
+        onClick && "cursor-pointer hover:bg-slate-800/70",
+      )}
+    >
       {state === "done" ? (
         <span className="flex size-[18px] shrink-0 items-center justify-center rounded-full border-[1.5px] border-emerald-400 text-emerald-400">
           <Check className="size-2.5" strokeWidth={3} />
@@ -484,20 +506,28 @@ function SidebarStep({
         {label}
       </span>
       {chevron && <ChevronDown className="ml-auto size-3.5 rotate-180 text-slate-400" />}
-    </div>
+    </Tag>
   );
 }
 
-function SidebarSubstep({ label, done, active }: { label: string; done: boolean; active: boolean }) {
+function SidebarSubstep({ label, done, active, onClick }: { label: string; done: boolean; active: boolean; onClick?: () => void }) {
+  const Tag = onClick ? "button" : "div";
   return (
-    <div className={cn("flex items-center gap-2 rounded-md px-2.5 py-1.5", active && "bg-slate-800")}>
+    <Tag
+      {...(onClick ? { type: "button" as const, onClick } : {})}
+      className={cn(
+        "flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left",
+        active && "bg-slate-800",
+        onClick && "cursor-pointer hover:bg-slate-800/70",
+      )}
+    >
       <span className="flex size-3.5 shrink-0 items-center justify-center">
         {done && <Check className="size-3 text-emerald-400" strokeWidth={3} />}
       </span>
       <span className={cn("text-[12.5px]", active || done ? "text-slate-100" : "text-slate-400", active && "font-medium")}>
         {label}
       </span>
-    </div>
+    </Tag>
   );
 }
 
@@ -1344,19 +1374,39 @@ function LimitsStep({ acct, save }: { acct: MailboxAccount; save: (p: Record<str
   const [delay, setDelay] = useState(String(acct.delaySeconds ?? 600));
   const [editorOpen, setEditorOpen] = useState(false);
 
+  const normalized = () => ({
+    dailySendLimit: Math.max(1, Number(daily) || 50),
+    hourlySendLimit: Math.max(1, Number(hourly) || 6),
+    delaySeconds: Math.max(0, Number(delay) || 600),
+  });
+
   // The Complete button (in the wizard's bottom bar) fires this event so the
   // current input values persist together with sendingLimitsCompleted.
   useEffect(() => {
-    const handler = () => {
-      void save({
-        dailySendLimit: Math.max(1, Number(daily) || 50),
-        hourlySendLimit: Math.max(1, Number(hourly) || 6),
-        delaySeconds: Math.max(0, Number(delay) || 600),
-      });
-    };
+    const handler = () => { void save(normalized()); };
     window.addEventListener("mailbox-limits-complete", handler);
     return () => window.removeEventListener("mailbox-limits-complete", handler);
   }, [daily, hourly, delay]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // …and persist on UNMOUNT too, the way SignatureStep does. That event only
+  // fires from Complete, so "Skip this step", Previous, jumping via the step
+  // list, or closing the wizard all threw the numbers away — which is why
+  // sending limits appeared not to save. A ref carries the latest values
+  // without re-running the effect.
+  const latest = useRef(normalized());
+  latest.current = normalized();
+  useEffect(() => {
+    return () => {
+      const v = latest.current;
+      if (
+        v.dailySendLimit !== (acct.dailySendLimit ?? 50) ||
+        v.hourlySendLimit !== (acct.hourlySendLimit ?? 6) ||
+        v.delaySeconds !== (acct.delaySeconds ?? 600)
+      ) {
+        void save(v);
+      }
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="mx-auto w-full max-w-3xl px-6 py-10">

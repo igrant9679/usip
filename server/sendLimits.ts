@@ -59,6 +59,34 @@ export async function getAccountSentToday(
   return Number(row?.cnt ?? 0);
 }
 
+/**
+ * Count drafts this account dispatched in the last rolling hour.
+ *
+ * A rolling window, not a clock hour: an account capped at 6/hour should not
+ * be able to send 6 at 10:59 and 6 more at 11:01, which is a 12-in-two-minutes
+ * burst — exactly the pattern the limit exists to prevent.
+ */
+export async function getAccountSentLastHour(
+  accountId: number,
+  workspaceId: number,
+): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const since = new Date(Date.now() - 60 * 60 * 1000);
+  const [row] = await db
+    .select({ cnt: sql<number>`COUNT(*)` })
+    .from(emailDrafts)
+    .where(
+      and(
+        eq(emailDrafts.workspaceId, workspaceId),
+        eq(emailDrafts.sendingAccountId, accountId),
+        eq(emailDrafts.status, "sent"),
+        sql`${emailDrafts.sentAt} >= ${since}`,
+      ),
+    );
+  return Number(row?.cnt ?? 0);
+}
+
 /** Count drafts dispatched today across the entire workspace. */
 export async function getWorkspaceSentToday(workspaceId: number): Promise<number> {
   const db = await getDb();
@@ -120,6 +148,8 @@ export async function assertSendAllowed(
   const [acct] = await db
     .select({
       dailySendLimit: sendingAccounts.dailySendLimit,
+      hourlySendLimit: sendingAccounts.hourlySendLimit,
+      sendingLimitsCompleted: sendingAccounts.sendingLimitsCompleted,
       fromEmail: sendingAccounts.fromEmail,
     })
     .from(sendingAccounts)
@@ -137,5 +167,24 @@ export async function assertSendAllowed(
       code: "TOO_MANY_REQUESTS",
       message: `Sending account ${acct.fromEmail} hit its daily limit (${acctSent}/${acct.dailySendLimit}). Pick a different sender or wait until tomorrow.`,
     });
+  }
+
+  // Per-account HOURLY cap. Stored since the setup wizard shipped and enforced
+  // by nothing until 2026-08-14 — the column was written, read back into the
+  // form, and ignored by every send path.
+  //
+  // Gated on sendingLimitsCompleted on purpose. The column is NOT NULL with a
+  // default of 6, so enforcing it unconditionally would suddenly throttle every
+  // mailbox whose owner never opened that step — forcing a value nobody chose,
+  // which is the opposite of the rule. Completing the step is the signal that
+  // these numbers are the owner's.
+  if (acct.sendingLimitsCompleted && acct.hourlySendLimit > 0) {
+    const lastHour = await getAccountSentLastHour(accountId, workspaceId);
+    if (lastHour >= acct.hourlySendLimit) {
+      throw new TRPCError({
+        code: "TOO_MANY_REQUESTS",
+        message: `Sending account ${acct.fromEmail} hit its hourly limit (${lastHour}/${acct.hourlySendLimit}). It will resume automatically within the hour.`,
+      });
+    }
   }
 }

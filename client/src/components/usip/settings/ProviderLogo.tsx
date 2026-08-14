@@ -82,7 +82,11 @@ export function ProviderLogo({
   if (!src || failed) return <>{fallback}</>;
   return (
     <span
-      className={cn("inline-flex shrink-0 items-center justify-center overflow-hidden rounded-md border border-border bg-background", className)}
+      // No background and no border: the mark keeps its own transparency, so
+      // it sits cleanly on the dark shell instead of inside a light card
+      // (owner ask 2026-08-14). The CDN is asked for the theme-matched variant
+      // above, which is what makes a dark-on-transparent logo readable.
+      className={cn("inline-flex shrink-0 items-center justify-center overflow-hidden rounded-md bg-transparent", className)}
       title={label}
     >
       <img

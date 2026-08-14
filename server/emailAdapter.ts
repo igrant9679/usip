@@ -8,6 +8,7 @@ import nodemailer from "nodemailer";
 import { ImapFlow } from "imapflow";
 import { simpleParser } from "mailparser";
 import type { SendingAccount } from "../drizzle/schema";
+import { applyAccountSendDefaults } from "./services/sending/accountDefaults";
 import { recordEmailsSent } from "./usageCounters";
 import { createDecipheriv, createCipheriv, randomBytes } from "crypto";
 
@@ -447,7 +448,24 @@ export function createEmailAdapter(account: SendingAccount): EmailAdapter {
   const adapter = buildEmailAdapter(account);
   const send = adapter.sendEmail.bind(adapter);
   adapter.sendEmail = async (input) => {
-    const result = await send(input);
+    // The inbox's own signature and opt-out, applied to EVERY outreach email
+    // sent through it (owner ask 2026-08-14). This wrapper is the one place
+    // every account-attributed send already passes through, which is why the
+    // defaults live here rather than in each of the callers.
+    //
+    // Deliberately NOT applied to transactional mail: sendWorkspaceEmail and
+    // sendSystemEmail use the workspace SMTP config, never a sending account,
+    // so invites and notifications keep coming through unchanged.
+    const decorated = applyAccountSendDefaults(
+      {
+        signature: (account as { signature?: string | null }).signature ?? null,
+        optOutEnabled: (account as { optOutEnabled?: boolean | null }).optOutEnabled ?? null,
+        optOutMessage: (account as { optOutMessage?: string | null }).optOutMessage ?? null,
+        fromEmail: input.fromEmail ?? account.fromEmail ?? null,
+      },
+      input,
+    );
+    const result = await send(decorated);
     await recordEmailsSent(account.workspaceId, 1);
     return result;
   };
