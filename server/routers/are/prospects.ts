@@ -30,7 +30,7 @@
  * decision, not something to infer.
  */
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, getTableColumns, inArray, ne, sql } from "drizzle-orm";
+import { and, desc, eq, getTableColumns, inArray, isNotNull, ne, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
   areAbVariants,
@@ -1327,7 +1327,9 @@ export const prospectsRouter = router({
    *  prospects with a generated sequence (for view + edit) AND approved
    *  prospects without one yet (so the user can trigger Generate). */
   listSequences: workspaceProcedure
-    .input(z.object({ campaignId: z.number(), limit: z.number().default(100) }))
+    // 100 was below the size of a real campaign's queue (101 rows live), which
+    // is how a page boundary became a missing feature.
+    .input(z.object({ campaignId: z.number(), limit: z.number().default(500) }))
     .query(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
@@ -1354,7 +1356,28 @@ export const prospectsRouter = router({
           and(
             eq(prospectQueue.campaignId, input.campaignId),
             eq(prospectQueue.workspaceId, ctx.workspace.id),
+            // Filter in SQL, not after. The LIMIT below used to be applied to
+            // the UNfiltered set and then trimmed in JS, so skipped rows ate
+            // slots and pushed real ones off the end of the page.
+            or(
+              ne(prospectQueue.sequenceStatus, "skipped"),
+              isNotNull(prospectIntelligence.generatedSequence),
+            ),
           ),
+        )
+        // Active sequences FIRST, then a stable id order.
+        //
+        // There was no ORDER BY at all, so MySQL returned an arbitrary page.
+        // Live: campaign 21 holds 101 queue rows; LIMIT 100 dropped exactly one
+        // of them, and the one it dropped was the campaign's ONLY enrolled
+        // prospect — so the Active tab read "No prospects in 'Active'" while a
+        // sequence was running. Ordering by status guarantees the rows a user
+        // is most likely to be looking for cannot be the ones truncated.
+        .orderBy(
+          sql`CASE WHEN ${prospectQueue.sequenceStatus} IN ('enrolled','paused') THEN 0
+                   WHEN ${prospectQueue.sequenceStatus} IN ('approved','replied','completed') THEN 1
+                   ELSE 2 END`,
+          prospectQueue.id,
         )
         .limit(input.limit);
       // Show a prospect unless they were deliberately dismissed.

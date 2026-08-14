@@ -1103,7 +1103,9 @@ function StatusBadgeMini({ status }: { status: string }) {
 }
 
 function SequencesTab({ campaignId, campaign }: { campaignId: number; campaign: any }) {
-  const { data: rows = [], refetch, isLoading } = trpc.are.prospects.listSequences.useQuery({ campaignId });
+  // Explicit limit: the default was 100 and a live campaign's queue held 101
+  // rows, which silently truncated the page.
+  const { data: rows = [], refetch, isLoading } = trpc.are.prospects.listSequences.useQuery({ campaignId, limit: 500 });
   // Execution rows for the whole campaign, indexed per prospect. One query
   // rather than one per row: an active campaign has a handful of enrolled
   // prospects and a few steps each, and the queue is already campaign-scoped.

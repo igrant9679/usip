@@ -59,6 +59,35 @@ describe("it shows where the sequence actually is", () => {
   });
 });
 
+describe("an active sequence can never be truncated off the page", () => {
+  // Live: campaign 21 holds 101 queue rows. listSequences had no ORDER BY and
+  // applied LIMIT 100 BEFORE filtering skipped rows out in JS, so MySQL
+  // returned an arbitrary 100 — and the one row it dropped was the campaign's
+  // only enrolled prospect. The Active tab read "No prospects in 'Active'"
+  // while a sequence was running.
+  const router = readFileSync("server/routers/are/prospects.ts", "utf8");
+  const proc = router.slice(router.indexOf("listSequences: workspaceProcedure"), router.indexOf("editSequenceStep"));
+
+  it("filters in SQL so the limit applies to the right set", () => {
+    expect(proc).toContain('ne(prospectQueue.sequenceStatus, "skipped")');
+    expect(proc).toContain("isNotNull(prospectIntelligence.generatedSequence)");
+  });
+
+  it("orders active sequences first, with a stable tiebreak", () => {
+    expect(proc).toContain("CASE WHEN");
+    expect(proc).toContain("IN ('enrolled','paused') THEN 0");
+    expect(proc).toContain("prospectQueue.id,");
+  });
+
+  it("the default limit clears a real campaign's queue", () => {
+    expect(proc).toContain("limit: z.number().default(500)");
+  });
+
+  it("the page asks for an explicit limit rather than trusting the default", () => {
+    expect(page).toContain("listSequences.useQuery({ campaignId, limit: 500 })");
+  });
+});
+
 describe("it is mounted where the owner asked", () => {
   it("renders inline on active rows in the Sequences tab", () => {
     expect(page).toContain("<ActiveSequenceTimeline");
