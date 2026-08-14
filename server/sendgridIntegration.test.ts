@@ -87,6 +87,23 @@ describe("one key, one place to rotate it", () => {
     expect(proc).toContain("...(workspaceKeyOwnsIt ? {} : { sendgridApiKeyEnc: encryptSecret(key) })");
   });
 
+  it("every SendGrid key read resolves the workspace key, not just the column", () => {
+    // Owner report: "Check deliverability" said API key required while the
+    // same mailbox sent fine. Sending resolved the workspace key; the two
+    // test paths and the has-key flag read the account column alone, which is
+    // deliberately empty for picker-linked mailboxes.
+    const router = readFileSync("server/routers/sendingAccounts.ts", "utf8");
+    const conn = router.slice(router.indexOf("testConnection: workspaceProcedure"), router.indexOf("getDailyStats:"));
+    expect(conn).toContain("resolveSendgridKey(db, ctx.workspace.id, undefined, account.id)");
+    expect(conn).not.toContain("tryDecryptSecret(account.sendgridApiKeyEnc)");
+
+    const cfg = router.slice(router.indexOf("testConfig: workspaceProcedure"), router.indexOf("testConnection: workspaceProcedure"));
+    expect(cfg).toContain("resolveSendgridKey(db, ctx.workspace.id, undefined, input.editId)");
+
+    // …and the flag the UI reads must mean "usable", not "has its own copy".
+    expect(router).toContain("hasSendgridKey: !!sendgridApiKeyEnc || workspaceHasKey");
+  });
+
   it("the sender picker can use the workspace key with no mailbox saved yet", () => {
     const router = readFileSync("server/routers/sendingAccounts.ts", "utf8");
     const resolver = router.slice(router.indexOf("async function resolveSendgridKey"));

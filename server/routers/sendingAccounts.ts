@@ -382,12 +382,17 @@ export const sendingAccountsRouter = router({
         : [];
 
     const statsMap = new Map(stats.map((s) => [s.accountId, s]));
+    // A mailbox linked through the sender picker carries NO copy of the key —
+    // the workspace one owns it — so reporting only its own column told the UI
+    // "no key" about mailboxes that send perfectly well.
+    const { getWorkspaceSendgridKey } = await import("../services/sendgridKey");
+    const workspaceHasKey = !!(await getWorkspaceSendgridKey(ctx.workspace.id));
     return accounts.map(({ sendgridApiKeyEnc, ...a }) => ({
       ...a,
       // The key never leaves the server, not even as ciphertext. The UI only
-      // needs to know whether one is set, so it can say "leave blank to keep
+      // needs to know whether one is USABLE, so it can say "leave blank to keep
       // the current key" instead of implying the field is empty.
-      hasSendgridKey: !!sendgridApiKeyEnc,
+      hasSendgridKey: !!sendgridApiKeyEnc || workspaceHasKey,
       sentToday: statsMap.get(a.id)?.sentCount ?? 0,
       bouncedToday: statsMap.get(a.id)?.bounceCount ?? 0,
       remainingToday: a.dailySendLimit - (statsMap.get(a.id)?.sentCount ?? 0),
@@ -421,9 +426,11 @@ export const sendingAccountsRouter = router({
           ),
         );
       const { sendgridApiKeyEnc, ...safe } = account;
+      const { getWorkspaceSendgridKey } = await import("../services/sendgridKey");
       return {
         ...safe,
-        hasSendgridKey: !!sendgridApiKeyEnc,
+        // Own copy OR the workspace key — the same thing a send resolves.
+        hasSendgridKey: !!sendgridApiKeyEnc || !!(await getWorkspaceSendgridKey(ctx.workspace.id)),
         sentToday: stat?.sentCount ?? 0,
         bouncedToday: stat?.bounceCount ?? 0,
         remainingToday: account.dailySendLimit - (stat?.sentCount ?? 0),
@@ -762,19 +769,16 @@ export const sendingAccountsRouter = router({
       let smtpPassword = input.smtpPassword;
       let sendgridApiKey = input.sendgridApiKey;
       let oauthAccessToken: string | null | undefined;
-      // Testing a SAVED SendGrid account without retyping the key: fall back to
-      // the stored one, same as the SMTP password below.
-      if (input.editId && input.provider === "sendgrid" && !sendgridApiKey) {
+      // Testing a SAVED SendGrid account without retyping the key: resolve it
+      // the same way a real send does — the account's own copy if it has one,
+      // otherwise the WORKSPACE key from Settings → Integrations. Reading only
+      // the account's column reported "API key is required" for every mailbox
+      // linked through the sender picker, because those deliberately carry no
+      // copy so one key stays one key.
+      if (input.provider === "sendgrid" && !sendgridApiKey) {
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-        const [existing] = await db
-          .select({ enc: sendingAccounts.sendgridApiKeyEnc })
-          .from(sendingAccounts)
-          .where(and(
-            eq(sendingAccounts.id, input.editId),
-            eq(sendingAccounts.workspaceId, ctx.workspace.id),
-          ));
-        if (existing) sendgridApiKey = tryDecryptSecret(existing.enc) || undefined;
+        sendgridApiKey = (await resolveSendgridKey(db, ctx.workspace.id, undefined, input.editId)) ?? undefined;
       }
       // For an existing account being edited, fall back to the stored
       // password / OAuth token when the form left those fields blank.
@@ -831,7 +835,10 @@ export const sendingAccountsRouter = router({
         smtpPassword: account.smtpPassword,
         sesRegion: account.sesRegion,
         oauthAccessToken: account.oauthAccessToken,
-        sendgridApiKey: tryDecryptSecret(account.sendgridApiKeyEnc),
+        // Same resolution as a real send: own copy, else the workspace key.
+        // "Check deliverability" reported "API key is required" for every
+        // picker-linked mailbox while sending through them worked fine.
+        sendgridApiKey: await resolveSendgridKey(db, ctx.workspace.id, undefined, account.id),
       });
 
       await db
