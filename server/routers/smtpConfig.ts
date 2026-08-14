@@ -20,6 +20,7 @@ import {
   emailSuppressions,
   emailTrackingEvents,
   leads,
+  sendingAccounts,
   smtpConfigs,
   workspaceSettings,
 } from "../../drizzle/schema";
@@ -29,6 +30,7 @@ import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { router } from "../_core/trpc";
 import { buildMergeContextFromDb, resolveMergeVars, bodyToHtmlDocument, injectTracking, resolveBookingUrl, renderSequenceOptOut } from "../mergeVars";
 import { isHtmlBody, htmlBodyToText } from "@shared/emailBody";
+import { applyAccountSendDefaults } from "../services/sending/accountDefaults";
 import { isEmailSuppressed } from "./emailSuppressions";
 import { appBaseUrl as publicAppOrigin } from "../appUrl";
 
@@ -352,6 +354,25 @@ export const smtpConfigRouter = router({
       const optOutEnabled = sendPrefs?.optOutEnabled === true;
       const optOutMessage = sendPrefs?.optOutMessage ?? "";
 
+      // Inbox-level defaults (owner ask 2026-08-14). This path predates the
+      // adapter and sends through the workspace SMTP transporter, so
+      // createEmailAdapter's wrapper never sees it — the drafts still carry
+      // the mailbox that owns them, which is enough to honour its settings.
+      const acctIds = Array.from(new Set(drafts.map((d) => d.sendingAccountId).filter((x): x is number => !!x)));
+      const acctRows = acctIds.length
+        ? await db
+            .select({
+              id: sendingAccounts.id,
+              signature: sendingAccounts.signature,
+              optOutEnabled: sendingAccounts.optOutEnabled,
+              optOutMessage: sendingAccounts.optOutMessage,
+              fromEmail: sendingAccounts.fromEmail,
+            })
+            .from(sendingAccounts)
+            .where(and(eq(sendingAccounts.workspaceId, ctx.workspace.id), inArray(sendingAccounts.id, acctIds)))
+        : [];
+      const acctById = new Map(acctRows.map((a) => [a.id, a]));
+
       for (const draft of drafts) {
         const toEmail =
           draft.toEmail ??
@@ -393,10 +414,30 @@ export const smtpConfigRouter = router({
           // A rich-editor body is HTML — the text/plain part must be its
           // readable conversion, not the raw markup.
           let textBody = isHtmlBody(resolvedBody) ? htmlBodyToText(resolvedBody) : resolvedBody;
-          // Sequence opt-out footer (workspace_settings): appended AFTER tracking
-          // injection so its one-click unsubscribe link isn't click-wrapped.
-          if (optOutEnabled) {
-            const optOut = renderSequenceOptOut(optOutMessage, {
+          // The sending inbox's own signature, if it has one configured.
+          const acct = draft.sendingAccountId ? acctById.get(draft.sendingAccountId) : undefined;
+          if (acct?.signature?.trim()) {
+            const decorated = applyAccountSendDefaults(
+              { signature: acct.signature },
+              { bodyHtml: htmlBody, bodyText: textBody },
+            );
+            htmlBody = decorated.bodyHtml;
+            textBody = decorated.bodyText ?? textBody;
+          }
+
+          // Sequence opt-out footer: appended AFTER tracking injection so its
+          // one-click unsubscribe link isn't click-wrapped.
+          //
+          // The INBOX decides whether there is a footer and what it says when
+          // it has one configured; the workspace setting is the fallback for an
+          // inbox that has not. Either way the link stays this path's tokenised
+          // one-click URL, which is strictly better than the mailto the adapter
+          // has to use — the setting governs the wording, not the mechanism.
+          const inboxOptOut = acct?.optOutEnabled === true && !!acct.optOutMessage?.trim();
+          const effectiveOptOutEnabled = inboxOptOut || optOutEnabled;
+          const effectiveOptOutMessage = inboxOptOut ? acct!.optOutMessage! : optOutMessage;
+          if (effectiveOptOutEnabled) {
+            const optOut = renderSequenceOptOut(effectiveOptOutMessage, {
               unsubscribeUrl: `${appBaseUrl}/api/track/unsubscribe/${encodeURIComponent(token)}`,
             });
             if (optOut) {

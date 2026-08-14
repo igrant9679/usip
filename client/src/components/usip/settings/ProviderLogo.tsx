@@ -19,18 +19,37 @@ import { brandfetchLogoUrl } from "@shared/brandfetch";
 import { useTheme } from "@/contexts/ThemeContext";
 import { useBrandfetchClientId } from "@/components/usip/company/CompanyLogo";
 
-/** Which brand stands behind each sending provider. */
-export const PROVIDER_BRAND: Record<string, { domain: string; label: string }> = {
+/**
+ * Which brand stands behind each sending provider, and which CDN asset types
+ * are worth asking for.
+ *
+ * Measured against the live CDN 2026-08-14 (64px, dark theme, alpha sampled):
+ *   symbol → corner alpha 0, ~45% transparent pixels — the standalone mark.
+ *   icon   → corner alpha 255, 0% transparent — a favicon-style square with a
+ *            solid background baked in. This is the white box that survived
+ *            making the wrapper transparent: the opacity was in the IMAGE.
+ * So `symbol` first, `icon` only as a last resort.
+ *
+ * Outlook is the exception: cdn.brandfetch.io has NO symbol for outlook.com
+ * (404), its icon is the opaque Microsoft-style square, and its logo is a
+ * 64×14 wordmark — none of which is the Outlook app mark. `types: []` skips
+ * the CDN entirely so the caller's own Outlook glyph renders: transparent SVG,
+ * and actually Outlook rather than Microsoft's main logo (owner ask).
+ */
+export const PROVIDER_BRAND: Record<string, { domain: string; label: string; types?: Array<"symbol" | "icon" | "logo"> }> = {
   google_oauth: { domain: "google.com", label: "Google" },
-  outlook_oauth: { domain: "outlook.com", label: "Outlook" },
+  outlook_oauth: { domain: "outlook.com", label: "Outlook", types: [] },
   sendgrid: { domain: "sendgrid.com", label: "SendGrid" },
   amazon_ses: { domain: "aws.amazon.com", label: "Amazon SES" },
 };
 
+/** Transparent mark first; the opaque favicon square only if there is no mark. */
+const DEFAULT_TYPES: Array<"symbol" | "icon" | "logo"> = ["symbol", "icon"];
+
 /** Consumer domains whose brand IS the provider. */
 const OUTLOOK_FAMILY = /^(outlook|hotmail|live|msn|office365|microsoft)\./;
 
-export function providerBrandDomain(provider: string, email?: string | null): { domain: string | null; label: string } {
+export function providerBrandDomain(provider: string, email?: string | null): { domain: string | null; label: string; types?: Array<"symbol" | "icon" | "logo"> } {
   const known = PROVIDER_BRAND[provider];
   if (known) return known;
   const host = (email ?? "").split("@")[1]?.toLowerCase() ?? "";
@@ -63,23 +82,28 @@ export function ProviderLogo({
 }) {
   const clientId = useBrandfetchClientId();
   const { theme } = useTheme();
-  const { domain, label } = useMemo(() => providerBrandDomain(provider, email), [provider, email]);
+  const { domain, label, types } = useMemo(() => providerBrandDomain(provider, email), [provider, email]);
 
-  const src = useMemo(
-    () => brandfetchLogoUrl(domain, clientId, {
-      theme: theme === "dark" ? "dark" : "light",
-      size: pixels * 2,
-      type: "icon",
-      fallback: "404",
-    }),
-    [domain, clientId, theme, pixels],
-  );
+  // One URL per asset type, best first. An empty list means "never ask the
+  // CDN" — the caller's glyph is already the better answer.
+  const sources = useMemo(() => {
+    const wanted = types ?? DEFAULT_TYPES;
+    return wanted
+      .map((type) => brandfetchLogoUrl(domain, clientId, {
+        theme: theme === "dark" ? "dark" : "light",
+        size: pixels * 2,
+        type,
+        fallback: "404",
+      }))
+      .filter((u): u is string => !!u);
+  }, [domain, clientId, theme, pixels, types]);
 
-  const [failed, setFailed] = useState(false);
-  // A new identity (or a client id that arrives late) deserves a fresh try.
-  useEffect(() => { setFailed(false); }, [src]);
+  const [tier, setTier] = useState(0);
+  // A new identity (or a client id that arrives late) restarts the cascade.
+  useEffect(() => { setTier(0); }, [sources.join("|")]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (!src || failed) return <>{fallback}</>;
+  const src = sources[tier] ?? null;
+  if (!src) return <>{fallback}</>;
   return (
     <span
       // No background and no border: the mark keeps its own transparency, so
@@ -95,7 +119,7 @@ export function ProviderLogo({
         className="size-full object-contain"
         loading="lazy"
         referrerPolicy="no-referrer"
-        onError={() => setFailed(true)}
+        onError={() => setTier((t) => t + 1)}
       />
     </span>
   );

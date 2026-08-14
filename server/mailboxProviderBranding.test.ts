@@ -63,7 +63,9 @@ describe("logos come from Brandfetch, with a fallback", () => {
   it("renders the fallback itself when there is no logo to show", () => {
     // Returning null and asking callers to detect emptiness does not work — a
     // JSX element is always truthy, so the caller's fallback never fires.
-    expect(logo).toContain("if (!src || failed) return <>{fallback}</>;");
+    // `!src` covers both "no client id / no domain" and "every asset type in
+    // the cascade has 404'd", since the tier walks past the end of the list.
+    expect(logo).toContain("if (!src) return <>{fallback}</>;");
   });
 
   it("the mailbox row and the provider cards both go through it", () => {

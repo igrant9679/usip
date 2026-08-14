@@ -116,6 +116,62 @@ describe("the defaults are applied where every account send passes", () => {
   });
 });
 
+describe("the older sequence-blast path honours the inbox too", () => {
+  // It predates the adapter and sends through the workspace SMTP transporter,
+  // so createEmailAdapter's wrapper never sees it. The drafts still carry the
+  // mailbox that owns them, which is enough.
+  const blast = readFileSync("server/routers/smtpConfig.ts", "utf8");
+
+  it("loads the sending account behind each draft", () => {
+    expect(blast).toContain("draft.sendingAccountId ? acctById.get(draft.sendingAccountId)");
+  });
+
+  it("applies the inbox signature", () => {
+    expect(blast).toContain("applyAccountSendDefaults(");
+    expect(blast).toContain("{ signature: acct.signature }");
+  });
+
+  it("the inbox's opt-out message wins, but keeps the tokenised link", () => {
+    // The setting governs the wording; the mechanism stays this path's
+    // one-click /api/track/unsubscribe URL, which beats the adapter's mailto.
+    expect(blast).toContain("const inboxOptOut = acct?.optOutEnabled === true");
+    expect(blast).toContain("inboxOptOut || optOutEnabled");
+    expect(blast).toContain("renderSequenceOptOut(effectiveOptOutMessage");
+    const call = blast.slice(blast.indexOf("renderSequenceOptOut(effectiveOptOutMessage"));
+    expect(call.slice(0, 220)).toContain("/api/track/unsubscribe/");
+  });
+
+  it("an inbox with nothing configured leaves the workspace behaviour alone", () => {
+    // effectiveOptOutEnabled falls back to the workspace flag, not to false.
+    expect(blast).toContain("const effectiveOptOutEnabled = inboxOptOut || optOutEnabled;");
+    expect(blast).toContain("const effectiveOptOutMessage = inboxOptOut ? acct!.optOutMessage! : optOutMessage;");
+  });
+});
+
+describe("provider logos are transparent marks", () => {
+  const logo = readFileSync("client/src/components/usip/settings/ProviderLogo.tsx", "utf8");
+
+  it("asks for the symbol before the opaque favicon square", () => {
+    // Measured on the live CDN: symbol → corner alpha 0 (~45% transparent);
+    // icon → corner alpha 255, 0% transparent. The white box was in the IMAGE,
+    // which is why making the wrapper transparent changed nothing.
+    expect(logo).toContain('const DEFAULT_TYPES: Array<"symbol" | "icon" | "logo"> = ["symbol", "icon"]');
+  });
+
+  it("falls through asset types on error rather than giving up", () => {
+    expect(logo).toContain("onError={() => setTier((t) => t + 1)}");
+  });
+
+  it("Outlook skips the CDN — it has no symbol, only Microsoft's square", () => {
+    expect(logo).toMatch(/outlook_oauth:\s*\{[^}]*types:\s*\[\]/);
+  });
+
+  it("the wrapper adds no background of its own", () => {
+    expect(logo).toContain("bg-transparent");
+    expect(logo).not.toContain("bg-background");
+  });
+});
+
 describe("sending limits are enforced, not just stored", () => {
   const limits = readFileSync("server/sendLimits.ts", "utf8");
 
