@@ -815,25 +815,47 @@ export async function runSequenceAgent(
   prospectId: number,
   workspaceId: number,
   campaignId: number,
-  options: { force?: boolean } = {},
+  options: { force?: boolean; allowWithoutIntel?: boolean } = {},
 ): Promise<SequenceAgentResult> {
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
 
   const startedAt = Date.now();
   const [prospect] = await db.select().from(prospectQueue).where(eq(prospectQueue.id, prospectId)).limit(1);
-  const [intel] = await db.select().from(prospectIntelligence).where(eq(prospectIntelligence.prospectQueueId, prospectId)).limit(1);
+  let [intel] = await db.select().from(prospectIntelligence).where(eq(prospectIntelligence.prospectQueueId, prospectId)).limit(1);
   const [campaign] = await db.select().from(areCampaigns).where(eq(areCampaigns.id, campaignId)).limit(1);
 
   if (!prospect) throw new Error(`Prospect ${prospectId} not found`);
   if (!campaign) throw new Error(`Campaign ${campaignId} not found`);
-  if (!intel) {
+  if (!intel && !options.allowWithoutIntel) {
     // The prospect was never enriched (or enrichment failed). Without
-    // intel there's nothing to personalize against.
+    // intel there's nothing to personalize against. The AUTONOMOUS path keeps
+    // refusing — an unenriched prospect is a data gap the engine should not
+    // paper over on its own.
     await emitSeqLog(db, workspaceId, campaignId, "warn", "sequence.skip",
       `Cannot generate sequence — prospect "${prospect.firstName} ${prospect.lastName}" has no enrichment data. Run enrichment first.`,
       { prospectId, reason: "no_intel" });
     throw new Error("Prospect has no enrichment data — enrich it first, then generate the sequence");
+  }
+
+  // A HUMAN asked for this one specifically (owner ask 2026-08-14: "make it so
+  // I can send anyone manually, even if they're not enriched"). The refusal
+  // above was not really about personalisation — personalizeForProspect and
+  // primaryHookOf both degrade to the prospect's own name/title/company and a
+  // generic hook. It was about storage: the generated sequence is saved ONTO
+  // the intelligence row, so with no row there is nowhere to put it. Create the
+  // empty dossier, then take the normal path.
+  if (!intel) {
+    await emitSeqLog(db, workspaceId, campaignId, "info", "sequence.no_intel_manual",
+      `Generating a sequence for "${prospect.firstName} ${prospect.lastName}" WITHOUT enrichment (manual request) — copy will personalise from their title and company only`,
+      { prospectId });
+    await db.insert(prospectIntelligence).values({
+      prospectQueueId: prospectId,
+      workspaceId,
+      enrichmentConfidence: 0,
+    } as never);
+    [intel] = await db.select().from(prospectIntelligence).where(eq(prospectIntelligence.prospectQueueId, prospectId)).limit(1);
+    if (!intel) throw new Error("Could not create a dossier row for this prospect");
   }
 
   // Idempotency: don't waste LLM tokens if a sequence already exists.
@@ -1134,10 +1156,21 @@ export const prospectsRouter = router({
       campaignId: z.number(),
       /** Force regeneration even if a sequence already exists. */
       force: z.boolean().default(false),
+      /**
+       * Generate even with no enrichment behind the prospect. Defaults ON
+       * because this procedure IS the manual surface — a person clicked the
+       * button for this specific prospect. The autonomous engine calls
+       * runSequenceAgent directly and keeps refusing, so unenriched prospects
+       * still never get auto-sequenced behind the owner's back.
+       */
+      allowWithoutEnrichment: z.boolean().default(true),
     }))
     .mutation(async ({ ctx, input }) => {
       try {
-        return await runSequenceAgent(input.prospectId, ctx.workspace.id, input.campaignId, { force: input.force });
+        return await runSequenceAgent(input.prospectId, ctx.workspace.id, input.campaignId, {
+          force: input.force,
+          allowWithoutIntel: input.allowWithoutEnrichment,
+        });
       } catch (e) {
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
@@ -1598,7 +1631,9 @@ export const prospectsRouter = router({
         void (async () => {
           await runEnrichAgent(a.queueId, ctx.workspace.id);
           if (input.generateSequence) {
-            await runSequenceAgent(a.queueId, ctx.workspace.id, input.campaignId, { force: false });
+            // allowWithoutIntel: enrichment may legitimately find nothing for
+            // this person, and a manual push should still produce a sequence.
+            await runSequenceAgent(a.queueId, ctx.workspace.id, input.campaignId, { force: false, allowWithoutIntel: true });
           }
         })().catch((e) => console.error(`[are.pushExisting] queue ${a.queueId}:`, (e as Error)?.message ?? e));
       }

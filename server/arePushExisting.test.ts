@@ -78,6 +78,40 @@ describe("enrichment runs BEFORE sequence generation", () => {
   });
 });
 
+describe("a human can sequence anyone, enriched or not", () => {
+  // Owner report: sequences stopped dead after one prospect. Verified on live
+  // data — campaign 21's rows are enrichmentStatus "complete" up to and
+  // including "Rocky Roselle Emma" (position 78 of 88) and "pending" for every
+  // one below. The cutoff WAS the enrichment boundary; runSequenceAgent
+  // refused anyone without a dossier.
+  const agent = router.slice(router.indexOf("export async function runSequenceAgent"), router.indexOf("  approve: workspaceProcedure"));
+
+  it("still refuses when the AUTONOMOUS engine asks", () => {
+    // The engine calling runSequenceAgent directly gets the old behaviour, so
+    // unenriched prospects are never auto-sequenced behind the owner's back.
+    expect(agent).toContain("if (!intel && !options.allowWithoutIntel)");
+    expect(agent).toContain("Prospect has no enrichment data");
+  });
+
+  it("creates the dossier row it needs to store the sequence in", () => {
+    // The refusal was really about storage: generatedSequence is written ONTO
+    // prospectIntelligence, so with no row there is nowhere to put it.
+    expect(agent).toContain("await db.insert(prospectIntelligence).values({");
+    expect(agent).toContain("enrichmentConfidence: 0");
+    expect(agent).toContain("sequence.no_intel_manual");
+  });
+
+  it("the manual procedure allows it by default", () => {
+    const proc = router.slice(router.indexOf("generateSequence: workspaceProcedure"), router.indexOf("  approve: workspaceProcedure"));
+    expect(proc).toContain("allowWithoutEnrichment: z.boolean().default(true)");
+    expect(proc).toContain("allowWithoutIntel: input.allowWithoutEnrichment");
+  });
+
+  it("a manual push ends in a sequence even if enrichment finds nothing", () => {
+    expect(proc).toContain("allowWithoutIntel: true");
+  });
+});
+
 describe("the surface is actually reachable", () => {
   const page = readFileSync("client/src/pages/usip/ARECampaignDetail.tsx", "utf8");
   const dialog = readFileSync("client/src/components/usip/are/AddExistingProspectsDialog.tsx", "utf8");
