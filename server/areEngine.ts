@@ -857,7 +857,19 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
         if (sendRes.ok) {
           await db
             .update(areExecutionQueue)
-            .set({ status: "sent", executedAt: new Date(), trackingToken })
+            .set({
+              status: "sent",
+              executedAt: new Date(),
+              trackingToken,
+              // CLEAR the pre-mark's reason. Without this every successfully
+              // sent row keeps "Dispatch interrupted — send state unknown"
+              // forever beside status='sent' — a contradiction that stayed
+              // invisible only because the ARE tabs read `status` and nothing
+              // read `failureReason` on a sent row. The Emails page does, and
+              // showed "send state unknown" on a message with three recorded
+              // opens (owner report 2026-08-14).
+              failureReason: null,
+            })
             .where(eq(areExecutionQueue.id, step.id));
           result.sent++;
         } else {

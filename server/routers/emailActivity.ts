@@ -47,7 +47,10 @@ import {
 } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { workspaceProcedure } from "../_core/workspace";
-import { feedSourceApplies, mergeFeed, type EmailFeedKind, type EmailFeedRow } from "@shared/emailActivity";
+import {
+  failureReasonFor, feedSourceApplies, mergeFeed,
+  type EmailFeedKind, type EmailFeedRow,
+} from "@shared/emailActivity";
 
 const listInput = z.object({
   direction: z.enum(["all", "outbound", "inbound"]).default("all"),
@@ -167,7 +170,7 @@ export const emailActivityRouter = {
         fromName: r.fromName,
         toEmail: r.toEmail,
         status: r.draftBouncedAt ? "bounced" : r.status,
-        failureReason: r.failureReason,
+        failureReason: failureReasonFor(r.draftBouncedAt ? "bounced" : r.status, r.failureReason),
         at: r.at,
         openCount: num(r.draftOpens) || num(r.execOpens),
         clickCount: num(r.draftClicks),
@@ -333,7 +336,7 @@ export const emailActivityRouter = {
           fromName: null,
           toEmail: r.toEmail,
           status: r.status,
-          failureReason: r.failureReason,
+          failureReason: failureReasonFor(r.status, r.failureReason),
           at: r.executedAt ?? r.scheduledAt,
           openCount: num(r.openCount),
           clickCount: 0,

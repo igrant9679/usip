@@ -92,6 +92,35 @@ export interface EmailFeedRow {
   stepIndex: number | null;
 }
 
+/**
+ * States in which the message demonstrably left the building.
+ *
+ * `bounced` is deliberately NOT here: a bounce leaves and is then rejected, so
+ * its reason is the most informative thing on the row.
+ */
+const DELIVERED_STATUSES = new Set(["sent", "received"]);
+
+/**
+ * A failure reason only means something on a row that failed.
+ *
+ * The ARE dispatcher pre-marks its execution row as failed BEFORE sending — a
+ * deliberate choice, so an interrupted dispatch settles as a visible failure
+ * nobody retries rather than as a silent resend. Until 2026-08-14 the success
+ * branch overwrote `status` and left `failureReason` alone, so every sent row
+ * carried "Dispatch interrupted — send state unknown" forever. Nothing showed
+ * it, because the ARE tabs read status; the Emails page reads both, and put
+ * "send state unknown" on a message with three recorded opens.
+ *
+ * Fixed at the source and repaired in migration 0164. This is the third
+ * guard: a reason on a delivered row is a contradiction, and the reader
+ * should never pass one on whatever wrote it.
+ */
+export function failureReasonFor(status: string, reason: string | null | undefined): string | null {
+  if (!reason) return null;
+  if (DELIVERED_STATUSES.has(status)) return null;
+  return reason;
+}
+
 /** A row is "engaged" when the recipient did something with it. */
 export function isEngaged(row: EmailFeedRow): boolean {
   return (row.openCount ?? 0) > 0 || (row.clickCount ?? 0) > 0 || !!row.repliedAt;

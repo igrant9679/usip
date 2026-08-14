@@ -21,6 +21,7 @@ import {
   mergeFeed,
   emailSourceLabel,
   isEngaged,
+  failureReasonFor,
   feedSourceApplies,
   EMAIL_SOURCES,
   type EmailFeedRow,
@@ -33,6 +34,22 @@ const delivery = readFileSync("server/emailDelivery.ts", "utf8");
 const operations = readFileSync("server/routers/operations.ts", "utf8");
 const migrations = readFileSync("server/_core/rawMigrations.ts", "utf8");
 const page = readFileSync("client/src/pages/usip/EmailsV2.tsx", "utf8");
+
+/**
+ * One migration's statements, and only its own.
+ *
+ * Slicing forward to the next `];` reached the END OF THE ARRAY, so once 0164
+ * and 0165 landed behind 0163 this returned all three — and the "no engagement
+ * counters in the log" assertion below started reading 0165's
+ * `machineOpenCount` and failing. A test whose scope silently widens as the
+ * file grows has stopped testing what it names.
+ */
+function migrationBlock(name: string): string {
+  const start = migrations.indexOf(`name: "${name}"`);
+  if (start < 0) throw new Error(`migration ${name} not found`);
+  const next = migrations.indexOf('name: "0', start + 1);
+  return migrations.slice(start, next > 0 ? next : migrations.indexOf("];", start));
+}
 
 function row(key: string, at: string, extra: Partial<EmailFeedRow> = {}): EmailFeedRow {
   return {
@@ -161,8 +178,7 @@ describe("every transmission point writes the log", () => {
 
 describe("the log table and its history", () => {
   it("ships as migration 0163 with a backfill from both existing homes", () => {
-    const m = migrations.slice(migrations.indexOf('name: "0163_email_log.sql"'));
-    const block = m.slice(0, m.indexOf("];"));
+    const block = migrationBlock("0163_email_log.sql");
     expect(block).toContain("CREATE TABLE IF NOT EXISTS `email_log`");
     // Without the backfill the fix would look like it had not worked: the page
     // would start empty on a workspace with thousands of sent emails.
@@ -175,8 +191,7 @@ describe("the log table and its history", () => {
   it("does not copy engagement counters into the log", () => {
     // Copying them would create a second set to keep in step — which is how
     // are_ab_variants ended up with columns nothing ever wrote.
-    const m = migrations.slice(migrations.indexOf('name: "0163_email_log.sql"'));
-    const block = m.slice(0, m.indexOf("];"));
+    const block = migrationBlock("0163_email_log.sql");
     expect(block).not.toContain("openCount");
     expect(block).not.toContain("clickCount");
   });
@@ -243,6 +258,43 @@ describe("the source and status filters compose", () => {
     expect(feedSourceApplies(f("all", "campaign", "all"), "draft")).toBe(false);
     expect(feedSourceApplies(f("all", "sequence", "all"), "draft")).toBe(true);
     expect(feedSourceApplies(f("all", "sequence", "all"), "queued")).toBe(false);
+  });
+});
+
+describe("a sent row cannot also carry a failure reason", () => {
+  it("drops a reason from a delivered row", () => {
+    // The owner's report: "send state unknown" beside three recorded opens.
+    // The ARE dispatcher pre-marks the row failed before sending, and the
+    // success branch used to overwrite status while leaving the reason.
+    expect(failureReasonFor("sent", "Dispatch interrupted — send state unknown")).toBeNull();
+    expect(failureReasonFor("received", "anything")).toBeNull();
+  });
+
+  it("keeps it everywhere it still means something", () => {
+    expect(failureReasonFor("failed", "All sending accounts have hit their daily limit"))
+      .toBe("All sending accounts have hit their daily limit");
+    expect(failureReasonFor("skipped", "On suppression list")).toBe("On suppression list");
+    // A bounce left and was rejected — the reason is the most useful fact on it.
+    expect(failureReasonFor("bounced", "550 user unknown")).toBe("550 user unknown");
+    expect(failureReasonFor("sent", null)).toBeNull();
+  });
+
+  it("is fixed at the source, not only at the reader", () => {
+    const engine = readFileSync("server/areEngine.ts", "utf8");
+    const success = engine.slice(engine.indexOf("if (sendRes.ok) {"));
+    expect(success.slice(0, 900)).toContain("failureReason: null");
+  });
+
+  it("repairs the rows already written, in both tables", () => {
+    const block = migrationBlock("0164_clear_stale_dispatch_failure.sql");
+    expect(block).toContain("UPDATE `are_execution_queue` SET `failureReason` = NULL");
+    expect(block).toContain("UPDATE `email_log` SET `failureReason` = NULL");
+    // Scoped to the contradiction, so a genuine failure keeps its reason.
+    expect((block.match(/WHERE `status` = 'sent' AND `failureReason` IS NOT NULL/g) ?? []).length).toBe(2);
+  });
+
+  it("the reader passes both mappings through the guard", () => {
+    expect((router.match(/failureReasonFor\(/g) ?? []).length).toBe(2);
   });
 });
 
