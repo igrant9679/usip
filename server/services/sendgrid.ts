@@ -210,38 +210,65 @@ export async function listSendGridSenders(apiKey: string): Promise<SendGridSende
   const key = apiKey?.trim();
   if (!key) return { ok: false, error: "API key is required" };
 
+  // THREE endpoints, because SendGrid has moved twice and which one answers
+  // depends on the account's plan and provisioning, not on the key:
+  //   /v3/verified_senders  — current Sender Verification list
+  //   /v3/marketing/senders — Marketing Campaigns (new)
+  //   /v3/senders           — Marketing Campaigns (legacy, commonly 403s)
+  // Any one answering is a success; only all three failing is a failure.
   const endpoints = [
-    { url: "https://api.sendgrid.com/v3/verified_senders", pick: (b: unknown) => (b as { results?: unknown[] })?.results },
-    { url: "https://api.sendgrid.com/v3/senders", pick: (b: unknown) => (Array.isArray(b) ? b : (b as { results?: unknown[] })?.results) },
+    { name: "verified_senders", url: "https://api.sendgrid.com/v3/verified_senders", pick: (b: unknown) => (b as { results?: unknown[] })?.results },
+    { name: "marketing/senders", url: "https://api.sendgrid.com/v3/marketing/senders", pick: (b: unknown) => (b as { results?: unknown[] })?.results ?? (Array.isArray(b) ? b : undefined) },
+    { name: "senders", url: "https://api.sendgrid.com/v3/senders", pick: (b: unknown) => (Array.isArray(b) ? b : (b as { results?: unknown[] })?.results) },
   ];
 
   const byEmail = new Map<string, SendGridSender>();
-  const errors: string[] = [];
+  const failures: string[] = [];
+  let answered = false;
   for (const ep of endpoints) {
     try {
       const res = await fetch(ep.url, { headers: { Authorization: `Bearer ${key}` } });
       if (!res.ok) {
         const body = await res.json().catch(() => null);
-        errors.push(describeSendGridError(res.status, body));
+        failures.push(`${ep.name} → ${res.status} ${describeSendGridError(res.status, body)}`);
         continue;
       }
       const body = await res.json().catch(() => null);
       const rows = ep.pick(body);
-      if (!Array.isArray(rows)) { errors.push("SendGrid returned an unexpected response shape"); continue; }
+      if (!Array.isArray(rows)) { failures.push(`${ep.name} → 200 but an unexpected response shape`); continue; }
+      answered = true;
       for (const r of rows) {
         const s = toSender((r ?? {}) as Record<string, unknown>);
-        // First endpoint wins on conflict, but a verified sighting always
-        // beats an unverified one for the same address.
         if (!s) continue;
         const prev = byEmail.get(s.email);
         if (!prev || (!prev.verified && s.verified)) byEmail.set(s.email, s);
       }
-      errors.length = 0; // this endpoint answered — earlier scope errors are moot
     } catch (e) {
-      errors.push(`Could not reach SendGrid: ${(e as Error).message}`);
+      failures.push(`${ep.name} → could not reach SendGrid: ${(e as Error).message}`);
     }
   }
 
-  if (byEmail.size === 0 && errors.length > 0) return { ok: false, error: errors[0]! };
-  return { ok: true, senders: Array.from(byEmail.values()).sort((a, b) => a.email.localeCompare(b.email)) };
+  if (answered) {
+    return { ok: true, senders: Array.from(byEmail.values()).sort((a, b) => a.email.localeCompare(b.email)) };
+  }
+
+  // Nothing answered. Say WHICH endpoints failed and what the key can actually
+  // do — "access forbidden, check your scopes" with no scope list sends people
+  // hunting through SendGrid for a permission they may already have.
+  let scopeNote = "";
+  try {
+    const res = await fetch("https://api.sendgrid.com/v3/scopes", { headers: { Authorization: `Bearer ${key}` } });
+    if (res.ok) {
+      const body = (await res.json().catch(() => null)) as { scopes?: string[] } | null;
+      const scopes = Array.isArray(body?.scopes) ? body!.scopes! : [];
+      const senderScopes = scopes.filter((x) => /sender/i.test(x));
+      scopeNote = senderScopes.length
+        ? ` The key does carry ${senderScopes.slice(0, 6).join(", ")}, so this may be a plan/provisioning limit rather than the key.`
+        : ` The key reports ${scopes.length} scopes and none of them mention senders — reissue it as Full Access, or add Sender Verification read.`;
+    } else {
+      scopeNote = ` The key also could not read /v3/scopes (${res.status}), so it may be invalid or revoked.`;
+    }
+  } catch { /* diagnosis is best-effort */ }
+
+  return { ok: false, error: `SendGrid would not list senders. ${failures.join(" · ")}.${scopeNote}` };
 }

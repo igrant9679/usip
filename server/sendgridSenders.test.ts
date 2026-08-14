@@ -50,8 +50,8 @@ describe("listSendGridSenders", () => {
     expect(news).toMatchObject({ name: "Acme News", replyTo: "replies@acme.com", verified: true });
   });
 
-  it("one endpoint 403ing is not a failure while the other answers", async () => {
-    // A restricted key is commonly scoped to only one of the two.
+  it("one endpoint 403ing is not a failure while another answers", async () => {
+    // Which endpoint serves an account depends on its plan, not on the key.
     vi.stubGlobal("fetch", vi.fn(async (url: string) =>
       url.includes("verified_senders") ? errJson(403, { errors: [{ message: "access forbidden" }] }) : okJson(LEGACY)));
     const r = await listSendGridSenders("SG.key");
@@ -60,12 +60,46 @@ describe("listSendGridSenders", () => {
     expect(r.senders).toHaveLength(1);
   });
 
+  it("tries the Marketing senders endpoint too", async () => {
+    const seen: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      seen.push(url);
+      return url.includes("marketing/senders") ? okJson({ results: LEGACY }) : errJson(403, {});
+    }));
+    const r = await listSendGridSenders("SG.key");
+    expect(seen.some((u) => u.includes("/v3/marketing/senders"))).toBe(true);
+    expect(r.ok).toBe(true);
+  });
+
   it("a bad key is an ERROR, never an empty sender list", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => errJson(401, { errors: [{ message: "authorization required" }] })));
     const r = await listSendGridSenders("SG.bad");
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect(r.error).toBeTruthy();
+  });
+
+  it("when nothing answers it names the endpoints AND what the key can do", async () => {
+    // The bare SendGrid text ("access forbidden, check your scopes") sends
+    // people hunting for a permission they may already hold.
+    vi.stubGlobal("fetch", vi.fn(async (url: string) =>
+      url.includes("/v3/scopes")
+        ? okJson({ scopes: ["mail.send", "alerts.read"] })
+        : errJson(403, { errors: [{ message: "access forbidden" }] })));
+    const r = await listSendGridSenders("SG.key");
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).toContain("verified_senders");
+    expect(r.error).toContain("marketing/senders");
+    expect(r.error).toContain("none of them mention senders");
+  });
+
+  it("says so when the key cannot even read its own scopes", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => errJson(401, {})));
+    const r = await listSendGridSenders("SG.revoked");
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).toContain("invalid or revoked");
   });
 
   it("an account with genuinely no senders is ok:true with none", async () => {
