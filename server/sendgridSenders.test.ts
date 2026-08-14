@@ -119,11 +119,21 @@ describe("listSendGridSenders", () => {
 describe("the picker is wired to the surfaces the owner named", () => {
   const picker = readFileSync("client/src/components/usip/settings/SendgridSenderPicker.tsx", "utf8");
 
-  it("the Link mailbox wizard offers SendGrid and opens the picker", () => {
+  it("SendGrid is offered inside the SMTP/IMAP modal and opens the picker", () => {
+    // Moved off the provider grid on 2026-08-14 (owner ask): it links no
+    // single mailbox, so it sits with the other multi-account options as the
+    // middle button between "Connect Single account" and "Bulk Import".
     const wizard = readFileSync("client/src/components/usip/settings/GuidedMailboxSetup.tsx", "utf8");
     expect(wizard).toContain("<SendgridSenderPicker");
-    expect(wizard).toContain('provider === "sendgrid" ? "sendgrid"');
-    expect(wizard).toContain('id: "sendgrid" as const');
+    expect(wizard).toContain("onSendgrid={() => setModal(\"sendgrid\")}");
+    const modal = wizard.slice(wizard.indexOf("function SmtpImapChoiceDialog"));
+    const grid = modal.slice(0, modal.indexOf("</DialogContent>"));
+    expect(grid).toContain("Connect SendGrid senders");
+    // Order matters to the ask: single → SendGrid → bulk.
+    expect(grid.indexOf("onClick={onSingle}")).toBeLessThan(grid.indexOf("onClick={onSendgrid}"));
+    expect(grid.indexOf("onClick={onSendgrid}")).toBeLessThan(grid.indexOf("onClick={onBulk}"));
+    // …and no longer a card on the provider grid.
+    expect(wizard).not.toContain('id: "sendgrid" as const');
   });
 
   it("the picker is reachable from a surface that is actually rendered", () => {

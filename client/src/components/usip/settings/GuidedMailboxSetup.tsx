@@ -59,7 +59,6 @@ import {
   Plug,
   Network,
   Link2,
-  Lock,
   Lightbulb,
   Settings2,
   Wrench,
@@ -107,11 +106,57 @@ export function GoogleGlyph({ className }: { className?: string }) {
   );
 }
 
+/**
+ * Outlook's current app icon (owner supplied it 2026-08-14): the folded
+ * envelope of three blue bands with the rounded-square "O" badge at the lower
+ * left. Hand-authored SVG, per the house rule that lucide carries no brand
+ * marks — and transparent, which is why this beats the CDN here: Brandfetch
+ * has no `symbol` for outlook.com, only an opaque Microsoft-style square.
+ *
+ * useId keeps the gradient ids unique across the many rows that render it;
+ * duplicated ids make every instance after the first pick up the FIRST one's
+ * gradient, which is how a list of mailboxes ends up with one right icon and
+ * a column of wrong ones.
+ */
 export function OutlookGlyph({ className }: { className?: string }) {
+  const uid = useId().replace(/:/g, "");
+  const gTop = `olt-${uid}`;
+  const gMid = `olm-${uid}`;
+  const gBot = `olb-${uid}`;
+  const gBody = `oly-${uid}`;
+  const gBadge = `olg-${uid}`;
   return (
-    <svg viewBox="0 0 24 24" className={cn("size-6 shrink-0", className)} aria-label="Outlook">
-      <rect x="1.5" y="3.5" width="21" height="17" rx="3" fill="#0F6CBD" />
-      <circle cx="12" cy="12" r="5" fill="none" stroke="#fff" strokeWidth="2.6" />
+    <svg viewBox="0 0 96 91" className={cn("size-6 shrink-0", className)} aria-label="Outlook" fill="none">
+      <defs>
+        <linearGradient id={gTop} x1="10" y1="6" x2="80" y2="34" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#4CC2FA" /><stop offset="1" stopColor="#7A6BF2" />
+        </linearGradient>
+        <linearGradient id={gMid} x1="22" y1="20" x2="92" y2="50" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#2E7BE4" /><stop offset="1" stopColor="#3320C0" />
+        </linearGradient>
+        <linearGradient id={gBot} x1="30" y1="40" x2="94" y2="70" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#2350AE" /><stop offset="1" stopColor="#1B3E92" />
+        </linearGradient>
+        <linearGradient id={gBody} x1="6" y1="86" x2="92" y2="30" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#43C8FC" /><stop offset="1" stopColor="#2FB2F7" />
+        </linearGradient>
+        <linearGradient id={gBadge} x1="3" y1="46" x2="40" y2="84" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#2472CE" /><stop offset="1" stopColor="#14418C" />
+        </linearGradient>
+      </defs>
+
+      {/* envelope body — the light face the folds sit on */}
+      <path d="M4 33 L44 4a14 14 0 0 1 16 0l36 29v39a15 15 0 0 1-15 15H19A15 15 0 0 1 4 72Z" fill={`url(#${gBody})`} />
+
+      {/* the three folded bands, back to front */}
+      <path d="M30 52 L70 27a12 12 0 0 1 12 0l8 5a12 12 0 0 1 0 21L50 78Z" fill={`url(#${gBot})`} />
+      <path d="M19 36 L60 11a12 12 0 0 1 12 0l7 4a12 12 0 0 1 0 21L39 61Z" fill={`url(#${gMid})`} />
+      <path d="M8 22 L47 1a12 12 0 0 1 12 0l5 3a12 12 0 0 1 0 21L28 47Z" fill={`url(#${gTop})`} />
+
+      {/* the O badge, lower left, overlapping the envelope */}
+      <rect x="1" y="44" width="40" height="40" rx="11" fill={`url(#${gBadge})`} />
+      <ellipse cx="21" cy="64" rx="12.5" ry="14" fill="#fff" />
+      <ellipse cx="21" cy="64" rx="6" ry="7.5" fill="#1E58B4" />
     </svg>
   );
 }
@@ -341,7 +386,7 @@ export function GuidedMailboxSetup({
                 setProvider={setProvider}
                 tos={tos}
                 setTos={setTos}
-                onLink={() => setModal(provider === "imap" ? "choice" : provider === "sendgrid" ? "sendgrid" : "oauth")}
+                onLink={() => setModal(provider === "imap" ? "choice" : "oauth")}
               />
             )}
             {step === "linked" && acct && <LinkedStep acct={acct} onCloseWizard={onClose} />}
@@ -444,6 +489,7 @@ export function GuidedMailboxSetup({
           onBack={() => setModal(null)}
           onSingle={() => setModal("smtp")}
           onBulk={() => setModal("csv")}
+          onSendgrid={() => setModal("sendgrid")}
         />
         <SendgridSenderPicker
           open={modal === "sendgrid"}
@@ -578,10 +624,7 @@ function ProviderStep({
     // Real marks from Brandfetch, with the hand-drawn glyphs as the fallback.
     { id: "google" as const, title: "Google", sub: "Gmail / GSuite", icon: <ProviderLogo provider="google_oauth" pixels={36} className="size-9 border-0" fallback={<GoogleGlyph className="size-9" />} /> },
     { id: "outlook" as const, title: "Outlook", sub: "Hotmail, Live, MSN", icon: <ProviderLogo provider="outlook_oauth" pixels={36} className="size-9 border-0" fallback={<OutlookGlyph className="size-9" />} /> },
-    { id: "imap" as const, title: "Other", sub: "Any provider, IMAP", icon: <Mail className="size-9 text-foreground/80" strokeWidth={1.25} />, lock: true },
-    // SendGrid does not link ONE mailbox — it exposes every sender identity
-    // the key may send from, so this card opens a picker instead of a form.
-    { id: "sendgrid" as const, title: "SendGrid", sub: "Pick from your senders", icon: <ProviderLogo provider="sendgrid" pixels={36} className="size-9 border-0" fallback={<Send className="size-9 text-foreground/80" strokeWidth={1.25} />} /> },
+    { id: "imap" as const, title: "Other", sub: "Any provider, IMAP", icon: <Mail className="size-9 text-foreground/80" strokeWidth={1.25} /> },
   ];
   return (
     <div className="mx-auto w-full max-w-3xl px-6 py-10">
@@ -593,7 +636,7 @@ function ProviderStep({
       </p>
 
       <h2 className="mt-8 text-[14px] font-semibold">Choose your email provider</h2>
-      <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
         {cards.map((c) => (
           <button
             key={c.id}
@@ -605,7 +648,6 @@ function ProviderStep({
               provider === c.id ? "border-sky-500 shadow-sm" : "border-border hover:border-foreground/30",
             )}
           >
-            {c.lock && <Lock className="absolute right-3 top-3 size-3.5 text-muted-foreground" />}
             <span className="flex h-11 items-center">{c.icon}</span>
             <span className="text-[14px] font-semibold">{c.title}</span>
             <span className="text-[12.5px] text-muted-foreground">{c.sub}</span>
@@ -696,12 +738,16 @@ function OauthLinkDialog({
 /* ──────────────────── SMTP/IMAP option choice modal ───────────────────── */
 
 function SmtpImapChoiceDialog({
-  open, onBack, onSingle, onBulk,
+  open, onBack, onSingle, onBulk, onSendgrid,
 }: {
   open: boolean;
   onBack: () => void;
   onSingle: () => void;
   onBulk: () => void;
+  /** SendGrid lives here rather than on the provider grid (owner ask
+   *  2026-08-14): it links no single mailbox, it lists every sender identity
+   *  the key may send from. Same picker, just reached from here. */
+  onSendgrid: () => void;
 }) {
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onBack()}>
@@ -717,7 +763,7 @@ function SmtpImapChoiceDialog({
             Choose an option to connect email accounts either in bulk or individually.
           </DialogDescription>
         </DialogHeader>
-        <div className="grid grid-cols-1 gap-4 pt-1 sm:grid-cols-2">
+        <div className="grid grid-cols-1 gap-4 pt-1 sm:grid-cols-3">
           <button
             type="button"
             onClick={onSingle}
@@ -726,6 +772,15 @@ function SmtpImapChoiceDialog({
             <Server className="size-9 text-slate-500 dark:text-slate-400" strokeWidth={1.5} />
             <span className="text-[15px] font-semibold">Connect Single account</span>
             <span className="max-w-[200px] text-[12.5px] text-muted-foreground">Connect single email account via SMTP</span>
+          </button>
+          <button
+            type="button"
+            onClick={onSendgrid}
+            className="flex flex-col items-center gap-2.5 rounded-lg bg-muted/70 px-4 py-8 text-center transition-shadow hover:ring-2 hover:ring-sky-400"
+          >
+            <ProviderLogo provider="sendgrid" pixels={36} className="size-9" fallback={<Send className="size-9 text-foreground/80" strokeWidth={1.5} />} />
+            <span className="text-[15px] font-semibold">Connect SendGrid senders</span>
+            <span className="max-w-[200px] text-[12.5px] text-muted-foreground">Pick from the addresses your SendGrid key can send from</span>
           </button>
           <button
             type="button"
