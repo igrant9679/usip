@@ -40,6 +40,7 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { trpc } from "@/lib/trpc";
 import { AddExistingProspectsDialog } from "@/components/usip/are/AddExistingProspectsDialog";
+import { ActiveSequenceTimeline } from "@/components/usip/are/ActiveSequenceTimeline";
 import { RichTextEditor } from "@/components/usip/RichTextEditor";
 import { sanitizeEmailHtml } from "@/lib/sanitizeHtml";
 import { isHtmlBody } from "@shared/emailBody";
@@ -91,7 +92,7 @@ import {
   XCircle,
   Zap,
 } from "lucide-react";
-import { useState, useRef, useEffect } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams, useLocation } from "wouter";
 import { toast } from "sonner";
 
@@ -1103,6 +1104,19 @@ function StatusBadgeMini({ status }: { status: string }) {
 
 function SequencesTab({ campaignId, campaign }: { campaignId: number; campaign: any }) {
   const { data: rows = [], refetch, isLoading } = trpc.are.prospects.listSequences.useQuery({ campaignId });
+  // Execution rows for the whole campaign, indexed per prospect. One query
+  // rather than one per row: an active campaign has a handful of enrolled
+  // prospects and a few steps each, and the queue is already campaign-scoped.
+  const { data: execRows = [] } = trpc.are.execution.getQueue.useQuery({ campaignId, limit: 200 });
+  const execByProspect = useMemo(() => {
+    const m = new Map<number, any[]>();
+    for (const e of execRows as any[]) {
+      const list = m.get(e.prospectQueueId) ?? [];
+      list.push(e);
+      m.set(e.prospectQueueId, list);
+    }
+    return m;
+  }, [execRows]);
   // Centralised sync — hits every tab's query so the user never sees
   // stale data after a mutation (was the root cause of "A/B tab out of
   // sync" + "Prospects tab still shows enrolled after cancel").
@@ -1245,10 +1259,15 @@ function SequencesTab({ campaignId, campaign }: { campaignId: number; campaign: 
             const steps = (r.generatedSequence ?? []) as any[];
             const hasSeq = steps.length > 0;
             const nm = `${r.firstName ?? ""} ${r.lastName ?? ""}`.trim() || "(no name)";
+            // An ACTIVE prospect's progress belongs on the row itself — the
+            // question this tab is asked is "where is it up to", and that was
+            // only answerable by opening the drawer, which shows the stored
+            // copy and not the schedule.
+            const isActive = r.sequenceStatus === "enrolled" || r.sequenceStatus === "paused";
             return (
+              <div key={r.prospectId} className="group">
               <div
-                key={r.prospectId}
-                className="group px-3 py-2 hover:bg-muted/40 transition-colors cursor-pointer flex items-center gap-2 text-xs"
+                className="px-3 py-2 hover:bg-muted/40 transition-colors cursor-pointer flex items-center gap-2 text-xs"
                 onClick={() => setDrawerProspectId(r.prospectId)}
               >
                 {/* Identity */}
@@ -1299,6 +1318,12 @@ function SequencesTab({ campaignId, campaign }: { campaignId: number; campaign: 
                     </Button>
                   )}
                 </div>
+              </div>
+              {isActive && hasSeq && (
+                <div className="px-3 pb-2">
+                  <ActiveSequenceTimeline steps={steps} exec={execByProspect.get(r.prospectId) ?? []} />
+                </div>
+              )}
               </div>
             );
           })}
