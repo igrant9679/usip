@@ -171,7 +171,9 @@ export async function runComprehensiveEnrichment(opts: {
     // account's network, but "CFO at Acme" headlines still name the employer.
     // Weaker source, honest ledger: headline_parse · 60.
     if (!enr.currentCompanyName?.trim()) {
-      const guessed = companyFromHeadline(enr.linkedinHeadline ?? enr.currentTitle);
+      // Headline only. currentTitle is now the Experience job title, which
+      // never names the employer, so falling back to it would just mislead.
+      const guessed = companyFromHeadline(enr.linkedinHeadline);
       if (guessed) {
         candidates.push({ field: "company", value: guessed, source: "headline_parse", confidence: CONFIDENCE.headlineParse, at });
         phases.headline = `parsed "${guessed}"`;

@@ -439,7 +439,11 @@ export async function backfillQueueCompanies(opts: {
       byStatus[out.status] = (byStatus[out.status] ?? 0) + 1;
       if (samples.length < 3 && out.status !== "enriched" && out.message) samples.push(`${out.status}: ${out.message}`.slice(0, 200));
       if (out.status === "rate_limited") { stoppedBecause = "rate_limited"; break; }
-      const headlineCompany = companyFromHeadline((out.profile as unknown as { currentTitle?: string | null })?.currentTitle);
+      // `headline`, not `currentTitle`. Since 2026-08-14 currentTitle is the
+      // structured Experience job title ("VP of Sales"), which names no
+      // employer — reading it here would silently end headline-derived
+      // company recovery.
+      const headlineCompany = companyFromHeadline((out.profile as unknown as { headline?: string | null })?.headline);
       const company = out.profile?.currentCompanyName ?? headlineCompany;
       const domain = out.profile?.currentCompanyDomain ?? null;
       if (!out.profile?.currentCompanyName && headlineCompany) fromHeadline++;
@@ -452,10 +456,10 @@ export async function backfillQueueCompanies(opts: {
           // which is the difference between "LinkedIn will not show us this"
           // and "we are not reading what it did show us".
           if (samples.length < 3) {
-            const pr = out.profile as unknown as { fullName?: string | null; currentTitle?: string | null; experience?: unknown[]; connectionDegree?: string | null };
+            const pr = out.profile as unknown as { fullName?: string | null; headline?: string | null; title?: string | null; experience?: unknown[]; connectionDegree?: string | null };
             samples.push(JSON.stringify({
               name: pr.fullName ?? null,
-              headline: pr.currentTitle ?? null,
+              headline: pr.headline ?? null,
               experienceEntries: Array.isArray(pr.experience) ? pr.experience.length : 0,
               degree: pr.connectionDegree ?? null,
             }).slice(0, 300));

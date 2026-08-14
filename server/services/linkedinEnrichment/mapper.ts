@@ -133,7 +133,11 @@ export function mapSearchHitToProfile(hit: {
     industry: null,
     profileImageUrl: str(hit.profilePictureUrl),
     summaryAbout: null,
-    currentTitle: str(hit.headline),
+    // A search hit carries no experience section, so there is no job title to
+    // report — the headline sitting here is precisely the bio-as-title the
+    // owner rule forbids. Null emits no title candidate, leaving whatever the
+    // prospect already has; a later full profile fetch supplies the real one.
+    currentTitle: null,
     currentCompanyName: str(hit.company),
     currentCompanyLinkedinUrl: null,
     currentCompanyDomain: null,
@@ -226,7 +230,22 @@ export function mapUnipileProfileToVelocitySchema(
   // Prefer the explicit current_company; else the first work_experience marked current.
   const currentExp = experience.find((e) => e.current) ?? experience[0];
   const currentCompanyName = company.name ?? currentExp?.company ?? null;
-  const currentTitle = str(p.headline) ?? str(p.occupation) ?? currentExp?.title ?? null;
+  // The JOB TITLE comes from the current Experience entry. Nothing else.
+  //
+  // Owner rule 2026-08-14: use the title under the person's current job in
+  // the Experience tab, not their bio. A headline is free text they wrote
+  // about themselves — "Helping SaaS founders scale | ex-Google | girl dad" —
+  // and `occupation` is usually just the headline again. Reading either as a
+  // job title fills the CRM with slogans and then merge-renders them into
+  // outreach.
+  //
+  // No fallback on purpose. LinkedIn withholds structured experience for
+  // out-of-network profiles, and a null here simply emits no title candidate,
+  // so the prospect keeps whatever it already had — the merge never deletes.
+  // Declining to answer beats answering with a bio. The headline is still
+  // captured as `headline` (and still parsed for the COMPANY, which is a
+  // different question with its own weaker confidence tier).
+  const currentTitle = currentExp?.title ?? null;
   const currentCompanyStartDate = experience.find((e) => e.company === currentCompanyName && e.current)?.start ?? null;
 
   const education = (p.education ?? []).map((e) => ({
