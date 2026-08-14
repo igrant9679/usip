@@ -618,11 +618,32 @@ export const executionRouter = router({
       return { success: true };
     }),
 
+  /**
+   * The signal feed, with WHO produced each signal and WHAT it answers.
+   *
+   * Used to be a bare `select()` off are_signal_log, so the Signals tab could
+   * only render the machine vocabulary: a type slug, a sentiment, a timestamp.
+   * The person was one join away (prospect_queue) and the message they acted on
+   * was another (are_execution_queue) — an activity feed that cannot say who
+   * did the thing is not an activity feed.
+   *
+   * Both joins are LEFT: a signal survives its prospect being deleted, and
+   * reply/meeting signals carry no executionQueueId at all (the inbound poller
+   * matches on the person, not on a specific send), so an inner join would
+   * silently drop exactly the signals that matter most.
+   *
+   * `signalType` was accepted in the input and never applied — every "filter"
+   * returned the unfiltered feed. Applied here, in SQL, alongside the LIMIT:
+   * filtering a limited page in JS is the shape that emptied the Active tab
+   * (320072b).
+   */
   getSignalLog: workspaceProcedure
     .input(z.object({
       campaignId: z.number().optional(),
       prospectId: z.number().optional(),
       signalType: z.string().optional(),
+      /** Person search — name, email or company. Applied in SQL, see below. */
+      search: z.string().optional(),
       limit: z.number().default(100),
     }))
     .query(async ({ ctx, input }) => {
@@ -631,12 +652,83 @@ export const executionRouter = router({
       const conditions = [eq(areSignalLog.workspaceId, ctx.workspace.id)];
       if (input.campaignId) conditions.push(eq(areSignalLog.campaignId, input.campaignId));
       if (input.prospectId) conditions.push(eq(areSignalLog.prospectQueueId, input.prospectId));
+      if (input.signalType) conditions.push(eq(areSignalLog.signalType, input.signalType as never));
+      const term = (input.search ?? "").trim();
+      if (term) {
+        const like = `%${term}%`;
+        conditions.push(sql`(
+          CONCAT_WS(' ', ${prospectQueue.firstName}, ${prospectQueue.lastName}) LIKE ${like}
+          OR ${prospectQueue.email} LIKE ${like}
+          OR ${prospectQueue.companyName} LIKE ${like}
+        )`);
+      }
       return db
-        .select()
+        .select({
+          id: areSignalLog.id,
+          signalType: areSignalLog.signalType,
+          sentiment: areSignalLog.sentiment,
+          sentimentReason: areSignalLog.sentimentReason,
+          actionTaken: areSignalLog.actionTaken,
+          processedAt: areSignalLog.processedAt,
+          rawPayload: areSignalLog.rawPayload,
+          campaignId: areSignalLog.campaignId,
+          // ── who ──
+          prospectQueueId: areSignalLog.prospectQueueId,
+          firstName: prospectQueue.firstName,
+          lastName: prospectQueue.lastName,
+          email: prospectQueue.email,
+          title: prospectQueue.title,
+          companyName: prospectQueue.companyName,
+          linkedinUrl: prospectQueue.linkedinUrl,
+          // Where the person can be opened: their CRM contact once promoted,
+          // else their canonical People row (migration 0153).
+          linkedContactId: prospectQueue.linkedContactId,
+          personProspectId: prospectQueue.personProspectId,
+          // ── what they acted on ──
+          executionQueueId: areSignalLog.executionQueueId,
+          stepIndex: areExecutionQueue.stepIndex,
+          channel: areExecutionQueue.channel,
+          messageContent: areExecutionQueue.messageContent,
+          messageSentAt: areExecutionQueue.executedAt,
+          messageStatus: areExecutionQueue.status,
+        })
         .from(areSignalLog)
+        .leftJoin(prospectQueue, eq(prospectQueue.id, areSignalLog.prospectQueueId))
+        .leftJoin(areExecutionQueue, eq(areExecutionQueue.id, areSignalLog.executionQueueId))
         .where(and(...conditions))
         .orderBy(desc(areSignalLog.processedAt))
         .limit(input.limit);
+    }),
+
+  /**
+   * How many of each signal type this campaign has produced.
+   *
+   * Exists so the feed's type filter can show a TRUE total per type. Counting
+   * the rows already on screen would count a page — with getSignalLog limited,
+   * "Email open 50" would mean "50 of them fit", which is the same lie the
+   * unordered LIMIT told on the Active tab.
+   */
+  getSignalCounts: workspaceProcedure
+    .input(z.object({ campaignId: z.number().optional() }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const conditions = [eq(areSignalLog.workspaceId, ctx.workspace.id)];
+      if (input.campaignId) conditions.push(eq(areSignalLog.campaignId, input.campaignId));
+      const rows = await db
+        .select({
+          signalType: areSignalLog.signalType,
+          count: sql<number>`count(*)`,
+          lastAt: sql<Date>`max(${areSignalLog.processedAt})`,
+        })
+        .from(areSignalLog)
+        .where(and(...conditions))
+        .groupBy(areSignalLog.signalType);
+      return rows.map((r) => ({
+        signalType: r.signalType as string,
+        count: Number(r.count) || 0,
+        lastAt: r.lastAt,
+      }));
     }),
 
   /** Ingest an incoming signal (called from webhook or manual test) */

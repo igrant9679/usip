@@ -46,12 +46,17 @@ import { sanitizeEmailHtml } from "@/lib/sanitizeHtml";
 import { isHtmlBody } from "@shared/emailBody";
 import { ARE_SOURCES, ARE_DEFAULT_SOURCES, normalizeSources } from "@shared/areSources";
 import {
+  signalMeta, describeSignal, actionLabel, signalSourceLabel, stepLabelFromPayload,
+  type AreSignalChannel,
+} from "@shared/areSignals";
+import {
   Activity,
   ArrowLeft,
   AtSign,
   BarChart2,
   Bot,
   Brain,
+  CalendarClock,
   CheckCircle2,
   ChevronRight,
   Clock,
@@ -1653,6 +1658,237 @@ function LogRow({ log }: { log: any }) {
   );
 }
 
+/* ─── Signal feed ──────────────────────────────────────────────────────────── */
+
+/** One row as getSignalLog returns it — the log row plus its two joins. */
+type SignalFeedRow = {
+  id: number;
+  signalType: string;
+  sentiment: string | null;
+  sentimentReason: string | null;
+  actionTaken: string | null;
+  processedAt: string | Date;
+  rawPayload: unknown;
+  prospectQueueId: number;
+  firstName: string | null;
+  lastName: string | null;
+  email: string | null;
+  title: string | null;
+  companyName: string | null;
+  linkedinUrl: string | null;
+  linkedContactId: number | null;
+  personProspectId: number | null;
+  executionQueueId: number | null;
+  stepIndex: number | null;
+  channel: string | null;
+  messageContent: unknown;
+  messageSentAt: string | Date | null;
+  messageStatus: string | null;
+};
+
+const SIGNAL_CHANNEL_ICON: Record<AreSignalChannel, React.ElementType> = {
+  email: AtSign,
+  linkedin: Linkedin,
+  sms: MessageSquare,
+  voice: Radar,
+  meeting: CalendarClock,
+  crm: Target,
+};
+
+/** "3 minutes ago" / "2 days ago" — the coarse half of the WHEN. */
+function relativeWhen(value: string | Date): string {
+  const then = new Date(value).getTime();
+  if (!Number.isFinite(then)) return "";
+  const secs = Math.round((Date.now() - then) / 1000);
+  if (secs < 45) return "just now";
+  const units: Array<[number, Intl.RelativeTimeFormatUnit]> = [
+    [60, "second"], [3600, "minute"], [86400, "hour"], [604800, "day"], [2629800, "week"],
+    [31557600, "month"], [Infinity, "year"],
+  ];
+  const divisors = [1, 60, 3600, 86400, 604800, 2629800, 31557600];
+  const fmt = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+  for (let i = 0; i < units.length; i++) {
+    if (secs < units[i][0]) return fmt.format(-Math.round(secs / divisors[i]), units[i][1]);
+  }
+  return fmt.format(-Math.round(secs / 31557600), "year");
+}
+
+/** The exact half of the WHEN — full date, time and zone, for the tooltip. */
+function exactWhen(value: string | Date): string {
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleString(undefined, {
+    weekday: "short", year: "numeric", month: "short", day: "numeric",
+    hour: "numeric", minute: "2-digit", second: "2-digit", timeZoneName: "short",
+  });
+}
+
+function SignalTypeChip({ label, count, active, onClick }: {
+  label: string; count: number; active: boolean; onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 h-7 text-[11px] font-medium transition-colors ${
+        active
+          ? "border-primary/50 bg-primary/10 text-primary"
+          : "border-border bg-card text-muted-foreground hover:text-foreground hover:border-primary/30"
+      }`}
+    >
+      {label}
+      <span className={`tabular-nums ${active ? "text-primary" : "text-muted-foreground/70"}`}>{count.toLocaleString()}</span>
+    </button>
+  );
+}
+
+/**
+ * One signal, as a sentence: WHO did WHAT, WHEN — then the evidence.
+ *
+ * The feed used to render the stored slugs ("email open · neutral") with a
+ * short timestamp, so the person who produced the signal appeared nowhere and
+ * the message they acted on appeared nowhere. Everything below the heading is
+ * derived from data the row already carried: the two joins, and rawPayload,
+ * which held the clicked URL and the reply text and was never read.
+ */
+function SignalRow({ s }: { s: SignalFeedRow }) {
+  const meta = signalMeta(s.signalType);
+  const Icon = SIGNAL_CHANNEL_ICON[meta.channel] ?? Activity;
+  const sentiment = typeof s.sentiment === "string" ? s.sentiment : "";
+  // Sentiment when the AI classified one (replies), else the type's own tone —
+  // an open is a positive signal whether or not anything ran an LLM over it.
+  const color = SIGNAL_COLORS[sentiment] ?? SIGNAL_COLORS[meta.tone] ?? SIGNAL_COLORS.neutral;
+
+  const fullName = `${s.firstName ?? ""} ${s.lastName ?? ""}`.trim();
+  const who = fullName || s.email || "An unknown prospect";
+  const subtitle = [s.title, s.companyName].filter(Boolean).join(" · ");
+  // Their record: the CRM contact once promoted, else their People row. A
+  // prospect that is neither is not linkable — the queue row is not a page.
+  const href = s.linkedContactId
+    ? `/contacts/${s.linkedContactId}`
+    : s.personProspectId
+      ? `/prospects/${s.personProspectId}`
+      : null;
+
+  const mc = (s.messageContent ?? null) as { subject?: string } | null;
+  const step = s.stepIndex != null ? `Step ${s.stepIndex + 1}` : stepLabelFromPayload(s.rawPayload);
+  const messageRef = [step, mc?.subject ? `“${mc.subject}”` : null].filter(Boolean).join(" · ");
+
+  const details = describeSignal(s.signalType, s.rawPayload);
+  const action = actionLabel(s.actionTaken);
+  const via = signalSourceLabel(s.rawPayload);
+
+  return (
+    <div className="rounded-xl border bg-card px-4 py-3">
+      <div className="flex items-start gap-3">
+        <span
+          className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full"
+          style={{ backgroundColor: `${color}22`, color }}
+          title={meta.label}
+        >
+          <Icon className="size-4" />
+        </span>
+
+        <div className="min-w-0 flex-1">
+          {/* WHO — with a way through to their record. */}
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <ProspectAvatar image={null} name={who} size="sm" className="!size-5 !text-[9px] shrink-0" />
+            {href ? (
+              <Link href={href}>
+                <span className="text-sm font-medium hover:underline cursor-pointer">{who}</span>
+              </Link>
+            ) : (
+              <span className="text-sm font-medium">{who}</span>
+            )}
+            {s.linkedinUrl ? (
+              <a
+                href={s.linkedinUrl}
+                target="_blank" rel="noopener noreferrer"
+                title="Open LinkedIn profile"
+                className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[3px] bg-[#0A66C2] text-[8px] font-bold leading-none text-white hover:opacity-80"
+              >
+                in
+              </a>
+            ) : null}
+            {subtitle ? <span className="text-xs text-muted-foreground truncate">{subtitle}</span> : null}
+          </div>
+
+          {/* WHAT — the plain-English act, and what it answers. */}
+          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span className="text-sm">{meta.verb}</span>
+            <Badge
+              variant="outline"
+              className="text-[10px] px-1.5 py-0 h-4 border-0"
+              style={{ backgroundColor: `${color}22`, color }}
+            >
+              {sentiment || meta.label}
+            </Badge>
+            {messageRef ? (
+              <span className="text-xs text-muted-foreground truncate" title={mc?.subject ?? undefined}>
+                {messageRef}
+              </span>
+            ) : null}
+          </div>
+
+          {s.email ? (
+            <div className="mt-0.5 text-[11px] text-muted-foreground truncate">{s.email}</div>
+          ) : null}
+
+          {/* The evidence behind it — clicked link, reply text, bounce reason. */}
+          {details.length > 0 && (
+            <div className="mt-2 space-y-1">
+              {details.map((d, i) => (
+                <div key={`${d.label}-${i}`} className="flex gap-2 text-[11px]">
+                  <span className="shrink-0 text-muted-foreground w-[86px]">{d.label}</span>
+                  {d.href ? (
+                    <a
+                      href={d.href}
+                      target="_blank" rel="noopener noreferrer"
+                      className="min-w-0 break-all text-primary hover:underline"
+                    >
+                      {d.value}
+                    </a>
+                  ) : (
+                    <span className="min-w-0 break-words text-foreground/90">{d.value}</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {s.sentimentReason ? (
+            <div className="mt-1.5 text-xs text-muted-foreground">
+              <span className="font-medium text-foreground/70">AI read:</span> {s.sentimentReason}
+            </div>
+          ) : null}
+
+          {/* What VELOCITY did about it — attributed to the engine, not the
+              person, so "added to the suppression list" can't read as theirs. */}
+          {action ? (
+            <div className="mt-1.5 inline-flex items-center gap-1.5 rounded-md bg-emerald-500/10 px-2 py-1 text-[11px] text-emerald-600 dark:text-emerald-400">
+              <Bot className="size-3 shrink-0" />
+              Velocity {action.charAt(0).toLowerCase() + action.slice(1)}
+            </div>
+          ) : null}
+        </div>
+
+        {/* WHEN — relative for scanning, exact on hover. */}
+        <div className="shrink-0 text-right">
+          <div className="text-[11px] text-muted-foreground" title={exactWhen(s.processedAt)}>
+            {relativeWhen(s.processedAt)}
+          </div>
+          <div className="text-[10px] text-muted-foreground/70 tabular-nums">
+            {new Date(s.processedAt).toLocaleString(undefined, {
+              month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
+            })}
+          </div>
+          {via ? <div className="mt-0.5 text-[10px] text-muted-foreground/70 max-w-[150px]">{via}</div> : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ─── Main page ────────────────────────────────────────────────────────────── */
 export default function ARECampaignDetail() {
   const { id } = useParams<{ id: string }>();
@@ -1661,7 +1897,29 @@ export default function ARECampaignDetail() {
 
   const { data: campaign, isLoading: loadingCampaign } = trpc.are.campaigns.get.useQuery({ id: campaignId });
   const { data: prospects, isLoading: loadingProspects } = trpc.are.prospects.list.useQuery({ campaignId, limit: 100 });
-  const { data: signals } = trpc.are.execution.getSignalLog.useQuery({ campaignId, limit: 50 });
+  /**
+   * Signal feed. Type + person filters are sent to the SERVER, not applied to
+   * the rows already on screen: filtering after a LIMIT shows "the matches that
+   * happened to fit on page one", which is how the Active tab came up empty.
+   */
+  const [signalType, setSignalType] = useState<string>("all");
+  const [signalSearch, setSignalSearch] = useState("");
+  const [signalSearchDebounced, setSignalSearchDebounced] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setSignalSearchDebounced(signalSearch.trim()), 250);
+    return () => clearTimeout(t);
+  }, [signalSearch]);
+  const { data: signals, isLoading: loadingSignals } = trpc.are.execution.getSignalLog.useQuery({
+    campaignId,
+    limit: 200,
+    ...(signalType !== "all" ? { signalType } : {}),
+    ...(signalSearchDebounced ? { search: signalSearchDebounced } : {}),
+  });
+  const { data: signalCounts } = trpc.are.execution.getSignalCounts.useQuery({ campaignId });
+  const signalTotal = useMemo(
+    () => (signalCounts ?? []).reduce((n, c) => n + c.count, 0),
+    [signalCounts],
+  );
   const { data: abVariants } = trpc.are.prospects.getAbVariants.useQuery({ campaignId });
   const { data: scrapeJobs } = trpc.are.scraper.listJobs.useQuery({ campaignId, limit: 25 });
   const { data: rejectionStats } = trpc.are.prospects.getRejectionStats.useQuery({ campaignId });
@@ -1986,9 +2244,9 @@ export default function ARECampaignDetail() {
             </TabsTrigger>
             <TabsTrigger value="signals" className="text-xs gap-1.5">
               <Activity className="size-3.5" /> Signals
-              {(signals?.length ?? 0) > 0 && (
+              {signalTotal > 0 && (
                 <span className="ml-1 text-[10px] bg-primary/20 text-primary rounded-full px-1.5 py-0.5 font-medium">
-                  {signals?.length}
+                  {signalTotal}
                 </span>
               )}
             </TabsTrigger>
@@ -2374,52 +2632,64 @@ export default function ARECampaignDetail() {
           </TabsContent>
 
           {/* ── Signal Feed tab ── */}
-          <TabsContent value="signals" className="mt-4">
-            {!signals || signals.length === 0 ? (
+          <TabsContent value="signals" className="mt-4 space-y-3">
+            {/* Who / what filters. Both are server-side (see the query). */}
+            <div className="flex flex-wrap items-center gap-2">
+              <SignalTypeChip
+                label="All signals"
+                count={signalTotal}
+                active={signalType === "all"}
+                onClick={() => setSignalType("all")}
+              />
+              {(signalCounts ?? [])
+                .slice()
+                .sort((a, b) => b.count - a.count)
+                .map((c) => (
+                  <SignalTypeChip
+                    key={c.signalType}
+                    label={signalMeta(c.signalType).label}
+                    count={c.count}
+                    active={signalType === c.signalType}
+                    onClick={() => setSignalType(signalType === c.signalType ? "all" : c.signalType)}
+                  />
+                ))}
+              <div className="flex-1 min-w-[160px]" />
+              <div className="relative w-full sm:w-64">
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
+                <Input
+                  value={signalSearch}
+                  onChange={(e) => setSignalSearch(e.target.value)}
+                  placeholder="Find a person, company or email…"
+                  className="h-8 pl-8 text-xs"
+                />
+              </div>
+            </div>
+
+            {loadingSignals ? (
+              <div className="space-y-2">
+                {Array.from({ length: 4 }).map((_, i) => (
+                  <div key={i} className="h-20 rounded-xl bg-muted/50 animate-pulse" />
+                ))}
+              </div>
+            ) : !signals || signals.length === 0 ? (
               <EmptyState
                 icon={Activity}
-                title="No signals yet"
-                description="Signals appear here as prospects reply, open emails, or book meetings."
+                title={signalType === "all" && !signalSearchDebounced ? "No signals yet" : "No signals match that filter"}
+                description={
+                  signalType === "all" && !signalSearchDebounced
+                    ? "Signals appear here as prospects open, click, reply, or book a meeting — each one showing who it was, what they did, and when."
+                    : "Clear the filter or search for a different person to see the rest of the feed."
+                }
               />
             ) : (
               <div className="space-y-2">
-                {signals.map((s) => {
-                  // Server columns are nullable / typed as `unknown` for JSON
-                  // fields. Coerce to string and fall back where needed.
-                  const sentimentStr = typeof s.sentiment === "string" ? s.sentiment : "";
-                  const color = (sentimentStr && SIGNAL_COLORS[sentimentStr]) ?? SIGNAL_COLORS.neutral;
-                  const actionTakenStr = typeof s.actionTaken === "string" ? s.actionTaken : "";
-                  const actionLabel = actionTakenStr && actionTakenStr !== "no_action"
-                    ? actionTakenStr.replace(/_/g, " ")
-                    : null;
-                  const sentimentReasonStr = typeof s.sentimentReason === "string" ? s.sentimentReason : "";
-                  const signalTypeStr = typeof s.signalType === "string" ? s.signalType : "";
-                  return (
-                    <div key={s.id} className="flex items-start gap-3 rounded-xl border bg-card px-4 py-3">
-                      <div className="size-2 rounded-full mt-2 shrink-0" style={{ backgroundColor: color }} />
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="text-sm font-medium capitalize">{signalTypeStr.replace(/_/g, " ")}</span>
-                          <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 border-0 capitalize"
-                            style={{ backgroundColor: color + "22", color }}>
-                            {sentimentStr}
-                          </Badge>
-                          {actionLabel && (
-                            <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 border-emerald-500/30 text-emerald-600 bg-emerald-500/10">
-                              {actionLabel}
-                            </Badge>
-                          )}
-                        </div>
-                        {sentimentReasonStr && (
-                          <div className="text-xs text-muted-foreground mt-0.5">{sentimentReasonStr}</div>
-                        )}
-                      </div>
-                      <div className="text-[10px] text-muted-foreground shrink-0 mt-0.5">
-                        {new Date(s.processedAt).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
-                      </div>
-                    </div>
-                  );
-                })}
+                {signals.map((s) => <SignalRow key={s.id} s={s} />)}
+                {signals.length >= 200 && (
+                  <p className="text-[11px] text-muted-foreground px-1">
+                    Showing the 200 most recent of {signalTotal.toLocaleString()} signals. Filter by type or search for a
+                    person to reach older ones.
+                  </p>
+                )}
               </div>
             )}
            </TabsContent>
