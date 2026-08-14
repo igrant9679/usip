@@ -47,6 +47,8 @@ export function SendgridSenderPicker({
 }) {
   const utils = trpc.useUtils();
   const [senders, setSenders] = useState<Sender[]>([]);
+  const [domains, setDomains] = useState<string[]>([]);
+  const [customEmail, setCustomEmail] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
@@ -60,6 +62,7 @@ export function SendgridSenderPicker({
     try {
       const r = await list.mutateAsync({ apiKey, accountId });
       setSenders(r.senders as Sender[]);
+      setDomains((r as { domains?: string[] }).domains ?? []);
       setError(r.ok ? null : r.error);
       // Pre-tick everything linkable, since linking all of them is the
       // common intent — untick is cheaper than hunting for tick.
@@ -85,8 +88,13 @@ export function SendgridSenderPicker({
     });
 
   const linkable = senders.filter((s) => !s.alreadyLinked);
+  /** Is this address at a domain SendGrid has authenticated? */
+  const domainAllows = (email: string) => {
+    const host = email.trim().toLowerCase().split("@")[1] ?? "";
+    return domains.some((d) => host === d || host.endsWith(`.${d}`));
+  };
   const link = async () => {
-    const emails = Array.from(checked);
+    const emails = customEmail.trim() ? [customEmail.trim().toLowerCase()] : Array.from(checked);
     if (emails.length === 0) { toast.error("Pick at least one sender"); return; }
     try {
       const r = await importSenders.mutateAsync({ apiKey, accountId, emails });
@@ -131,10 +139,35 @@ export function SendgridSenderPicker({
               </Button>
             </div>
           </div>
+        ) : senders.length === 0 && domains.length > 0 ? (
+          /* Domain Authentication instead of Single Sender Verification: there
+             are no identities to list, but any address at these domains sends. */
+          <div className="space-y-3">
+            <p className="text-[13px] text-muted-foreground">
+              This SendGrid account has no individual verified senders, but it authenticates{" "}
+              {domains.map((d) => <b key={d} className="text-foreground">@{d}</b>).reduce((a, b) => <>{a}, {b}</> )}
+              {" "}— any address there can send. Enter the one to link.
+            </p>
+            <div className="flex gap-2">
+              <Input
+                autoFocus
+                placeholder={`you@${domains[0]}`}
+                value={customEmail}
+                onChange={(e) => setCustomEmail(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") void link(); }}
+              />
+            </div>
+            {customEmail.trim() && !domainAllows(customEmail) && (
+              <p className="text-[12px] text-amber-700 dark:text-amber-400">
+                SendGrid hasn't authenticated that domain, so it will reject sends from it.
+              </p>
+            )}
+          </div>
         ) : senders.length === 0 ? (
           <div className="py-8 text-center text-sm text-muted-foreground">
-            SendGrid returned no sender identities. Add one in SendGrid under Settings → Sender Authentication
-            (Single Sender Verification), then refresh.
+            SendGrid returned no sender identities and no authenticated domains. Add one in SendGrid under
+            Settings → Sender Authentication — either Single Sender Verification or Domain Authentication —
+            then refresh.
             <div className="mt-3">
               <Button variant="outline" size="sm" className="h-7 gap-1.5" onClick={() => void load()}>
                 <RefreshCw className="size-3.5" /> Refresh
@@ -179,9 +212,17 @@ export function SendgridSenderPicker({
 
         <DialogFooter className="gap-2 sm:gap-2">
           <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button disabled={loading || importSenders.isPending || checked.size === 0 || linkable.length === 0} onClick={link}>
+          <Button
+            disabled={
+              loading || importSenders.isPending ||
+              (customEmail.trim()
+                ? !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(customEmail.trim())
+                : checked.size === 0 || linkable.length === 0)
+            }
+            onClick={link}
+          >
             {importSenders.isPending ? <Loader2 className="mr-1.5 size-4 animate-spin" /> : <Link2 className="mr-1.5 size-4" />}
-            Link {checked.size || ""} {checked.size === 1 ? "mailbox" : "mailboxes"}
+            Link {customEmail.trim() ? "mailbox" : `${checked.size || ""} ${checked.size === 1 ? "mailbox" : "mailboxes"}`}
           </Button>
         </DialogFooter>
       </DialogContent>

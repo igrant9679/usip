@@ -445,9 +445,19 @@ export const sendingAccountsRouter = router({
       if (!key) {
         return { ok: false as const, error: "No SendGrid API key is saved yet. Enter one to see your senders.", senders: [] };
       }
-      const { listSendGridSenders } = await import("../services/sendgrid");
+      const { listSendGridSenders, listSendGridAuthenticatedDomains } = await import("../services/sendgrid");
       const result = await listSendGridSenders(key);
-      if (!result.ok) return { ok: false as const, error: result.error, senders: [] };
+      if (!result.ok) return { ok: false as const, error: result.error, senders: [], domains: [] };
+
+      // An account using Domain Authentication has no sender identities at
+      // all — any address at the domain may send. Only worth asking when the
+      // sender list came back empty, which is exactly when the owner would
+      // otherwise be told "you have none" about a setup that works fine.
+      let domains: string[] = [];
+      if (result.senders.length === 0) {
+        const d = await listSendGridAuthenticatedDomains(key);
+        if (d.ok) domains = d.domains;
+      }
 
       const existing = await db
         .select({ fromEmail: sendingAccounts.fromEmail })
@@ -457,6 +467,7 @@ export const sendingAccountsRouter = router({
       return {
         ok: true as const,
         error: null,
+        domains,
         senders: result.senders.map((s) => ({ ...s, alreadyLinked: linked.has(s.email) })),
       };
     }),
@@ -493,7 +504,24 @@ export const sendingAccountsRouter = router({
 
       const wanted = new Set(input.emails.map((e) => e.trim().toLowerCase()));
       const chosen = result.senders.filter((s) => wanted.has(s.email));
-      if (chosen.length === 0) throw new TRPCError({ code: "BAD_REQUEST", message: "None of those senders exist on this SendGrid account" });
+
+      // Addresses at an authenticated domain are legitimate senders even
+      // though SendGrid lists no identity for them. Verify the DOMAIN instead
+      // of the address — still a check against SendGrid, never the client's
+      // word for it.
+      const unmatched = Array.from(wanted).filter((e) => !chosen.some((s) => s.email === e));
+      if (unmatched.length > 0) {
+        const { listSendGridAuthenticatedDomains } = await import("../services/sendgrid");
+        const d = await listSendGridAuthenticatedDomains(key);
+        const authed = d.ok ? d.domains : [];
+        for (const email of unmatched) {
+          const host = email.split("@")[1] ?? "";
+          if (authed.some((dom) => host === dom || host.endsWith(`.${dom}`))) {
+            chosen.push({ email, name: null, replyTo: null, nickname: null, verified: true });
+          }
+        }
+      }
+      if (chosen.length === 0) throw new TRPCError({ code: "BAD_REQUEST", message: "None of those addresses are a verified sender or at an authenticated domain on this SendGrid account" });
 
       const existing = await db
         .select({ fromEmail: sendingAccounts.fromEmail })

@@ -272,3 +272,45 @@ export async function listSendGridSenders(apiKey: string): Promise<SendGridSende
 
   return { ok: false, error: `SendGrid would not list senders. ${failures.join(" · ")}.${scopeNote}` };
 }
+
+/**
+ * Domains SendGrid has authenticated for this account.
+ *
+ * An account set up with Domain Authentication (rather than Single Sender
+ * Verification) has NO sender identities to list — any address at the domain
+ * may send. Without this the sender picker correctly reports "no senders" and
+ * the owner is stuck, because the thing they configured does not appear in
+ * the API the picker was reading.
+ */
+export type SendGridDomainList =
+  | { ok: true; domains: string[] }
+  | { ok: false; error: string };
+
+export async function listSendGridAuthenticatedDomains(apiKey: string): Promise<SendGridDomainList> {
+  const key = apiKey?.trim();
+  if (!key) return { ok: false, error: "API key is required" };
+  try {
+    const res = await fetch("https://api.sendgrid.com/v3/whitelabel/domains?limit=100", {
+      headers: { Authorization: `Bearer ${key}` },
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => null);
+      return { ok: false, error: describeSendGridError(res.status, body) };
+    }
+    const body = await res.json().catch(() => null);
+    if (!Array.isArray(body)) return { ok: false, error: "SendGrid returned an unexpected response shape" };
+    const domains = body
+      // `valid` is SendGrid's own word for "DNS is in place and it works".
+      .filter((d) => (d as { valid?: unknown })?.valid === true || (d as { valid?: unknown })?.valid === "true")
+      .map((d) => {
+        const r = d as Record<string, unknown>;
+        const sub = typeof r.subdomain === "string" ? r.subdomain : null;
+        const domain = typeof r.domain === "string" ? r.domain : null;
+        return domain ? (sub ? `${sub}.${domain}` : domain).toLowerCase() : null;
+      })
+      .filter((d): d is string => !!d);
+    return { ok: true, domains: Array.from(new Set(domains)).sort() };
+  } catch (e) {
+    return { ok: false, error: `Could not reach SendGrid: ${(e as Error).message}` };
+  }
+}

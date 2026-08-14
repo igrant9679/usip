@@ -167,13 +167,50 @@ describe("the picker is wired to the surfaces the owner named", () => {
   });
 });
 
+describe("Domain Authentication accounts (no sender identities at all)", () => {
+  it("lists the authenticated domains", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (url: string) =>
+      url.includes("whitelabel/domains")
+        ? okJson([
+            { domain: "acme.com", subdomain: "em123", valid: true },
+            { domain: "old.com", subdomain: null, valid: false },
+          ])
+        : okJson({ results: [] })));
+    const { listSendGridAuthenticatedDomains } = await import("./services/sendgrid");
+    const r = await listSendGridAuthenticatedDomains("SG.key");
+    expect(r).toEqual({ ok: true, domains: ["em123.acme.com"] });
+  });
+
+  it("an unvalidated domain does not count", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => okJson([{ domain: "acme.com", valid: false }])));
+    const { listSendGridAuthenticatedDomains } = await import("./services/sendgrid");
+    const r = await listSendGridAuthenticatedDomains("SG.key");
+    expect(r).toEqual({ ok: true, domains: [] });
+  });
+
+  it("the procedure only asks for domains when there are no senders", () => {
+    const router = readFileSync("server/routers/sendingAccounts.ts", "utf8");
+    const proc = router.slice(router.indexOf("sendgridSenders:"), router.indexOf("importSendgridSenders:"));
+    expect(proc).toContain("if (result.senders.length === 0)");
+    expect(proc).toContain("listSendGridAuthenticatedDomains(key)");
+  });
+
+  it("import accepts an address at an authenticated domain, checked against SendGrid", () => {
+    const router = readFileSync("server/routers/sendingAccounts.ts", "utf8");
+    const proc = router.slice(router.indexOf("importSendgridSenders:"), router.indexOf("create: adminWsProcedure"));
+    // Verified against the DOMAIN list from SendGrid, never the client's word.
+    expect(proc).toContain("listSendGridAuthenticatedDomains(key)");
+    expect(proc).toContain("host === dom || host.endsWith(`.${dom}`)");
+  });
+});
+
 describe("the import procedure", () => {
   const router = readFileSync("server/routers/sendingAccounts.ts", "utf8");
   const proc = router.slice(router.indexOf("importSendgridSenders:"), router.indexOf("create: adminWsProcedure"));
 
   it("re-reads senders from SendGrid rather than trusting the client's payload", () => {
     expect(proc).toContain("listSendGridSenders(key)");
-    expect(proc).toContain("None of those senders exist on this SendGrid account");
+    expect(proc).toContain("None of those addresses are a verified sender or at an authenticated domain");
   });
 
   it("skips addresses that are already mailboxes instead of duplicating them", () => {
