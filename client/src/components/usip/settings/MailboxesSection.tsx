@@ -42,6 +42,7 @@ import {
 } from "lucide-react";
 import {
   GuidedMailboxSetup,
+  PROVIDER_META,
   ProviderTile,
   setupProgress,
   setupComplete,
@@ -287,7 +288,10 @@ function MailboxRow({ a, onConfigure }: { a: MailboxAccount; onConfigure: () => 
           <TooltipTrigger asChild>
             <span className="inline-flex rounded p-1 text-muted-foreground"><Link2 className="size-4" /></span>
           </TooltipTrigger>
-          <TooltipContent side="top">{a.provider === "generic_smtp" ? "SMTP/IMAP connection" : a.provider === "google_oauth" ? "Google account" : a.provider === "outlook_oauth" ? "Outlook account" : "Amazon SES"}</TooltipContent>
+          {/* One vocabulary, not a hand-written chain. The old chain ended in a
+              hardcoded "Amazon SES", so every provider it did not name — SendGrid
+              included — was labelled Amazon SES. */}
+          <TooltipContent side="top">{PROVIDER_META[a.provider]?.label ?? "Mailbox"}</TooltipContent>
         </Tooltip>
       </td>
       {/* Setup */}

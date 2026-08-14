@@ -29,6 +29,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { SendgridSenderPicker } from "./SendgridSenderPicker";
+import { ProviderLogo } from "./ProviderLogo";
 import {
   Dialog,
   DialogContent,
@@ -88,6 +89,10 @@ export const PROVIDER_META: Record<string, { label: string; tile: string; letter
   outlook_oauth: { label: "Outlook", tile: "bg-sky-600", letter: "O" },
   generic_smtp: { label: "SMTP/IMAP", tile: "bg-slate-600", letter: "S" },
   amazon_ses: { label: "Amazon SES", tile: "bg-amber-600", letter: "A" },
+  // Added 2026-08-14. Its absence was why a SendGrid mailbox fell through to
+  // the generic_smtp tile (the bare "S") and why the Mailboxes "Type" tooltip
+  // called it Amazon SES — that column's last else-branch was hardcoded.
+  sendgrid: { label: "SendGrid", tile: "bg-blue-600", letter: "S" },
 };
 
 /** Hand-rolled brand glyphs (lucide has no brand icons — house rule). */
@@ -142,7 +147,24 @@ export function MailpoolGlyph({ className }: { className?: string }) {
   );
 }
 
+/**
+ * The mark shown beside a mailbox. Prefers the REAL provider logo from
+ * Brandfetch (owner ask 2026-08-14 — this is what replaced the bare "S" on
+ * SendGrid rows); the hand-drawn glyphs below remain the fallback for when the
+ * CDN has no icon or the logo client id is not configured.
+ */
 export function ProviderTile({ provider, email, className }: { provider: string; email?: string; className?: string }) {
+  return (
+    <ProviderLogo
+      provider={provider}
+      email={email}
+      className={cn("size-6", className)}
+      fallback={<ProviderGlyph provider={provider} email={email} className={className} />}
+    />
+  );
+}
+
+function ProviderGlyph({ provider, email, className }: { provider: string; email?: string; className?: string }) {
   if (provider === "google_oauth") return <MailpoolGlyph className={className} />;
   if (provider === "outlook_oauth") return <OutlookGlyph className={className} />;
   // SMTP/IMAP mailboxes carry no provider brand — infer it from the address so
@@ -523,12 +545,13 @@ function ProviderStep({
 }) {
   const kw = "font-medium text-sky-700 dark:text-sky-400";
   const cards = [
-    { id: "google" as const, title: "Google", sub: "Gmail / GSuite", icon: <GoogleGlyph className="size-9" /> },
-    { id: "outlook" as const, title: "Outlook", sub: "Hotmail, Live, MSN", icon: <OutlookGlyph className="size-9" /> },
+    // Real marks from Brandfetch, with the hand-drawn glyphs as the fallback.
+    { id: "google" as const, title: "Google", sub: "Gmail / GSuite", icon: <ProviderLogo provider="google_oauth" pixels={36} className="size-9 border-0" fallback={<GoogleGlyph className="size-9" />} /> },
+    { id: "outlook" as const, title: "Outlook", sub: "Hotmail, Live, MSN", icon: <ProviderLogo provider="outlook_oauth" pixels={36} className="size-9 border-0" fallback={<OutlookGlyph className="size-9" />} /> },
     { id: "imap" as const, title: "Other", sub: "Any provider, IMAP", icon: <Mail className="size-9 text-foreground/80" strokeWidth={1.25} />, lock: true },
     // SendGrid does not link ONE mailbox — it exposes every sender identity
     // the key may send from, so this card opens a picker instead of a form.
-    { id: "sendgrid" as const, title: "SendGrid", sub: "Pick from your senders", icon: <Send className="size-9 text-foreground/80" strokeWidth={1.25} /> },
+    { id: "sendgrid" as const, title: "SendGrid", sub: "Pick from your senders", icon: <ProviderLogo provider="sendgrid" pixels={36} className="size-9 border-0" fallback={<Send className="size-9 text-foreground/80" strokeWidth={1.25} />} /> },
   ];
   return (
     <div className="mx-auto w-full max-w-3xl px-6 py-10">
