@@ -91,12 +91,18 @@ DialogOverlay.displayName = "DialogOverlay";
 
 function DialogContent({
   className,
+  overlayClassName,
   children,
   showCloseButton = true,
   onEscapeKeyDown,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   showCloseButton?: boolean;
+  /** Restyle the backdrop — needed to raise z-index when a dialog is opened
+   *  from inside a surface that already sits above the default z-50 (the
+   *  guided mailbox wizard is z-[90], and Radix portals to <body>, so an
+   *  un-raised dialog renders BEHIND it and looks like a dead button). */
+  overlayClassName?: string;
 }) {
   const { isComposing } = useDialogComposition();
 
@@ -120,7 +126,7 @@ function DialogContent({
 
   return (
     <DialogPortal data-slot="dialog-portal">
-      <DialogOverlay />
+      <DialogOverlay className={overlayClassName} />
       <DialogPrimitive.Content
         data-slot="dialog-content"
         className={cn(

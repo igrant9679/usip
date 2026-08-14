@@ -104,7 +104,12 @@ export function SendgridSenderPicker({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-[calc(100%-2rem)] sm:max-w-xl max-h-[80vh] overflow-y-auto">
+      {/* z-[100] because this opens from INSIDE the guided mailbox wizard,
+          whose shell is a z-[90] full-screen surface. Radix portals to
+          <body>, so at the default z-50 the dialog renders behind that shell
+          and the button looks dead — which is exactly what it did. Harmless
+          in the Settings card, where nothing sits above it. */}
+      <DialogContent className="max-w-[calc(100%-2rem)] sm:max-w-xl max-h-[80vh] overflow-y-auto z-[100]" overlayClassName="z-[95]">
         <DialogHeader>
           <DialogTitle>Link a SendGrid sender</DialogTitle>
           <DialogDescription>

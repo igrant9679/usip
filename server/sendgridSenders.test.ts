@@ -106,6 +106,31 @@ describe("the picker is wired to the surfaces the owner named", () => {
   it("cannot re-link a sender that is already a mailbox", () => {
     expect(picker).toContain("disabled={s.alreadyLinked}");
   });
+
+  it("opens ABOVE the guided wizard instead of behind it", () => {
+    // Reported live: clicking "Link mailbox" with SendGrid chosen did nothing.
+    // The dialog WAS opening — Radix portals it to <body> at z-50, and the
+    // wizard shell is a z-[90] opaque full-screen surface, so it rendered
+    // underneath. Every dialog reachable from that wizard needs raising, and
+    // this is the assertion that a future refactor has to keep true.
+    const wizard = readFileSync("client/src/components/usip/settings/GuidedMailboxSetup.tsx", "utf8");
+    const shellZ = /className="fixed inset-0 z-\[(\d+)\]/.exec(wizard);
+    expect(shellZ).toBeTruthy();
+    const shell = Number(shellZ![1]);
+
+    const dialogZ = (src: string) =>
+      Array.from(src.matchAll(/<DialogContent[^>]*className="[^"]*\bz-\[(\d+)\]/g)).map((m) => Number(m[1]));
+    const wizardDialogs = dialogZ(wizard);
+    // Every <DialogContent> in the wizard file must clear the shell.
+    const totalDialogs = (wizard.match(/<DialogContent/g) ?? []).length;
+    expect(wizardDialogs).toHaveLength(totalDialogs);
+    for (const z of wizardDialogs) expect(z).toBeGreaterThan(shell);
+
+    const pickerZ = dialogZ(picker);
+    expect(pickerZ.length).toBe(1);
+    expect(pickerZ[0]).toBeGreaterThan(shell);
+    expect(picker).toContain("overlayClassName=");
+  });
 });
 
 describe("the import procedure", () => {

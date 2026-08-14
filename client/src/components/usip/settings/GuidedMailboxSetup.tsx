@@ -617,7 +617,7 @@ function OauthLinkDialog({
   };
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onBack()}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="sm:max-w-md z-[100]" overlayClassName="z-[95]">
         <DialogHeader>
           <DialogTitle>Link your {label} mailbox</DialogTitle>
           <DialogDescription>
@@ -652,7 +652,7 @@ function SmtpImapChoiceDialog({
 }) {
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onBack()}>
-      <DialogContent className="sm:max-w-xl">
+      <DialogContent className="sm:max-w-xl z-[100]" overlayClassName="z-[95]">
         <DialogHeader>
           <div className="flex items-center gap-2">
             <button type="button" onClick={onBack} aria-label="Back" className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground">
@@ -854,7 +854,7 @@ function SmtpImapFormDialog({
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onCancel()}>
-      <DialogContent className="sm:max-w-4xl max-h-[90vh] flex flex-col p-0 gap-0">
+      <DialogContent className="sm:max-w-4xl max-h-[90vh] flex flex-col p-0 gap-0 z-[100]" overlayClassName="z-[95]">
         <DialogHeader className="border-b border-border px-6 py-4">
           <DialogTitle>Connect SMTP/IMAP account</DialogTitle>
           <DialogDescription>Enter the sending (SMTP) and reading (IMAP) details for the mailbox.</DialogDescription>
@@ -1127,7 +1127,7 @@ function CsvImportDialog({
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) { reset(); onCancel(); } }}>
-      <DialogContent className="sm:max-w-xl">
+      <DialogContent className="sm:max-w-xl z-[100]" overlayClassName="z-[95]">
         <DialogHeader>
           <DialogTitle>Import email accounts</DialogTitle>
           <DialogDescription>Connect multiple SMTP/IMAP mailboxes at once from a CSV file.</DialogDescription>
