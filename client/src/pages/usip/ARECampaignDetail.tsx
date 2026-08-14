@@ -39,6 +39,7 @@ import { Separator } from "@/components/ui/separator";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { trpc } from "@/lib/trpc";
+import { AddExistingProspectsDialog } from "@/components/usip/are/AddExistingProspectsDialog";
 import { RichTextEditor } from "@/components/usip/RichTextEditor";
 import { sanitizeEmailHtml } from "@/lib/sanitizeHtml";
 import { isHtmlBody } from "@shared/emailBody";
@@ -46,44 +47,49 @@ import { ARE_SOURCES, ARE_DEFAULT_SOURCES, normalizeSources } from "@shared/areS
 import {
   Activity,
   ArrowLeft,
-  History,
   AtSign,
   BarChart2,
-  Download,
-  RefreshCcw,
   Bot,
   Brain,
   CheckCircle2,
   ChevronRight,
   Clock,
+  Download,
   ExternalLink,
   Eye,
   FlaskConical,
   Globe,
+  History,
   Linkedin,
+  ListOrdered,
   Loader2,
+  Megaphone,
   MessageSquare,
   Newspaper,
   Pause,
+  Pencil,
+  Pin,
   Play,
   Plus,
   Radar,
+  RefreshCcw,
   RefreshCw,
+  ScrollText,
   Search,
   Settings,
   Sparkles,
-  Pencil,
-  Pin,
-  StickyNote,
   Star,
+  StickyNote,
   Target,
   Trash2,
   TrendingDown,
   TrendingUp,
+  Upload,
+  UserPlus,
   Users,
   X,
   XCircle,
-  Zap, Megaphone, ScrollText, ListOrdered, Upload
+  Zap,
 } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
 import { Link, useParams, useLocation } from "wouter";
@@ -1788,6 +1794,9 @@ export default function ARECampaignDetail() {
     onError: (e) => toast.error(e.message),
   });
 
+  // ── Push people who already exist in the CRM into this campaign ──────────
+  const [addExistingOpen, setAddExistingOpen] = useState(false);
+
   // ── CSV import (bring-your-own-list) ─────────────────────────────────────
   const [importOpen, setImportOpen] = useState(false);
   const [importParsed, setImportParsed] = useState<ImportRow[]>([]);
@@ -1991,6 +2000,13 @@ export default function ARECampaignDetail() {
                 )}
               </div>
               <div className="flex items-center gap-2">
+                <Button
+                  size="sm" variant="outline" className="gap-1.5 text-xs"
+                  onClick={() => setAddExistingOpen(true)}
+                >
+                  <UserPlus className="size-3.5" />
+                  Add existing
+                </Button>
                 <Button
                   size="sm" variant="outline" className="gap-1.5 text-xs"
                   onClick={() => { setImportParsed([]); setImportFileName(""); setImportOpen(true); }}
@@ -2903,6 +2919,13 @@ export default function ARECampaignDetail() {
           </div>
         </SheetContent>
       </Sheet>
+
+      <AddExistingProspectsDialog
+        open={addExistingOpen}
+        onOpenChange={setAddExistingOpen}
+        campaignId={campaignId}
+        onPushed={() => { utils.are.prospects.list.invalidate(); utils.are.campaigns.get.invalidate(); }}
+      />
 
       {/* ── Import CSV Dialog ── */}
       <Dialog open={importOpen} onOpenChange={setImportOpen}>

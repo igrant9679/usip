@@ -58,6 +58,10 @@ const HANDLED_ELSEWHERE = new Set<string>([
   "components/usip/settings/SendgridSenderPicker.tsx::sendingAccounts.sendgridSenders",
   "components/usip/settings/SendgridSenderPicker.tsx::sendingAccounts.importSendgridSenders",
 
+  // Awaited in a try/catch that toasts; per-prospect refusals come back in
+  // the RESULT (skipped[]) and render inline, they are not errors.
+  "components/usip/are/AddExistingProspectsDialog.tsx::are.prospects.pushExisting",
+
   // Settings sections: awaited in a try/catch whose catch toasts.
   "components/usip/settings/BrandingSection.tsx::settings.save",
   "components/usip/settings/BrandingSection.tsx::brandVoice.save",

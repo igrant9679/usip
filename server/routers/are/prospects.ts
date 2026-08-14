@@ -30,7 +30,7 @@
  * decision, not something to infer.
  */
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, getTableColumns, ne, sql } from "drizzle-orm";
+import { and, desc, eq, getTableColumns, inArray, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
   areAbVariants,
@@ -1494,6 +1494,121 @@ export const prospectsRouter = router({
         after: { ...res, notes: res.notes.slice(0, 20) },
       });
       return res;
+    }),
+
+  /**
+   * Push people who ALREADY exist in the CRM into a campaign and run them
+   * through to a generated sequence (owner ask 2026-08-14).
+   *
+   * `addManual` below only ever accepted a person typed in by hand, and it had
+   * no UI caller at all — so there was no way to take someone already in People
+   * and put them into a campaign. The engine minting prospects itself was the
+   * only route in.
+   *
+   * Identity, exclusivity and dedup all go through the SAME queueIdentity
+   * vocabulary every other ingest seam uses. That is the point: a second way in
+   * that invents its own dedup rule is how one person ends up in two campaigns.
+   *
+   * Enrichment then sequence generation are chained server-side and NOT awaited
+   * — runSequenceAgent refuses a prospect with no intelligence, so the order
+   * matters, and both are LLM-bound work that would time out an HTTP request.
+   * The queue row is returned immediately; the campaign view already polls it.
+   */
+  pushExisting: workspaceProcedure
+    .input(z.object({
+      campaignId: z.number(),
+      /** CRM prospect ids (People), not queue row ids. */
+      prospectIds: z.array(z.number().int().positive()).min(1).max(100),
+      /** Generate the sequence once enrichment lands. Off = just queue them. */
+      generateSequence: z.boolean().default(true),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+
+      const [campaign] = await db.select({ id: areCampaigns.id })
+        .from(areCampaigns)
+        .where(and(eq(areCampaigns.id, input.campaignId), eq(areCampaigns.workspaceId, ctx.workspace.id)))
+        .limit(1);
+      if (!campaign) throw new TRPCError({ code: "NOT_FOUND", message: "Campaign not found" });
+
+      const people = await db
+        .select({
+          id: prospects.id, firstName: prospects.firstName, lastName: prospects.lastName,
+          email: prospects.email, linkedinUrl: prospects.linkedinUrl, phone: prospects.phone,
+          title: prospects.title, company: prospects.company, companyDomain: prospects.companyDomain,
+        })
+        .from(prospects)
+        .where(and(eq(prospects.workspaceId, ctx.workspace.id), inArray(prospects.id, input.prospectIds)));
+
+      const { workspaceQueueIdentityIndex, existingClaim } = await import("../../services/are/queueIdentity");
+      const index = await workspaceQueueIdentityIndex(ctx.workspace.id);
+
+      const added: Array<{ prospectId: number; queueId: number }> = [];
+      const skipped: Array<{ prospectId: number; reason: string }> = [];
+
+      for (const p of people) {
+        const shape = {
+          email: p.email, linkedinUrl: p.linkedinUrl,
+          firstName: p.firstName, lastName: p.lastName,
+          companyName: p.company, companyDomain: p.companyDomain,
+        };
+        // Identity-less rows are refused at ingest everywhere else; a manual
+        // push is no exception. Without a key this person cannot be deduped,
+        // and the queue fills with untraceable duplicates.
+        const { queueIdentityKeys } = await import("../../services/are/queueIdentity");
+        if (queueIdentityKeys(shape).length === 0) {
+          skipped.push({ prospectId: p.id, reason: "No email, LinkedIn URL, or name + company to identify them by" });
+          continue;
+        }
+        const claim = existingClaim(index, shape);
+        if (claim) {
+          skipped.push({
+            prospectId: p.id,
+            reason: claim.campaignId === input.campaignId
+              ? "Already in this campaign"
+              : `Already in another campaign (id ${claim.campaignId ?? "—"}) — a prospect can only be in one at a time`,
+          });
+          continue;
+        }
+
+        const [row] = await db.insert(prospectQueue).values({
+          workspaceId: ctx.workspace.id,
+          campaignId: input.campaignId,
+          sourceType: "internal_contact",
+          firstName: p.firstName, lastName: p.lastName,
+          email: p.email, linkedinUrl: p.linkedinUrl, phone: p.phone,
+          title: p.title, companyName: p.company, companyDomain: p.companyDomain,
+          // The link back to People — what keeps enrichment, field history and
+          // the drawer pointing at one person rather than a queue-only copy.
+          personProspectId: p.id,
+          icpMatchScore: 0,
+          enrichmentStatus: "pending",
+          sequenceStatus: "pending",
+        }).$returningId();
+
+        added.push({ prospectId: p.id, queueId: row.id });
+        // Claim the identity for the rest of THIS batch too, so pushing the
+        // same person twice in one selection cannot slip past.
+        for (const k of queueIdentityKeys(shape)) if (!index.has(k)) index.set(k, { rowId: row.id, campaignId: input.campaignId });
+      }
+
+      // Enrich → sequence, in that order, off the request path.
+      for (const a of added) {
+        void (async () => {
+          await runEnrichAgent(a.queueId, ctx.workspace.id);
+          if (input.generateSequence) {
+            await runSequenceAgent(a.queueId, ctx.workspace.id, input.campaignId, { force: false });
+          }
+        })().catch((e) => console.error(`[are.pushExisting] queue ${a.queueId}:`, (e as Error)?.message ?? e));
+      }
+
+      await recordAudit({
+        workspaceId: ctx.workspace.id, actorUserId: ctx.user.id,
+        action: "create", entityType: "are_push_existing", entityId: input.campaignId,
+        after: { added: added.length, skipped: skipped.length },
+      });
+      return { added, skipped };
     }),
 
   addManual: workspaceProcedure
