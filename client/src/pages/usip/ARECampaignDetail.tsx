@@ -1237,7 +1237,7 @@ function SequencesTab({ campaignId, campaign }: { campaignId: number; campaign: 
         <EmptyState
           icon={ListOrdered}
           title={search ? "No matches" : filter === "all" ? "No approved prospects yet" : `No prospects in '${STATUS_STYLE[filter]?.label ?? filter}'`}
-          description={search ? "Try a different search term." : filter === "all" ? "Approve prospects on the Prospects tab to populate this list." : "Switch filter above to see other statuses."}
+          description={search ? "Try a different search term." : filter === "all" ? "Add prospects to this campaign to populate this list." : "Switch filter above to see other statuses."}
         />
       ) : (
         <div className="border rounded-lg bg-card divide-y overflow-hidden">

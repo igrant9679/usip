@@ -1357,14 +1357,24 @@ export const prospectsRouter = router({
           ),
         )
         .limit(input.limit);
-      // Keep rows that either HAVE a sequence or COULD have one
-      // (approved/enrolled/etc. with successful enrichment).
+      // Show a prospect unless they were deliberately dismissed.
+      //
+      // This used to require a sequence OR an approved/enrolled status, which
+      // made the tab unusable exactly when it was needed: a "pending" prospect
+      // has no sequence, so it was filtered out, so it never appeared, so the
+      // Generate button next to it could never be clicked. Chicken and egg.
+      // Live: campaign 21 held 88 prospects — 87 pending, 1 enrolled — and this
+      // list returned ONE row.
+      //
+      // The row UI has always handled the empty case ("no sequence" + a
+      // Generate action), and the tab's own filter bar offers "pending", so the
+      // client was built for these rows all along. Only `skipped` is hidden,
+      // and only when there is nothing to show: a skipped prospect that already
+      // has a sequence still appears, because hiding real work is worse than
+      // showing a dismissed row.
       return rows.filter((r) => {
         const hasSeq = Array.isArray(r.generatedSequence) && (r.generatedSequence as unknown[]).length > 0;
-        const sequenceableStatus = ["approved", "enrolled", "completed", "replied"].includes(
-          String(r.sequenceStatus),
-        );
-        return hasSeq || sequenceableStatus;
+        return hasSeq || String(r.sequenceStatus) !== "skipped";
       });
     }),
 

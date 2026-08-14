@@ -139,9 +139,22 @@ function buildVarMap(ctx: MergeContext): Map<string, string> {
   m.set("revenueBand", a.revenueBand ?? "");
   m.set("region", a.region ?? "");
 
-  // Sender fields
-  m.set("senderName", s.name ?? "");
+  // Sender fields.
+  //
+  // A mailbox linked by address (SendGrid domain-authenticated senders, most
+  // SMTP mailboxes) carries no fromName, so `s.name` is null and the
+  // senderName token rendered as NOTHING — a campaign signature of
+  // "Best," / senderName / "CommunityForce" went out as "Best," / blank line /
+  // "CommunityForce". Falling back to the address is not a guess:
+  // asrar.mehraj@… is that person's own name, written by them, and it beats a
+  // hole in the sign-off.
+  const senderName = (s.name ?? "").trim() || personNameFromEmailLocal(s.email);
+  m.set("senderName", senderName);
   m.set("senderEmail", s.email ?? "");
+  // First/last split so a signature can sign off with just the first name.
+  const senderParts = senderName.split(/\s+/).filter(Boolean);
+  m.set("senderFirstName", senderParts[0] ?? "");
+  m.set("senderLastName", senderParts.slice(1).join(" "));
   m.set("bookingLink", s.bookingUrl ?? "");
 
   // Custom fields: {{customField.key}}
@@ -366,6 +379,26 @@ export function bodyToHtmlDocument(body: string): string {
  * one-click unsubscribe link; otherwise it falls back to a `mailto:` to
  * `senderEmail`. Produces both a plain-text and an HTML footer.
  */
+/**
+ * "asrar.mehraj@cforcefederal.com" → "Asrar Mehraj".
+ *
+ * Only splits on the separators people actually use in a work address, and
+ * refuses anything that does not look like a name — a shared mailbox like
+ * "info@" or "sales@" must not sign an email "Info".
+ */
+export function personNameFromEmailLocal(email?: string | null): string {
+  const local = String(email ?? "").split("@")[0]?.trim().toLowerCase() ?? "";
+  if (!local) return "";
+  const GENERIC = /^(info|sales|hello|hi|team|support|contact|admin|help|no-?reply|do-?not-?reply|marketing|billing|careers|jobs|press|office)$/;
+  if (GENERIC.test(local)) return "";
+  const parts = local.split(/[._-]+/).filter(Boolean)
+    // Drop trailing digits people append to disambiguate ("jsmith2").
+    .map((w) => w.replace(/\d+$/, ""))
+    .filter((w) => w.length > 1);
+  if (parts.length === 0) return "";
+  return parts.map((w) => w[0]!.toUpperCase() + w.slice(1)).join(" ");
+}
+
 export function renderSequenceOptOut(
   message: string | null | undefined,
   opts: { unsubscribeUrl?: string; senderEmail?: string },
