@@ -44,6 +44,7 @@ import ContactDetail from "@/pages/usip/ContactDetail";
 import LeadDetail from "@/pages/usip/LeadDetail";
 import OpportunityDetail from "@/pages/usip/OpportunityDetail";
 import SettingsPipelines from "@/pages/usip/SettingsPipelines";
+import LinkedInLimits from "@/pages/usip/LinkedInLimits";
 import Forecast from "@/pages/usip/Forecast";
 import FindProspects from "@/pages/usip/FindProspects";
 import Pipeline from "@/pages/usip/Pipeline";
@@ -444,6 +445,7 @@ function Router() {
       <Route path="/opportunities/:id"><AuthGate><OpportunityDetail /></AuthGate></Route>
       <Route path="/pipeline"><AuthGate><Pipeline /></AuthGate></Route>
       <Route path="/settings/pipelines"><AuthGate><SettingsPipelines /></AuthGate></Route>
+      <Route path="/settings/linkedin-limits"><AuthGate><LinkedInLimits /></AuthGate></Route>
       <Route path="/forecast"><AuthGate><Forecast /></AuthGate></Route>
       <Route path="/sequences"><AuthGate><Sequences /></AuthGate></Route>
       <Route path="/sequences/:id/canvas"><AuthGate><SequenceCanvas /></AuthGate></Route>

@@ -907,6 +907,84 @@ export const emailLog = mysqlTable(
 export type EmailLog = typeof emailLog.$inferSelect;
 
 /* ──────────────────────────────────────────────────────────────────────────
+   LinkedIn Activity Limits — how hard we may work a connected account
+   (migration 0167)
+
+   LinkedIn restricts accounts on BEHAVIOUR, and the protections used to be
+   four unrelated constants in four files that could not see each other, all of
+   them daily — while the invite ceiling that actually gets accounts restricted
+   is weekly. @shared/linkedinLimits explains the whole reasoning.
+
+   One row per (workspace, account). `unipileAccountId` NULL is the workspace
+   DEFAULT that unconfigured accounts inherit, so a new mailbox is governed the
+   moment it connects rather than running unlimited until someone notices.
+   ────────────────────────────────────────────────────────────────────────── */
+export const linkedinActivityLimits = mysqlTable(
+  "linkedin_activity_limits",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    /** NULL = the workspace default applied to every account without a row. */
+    unipileAccountId: varchar("unipileAccountId", { length: 200 }),
+    enabled: boolean("enabled").default(true).notNull(),
+    /** The binding one. Daily caps smooth activity beneath it. */
+    weeklyInviteCap: int("weeklyInviteCap").default(80).notNull(),
+    dailyInviteCap: int("dailyInviteCap").default(15).notNull(),
+    dailyMessageCap: int("dailyMessageCap").default(40).notNull(),
+    dailyLookupCap: int("dailyLookupCap").default(100).notNull(),
+    /** Every kind together — the budget the four separate caps never had. */
+    dailyActionCap: int("dailyActionCap").default(120).notNull(),
+    minSpacingSeconds: int("minSpacingSeconds").default(90).notNull(),
+    jitterSeconds: int("jitterSeconds").default(60).notNull(),
+    workingHourStart: int("workingHourStart").default(8).notNull(),
+    workingHourEnd: int("workingHourEnd").default(18).notNull(),
+    /** ISO weekdays, comma separated. "1,2,3,4,5" = Mon–Fri. */
+    workingDays: varchar("workingDays", { length: 32 }).default("1,2,3,4,5").notNull(),
+    timezone: varchar("timezone", { length: 64 }).default("UTC").notNull(),
+    warmupDays: int("warmupDays").default(14).notNull(),
+    updatedByUserId: int("updatedByUserId"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    byWs: index("ix_lal_ws").on(t.workspaceId),
+    byAccount: uniqueIndex("ix_lal_ws_acct").on(t.workspaceId, t.unipileAccountId),
+  }),
+);
+export type LinkedinActivityLimit = typeof linkedinActivityLimits.$inferSelect;
+
+/**
+ * One row per action taken on a LinkedIn account, of any kind.
+ *
+ * `linkedin_daily_usage` already counted lookups per day, but a counter cannot
+ * answer the two questions that decide whether an account looks automated:
+ * how many actions in the trailing SEVEN days, and how long since the last
+ * one. A ledger answers daily, weekly and spacing from one place, and lets the
+ * panel show what an account has actually been doing.
+ */
+export const linkedinActivityLog = mysqlTable(
+  "linkedin_activity_log",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    unipileAccountId: varchar("unipileAccountId", { length: 200 }).notNull(),
+    /** invite | message | lookup | reaction — @shared/linkedinLimits. */
+    kind: varchar("kind", { length: 16 }).notNull(),
+    /** What triggered it: social_autopilot | enrichment | manual | are_engine. */
+    source: varchar("source", { length: 32 }),
+    /** The person acted on, when there is one — for the panel's recent list. */
+    targetIdentifier: varchar("targetIdentifier", { length: 200 }),
+    occurredAt: timestamp("occurredAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    // The gate's own query: one account, trailing window, newest first.
+    byAccountTime: index("ix_lact_acct_time").on(t.unipileAccountId, t.occurredAt),
+    byWs: index("ix_lact_ws_time").on(t.workspaceId, t.occurredAt),
+  }),
+);
+export type LinkedinActivityLogRow = typeof linkedinActivityLog.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
    Customer Success
    ────────────────────────────────────────────────────────────────────────── */
 

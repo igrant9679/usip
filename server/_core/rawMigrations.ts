@@ -3644,6 +3644,75 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0167: LinkedIn activity limits (owner ask 2026-08-14) ────────────────
+  // The protections were four unrelated constants in four files — 100 lookups,
+  // 20 invites, 50 DMs, 25 re-engagements — none of which could see the
+  // others, so one account could take 170 actions in a day with every
+  // subsystem correctly believing it was inside its limit. All four were
+  // DAILY, while the invite ceiling LinkedIn actually restricts on is WEEKLY:
+  // 20/day is 140/week, past the ~100/week figure widely reported since 2022.
+  // Respecting the daily cap every single day was a way to breach the real one.
+  //
+  // Nothing throttled by time of day, nothing spaced actions apart (twenty
+  // invites went out back-to-back in one tick), and a LinkedIn account
+  // connected yesterday got the same allowance as one held for a decade.
+  //
+  // The default row (unipileAccountId NULL) is seeded per workspace at first
+  // read, so an account is governed the moment it connects rather than running
+  // unlimited until someone visits the settings page.
+  {
+    name: "0167_linkedin_activity_limits.sql",
+    statements: [
+      "CREATE TABLE IF NOT EXISTS `linkedin_activity_limits` (" +
+        "`id` int NOT NULL AUTO_INCREMENT PRIMARY KEY," +
+        "`workspaceId` int NOT NULL," +
+        "`unipileAccountId` varchar(200) NULL," +
+        "`enabled` boolean NOT NULL DEFAULT true," +
+        "`weeklyInviteCap` int NOT NULL DEFAULT 80," +
+        "`dailyInviteCap` int NOT NULL DEFAULT 15," +
+        "`dailyMessageCap` int NOT NULL DEFAULT 40," +
+        "`dailyLookupCap` int NOT NULL DEFAULT 100," +
+        "`dailyActionCap` int NOT NULL DEFAULT 120," +
+        "`minSpacingSeconds` int NOT NULL DEFAULT 90," +
+        "`jitterSeconds` int NOT NULL DEFAULT 60," +
+        "`workingHourStart` int NOT NULL DEFAULT 8," +
+        "`workingHourEnd` int NOT NULL DEFAULT 18," +
+        "`workingDays` varchar(32) NOT NULL DEFAULT '1,2,3,4,5'," +
+        "`timezone` varchar(64) NOT NULL DEFAULT 'UTC'," +
+        "`warmupDays` int NOT NULL DEFAULT 14," +
+        "`updatedByUserId` int NULL," +
+        "`createdAt` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP," +
+        "`updatedAt` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP" +
+        ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+      "CREATE INDEX `ix_lal_ws` ON `linkedin_activity_limits` (`workspaceId`)",
+      // Unique on (workspace, account) so a default row and a per-account
+      // override cannot both be created twice by concurrent first reads.
+      "CREATE UNIQUE INDEX `ix_lal_ws_acct` ON `linkedin_activity_limits` (`workspaceId`, `unipileAccountId`)",
+
+      "CREATE TABLE IF NOT EXISTS `linkedin_activity_log` (" +
+        "`id` int NOT NULL AUTO_INCREMENT PRIMARY KEY," +
+        "`workspaceId` int NOT NULL," +
+        "`unipileAccountId` varchar(200) NOT NULL," +
+        "`kind` varchar(16) NOT NULL," +
+        "`source` varchar(32) NULL," +
+        "`targetIdentifier` varchar(200) NULL," +
+        "`occurredAt` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP" +
+        ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+      "CREATE INDEX `ix_lact_acct_time` ON `linkedin_activity_log` (`unipileAccountId`, `occurredAt`)",
+      "CREATE INDEX `ix_lact_ws_time` ON `linkedin_activity_log` (`workspaceId`, `occurredAt`)",
+
+      // Seed the ledger from the lookups already counted, so the first week of
+      // readouts is not blank and today's budget accounts for work already
+      // done. Only today's row: older per-day counts carry no clock time, and
+      // inventing one would corrupt the spacing signal.
+      "INSERT INTO `linkedin_activity_log` (`workspaceId`, `unipileAccountId`, `kind`, `source`, `occurredAt`) " +
+        "SELECT ua.`workspaceId`, u.`unipile_account_id`, 'lookup', 'legacy_counter', u.`updatedAt` " +
+        "FROM `linkedin_daily_usage` u " +
+        "JOIN `unipile_accounts` ua ON ua.`unipileAccountId` = u.`unipile_account_id` " +
+        "WHERE u.`usage_date` = DATE_FORMAT(UTC_DATE(), '%Y-%m-%d') AND u.`count` > 0",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

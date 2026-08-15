@@ -17,6 +17,7 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { getDb } from "../db";
+import { checkLinkedInAction, recordLinkedInAction } from "./linkedin/activityGate";
 import {
   unipileAccounts,
   linkedinLookupLog,
@@ -289,6 +290,41 @@ export async function lookupProfile(opts: {
     chosen = pool.find((a) => a.remainingToday > 0) ?? pool[0];
   }
 
+  /**
+   * Account-level limits (migration 0167), checked BEFORE the atomic reserve
+   * below because a refusal here should not consume a slot.
+   *
+   * This is the gate that sees the whole account: its trailing-week volume,
+   * everything else it has done today across invites and messages, the spacing
+   * since its last action, and the hours it is allowed to work. The per-day
+   * reservation underneath stays exactly as it was — it is atomic and it is
+   * the thing that survives concurrency, which this check deliberately is not.
+   */
+  const gate = await checkLinkedInAction({
+    workspaceId: opts.workspaceId,
+    unipileAccountId: chosen.unipileAccountId,
+    kind: "lookup",
+  });
+  if (!gate.allowed) {
+    await db.insert(linkedinLookupLog).values({
+      workspaceId: opts.workspaceId,
+      requestedByUserId: opts.userId,
+      unipileAccountId: chosen.unipileAccountId,
+      accountOwnerUserId: chosen.ownerUserId,
+      targetUrl: opts.linkedinUrl,
+      targetIdentifier: identifier,
+      status: "blocked",
+      error: gate.message.slice(0, 500),
+    } as never);
+    return {
+      ok: false,
+      identifier,
+      viaAccountId: chosen.unipileAccountId,
+      profile: null,
+      message: gate.message,
+    };
+  }
+
   // Rate-limit gate — ATOMIC reserve. Concurrent lookups on the same
   // account can't all slip past (the old `remainingToday <= 0` read-check
   // had a TOCTOU window that risked blowing LinkedIn's per-account
@@ -320,6 +356,15 @@ export async function lookupProfile(opts: {
   // fails so a failed request doesn't permanently consume daily capacity.
   try {
     const profile = await getLinkedInProfile(chosen.unipileAccountId, identifier);
+    // Into the shared ledger, so invites and messages on this account see the
+    // work the enrichment engine has already done with it today.
+    await recordLinkedInAction({
+      workspaceId: opts.workspaceId,
+      unipileAccountId: chosen.unipileAccountId,
+      kind: "lookup",
+      source: "enrichment",
+      targetIdentifier: identifier,
+    });
     await db.insert(linkedinLookupLog).values({
       workspaceId: opts.workspaceId,
       requestedByUserId: opts.userId,

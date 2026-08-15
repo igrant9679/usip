@@ -32,6 +32,7 @@ import {
   workspaceSettings,
 } from "../../drizzle/schema";
 import { getDb } from "../db";
+import { checkLinkedInAction, recordLinkedInAction } from "./linkedin/activityGate";
 import { invokeLLM } from "../_core/llm";
 import { HUMAN_COPY_RULES, humanizeAiCopy } from "./humanCopy";
 import { listUserPosts, reactToPost, sendLinkedInInvitation, sendMessage } from "../lib/unipile";
@@ -191,6 +192,33 @@ export async function handleNewRelation(payload: NewRelationPayload): Promise<st
     return "approval_task";
   }
 
+  /**
+   * Account-level limits first (migration 0167). This governs the risk that
+   * actually gets an account restricted — the trailing-week volume, the whole
+   * day's activity across every action type, the spacing between actions and
+   * the hours they run in — none of which the per-workspace daily count below
+   * can see. That count stays as a second, workspace-wide ceiling.
+   */
+  const gate = await checkLinkedInAction({ workspaceId, unipileAccountId: accountId, kind: "message" });
+  if (!gate.allowed) {
+    await db.insert(tasks).values({
+      workspaceId,
+      title: `Send LinkedIn opener to ${name} (held by activity limits)`,
+      description: `${opener}
+
+— Held automatically: ${gate.message}`,
+      type: "social_touch",
+      priority: "normal",
+      status: "open",
+      dueAt: new Date(Date.now() + 86400000),
+      ownerUserId,
+      relatedType: linkedContactId ? "contact" : null,
+      relatedId: linkedContactId,
+      source: "ai",
+    } as never);
+    return "capped_task";
+  }
+
   // Auto mode: enforce the per-workspace daily send cap.
   const cap = ws?.cap ?? 50;
   // UTC — LinkedIn sends are the account-risk path; the window must not move
@@ -227,6 +255,12 @@ export async function handleNewRelation(payload: NewRelationPayload): Promise<st
 
   try {
     const sent = await sendMessage({ accountId, attendeesIds: [providerId], text: opener });
+    // Recorded AFTER the send: a refused or failed call is not activity
+    // LinkedIn ever saw, and counting it would shrink the budget for nothing.
+    await recordLinkedInAction({
+      workspaceId, unipileAccountId: accountId, kind: "message",
+      source: "social_autopilot", targetIdentifier: providerId,
+    });
     await db.insert(unipileMessages).values({
       workspaceId,
       unipileAccountId: accountId,
@@ -297,12 +331,18 @@ Rules: under 180 characters, warm and specific, no pitch, no "I hope this finds 
  * lands on a slightly warmer relationship. Never throws — any failure (no
  * posts, private profile, wrong id) is swallowed so it can't block the invite.
  */
-async function warmBeforeInvite(accountId: string, identifier: string): Promise<void> {
+async function warmBeforeInvite(workspaceId: number, accountId: string, identifier: string): Promise<void> {
   try {
     const { items } = await listUserPosts(accountId, identifier, { limit: 1 });
     const socialId = items[0]?.social_id;
     if (socialId) {
       await reactToPost(accountId, socialId, "like");
+      // A like is activity LinkedIn sees. Left out of the ledger, the account's
+      // real daily total would be understated by one per invite.
+      await recordLinkedInAction({
+        workspaceId, unipileAccountId: accountId, kind: "reaction",
+        source: "social_autopilot", targetIdentifier: identifier,
+      });
       console.log(`[SocialAutopilot] warmed ${identifier} (liked latest post)`);
     }
   } catch (err) {
@@ -392,12 +432,33 @@ export async function runSocialAutopilotInvitesForWorkspace(
     }
 
     // auto
+    /**
+     * Account limits, per sending account (migration 0167). The workspace
+     * budget above cannot see them: it counts a day, while the ceiling that
+     * gets accounts restricted is the trailing WEEK, and it says nothing about
+     * spacing, hours, or how much OTHER work the same account has done today.
+     *
+     * A refusal ends the loop rather than skipping to the next lead — every
+     * remaining candidate on this account would hit the identical verdict, and
+     * spinning through them would burn the run for nothing.
+     */
+    const gate = await checkLinkedInAction({ workspaceId, unipileAccountId: ownerAcct, kind: "invite" });
+    if (!gate.allowed) {
+      console.log(`[SocialAutopilot] invites held for ${ownerAcct}: ${gate.message}`);
+      out.skipped++;
+      break;
+    }
+
     // Warming touch: like the lead's most recent post just before inviting —
     // best-effort, never blocks the invite (wrong/absent post just no-ops).
-    await warmBeforeInvite(ownerAcct, slug);
+    await warmBeforeInvite(workspaceId, ownerAcct, slug);
     const note = await generateInviteNote(workspaceId, { name, title: lead.title, company: lead.company });
     try {
       await sendLinkedInInvitation({ accountId: ownerAcct, providerId: slug, message: note });
+      await recordLinkedInAction({
+        workspaceId, unipileAccountId: ownerAcct, kind: "invite",
+        source: "social_autopilot", targetIdentifier: slug,
+      });
       await db.insert(unipileInvites).values({
         workspaceId, userId: ownerUserId ?? fallback.userId ?? 0, unipileAccountId: ownerAcct,
         recipientProviderId: slug, recipientName: name, message: note, status: "pending",
