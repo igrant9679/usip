@@ -56,6 +56,7 @@ import { searchLinkedInPeople, type UnipileLinkedInSearchHit } from "./lib/unipi
 import { listUsableAccounts } from "./services/linkedinLookup";
 import { randomUUID } from "node:crypto";
 import { sendWorkspaceEmail, sendCampaignEmailViaPool } from "./emailDelivery";
+import { dispatchLinkedInStep, HEALABLE_NO_LINKEDIN } from "./services/are/linkedinStep";
 import { injectTracking } from "./mergeVars";
 import { resolveBookingUrl } from "./mergeVars";
 import { ARE_DEFAULT_SOURCES, normalizeSources } from "@shared/areSources";
@@ -679,6 +680,39 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
           await emitLog(wsId, campId, "dispatch", "info",
             `Re-scheduled ${healable.length} failed step(s) (email resolved or send infra recovered)`);
         }
+
+        /**
+         * The same heal for LinkedIn steps (2026-08-15). A step that failed
+         * only because the prospect had no LinkedIn URL becomes schedulable
+         * once enrichment finds one — and enrichment adds them continuously,
+         * so without this the step dies permanently on a fact that stopped
+         * being true.
+         *
+         * Separate from the email heal above because its predicate is
+         * different: that one requires an email address, this one a LinkedIn
+         * profile. One query with both would revive each on the other's
+         * evidence.
+         */
+        const linkedinHealable = await db
+          .select({ id: areExecutionQueue.id, prospectQueueId: areExecutionQueue.prospectQueueId })
+          .from(areExecutionQueue)
+          .innerJoin(prospectQueue, eq(areExecutionQueue.prospectQueueId, prospectQueue.id))
+          .where(and(
+            eq(areExecutionQueue.campaignId, campId),
+            eq(areExecutionQueue.workspaceId, wsId),
+            eq(areExecutionQueue.status, "failed"),
+            eq(areExecutionQueue.channel, "linkedin"),
+            eq(areExecutionQueue.failureReason, HEALABLE_NO_LINKEDIN),
+            isNotNull(prospectQueue.linkedinUrl),
+          ));
+        if (linkedinHealable.length > 0) {
+          await db
+            .update(areExecutionQueue)
+            .set({ status: "scheduled", failureReason: null, executedAt: null })
+            .where(inArray(areExecutionQueue.id, linkedinHealable.map((h) => h.id)));
+          await emitLog(wsId, campId, "dispatch", "info",
+            `Re-scheduled ${linkedinHealable.length} LinkedIn step(s) (profile URL resolved)`);
+        }
       } catch (e) {
         console.error(`[AreEngine] campaign ${campId} step heal failed:`, e);
       }
@@ -699,15 +733,105 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
 
       // Resolved lazily on the first email step, then reused for the batch.
       let bookingUrl: string | undefined;
+      /**
+       * Set once a LinkedIn step is refused for a reason every other LinkedIn
+       * step this tick would share — throttled by the activity gate, or no
+       * account connected. Re-asking once per queued step would spend three
+       * queries each to be told the same thing.
+       */
+      let linkedinHeld: string | null = null;
+
       for (const step of due) {
-        // Non-email channels are not wired in v1 — skip cleanly so they
-        // never block the queue.
+        /**
+         * LINKEDIN (wired 2026-08-15). Previously every non-email step was
+         * skipped with "not wired" — on campaign 13 that was 57 of 126 steps,
+         * so a multi-channel cadence silently ran as email-only.
+         *
+         * Safe to wire now ONLY because the activity gate exists (migration
+         * 0167): adding a second automated source of LinkedIn activity to an
+         * account that already runs Social Autopilot, with no shared budget
+         * between them, is how accounts get restricted.
+         */
+        if (step.channel === "linkedin") {
+          if (!channels.linkedin) {
+            await db
+              .update(areExecutionQueue)
+              .set({
+                status: "skipped",
+                failureReason: "LinkedIn channel disabled on campaign",
+                executedAt: new Date(),
+              })
+              .where(eq(areExecutionQueue.id, step.id));
+            continue;
+          }
+          if (linkedinHeld) continue; // already established for this tick
+
+          const [lp] = await db
+            .select()
+            .from(prospectQueue)
+            .where(eq(prospectQueue.id, step.prospectQueueId))
+            .limit(1);
+          if (!lp) {
+            await db
+              .update(areExecutionQueue)
+              .set({ status: "failed", failureReason: "Prospect not found", executedAt: new Date() })
+              .where(eq(areExecutionQueue.id, step.id));
+            continue;
+          }
+          if (lp.sequenceStatus !== "enrolled") {
+            await db
+              .update(areExecutionQueue)
+              .set({
+                status: "skipped",
+                failureReason: `Prospect no longer enrolled (status: ${lp.sequenceStatus})`,
+                executedAt: new Date(),
+              })
+              .where(eq(areExecutionQueue.id, step.id));
+            continue;
+          }
+
+          const lmc = (step.messageContent ?? {}) as { body?: string };
+          const outcome = await dispatchLinkedInStep({
+            workspaceId: wsId,
+            campaignId: campId,
+            campaignOwnerUserId: campaign.ownerUserId ?? null,
+            prospect: lp,
+            body: applyMerge(lmc.body ?? "", lp),
+            stepIndex: step.stepIndex ?? 0,
+          });
+
+          if (outcome.kind === "deferred") {
+            // Row stays SCHEDULED — this is a wait, not a failure.
+            if (outcome.stopChannel) {
+              linkedinHeld = outcome.reason;
+              await emitLog(wsId, campId, "dispatch", "info", `LinkedIn steps held: ${outcome.reason}`);
+            }
+            continue;
+          }
+          await db
+            .update(areExecutionQueue)
+            .set(
+              outcome.kind === "sent"
+                ? { status: "sent", executedAt: new Date(), failureReason: null }
+                : { status: outcome.kind === "skipped" ? "skipped" : "failed", failureReason: outcome.reason, executedAt: new Date() },
+            )
+            .where(eq(areExecutionQueue.id, step.id));
+          if (outcome.kind === "sent") {
+            result.sent++;
+            await emitLog(wsId, campId, "dispatch", "info",
+              `LinkedIn ${outcome.via} sent to ${lp.firstName ?? ""} ${lp.lastName ?? ""}`.trim());
+          }
+          continue;
+        }
+
+        // Channels still unwired (sms, voice) — skip cleanly so they never
+        // block the queue.
         if (step.channel !== "email") {
           await db
             .update(areExecutionQueue)
             .set({
               status: "skipped",
-              failureReason: `Channel '${step.channel}' not wired — ARE engine v1 sends email only`,
+              failureReason: `Channel '${step.channel}' not wired — the ARE engine sends email and LinkedIn`,
               executedAt: new Date(),
             })
             .where(eq(areExecutionQueue.id, step.id));
@@ -918,7 +1042,12 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
           total: sql<number>`count(*)`,
           stillScheduled: sql<number>`sum(case when ${areExecutionQueue.status} = 'scheduled' then 1 else 0 end)`,
           sent: sql<number>`sum(case when ${areExecutionQueue.status} = 'sent' then 1 else 0 end)`,
-          healableFailed: sql<number>`sum(case when ${areExecutionQueue.status} = 'failed' and (${areExecutionQueue.failureReason} = ${HEALABLE_NO_EMAIL} or ${areExecutionQueue.failureReason} like ${`${HEALABLE_POOL_PREFIX}%`}) then 1 else 0 end)`,
+          // HEALABLE_NO_LINKEDIN joins the two email reasons here (2026-08-15).
+          // The completion sweep and the heal must agree on what "revivable"
+          // means — them disagreeing is exactly how the 08-08 lockout happened,
+          // where sequences were marked complete while still healable and so
+          // put beyond the heal that would have revived them.
+          healableFailed: sql<number>`sum(case when ${areExecutionQueue.status} = 'failed' and (${areExecutionQueue.failureReason} = ${HEALABLE_NO_EMAIL} or ${areExecutionQueue.failureReason} = ${HEALABLE_NO_LINKEDIN} or ${areExecutionQueue.failureReason} like ${`${HEALABLE_POOL_PREFIX}%`}) then 1 else 0 end)`,
         })
         .from(areExecutionQueue)
         .where(eq(areExecutionQueue.prospectQueueId, p.id));

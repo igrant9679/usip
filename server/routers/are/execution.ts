@@ -26,7 +26,7 @@
  * the metrics layer automatically, but no counter anywhere needs updating.
  */
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
   areCampaigns,
@@ -860,6 +860,89 @@ export const executionRouter = router({
         count: Number(r.count) || 0,
         lastAt: r.lastAt,
       }));
+    }),
+
+  /**
+   * Put steps skipped as "channel not wired" back on the queue.
+   *
+   * Wiring LinkedIn (2026-08-15) does not revive the steps already skipped for
+   * it — dispatch only picks up `scheduled` rows, and a migration that flipped
+   * them silently would be the wrong shape for this decision. Those steps were
+   * written for a moment that has passed: on the campaigns as they stand, the
+   * oldest is due 19 June. Reviving a step-3 follow-up whose step 1 never went
+   * out reads strangely to the recipient, so it is the owner's call, not a
+   * side effect of a deploy.
+   *
+   * `dryRun` defaults TRUE: the first call tells you how many rows it would
+   * touch. Nothing here sends anything — it re-queues, and the daily cap, the
+   * campaign's own paused/active state and the LinkedIn activity gate all
+   * still stand between a re-queued step and an actual send.
+   */
+  reviveSkippedSteps: workspaceProcedure
+    .input(z.object({
+      campaignId: z.number(),
+      channel: z.enum(["linkedin", "sms", "voice"]).default("linkedin"),
+      /** Re-schedule for now, rather than leaving a due date months past. */
+      rescheduleNow: z.boolean().default(true),
+      dryRun: z.boolean().default(true),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // Matched on the reason PREFIX so both the old wording ("ARE engine v1
+      // sends email only") and the current one qualify — the sentence changed
+      // when the channel was wired.
+      const reasonLike = `Channel '${input.channel}' not wired%`;
+      const rows = await db
+        .select({ id: areExecutionQueue.id, prospectQueueId: areExecutionQueue.prospectQueueId })
+        .from(areExecutionQueue)
+        .where(and(
+          eq(areExecutionQueue.workspaceId, ctx.workspace.id),
+          eq(areExecutionQueue.campaignId, input.campaignId),
+          eq(areExecutionQueue.channel, input.channel as never),
+          eq(areExecutionQueue.status, "skipped" as never),
+          sql`${areExecutionQueue.failureReason} LIKE ${reasonLike}`,
+        ));
+      if (input.dryRun || rows.length === 0) {
+        return { dryRun: true, wouldRevive: rows.length, revived: 0 };
+      }
+      /**
+       * The clause is written out here rather than shared with the SELECT
+       * above through a variable. `tenantScope.test.ts` rejects a destructive
+       * statement whose WHERE it cannot read — and it is right to: an
+       * unreadable UPDATE passes every scoping check by default, so a later
+       * edit could drop the workspace predicate and nothing would notice.
+       * Duplication is the price of the statement being auditable where it is.
+       */
+      await db
+        .update(areExecutionQueue)
+        .set({
+          status: "scheduled",
+          failureReason: null,
+          executedAt: null,
+          ...(input.rescheduleNow ? { scheduledAt: new Date() } : {}),
+        } as never)
+        .where(and(
+          eq(areExecutionQueue.workspaceId, ctx.workspace.id),
+          eq(areExecutionQueue.campaignId, input.campaignId),
+          eq(areExecutionQueue.channel, input.channel as never),
+          eq(areExecutionQueue.status, "skipped" as never),
+          sql`${areExecutionQueue.failureReason} LIKE ${reasonLike}`,
+        ));
+      // Same reason the email heal revives its prospects: the completion sweep
+      // only scans "enrolled", so a re-queued step under a "completed" prospect
+      // would dispatch beneath a lying status.
+      const ids = Array.from(new Set(rows.map((r) => r.prospectQueueId)));
+      if (ids.length) {
+        await db
+          .update(prospectQueue)
+          .set({ sequenceStatus: "enrolled" } as never)
+          .where(and(
+            inArray(prospectQueue.id, ids),
+            eq(prospectQueue.sequenceStatus, "completed" as never),
+          ));
+      }
+      return { dryRun: false, wouldRevive: rows.length, revived: rows.length };
     }),
 
   /** Ingest an incoming signal (called from webhook or manual test) */
