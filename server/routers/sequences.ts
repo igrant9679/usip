@@ -1828,14 +1828,38 @@ export async function autoSendForAllWorkspaces(): Promise<{
     if (archivedWs.has(ws.workspaceId)) continue; // archived workspaces are frozen (2026-08-12)
     const scoreMin = ws.aiAutoSendScoreMin ?? 70;
 
+    // The recipient's score decides whether a draft can send, so it decides
+    // the SET — it cannot be a post-limit skip.
+    //
+    // This read used to take an arbitrary 50 pending_review drafts (no ORDER
+    // BY) and then apply the score gate in JS. A draft refused by that gate
+    // keeps its pending_review status, so it comes back next tick, and the
+    // tick after that; the comment below already records that unscored
+    // contacts "sat forever pending review". Fifty of those permanently
+    // occupy the page and auto-send stops for every sendable draft behind
+    // them — silently, because a tick that dispatches nothing looks exactly
+    // like a tick with nothing to dispatch.
+    //
+    // Lead first, then contact: mirrors the old `if (toLeadId) … else if
+    // (toContactId)` precedence exactly. A COALESCE would NOT — it would
+    // fall through to the contact's score when a lead-addressed draft has a
+    // null one, which is a different rule.
+    const recipientScoreExpr = sql<number | null>`CASE WHEN ${emailDrafts.toLeadId} IS NOT NULL THEN ${leads.score} ELSE ${contacts.relStrengthScore} END`;
+    const sendableGate = ws.aiAutoSendAllowUnscored
+      ? sql`(${recipientScoreExpr} IS NULL OR ${recipientScoreExpr} >= ${scoreMin})`
+      : sql`(${recipientScoreExpr} IS NOT NULL AND ${recipientScoreExpr} >= ${scoreMin})`;
+
     const candidateDrafts = await db
       .select({
         id: emailDrafts.id,
         toContactId: emailDrafts.toContactId,
         toLeadId: emailDrafts.toLeadId,
         createdByUserId: emailDrafts.createdByUserId,
+        recipientScore: recipientScoreExpr,
       })
       .from(emailDrafts)
+      .leftJoin(leads, eq(leads.id, emailDrafts.toLeadId))
+      .leftJoin(contacts, eq(contacts.id, emailDrafts.toContactId))
       .where(
         and(
           eq(emailDrafts.workspaceId, ws.workspaceId),
@@ -1847,9 +1871,37 @@ export async function autoSendForAllWorkspaces(): Promise<{
           // with aiGenerated:false), so automated sequence outreach never
           // auto-sent at all. Dropped it; sequenceId-scoping is correct.
           isNotNull(emailDrafts.sequenceId),
+          sendableGate,
         ),
       )
+      .orderBy(asc(emailDrafts.id)) // oldest first: a queue, not a lottery
       .limit(50); // bounded per workspace per tick
+
+    // Blocked drafts never reach the loop now, but the reason they are
+    // blocked is the most useful thing this cron knows — the summary exists
+    // to say "you have 12 unscored contacts stopping auto-send". Counting
+    // them here keeps that, and makes it a workspace TOTAL instead of
+    // however many happened to fall inside one arbitrary page.
+    const [blocked] = await db
+      .select({
+        nullScore: sql<number>`SUM(CASE WHEN ${recipientScoreExpr} IS NULL AND ${ws.aiAutoSendAllowUnscored ? sql`FALSE` : sql`TRUE`} THEN 1 ELSE 0 END)`,
+        lowScore: sql<number>`SUM(CASE WHEN ${recipientScoreExpr} IS NOT NULL AND ${recipientScoreExpr} < ${scoreMin} THEN 1 ELSE 0 END)`,
+      })
+      .from(emailDrafts)
+      .leftJoin(leads, eq(leads.id, emailDrafts.toLeadId))
+      .leftJoin(contacts, eq(contacts.id, emailDrafts.toContactId))
+      .where(
+        and(
+          eq(emailDrafts.workspaceId, ws.workspaceId),
+          eq(emailDrafts.status, "pending_review"),
+          isNotNull(emailDrafts.sequenceId),
+        ),
+      );
+    const blockedNull = Number(blocked?.nullScore ?? 0);
+    const blockedLow = Number(blocked?.lowScore ?? 0);
+    skippedNullScore += blockedNull;
+    skippedLowScore += blockedLow;
+    skipped += blockedNull + blockedLow;
 
     if (candidateDrafts.length === 0) continue;
     // aiAutoSendConfidenceMin is configurable in Settings but there's
@@ -1858,48 +1910,24 @@ export async function autoSendForAllWorkspaces(): Promise<{
     // explicit "no signal source yet" hint instead. (Critical-8.)
 
     for (const draft of candidateDrafts) {
-      // Score gate
-      let recipientScore: number | null = null;
-      if (draft.toLeadId) {
-        const [l] = await db
-          .select({ score: leads.score })
-          .from(leads)
-          .where(eq(leads.id, draft.toLeadId))
-          .limit(1);
-        recipientScore = l?.score ?? null;
-      } else if (draft.toContactId) {
-        const [c] = await db
-          .select({ score: contacts.relStrengthScore })
-          .from(contacts)
-          .where(eq(contacts.id, draft.toContactId))
-          .limit(1);
-        recipientScore = c?.score ?? null;
-      }
-      // Two distinct skip reasons — track them separately so the cron
-      // summary can surface "you have 12 unscored contacts blocking
-      // auto-send". Previously these were silently bucketed together
-      // and contacts that hadn't been AI-scored just sat forever
-      // pending review with no visible cause. (Critical-7.)
-      if (recipientScore === null) {
-        // Cold mass-outreach use case: freshly imported contacts have a
-        // NULL relStrengthScore and nothing scores them server-side. The
-        // relationship-strength gate is meant to protect WARM contacts
-        // from auto-spam — it's backwards for a deliberate SDR cold
-        // sequence. When the workspace opts into aiAutoSendAllowUnscored,
-        // treat a null score as eligible (fall through to send) instead
-        // of parking it forever as skippedNullScore. Default-off, so no
-        // behavior change for workspaces that didn't opt in.
-        if (!ws.aiAutoSendAllowUnscored) {
-          skipped++;
-          skippedNullScore++;
-          continue;
-        }
-        // allowed → skip the < scoreMin check below (null isn't comparable)
-      } else if (recipientScore < scoreMin) {
-        skipped++;
-        skippedLowScore++;
-        continue;
-      }
+      // Resolved by the query above — the gate that used to live here is now
+      // the WHERE clause that produced this row, so there is nothing left to
+      // re-decide. Kept only for the dispatch log line.
+      const recipientScore: number | null =
+        draft.recipientScore === null || draft.recipientScore === undefined
+          ? null
+          : Number(draft.recipientScore);
+      // The two skip branches that used to sit here are gone — not because
+      // the distinction stopped mattering (the cron summary still reports
+      // "you have 12 unscored contacts blocking auto-send") but because it is
+      // now counted above, over the whole workspace, instead of over whatever
+      // fraction of the blocked drafts happened to land in this page.
+      //
+      // The cold-outreach rule they encoded is unchanged and now lives in
+      // `sendableGate`: a NULL relStrengthScore is eligible only when the
+      // workspace opts into aiAutoSendAllowUnscored, because the
+      // relationship-strength gate protects WARM contacts and is backwards
+      // for a deliberate SDR cold sequence. Default-off either way.
 
       /**
        * Actor: prefer draft.createdByUserId, fall back to the workspace owner.
