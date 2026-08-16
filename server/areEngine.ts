@@ -32,7 +32,7 @@
  * Per-campaign and per-phase try/catch so one failure never blocks the rest.
  */
 import { createHash } from "node:crypto";
-import { and, desc, eq, gte, inArray, isNotNull, like, lte, notInArray, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, isNull, like, lte, ne, notExists, notInArray, or, sql } from "drizzle-orm";
 import { getDb } from "./db";
 import {
   areCampaigns,
@@ -1732,15 +1732,51 @@ async function discoverViaInternalCrm(
         and(
           eq(contacts.workspaceId, campaign.workspaceId),
           or(...wanted.map((t) => like(contacts.title, `%${t}%`))),
+          // Both discards below used to happen AFTER this LIMIT, which is how
+          // this source could return its full 50 and contribute nothing —
+          // every tick, forever, with thousands of usable contacts behind the
+          // window. A LIMIT must be applied to the set the caller can use.
+          //
+          // (1) Un-actionable: no email AND no company. Discarded by the loop.
+          //     This workspace had 1,500+ such rows, so they alone could fill
+          //     the page.
+          or(
+            and(isNotNull(contacts.email), ne(contacts.email, "")),
+            and(isNotNull(contacts.companyDomain), ne(contacts.companyDomain, "")),
+            and(isNotNull(contacts.companyName), ne(contacts.companyName, "")),
+          ),
+          // (2) Already queued. Discarded further downstream by the
+          //     queueIdentity claim, so it is invisible from in here — but it
+          //     spends a slot just the same, and in a mature workspace it is
+          //     the LARGER population of the two. Matched on email only: the
+          //     claim vocabulary is richer than this (name+company, LinkedIn),
+          //     so this narrows the waste rather than eliminating it, and the
+          //     claim stays the authority on exclusivity.
+          or(
+            isNull(contacts.email),
+            eq(contacts.email, ""),
+            notExists(
+              db
+                .select({ one: sql`1` })
+                .from(prospectQueue)
+                .where(and(
+                  eq(prospectQueue.workspaceId, campaign.workspaceId),
+                  eq(prospectQueue.email, contacts.email),
+                )),
+            ),
+          ),
         ),
       )
+      // Newest contacts first. Any stable order beats none, and a CRM's
+      // recent additions are the rows least likely to have been queued
+      // already — which is the waste this page cannot see.
+      .orderBy(desc(contacts.id))
       .limit(limit);
 
     for (const c of contactRows) {
-      // A contact with no email AND no company/domain is un-actionable
-      // downstream: dispatch needs an email and the enrichment email-finder
-      // needs a domain. Queueing them just burns LLM enrichment on rows
-      // that can never send (this workspace had 1,500+ such rows).
+      // Belt-and-braces: the WHERE above owns this now. Kept because the
+      // predicate here is the readable statement of what "actionable" means
+      // and the SQL is a translation of it.
       if (!c.email && !c.companyDomain && !c.companyName) continue;
       out.push({
         firstName: c.firstName,
@@ -1780,6 +1816,12 @@ async function discoverViaInternalCrm(
             or(...wanted.map((t) => like(leads.title, `%${t}%`))),
           ),
         )
+        // The loop below discards nothing, so this page was never starved the
+        // way the contact one was — but an unordered LIMIT still means an
+        // arbitrary slice, so which leads a campaign sources is a coin flip.
+        // (It CAN still spend slots on already-queued leads; that waste is
+        // invisible from here and is not addressed.)
+        .orderBy(desc(leads.id))
         .limit(remaining);
 
       for (const l of leadRows) {
