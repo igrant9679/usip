@@ -13,7 +13,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { hasPersonIdentity, keysConflict } from "./personLink";
+import { NAME_TIER_CAP, hasPersonIdentity, keysConflict } from "./personLink";
 
 const ROOT = join(__dirname, "..", "..");
 const read = (p: string) => readFileSync(join(ROOT, p), "utf8");
@@ -98,5 +98,48 @@ describe("the flow is wired (structural)", () => {
     for (const s of sets) {
       expect(s).not.toMatch(/email|firstName|lastName|companyName|phone|title/);
     }
+  });
+});
+
+describe("the name tiers cannot be truncated into a false 'only match'", () => {
+  // These tiers answer "is this the ONLY candidate?" — a verdict that is
+  // meaningless over a truncated set. The read used to be a bare LIMIT 25
+  // with no ORDER BY, so a name held by more people than that produced an
+  // arbitrary window, and a single survivor inside that window was returned
+  // as a CONFIDENT link (tier name_domain / name_company).
+  //
+  // Anchored to the function, not the file: an earlier test in this repo
+  // silently widened its own scope by slicing to the end of an array.
+  const src = read("server/services/personLink.ts");
+  const start = src.indexOf("export async function findPersonForRow");
+  const end = src.indexOf("function candidatesFromRow", start);
+  const fn = src.slice(start, end);
+
+  it("the function boundary is where we think it is", () => {
+    expect(start, "findPersonForRow moved — re-anchor").toBeGreaterThan(-1);
+    expect(end, "candidatesFromRow marker moved — re-anchor").toBeGreaterThan(start);
+  });
+
+  it("reads one row PAST the cap, so truncation is detectable", () => {
+    // A read of exactly the cap cannot distinguish "25 of them" from
+    // "25 of the 30 of them".
+    expect(fn).toContain("limit(NAME_TIER_CAP + 1)");
+  });
+
+  it("refuses instead of deciding when the cap is exceeded", () => {
+    expect(fn).toMatch(
+      /if \(named\.length > NAME_TIER_CAP\) return \{ person: null, tier: "ambiguous" \}/,
+    );
+  });
+
+  it("orders the window so the same row resolves the same way twice", () => {
+    expect(fn).toContain(".orderBy(prospects.id)");
+  });
+
+  it("the cap is one shared constant, not a literal at the call site", () => {
+    // If someone re-inlines `25`, the coupling between the read width and the
+    // refuse-branch breaks silently and the bug returns.
+    expect(NAME_TIER_CAP).toBe(25);
+    expect(fn).not.toMatch(/\.limit\(\s*2[05]\s*\)/);
   });
 });

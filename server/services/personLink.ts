@@ -36,6 +36,12 @@ import { isPlaceholderToken, usableEmailOrNull } from "@shared/fieldHygiene";
 import { normalizeCompanyName, normalizeDomain } from "./company/normalize";
 import { extractLinkedInIdentifier } from "./linkedinLookup";
 
+/** How many same-name people the name tiers will reason about. Past this the
+ *  tiers refuse rather than decide — see the ORDER BY / cap + 1 read in
+ *  `findPersonForRow`. Not a page size: it is the point at which "is this the
+ *  only one?" stops being answerable within a bounded read. */
+export const NAME_TIER_CAP = 25;
+
 export interface QueuePersonShape {
   id: number;
   campaignId: number;
@@ -136,13 +142,31 @@ export async function findPersonForRow(
   const first = stripNameCredentials(row.firstName ?? "")?.trim().toLowerCase();
   const last = stripNameCredentials(row.lastName ?? "")?.trim().toLowerCase();
   if (first && last) {
+    // Ordered, and one row wider than the cap ON PURPOSE.
+    //
+    // These tiers do not return "a match" — they return a match only when it
+    // is the ONLY one, and `ambiguous` otherwise. That verdict is worthless if
+    // it is computed over a truncated set: with a bare LIMIT 25 and no ORDER
+    // BY, thirty people sharing a name yield an arbitrary 25, and if the
+    // window happens to contain one of the two candidates at a domain, the
+    // uniqueness test below passes and this returns a CONFIDENT link to a
+    // person it never compared against the row that would have disqualified
+    // it. Truncation cannot be allowed to manufacture uniqueness.
+    //
+    // So: ask for cap + 1. If the extra row comes back, the name is too
+    // common to decide on and the honest answer is `ambiguous` — the same
+    // answer this gives when it finds two candidates, for the same reason.
+    // The ORDER BY makes the window itself reproducible; without it the same
+    // row could resolve differently on two runs.
     const named = await db.select().from(prospects)
       .where(and(
         eq(prospects.workspaceId, workspaceId),
         sql`LOWER(${prospects.firstName}) = ${first}`,
         sql`LOWER(${prospects.lastName}) = ${last}`,
       ))
-      .limit(25);
+      .orderBy(prospects.id)
+      .limit(NAME_TIER_CAP + 1);
+    if (named.length > NAME_TIER_CAP) return { person: null, tier: "ambiguous" };
     const compatible = named.filter((p) => !keysConflict(row, p));
 
     const domain = normalizeDomain(row.companyDomain);
