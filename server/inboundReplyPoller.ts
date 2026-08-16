@@ -190,6 +190,35 @@ export interface InboundReplyData {
 export async function processInboundReply(data: InboundReplyData) {
   const db = await getDb();
   if (!db) return;
+
+  /**
+   * Idempotency belongs to the OPERATION, not to one of its callers.
+   *
+   * The IMAP poller checks `email_replies` for the Message-ID before calling
+   * this — but the SendGrid inbound webhook (migration 0162) calls the same
+   * function, so that guard protected one entrance and left the other open.
+   * Live on 2026-08-16, 23 of 26 unique reply notifications appeared exactly
+   * twice: same sender, subject, category and date. "Exactly twice" is the
+   * signature of two producers, not of a retry.
+   *
+   * Same lesson as the LinkedIn limits work: a rule enforced at each call site
+   * is a rule that a new call site silently escapes. Checked here, every path
+   * in is covered, including any added later.
+   *
+   * Only a real Message-ID can be deduplicated — a message without one is not
+   * provably the same message, and refusing those would drop genuine mail.
+   */
+  if (data.messageId) {
+    const [seen] = await db
+      .select({ id: emailReplies.id })
+      .from(emailReplies)
+      .where(and(
+        eq(emailReplies.workspaceId, data.workspaceId),
+        eq(emailReplies.messageId, data.messageId),
+      ))
+      .limit(1);
+    if (seen) return;
+  }
   // 1. Match to outbound draft via In-Reply-To or References.
   //
   // Previously this gathered refIds and then *ignored* them — query

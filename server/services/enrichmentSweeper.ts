@@ -43,6 +43,18 @@ import { clampSweepCap, SWEEP_DAILY_CAP_DEFAULT } from "@shared/enrichmentLimits
 export type SweepMode = "off" | "approval" | "auto";
 
 /**
+ * QuickEnrich outcomes that describe the REQUEST rather than the person.
+ *
+ * quickenrichFindEmailByLinkedIn already discriminates its misses —
+ * `found | no_match | http_error | network_error | unrecognised_shape` — and
+ * only `no_match` is a statement about the prospect. The other three mean we
+ * never got an answer, which must not be recorded as one. Measured on prod
+ * 2026-08-16: 3 of 61 failed rows were `http_error`, retired permanently for
+ * a transport blip.
+ */
+const QUICKENRICH_TRANSPORT_FAILURES = new Set(["http_error", "network_error", "unrecognised_shape"]);
+
+/**
  * The one definition of "this campaign is a demo, don't work it". Lived in
  * apolloEnrich.ts until that module (the only paid-Apollo surface) was removed
  * with the dataCleanup router; the sweeper was its sole remaining caller.
@@ -670,7 +682,27 @@ export async function sweepWorkspace(
             result.emailsFound++;
             result.quickenrichFound++;
           }
+        } else if (QUICKENRICH_TRANSPORT_FAILURES.has(found.reason)) {
+          /**
+           * A request that did not complete says nothing about the prospect.
+           *
+           * This marked EVERY empty result `failed`, and `failed` is terminal
+           * — the ARE's enrichment selector reads only pending/enriching, so a
+           * sweeper verdict permanently removed the row from both engines. A
+           * 500 from the vendor, a socket reset, or a response shape we did
+           * not recognise thereby retired a prospect forever. Same failure as
+           * the day-9 brand search returning [] for a dead key and a genuine
+           * miss alike: the reason vocabulary already told us which was which,
+           * and the caller threw it away.
+           *
+           * Left `pending` so the next pass retries, with the reason recorded
+           * for anyone reading the row. Deliberately NOT stamping enrichedAt:
+           * that marker means "we have looked", and we have not.
+           */
+          patch.enrichmentError = `quickenrich: ${found.reason} — transport failure, will retry`.slice(0, 500);
+          delete patch.enrichedAt;
         } else {
+          // A genuine miss: the vendor answered, and this person is not in it.
           patch.enrichmentStatus = "failed";
           patch.enrichmentError = `quickenrich: ${found.reason}`.slice(0, 500);
         }
