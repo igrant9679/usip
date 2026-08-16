@@ -12,7 +12,7 @@
  * refreshes a suppressed prospect.
  */
 import { archivedWorkspaceIds } from "../../_core/workspaceArchive";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, getTableColumns, inArray, isNull, lt, ne, or } from "drizzle-orm";
 import { getDb } from "../../db";
 import {
   prospects,
@@ -57,10 +57,47 @@ export async function runDailyCheckForWorkspace(opts: {
   let checked = 0, changed = 0, failed = 0, skipped = 0;
 
   try {
+    // Staleness and suppression decide the SET, not the loop.
+    //
+    // This read used to be `where workspaceId` + LIMIT 250 with no ORDER BY,
+    // and both refusals below (checked within 24h, prospect rejected) were
+    // applied in JS afterwards. So a job whose entire purpose is refreshing
+    // the STALE records spent its budget on whichever 250 rows MySQL felt
+    // like returning — overwhelmingly the fresh ones, since they are the
+    // majority — and the stale rows behind that window were never reached.
+    // The unordered page is what made it permanent: the same arbitrary 250
+    // come back every run, so a record outside it is not "late", it is
+    // unreachable.
+    //
+    // Oldest first, never-checked first (MySQL sorts NULL ahead in ASC), so
+    // the budget lands on the rows with the most to tell us. Note the loop
+    // still re-checks suppression: retrievals below are awaited, so minutes
+    // pass and a prospect can be rejected mid-run — that is a genuine
+    // time-of-check gap, not a duplicated filter.
+    const staleBefore = new Date(Date.now() - TWENTY_FOUR_H);
+    // getTableColumns, NOT a bare .select(): with a join, drizzle nests the
+    // result by table name and every `enr.<field>` below would silently read
+    // undefined. This keeps the row shape byte-identical to the pre-join one.
     const enrichments = await db
-      .select()
+      .select(getTableColumns(prospectLinkedinEnrichments))
       .from(prospectLinkedinEnrichments)
-      .where(eq(prospectLinkedinEnrichments.workspaceId, ws))
+      .innerJoin(prospects, and(
+        eq(prospects.id, prospectLinkedinEnrichments.prospectId),
+        eq(prospects.workspaceId, ws),
+      ))
+      .where(and(
+        eq(prospectLinkedinEnrichments.workspaceId, ws),
+        // enrichmentBlockReason(): rejected is the one suppression state.
+        or(
+          isNull(prospects.verificationStatus),
+          ne(prospects.verificationStatus, "rejected"),
+        ),
+        ...(opts.force ? [] : [or(
+          isNull(prospectLinkedinEnrichments.linkedinLastCheckedAt),
+          lt(prospectLinkedinEnrichments.linkedinLastCheckedAt, staleBefore),
+        )]),
+      ))
+      .orderBy(asc(prospectLinkedinEnrichments.linkedinLastCheckedAt))
       .limit(MAX_PER_RUN);
 
     // Map source account → owner user id so lookups route through the same
@@ -75,12 +112,14 @@ export async function runDailyCheckForWorkspace(opts: {
       for (const a of accts) ownerByAccount.set(a.acct, a.owner);
     }
 
-    const now = Date.now();
     for (const enr of enrichments) {
-      const last = enr.linkedinLastCheckedAt ? new Date(enr.linkedinLastCheckedAt).getTime() : 0;
-      if (!opts.force && last && now - last < TWENTY_FOUR_H) { skipped++; continue; }
+      // No staleness check here any more — the query above owns it. A refusal
+      // that can never fire reads, on the next visit, like the filter is
+      // still being applied somewhere it is not.
 
-      // Compliance: never refresh a suppressed/rejected prospect.
+      // Compliance: never refresh a suppressed/rejected prospect. Kept
+      // despite the SQL predicate: every iteration awaits a network
+      // retrieval, so a prospect can be rejected while this loop is running.
       const [p] = await db
         .select({ verificationStatus: prospects.verificationStatus })
         .from(prospects)
