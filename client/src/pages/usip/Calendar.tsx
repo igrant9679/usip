@@ -188,11 +188,24 @@ function EventDialog({
   const [description, setDescription] = useState(event?.description ?? "");
   const [location, setLocation] = useState(event?.location ?? "");
   const [meetingUrl, setMeetingUrl] = useState(event?.meetingUrl ?? "");
+  /**
+   * `datetime-local` holds a LOCAL wall-clock string with no zone. Feeding it
+   * `toISOString()` put UTC digits into a field the browser reads as local, so
+   * at 01:32 Eastern the form opened at 05:31.
+   *
+   * The read was only half of it. The write does `new Date(start)`, which
+   * parses a bare local string AS local and converts correctly — so the two
+   * directions disagreed by exactly one UTC offset, and the error COMPOUNDED:
+   * opening an existing event and saving it moved the meeting four hours
+   * later, every time, silently, on a record other people see.
+   */
+  const toLocalInput = (d: Date) =>
+    new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
   const [start, setStart] = useState<string>(
-    (event?.startAt ?? initialStart ?? new Date()).toISOString().slice(0, 16)
+    toLocalInput(new Date(event?.startAt ?? initialStart ?? new Date()))
   );
   const [end, setEnd] = useState<string>(
-    (event?.endAt ?? initialEnd ?? new Date(Date.now() + 3600_000)).toISOString().slice(0, 16)
+    toLocalInput(new Date(event?.endAt ?? initialEnd ?? new Date(Date.now() + 3600_000)))
   );
   const [allDay, setAllDay] = useState(event?.allDay ?? false);
   const [attendees, setAttendees] = useState<string>(

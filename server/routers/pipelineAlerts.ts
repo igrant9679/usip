@@ -281,10 +281,26 @@ export const pipelineAlertsRouter = router({
           : [];
       const oppMap = Object.fromEntries(opps.map((o) => [o.id, o]));
 
-      return alerts.map((a) => ({
-        ...a,
-        opportunity: oppMap[a.opportunityId] ?? null,
-      }));
+      /**
+       * An alert about an opportunity that no longer exists is not an alert,
+       * it is debris. These rows survive the opportunity being deleted (no FK
+       * cleanup), and because the alert carries a denormalised
+       * `details.oppName` the UI renders a plausible name for a record that
+       * cannot be opened — live on 2026-08-16, ALL 50 alerts in LSI were
+       * orphans of the sample-data removal, each offering a "View Opp" link
+       * to nothing.
+       *
+       * Dropped on read rather than deleted: the row is evidence of what the
+       * engine once saw, and this procedure is a reader. Whatever removes
+       * opportunities should dismiss their alerts; until it does, this stops
+       * them being presented as live work.
+       */
+      return alerts
+        .filter((a) => oppMap[a.opportunityId])
+        .map((a) => ({
+          ...a,
+          opportunity: oppMap[a.opportunityId]!,
+        }));
     }),
 
   /** Dismiss an alert */

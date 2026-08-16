@@ -243,7 +243,11 @@ function AlertCard({ alert, onDismiss }: { alert: any; onDismiss: () => void }) 
             {new Date(alert.createdAt).toLocaleDateString()}
           </span>
           <div className="ml-auto flex gap-2">
-            <Link href={`/pipeline`}>
+            {/* This was href={`/pipeline`} — a template literal with nothing
+                interpolated into it, so every alert's "View Opp" landed on the
+                generic board and the alert could not be investigated. The
+                detail route (/opportunities/:id) existed the whole time. */}
+            <Link href={`/opportunities/${alert.opportunityId}`}>
               <Button size="sm" variant="ghost" className="h-6 text-xs px-2">
                 View Opp
               </Button>
