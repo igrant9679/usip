@@ -6,7 +6,7 @@
  * closing the sequence → reply → meeting loop.
  */
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, isNotNull, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { emailReplies, unipileMessages, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
@@ -26,7 +26,13 @@ export const conversationsRouter = router({
       if (!db) return [];
       // Push filters + the 300-row cap into SQL — this table can have tens of
       // thousands of replies, so never load them all into memory.
-      const conds = [eq(emailReplies.workspaceId, ctx.workspace.id)];
+      // Scoped to real replies, exactly as `stats` below is — the two must
+      // move together or the header counts one population and the list shows
+      // another. See the note on stats for what unscoped meant here.
+      const conds = [
+        eq(emailReplies.workspaceId, ctx.workspace.id),
+        isNotNull(emailReplies.draftId),
+      ];
       const f = input?.filter;
       if (f === "unhandled") conds.push(isNull(emailReplies.handledAt));
       else if (f && f !== "all") conds.push(eq(emailReplies.replyClass, f));
@@ -47,7 +53,20 @@ export const conversationsRouter = router({
       needsClassify: sql<number>`sum(case when \`classifiedAt\` is null then 1 else 0 end)`,
       willingToMeet: sql<number>`sum(case when \`replyClass\` = 'willing_to_meet' then 1 else 0 end)`,
       meetingsProposed: sql<number>`sum(case when \`autoActionTaken\` = 'meeting_proposed' then 1 else 0 end)`,
-    }).from(emailReplies).where(eq(emailReplies.workspaceId, ctx.workspace.id));
+    // `email_replies` is NOT "replies to our outbound" — inboundReplyPoller
+    // inserts a row for EVERY inbound message, with draftId NULL when it
+    // matches no send. Unscoped, this counted the owner's entire synced
+    // mailbox: live on 2026-08-16 it reported 70,484 unhandled replies in LSI
+    // where the true figure is 0, and `total === unhandled` exactly, because
+    // ordinary inbox mail is never "handled" in this sense.
+    //
+    // Home and Analytics both render this procedure, so all three surfaces
+    // were wrong together. attention.ts has always scoped it correctly and
+    // Home even queries that too — then showed this number instead.
+    }).from(emailReplies).where(and(
+      eq(emailReplies.workspaceId, ctx.workspace.id),
+      isNotNull(emailReplies.draftId),
+    ));
     return {
       total: Number(row?.total ?? 0),
       unhandled: Number(row?.unhandled ?? 0),

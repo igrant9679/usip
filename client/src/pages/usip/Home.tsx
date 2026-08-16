@@ -216,6 +216,8 @@ export default function Home() {
   const people = ((trpc.prospects.list.useQuery({ page: 1, perPage: 8 }).data as any)?.data ?? []) as any[];
   const companies = (trpc.accounts.list.useQuery().data ?? []) as any[];
   const tasks = (trpc.tasks.list.useQuery({}).data ?? []) as any[];
+  // The one definition of open/dueToday/overdue, in the workspace's timezone.
+  const taskStats = trpc.tasks.stats.useQuery().data as any;
   const sequences = (trpc.sequences.list.useQuery().data ?? []) as any[];
   const metrics = trpc.dataHealth.getMetrics.useQuery().data as any;
   const trend = trpc.workspace.trend7d.useQuery().data;
@@ -271,7 +273,13 @@ export default function Home() {
           <div className="shrink-0 flex flex-wrap items-center gap-2.5 px-4 md:px-6 py-2.5 border-b border-border/70"
             style={{ background: `linear-gradient(90deg, ${accent}14, transparent 65%)` }}>
             <HeroChip label="Meetings today" value={trend?.meetings?.[6] ?? 0} series={trend?.meetings} color="#10B981" onClick={() => setLocation("/v2/meetings")} />
-            <HeroChip label="Tasks due today" value={tasks.filter((t: any) => t.status === "open" && t.dueAt && new Date(t.dueAt) <= new Date(new Date().setHours(23, 59, 59, 999))).length} series={trend?.activities} color="#F59E0B" onClick={() => setLocation("/v2/tasks")} />
+            {/* Server-computed, not recounted here. This filtered on
+                `dueAt <= endOfToday` with NO lower bound, so all 144 overdue
+                tasks were counted as due today (186 shown against a true 0),
+                and it used new Date().setHours(...) — the BROWSER's day, the
+                same UTC-day bug activities.ts records having fixed server-side
+                using the workspace timezone. Two copies, one fixed. */}
+            <HeroChip label="Tasks due today" value={taskStats?.dueToday ?? 0} series={trend?.activities} color="#F59E0B" onClick={() => setLocation("/v2/tasks")} />
             <HeroChip label="Unhandled replies" value={convStats?.unhandled ?? 0} series={trend?.replies} color="#8B5CF6" onClick={() => setLocation("/v2/conversations")} />
             <div className="flex-1" />
             <button type="button" onClick={() => setLocation("/inbox")} className="hidden lg:flex min-w-0 max-w-md items-center gap-2 text-left">
