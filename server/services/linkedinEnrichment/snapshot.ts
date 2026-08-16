@@ -20,6 +20,11 @@ export interface DetectedChange {
   label: string;
   oldValue: string | null;
   newValue: string | null;
+  /** True when the previous snapshot held NO value for this field, i.e. this
+   *  is the first time we have seen it rather than a change to it. Consumers
+   *  that act on "it changed" (job-change re-engagement) must exclude these;
+   *  consumers that act on "we now know" may keep them. */
+  firstObservation?: boolean;
 }
 
 /** Monitored scalar fields → change classification + priority. */
@@ -117,10 +122,25 @@ export function detectChanges(prev: ProfileSnapshot, p: VelocityLinkedInProfile)
   const out: DetectedChange[] = [];
 
   for (const f of SCALAR_FIELDS) {
-    if ((prev.canon[f.key] ?? "") !== (cur.canon[f.key] ?? "")) {
+    const before = prev.canon[f.key] ?? "";
+    const after = cur.canon[f.key] ?? "";
+    if (before !== after) {
       out.push({
         fieldName: f.key, changeType: f.changeType, priority: f.priority, label: f.label,
         oldValue: prev.raw[f.key] ?? null, newValue: cur.raw[f.key] ?? null,
+        // Learning a field for the first time is NOT the field changing.
+        //
+        // This compared `(prev ?? "") !== (cur ?? "")`, so an empty previous
+        // snapshot against any value was a change — and "company_changed" is
+        // what creates a high-priority "they moved jobs, re-engage them" task.
+        // Live on 2026-08-16: 52 of 54 such tasks read "<name> moved from
+        // their previous company", because oldValue was null. They had not
+        // moved; we had merely never seen where they worked.
+        //
+        // Both facts are still emitted — a first sighting is real and other
+        // consumers want it — but they are now distinguishable, and the
+        // consumers that mean "changed" filter on this.
+        firstObservation: before === "",
       });
     }
   }

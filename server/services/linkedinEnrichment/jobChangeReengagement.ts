@@ -26,10 +26,36 @@ import type { DetectedChange } from "./snapshot";
 /** All job-change tasks share this title prefix — used as the dedupe key. */
 const REENGAGE_PREFIX = "Re-engage:";
 
+/**
+ * LinkedIn's "current company" is free text and people put life states in it.
+ * A prospect whose new employer is "Retired" has not moved to a company — and
+ * a task telling a rep to re-engage them at it is the kind of outreach that
+ * costs a relationship. Matched on the WHOLE trimmed value, not a substring:
+ * "Retired Brands Inc" is a real company and must survive this.
+ */
+const NOT_AN_EMPLOYER = new Set([
+  "retired", "unemployed", "none", "n/a", "na", "-", "self", "self employed",
+  "self-employed", "freelance", "freelancer", "independent", "independent consultant",
+  "student", "seeking opportunities", "open to work", "looking for work",
+  "career break", "sabbatical", "stay at home parent", "homemaker",
+]);
+
+function isNotAnEmployer(value: string): boolean {
+  const v = value.trim().toLowerCase().replace(/[.,]+$/, "");
+  return NOT_AN_EMPLOYER.has(v);
+}
+
 
 export interface JobChangeReengageResult {
   created: boolean;
-  reason: "created" | "off" | "no_company_change" | "already_active" | "cap_reached" | "no_prospect" | "error";
+  reason:
+    | "created" | "off" | "no_company_change" | "already_active" | "cap_reached"
+    | "no_prospect" | "error"
+    /** The change names no old or no new employer, so no brief can be written
+     *  from it — usually a first observation recorded as a change. */
+    | "incomplete_company_change"
+    /** The "new company" is a life state ("Retired"), not an employer. */
+    | "new_company_not_an_employer";
   taskStatus?: "draft" | "open";
 }
 
@@ -53,9 +79,27 @@ export async function onJobChangeDetected(
   prospectId: number,
   changes: DetectedChange[],
 ): Promise<void> {
-  const companyChange =
-    changes.find((c) => c.changeType === "company_changed" && c.fieldName === "current_company_name") ??
-    changes.find((c) => c.changeType === "company_changed");
+  /**
+   * A job change requires a job to have changed. Two exclusions, both of which
+   * were producing tasks in production on 2026-08-16:
+   *
+   * 1. `firstObservation` — the snapshot diff counted an empty previous value
+   *    as a change, so the first time enrichment learned where someone worked
+   *    it reported them as having moved. 52 of 54 live tasks were this, which
+   *    is why they read "moved from their previous company": oldValue was null
+   *    and the copy fell back to a placeholder.
+   *
+   * 2. The DOMAIN field also carries changeType "company_changed", and the
+   *    fallback below would happily use it — producing a re-engagement whose
+   *    "old company" and "new company" are domains, or firing when only the
+   *    domain was filled in on an unchanged employer. Only the NAME field can
+   *    stand for "they moved".
+   */
+  const companyChange = changes.find(
+    (c) => c.changeType === "company_changed"
+      && c.fieldName === "current_company_name"
+      && !c.firstObservation,
+  );
 
   // 1) User-defined workflow rules on the job-change signal.
   if (companyChange) {
@@ -192,8 +236,27 @@ export async function maybeCreateJobChangeReengagement(
     if (Number(capRow?.n ?? 0) >= cap) return { created: false, reason: "cap_reached" };
 
     const name = `${p.firstName ?? ""} ${p.lastName ?? ""}`.trim() || "this prospect";
-    const oldCompany = companyChange.oldValue?.trim() || "their previous company";
-    const newCompany = companyChange.newValue?.trim() || "a new company";
+    const oldCompany = companyChange.oldValue?.trim() ?? "";
+    const newCompany = companyChange.newValue?.trim() ?? "";
+
+    /**
+     * Both sides must name a real employer.
+     *
+     * The placeholder fallbacks that used to sit here ("their previous
+     * company" / "a new company") are gone: a task that cannot say where
+     * someone moved FROM and TO is not a re-engagement brief, and under
+     * Autonomous mode it ships to a rep as an open, high-priority action.
+     * Refusing is the honest outcome — see the firstObservation note above for
+     * how these came to be empty in the first place.
+     *
+     * NOT_AN_EMPLOYER catches the other half of it: LinkedIn's current-company
+     * field carries life states as freely as it carries companies, and one
+     * live task read "moved to Retired" with a matching title. Re-engaging
+     * someone about their retirement is worse than sending nothing.
+     */
+    if (!oldCompany || !newCompany) return { created: false, reason: "incomplete_company_change" };
+    if (isNotAnEmployer(newCompany)) return { created: false, reason: "new_company_not_an_employer" };
+
     const targetStatus = mode === "auto" ? "open" : "draft";
 
     const title = `${REENGAGE_PREFIX} ${name} moved to ${newCompany}`.slice(0, 240);
