@@ -264,9 +264,41 @@ export async function sendMeetingInvite(workspaceId: number, meetingId: number, 
   if (!m) return { sent: false, scheduledAt: null, reason: "not_found" };
 
   const times = Array.isArray(m.proposedTimes) ? (m.proposedTimes as string[]) : [];
-  const when = chosenTime ?? (m.scheduledAt ? new Date(m.scheduledAt).toISOString() : times[0]);
-  if (!when) return { sent: false, scheduledAt: null, reason: "no_time" };
+
+  /**
+   * A proposal does not expire, so its times go stale where they sit. Live on
+   * 2026-08-16: of 129 proposals in one workspace, 81 held ONLY past times and
+   * 10 were part-past — and nothing anywhere compared a proposed time to the
+   * clock. Approving one booked a real calendar event in the past, marked the
+   * meeting `scheduled`, stamped `inviteSent`, and credited the ARE campaign
+   * with a booking, then emailed the prospect an invitation to a meeting that
+   * had already happened.
+   *
+   * The guard lives HERE rather than on the button because this is the one
+   * path both the UI and the autonomous scheduler go through — the same reason
+   * the LinkedIn gate and bookSlotForLink are single chokepoints. A disabled
+   * button protects the person who can already see the date; it does nothing
+   * for the unattended path working through a backlog.
+   *
+   * With no explicit choice, pick the earliest time still in the FUTURE rather
+   * than times[0]. "Here are three times that suit me" means the offer, not
+   * the first array element — and defaulting to a stale slot is what made the
+   * default action the harmful one.
+   */
+  const nowMs = Date.now();
+  const isFuture = (t: string) => { const ms = new Date(t).getTime(); return Number.isFinite(ms) && ms > nowMs; };
+  const when = chosenTime
+    ?? (m.scheduledAt ? new Date(m.scheduledAt).toISOString() : undefined)
+    ?? times.filter(isFuture).sort()[0];
+  if (!when) {
+    // Distinguish "never had times" from "had times, all expired": the second
+    // is a proposal that needs regenerating, and a caller that cannot tell
+    // them apart cannot say anything useful to the user.
+    return { sent: false, scheduledAt: null, reason: times.length ? "all_times_expired" : "no_time" };
+  }
   const start = new Date(when);
+  if (!Number.isFinite(start.getTime())) return { sent: false, scheduledAt: null, reason: "invalid_time" };
+  if (start.getTime() <= nowMs) return { sent: false, scheduledAt: null, reason: "time_in_past" };
   const end = new Date(start.getTime() + (m.durationMin ?? 30) * 60000);
 
   // Owner's connected calendar (if any) → send a real provider invite.

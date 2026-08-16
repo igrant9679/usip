@@ -344,7 +344,14 @@ function ProposalCard({
   ContactLine: ReactNode;
 }) {
   const times = (m.proposedTimes ?? []) as string[];
-  const [chosen, setChosen] = useState<string | undefined>(times[0]);
+  // A proposal has no expiry, so its times go stale in place. The server
+  // refuses a past booking (sendMeetingInvite is the one path both this and
+  // the autonomous scheduler use); this stops the UI OFFERING one, and stops
+  // the default selection being a slot that cannot be sent.
+  const isPast = (t: string) => { const ms = new Date(t).getTime(); return Number.isFinite(ms) && ms <= Date.now(); };
+  const future = times.filter((t) => !isPast(t));
+  const expired = times.length > 0 && future.length === 0;
+  const [chosen, setChosen] = useState<string | undefined>(future[0]);
   return (
     <div className="rounded-xl border bg-card p-3 shadow-sm" style={{ borderColor: "#7c3aed40" }}>
       <div className="flex items-start gap-3">
@@ -362,18 +369,33 @@ function ProposalCard({
           {times.length > 0 && (
             <div className="flex flex-wrap items-center gap-1.5 mt-2">
               <span className="text-[11px] text-muted-foreground mr-0.5">Proposed:</span>
-              {times.map((t) => (
-                <button key={t} onClick={() => setChosen(t)}
-                  className={cn("rounded-full border px-2 py-0.5 text-[11px] transition-colors", chosen === t ? "text-white border-transparent" : "hover:bg-muted")}
-                  style={chosen === t ? { backgroundColor: "#7c3aed" } : undefined}>
-                  {fmtDateTime(t)}
-                </button>
-              ))}
+              {times.map((t) => {
+                const past = isPast(t);
+                return (
+                  <button key={t} onClick={() => !past && setChosen(t)} disabled={past}
+                    title={past ? "This time has already passed" : undefined}
+                    className={cn("rounded-full border px-2 py-0.5 text-[11px] transition-colors",
+                      past ? "opacity-40 line-through cursor-not-allowed" : chosen === t ? "text-white border-transparent" : "hover:bg-muted")}
+                    style={chosen === t && !past ? { backgroundColor: "#7c3aed" } : undefined}>
+                    {fmtDateTime(t)}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          {expired && (
+            // A disabled button with only a tooltip leaves the user guessing —
+            // and on a proposal whose every time has passed, the needed action
+            // is regeneration, not a different click.
+            <div className="text-[11px] text-amber-700 dark:text-amber-500 mt-1.5">
+              Every proposed time has passed. Regenerate this proposal to offer new times.
             </div>
           )}
         </div>
         <div className="flex items-center gap-1 shrink-0">
-          <Button size="sm" className="h-7 gap-1" disabled={pending} onClick={() => onApprove(chosen)}><Send className="size-3.5" /> Approve &amp; send</Button>
+          <Button size="sm" className="h-7 gap-1" disabled={pending || expired || !chosen}
+            title={expired ? "Every proposed time has passed — regenerate this proposal" : undefined}
+            onClick={() => onApprove(chosen)}><Send className="size-3.5" /> Approve &amp; send</Button>
           <Button size="icon" variant="ghost" className="size-7 text-muted-foreground" title="Dismiss" onClick={onDismiss}><X className="size-4" /></Button>
         </div>
       </div>
