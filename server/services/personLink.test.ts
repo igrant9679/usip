@@ -101,6 +101,49 @@ describe("the flow is wired (structural)", () => {
   });
 });
 
+describe("the backfill page cannot silt up with rows it can never link", () => {
+  // A queue row with no identity can never be linked, and nothing about it
+  // changes, so it stays inside `personProspectId IS NULL` forever. Refused
+  // in JS against an unordered LIMIT 200, those permanent refusals sit at the
+  // front of the page and the backfill re-reads them every run — the day-9
+  // brand sweep starving on its own negative cache, in a different table.
+  const src = read("server/services/personLink.ts");
+  const start = src.indexOf("export async function linkUnlinkedQueueRows");
+  const end = src.indexOf("CRM contacts → People", start);
+  const fn = src.slice(start, end);
+
+  it("the function boundary is where we think it is", () => {
+    expect(start, "linkUnlinkedQueueRows moved — re-anchor").toBeGreaterThan(-1);
+    expect(end, "contact section marker moved — re-anchor").toBeGreaterThan(start);
+  });
+
+  it("requires a name in SQL", () => {
+    expect(fn).toMatch(/or\(nonEmpty\(prospectQueue\.firstName\), nonEmpty\(prospectQueue\.lastName\)\)/);
+  });
+
+  it("requires a resolvable key in SQL, mirroring hasPersonIdentity", () => {
+    expect(fn).toContain("nonEmpty(prospectQueue.email)");
+    expect(fn).toContain("nonEmpty(prospectQueue.linkedinUrl)");
+    expect(fn).toContain("nonEmpty(prospectQueue.companyName)");
+  });
+
+  it("treats the empty string as absent, like the JS predicate does", () => {
+    // The `<> ''` half is the whole point — IS NOT NULL alone would admit
+    // every row carrying an empty-string name, which is most of the dead ones.
+    expect(fn).toMatch(/const nonEmpty = .*IS NOT NULL AND \$\{col\} <> ''/s);
+  });
+
+  it("orders the page", () => {
+    expect(fn).toContain("orderBy(prospectQueue.id)");
+  });
+
+  it("still refuses in JS, because the SQL is deliberately a superset", () => {
+    // usableEmailOrNull() also rejects placeholder emails; SQL does not try.
+    // The JS check must remain the authority on identity.
+    expect(fn).toContain("skippedNoIdentity++");
+  });
+});
+
 describe("the name tiers cannot be truncated into a false 'only match'", () => {
   // These tiers answer "is this the ONLY candidate?" — a verdict that is
   // meaningless over a truncated set. The read used to be a bare LIMIT 25

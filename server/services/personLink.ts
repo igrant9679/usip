@@ -26,7 +26,8 @@
  * pattern. It never mutates queue person columns: emails a sequence already
  * used stay byte-identical (owner risk-reconciliation, 2026-08-11).
  */
-import { and, eq, gt, isNull, sql } from "drizzle-orm";
+import { and, eq, gt, isNull, or, sql } from "drizzle-orm";
+import type { AnyMySqlColumn } from "drizzle-orm/mysql-core";
 import { getDb } from "../db";
 import { contacts, prospects, prospectQueue, prospectLinkedinEnrichments } from "../../drizzle/schema";
 import { CONFIDENCE, mergeAll, type Candidate, type ProvenanceMap } from "./enrichment/fieldMerge";
@@ -376,6 +377,32 @@ export async function linkUnlinkedQueueRows(opts: {
   if (opts.workspaceId) conds.push(eq(prospectQueue.workspaceId, opts.workspaceId));
   if (opts.campaignId) conds.push(eq(prospectQueue.campaignId, opts.campaignId));
 
+  // A row with no identity can never be linked — and, crucially, nothing
+  // about it ever changes, so it stays inside `personProspectId IS NULL`
+  // forever. Filtered in JS (as `skippedNoIdentity`) against an unordered
+  // LIMIT 200, those permanent refusals accumulate at the front of the page
+  // and the backfill re-reads the same dead rows every run while linkable
+  // ones behind them are never reached. This is the day-9 brand sweep
+  // starving on its own negative cache, in a different table.
+  //
+  // A deliberately CONSERVATIVE translation of hasPersonIdentity(): it may
+  // admit a row the JS check then refuses (usableEmailOrNull also rejects
+  // placeholder emails, which SQL does not attempt), but it must never
+  // exclude one the JS check would accept. 0159 purged the stored "<UNKNOWN>"
+  // values and ingest cleans new ones, so that residue is small and bounded —
+  // whereas the rows this now excludes are the unbounded population.
+  const nonEmpty = (col: AnyMySqlColumn) => sql`(${col} IS NOT NULL AND ${col} <> '')`;
+  conds.push(or(nonEmpty(prospectQueue.firstName), nonEmpty(prospectQueue.lastName))!);
+  conds.push(or(
+    nonEmpty(prospectQueue.email),
+    nonEmpty(prospectQueue.linkedinUrl),
+    and(
+      nonEmpty(prospectQueue.firstName),
+      nonEmpty(prospectQueue.lastName),
+      nonEmpty(prospectQueue.companyName),
+    ),
+  )!);
+
   const rows = await db.select({
     id: prospectQueue.id, workspaceId: prospectQueue.workspaceId, campaignId: prospectQueue.campaignId,
     firstName: prospectQueue.firstName, lastName: prospectQueue.lastName,
@@ -383,7 +410,9 @@ export async function linkUnlinkedQueueRows(opts: {
     phone: prospectQueue.phone, title: prospectQueue.title,
     companyName: prospectQueue.companyName, companyDomain: prospectQueue.companyDomain,
     sourceType: prospectQueue.sourceType,
-  }).from(prospectQueue).where(and(...conds)).limit(opts.limit ?? 200);
+  }).from(prospectQueue).where(and(...conds))
+    .orderBy(prospectQueue.id)
+    .limit(opts.limit ?? 200);
 
   summary.scanned = rows.length;
   for (const row of rows) {
