@@ -492,9 +492,53 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
           eq(prospectQueue.workspaceId, wsId),
           eq(prospectQueue.sequenceStatus, "approved"),
           sql`${prospectIntelligence.generatedSequence} IS NOT NULL`,
+          // A stored sequence that yields no steps is the one exit from the
+          // loop below that does not change the row: status stays `approved`
+          // and generatedSequence stays non-null, so it matches this WHERE
+          // again on the very next tick. Ten of them (the whole per-tick
+          // allowance) and this campaign never enrols anyone again.
+          //
+          // Exactly equivalent to `normalizeSequence(raw).length === 0`, and
+          // that is checkable rather than hopeful: normalizeSequence is a
+          // pure .map, so it never drops a step — it returns [] only when the
+          // stored value is not an array, or is an empty one. JSON_TYPE
+          // covers the first (an LLM writing an object instead of a list),
+          // JSON_LENGTH the second.
+          sql`(JSON_TYPE(${prospectIntelligence.generatedSequence}) = 'ARRAY'
+               AND JSON_LENGTH(${prospectIntelligence.generatedSequence}) > 0)`,
         ),
       )
+      // Oldest approved first. Anything but an arbitrary page.
+      .orderBy(prospectQueue.id)
       .limit(ENROLL_PER_CAMPAIGN_TICK);
+
+    // Those rows are now out of the page — which fixes the starvation and,
+    // on its own, would make them invisible instead: approved forever, never
+    // enrolled, nothing saying why. Counted and logged so the campaign log
+    // names the defect. Same trade as the auto-send fix: filter in SQL, keep
+    // the number.
+    const [unusable] = await db
+      .select({ n: sql<number>`count(*)` })
+      .from(prospectQueue)
+      .innerJoin(
+        prospectIntelligence,
+        eq(prospectIntelligence.prospectQueueId, prospectQueue.id),
+      )
+      .where(
+        and(
+          eq(prospectQueue.campaignId, campId),
+          eq(prospectQueue.workspaceId, wsId),
+          eq(prospectQueue.sequenceStatus, "approved"),
+          sql`${prospectIntelligence.generatedSequence} IS NOT NULL`,
+          sql`NOT (JSON_TYPE(${prospectIntelligence.generatedSequence}) = 'ARRAY'
+                   AND JSON_LENGTH(${prospectIntelligence.generatedSequence}) > 0)`,
+        ),
+      );
+    const unusableCount = Number(unusable?.n ?? 0);
+    if (unusableCount > 0) {
+      await emitLog(wsId, campId, "enroll", "warn",
+        `${unusableCount} approved prospect${unusableCount === 1 ? " has" : "s have"} a generated sequence with no usable steps — not enrolled. Regenerate the sequence for these prospects.`);
+    }
 
     let finalChecksThisTick = 0;
     for (const row of rows) {
@@ -552,7 +596,25 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
       }
 
       const steps = normalizeSequence(row.sequence);
-      if (steps.length === 0) continue;
+      if (steps.length === 0) {
+        // Unreachable: the WHERE above excludes these. Kept, and no longer a
+        // bare `continue`, because the two ways of asking the same question
+        // sit in different languages — if they ever disagree, falling through
+        // inserts zero execution rows and then marks the prospect `enrolled`,
+        // which is a person in a campaign that will never touch them. Better
+        // to stop, say so, and drain the row so it cannot cycle.
+        await db
+          .update(prospectQueue)
+          .set({
+            sequenceStatus: "skipped",
+            rejectedAt: new Date(),
+            rejectionReason: "Generated sequence has no usable steps",
+          })
+          .where(eq(prospectQueue.id, row.id));
+        await emitLog(wsId, campId, "enroll", "warn",
+          `Prospect ${row.id} skipped — generated sequence normalised to zero steps (SQL and normalizeSequence disagree; investigate).`);
+        continue;
+      }
 
       const now = Date.now();
       const execRows = steps.map((s) => ({
