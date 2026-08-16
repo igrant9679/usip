@@ -17,7 +17,11 @@
  * "tick" through the remaining pipeline phases:
  *
  *   1. SCREEN     — auto-approve / auto-reject enriched prospects per the
- *                   campaign's autonomyMode + autoApproveThreshold.
+ *                   campaign's autonomyMode + autoApproveThreshold. Also
+ *                   rejects rows scored BELOW the enrichment gate, which can
+ *                   never be enriched and so could never reach this pass at
+ *                   all — they used to sit 'pending' forever with no reason
+ *                   recorded anywhere.
  *   2. SEQUENCE   — runSequenceAgent on approved prospects with no sequence.
  *   3. ENROLL     — turn a prospect's generatedSequence into are_execution_queue
  *                   rows (one per step) and mark it 'enrolled'.
@@ -111,6 +115,16 @@ const ENROLL_PER_CAMPAIGN_TICK = 10;
 // the 3-minute engine cadence never stalls. Unchecked rows still enroll.
 const FINAL_CHECKS_PER_TICK = 5;
 /** icpMatchScore below this is auto-screened out even in human-approval modes. */
+/** The ICP score a prospect needs before enrichment will spend LLM budget on
+ *  it, when the campaign does not set its own `minConfidence`.
+ *
+ *  ONE definition on purpose. It is used by the enrichment selector AND by the
+ *  screen pass that rejects rows falling below it, and those two must be exact
+ *  inverses of each other. If they drift, the screen pass rejects prospects
+ *  that enrichment would have accepted — which destroys work rather than
+ *  tidying up. `areEnrichGate.test.ts` asserts both sites use this constant. */
+const ENRICH_MIN_CONFIDENCE_DEFAULT = 40;
+
 const AUTO_REJECT_FLOOR = 30;
 /** Fallback approve line for `full` autonomy when autoApproveThreshold is null. */
 const DEFAULT_APPROVE_THRESHOLD = 70;
@@ -335,7 +349,7 @@ async function enrichPendingGlobally(result: AreEngineResult): Promise<void> {
       and(
         eq(areCampaigns.status, "active"),
         inArray(prospectQueue.enrichmentStatus, ["pending", "enriching"]),
-        sql`(${prospectQueue.icpMatchScore} >= COALESCE(${areCampaigns.minConfidence}, 40) OR ${prospectQueue.icpMatchScore} = 0)`,
+        sql`(${prospectQueue.icpMatchScore} >= COALESCE(${areCampaigns.minConfidence}, ${ENRICH_MIN_CONFIDENCE_DEFAULT}) OR ${prospectQueue.icpMatchScore} = 0)`,
       ),
     )
     .orderBy(desc(prospectQueue.icpMatchScore))
@@ -380,6 +394,57 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
 
   /* ── Phase 1: SCREEN — auto-approve / auto-reject ──────────────────── */
   try {
+    /* 1a. Reject what can never be enriched, and so can never be screened.
+     *
+     * enrichPendingGlobally selects only
+     *   icpMatchScore >= COALESCE(minConfidence, ENRICH_MIN_CONFIDENCE_DEFAULT)
+     *   OR icpMatchScore = 0
+     * so a row scored between 1 and the gate satisfies neither branch. It is
+     * never enriched, so enrichmentStatus stays 'pending', so the pass below
+     * (which reads only 'complete') never sees it, so sequenceStatus stays
+     * 'pending' — forever, with no record anywhere of why.
+     *
+     * Measured on prod 2026-08-16: 44 of CommunityForce's 258 queued
+     * prospects, and EVERY enrichment-pending row across all three active
+     * campaigns sat in this band while not one eligible row did. Enrichment
+     * had already taken everything it was allowed to touch; what remained was
+     * not a backlog, it was sediment.
+     *
+     * Same rule this file applies everywhere else: a row that cannot proceed
+     * must leave the set rather than linger in it. `skipped` is the existing
+     * vocabulary for that and it surfaces in Rejections with a reason, which
+     * is the point — the previous state was indistinguishable from "we have
+     * not got to it yet".
+     *
+     * ⚠️ Note what this does NOT do: `targetProspectCount` is checked with an
+     * unfiltered count(*), so rejected rows still count toward it. This does
+     * not free queue headroom and will not unblock discovery.
+     *
+     * The predicate is deliberately the exact inverse of the selector's and
+     * shares its constant. Written out in full rather than assembled from
+     * variables, because an UPDATE whose WHERE cannot be read at the statement
+     * is one edit away from losing its workspace scope unnoticed. */
+    const gate = campaign.minConfidence ?? ENRICH_MIN_CONFIDENCE_DEFAULT;
+    const [gateReject] = await db.execute(sql`
+      UPDATE \`prospect_queue\`
+      SET \`sequenceStatus\` = 'skipped',
+          \`rejectedAt\` = NOW(),
+          \`rejectionReason\` = CONCAT('Auto-screened: ICP match ', \`icpMatchScore\`,
+            '/100 is below this campaign''s enrichment gate of ', ${gate},
+            ' — never eligible for enrichment, so never screenable')
+      WHERE \`campaignId\` = ${campId}
+        AND \`workspaceId\` = ${wsId}
+        AND \`sequenceStatus\` = 'pending'
+        AND \`enrichmentStatus\` IN ('pending', 'enriching')
+        AND \`icpMatchScore\` > 0
+        AND \`icpMatchScore\` < ${gate}`);
+    const gateRejected = (gateReject as { affectedRows?: number })?.affectedRows ?? 0;
+    if (gateRejected > 0) {
+      result.rejected += gateRejected;
+      await emitLog(wsId, campId, "screen", "info",
+        `${gateRejected} prospect${gateRejected === 1 ? "" : "s"} rejected — ICP match below the enrichment gate of ${gate}, so they could never be enriched or screened.`);
+    }
+
     const enriched = await db
       .select()
       .from(prospectQueue)
