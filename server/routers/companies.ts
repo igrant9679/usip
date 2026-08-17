@@ -156,10 +156,25 @@ export const companiesRouter = router({
     }),
 
   /* ── association ── */
-  backfill: workspaceProcedure.mutation(async ({ ctx }) => {
-    requireRole(ctx.member.role, "manager");
-    return associateUnlinkedProspects(ctx.workspace.id);
-  }),
+  /**
+   * Link every unlinked prospect to a company (creating accounts where none
+   * matches). `dryRun` returns the plan — counts, the accounts it would
+   * create, any same-name collisions, the conflicts — and writes nothing.
+   * A real run is reversible with `undoAssociation` scoped to its start
+   * time, which the audit row records.
+   */
+  backfill: workspaceProcedure
+    .input(z.object({ dryRun: z.boolean().default(false) }).optional())
+    .mutation(async ({ ctx, input }) => {
+      requireRole(ctx.member.role, "manager");
+      const dryRun = input?.dryRun === true;
+      const startedAt = new Date().toISOString();
+      const result = await associateUnlinkedProspects(ctx.workspace.id, 3000, "prospect_import", { dryRun });
+      if (!dryRun) {
+        await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "association_run", entityId: 0, after: { startedAt, ...result } });
+      }
+      return { startedAt, ...result };
+    }),
 
   /* ── enrichment ── */
   enrich: workspaceProcedure

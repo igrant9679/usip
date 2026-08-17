@@ -32,6 +32,11 @@ export interface AssociationResult {
   created: boolean;
   status: "linked" | "needs_review" | "conflict" | "missing";
   score: number;
+  /** What the decision was made from — filled on dry runs so a plan can be
+   *  read without a database. `viaLinkedIn` says the company came from the
+   *  person's LinkedIn profile rather than the record's own fields. */
+  input?: { name: string | null; domain: string | null; emailDomain: string | null; viaLinkedIn: boolean };
+  reasons?: string[];
 }
 
 /**
@@ -208,12 +213,17 @@ async function linkPerson(opts: {
 
 /**
  * Associate one prospect to a company. Returns the resolution. Never throws.
+ *
+ * `dryRun` makes the same decision and writes nothing — no account, no link,
+ * no status — and returns it with the input and reasons attached, so a whole
+ * run can be planned and read before it moves anything.
  */
 export async function associateProspectToCompany(prospect: {
   id: number; workspaceId: number; company?: string | null; companyDomain?: string | null;
   email?: string | null; title?: string | null; city?: string | null; state?: string | null; country?: string | null;
-}, opts?: { sourceType?: string; linkedin?: LinkedInCompanyFacts | null }): Promise<AssociationResult> {
+}, opts?: { sourceType?: string; linkedin?: LinkedInCompanyFacts | null; dryRun?: boolean }): Promise<AssociationResult> {
   const sourceType = opts?.sourceType ?? "prospect_import";
+  const dryRun = opts?.dryRun === true;
   const db = await getDb();
   if (!db) return { accountId: null, globalOrganizationId: null, created: false, status: "missing", score: 0 };
 
@@ -224,10 +234,16 @@ export async function associateProspectToCompany(prospect: {
       ? opts.linkedin
       : (await linkedInCompanyFactsFor(prospect.workspaceId, [prospect.id])).get(prospect.id) ?? null;
     const input = companyInputFromProspect(prospect, linkedin);
+    const viaLinkedIn = !!(linkedin?.companyName?.trim() || linkedin?.companyDomain?.trim());
+    const planInput = {
+      name: input.name ?? null, domain: input.domain ?? null, emailDomain: input.emailDomain ?? null, viaLinkedIn,
+    };
     if (!hasUsableIdentity(input)) {
-      await db.update(prospects).set({ companyMatchStatus: "missing" } as never)
-        .where(and(eq(prospects.workspaceId, prospect.workspaceId), eq(prospects.id, prospect.id)));
-      return { accountId: null, globalOrganizationId: null, created: false, status: "missing", score: 0 };
+      if (!dryRun) {
+        await db.update(prospects).set({ companyMatchStatus: "missing" } as never)
+          .where(and(eq(prospects.workspaceId, prospect.workspaceId), eq(prospects.id, prospect.id)));
+      }
+      return { accountId: null, globalOrganizationId: null, created: false, status: "missing", score: 0, input: planInput, reasons: [] };
     }
 
     const match = await findWorkspaceAccountMatch(prospect.workspaceId, input);
@@ -241,12 +257,21 @@ export async function associateProspectToCompany(prospect: {
       accountId = match.accountId; status = "needs_review";
     } else if (match.confidence === "conflict") {
       // Do not auto-link on conflicting identifiers — flag for review.
-      await db.update(prospects).set({ companyMatchStatus: "conflict" } as never)
-        .where(and(eq(prospects.workspaceId, prospect.workspaceId), eq(prospects.id, prospect.id)));
-      return { accountId: null, globalOrganizationId: null, created: false, status: "conflict", score: match.score };
+      if (!dryRun) {
+        await db.update(prospects).set({ companyMatchStatus: "conflict" } as never)
+          .where(and(eq(prospects.workspaceId, prospect.workspaceId), eq(prospects.id, prospect.id)));
+      }
+      return { accountId: null, globalOrganizationId: null, created: false, status: "conflict", score: match.score, input: planInput, reasons: match.reasons };
+    } else if (dryRun) {
+      // Would create. Nothing to point at yet.
+      return { accountId: null, globalOrganizationId: null, created: true, status: "linked", score: match.score, input: planInput, reasons: match.reasons };
     } else {
       accountId = await createWorkspaceAccount(prospect.workspaceId, input, sourceType);
       created = true;
+    }
+
+    if (dryRun) {
+      return { accountId, globalOrganizationId: match.globalOrganizationId, created: false, status, score: match.score, input: planInput, reasons: match.reasons };
     }
 
     // Resolve global org for the account.
@@ -277,29 +302,117 @@ export async function associateProspectToCompany(prospect: {
   }
 }
 
+export interface AssociationRunStats {
+  processed: number;
+  /** Auto-linked to an existing account (exact/high) — plus, on a real run,
+   *  people linked to an account the same run created. */
+  linked: number;
+  /** New accounts created (a real run) / people who would create one (dry). */
+  created: number;
+  needsReview: number;
+  conflict: number;
+  missing: number;
+  /** People whose company came from their LinkedIn profile. */
+  viaLinkedIn: number;
+}
+
+/** What a dry run would do, grouped so it can be read. Estimates: in a real
+ *  run the first person at a new company creates it and the rest link to it,
+ *  which is why `wouldCreateAccounts` groups people by name. */
+export interface AssociationPlan extends AssociationRunStats {
+  dryRun: true;
+  /** Distinct new accounts (grouped by normalized name). */
+  wouldCreateAccounts: number;
+  /** New accounts that would carry a domain from a company source. */
+  wouldCreateWithDomain: number;
+  /** New names that ALSO exist as a live account in the workspace — a same-
+   *  name duplicate in the making. Should be zero; if not, the matcher has a
+   *  gap. (Exact name with no conflict links as needs_review by design.) */
+  nameCollisions: Array<{ name: string; people: number }>;
+  /** Names where different people supply different domains: in a real run
+   *  the first creates the account and the rest hit a domain conflict. */
+  domainVariants: Array<{ name: string; domains: string[]; people: number }>;
+  /** Largest would-be creations, for eyeballing what is about to exist. */
+  createSample: Array<{ name: string; domain: string | null; people: number; viaLinkedIn: number }>;
+  /** Some of the conflicts, with the matcher's reasons. */
+  conflictSample: Array<{ prospectId: number; name: string | null; domain: string | null; emailDomain: string | null; reasons: string[] }>;
+}
+
 /**
  * Associate every prospect in the workspace that isn't linked yet (account_id
  * IS NULL) and has usable company data. Serves both post-import sweeps and the
  * one-time backfill. Idempotent — already-linked prospects are skipped.
+ *
+ * `dryRun` plans the same run without writing and returns an AssociationPlan.
  */
 export async function associateUnlinkedProspects(
   workspaceId: number, limit = 3000, sourceType = "prospect_import",
-): Promise<{ processed: number; linked: number; created: number; needsReview: number; missing: number }> {
+  opts?: { dryRun?: boolean },
+): Promise<AssociationRunStats | AssociationPlan> {
   const db = await getDb();
-  const stats = { processed: 0, linked: 0, created: 0, needsReview: 0, missing: 0 };
+  const dryRun = opts?.dryRun === true;
+  const stats: AssociationRunStats = { processed: 0, linked: 0, created: 0, needsReview: 0, conflict: 0, missing: 0, viaLinkedIn: 0 };
   if (!db) return stats;
   const rows = await db.select().from(prospects)
     .where(and(eq(prospects.workspaceId, workspaceId), isNull(prospects.accountId))).limit(limit);
   // One batched read instead of a LinkedIn lookup per prospect.
   const linkedin = await linkedInCompanyFactsFor(workspaceId, rows.map((p) => p.id));
+
+  const creates = new Map<string, { name: string; domains: Map<string, number>; people: number; viaLinkedIn: number }>();
+  const conflicts: AssociationPlan["conflictSample"] = [];
+
   for (const p of rows) {
-    const r = await associateProspectToCompany(p as never, { sourceType, linkedin: linkedin.get(p.id) ?? null });
+    const r = await associateProspectToCompany(p as never, { sourceType, linkedin: linkedin.get(p.id) ?? null, dryRun });
     stats.processed++;
+    if (r.input?.viaLinkedIn) stats.viaLinkedIn++;
     if (r.created) stats.created++;
-    if (r.status === "linked") stats.linked++;
+    // A real run's creations also link the person (kept for the UI's toast);
+    // a dry run's "would create" is not a link to anything yet.
+    if (r.status === "linked" && (!r.created || !dryRun)) stats.linked++;
     else if (r.status === "needs_review") stats.needsReview++;
+    else if (r.status === "conflict") stats.conflict++;
     else if (r.status === "missing") stats.missing++;
+
+    if (!dryRun) continue;
+    if (r.created && r.input) {
+      const key = normalizeCompanyName(r.input.name) || normalizeDomain(r.input.domain) || "?";
+      const g = creates.get(key) ?? { name: r.input.name ?? r.input.domain ?? "?", domains: new Map(), people: 0, viaLinkedIn: 0 };
+      g.people++;
+      if (r.input.viaLinkedIn) g.viaLinkedIn++;
+      const d = normalizeDomain(r.input.domain);
+      if (d) g.domains.set(d, (g.domains.get(d) ?? 0) + 1);
+      creates.set(key, g);
+    } else if (r.status === "conflict" && conflicts.length < 25 && r.input) {
+      conflicts.push({ prospectId: p.id, name: r.input.name, domain: r.input.domain, emailDomain: r.input.emailDomain, reasons: r.reasons ?? [] });
+    }
   }
-  return stats;
+  if (!dryRun) return stats;
+
+  // Which of the would-be names already exist live in this workspace?
+  const names = Array.from(creates.keys()).filter((k) => k !== "?");
+  const existing = new Set<string>();
+  for (let i = 0; i < names.length; i += 500) {
+    const chunk = names.slice(i, i + 500);
+    const found = await db.select({ n: accounts.normalizedName }).from(accounts)
+      .where(and(eq(accounts.workspaceId, workspaceId), isNull(accounts.archivedAt), inArray(accounts.normalizedName, chunk)));
+    for (const f of found) if (f.n) existing.add(f.n);
+  }
+
+  const groups = Array.from(creates.entries());
+  const plan: AssociationPlan = {
+    ...stats, dryRun: true,
+    wouldCreateAccounts: groups.length,
+    wouldCreateWithDomain: groups.filter(([, g]) => g.domains.size > 0).length,
+    nameCollisions: groups.filter(([k]) => existing.has(k)).map(([, g]) => ({ name: g.name, people: g.people })),
+    domainVariants: groups.filter(([, g]) => g.domains.size > 1)
+      .map(([, g]) => ({ name: g.name, domains: Array.from(g.domains.keys()), people: g.people })),
+    createSample: groups.sort((a, b) => b[1].people - a[1].people).slice(0, 40).map(([, g]) => ({
+      name: g.name,
+      domain: g.domains.size ? Array.from(g.domains.entries()).sort((a, b) => b[1] - a[1])[0][0] : null,
+      people: g.people, viaLinkedIn: g.viaLinkedIn,
+    })),
+    conflictSample: conflicts,
+  };
+  return plan;
 }
 
