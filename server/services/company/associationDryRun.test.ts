@@ -137,8 +137,9 @@ describe("associateUnlinkedProspects dryRun plan", () => {
     expect(plan.wouldCreateAccounts).toBe(1); // …one account ("newco", suffix stripped)
     expect(plan.wouldCreateWithDomain).toBe(1);
     expect(plan.needsReview).toBe(1);        // exact name only → reviewable link
-    expect(plan.linked).toBe(1);             // name + mailbox → auto-link (85): the stored fiserv.com equalled the mailbox and was demoted
-    expect(plan.domainDemotedToMailbox).toBe(1);
+    expect(plan.linked).toBe(1);             // stored fiserv.com equals the mailbox but the NAME vouches for it → kept → exact domain
+    expect(plan.domainDemotedToMailbox).toBe(0);
+    expect(plan.domainKeptByName).toBe(1);
     expect(plan.namePlaceholders).toBe(0);
     expect(plan.nameUrls).toBe(0);
     expect(plan.missing).toBe(1);

@@ -98,6 +98,68 @@ export function nameSimilarity(a?: string | null, b?: string | null): number {
   return inter / (ta.size + tb.size - inter);
 }
 
+/**
+ * Words that say what KIND of organisation something is, not WHICH one. They
+ * never vouch for a domain on their own ("Community Free Library" ↔ nioga.org
+ * shares nothing that identifies it).
+ */
+const CONNECTIVES = ["the", "of", "and", "for", "at", "in", "on", "a", "an", "&"];
+const GENERIC_ORG_WORDS = new Set([
+  ...CONNECTIVES,
+  "university", "college", "school", "schools", "academy", "institute", "institution",
+  "foundation", "association", "society", "center", "centre", "council", "alliance",
+  "company", "corporation", "corp", "inc", "llc", "ltd", "co", "group", "holdings",
+  "international", "national", "american", "america", "united", "states", "us", "usa", "global",
+  "public", "community", "free", "library", "libraries", "memorial",
+  "services", "service", "solutions", "systems", "partners", "technologies", "technology",
+  "health", "healthcare", "medical", "hospital", "clinic",
+  "state", "county", "city", "area", "regional", "district", "department", "office",
+  "board", "trust", "fund", "federal", "government", "authority", "agency", "bureau",
+]);
+
+/**
+ * Does the company NAME vouch for this domain? True when a distinctive name
+ * token (not a generic organisation word, ≥4 letters) sits inside a domain
+ * label, or the name's initials ARE a label.
+ *
+ *   "Marquette University" ↔ marquette.edu       → true  (token)
+ *   "Bowie State University" ↔ bowiestate.edu    → true  (token, substring)
+ *   "Virginia Commonwealth University" ↔ vcu.edu → true  (initials)
+ *   "Washington and Lee University" ↔ wlu.edu    → true  (initials w/o connectives)
+ *   "The San Francisco Foundation" ↔ sff.org     → true  (initials w/o connectives)
+ *   "Holy Cross Academy" ↔ bluefrog.com          → false
+ *   "Oxford Memorial Library" ↔ stny.rr.com      → false
+ *   "National Park Foundation" ↔ nps.gov         → false (npf ≠ nps)
+ *
+ * Why it exists: a prospect's stored companyDomain often equals their mailbox
+ * domain, and that is either an employee at their org (right) or a trustee
+ * carrying a day-job mailbox that got copied into the company field (wrong).
+ * The two are indistinguishable from the fields alone; the name is the one
+ * extra witness we hold. Weak by design — false positives exist ("Southern
+ * University" ↔ southern.edu) — so callers use it to KEEP a domain that would
+ * otherwise be set aside, never to invent one.
+ */
+export function nameVouchesForDomain(name?: string | null, domain?: string | null): boolean {
+  const d = normalizeDomain(domain);
+  if (!d) return false;
+  const labels = d.split(".").slice(0, -1).filter(Boolean); // drop the TLD
+  if (labels.length === 0) return false;
+  const joined = labels.join("");
+  const all = normalizeCompanyName(name).split(" ").filter(Boolean);
+  if (all.length === 0) return false;
+  const distinctive = all.filter((t) => !GENERIC_ORG_WORDS.has(t));
+  for (const t of distinctive) {
+    if (t.length >= 4 && joined.includes(t)) return true;
+  }
+  const initials = (ts: string[]) => ts.map((t) => t[0]).join("");
+  const connective = new Set(CONNECTIVES);
+  const variants = [all, all.filter((t) => !connective.has(t)), distinctive];
+  for (const acr of Array.from(new Set(variants.map(initials)))) {
+    if (acr.length >= 3 && labels.includes(acr)) return true;
+  }
+  return false;
+}
+
 /** A display name → initials (max 2) for the fallback avatar. */
 export function companyInitials(name?: string | null): string {
   const parts = (name ?? "").trim().split(/\s+/).filter(Boolean);

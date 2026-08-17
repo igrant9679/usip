@@ -17,7 +17,7 @@ import {
   globalOrganizations, organizationDomains, accountDomains, activities,
 } from "../../../drizzle/schema";
 import {
-  normalizeCompanyName, normalizeDomain, normalizeWebsite, businessDomainFromEmail,
+  normalizeCompanyName, normalizeDomain, normalizeWebsite, businessDomainFromEmail, nameVouchesForDomain,
 } from "./normalize";
 import {
   findWorkspaceAccountMatch, findGlobalOrganizationMatch, shouldAutoLink,
@@ -44,8 +44,11 @@ export interface AssociationResult {
 /** How the record's own company fields were read — reported by dry runs. */
 export interface RecordCompanyRead {
   /** The stored companyDomain was set aside because it equals the person's
-   *  mailbox domain and LinkedIn did not supply it (see below). */
+   *  mailbox domain and nothing vouches for it (see below). */
   domainDemotedToMailbox: boolean;
+  /** The stored companyDomain equals the mailbox domain but was KEPT because
+   *  the company name vouches for it ("Marquette University" ↔ marquette.edu). */
+  domainKeptByName: boolean;
   /** The stored company name was a placeholder ("<unknown>", "n/a"…). */
   namePlaceholder: boolean;
   /** The stored company name was a URL and was read as one. */
@@ -72,7 +75,9 @@ export interface RecordCompanyRead {
  *    When the stored domain EQUALS the mailbox domain we cannot tell
  *    agreement from copying, and a blank beats a plausible wrong one; it is
  *    demoted to mailbox status (recognition only, +35) unless LinkedIn wrote
- *    it. When it differs it cannot have been copied and is kept.
+ *    it or the company NAME vouches for it (nameVouchesForDomain: "Marquette
+ *    University" ↔ marquette.edu keeps; "Holy Cross Academy" ↔ bluefrog.com
+ *    does not). When it differs it cannot have been copied and is kept.
  *  - `company` can be a placeholder token ("<unknown>") — truthy garbage
  *    that would mint an account named "<unknown>". shared/fieldHygiene is
  *    the one cleaner for that vocabulary.
@@ -102,7 +107,9 @@ export function companyInputFromProspect(
   // drops social hosts ("facebook.com" is nobody's company domain).
   const storedDomain = companyDomainFromUrl(usableDomainOrNull(p.companyDomain));
   const prov = (p.fieldProvenance as { companyDomain?: { source?: string } } | null | undefined)?.companyDomain?.source;
-  const demote = !!storedDomain && !!emailDomain && normalizeDomain(storedDomain) === normalizeDomain(emailDomain) && prov !== "linkedin";
+  const equalsMailbox = !!storedDomain && !!emailDomain && normalizeDomain(storedDomain) === normalizeDomain(emailDomain);
+  const vouched = equalsMailbox && nameVouchesForDomain(recName, storedDomain);
+  const demote = equalsMailbox && prov !== "linkedin" && !vouched;
   const recDomain = demote ? null : storedDomain;
 
   const liName = linkedin?.companyName?.trim() || null;
@@ -111,6 +118,7 @@ export function companyInputFromProspect(
     // Reported only when it changed the outcome — a LinkedIn domain
     // supersedes the record's either way.
     read.domainDemotedToMailbox = demote && !liDomain;
+    read.domainKeptByName = vouched && prov !== "linkedin" && !liDomain;
     read.namePlaceholder = namePlaceholder;
     read.nameWasUrl = nameWasUrl;
   }
@@ -297,7 +305,7 @@ export async function associateProspectToCompany(prospect: {
     const linkedin = opts?.linkedin !== undefined
       ? opts.linkedin
       : (await linkedInCompanyFactsFor(prospect.workspaceId, [prospect.id])).get(prospect.id) ?? null;
-    const read: RecordCompanyRead = { domainDemotedToMailbox: false, namePlaceholder: false, nameWasUrl: false };
+    const read: RecordCompanyRead = { domainDemotedToMailbox: false, domainKeptByName: false, namePlaceholder: false, nameWasUrl: false };
     const input = companyInputFromProspect(prospect, linkedin, read);
     const viaLinkedIn = !!(linkedin?.companyName?.trim() || linkedin?.companyDomain?.trim());
     const planInput = {
@@ -382,6 +390,9 @@ export interface AssociationRunStats {
   /** People whose stored companyDomain equalled their mailbox domain and was
    *  read as a mailbox (recognition only), not as the company's domain. */
   domainDemotedToMailbox: number;
+  /** People whose stored companyDomain equalled their mailbox domain and was
+   *  KEPT because the company name vouches for it. */
+  domainKeptByName: number;
   /** People whose stored company name was a placeholder / a URL. */
   namePlaceholders: number;
   nameUrls: number;
@@ -422,7 +433,7 @@ export async function associateUnlinkedProspects(
 ): Promise<AssociationRunStats | AssociationPlan> {
   const db = await getDb();
   const dryRun = opts?.dryRun === true;
-  const stats: AssociationRunStats = { processed: 0, linked: 0, created: 0, needsReview: 0, conflict: 0, missing: 0, viaLinkedIn: 0, domainDemotedToMailbox: 0, namePlaceholders: 0, nameUrls: 0 };
+  const stats: AssociationRunStats = { processed: 0, linked: 0, created: 0, needsReview: 0, conflict: 0, missing: 0, viaLinkedIn: 0, domainDemotedToMailbox: 0, domainKeptByName: 0, namePlaceholders: 0, nameUrls: 0 };
   if (!db) return stats;
   const rows = await db.select().from(prospects)
     .where(and(eq(prospects.workspaceId, workspaceId), isNull(prospects.accountId))).limit(limit);
@@ -437,6 +448,7 @@ export async function associateUnlinkedProspects(
     stats.processed++;
     if (r.input?.viaLinkedIn) stats.viaLinkedIn++;
     if (r.input?.read.domainDemotedToMailbox) stats.domainDemotedToMailbox++;
+    if (r.input?.read.domainKeptByName) stats.domainKeptByName++;
     if (r.input?.read.namePlaceholder) stats.namePlaceholders++;
     if (r.input?.read.nameWasUrl) stats.nameUrls++;
     if (r.created) stats.created++;

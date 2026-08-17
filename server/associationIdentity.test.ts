@@ -45,7 +45,7 @@ describe("the record's own companyDomain is read with the mailbox caution (dry r
   // "Holy Cross Academy" with bluefrog.com, "New Woodstock Free Library"
   // with parks.ny.gov. Equal-to-mailbox cannot be told from copied.
   it("demotes a stored domain that equals the mailbox domain to recognition only", () => {
-    const read = { domainDemotedToMailbox: false, namePlaceholder: false, nameWasUrl: false };
+    const read = { domainDemotedToMailbox: false, domainKeptByName: false, namePlaceholder: false, nameWasUrl: false };
     const input = companyInputFromProspect(
       { company: "Oxford Memorial Library", companyDomain: "stny.rr.com", email: "trustee@stny.rr.com" }, null, read,
     );
@@ -56,8 +56,18 @@ describe("the record's own companyDomain is read with the mailbox caution (dry r
     expect(read.domainDemotedToMailbox).toBe(true);
   });
 
+  it("keeps an equal domain when the company NAME vouches for it (an employee at their org)", () => {
+    const read = { domainDemotedToMailbox: false, domainKeptByName: false, namePlaceholder: false, nameWasUrl: false };
+    const input = companyInputFromProspect(
+      { company: "Marquette University", companyDomain: "marquette.edu", email: "dean@marquette.edu" }, null, read,
+    );
+    expect(input.domain).toBe("marquette.edu");
+    expect(read.domainDemotedToMailbox).toBe(false);
+    expect(read.domainKeptByName).toBe(true);
+  });
+
   it("keeps a stored domain that differs from the mailbox — it cannot have been copied", () => {
-    const read = { domainDemotedToMailbox: false, namePlaceholder: false, nameWasUrl: false };
+    const read = { domainDemotedToMailbox: false, domainKeptByName: false, namePlaceholder: false, nameWasUrl: false };
     const input = companyInputFromProspect(
       { company: "Takoma Children's School", companyDomain: "takomachildren.org", email: "parent@dc.gov" }, null, read,
     );
@@ -90,14 +100,14 @@ describe("the record's own companyDomain is read with the mailbox caution (dry r
 
 describe("the record's own company name is read with hygiene", () => {
   it("a placeholder token is not a name (it would have minted an account called <unknown>)", () => {
-    const read = { domainDemotedToMailbox: false, namePlaceholder: false, nameWasUrl: false };
+    const read = { domainDemotedToMailbox: false, domainKeptByName: false, namePlaceholder: false, nameWasUrl: false };
     const input = companyInputFromProspect({ company: "<unknown>", companyDomain: null, email: "j@70facesmedia.org" }, null, read);
     expect(input.name).toBeNull();
     expect(read.namePlaceholder).toBe(true);
   });
 
   it("a URL name is read as the repair reads it: slug as name, own host as website, social host dropped", () => {
-    const read = { domainDemotedToMailbox: false, namePlaceholder: false, nameWasUrl: false };
+    const read = { domainDemotedToMailbox: false, domainKeptByName: false, namePlaceholder: false, nameWasUrl: false };
     const social = companyInputFromProspect({ company: "Https://facebook.com/acxiomcorp", email: "j@gmail.com" }, null, read);
     expect(social.name).toBe("acxiomcorp");
     expect(social.website).toBeNull();
