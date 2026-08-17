@@ -23,6 +23,8 @@ import {
   findWorkspaceAccountMatch, findGlobalOrganizationMatch, shouldAutoLink,
   type CompanyInput,
 } from "./matchingService";
+import { cleanScrapedField, usableDomainOrNull } from "../../../shared/fieldHygiene";
+import { companyDomainFromUrl, companyFromUrl, looksLikeUrl } from "./nameRepair";
 
 const insertId = (res: unknown): number => Number((res as { insertId?: number }[])[0]?.insertId ?? 0);
 
@@ -35,8 +37,19 @@ export interface AssociationResult {
   /** What the decision was made from — filled on dry runs so a plan can be
    *  read without a database. `viaLinkedIn` says the company came from the
    *  person's LinkedIn profile rather than the record's own fields. */
-  input?: { name: string | null; domain: string | null; emailDomain: string | null; viaLinkedIn: boolean };
+  input?: { name: string | null; domain: string | null; emailDomain: string | null; viaLinkedIn: boolean; read: RecordCompanyRead };
   reasons?: string[];
+}
+
+/** How the record's own company fields were read — reported by dry runs. */
+export interface RecordCompanyRead {
+  /** The stored companyDomain was set aside because it equals the person's
+   *  mailbox domain and LinkedIn did not supply it (see below). */
+  domainDemotedToMailbox: boolean;
+  /** The stored company name was a placeholder ("<unknown>", "n/a"…). */
+  namePlaceholder: boolean;
+  /** The stored company name was a URL and was read as one. */
+  nameWasUrl: boolean;
 }
 
 /**
@@ -47,22 +60,68 @@ export interface AssociationResult {
  * profile states where they actually work; their mailbox does not. A parent,
  * board member or partner carries dc.gov, ftc.gov or a spouse's employer, and
  * treating that as their company is what split one org into six accounts.
+ *
+ * The record's own fields are read with three cautions, each learned from a
+ * live dry run on 2026-08-17:
+ *
+ *  - `companyDomain` is NOT always a company source. Two enrichment paths
+ *    fill a blank one from the person's mailbox (comprehensivePass §1b, the
+ *    People-list read-repair; both ledger `email_domain`), and discovery's
+ *    extraction has done the same without a ledger — "Oxford Memorial
+ *    Library" arrived with stny.rr.com, "Holy Cross Academy" with bluefrog.com.
+ *    When the stored domain EQUALS the mailbox domain we cannot tell
+ *    agreement from copying, and a blank beats a plausible wrong one; it is
+ *    demoted to mailbox status (recognition only, +35) unless LinkedIn wrote
+ *    it. When it differs it cannot have been copied and is kept.
+ *  - `company` can be a placeholder token ("<unknown>") — truthy garbage
+ *    that would mint an account named "<unknown>". shared/fieldHygiene is
+ *    the one cleaner for that vocabulary.
+ *  - `company` can be a URL ("https://facebook.com/acxiomcorp", "carrier.com").
+ *    Read the way the account-name repair reads it: slug as the name, the
+ *    host as a website candidate only when it is the company's own site.
  */
 export function companyInputFromProspect(
   p: {
     company?: string | null; companyDomain?: string | null; email?: string | null;
     city?: string | null; state?: string | null; country?: string | null;
+    fieldProvenance?: unknown;
   },
   linkedin?: { companyName?: string | null; companyDomain?: string | null } | null,
+  read?: RecordCompanyRead,
 ): CompanyInput {
+  const emailDomain = businessDomainFromEmail(p.email) || null;
+
+  // The record's name, cleaned.
+  const rawName = cleanScrapedField(p.company, 200) ?? null;
+  const namePlaceholder = !!(p.company && String(p.company).trim()) && !rawName;
+  const nameWasUrl = looksLikeUrl(rawName);
+  const recName = nameWasUrl ? companyFromUrl(rawName) : rawName;
+  const hostFromName = nameWasUrl ? companyDomainFromUrl(rawName) : null; // null for social hosts
+
+  // The record's domain, with the mailbox caution. companyDomainFromUrl also
+  // drops social hosts ("facebook.com" is nobody's company domain).
+  const storedDomain = companyDomainFromUrl(usableDomainOrNull(p.companyDomain));
+  const prov = (p.fieldProvenance as { companyDomain?: { source?: string } } | null | undefined)?.companyDomain?.source;
+  const demote = !!storedDomain && !!emailDomain && normalizeDomain(storedDomain) === normalizeDomain(emailDomain) && prov !== "linkedin";
+  const recDomain = demote ? null : storedDomain;
+
+  const liName = linkedin?.companyName?.trim() || null;
+  const liDomain = linkedin?.companyDomain?.trim() || null;
+  if (read) {
+    // Reported only when it changed the outcome — a LinkedIn domain
+    // supersedes the record's either way.
+    read.domainDemotedToMailbox = demote && !liDomain;
+    read.namePlaceholder = namePlaceholder;
+    read.nameWasUrl = nameWasUrl;
+  }
   return {
-    name: (linkedin?.companyName?.trim() || null) ?? p.company ?? null,
-    domain: (linkedin?.companyDomain?.trim() || null) ?? p.companyDomain ?? null,
-    website: (linkedin?.companyDomain?.trim() || null) ?? p.companyDomain ?? null,
+    name: liName ?? recName,
+    domain: liDomain ?? recDomain,
+    website: liDomain ?? recDomain ?? hostFromName,
     // Kept ONLY so matching can recognise an existing account that already
-    // owns this domain. It is no longer allowed to name or create a company —
+    // owns this domain. It is never allowed to name or create a company —
     // see createWorkspaceAccount and hasUsableIdentity.
-    emailDomain: businessDomainFromEmail(p.email) || null,
+    emailDomain,
     hqCity: p.city ?? null, hqState: p.state ?? null, hqCountry: p.country ?? null,
   };
 }
@@ -142,7 +201,9 @@ export async function upsertGlobalOrganization(input: CompanyInput): Promise<num
   // brand/adopt path fills it later; a mailbox domain is a wrong answer that
   // then poisons matching, linking and email-pattern enrichment.
   const domain = normalizeDomain(input.domain) || normalizeDomain(input.website) || null;
-  const name = (input.name && input.name.trim()) || domain || "Unknown company";
+  // A domain-only identity is named by its label ("70facesmedia"), the way
+  // the URL-name repair would name it — never by the URL-shaped domain string.
+  const name = (input.name && input.name.trim()) || companyFromUrl(domain) || domain || "Unknown company";
   const res = await db.insert(globalOrganizations).values({
     name: name.slice(0, 200), normalizedName: normalizeCompanyName(name) || name.toLowerCase(),
     domain, normalizedDomain: domain, websiteUrl: normalizeWebsite(input.website) || (domain ? `https://${domain}` : null),
@@ -169,7 +230,9 @@ export async function createWorkspaceAccount(ws: number, input: CompanyInput, so
   // brand/adopt path fills it later; a mailbox domain is a wrong answer that
   // then poisons matching, linking and email-pattern enrichment.
   const domain = normalizeDomain(input.domain) || normalizeDomain(input.website) || null;
-  const name = (input.name && input.name.trim()) || domain || "Unknown company";
+  // A domain-only identity is named by its label ("70facesmedia"), the way
+  // the URL-name repair would name it — never by the URL-shaped domain string.
+  const name = (input.name && input.name.trim()) || companyFromUrl(domain) || domain || "Unknown company";
   const orgId = await upsertGlobalOrganization(input);
   const res = await db.insert(accounts).values({
     workspaceId: ws, name: name.slice(0, 200), domain,
@@ -221,6 +284,7 @@ async function linkPerson(opts: {
 export async function associateProspectToCompany(prospect: {
   id: number; workspaceId: number; company?: string | null; companyDomain?: string | null;
   email?: string | null; title?: string | null; city?: string | null; state?: string | null; country?: string | null;
+  fieldProvenance?: unknown;
 }, opts?: { sourceType?: string; linkedin?: LinkedInCompanyFacts | null; dryRun?: boolean }): Promise<AssociationResult> {
   const sourceType = opts?.sourceType ?? "prospect_import";
   const dryRun = opts?.dryRun === true;
@@ -233,10 +297,11 @@ export async function associateProspectToCompany(prospect: {
     const linkedin = opts?.linkedin !== undefined
       ? opts.linkedin
       : (await linkedInCompanyFactsFor(prospect.workspaceId, [prospect.id])).get(prospect.id) ?? null;
-    const input = companyInputFromProspect(prospect, linkedin);
+    const read: RecordCompanyRead = { domainDemotedToMailbox: false, namePlaceholder: false, nameWasUrl: false };
+    const input = companyInputFromProspect(prospect, linkedin, read);
     const viaLinkedIn = !!(linkedin?.companyName?.trim() || linkedin?.companyDomain?.trim());
     const planInput = {
-      name: input.name ?? null, domain: input.domain ?? null, emailDomain: input.emailDomain ?? null, viaLinkedIn,
+      name: input.name ?? null, domain: input.domain ?? null, emailDomain: input.emailDomain ?? null, viaLinkedIn, read,
     };
     if (!hasUsableIdentity(input)) {
       if (!dryRun) {
@@ -295,7 +360,7 @@ export async function associateProspectToCompany(prospect: {
     });
     if (!created) await emitCompanyActivity(prospect.workspaceId, accountId!, "Prospect linked to company");
 
-    return { accountId, globalOrganizationId: orgId, created, status, score: match.score };
+    return { accountId, globalOrganizationId: orgId, created, status, score: match.score, input: planInput, reasons: match.reasons };
   } catch (e) {
     console.error(`[company] associate prospect ${prospect.id} failed:`, (e as Error).message);
     return { accountId: null, globalOrganizationId: null, created: false, status: "missing", score: 0 };
@@ -314,6 +379,12 @@ export interface AssociationRunStats {
   missing: number;
   /** People whose company came from their LinkedIn profile. */
   viaLinkedIn: number;
+  /** People whose stored companyDomain equalled their mailbox domain and was
+   *  read as a mailbox (recognition only), not as the company's domain. */
+  domainDemotedToMailbox: number;
+  /** People whose stored company name was a placeholder / a URL. */
+  namePlaceholders: number;
+  nameUrls: number;
 }
 
 /** What a dry run would do, grouped so it can be read. Estimates: in a real
@@ -351,7 +422,7 @@ export async function associateUnlinkedProspects(
 ): Promise<AssociationRunStats | AssociationPlan> {
   const db = await getDb();
   const dryRun = opts?.dryRun === true;
-  const stats: AssociationRunStats = { processed: 0, linked: 0, created: 0, needsReview: 0, conflict: 0, missing: 0, viaLinkedIn: 0 };
+  const stats: AssociationRunStats = { processed: 0, linked: 0, created: 0, needsReview: 0, conflict: 0, missing: 0, viaLinkedIn: 0, domainDemotedToMailbox: 0, namePlaceholders: 0, nameUrls: 0 };
   if (!db) return stats;
   const rows = await db.select().from(prospects)
     .where(and(eq(prospects.workspaceId, workspaceId), isNull(prospects.accountId))).limit(limit);
@@ -365,6 +436,9 @@ export async function associateUnlinkedProspects(
     const r = await associateProspectToCompany(p as never, { sourceType, linkedin: linkedin.get(p.id) ?? null, dryRun });
     stats.processed++;
     if (r.input?.viaLinkedIn) stats.viaLinkedIn++;
+    if (r.input?.read.domainDemotedToMailbox) stats.domainDemotedToMailbox++;
+    if (r.input?.read.namePlaceholder) stats.namePlaceholders++;
+    if (r.input?.read.nameWasUrl) stats.nameUrls++;
     if (r.created) stats.created++;
     // A real run's creations also link the person (kept for the UI's toast);
     // a dry run's "would create" is not a link to anything yet.

@@ -27,7 +27,7 @@ describe("LinkedIn is the company source", () => {
   });
 
   it("falls back to the record's fields when LinkedIn has nothing", () => {
-    const input = companyInputFromProspect({ company: "Acme", companyDomain: "acme.com", email: "j@acme.com" }, null);
+    const input = companyInputFromProspect({ company: "Acme", companyDomain: "acme.com", email: "j@gmail.com" }, null);
     expect(input.name).toBe("Acme");
     expect(input.domain).toBe("acme.com");
   });
@@ -36,6 +36,76 @@ describe("LinkedIn is the company source", () => {
     const input = companyInputFromProspect({ company: "Acme", companyDomain: "acme.com" }, { companyName: "  ", companyDomain: "" });
     expect(input.name).toBe("Acme");
     expect(input.domain).toBe("acme.com");
+  });
+});
+
+describe("the record's own companyDomain is read with the mailbox caution (dry run 2026-08-17)", () => {
+  // Discovery and two enrichment paths have filled companyDomain from the
+  // person's mailbox: "Oxford Memorial Library" arrived with stny.rr.com,
+  // "Holy Cross Academy" with bluefrog.com, "New Woodstock Free Library"
+  // with parks.ny.gov. Equal-to-mailbox cannot be told from copied.
+  it("demotes a stored domain that equals the mailbox domain to recognition only", () => {
+    const read = { domainDemotedToMailbox: false, namePlaceholder: false, nameWasUrl: false };
+    const input = companyInputFromProspect(
+      { company: "Oxford Memorial Library", companyDomain: "stny.rr.com", email: "trustee@stny.rr.com" }, null, read,
+    );
+    expect(input.name).toBe("Oxford Memorial Library");
+    expect(input.domain).toBeNull();
+    expect(input.website).toBeNull();
+    expect(input.emailDomain).toBe("stny.rr.com"); // still recognises an account that owns it
+    expect(read.domainDemotedToMailbox).toBe(true);
+  });
+
+  it("keeps a stored domain that differs from the mailbox — it cannot have been copied", () => {
+    const read = { domainDemotedToMailbox: false, namePlaceholder: false, nameWasUrl: false };
+    const input = companyInputFromProspect(
+      { company: "Takoma Children's School", companyDomain: "takomachildren.org", email: "parent@dc.gov" }, null, read,
+    );
+    expect(input.domain).toBe("takomachildren.org");
+    expect(input.emailDomain).toBe("dc.gov");
+    expect(read.domainDemotedToMailbox).toBe(false);
+  });
+
+  it("keeps an equal domain when LinkedIn wrote it (ledger says so)", () => {
+    const input = companyInputFromProspect(
+      { company: "Fiserv", companyDomain: "fiserv.com", email: "j@fiserv.com", fieldProvenance: { companyDomain: { source: "linkedin", confidence: 90 } } },
+      null,
+    );
+    expect(input.domain).toBe("fiserv.com");
+  });
+
+  it("LinkedIn facts are never demoted — they are the company source", () => {
+    const input = companyInputFromProspect(
+      { company: null, companyDomain: null, email: "j@fiserv.com" },
+      { companyName: "Fiserv", companyDomain: "fiserv.com" },
+    );
+    expect(input.domain).toBe("fiserv.com");
+  });
+
+  it("drops a social host stored as the company domain", () => {
+    const input = companyInputFromProspect({ company: "Acxiom", companyDomain: "facebook.com", email: "j@gmail.com" }, null);
+    expect(input.domain).toBeNull();
+  });
+});
+
+describe("the record's own company name is read with hygiene", () => {
+  it("a placeholder token is not a name (it would have minted an account called <unknown>)", () => {
+    const read = { domainDemotedToMailbox: false, namePlaceholder: false, nameWasUrl: false };
+    const input = companyInputFromProspect({ company: "<unknown>", companyDomain: null, email: "j@70facesmedia.org" }, null, read);
+    expect(input.name).toBeNull();
+    expect(read.namePlaceholder).toBe(true);
+  });
+
+  it("a URL name is read as the repair reads it: slug as name, own host as website, social host dropped", () => {
+    const read = { domainDemotedToMailbox: false, namePlaceholder: false, nameWasUrl: false };
+    const social = companyInputFromProspect({ company: "Https://facebook.com/acxiomcorp", email: "j@gmail.com" }, null, read);
+    expect(social.name).toBe("acxiomcorp");
+    expect(social.website).toBeNull();
+    expect(read.nameWasUrl).toBe(true);
+
+    const own = companyInputFromProspect({ company: "carrier.com", email: "j@gmail.com" }, null);
+    expect(own.name).toBe("carrier");
+    expect(own.website).toBe("carrier.com");
   });
 });
 

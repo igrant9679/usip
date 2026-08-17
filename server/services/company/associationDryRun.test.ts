@@ -67,7 +67,7 @@ describe("associateProspectToCompany dryRun", () => {
     expect(r.status).toBe("needs_review");
     expect(r.accountId).toBe(9);
     expect(r.created).toBe(false);
-    expect(r.input).toEqual({ name: "Fiserv", domain: null, emailDomain: null, viaLinkedIn: false });
+    expect(r.input).toMatchObject({ name: "Fiserv", domain: null, emailDomain: null, viaLinkedIn: false });
     expect(r.reasons).toContain("exact name (+50)");
   });
 
@@ -79,7 +79,7 @@ describe("associateProspectToCompany dryRun", () => {
     );
     expect(r.created).toBe(true);
     expect(r.accountId).toBeNull();
-    expect(r.input).toEqual({ name: "NewCo", domain: "newco.org", emailDomain: "dc.gov", viaLinkedIn: false });
+    expect(r.input).toMatchObject({ name: "NewCo", domain: "newco.org", emailDomain: "dc.gov", viaLinkedIn: false });
   });
 
   it("marks LinkedIn-sourced identity and prefers it over the record", async () => {
@@ -137,7 +137,10 @@ describe("associateUnlinkedProspects dryRun plan", () => {
     expect(plan.wouldCreateAccounts).toBe(1); // …one account ("newco", suffix stripped)
     expect(plan.wouldCreateWithDomain).toBe(1);
     expect(plan.needsReview).toBe(1);        // exact name only → reviewable link
-    expect(plan.linked).toBe(1);             // name + domain → auto-link
+    expect(plan.linked).toBe(1);             // name + mailbox → auto-link (85): the stored fiserv.com equalled the mailbox and was demoted
+    expect(plan.domainDemotedToMailbox).toBe(1);
+    expect(plan.namePlaceholders).toBe(0);
+    expect(plan.nameUrls).toBe(0);
     expect(plan.missing).toBe(1);
     expect(plan.conflict).toBe(0);
     expect(plan.nameCollisions).toEqual([]);
