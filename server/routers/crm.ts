@@ -19,6 +19,7 @@ import {
   opportunityContactRoles,
   opportunityStageHistory,
   products,
+  prospects,
   tasks,
   enrollments,
   sendingAccounts,
@@ -435,8 +436,17 @@ export const contactsRouter = router({
         .from(contacts)
         .where(and(eq(contacts.workspaceId, ctx.workspace.id), inArray(contacts.id, input.ids)));
       if (rows.length === 0) return { deleted: 0 };
-      await db.delete(contacts).where(and(eq(contacts.workspaceId, ctx.workspace.id), inArray(contacts.id, rows.map((r) => r.id))));
-      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "delete", entityType: "contact_bulk", entityId: 0, before: { rows }, after: { ids: rows.map((r) => r.id) } });
+      const ids = rows.map((r) => r.id);
+      await db.delete(contacts).where(and(eq(contacts.workspaceId, ctx.workspace.id), inArray(contacts.id, ids)));
+      // People rows point back at their linked contact (prospects.linkedContactId).
+      // A deleted contact must not leave that pointer dangling — a People row
+      // naming a contact id that no longer exists is a stale link that reads
+      // as "has a CRM contact" everywhere it is checked. Nothing cleared it
+      // before; on 2026-08-17 every sampled LSI People row pointed at a contact
+      // about to be deleted. Cleared here, in the same operation, tenant-scoped.
+      await db.update(prospects).set({ linkedContactId: null })
+        .where(and(eq(prospects.workspaceId, ctx.workspace.id), inArray(prospects.linkedContactId, ids)));
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "delete", entityType: "contact_bulk", entityId: 0, before: { rows }, after: { ids } });
       return { deleted: rows.length };
     }),
 
