@@ -59,7 +59,7 @@ import { resolveVerifiedEmail } from "../../services/scraper";
 import { buildBrandContext } from "../../services/brandContext";
 // The A/B metadata row must be keyed by the same step index + variant key the
 // execution queue uses, so both sides read one rule. See shared/variantKeys.ts.
-import { stepIndexOf } from "@shared/areSequenceSteps";
+import { DEFAULT_STEP_GAP_DAYS, defaultDayForStep, stepIndexOf } from "@shared/areSequenceSteps";
 import { DEFAULT_VARIANT_KEY, normalizeVariantKey } from "@shared/variantKeys";
 
 /* ─── ICP Match Scorer ───────────────────────────────────────────────────── */
@@ -545,7 +545,12 @@ export async function generateCampaignTemplate(
   const userContent =
     `## Campaign goal\n${goalText}\n\n` +
     `## Channels enabled\n${JSON.stringify(campaign.channelsEnabled)}\n\n` +
-    `## Cadence rules\n- First step on day 0.\n- 7-day total window for 5-step, 14 days for 7-step.\n- No two consecutive steps on the same channel unless both are email.\n- Final step is a polite break-up.\n\n` +
+    // Days are stated EXACTLY, not as a window for the model to divide. The
+    // old "14-day total window for 7-step" produced 0/3/6/8/10/12/14 — the
+    // model's own arithmetic, uneven and ~2 days apart. DEFAULT_STEP_GAP_DAYS
+    // is the same constant normalizeSequence falls back to, so a sequence
+    // that arrives without days schedules on the rhythm the prompt asked for.
+    `## Cadence rules\n- First step on day 0.\n- Exactly ${DEFAULT_STEP_GAP_DAYS} days between consecutive steps: the day for step i is i × ${DEFAULT_STEP_GAP_DAYS} (${Array.from({ length: stepCount }, (_, i) => defaultDayForStep(i)).join(", ")}).\n- No two consecutive steps on the same channel unless both are email.\n- Final step is a polite break-up.\n\n` +
     `Return ${stepCount} steps. For each: stepIndex (0-based), day (cumulative from start), channel, archetype (one of: opener | value | social_proof | resource | check_in | break_up), skeleton (1–2 sentences describing what to write — placeholders like {hook}, {pain}, {company}, {firstName} for what the personalizer will fill), and ctaPattern (one short sentence like "Open with question, close with a 15-min Tue/Thu offer").`;
 
   const result = await invokeLLM({

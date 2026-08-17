@@ -24,6 +24,25 @@ import { normalizeVariantKey } from "./variantKeys";
 export const ARE_STEP_CHANNELS = ["email", "linkedin", "sms", "voice"] as const;
 export type AreStepChannel = (typeof ARE_STEP_CHANNELS)[number];
 
+/**
+ * Default spacing between consecutive sequence steps, in days. ONE definition:
+ * the template generator's cadence rules and normalizeSequence's fallback both
+ * read this, so the prompt cannot ask for one rhythm while the fallback
+ * schedules another.
+ *
+ * Owner directive 2026-08-17: one week per step. The previous rhythm was
+ * ~2 days (a "14-day total window" for seven steps), which is aggressive for
+ * grants, scholarship and program-office audiences whose inboxes run on
+ * committee and cycle time. A 7-step sequence now spans six weeks (days 0,
+ * 7, 14, 21, 28, 35, 42).
+ */
+export const DEFAULT_STEP_GAP_DAYS = 7;
+
+/** Cumulative day offset for the i-th step under the default cadence. */
+export function defaultDayForStep(i: number): number {
+  return i * DEFAULT_STEP_GAP_DAYS;
+}
+
 export interface NormalizedStep {
   stepIndex: number;
   channel: AreStepChannel;
@@ -68,7 +87,7 @@ export function normalizeSequence(raw: unknown): NormalizedStep[] {
     if (typeof step.day === "number") {
       dayOffset = step.day;
     } else {
-      cumulativeDay += typeof step.waitDays === "number" ? step.waitDays : i === 0 ? 0 : 2;
+      cumulativeDay += typeof step.waitDays === "number" ? step.waitDays : i === 0 ? 0 : DEFAULT_STEP_GAP_DAYS;
       dayOffset = cumulativeDay;
     }
     return {
