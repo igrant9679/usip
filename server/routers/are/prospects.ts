@@ -1535,6 +1535,20 @@ export const prospectsRouter = router({
       return getAbVariantStats(ctx.workspace.id, input.campaignId);
     }),
 
+  /**
+   * One row per SENT message — the individual dispatches getAbVariants rolls
+   * up. Owner (2026-08-17): 31 step-1s dispatched should be 31 cards, not one
+   * specimen. Same two tables, same attribution; see getDispatchStats.
+   */
+  getDispatches: workspaceProcedure
+    .input(z.object({ campaignId: z.number() }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const { getDispatchStats } = await import("../../services/performanceMetrics");
+      return getDispatchStats(ctx.workspace.id, input.campaignId);
+    }),
+
   /** Add a prospect manually */
   /**
    * Read-only data-quality audit over the whole workspace queue (all

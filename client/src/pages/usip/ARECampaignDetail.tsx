@@ -1963,6 +1963,9 @@ export default function ARECampaignDetail() {
     [signalCounts],
   );
   const { data: abVariants } = trpc.are.prospects.getAbVariants.useQuery({ campaignId });
+  // One row per SENT message. The per-step aggregate above still feeds the
+  // Sankey; the cards below are the individual dispatches it rolls up.
+  const { data: dispatches } = trpc.are.prospects.getDispatches.useQuery({ campaignId });
   const { data: scrapeJobs } = trpc.are.scraper.listJobs.useQuery({ campaignId, limit: 25 });
   const { data: rejectionStats } = trpc.are.prospects.getRejectionStats.useQuery({ campaignId });
   const { data: reevalHistory } = trpc.are.prospects.getReevalHistory.useQuery({ campaignId });
@@ -2611,80 +2614,78 @@ export default function ARECampaignDetail() {
                   <StepFunnelSankey funnel={stepFunnel} onSelectStep={(i) => void openStepPreview(i)} />
                 )}
                 <p className="text-sm text-muted-foreground">
-                  The engine writes uniquely personalised copy for every prospect, so it produces a single variant (<strong>A</strong>) per step — there is no shared message to split-test, and a second variant only ever appears on the seeded <strong>[Demo]</strong> campaign. These cards show how each <strong>step</strong> performed, counted from real dispatches; the subject and preview are the most recently generated prospect's opener, shown as an example of that step's copy.
+                  The engine writes uniquely personalised copy for every prospect, so every dispatch is its own message. Each card below is <strong>one message that was actually sent</strong> — who it went to, what it said, and whether that person opened or replied — grouped by step. The bands above are the roll-up of these.
                 </p>
-                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
-                  {abVariants.map((v) => {
-                    // Rates come computed from the server (performanceMetrics) —
-                    // the old client-side maths divided counter columns that were
-                    // never written, so every bar read 0%.
-                    const replyRate = v.replyRate;
-                    const isA = v.variantKey === "A";
+                {(() => {
+                  const list = dispatches ?? [];
+                  const bySteps = new Map<number, typeof list>();
+                  for (const d of list) { const arr = bySteps.get(d.stepIndex) ?? []; arr.push(d); bySteps.set(d.stepIndex, arr); }
+                  const stepAgg = new Map((abVariants ?? []).map((v) => [v.stepIndex, v]));
+                  return Array.from(bySteps.entries()).sort((x, y) => x[0] - y[0]).map(([stepIndex, items]) => {
+                    const agg = stepAgg.get(stepIndex);
                     return (
-                      <Card
-                        key={`${v.stepIndex}-${v.variantKey}`}
-                        className="bg-card border cursor-pointer transition-colors hover:border-primary/40"
-                        role="button"
-                        tabIndex={0}
-                        title="Open this step's message and its stats"
-                        onClick={() => void openStepPreview(v.stepIndex, v.variantKey)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" || e.key === " ") {
-                            e.preventDefault();
-                            void openStepPreview(v.stepIndex, v.variantKey);
-                          }
-                        }}
-                      >
-                        <CardHeader className="pb-2 pt-4 px-4">
-                          <div className="flex items-center gap-2">
-                            <Badge variant="outline" className={`text-[10px] px-2 py-0.5 border font-bold ${isA ? "border-emerald-500/30 text-emerald-600 bg-emerald-500/10" : "border-blue-500/30 text-blue-600 bg-blue-500/10"}`}>
-                              Variant {v.variantKey}
-                            </Badge>
-                            {/* 1-based for display, matching AREPerformance's
-                                step table and the sequence viewer above. */}
-                            <span className="text-xs text-muted-foreground">Step {v.stepIndex + 1}</span>
-                            {v.hookType && (
-                              <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 ml-auto capitalize">
-                                {v.hookType.replace(/_/g, " ")}
-                              </Badge>
-                            )}
-                          </div>
-                          {v.subjectLine && (
-                            <div className="text-xs font-medium mt-1.5 line-clamp-1">{v.subjectLine}</div>
+                      <div key={stepIndex} className="space-y-3">
+                        <div className="flex items-baseline gap-3 flex-wrap">
+                          <h3 className="text-sm font-semibold">Step {stepIndex + 1}</h3>
+                          <span className="text-xs text-muted-foreground tabular-nums">
+                            {items.length} dispatched
+                            {agg && agg.opensTracked ? <> · {agg.opens} opened ({agg.openRate.toFixed(0)}%)</> : null}
+                            {agg ? <> · {agg.replies} replied · {agg.meetings} meeting{agg.meetings === 1 ? "" : "s"}</> : null}
+                          </span>
+                          {agg && agg.sent > 0 && !agg.sampleSufficient && (
+                            <span className="text-[10px] text-amber-600 dark:text-amber-500">too few sends to judge the step yet</span>
                           )}
-                        </CardHeader>
-                        <CardContent className="px-4 pb-4 space-y-3">
-                          <p className="text-xs text-muted-foreground leading-relaxed line-clamp-3">{v.bodyPreview}</p>
-                          <div className="space-y-1.5">
-                            <div className="flex items-center justify-between text-[11px]">
-                              <span className="text-muted-foreground">Reply rate</span>
-                              <span className={`font-semibold tabular-nums ${replyRate > 0 ? "text-emerald-600" : "text-muted-foreground"}`}>
-                                {replyRate.toFixed(1)}%
-                              </span>
-                            </div>
-                            <Progress value={replyRate} className="h-1.5" />
-                            <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
-                              <span>Sent: {v.sent}</span>
-                              {/* Only claim an open rate for sends that actually
-                                  carry a pixel; older sends can never report one,
-                                  and "0 opens" would read as failure not silence. */}
-                              {v.opensTracked
-                                ? <span title="Distinct messages opened at least once. Mail privacy proxies can inflate this.">Opens: {v.opens} ({v.openRate.toFixed(0)}%)</span>
-                                : <span className="italic">Opens: not tracked</span>}
-                              <span>Replies: {v.replies}</span>
-                              <span>Meetings: {v.meetings}</span>
-                            </div>
-                            {v.sent > 0 && !v.sampleSufficient && (
-                              <p className="text-[10px] text-amber-600 dark:text-amber-500">
-                                Only {v.sent} send{v.sent === 1 ? "" : "s"} — too few to call a winner yet.
-                              </p>
-                            )}
-                          </div>
-                        </CardContent>
-                      </Card>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
+                          {items.map((d) => {
+                            const sentLabel = d.sentAt ? new Date(d.sentAt).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "—";
+                            const tone = d.replied || d.meeting ? "border-emerald-500/40" : d.opened ? "border-blue-500/30" : "";
+                            return (
+                              <Card
+                                key={d.executionId}
+                                className={"bg-card border cursor-pointer transition-colors hover:border-primary/40 " + tone}
+                                role="button"
+                                tabIndex={0}
+                                title="Open this message and its stats"
+                                onClick={() => setPreviewExecId(d.executionId)}
+                                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setPreviewExecId(d.executionId); } }}
+                              >
+                                <CardHeader className="pb-2 pt-3 px-4">
+                                  <div className="flex items-start gap-2">
+                                    <div className="min-w-0 flex-1">
+                                      <div className="text-xs font-semibold truncate">{d.prospectName}</div>
+                                      <div className="text-[11px] text-muted-foreground truncate">
+                                        {[d.prospectTitle, d.companyName].filter(Boolean).join(" · ") || "—"}
+                                      </div>
+                                    </div>
+                                    <div className="flex items-center gap-1 shrink-0">
+                                      {d.meeting && <Badge className="text-[9px] px-1.5 py-0 h-4 bg-emerald-600 text-white border-0">Meeting</Badge>}
+                                      {!d.meeting && d.replied && <Badge className="text-[9px] px-1.5 py-0 h-4 bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border-emerald-500/30">Replied</Badge>}
+                                      {!d.replied && !d.meeting && d.opened && <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 border-blue-500/30 text-blue-600">Opened</Badge>}
+                                      {!d.replied && !d.meeting && !d.opened && (
+                                        <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 text-muted-foreground">
+                                          {d.opensTracked ? "No open yet" : "Opens not tracked"}
+                                        </Badge>
+                                      )}
+                                    </div>
+                                  </div>
+                                  {d.subject && <div className="text-xs font-medium mt-1.5 line-clamp-1">{d.subject}</div>}
+                                </CardHeader>
+                                <CardContent className="px-4 pb-3 space-y-2">
+                                  {d.bodyPreview && <p className="text-[11px] text-muted-foreground leading-relaxed line-clamp-3">{d.bodyPreview}</p>}
+                                  <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+                                    <span>Sent {sentLabel}</span>
+                                    {d.opened && d.openedAt && <span>Opened {new Date(d.openedAt).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</span>}
+                                  </div>
+                                </CardContent>
+                              </Card>
+                            );
+                          })}
+                        </div>
+                      </div>
                     );
-                  })}
-                </div>
+                  });
+                })()}
               </div>
             )}
           </TabsContent>

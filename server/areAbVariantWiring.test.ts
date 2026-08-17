@@ -390,7 +390,10 @@ describe("the step-performance tab does not promise an experiment", () => {
   it("labels steps 1-based, the same as every other step table", () => {
     // The page showed the opener as "Step 0" in the sequence viewer and the same
     // step as "Step 1" on this tab — one page, two numbering schemes.
-    expect(src).toMatch(/Step \{v\.stepIndex \+ 1\}/);
+    // 2026-08-17: the tab went from one card per step (`v`) to one card per
+    // dispatch grouped under a step header — the label moved to the header
+    // and is still 1-based. Same intent, new variable.
+    expect(src).toMatch(/Step \{stepIndex \+ 1\}/);
     expect(src).toMatch(/\(s\.stepIndex \?\? s\.step \?\? idx\) \+ 1/);
   });
 });

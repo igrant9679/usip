@@ -1053,6 +1053,154 @@ export async function getAbVariantStats(
   return out;
 }
 
+/* ─── Per-dispatch step performance ────────────────────────────────────── */
+
+/**
+ * One row per SENT message — the individual dispatches that the per-step
+ * aggregate above rolls up.
+ *
+ * Owner (2026-08-17): "It says 31 Step 1's were dispatched, so there should
+ * be 31 Step 1 cards." The engine writes uniquely personalised copy for every
+ * prospect, so a step is not one message sent 31 times; it is 31 different
+ * messages. A card per step showed one specimen (the newest send) and gave
+ * no way to see the other 30. This returns every one, with the prospect it
+ * went to and THAT message's own open/reply/meeting state.
+ *
+ * Reads the same two tables getAbVariantStats and computeStepFunnel read, so
+ * a per-dispatch card can never disagree with the Sankey or the aggregate
+ * above it. Same last-touch attribution: a reply or meeting signal belongs to
+ * the prospect's most recent send at or before the signal.
+ */
+export interface DispatchStat {
+  executionId: number;
+  prospectQueueId: number;
+  prospectName: string;
+  prospectTitle: string | null;
+  companyName: string | null;
+  stepIndex: number;
+  variantKey: string;
+  subject: string | null;
+  bodyPreview: string | null;
+  sentAt: Date | null;
+  /** Whether this send carried a tracking pixel — older sends cannot report opens. */
+  opensTracked: boolean;
+  opened: boolean;
+  openedAt: Date | null;
+  replied: boolean;
+  meeting: boolean;
+}
+
+export async function getDispatchStats(
+  workspaceId: number,
+  campaignId: number,
+): Promise<DispatchStat[]> {
+  const db = await getDb();
+  if (!db) return [];
+
+  const variantKeyExpr = sql<string>`coalesce(json_unquote(json_extract(${areExecutionQueue.messageContent}, '$.variantKey')), 'A')`;
+  const subjectExpr = sql<string | null>`json_unquote(json_extract(${areExecutionQueue.messageContent}, '$.subject'))`;
+  const bodyExpr = sql<string | null>`left(json_unquote(json_extract(${areExecutionQueue.messageContent}, '$.body')), 240)`;
+
+  const sends = await db
+    .select({
+      executionId: areExecutionQueue.id,
+      prospectQueueId: areExecutionQueue.prospectQueueId,
+      stepIndex: areExecutionQueue.stepIndex,
+      variantKey: variantKeyExpr,
+      subject: subjectExpr,
+      bodyPreview: bodyExpr,
+      executedAt: areExecutionQueue.executedAt,
+      openedAt: areExecutionQueue.openedAt,
+      trackingToken: areExecutionQueue.trackingToken,
+      firstName: prospectQueue.firstName,
+      lastName: prospectQueue.lastName,
+      title: prospectQueue.title,
+      companyName: prospectQueue.companyName,
+    })
+    .from(areExecutionQueue)
+    .leftJoin(prospectQueue, eq(prospectQueue.id, areExecutionQueue.prospectQueueId))
+    .where(and(
+      eq(areExecutionQueue.workspaceId, workspaceId),
+      eq(areExecutionQueue.campaignId, campaignId),
+      eq(areExecutionQueue.status, "sent" as never),
+    ));
+
+  const signals = await db
+    .select({
+      prospectQueueId: areSignalLog.prospectQueueId,
+      signalType: areSignalLog.signalType,
+      // The log stamps `processedAt`, not createdAt — same column the
+      // aggregate's attribution reads.
+      at: areSignalLog.processedAt,
+    })
+    .from(areSignalLog)
+    .where(and(
+      eq(areSignalLog.workspaceId, workspaceId),
+      eq(areSignalLog.campaignId, campaignId),
+    ));
+
+  // Last-touch attribution, per prospect: each reply/meeting signal is credited
+  // to the most recent send at or before it. Same rule as computeVariantCells,
+  // so the per-dispatch view and the aggregate agree on which step earned it.
+  type SendRow = (typeof sends)[number];
+  const sendsByProspect = new Map<number, SendRow[]>();
+  for (const s of sends) {
+    const k = Number(s.prospectQueueId);
+    const arr = sendsByProspect.get(k) ?? [];
+    arr.push(s);
+    sendsByProspect.set(k, arr);
+  }
+  sendsByProspect.forEach((arr) => {
+    arr.sort((a: SendRow, b: SendRow) => (new Date(a.executedAt ?? 0).getTime()) - (new Date(b.executedAt ?? 0).getTime()));
+  });
+  const replied = new Set<number>();
+  const meeting = new Set<number>();
+  for (const sig of signals) {
+    const t = String(sig.signalType);
+    // EXACTLY the two types computeVariantCells credits — `email_reply` and
+    // `meeting_booked`, nothing wider. Counting linkedin_reply/sms_reply here
+    // would put a reply on a card that the aggregate and the Sankey do not
+    // show, and the whole point of reading the same tables is that they agree.
+    const isReply = t === "email_reply";
+    const isMeeting = t === "meeting_booked";
+    if (!isReply && !isMeeting) continue;
+    const arr = sendsByProspect.get(Number(sig.prospectQueueId));
+    if (!arr?.length) continue;
+    const at = new Date(sig.at ?? 0).getTime();
+    let owner = arr[0]!;
+    for (const s of arr) {
+      if (new Date(s.executedAt ?? 0).getTime() <= at) owner = s;
+      else break;
+    }
+    if (isReply) replied.add(Number(owner.executionId));
+    if (isMeeting) meeting.add(Number(owner.executionId));
+  }
+
+  const out: DispatchStat[] = sends.map((s) => ({
+    executionId: Number(s.executionId),
+    prospectQueueId: Number(s.prospectQueueId),
+    prospectName: `${s.firstName ?? ""} ${s.lastName ?? ""}`.trim() || "(no name)",
+    prospectTitle: (s.title as string | null) ?? null,
+    companyName: (s.companyName as string | null) ?? null,
+    stepIndex: Number(s.stepIndex ?? 0),
+    variantKey: normalizeVariantKey(String(s.variantKey ?? "A")),
+    subject: (s.subject as string | null) ?? null,
+    bodyPreview: (s.bodyPreview as string | null) ?? null,
+    sentAt: (s.executedAt as Date | null) ?? null,
+    opensTracked: !!s.trackingToken,
+    opened: !!s.openedAt,
+    openedAt: (s.openedAt as Date | null) ?? null,
+    replied: replied.has(Number(s.executionId)),
+    meeting: meeting.has(Number(s.executionId)),
+  }));
+
+  // Step first, then newest send first within a step — the most recent
+  // dispatch is the one someone auditing copy wants at the top.
+  out.sort((a, b) => a.stepIndex - b.stepIndex
+    || (new Date(b.sentAt ?? 0).getTime()) - (new Date(a.sentAt ?? 0).getTime()));
+  return out;
+}
+
 /* ─── Sequence A/B variant performance ──────────────────────────────────── */
 
 export interface SequenceAbVariantStats {
