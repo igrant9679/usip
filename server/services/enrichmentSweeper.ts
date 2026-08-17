@@ -318,6 +318,9 @@ async function quickenrichCandidatesFor(workspaceId: number, limit: number, retr
       id: prospectQueue.id,
       linkedinUrl: prospectQueue.linkedinUrl,
       campaignName: areCampaigns.name,
+      // Carried so a hit can be pushed to the canonical People row (see the
+      // write site). Without it the sweeper's finds stopped at the queue.
+      personProspectId: prospectQueue.personProspectId,
     })
     .from(prospectQueue)
     .innerJoin(areCampaigns, eq(prospectQueue.campaignId, areCampaigns.id))
@@ -681,6 +684,33 @@ export async function sweepWorkspace(
             patch.enrichmentStatus = "complete";
             result.emailsFound++;
             result.quickenrichFound++;
+            /**
+             * People-as-master: the find lands on the canonical person too.
+             *
+             * This path wrote the queue row and stopped. The ARE enrich agent
+             * pushes its finds to People through mergeIntoPerson; the sweeper
+             * — which finds MOST of the LinkedIn-keyed emails — did not, so
+             * People rows sat with no email while the queue row beside them
+             * carried one and was being sent to. Live on 2026-08-17: 8 of the
+             * 112 actively-sequenced CF prospects, People email NULL, queue
+             * email present, step 1 already delivered — and the owner about
+             * to delete "People with no email". Third instance of the one-
+             * directional fold (contacts, then Data Health, now this).
+             *
+             * Through the merge, never a blind write: provenance is recorded,
+             * a stronger existing value is kept, and the Reoon verdict rides
+             * along as the verification. Fire-and-forget; a People failure
+             * never fails the queue write that dispatch depends on.
+             */
+            if (q.personProspectId) {
+              void import("./personLink")
+                .then((m) => m.mergeIntoPerson(workspaceId, q.personProspectId!, {
+                  email: found.email,
+                  emailVerification: status,
+                  source: "enrichment_sweeper_quickenrich",
+                }))
+                .catch((e) => console.error("[EnrichmentSweep] People writeback failed:", (e as Error)?.message ?? e));
+            }
           }
         } else if (QUICKENRICH_TRANSPORT_FAILURES.has(found.reason)) {
           /**

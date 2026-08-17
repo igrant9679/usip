@@ -102,3 +102,29 @@ describe("enrichment on People mirrors down to linked contacts, fill-only", () =
     expect(proc).toContain("adminWsProcedure");
   });
 });
+
+describe("every path that writes a queue-row email pushes it to People", () => {
+  // Third instance of the one-directional fold. The ARE enrich agent pushed
+  // its finds to People; the sweeper — which finds MOST LinkedIn-keyed emails
+  // — did not, so People rows sat email-less beside queue rows being sent to.
+  it("the sweeper's QuickEnrich hit calls mergeIntoPerson", () => {
+    const src = R("server/services/enrichmentSweeper.ts");
+    const hit = src.slice(src.indexOf("patch.email = found.email;"), src.indexOf("QUICKENRICH_TRANSPORT_FAILURES.has(found.reason)"));
+    expect(hit).toContain("m.mergeIntoPerson(workspaceId, q.personProspectId!");
+    expect(hit).toContain('source: "enrichment_sweeper_quickenrich"');
+    // and the collector carries the link it needs
+    expect(src).toMatch(/personProspectId: prospectQueue\.personProspectId,[\s\S]{0,400}\.from\(prospectQueue\)[\s\S]{0,200}innerJoin\(areCampaigns/);
+  });
+  it("the ARE enrich agent still does too (pinned, so the pair stays a pair)", () => {
+    const src = R("server/routers/are/prospects.ts");
+    expect(src).toContain('source: "are_enrich_agent"');
+  });
+  it("the catch-up goes through the merge, one push per person, dry-run by default", () => {
+    const dh = R("server/routers/dataHealth.ts");
+    const proc = dh.slice(dh.indexOf("syncPeopleFromQueue:"), dh.indexOf("importMappingAudit:"));
+    expect(proc).toContain("dryRun: z.boolean().default(true)");
+    expect(proc).toContain("mergeIntoPerson(wsId, personId, { email");
+    expect(proc).toContain("byPerson.has(r.personId)");
+    expect(proc).not.toMatch(/\.update\(prospects\)\.set\(\{\s*email/);
+  });
+});

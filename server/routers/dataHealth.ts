@@ -1,7 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { and, count, eq, sql } from "drizzle-orm";
 import { z } from "zod";
-import { activities, contacts, emailDrafts, enrollments, opportunityContactRoles, prospects } from "../../drizzle/schema";
+import { activities, contacts, emailDrafts, enrollments, opportunityContactRoles, prospects, prospectQueue } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, repProcedure, workspaceProcedure } from "../_core/workspace";
@@ -202,6 +202,44 @@ export const dataHealthRouter = router({
         }
       }
       return { dryRun: input.dryRun, scanned, contactsWithGaps: wouldFill, filled, byField };
+    }),
+
+  /**
+   * One-shot: push queue-row emails up to their linked People rows where the
+   * People row has none. The seam in enrichmentSweeper now does this on every
+   * new find; this catches up the rows the sweeper found BEFORE it did (CF:
+   * 8 actively-sequenced prospects with a queue email and no People email).
+   * Goes through mergeIntoPerson — provenance recorded, stronger values kept
+   * — never a blind copy. Admin-only, dry-run by default.
+   */
+  syncPeopleFromQueue: adminWsProcedure
+    .input(z.object({ dryRun: z.boolean().default(true), limit: z.number().int().min(1).max(5000).default(5000) }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const wsId = ctx.workspace.id;
+      const rows = await db
+        .select({ queueId: prospectQueue.id, personId: prospectQueue.personProspectId, qEmail: prospectQueue.email, pEmail: prospects.email })
+        .from(prospectQueue)
+        .innerJoin(prospects, and(eq(prospects.id, prospectQueue.personProspectId), eq(prospects.workspaceId, wsId)))
+        .where(and(
+          eq(prospectQueue.workspaceId, wsId),
+          sql`${prospectQueue.email} IS NOT NULL AND ${prospectQueue.email} <> ''`,
+          sql`(${prospects.email} IS NULL OR ${prospects.email} = '')`,
+        ))
+        .limit(input.limit);
+      // One push per PERSON — several queue rows can link to one People row.
+      const byPerson = new Map<number, string>();
+      for (const r of rows) if (r.personId && r.qEmail && !byPerson.has(r.personId)) byPerson.set(r.personId, r.qEmail);
+      let pushed = 0;
+      if (!input.dryRun) {
+        const { mergeIntoPerson } = await import("../services/personLink");
+        for (const [personId, email] of Array.from(byPerson.entries())) {
+          await mergeIntoPerson(wsId, personId, { email, source: "sync_from_queue" });
+          pushed++;
+        }
+      }
+      return { dryRun: input.dryRun, queueRowsWithEmailPeopleWithout: rows.length, distinctPeople: byPerson.size, pushed };
     }),
 
   importMappingAudit: adminWsProcedure.query(async ({ ctx }) => {
