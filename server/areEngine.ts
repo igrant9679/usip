@@ -144,6 +144,9 @@ export interface AreEngineResult {
   /** Sequences the completion sweep found cut short (all steps settled, more
    *  skipped than sent) and marked `canceled` rather than `completed`. */
   canceled?: number;
+  /** Enrol passes refused because another was in flight for the campaign.
+   *  Non-zero means "call again", NOT "nothing left". */
+  enrolSkippedInFlight?: number;
 }
 
 /* ─── Helpers ───────────────────────────────────────────────────────────── */
@@ -400,12 +403,48 @@ async function enrichPendingGlobally(result: AreEngineResult): Promise<void> {
  * ONE implementation. tickCampaign calls this; so does
  * are.engine.enrollOnly. They cannot drift.
  */
+/**
+ * Per-campaign in-flight set for enrolment. Two concurrent enrol runs on the
+ * same campaign both read a prospect as `approved`, both pass the scheduled-
+ * rows guard (neither has inserted yet), and both insert — the prospect gets
+ * every remaining step twice. Live on 2026-08-17: Heather Daughtery, 12 rows
+ * for a 6-step remainder, from two enrollOnly calls 18 seconds apart. The
+ * guard is a read-then-write and cannot be made atomic without a lock; this
+ * is the lock. Same shape as `engineRunning`, scoped to the campaign so
+ * different campaigns still enrol in parallel.
+ */
+const enrollInFlight = new Set<number>();
+
 export async function enrollApprovedForCampaign(
   campaign: Campaign,
   result: AreEngineResult,
 ): Promise<void> {
   const db = await getDb();
   if (!db) return;
+  const wsId = campaign.workspaceId;
+  const campId = campaign.id;
+  if (enrollInFlight.has(campId)) {
+    await emitLog(wsId, campId, "enroll", "warn",
+      "Enrol pass skipped — another enrol run for this campaign is still in flight");
+    // Surface it on the result too. A caller looping "until enrolled hits
+    // zero" would otherwise read a lock-skip as "done" — the same silent
+    // no-op that made a wedged engineRunning flag look like success.
+    result.enrolSkippedInFlight = (result.enrolSkippedInFlight ?? 0) + 1;
+    return;
+  }
+  enrollInFlight.add(campId);
+  try {
+    await enrollApprovedForCampaignUnlocked(db, campaign, result);
+  } finally {
+    enrollInFlight.delete(campId);
+  }
+}
+
+async function enrollApprovedForCampaignUnlocked(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  campaign: Campaign,
+  result: AreEngineResult,
+): Promise<void> {
   const wsId = campaign.workspaceId;
   const campId = campaign.id;
 

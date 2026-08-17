@@ -129,3 +129,23 @@ describe("enrollOnly — enrolment separable from outreach", () => {
     expect(proc).toContain("remainingApproved");
   });
 });
+
+describe("two concurrent enrol runs cannot double-enrol a prospect", () => {
+  // 2026-08-17: Heather Daughtery got 12 scheduled rows for a 6-step
+  // remainder — two enrollOnly calls 18s apart both read her as approved,
+  // both passed the scheduled-rows guard before either inserted.
+  it("enrolment takes a per-campaign lock", () => {
+    expect(src).toContain("const enrollInFlight = new Set<number>()");
+    const fn = src.slice(src.indexOf("export async function enrollApprovedForCampaign"), src.indexOf("async function enrollApprovedForCampaignUnlocked"));
+    expect(fn).toContain("if (enrollInFlight.has(campId))");
+    expect(fn).toContain("enrollInFlight.add(campId)");
+    expect(fn).toMatch(/finally \{\s*enrollInFlight\.delete\(campId\)/);
+  });
+
+  it("a lock-skip is reported, not silent", () => {
+    // A caller looping until enrolled===0 must not read a lock-skip as done.
+    expect(src).toContain("result.enrolSkippedInFlight = (result.enrolSkippedInFlight ?? 0) + 1");
+    const router = readFileSync(join(__dirname, "routers/are/engine.ts"), "utf8");
+    expect(router).toContain("skippedInFlight: (result.enrolSkippedInFlight ?? 0) > 0");
+  });
+});

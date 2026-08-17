@@ -87,6 +87,13 @@ export const engineRouter = router({
           eq(prospectQueue.sequenceStatus, "approved"),
           sql`${prospectIntelligence.generatedSequence} IS NOT NULL`,
         ));
-      return { campaignStatus: campaign.status, enrolled: result.enrolled, remainingApproved: Number(remaining?.n ?? 0) };
+      return {
+        campaignStatus: campaign.status,
+        enrolled: result.enrolled,
+        remainingApproved: Number(remaining?.n ?? 0),
+        /** True when this call did nothing because another enrol run held the
+         *  campaign lock. Call again; do not read enrolled:0 as finished. */
+        skippedInFlight: (result.enrolSkippedInFlight ?? 0) > 0,
+      };
     }),
 });
