@@ -141,6 +141,9 @@ export interface AreEngineResult {
   enrolled: number;
   sent: number;
   discovered: number;
+  /** Sequences the completion sweep found cut short (all steps settled, more
+   *  skipped than sent) and marked `canceled` rather than `completed`. */
+  canceled?: number;
 }
 
 /* ─── Helpers ───────────────────────────────────────────────────────────── */
@@ -607,11 +610,29 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
 
     let finalChecksThisTick = 0;
     for (const row of rows) {
-      // Idempotency — if execution rows already exist, just sync the status.
+      // Idempotency — if LIVE execution rows already exist, just sync the status.
+      //
+      // "Live" is the word that was missing. This counted ALL execution rows,
+      // so a prospect whose sequence had been canceled (every step `skipped`)
+      // and then re-approved with a freshly generated sequence was treated as
+      // already enrolled: status flipped to `enrolled`, no rows were minted,
+      // and the completion sweep — which sees zero scheduled and calls that
+      // done — marked the prospect `completed` within the hour. Live on
+      // 2026-08-16: 141 regenerated sequences, ZERO enrolled steps, 112 of
+      // them "completed" without a single follow-up ever being scheduled.
+      // The user saw sequences finish in hours that were written to run for
+      // fourteen days.
+      //
+      // Only rows that still represent work — scheduled, or sent — mean "this
+      // prospect is enrolled". Skipped, failed and canceled rows are history,
+      // and history is not enrolment.
       const [existing] = await db
         .select({ n: sql<number>`count(*)` })
         .from(areExecutionQueue)
-        .where(eq(areExecutionQueue.prospectQueueId, row.id));
+        .where(and(
+          eq(areExecutionQueue.prospectQueueId, row.id),
+          inArray(areExecutionQueue.status, ["scheduled", "sent"]),
+        ));
       if (Number(existing?.n ?? 0) > 0) {
         await db
           .update(prospectQueue)
@@ -1175,6 +1196,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
           // where sequences were marked complete while still healable and so
           // put beyond the heal that would have revived them.
           healableFailed: sql<number>`sum(case when ${areExecutionQueue.status} = 'failed' and (${areExecutionQueue.failureReason} = ${HEALABLE_NO_EMAIL} or ${areExecutionQueue.failureReason} = ${HEALABLE_NO_LINKEDIN} or ${areExecutionQueue.failureReason} like ${`${HEALABLE_POOL_PREFIX}%`}) then 1 else 0 end)`,
+          skipped: sql<number>`sum(case when ${areExecutionQueue.status} = 'skipped' then 1 else 0 end)`,
         })
         .from(areExecutionQueue)
         .where(eq(areExecutionQueue.prospectQueueId, p.id));
@@ -1183,12 +1205,27 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
         stillScheduled: Number(c?.stillScheduled ?? 0),
         sent: Number(c?.sent ?? 0),
         healableFailed: Number(c?.healableFailed ?? 0),
+        skipped: Number(c?.skipped ?? 0),
       });
-      if (verdict) {
+      if (verdict === "completed") {
         await db
           .update(prospectQueue)
           .set({ sequenceStatus: "completed" })
           .where(eq(prospectQueue.id, p.id));
+      } else if (verdict === "abandoned") {
+        // Cut short, not carried through. `canceled` is the honest status
+        // (the steps WERE canceled) and it keeps the prospect visible as one
+        // that needs re-enrolling, instead of hiding inside a healthy-looking
+        // "completed" count. Reason recorded so the row can say why.
+        await db
+          .update(prospectQueue)
+          .set({
+            sequenceStatus: "canceled",
+            rejectedAt: new Date(),
+            rejectionReason: `Sequence cut short: ${Number(c?.skipped ?? 0)} of ${Number(c?.total ?? 0)} steps skipped, ${Number(c?.sent ?? 0)} sent — re-approve to re-enrol`,
+          })
+          .where(eq(prospectQueue.id, p.id));
+        result.canceled = (result.canceled ?? 0) + 1;
       }
     }
   } catch (e) {

@@ -29,33 +29,89 @@ import {
 const read = (rel: string) => readFileSync(join(__dirname, "..", rel), "utf8");
 
 describe("sequenceCompletionVerdict — executed", () => {
+  // The verdict became three-valued on 2026-08-16 (`completed` | `abandoned`
+  // | null) — see the second-failure note in sequenceCompletion.ts. The
+  // pre-existing cases below keep their meaning exactly; only the vocabulary
+  // moved: false → null, true → "completed".
   it("never completes a prospect with no execution rows", () => {
-    expect(sequenceCompletionVerdict({ total: 0, stillScheduled: 0, sent: 0, healableFailed: 0 })).toBe(false);
+    expect(sequenceCompletionVerdict({ total: 0, stillScheduled: 0, sent: 0, healableFailed: 0 })).toBeNull();
   });
 
   it("never completes while steps are still scheduled", () => {
-    expect(sequenceCompletionVerdict({ total: 7, stillScheduled: 1, sent: 3, healableFailed: 0 })).toBe(false);
+    expect(sequenceCompletionVerdict({ total: 7, stillScheduled: 1, sent: 3, healableFailed: 0 })).toBeNull();
   });
 
   it("THE LOCKOUT CASE: zero sends + revivable steps is NOT finished", () => {
     // Campaign 13's exact shape: every email step failed no-email, nothing
     // sent. Completing this is what disarmed the heal.
-    expect(sequenceCompletionVerdict({ total: 7, stillScheduled: 0, sent: 0, healableFailed: 4 })).toBe(false);
+    expect(sequenceCompletionVerdict({ total: 7, stillScheduled: 0, sent: 0, healableFailed: 4 })).toBeNull();
     // Boundary: a single revivable step is enough to keep it open.
-    expect(sequenceCompletionVerdict({ total: 7, stillScheduled: 0, sent: 0, healableFailed: 1 })).toBe(false);
+    expect(sequenceCompletionVerdict({ total: 7, stillScheduled: 0, sent: 0, healableFailed: 1 })).toBeNull();
   });
 
   it("a sequence that actually sent completes normally", () => {
-    expect(sequenceCompletionVerdict({ total: 7, stillScheduled: 0, sent: 2, healableFailed: 0 })).toBe(true);
+    expect(sequenceCompletionVerdict({ total: 7, stillScheduled: 0, sent: 2, healableFailed: 0 })).toBe("completed");
     // Even with healable failures alongside: it RAN; later failures are its
     // history, not grounds to reopen it here (the enrolled-arm heal still
     // retries pool failures on live sequences).
-    expect(sequenceCompletionVerdict({ total: 7, stillScheduled: 0, sent: 1, healableFailed: 2 })).toBe(true);
+    expect(sequenceCompletionVerdict({ total: 7, stillScheduled: 0, sent: 1, healableFailed: 2 })).toBe("completed");
   });
 
   it("zero sends with NOTHING revivable completes — waiting would watch for a recovery that cannot happen", () => {
     // e.g. every step was a LinkedIn step the v1 engine cannot send.
-    expect(sequenceCompletionVerdict({ total: 7, stillScheduled: 0, sent: 0, healableFailed: 0 })).toBe(true);
+    expect(sequenceCompletionVerdict({ total: 7, stillScheduled: 0, sent: 0, healableFailed: 0 })).toBe("completed");
+  });
+
+  it("THE SECOND FAILURE: one sent, six skipped is ABANDONED, not completed", () => {
+    // 2026-08-16: 141 sequences canceled for regeneration and never
+    // re-enrolled (the enrol guard counted skipped rows as enrolment). Zero
+    // scheduled, one sent, six skipped — the old rule called every one of
+    // them finished. 112 prospects "completed" a fourteen-day cadence in an
+    // afternoon.
+    expect(sequenceCompletionVerdict({ total: 7, stillScheduled: 0, sent: 1, healableFailed: 0, skipped: 6 })).toBe("abandoned");
+    // All skipped, nothing sent: same verdict.
+    expect(sequenceCompletionVerdict({ total: 7, stillScheduled: 0, sent: 0, healableFailed: 0, skipped: 7 })).toBe("abandoned");
+  });
+
+  it("a few skips inside a sequence that mostly ran is still completed", () => {
+    // Suppression or a throttle skipping two of seven while five sent: the
+    // prospect received the cadence. Abandoned means cut short, not imperfect.
+    expect(sequenceCompletionVerdict({ total: 7, stillScheduled: 0, sent: 5, healableFailed: 0, skipped: 2 })).toBe("completed");
+    // Boundary — equal counts are NOT abandoned; skipped must EXCEED sent.
+    expect(sequenceCompletionVerdict({ total: 6, stillScheduled: 0, sent: 3, healableFailed: 0, skipped: 3 })).toBe("completed");
+  });
+
+  it("omitting `skipped` behaves as before (older callers keep compiling and keep their answer)", () => {
+    expect(sequenceCompletionVerdict({ total: 7, stillScheduled: 0, sent: 1, healableFailed: 0 })).toBe("completed");
+  });
+});
+
+describe("the enrol guard counts LIVE rows, not history", () => {
+  // The other half of the second failure. Phase 3's idempotency check
+  // counted ALL execution rows, so a canceled-then-re-approved prospect
+  // (every old step `skipped`) read as already enrolled: status flipped,
+  // no new rows minted, and the sweep above then called it done.
+  const engine = readFileSync(join(__dirname, "areEngine.ts"), "utf8");
+  const start = engine.indexOf("/* ── Phase 3: ENROLL");
+  const end = engine.indexOf("/* ── Phase 4", start);
+  const phase = engine.slice(start, end);
+
+  it("the phase boundary is where we think it is", () => {
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+  });
+
+  it("the idempotency count is restricted to scheduled|sent", () => {
+    const guard = phase.slice(phase.indexOf("Idempotency"), phase.indexOf("continue;", phase.indexOf("Idempotency")));
+    expect(guard).toContain('inArray(areExecutionQueue.status, ["scheduled", "sent"])');
+  });
+
+  it("the completion sweep writes `canceled` for an abandoned verdict, with a reason", () => {
+    const sweep = engine.slice(engine.indexOf("/* ── Phase 5: COMPLETE"), engine.indexOf("/* ── Phase 6"));
+    expect(sweep).toContain('verdict === "abandoned"');
+    expect(sweep).toContain('sequenceStatus: "canceled"');
+    expect(sweep).toContain("Sequence cut short");
+    expect(sweep).toContain("skipped: Number(c?.skipped ?? 0)");
   });
 });
 

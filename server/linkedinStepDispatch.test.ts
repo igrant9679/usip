@@ -124,7 +124,8 @@ describe("a missing LinkedIn URL heals, like a missing email does", () => {
     expect(counting.slice(0, 500)).toContain("HEALABLE_NO_LINKEDIN");
     // And the verdict itself still refuses to finish a sequence with revivable
     // steps and no sends.
-    expect(sequenceCompletionVerdict({ total: 3, stillScheduled: 0, sent: 0, healableFailed: 2 })).toBe(false);
+    // (verdict is three-valued since 2026-08-16; "not finished" is null)
+    expect(sequenceCompletionVerdict({ total: 3, stillScheduled: 0, sent: 0, healableFailed: 2 })).toBeNull();
   });
 });
 
