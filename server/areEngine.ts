@@ -385,162 +385,30 @@ async function enrichPendingGlobally(result: AreEngineResult): Promise<void> {
 }
 
 /* ─── Per-campaign tick ─────────────────────────────────────────────────── */
-async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promise<void> {
+/**
+ * Phase 3 — ENROLL, as a callable. Turns each approved prospect's
+ * generatedSequence into are_execution_queue rows and marks it enrolled.
+ *
+ * Extracted from tickCampaign so it can be run ON ITS OWN, against a
+ * PAUSED campaign, without the surrounding tick. The reason is operational:
+ * on 2026-08-17 the only way to enrol 112 partly-sent prospects was to
+ * unpause, run a full engine tick, and re-pause before dispatch could find
+ * anything due — from a browser session whose calls could time out and
+ * complete late, leaving campaigns active with nobody watching. Enrolment
+ * is bookkeeping and dispatch is outreach; they must be separable.
+ *
+ * ONE implementation. tickCampaign calls this; so does
+ * are.engine.enrollOnly. They cannot drift.
+ */
+export async function enrollApprovedForCampaign(
+  campaign: Campaign,
+  result: AreEngineResult,
+): Promise<void> {
   const db = await getDb();
   if (!db) return;
   const wsId = campaign.workspaceId;
   const campId = campaign.id;
 
-  // NOTE: enrichment is NOT a per-campaign phase — it runs once, globally and
-  // serially, in enrichPendingGlobally() before this loop (active campaigns
-  // only, one LLM call at a time). The tick below starts at SCREEN.
-
-  /* ── Phase 1: SCREEN — auto-approve / auto-reject ──────────────────── */
-  try {
-    /* 1a. Reject what can never be enriched, and so can never be screened.
-     *
-     * enrichPendingGlobally selects only
-     *   icpMatchScore >= COALESCE(minConfidence, ENRICH_MIN_CONFIDENCE_DEFAULT)
-     *   OR icpMatchScore = 0
-     * so a row scored between 1 and the gate satisfies neither branch. It is
-     * never enriched, so enrichmentStatus stays 'pending', so the pass below
-     * (which reads only 'complete') never sees it, so sequenceStatus stays
-     * 'pending' — forever, with no record anywhere of why.
-     *
-     * Measured on prod 2026-08-16: 44 of CommunityForce's 258 queued
-     * prospects, and EVERY enrichment-pending row across all three active
-     * campaigns sat in this band while not one eligible row did. Enrichment
-     * had already taken everything it was allowed to touch; what remained was
-     * not a backlog, it was sediment.
-     *
-     * Same rule this file applies everywhere else: a row that cannot proceed
-     * must leave the set rather than linger in it. `skipped` is the existing
-     * vocabulary for that and it surfaces in Rejections with a reason, which
-     * is the point — the previous state was indistinguishable from "we have
-     * not got to it yet".
-     *
-     * ⚠️ Note what this does NOT do: `targetProspectCount` is checked with an
-     * unfiltered count(*), so rejected rows still count toward it. This does
-     * not free queue headroom and will not unblock discovery.
-     *
-     * The predicate is deliberately the exact inverse of the selector's and
-     * shares its constant. Written out in full rather than assembled from
-     * variables, because an UPDATE whose WHERE cannot be read at the statement
-     * is one edit away from losing its workspace scope unnoticed. */
-    const gate = campaign.minConfidence ?? ENRICH_MIN_CONFIDENCE_DEFAULT;
-    const [gateReject] = await db.execute(sql`
-      UPDATE \`prospect_queue\`
-      SET \`sequenceStatus\` = 'skipped',
-          \`rejectedAt\` = NOW(),
-          \`rejectionReason\` = CONCAT('Auto-screened: ICP match ', \`icpMatchScore\`,
-            '/100 is below this campaign''s enrichment gate of ', ${gate},
-            ' — never eligible for enrichment, so never screenable')
-      WHERE \`campaignId\` = ${campId}
-        AND \`workspaceId\` = ${wsId}
-        AND \`sequenceStatus\` = 'pending'
-        AND \`enrichmentStatus\` IN ('pending', 'enriching')
-        AND \`icpMatchScore\` > 0
-        AND \`icpMatchScore\` < ${gate}`);
-    const gateRejected = (gateReject as { affectedRows?: number })?.affectedRows ?? 0;
-    if (gateRejected > 0) {
-      result.rejected += gateRejected;
-      await emitLog(wsId, campId, "screen", "info",
-        `${gateRejected} prospect${gateRejected === 1 ? "" : "s"} rejected — ICP match below the enrichment gate of ${gate}, so they could never be enriched or screened.`);
-    }
-
-    const enriched = await db
-      .select()
-      .from(prospectQueue)
-      .where(
-        and(
-          eq(prospectQueue.campaignId, campId),
-          eq(prospectQueue.workspaceId, wsId),
-          eq(prospectQueue.enrichmentStatus, "complete"),
-          eq(prospectQueue.sequenceStatus, "pending"),
-        ),
-      );
-    const mode = campaign.autonomyMode;
-    const threshold = campaign.autoApproveThreshold ?? DEFAULT_APPROVE_THRESHOLD;
-    for (const p of enriched) {
-      const score = p.icpMatchScore ?? 0;
-      if (mode === "full") {
-        // Fully autonomous — the threshold IS the approve/reject line.
-        if (score >= threshold) {
-          await db
-            .update(prospectQueue)
-            .set({ sequenceStatus: "approved", approvedAt: new Date() })
-            .where(eq(prospectQueue.id, p.id));
-          result.approved++;
-        } else {
-          await db
-            .update(prospectQueue)
-            .set({
-              sequenceStatus: "skipped",
-              rejectedAt: new Date(),
-              rejectionReason: `Auto-screened: ICP match ${score}/100 below approve threshold ${threshold}`,
-            })
-            .where(eq(prospectQueue.id, p.id));
-          result.rejected++;
-        }
-      } else if (mode === "batch_approval") {
-        // Engine screens out obvious junk; humans approve the rest in batches.
-        if (score < AUTO_REJECT_FLOOR) {
-          await db
-            .update(prospectQueue)
-            .set({
-              sequenceStatus: "skipped",
-              rejectedAt: new Date(),
-              rejectionReason: `Auto-screened: ICP match ${score}/100 below floor ${AUTO_REJECT_FLOOR}`,
-            })
-            .where(eq(prospectQueue.id, p.id));
-          result.rejected++;
-        }
-        // else: leave 'pending' for human batch approval
-      }
-      // review_release: leave everything 'pending' for individual review
-    }
-    if (enriched.length > 0) {
-      await emitLog(wsId, campId, "screen", "info",
-        `Screened ${enriched.length} (mode=${mode}, threshold=${threshold})`);
-    }
-  } catch (e) {
-    console.error(`[AreEngine] campaign ${campId} screen phase failed:`, e);
-    await emitLog(wsId, campId, "screen", "error", String((e as Error)?.message ?? e));
-  }
-
-  /* ── Phase 2: SEQUENCE generation for approved prospects ───────────── */
-  try {
-    const needSequence = await db
-      .select({ id: prospectQueue.id })
-      .from(prospectQueue)
-      .leftJoin(
-        prospectIntelligence,
-        eq(prospectIntelligence.prospectQueueId, prospectQueue.id),
-      )
-      .where(
-        and(
-          eq(prospectQueue.campaignId, campId),
-          eq(prospectQueue.workspaceId, wsId),
-          eq(prospectQueue.sequenceStatus, "approved"),
-          sql`${prospectIntelligence.generatedSequence} IS NULL`,
-        ),
-      )
-      .limit(SEQUENCE_PER_CAMPAIGN_TICK);
-    if (needSequence.length > 0) {
-      const settled = await Promise.allSettled(
-        needSequence.map((p) => runSequenceAgent(p.id, wsId, campId)),
-      );
-      const ok = settled.filter((s) => s.status === "fulfilled").length;
-      result.sequencesGenerated += ok;
-      await emitLog(wsId, campId, "sequence", "info",
-        `Generated ${ok}/${needSequence.length} sequences`);
-    }
-  } catch (e) {
-    console.error(`[AreEngine] campaign ${campId} sequence phase failed:`, e);
-    await emitLog(wsId, campId, "sequence", "error", String((e as Error)?.message ?? e));
-  }
-
-  /* ── Phase 3: ENROLL — generatedSequence → are_execution_queue rows ── */
   try {
     const rows = await db
       .select({
@@ -780,6 +648,165 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
     console.error(`[AreEngine] campaign ${campId} enroll phase failed:`, e);
     await emitLog(wsId, campId, "enroll", "error", String((e as Error)?.message ?? e));
   }
+}
+
+async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  const wsId = campaign.workspaceId;
+  const campId = campaign.id;
+
+  // NOTE: enrichment is NOT a per-campaign phase — it runs once, globally and
+  // serially, in enrichPendingGlobally() before this loop (active campaigns
+  // only, one LLM call at a time). The tick below starts at SCREEN.
+
+  /* ── Phase 1: SCREEN — auto-approve / auto-reject ──────────────────── */
+  try {
+    /* 1a. Reject what can never be enriched, and so can never be screened.
+     *
+     * enrichPendingGlobally selects only
+     *   icpMatchScore >= COALESCE(minConfidence, ENRICH_MIN_CONFIDENCE_DEFAULT)
+     *   OR icpMatchScore = 0
+     * so a row scored between 1 and the gate satisfies neither branch. It is
+     * never enriched, so enrichmentStatus stays 'pending', so the pass below
+     * (which reads only 'complete') never sees it, so sequenceStatus stays
+     * 'pending' — forever, with no record anywhere of why.
+     *
+     * Measured on prod 2026-08-16: 44 of CommunityForce's 258 queued
+     * prospects, and EVERY enrichment-pending row across all three active
+     * campaigns sat in this band while not one eligible row did. Enrichment
+     * had already taken everything it was allowed to touch; what remained was
+     * not a backlog, it was sediment.
+     *
+     * Same rule this file applies everywhere else: a row that cannot proceed
+     * must leave the set rather than linger in it. `skipped` is the existing
+     * vocabulary for that and it surfaces in Rejections with a reason, which
+     * is the point — the previous state was indistinguishable from "we have
+     * not got to it yet".
+     *
+     * ⚠️ Note what this does NOT do: `targetProspectCount` is checked with an
+     * unfiltered count(*), so rejected rows still count toward it. This does
+     * not free queue headroom and will not unblock discovery.
+     *
+     * The predicate is deliberately the exact inverse of the selector's and
+     * shares its constant. Written out in full rather than assembled from
+     * variables, because an UPDATE whose WHERE cannot be read at the statement
+     * is one edit away from losing its workspace scope unnoticed. */
+    const gate = campaign.minConfidence ?? ENRICH_MIN_CONFIDENCE_DEFAULT;
+    const [gateReject] = await db.execute(sql`
+      UPDATE \`prospect_queue\`
+      SET \`sequenceStatus\` = 'skipped',
+          \`rejectedAt\` = NOW(),
+          \`rejectionReason\` = CONCAT('Auto-screened: ICP match ', \`icpMatchScore\`,
+            '/100 is below this campaign''s enrichment gate of ', ${gate},
+            ' — never eligible for enrichment, so never screenable')
+      WHERE \`campaignId\` = ${campId}
+        AND \`workspaceId\` = ${wsId}
+        AND \`sequenceStatus\` = 'pending'
+        AND \`enrichmentStatus\` IN ('pending', 'enriching')
+        AND \`icpMatchScore\` > 0
+        AND \`icpMatchScore\` < ${gate}`);
+    const gateRejected = (gateReject as { affectedRows?: number })?.affectedRows ?? 0;
+    if (gateRejected > 0) {
+      result.rejected += gateRejected;
+      await emitLog(wsId, campId, "screen", "info",
+        `${gateRejected} prospect${gateRejected === 1 ? "" : "s"} rejected — ICP match below the enrichment gate of ${gate}, so they could never be enriched or screened.`);
+    }
+
+    const enriched = await db
+      .select()
+      .from(prospectQueue)
+      .where(
+        and(
+          eq(prospectQueue.campaignId, campId),
+          eq(prospectQueue.workspaceId, wsId),
+          eq(prospectQueue.enrichmentStatus, "complete"),
+          eq(prospectQueue.sequenceStatus, "pending"),
+        ),
+      );
+    const mode = campaign.autonomyMode;
+    const threshold = campaign.autoApproveThreshold ?? DEFAULT_APPROVE_THRESHOLD;
+    for (const p of enriched) {
+      const score = p.icpMatchScore ?? 0;
+      if (mode === "full") {
+        // Fully autonomous — the threshold IS the approve/reject line.
+        if (score >= threshold) {
+          await db
+            .update(prospectQueue)
+            .set({ sequenceStatus: "approved", approvedAt: new Date() })
+            .where(eq(prospectQueue.id, p.id));
+          result.approved++;
+        } else {
+          await db
+            .update(prospectQueue)
+            .set({
+              sequenceStatus: "skipped",
+              rejectedAt: new Date(),
+              rejectionReason: `Auto-screened: ICP match ${score}/100 below approve threshold ${threshold}`,
+            })
+            .where(eq(prospectQueue.id, p.id));
+          result.rejected++;
+        }
+      } else if (mode === "batch_approval") {
+        // Engine screens out obvious junk; humans approve the rest in batches.
+        if (score < AUTO_REJECT_FLOOR) {
+          await db
+            .update(prospectQueue)
+            .set({
+              sequenceStatus: "skipped",
+              rejectedAt: new Date(),
+              rejectionReason: `Auto-screened: ICP match ${score}/100 below floor ${AUTO_REJECT_FLOOR}`,
+            })
+            .where(eq(prospectQueue.id, p.id));
+          result.rejected++;
+        }
+        // else: leave 'pending' for human batch approval
+      }
+      // review_release: leave everything 'pending' for individual review
+    }
+    if (enriched.length > 0) {
+      await emitLog(wsId, campId, "screen", "info",
+        `Screened ${enriched.length} (mode=${mode}, threshold=${threshold})`);
+    }
+  } catch (e) {
+    console.error(`[AreEngine] campaign ${campId} screen phase failed:`, e);
+    await emitLog(wsId, campId, "screen", "error", String((e as Error)?.message ?? e));
+  }
+
+  /* ── Phase 2: SEQUENCE generation for approved prospects ───────────── */
+  try {
+    const needSequence = await db
+      .select({ id: prospectQueue.id })
+      .from(prospectQueue)
+      .leftJoin(
+        prospectIntelligence,
+        eq(prospectIntelligence.prospectQueueId, prospectQueue.id),
+      )
+      .where(
+        and(
+          eq(prospectQueue.campaignId, campId),
+          eq(prospectQueue.workspaceId, wsId),
+          eq(prospectQueue.sequenceStatus, "approved"),
+          sql`${prospectIntelligence.generatedSequence} IS NULL`,
+        ),
+      )
+      .limit(SEQUENCE_PER_CAMPAIGN_TICK);
+    if (needSequence.length > 0) {
+      const settled = await Promise.allSettled(
+        needSequence.map((p) => runSequenceAgent(p.id, wsId, campId)),
+      );
+      const ok = settled.filter((s) => s.status === "fulfilled").length;
+      result.sequencesGenerated += ok;
+      await emitLog(wsId, campId, "sequence", "info",
+        `Generated ${ok}/${needSequence.length} sequences`);
+    }
+  } catch (e) {
+    console.error(`[AreEngine] campaign ${campId} sequence phase failed:`, e);
+    await emitLog(wsId, campId, "sequence", "error", String((e as Error)?.message ?? e));
+  }
+
+  /* ── Phase 3: ENROLL — generatedSequence → are_execution_queue rows ── */
+  await enrollApprovedForCampaign(campaign, result);
 
   /* ── Phase 4: DISPATCH due email steps ─────────────────────────────── */
   try {

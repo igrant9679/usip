@@ -92,8 +92,8 @@ describe("the enrol guard counts LIVE rows, not history", () => {
   // (every old step `skipped`) read as already enrolled: status flipped,
   // no new rows minted, and the sweep above then called it done.
   const engine = readFileSync(join(__dirname, "areEngine.ts"), "utf8");
-  const start = engine.indexOf("/* ── Phase 3: ENROLL");
-  const end = engine.indexOf("/* ── Phase 4", start);
+  const start = engine.indexOf("export async function enrollApprovedForCampaign");
+  const end = engine.indexOf("\nasync function tickCampaign", start);
   const phase = engine.slice(start, end);
 
   it("the phase boundary is where we think it is", () => {

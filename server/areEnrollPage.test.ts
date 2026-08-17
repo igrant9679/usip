@@ -22,8 +22,8 @@ import { join } from "node:path";
 
 const src = readFileSync(join(__dirname, "areEngine.ts"), "utf8");
 
-const start = src.indexOf("/* ── Phase 3: ENROLL");
-const end = src.indexOf("/* ── Phase 4", start);
+const start = src.indexOf("export async function enrollApprovedForCampaign");
+const end = src.indexOf("\nasync function tickCampaign", start);
 // No end-of-file fallback — a missing anchor must fail the boundary test
 // rather than widening every assertion to the whole engine.
 const phase = src.slice(start, end);
@@ -85,5 +85,47 @@ describe("phase 3 selects only enrollable rows", () => {
     for (const seg of loop.split(/\bcontinue;/).slice(0, continues.length)) {
       expect(seg).toMatch(/\.update\(prospectQueue\)/);
     }
+  });
+});
+
+describe("enrollOnly — enrolment separable from outreach", () => {
+  // 2026-08-17: the only way to enrol partly-sent prospects on a paused
+  // campaign was unpause → full tick → re-pause, from a browser session whose
+  // calls could time out and complete LATE — twice leaving campaigns active
+  // with nobody watching. Enrolment is bookkeeping; dispatch is outreach.
+  const router = readFileSync(join(__dirname, "routers/are/engine.ts"), "utf8");
+  const a = router.indexOf("enrollOnly: workspaceProcedure");
+  const b = router.indexOf("\n});", a);
+  const proc = router.slice(a, b);
+
+  it("exists and is bounded", () => {
+    expect(a).toBeGreaterThan(-1);
+    expect(b).toBeGreaterThan(a);
+  });
+
+  it("calls the ONE shared enrol implementation, not a copy", () => {
+    expect(proc).toContain("await enrollApprovedForCampaign(campaign, result)");
+    // tickCampaign uses the same function.
+    const tick = src.slice(src.indexOf("async function tickCampaign"));
+    expect(tick).toContain("await enrollApprovedForCampaign(campaign, result)");
+  });
+
+  it("does not filter on campaign status — a paused campaign is the point", () => {
+    expect(proc).not.toMatch(/eq\(areCampaigns\.status/);
+    expect(proc).not.toContain('"active"');
+  });
+
+  it("touches nothing but enrolment", () => {
+    for (const forbidden of ["runAreEngine(", "tickCampaign(", "dispatch", "sendCampaignEmail", "runDiscovery", "runSequenceAgent", "runEnrichAgent"]) {
+      expect(proc, `enrollOnly must not reach ${forbidden}`).not.toContain(forbidden);
+    }
+  });
+
+  it("scopes the campaign read to the workspace", () => {
+    expect(proc).toContain("eq(areCampaigns.workspaceId, ctx.workspace.id)");
+  });
+
+  it("reports what remains so a caller can loop until done", () => {
+    expect(proc).toContain("remainingApproved");
   });
 });
