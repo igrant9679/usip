@@ -623,15 +623,23 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
       // The user saw sequences finish in hours that were written to run for
       // fourteen days.
       //
-      // Only rows that still represent work — scheduled, or sent — mean "this
-      // prospect is enrolled". Skipped, failed and canceled rows are history,
-      // and history is not enrolment.
+      // Only rows that still represent PENDING work — status scheduled — mean
+      // "this prospect is enrolled and needs nothing from us". Everything
+      // else, sent included, is history.
+      //
+      // The first version of this fix counted `scheduled OR sent`, and that
+      // re-broke it from the other side within the hour: a prospect whose
+      // step 1 had gone out and whose steps 2–7 were skipped has ONE sent row,
+      // tripped the guard, got flipped to enrolled with nothing scheduled, and
+      // the resume logic below — written for exactly that prospect — never
+      // ran. 112 people, same afternoon. Sent rows are what resume READS; they
+      // cannot also be what stops it running.
       const [existing] = await db
         .select({ n: sql<number>`count(*)` })
         .from(areExecutionQueue)
         .where(and(
           eq(areExecutionQueue.prospectQueueId, row.id),
-          inArray(areExecutionQueue.status, ["scheduled", "sent"]),
+          eq(areExecutionQueue.status, "scheduled"),
         ));
       if (Number(existing?.n ?? 0) > 0) {
         await db

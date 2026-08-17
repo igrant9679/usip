@@ -101,9 +101,22 @@ describe("the enrol guard counts LIVE rows, not history", () => {
     expect(end).toBeGreaterThan(start);
   });
 
-  it("the idempotency count is restricted to scheduled|sent", () => {
+  it("the idempotency count is restricted to SCHEDULED rows only", () => {
+    // Not scheduled|sent. The first fix counted sent too, and a prospect with
+    // step 1 delivered and steps 2–7 skipped tripped it — flipped to enrolled
+    // with nothing scheduled, and the resume logic that exists for exactly
+    // that prospect never ran. Sent rows are what resume READS.
     const guard = phase.slice(phase.indexOf("Idempotency"), phase.indexOf("continue;", phase.indexOf("Idempotency")));
-    expect(guard).toContain('inArray(areExecutionQueue.status, ["scheduled", "sent"])');
+    expect(guard).toContain('eq(areExecutionQueue.status, "scheduled")');
+    expect(guard).not.toContain('"sent"');
+  });
+
+  it("the guard sits ABOVE the resume logic and cannot pre-empt it for a partly-sent prospect", () => {
+    // Structural: the sent-row read used by resume must come AFTER the guard's
+    // `continue`, and the guard must not be able to fire on sent rows.
+    const guardEnd = phase.indexOf("continue;", phase.indexOf("Idempotency"));
+    const resumeRead = phase.indexOf("const priorSends");
+    expect(resumeRead).toBeGreaterThan(guardEnd);
   });
 
   it("the completion sweep writes `canceled` for an abandoned verdict, with a reason", () => {
