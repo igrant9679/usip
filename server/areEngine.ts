@@ -702,18 +702,62 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
         continue;
       }
 
+      /**
+       * Enrolment must RESUME a sequence, not restart it.
+       *
+       * This minted every step from `now + dayOffset`, which is right for a
+       * prospect nobody has touched and wrong for anyone else. A prospect
+       * whose earlier steps already SENT — a re-enrolment after a cancel, a
+       * regenerated sequence, a heal — would get a second copy of the steps
+       * they had already received, and the whole cadence re-anchored to today
+       * instead of to the day their first email actually went. Live on
+       * 2026-08-17: 112 prospects with step 1 delivered, about to be handed
+       * step 1 again.
+       *
+       * So: read what has been sent, skip those stepIndexes, and anchor the
+       * remaining offsets to the FIRST send so the day-3 follow-up lands on
+       * day 3 of the conversation the prospect is actually having. Nothing
+       * sent yet → identical to before (anchor = now, all steps).
+       */
+      const priorSends = await db
+        .select({ stepIndex: areExecutionQueue.stepIndex, executedAt: areExecutionQueue.executedAt })
+        .from(areExecutionQueue)
+        .where(and(
+          eq(areExecutionQueue.prospectQueueId, row.id),
+          eq(areExecutionQueue.status, "sent"),
+        ));
+      const sentIdx = new Set(priorSends.map((r) => r.stepIndex));
+      const firstSendMs = priorSends
+        .map((r) => (r.executedAt ? new Date(r.executedAt).getTime() : NaN))
+        .filter((t) => Number.isFinite(t))
+        .sort((a, b) => a - b)[0];
       const now = Date.now();
-      const execRows = steps.map((s) => ({
+      const anchor = firstSendMs ?? now;
+      const remaining = steps.filter((s) => !sentIdx.has(s.stepIndex));
+      if (remaining.length === 0) {
+        // Everything already sent: nothing to enrol, and the completion sweep
+        // will settle it. Not a `continue` that leaves the row matching its own
+        // WHERE — status changes to enrolled here so the sweep can see it.
+        await db.update(prospectQueue).set({ sequenceStatus: "enrolled" }).where(eq(prospectQueue.id, row.id));
+        continue;
+      }
+      const execRows = remaining.map((s) => ({
         workspaceId: wsId,
         campaignId: campId,
         prospectQueueId: row.id,
         stepIndex: s.stepIndex,
         channel: s.channel,
-        scheduledAt: new Date(now + s.dayOffset * 86_400_000),
+        // Never in the past: a resumed step whose day has already gone is due
+        // now, not overdue-and-dispatched-in-a-burst.
+        scheduledAt: new Date(Math.max(anchor + s.dayOffset * 86_400_000, now)),
         status: "scheduled" as const,
         messageContent: { subject: s.subject, body: s.body, variantKey: s.variantKey },
       }));
       await db.insert(areExecutionQueue).values(execRows as never);
+      if (sentIdx.size > 0) {
+        await emitLog(wsId, campId, "enroll", "info",
+          `Prospect ${row.id} resumed: ${sentIdx.size} step${sentIdx.size === 1 ? "" : "s"} already sent, ${remaining.length} scheduled from first-send anchor`);
+      }
       await db
         .update(prospectQueue)
         .set({ sequenceStatus: "enrolled" })

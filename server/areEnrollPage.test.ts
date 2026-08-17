@@ -62,6 +62,19 @@ describe("phase 3 selects only enrollable rows", () => {
     expect(branch.indexOf('sequenceStatus: "skipped"')).toBeLessThan(branch.indexOf("continue;"));
   });
 
+  it("enrolment RESUMES a partly-sent sequence instead of restarting it", () => {
+    // 2026-08-17: 112 prospects with step 1 delivered were about to be
+    // handed step 1 again, with the whole cadence re-anchored to today.
+    expect(phase).toContain('eq(areExecutionQueue.status, "sent")');
+    expect(phase).toContain("const sentIdx = new Set(priorSends.map((r) => r.stepIndex))");
+    expect(phase).toContain("steps.filter((s) => !sentIdx.has(s.stepIndex))");
+  });
+
+  it("anchors remaining offsets to the FIRST send, never in the past", () => {
+    expect(phase).toContain("const anchor = firstSendMs ?? now");
+    expect(phase).toContain("Math.max(anchor + s.dayOffset * 86_400_000, now)");
+  });
+
   it("every exit from the enrol loop changes the row it examined", () => {
     // The property that was violated. A `continue` that leaves the row
     // matching the WHERE it came from is how a page silts up.
