@@ -427,13 +427,16 @@ export const contactsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // Full rows into the audit `before` — the only copy of a hard-deleted
+      // record. Same asymmetry as prospects.bulkDelete: single delete captured
+      // the row, bulk captured ids, and bulk is what people use.
       const rows = await db
-        .select({ id: contacts.id })
+        .select()
         .from(contacts)
         .where(and(eq(contacts.workspaceId, ctx.workspace.id), inArray(contacts.id, input.ids)));
       if (rows.length === 0) return { deleted: 0 };
       await db.delete(contacts).where(and(eq(contacts.workspaceId, ctx.workspace.id), inArray(contacts.id, rows.map((r) => r.id))));
-      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "delete", entityType: "contact_bulk", entityId: 0, after: { ids: rows.map((r) => r.id) } });
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "delete", entityType: "contact_bulk", entityId: 0, before: { rows }, after: { ids: rows.map((r) => r.id) } });
       return { deleted: rows.length };
     }),
 

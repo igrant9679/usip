@@ -1,12 +1,31 @@
 import { TRPCError } from "@trpc/server";
 import { and, count, eq, sql } from "drizzle-orm";
 import { z } from "zod";
-import { activities, contacts, emailDrafts, enrollments, opportunityContactRoles } from "../../drizzle/schema";
+import { activities, contacts, emailDrafts, enrollments, opportunityContactRoles, prospects } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, repProcedure, workspaceProcedure } from "../_core/workspace";
 
 export const dataHealthRouter = router({
+  /**
+   * Data Health describes PEOPLE (`prospects`), the sitewide person record.
+   *
+   * Owner directive 2026-08-17: one location for every person; the scrapers,
+   * ARE, and enrichment all contribute to and read from People and Companies.
+   * This procedure used to count `contacts` — the older CRM table that the
+   * 0160 fold-in made a one-directional mirror of People — so it reported the
+   * table enrichment never writes to. Live on 2026-08-16 that read "0 of 1,520
+   * with email, 100% missing" for LSI while 1,505 People rows HAD emails, and
+   * Home turned that into a paid-enrichment nudge (deep test report #4).
+   *
+   * Vocabulary note, checked against prod rather than the schema comment:
+   * `prospects.emailStatus` carries Reoon's verdicts (valid / accept_all /
+   * risky / invalid / unknown) — the comment saying "verified|unverified|
+   * unavailable" is stale. So the four verification buckets map 1:1; nothing
+   * is invented. `withCompany` means "has an employer" here (company name or
+   * domain), not "linked to an account row" — People are enriched with an
+   * employer long before association links them to a Companies record.
+   */
   getMetrics: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
     if (!db) throw new Error("DB unavailable");
@@ -15,37 +34,37 @@ export const dataHealthRouter = router({
     const [totals] = await db
       .select({
         total: count(),
-        withEmail: sql<number>`SUM(CASE WHEN ${contacts.email} IS NOT NULL AND ${contacts.email} != '' THEN 1 ELSE 0 END)`,
-        withPhone: sql<number>`SUM(CASE WHEN ${contacts.phone} IS NOT NULL AND ${contacts.phone} != '' THEN 1 ELSE 0 END)`,
-        withCompany: sql<number>`SUM(CASE WHEN ${contacts.accountId} IS NOT NULL THEN 1 ELSE 0 END)`,
-        withTitle: sql<number>`SUM(CASE WHEN ${contacts.title} IS NOT NULL AND ${contacts.title} != '' THEN 1 ELSE 0 END)`,
-        withLinkedIn: sql<number>`SUM(CASE WHEN ${contacts.linkedinUrl} IS NOT NULL AND ${contacts.linkedinUrl} != '' THEN 1 ELSE 0 END)`,
-        verifiedValid: sql<number>`SUM(CASE WHEN ${contacts.emailVerificationStatus} = 'valid' THEN 1 ELSE 0 END)`,
-        verifiedAcceptAll: sql<number>`SUM(CASE WHEN ${contacts.emailVerificationStatus} = 'accept_all' THEN 1 ELSE 0 END)`,
-        verifiedRisky: sql<number>`SUM(CASE WHEN ${contacts.emailVerificationStatus} = 'risky' THEN 1 ELSE 0 END)`,
-        verifiedInvalid: sql<number>`SUM(CASE WHEN ${contacts.emailVerificationStatus} = 'invalid' THEN 1 ELSE 0 END)`,
-        verifiedUnknown: sql<number>`SUM(CASE WHEN ${contacts.emailVerificationStatus} IS NULL THEN 1 ELSE 0 END)`,
-        enrichedLast90Days: sql<number>`SUM(CASE WHEN ${contacts.updatedAt} >= DATE_SUB(NOW(), INTERVAL 90 DAY) THEN 1 ELSE 0 END)`,
+        withEmail: sql<number>`SUM(CASE WHEN ${prospects.email} IS NOT NULL AND ${prospects.email} != '' THEN 1 ELSE 0 END)`,
+        withPhone: sql<number>`SUM(CASE WHEN ${prospects.phone} IS NOT NULL AND ${prospects.phone} != '' THEN 1 ELSE 0 END)`,
+        withCompany: sql<number>`SUM(CASE WHEN (${prospects.company} IS NOT NULL AND ${prospects.company} != '') OR (${prospects.companyDomain} IS NOT NULL AND ${prospects.companyDomain} != '') THEN 1 ELSE 0 END)`,
+        withTitle: sql<number>`SUM(CASE WHEN ${prospects.title} IS NOT NULL AND ${prospects.title} != '' THEN 1 ELSE 0 END)`,
+        withLinkedIn: sql<number>`SUM(CASE WHEN ${prospects.linkedinUrl} IS NOT NULL AND ${prospects.linkedinUrl} != '' THEN 1 ELSE 0 END)`,
+        verifiedValid: sql<number>`SUM(CASE WHEN ${prospects.emailStatus} = 'valid' THEN 1 ELSE 0 END)`,
+        verifiedAcceptAll: sql<number>`SUM(CASE WHEN ${prospects.emailStatus} = 'accept_all' THEN 1 ELSE 0 END)`,
+        verifiedRisky: sql<number>`SUM(CASE WHEN ${prospects.emailStatus} = 'risky' THEN 1 ELSE 0 END)`,
+        verifiedInvalid: sql<number>`SUM(CASE WHEN ${prospects.emailStatus} = 'invalid' THEN 1 ELSE 0 END)`,
+        verifiedUnknown: sql<number>`SUM(CASE WHEN ${prospects.emailStatus} IS NULL OR ${prospects.emailStatus} = 'unknown' THEN 1 ELSE 0 END)`,
+        enrichedLast90Days: sql<number>`SUM(CASE WHEN ${prospects.updatedAt} >= DATE_SUB(NOW(), INTERVAL 90 DAY) THEN 1 ELSE 0 END)`,
       })
-      .from(contacts)
-      .where(eq(contacts.workspaceId, wsId));
+      .from(prospects)
+      .where(eq(prospects.workspaceId, wsId));
 
-    // Estimate duplicates: contacts sharing the same email (excluding nulls)
+    // Estimate duplicates: people sharing the same email (excluding nulls)
     const [dupEmailResult] = await db.execute(
       sql`SELECT COUNT(*) as cnt FROM (
-        SELECT email FROM ${contacts}
+        SELECT email FROM ${prospects}
         WHERE workspaceId = ${wsId} AND email IS NOT NULL AND email != ''
         GROUP BY email HAVING COUNT(*) > 1
       ) t`
     ) as any;
     const dupEmailGroups = Number((dupEmailResult as any[])?.[0]?.cnt ?? 0);
 
-    // Contacts sharing same firstName+lastName+company
+    // People sharing the same firstName+lastName+company
     const [dupNameResult] = await db.execute(
       sql`SELECT COUNT(*) as cnt FROM (
-        SELECT firstName, lastName, accountId FROM ${contacts}
-        WHERE workspaceId = ${wsId} AND firstName IS NOT NULL AND lastName IS NOT NULL AND accountId IS NOT NULL
-        GROUP BY firstName, lastName, accountId HAVING COUNT(*) > 1
+        SELECT firstName, lastName, company FROM ${prospects}
+        WHERE workspaceId = ${wsId} AND firstName IS NOT NULL AND lastName IS NOT NULL AND company IS NOT NULL AND company != ''
+        GROUP BY firstName, lastName, company HAVING COUNT(*) > 1
       ) t`
     ) as any;
     const dupNameGroups = Number((dupNameResult as any[])?.[0]?.cnt ?? 0);
@@ -135,6 +154,56 @@ export const dataHealthRouter = router({
    * Admin-scoped because it reports every import in the workspace, including
    * other members' filenames and column mappings.
    */
+  /**
+   * One-shot: bring every linked contact up to date with its People row,
+   * fill-only. The seam in personLink.mirrorPersonFieldsToContacts keeps them
+   * aligned from here on; this catches up the rows that diverged BEFORE it
+   * existed (LSI: 1,520 contacts with no email, People has them). Same rule
+   * as the seam — a contact's existing value always wins; only gaps fill.
+   * Admin-only and dry-run by default, because it writes to a CRM table.
+   */
+  syncContactsFromPeople: adminWsProcedure
+    .input(z.object({ dryRun: z.boolean().default(true), limit: z.number().int().min(1).max(5000).default(5000) }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const wsId = ctx.workspace.id;
+      const rows = await db
+        .select({
+          contactId: contacts.id,
+          cEmail: contacts.email, cPhone: contacts.phone, cTitle: contacts.title, cLinkedin: contacts.linkedinUrl,
+          cCompany: contacts.companyName, cDomain: contacts.companyDomain,
+          pEmail: prospects.email, pPhone: prospects.phone, pTitle: prospects.title, pLinkedin: prospects.linkedinUrl,
+          pCompany: prospects.company, pDomain: prospects.companyDomain,
+        })
+        .from(contacts)
+        .innerJoin(prospects, and(eq(prospects.id, contacts.personProspectId), eq(prospects.workspaceId, wsId)))
+        .where(eq(contacts.workspaceId, wsId))
+        .limit(input.limit);
+      const empty = (v: unknown) => v === null || v === undefined || String(v).trim() === "";
+      let scanned = 0, wouldFill = 0, filled = 0;
+      const byField: Record<string, number> = {};
+      for (const r of rows) {
+        scanned++;
+        const patch: Record<string, unknown> = {};
+        const pairs: Array<[string, unknown, unknown, number]> = [
+          ["email", r.cEmail, r.pEmail, 320], ["phone", r.cPhone, r.pPhone, 40], ["title", r.cTitle, r.pTitle, 120],
+          ["linkedinUrl", r.cLinkedin, r.pLinkedin, 200], ["companyName", r.cCompany, r.pCompany, 200], ["companyDomain", r.cDomain, r.pDomain, 200],
+        ];
+        for (const [col, cur, from, width] of pairs) {
+          if (empty(cur) && !empty(from)) { patch[col] = String(from).slice(0, width); byField[col] = (byField[col] ?? 0) + 1; }
+        }
+        if (Object.keys(patch).length === 0) continue;
+        wouldFill++;
+        if (!input.dryRun) {
+          await db.update(contacts).set(patch as never)
+            .where(and(eq(contacts.workspaceId, wsId), eq(contacts.id, r.contactId)));
+          filled++;
+        }
+      }
+      return { dryRun: input.dryRun, scanned, contactsWithGaps: wouldFill, filled, byField };
+    }),
+
   importMappingAudit: adminWsProcedure.query(async ({ ctx }) => {
     const { auditImportMappings } = await import("../services/importMappingAudit");
     return auditImportMappings(ctx.workspace.id);

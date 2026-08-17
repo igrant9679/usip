@@ -182,7 +182,7 @@ export default function DataEnrichment() {
 
               {/* cards grid */}
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-                <Card title="Email completeness" tag="Contacts" footer={<Button variant="outline" size="sm" className="h-7" onClick={() => setLocation("/contacts")}>View contacts</Button>}>
+                <Card title="Email completeness" tag="People" footer={<Button variant="outline" size="sm" className="h-7" onClick={() => setLocation("/v2/people")}>View People</Button>}>
                   <div className="flex items-center gap-4">
                     <Donut pct={metrics?.pctWithEmail ?? 0} color={accent} sub={`${metrics?.withEmail ?? 0}`} />
                     <div className="space-y-1.5">
@@ -192,7 +192,7 @@ export default function DataEnrichment() {
                   </div>
                 </Card>
 
-                <Card title="Phone completeness" tag="Contacts" footer={<Button variant="outline" size="sm" className="h-7" onClick={() => setLocation("/contacts")}>View contacts</Button>}>
+                <Card title="Phone completeness" tag="People" footer={<Button variant="outline" size="sm" className="h-7" onClick={() => setLocation("/v2/people")}>View People</Button>}>
                   <div className="flex items-center gap-4">
                     <Donut pct={metrics?.pctWithPhone ?? 0} color="#8b5cf6" sub={`${metrics?.withPhone ?? 0}`} />
                     <div className="space-y-1.5">

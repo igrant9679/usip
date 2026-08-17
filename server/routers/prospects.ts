@@ -749,8 +749,13 @@ export const prospectsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // Full rows, not just ids: the audit `before` below is the ONLY copy of
+      // a hard-deleted person. On 2026-08-17 a bulk delete of 24 People stored
+      // ids alone, and undoing it meant a rebuild from enrichment leftovers
+      // instead of a restore. Single `delete` already captured the row; the
+      // bulk path is what people actually use.
       const rows = await db
-        .select({ id: prospects.id, linkedContactId: prospects.linkedContactId })
+        .select()
         .from(prospects)
         .where(
           and(
@@ -773,6 +778,9 @@ export const prospectsRouter = router({
         action: "delete",
         entityType: "prospect_bulk",
         entityId: 0,
+        // `before` carries the rows so this is restorable; `after.ids` stays
+        // for anything that reads the old shape.
+        before: { rows },
         after: { ids: rows.map((r) => r.id) },
       });
       return {

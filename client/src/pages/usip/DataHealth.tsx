@@ -352,14 +352,14 @@ export default function DataHealth() {
             </div>
           ) : (
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-              <MetricCard label="Total Contacts" value={total} icon={Users} tone="default" />
+              <MetricCard label="Total People" value={total} icon={Users} tone="default" />
               <MetricCard
                 label="With Email"
                 value={metrics?.withEmail ?? 0}
                 pct={metrics?.pctWithEmail}
                 icon={Mail}
                 tone={(metrics?.pctWithEmail ?? 0) >= 80 ? "success" : (metrics?.pctWithEmail ?? 0) >= 50 ? "warning" : "danger"}
-                fixHref="/contacts?missingEmail=1"
+                fixHref="/v2/people?missingEmail=1"
                 fixLabel="Fix Now"
               />
               <MetricCard
@@ -375,7 +375,7 @@ export default function DataHealth() {
                 pct={metrics?.pctVerified}
                 icon={CheckCircle2}
                 tone={(metrics?.pctVerified ?? 0) >= 80 ? "success" : (metrics?.pctVerified ?? 0) >= 40 ? "warning" : "danger"}
-                fixHref="/contacts?verif=unknown"
+                fixHref="/v2/people?emailStatus=unknown"
                 fixLabel="Verify Now"
               />
               <MetricCard
@@ -383,7 +383,7 @@ export default function DataHealth() {
                 value={metrics?.verifiedInvalid ?? 0}
                 icon={XCircle}
                 tone={(metrics?.verifiedInvalid ?? 0) === 0 ? "success" : "danger"}
-                fixHref="/contacts?verif=invalid"
+                fixHref="/v2/people?emailStatus=invalid"
                 fixLabel="View Invalid"
               />
               <MetricCard

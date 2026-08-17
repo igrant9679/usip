@@ -773,7 +773,7 @@ export default function ImportContacts() {
               </div>
 
               <div className="flex justify-center gap-3 pt-2">
-                <Link href="/contacts">
+                <Link href="/v2/people">
                   <Button className="gap-2">
                     <Users className="h-4 w-4" />
                     View Contacts

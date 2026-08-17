@@ -207,15 +207,28 @@ export default function People() {
   const accent = useAccentColor();
 
   // ── server-backed filters (drive prospects.list → Total + pagination) ──
-  const [emailStatus, setEmailStatus] = useState<string>(""); // "" = any
-  const [hasEmail, setHasEmail] = useState(false);
+  // Both seedable from the URL so other pages can deep-link into a filtered
+  // People list: /v2/people?emailStatus=invalid, /v2/people?missingEmail=1.
+  // Data Health's "Fix now" cards use these (they pointed at the retired
+  // Contacts page before 2026-08-17).
+  const urlParams = typeof window === "undefined" ? null : new URLSearchParams(window.location.search);
+  const [emailStatus, setEmailStatus] = useState<string>(urlParams?.get("emailStatus") ?? ""); // "" = any
+  const [hasEmail, setHasEmail] = useState(urlParams?.get("hasEmail") === "1");
+  const [missingEmail, setMissingEmail] = useState(urlParams?.get("missingEmail") === "1");
   const [verification, setVerification] = useState<string>(""); // verified | needs_review | rejected
   const [promoted, setPromoted] = useState<"all" | "promoted" | "not">("all");
   const [page, setPage] = useState(1);
   const perPage = 50;
 
   // ── client refinement filters (narrow the loaded page) ──
-  const [search, setSearch] = useState("");
+  // Seedable from the URL: /v2/people?q=jane doe. Used by the /contacts/:id
+  // redirect when a contact has no linked person yet — it lands here with the
+  // name searched rather than dead-ending — and by anything else that wants
+  // to deep-link into a filtered People list.
+  const [search, setSearch] = useState(() => {
+    if (typeof window === "undefined") return "";
+    return new URLSearchParams(window.location.search).get("q") ?? "";
+  });
   const [titleQ, setTitleQ] = useState("");
   const [companyQ, setCompanyQ] = useState("");
   const [locationQ, setLocationQ] = useState("");
@@ -299,7 +312,9 @@ export default function People() {
     page,
     perPage,
     emailStatus: emailStatus || undefined,
-    hasEmail: hasEmail || undefined,
+    // The server predicate is three-valued: true → IS NOT NULL, false → IS
+    // NULL, undefined → no filter. "Missing email" is the false branch.
+    hasEmail: missingEmail ? false : (hasEmail || undefined),
     verificationStatus: (verification || undefined) as any,
     promoted: promoted === "promoted" ? true : promoted === "not" ? false : undefined,
     enrolled: enrolled === "all" ? undefined : enrolled,
@@ -517,12 +532,21 @@ export default function People() {
         );
       case "emailStatus":
         return (
-          <FilterGroup key={id} {...common} label="Email status" icon={Mail} count={(emailStatus ? 1 : 0) + (hasEmail ? 1 : 0)}>
+          <FilterGroup key={id} {...common} label="Email status" icon={Mail} count={(emailStatus ? 1 : 0) + (hasEmail ? 1 : 0) + (missingEmail ? 1 : 0)}>
             <div className="space-y-0.5">
+              {/* Reoon's verdict vocabulary — what the rows ACTUALLY hold.
+                  This offered verified/unverified/unavailable (the schema
+                  comment's stale wording) against an exact-match server
+                  predicate, and ZERO rows in either workspace carry those
+                  values, so the filter had never matched anything (checked
+                  2026-08-17: 1,505 + 1,205 People, all four buckets below
+                  populated, all three old ones empty). */}
               {[
-                { v: "verified", l: "Verified" },
-                { v: "unverified", l: "Unverified" },
-                { v: "unavailable", l: "Unavailable" },
+                { v: "valid", l: "Valid" },
+                { v: "accept_all", l: "Accept-all" },
+                { v: "risky", l: "Risky" },
+                { v: "invalid", l: "Invalid" },
+                { v: "unknown", l: "Unknown" },
               ].map((o) => (
                 <CheckRow
                   key={o.v}
@@ -533,7 +557,8 @@ export default function People() {
               ))}
             </div>
             <div className="pt-1 border-t border-border/60">
-              <CheckRow checked={hasEmail} onChange={() => { setHasEmail(!hasEmail); resetPage(); }} label="Has an email address" />
+              <CheckRow checked={hasEmail} onChange={() => { setHasEmail(!hasEmail); if (!hasEmail) setMissingEmail(false); resetPage(); }} label="Has an email address" />
+              <CheckRow checked={missingEmail} onChange={() => { setMissingEmail(!missingEmail); if (!missingEmail) setHasEmail(false); resetPage(); }} label="Missing an email address" />
             </div>
           </FilterGroup>
         );

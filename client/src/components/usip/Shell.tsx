@@ -178,9 +178,12 @@ const _LEGACY_NAV: NavGroup[] = [
       { href: "/prospects", label: "Prospects", icon: Radar },
       { href: "/leads", label: "Leads", icon: Target },
       { href: "/pipeline", label: "Pipeline", icon: KanbanSquare },
+      // "Records" are People and Companies — the two sitewide sources of truth
+      // (owner, 2026-08-17). The old Contacts list is retired; /contacts now
+      // redirects into People.
       { kind: "subhead", label: "Records", color: "#DB2777", darkColor: "#F472B6" },
-      { href: "/contacts", label: "Contacts", icon: Users },
-      { href: "/accounts", label: "Accounts", icon: Building2 },
+      { href: "/v2/people", label: "People", icon: Users },
+      { href: "/v2/companies", label: "Companies", icon: Building2 },
       { kind: "subhead", label: "Tools", color: "#EA580C", darkColor: "#FB923C" },
       // Phase 1 of the multi-source prospect finder (Google Places now,
       // arbitrary-URL scrape + LinkedIn coming in phases 2-3).

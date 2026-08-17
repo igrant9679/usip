@@ -150,8 +150,12 @@ const ROUTE_PAGE_KEYS: Array<[string, string]> = [
   ["/reports", "reports"],
   ["/dashboards", "dashboards"],
   ["/mindmaps", "mindmaps"],
+  // /contacts redirects into People since 2026-08-17; keep the mapping so a
+  // stale deep link still gets the right tour.
   ["/contacts", "contacts"],
+  ["/v2/people", "contacts"],
   ["/accounts", "contacts"],
+  ["/v2/companies", "contacts"],
   ["/v2/deals", "deals"],
   ["/v2/meetings", "meetings"],
   ["/v2/tasks", "tasks"],

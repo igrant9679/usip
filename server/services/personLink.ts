@@ -346,8 +346,65 @@ export async function mergeIntoPerson(
       .where(and(eq(prospects.workspaceId, workspaceId), eq(prospects.id, personId)));
     const { recordFieldHistory } = await import("./enrichment/fieldHistory");
     void recordFieldHistory(workspaceId, personId, merged.decisions, data.source);
+    void mirrorPersonFieldsToContacts(workspaceId, personId, merged.fields);
   } catch (e) {
     console.error(`[personLink] mergeIntoPerson(${personId}) failed:`, (e as Error)?.message ?? e);
+  }
+}
+
+/**
+ * Mirror enrichment wins on a People row down to its linked contact rows.
+ *
+ * Owner directive 2026-08-17: People is THE person record, sitewide. The 0160
+ * fold-in gave every contact a People row and pointed `personProspectId` at
+ * it — but the flow was one-directional: enrichment wrote to People and never
+ * came back. Live on 2026-08-16, LSI held 1,520 contacts with ZERO emails and
+ * 1,505 People rows WITH them, for the same humans. Anything still reading
+ * `contacts` (deal roles, briefs, the sequences audience picker) saw a person
+ * with no email that People knew the email of.
+ *
+ * FILL-ONLY. A contact field is written only when it is currently empty. A
+ * contact is a curated CRM record and its non-empty values outrank a scraped
+ * candidate — mergeAll already encodes that ordering on the People side, and
+ * this must not undo it from below. So: People wins on People; on contacts,
+ * the existing value wins and enrichment fills the gaps.
+ *
+ * Best-effort and fire-and-forget: a mirror failure never fails the People
+ * write that matters. Only the four columns contacts shares with the merge
+ * vocabulary; nothing else on the row is touched.
+ */
+async function mirrorPersonFieldsToContacts(
+  workspaceId: number,
+  personId: number,
+  fields: Record<string, string>,
+): Promise<void> {
+  try {
+    const db = await getDb();
+    if (!db) return;
+    // contacts column names differ from People's for company.
+    const map: Record<string, keyof typeof contacts.$inferInsert> = {
+      email: "email", phone: "phone", title: "title", linkedinUrl: "linkedinUrl",
+      company: "companyName", companyDomain: "companyDomain",
+    };
+    const entries = Object.entries(fields).filter(([f]) => f in map);
+    if (entries.length === 0) return;
+    const linked = await db.select().from(contacts)
+      .where(and(eq(contacts.workspaceId, workspaceId), eq(contacts.personProspectId, personId)));
+    for (const c of linked) {
+      const patch: Record<string, unknown> = {};
+      for (const [field, value] of entries) {
+        const col = map[field]!;
+        const current = (c as Record<string, unknown>)[col];
+        if (current === null || current === undefined || String(current).trim() === "") {
+          patch[col] = value.slice(0, field === "email" ? 320 : 200);
+        }
+      }
+      if (Object.keys(patch).length === 0) continue;
+      await db.update(contacts).set(patch as never)
+        .where(and(eq(contacts.workspaceId, workspaceId), eq(contacts.id, c.id)));
+    }
+  } catch (e) {
+    console.error(`[personLink] mirror to contacts (${personId}) failed:`, (e as Error)?.message ?? e);
   }
 }
 

@@ -259,7 +259,7 @@ export default function Calls() {
           <Phone className="size-4" style={{ color: accent }} />
           <h1 className="text-[15px] font-semibold tracking-tight">Calls</h1>
           <div className="flex-1" />
-          <Button variant="outline" size="sm" className="h-7 gap-1.5" onClick={() => setLocation("/contacts")}>Find someone to call</Button>
+          <Button variant="outline" size="sm" className="h-7 gap-1.5" onClick={() => setLocation("/v2/people")}>Find someone to call</Button>
         </div>
 
         <div className="flex-1 min-h-0 overflow-auto p-4 md:p-6 space-y-5">
@@ -287,7 +287,7 @@ export default function Calls() {
                   <PhoneOff className="size-8 mx-auto text-muted-foreground opacity-50 mb-2" />
                   <div className="text-sm font-medium">No calls scheduled</div>
                   <p className="text-xs text-muted-foreground mt-1 max-w-sm mx-auto">Schedule a call task on a contact, lead or account and it'll show up here. Outcomes you log are saved to that record's timeline.</p>
-                  <Button size="sm" className="mt-3" onClick={() => setLocation("/contacts")}>Go to contacts</Button>
+                  <Button size="sm" className="mt-3" onClick={() => setLocation("/v2/people")}>Go to People</Button>
                 </div>
               ) : (
                 queue.map((c) => <Row key={c.id} c={c} />)

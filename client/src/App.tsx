@@ -7,7 +7,7 @@ import NotFound from "@/pages/NotFound";
 import Accounts from "@/pages/usip/Accounts";
 import Audit from "@/pages/usip/Audit";
 import Campaigns from "@/pages/usip/Campaigns";
-import Contacts from "@/pages/usip/Contacts";
+import ContactRedirect from "@/pages/usip/ContactRedirect";
 import Customers from "@/pages/usip/Customers";
 import Dashboard from "@/pages/usip/Dashboard";
 import DashboardHome2 from "@/pages/usip/DashboardHome2";
@@ -40,7 +40,6 @@ import Home from "@/pages/usip/Home";
 import Library from "@/pages/usip/Library";
 import ProspectDetail from "@/pages/usip/ProspectDetail";
 import AccountDetail from "@/pages/usip/AccountDetail";
-import ContactDetail from "@/pages/usip/ContactDetail";
 import LeadDetail from "@/pages/usip/LeadDetail";
 import OpportunityDetail from "@/pages/usip/OpportunityDetail";
 import SettingsPipelines from "@/pages/usip/SettingsPipelines";
@@ -437,8 +436,11 @@ function Router() {
       <Route path="/prospects"><AuthGate><Prospects /></AuthGate></Route>
       <Route path="/prospects/:id"><AuthGate><ProspectDetail /></AuthGate></Route>
       <Route path="/find-prospects"><AuthGate><FindProspects /></AuthGate></Route>
-      <Route path="/contacts"><AuthGate><Contacts /></AuthGate></Route>
-      <Route path="/contacts/:id"><AuthGate><ContactDetail /></AuthGate></Route>
+      {/* Retired 2026-08-17 (owner: one location for every person record).
+          Both routes resolve to People — /contacts/:id lands on the contact's
+          linked PERSON so old deep links keep working. See ContactRedirect. */}
+      <Route path="/contacts"><AuthGate><ContactRedirect /></AuthGate></Route>
+      <Route path="/contacts/:id"><AuthGate><ContactRedirect /></AuthGate></Route>
       <Route path="/accounts"><AuthGate><Accounts /></AuthGate></Route>
       <Route path="/accounts/:id"><AuthGate><AccountDetail /></AuthGate></Route>
       <Route path="/leads/:id"><AuthGate><LeadDetail /></AuthGate></Route>
