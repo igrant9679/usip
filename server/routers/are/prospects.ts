@@ -1185,10 +1185,22 @@ export const prospectsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      /**
+       * `approvedAt` / `approvedByUserId` record the DECISION, so they are
+       * written only when there is one — i.e. only if the row was not already
+       * approved. Unconditionally, this re-stamped every call: on 2026-08-17 a
+       * repair pass re-approved 141 already-approved rows and overwrote the
+       * previous day's approval timestamps, and when the owner then asked
+       * "who approved these and when", the record could no longer say. An
+       * audit column that any later write can clobber is not an audit column.
+       *
+       * The status flip still happens regardless (that IS idempotent — it is
+       * how canceled/paused rows get back into the engine's approved set).
+       */
       await db.update(prospectQueue).set({
         sequenceStatus: "approved",
-        approvedAt: new Date(),
-        approvedByUserId: ctx.user.id,
+        approvedAt: sql`COALESCE(${prospectQueue.approvedAt}, NOW())`,
+        approvedByUserId: sql`COALESCE(${prospectQueue.approvedByUserId}, ${ctx.user.id})`,
       }).where(and(eq(prospectQueue.id, input.prospectId), eq(prospectQueue.workspaceId, ctx.workspace.id)));
       return { success: true };
     }),
@@ -1838,6 +1850,81 @@ export const prospectsRouter = router({
         rejectionReason: input.reason ?? null,
       }).where(and(eq(prospectQueue.id, input.prospectId), eq(prospectQueue.workspaceId, ctx.workspace.id)));
       return { success: true };
+    }),
+
+  /**
+   * Put approved prospects back in the review queue — the inverse of
+   * bulkApprove, which had no inverse.
+   *
+   * Exists because on 2026-08-16 152 prospects were bulk-approved from the
+   * owner's session on an instruction the owner did not intend as one, and
+   * the only paths back were `reject` (skipped, out of the queue for good) and
+   * `cancelSequence` (canceled, with a reason implying the sequence had run).
+   * Neither says "this was never decided". This does: `pending`, approval
+   * stamp cleared, every still-scheduled step skipped so nothing sends, and
+   * the generated sequence LEFT IN PLACE — it is real work and the next
+   * approver may want it. Idempotent: a pending row is untouched.
+   *
+   * Refuses rows that have already sent a step, unless `force`. A prospect who
+   * has received an email is not un-decided; the caller has to say so.
+   */
+  bulkUnapprove: workspaceProcedure
+    .input(z.object({
+      prospectIds: z.array(z.number()).min(1).max(200),
+      reason: z.string().max(500).optional(),
+      /** Also revert prospects who have already had a step SENT. */
+      force: z.boolean().default(false),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      let reverted = 0, stepsSkipped = 0, refusedSent = 0;
+      const reasonText = `Approval reverted${input.reason ? ` — ${input.reason}` : ""}`;
+      for (const id of input.prospectIds) {
+        const [row] = await db.select({ status: prospectQueue.sequenceStatus, campaignId: prospectQueue.campaignId })
+          .from(prospectQueue)
+          .where(and(eq(prospectQueue.id, id), eq(prospectQueue.workspaceId, ctx.workspace.id)))
+          .limit(1);
+        if (!row || row.status === "pending") continue;
+        if (!input.force) {
+          const [sent] = await db.select({ n: sql<number>`count(*)` }).from(areExecutionQueue)
+            .where(and(
+              eq(areExecutionQueue.workspaceId, ctx.workspace.id),
+              eq(areExecutionQueue.prospectQueueId, id),
+              eq(areExecutionQueue.status, "sent"),
+            ));
+          if (Number(sent?.n ?? 0) > 0) { refusedSent++; continue; }
+        }
+        // Written out in full at the statement, not assembled — tenantScope.
+        const skipRes = await db.update(areExecutionQueue).set({
+          status: "skipped",
+          failureReason: reasonText,
+          executedAt: new Date(),
+        }).where(and(
+          eq(areExecutionQueue.workspaceId, ctx.workspace.id),
+          eq(areExecutionQueue.prospectQueueId, id),
+          eq(areExecutionQueue.status, "scheduled"),
+        ));
+        stepsSkipped += Number((skipRes[0] as any)?.affectedRows ?? 0);
+        await db.update(prospectQueue).set({
+          sequenceStatus: "pending",
+          approvedAt: null,
+          approvedByUserId: null,
+          rejectedAt: null,
+          rejectedByUserId: null,
+          rejectionReason: null,
+        }).where(and(eq(prospectQueue.id, id), eq(prospectQueue.workspaceId, ctx.workspace.id)));
+        await db.insert(areEngineLogs).values({
+          workspaceId: ctx.workspace.id,
+          campaignId: row.campaignId,
+          phase: "approval.revert",
+          level: "info",
+          message: `Approval reverted for prospect ${id} (was ${row.status}) — back to pending`,
+          details: { prospectId: id, before: row.status, reason: input.reason ?? null, actorUserId: ctx.user.id },
+        } as never);
+        reverted++;
+      }
+      return { reverted, stepsSkipped, refusedSent };
     }),
 
   /** Bulk approve a list of prospects */
