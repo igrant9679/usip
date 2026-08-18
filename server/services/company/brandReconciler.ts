@@ -623,7 +623,15 @@ export async function collectBrandCandidates(
 }
 
 export async function runBrandReconciliation(
-  opts: { provider?: ProviderLike; limit?: number; spacingMs?: number; workspaceId?: number; domainlessOnly?: boolean } = {},
+  opts: {
+    provider?: ProviderLike; limit?: number; spacingMs?: number; workspaceId?: number; domainlessOnly?: boolean;
+    /** Reconcile exactly these accounts (live, in the workspace when given)
+     *  instead of collecting by the refresh rule — for a caller that knows
+     *  which accounts need a fresh look now (e.g. the ones the verification
+     *  repair un-stamped, whose recent observation would otherwise keep them
+     *  inside the negative-cache window). Same limit/spacing/abort rules. */
+    accountIds?: number[];
+  } = {},
 ): Promise<SweepSummary> {
   const summary: SweepSummary = { scanned: 0, searched: 0, applied: 0, corroborated: 0, candidates: 0, noMatch: 0, skipped: 0, failed: 0 };
   const provider = opts.provider ?? (await loadProvider());
@@ -636,7 +644,21 @@ export async function runBrandReconciliation(
   const limit = opts.limit ?? SWEEP_MAX_SEARCHES;
   const spacing = opts.spacingMs ?? SWEEP_SPACING_MS;
 
-  const { eligible, scanned, skipped } = await collectBrandCandidates(
+  const { eligible, scanned, skipped } = opts.accountIds
+    ? await (async () => {
+        const ids = Array.from(new Set(opts.accountIds)).slice(0, 5000);
+        if (ids.length === 0) return { eligible: [] as Array<{ id: number; workspaceId: number; name: string; domain: string | null; brandVerifiedAt: Date | null }>, scanned: 0, skipped: 0 };
+        const rows = await db
+          .select({ id: accounts.id, workspaceId: accounts.workspaceId, name: accounts.name, domain: accounts.domain, brandVerifiedAt: accounts.brandVerifiedAt })
+          .from(accounts)
+          .where(and(
+            inArray(accounts.id, ids), isNull(accounts.archivedAt), sql`${accounts.name} <> ''`,
+            ...(opts.workspaceId ? [eq(accounts.workspaceId, opts.workspaceId)] : []),
+          ))
+          .orderBy(accounts.id);
+        return { eligible: rows.slice(0, limit), scanned: ids.length, skipped: ids.length - Math.min(rows.length, limit) };
+      })()
+    : await collectBrandCandidates(
     (afterId, pageSize) => db
       .select({ id: accounts.id, workspaceId: accounts.workspaceId, name: accounts.name, domain: accounts.domain, brandVerifiedAt: accounts.brandVerifiedAt })
       .from(accounts)

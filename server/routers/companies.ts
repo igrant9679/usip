@@ -213,18 +213,46 @@ export const companiesRouter = router({
       searchLimit: z.number().int().min(1).max(50).default(30),
       /** "domainless" (the default) spends searches only where a domain is
        *  missing — the point of the batch. "all" also re-verifies accounts
-       *  that already have one, which the 6h cron otherwise does for free. */
-      target: z.enum(["domainless", "all"]).default("domainless"),
+       *  that already have one, which the 6h cron otherwise does for free.
+       *  "repaired" re-reconciles the accounts the verification repair
+       *  un-stamped and that are still unverified — their recent observation
+       *  keeps them inside the negative-cache window, so the refresh rule
+       *  would not reach them for a week; with People now linked and read as
+       *  corroborators, a fresh pass is what lets the honest ones re-verify. */
+      target: z.enum(["domainless", "all", "repaired"]).default("domainless"),
     }).optional())
     .mutation(async ({ ctx, input }) => {
       requireRole(ctx.member.role, "admin");
       const { repairUrlNamedAccounts } = await import("../services/company/nameRepair");
       const urlNames = await repairUrlNamedAccounts(ctx.workspace.id);
       const { runBrandReconciliation } = await import("../services/company/brandReconciler");
+      const target = input?.target ?? "domainless";
+      let repairedIds: number[] | undefined;
+      if (target === "repaired") {
+        const db0 = await getDb();
+        repairedIds = [];
+        if (db0) {
+          const { organizationEnrichmentEvents } = await import("../../drizzle/schema");
+          const { isNull: isNull0 } = await import("drizzle-orm");
+          const ev = await db0
+            .select({ accountId: organizationEnrichmentEvents.accountId })
+            .from(organizationEnrichmentEvents)
+            .innerJoin(accounts, and(eq(accounts.id, organizationEnrichmentEvents.accountId), eq(accounts.workspaceId, ctx.workspace.id)))
+            .where(and(
+              eq(organizationEnrichmentEvents.workspaceId, ctx.workspace.id),
+              eq(organizationEnrichmentEvents.sourceType, "brand_reconcile"),
+              eq(organizationEnrichmentEvents.status, "unverified"),
+              isNull0(accounts.brandVerifiedAt),
+              isNull0(accounts.archivedAt),
+            ));
+          repairedIds = Array.from(new Set(ev.map((e) => e.accountId).filter((x): x is number => !!x)));
+        }
+      }
       const sweep = await runBrandReconciliation({
         limit: input?.searchLimit ?? 30,
         workspaceId: ctx.workspace.id,
-        domainlessOnly: (input?.target ?? "domainless") === "domainless",
+        domainlessOnly: target === "domainless",
+        ...(repairedIds ? { accountIds: repairedIds } : {}),
       });
       // The sweep only STORES what it saw; a name-only hit writes nothing by
       // the reconciler's spec. Adoption is the separate, lower-trust step that
