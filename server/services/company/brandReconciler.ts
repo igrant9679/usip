@@ -29,6 +29,19 @@
  * The orchestrator is the ONLY automated caller of Brand Search. Prospect
  * enrichment never touches it (owner decision, structurally tested in
  * brandfetch.test.ts) — this stack owns company-level reconciliation.
+ *
+ * INDEPENDENCE (2026-08-18). A domain the PROVIDER supplied — adopted from a
+ * name search by domainAdopt, or written by this reconciler — is not evidence
+ * the provider can then be checked against. Before this rule the loop was:
+ * name-only hit stored as candidate → adopt fills the empty domain at 60 →
+ * next pass, same hit, `accDomain === hitDomain` → domain_exact ≥95 →
+ * VERIFIED. And adopt also set websiteUrl to that domain, so "corroborated by
+ * the account's own records" was the same guess read back. Both loops
+ * stamped brand_verified_at on Brandfetch's wrong same-name hits ("Triumph
+ * Academy" → an Australian school; "Golden Bridge" → Vietnam; "Arena Hall" →
+ * Belarus). `providerIndependentEvidence` strips provider-sourced values
+ * before scoring and corroboration; the truth then has to come from an
+ * import, LinkedIn, association, a human pin, or a person's mailbox.
  */
 import { createHash } from "node:crypto";
 import { and, desc, eq, gt, inArray, isNull, lt, or, sql } from "drizzle-orm";
@@ -157,6 +170,31 @@ export interface ReconcileAccountState {
   domain: string | null;
   legalName: string | null;
   brandOverride: BrandOverride | null;
+}
+
+/** Ledger sources that mean "the brand provider said so" — never evidence
+ *  the provider may be checked against. */
+export const PROVIDER_SOURCES: ReadonlySet<string> = new Set(["brand_search", BRAND_PROVIDER]);
+
+/**
+ * The account's domain and website as evidence INDEPENDENT of the provider.
+ * A domain whose ledger source is the provider (adopted from a name search,
+ * or written by a reconcile) is returned as null: the provider must earn it
+ * again from something else. A websiteUrl that merely mirrors that dependent
+ * domain is dropped too — domainAdopt sets `https://<domain>` when the field
+ * was empty, so it is the same guess wearing a different hat.
+ */
+export function providerIndependentEvidence(acc: {
+  domain: string | null | undefined;
+  websiteUrl: string | null | undefined;
+  fieldProvenance: unknown;
+}): { domain: string | null; websiteUrl: string | null; domainDependent: boolean } {
+  const ledger = (acc.fieldProvenance ?? {}) as { domain?: { source?: string } };
+  const src = ledger.domain?.source;
+  const domainDependent = !!normalizeDomain(acc.domain) && !!src && PROVIDER_SOURCES.has(src);
+  if (!domainDependent) return { domain: acc.domain ?? null, websiteUrl: acc.websiteUrl ?? null, domainDependent: false };
+  const mirrors = !!acc.websiteUrl && normalizeDomain(acc.websiteUrl) === normalizeDomain(acc.domain);
+  return { domain: null, websiteUrl: mirrors ? null : (acc.websiteUrl ?? null), domainDependent: true };
 }
 
 export interface ReconcileDecision {
@@ -354,13 +392,20 @@ export async function reconcileAccountBrand(
     };
   }
   const hits = outcome.hits;
-  const scored = pickBestHit({ name: acc.name, domain: acc.domain }, hits);
-  const corroborators = await corroboratorDomainsFor(workspaceId, accountId, acc.websiteUrl);
+  // Score and corroborate against what we know INDEPENDENTLY of the provider
+  // (see header, INDEPENDENCE). A provider-sourced domain scores as no
+  // domain: the hit must be corroborated by an import/LinkedIn/association
+  // domain or a person's mailbox before it verifies — and a corroborated
+  // hit at a different domain may REPLACE the provider's earlier guess.
+  const indep = providerIndependentEvidence(acc);
+  const scored = pickBestHit({ name: acc.name, domain: indep.domain }, hits);
+  const corroborators = await corroboratorDomainsFor(workspaceId, accountId, indep.websiteUrl);
   const decision = decideBrandReconcile(
-    { name: acc.name, domain: acc.domain, legalName: acc.legalName, brandOverride: override },
+    { name: acc.name, domain: indep.domain, legalName: acc.legalName, brandOverride: override },
     scored,
     corroborators,
   );
+  if (indep.domainDependent) decision.notes.push(`account domain ${acc.domain} is provider-sourced — not counted as evidence`);
 
   // Change detection BEFORE inserting the new sighting: compare against the
   // provider's previous story about this account.

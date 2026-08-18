@@ -271,6 +271,22 @@ export const companiesRouter = router({
       }
       return plan;
     }),
+  /**
+   * Un-stamp brand verifications the reconciler earned against its own
+   * adopted guesses (self-corroboration, 2026-08-18). Dry run unless
+   * `apply` — the plan lists what would change and why. Admin only.
+   */
+  repairBrandVerification: workspaceProcedure
+    .input(z.object({ apply: z.boolean().default(false) }).optional())
+    .mutation(async ({ ctx, input }) => {
+      requireRole(ctx.member.role, "admin");
+      const { repairBrandVerifications } = await import("../services/company/brandVerificationRepair");
+      const plan = await repairBrandVerifications(ctx.workspace.id, { apply: input?.apply === true });
+      if (plan.applied) {
+        await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "brand_verification_repair", entityId: 0, after: { examined: plan.examined, kept: plan.kept, unverified: plan.unverified, noObservation: plan.noObservation } });
+      }
+      return plan;
+    }),
   merge: workspaceProcedure
     .input(z.object({ primaryAccountId: z.number().int().positive(), duplicateAccountId: z.number().int().positive() }))
     .mutation(async ({ ctx, input }) => {
