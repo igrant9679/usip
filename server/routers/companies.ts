@@ -235,7 +235,7 @@ export const companiesRouter = router({
           const { organizationEnrichmentEvents } = await import("../../drizzle/schema");
           const { isNull: isNull0 } = await import("drizzle-orm");
           const ev = await db0
-            .select({ accountId: organizationEnrichmentEvents.accountId })
+            .select({ accountId: organizationEnrichmentEvents.accountId, repairedAt: organizationEnrichmentEvents.createdAt })
             .from(organizationEnrichmentEvents)
             .innerJoin(accounts, and(eq(accounts.id, organizationEnrichmentEvents.accountId), eq(accounts.workspaceId, ctx.workspace.id)))
             .where(and(
@@ -245,7 +245,28 @@ export const companiesRouter = router({
               isNull0(accounts.brandVerifiedAt),
               isNull0(accounts.archivedAt),
             ));
-          repairedIds = Array.from(new Set(ev.map((e) => e.accountId).filter((x): x is number => !!x)));
+          // Once per repair: an account already re-observed SINCE its repair
+          // event has had its fresh look — searching it again this week only
+          // repeats the same answer. Without this, every pass re-walks the
+          // same first N ids (all still unverified) — measured 2026-08-18.
+          const repairedAt = new Map<number, Date>();
+          for (const e of ev) if (e.accountId && (!repairedAt.has(e.accountId) || (e.repairedAt && e.repairedAt > repairedAt.get(e.accountId)!))) repairedAt.set(e.accountId, e.repairedAt as Date);
+          const cand = Array.from(repairedAt.keys());
+          const seenSince = new Set<number>();
+          if (cand.length) {
+            const { brandObservations } = await import("../../drizzle/schema");
+            const { inArray: inArray0, desc: desc0 } = await import("drizzle-orm");
+            const obs = await db0
+              .select({ accountId: brandObservations.accountId, observedAt: brandObservations.observedAt })
+              .from(brandObservations)
+              .where(and(eq(brandObservations.workspaceId, ctx.workspace.id), inArray0(brandObservations.accountId, cand)))
+              .orderBy(desc0(brandObservations.observedAt));
+            for (const o of obs) {
+              const r = repairedAt.get(o.accountId);
+              if (r && o.observedAt && o.observedAt > r) seenSince.add(o.accountId);
+            }
+          }
+          repairedIds = cand.filter((id) => !seenSince.has(id));
         }
       }
       const sweep = await runBrandReconciliation({
