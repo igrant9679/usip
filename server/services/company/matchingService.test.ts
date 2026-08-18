@@ -66,6 +66,36 @@ describe("a mailbox domain recognises but never conflicts", () => {
   });
 });
 
+describe("an unverified account domain cannot veto a name match (owner decision 2026-08-18)", () => {
+  // Triumph Academy: people at triumphyouthservices.com, account holding an
+  // unverified Brandfetch name-adopt guess triumphacademy.com.au.
+  const triumph = { normalizedName: "triumph academy", normalizedDomain: "triumphacademy.com.au", domain: "triumphacademy.com.au" };
+
+  it("differing domain vs an UNVERIFIED, un-pinned account domain: no conflict, name links (needs_review)", () => {
+    const s = scoreCompanyMatch({ name: "Triumph Academy", domain: "triumphyouthservices.com" }, { ...triumph, brandVerifiedAt: null, brandOverride: null });
+    expect(s.conflict).toBe(false);
+    expect(s.score).toBe(50);
+    expect(s.reasons.join(" ")).toContain("unverified account domain triumphacademy.com.au (no veto)");
+    expect(bucket(s.score, s.conflict, s.exactName)).toBe("possible_match");
+  });
+
+  it("differing domain vs a brand-VERIFIED account domain still conflicts", () => {
+    const s = scoreCompanyMatch({ name: "Triumph Academy", domain: "triumphyouthservices.com" }, { ...triumph, brandVerifiedAt: new Date("2026-08-01"), brandOverride: null });
+    expect(s.conflict).toBe(true);
+    expect(bucket(s.score, s.conflict, s.exactName)).toBe("conflict");
+  });
+
+  it("differing domain vs a human-pinned (override) domain still conflicts", () => {
+    const s = scoreCompanyMatch({ name: "Triumph Academy", domain: "triumphyouthservices.com" }, { ...triumph, brandVerifiedAt: null, brandOverride: { domain: "triumphacademy.com.au" } });
+    expect(s.conflict).toBe(true);
+  });
+
+  it("a candidate that does not carry the verification field at all keeps the strict rule (global orgs)", () => {
+    const s = scoreCompanyMatch({ name: "Triumph Academy", domain: "triumphyouthservices.com" }, triumph);
+    expect(s.conflict).toBe(true);
+  });
+});
+
 describe("exact name with nothing against it is a possible match, not a duplicate", () => {
   it("floors an exact-name-only score into possible_match", () => {
     const s = scoreCompanyMatch({ name: "Fiserv" }, { normalizedName: "fiserv", normalizedDomain: "fiserv.com" });

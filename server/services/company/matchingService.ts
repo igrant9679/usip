@@ -75,10 +75,31 @@ function norm(input: CompanyInput) {
   };
 }
 
+/**
+ * Is this candidate's domain strong enough to VETO a name match? Only when a
+ * human pinned it (brand override) or the brand reconciler verified it
+ * (domain_exact against the provider). A domain adopted from a name search,
+ * imported, or written by association is a guess until then — the same
+ * name plus a differing guess is a disagreement to surface, not a reason to
+ * leave the person unattached (owner decision 2026-08-18: 29 CF people
+ * were held off their org by unverified Brandfetch guesses like
+ * "Triumph Academy" → triumphacademy.com.au).
+ *
+ * Rows that do not carry the field at all (global organizations, ad-hoc
+ * candidates) keep the strict rule.
+ */
+function domainCanVeto(candidate: { brandVerifiedAt?: unknown; brandOverride?: unknown }): boolean {
+  if (!("brandVerifiedAt" in candidate)) return true;
+  if (candidate.brandVerifiedAt) return true;
+  const ov = candidate.brandOverride as { domain?: unknown } | null | undefined;
+  return !!(ov && ov.domain);
+}
+
 export function scoreCompanyMatch(input: CompanyInput, candidate: {
   normalizedName?: string | null; normalizedDomain?: string | null; domain?: string | null;
   website?: string | null; linkedinCompanyUrl?: string | null; crmExternalId?: string | null;
   globalOrganizationId?: number | null; hqCity?: string | null; hqState?: string | null; hqCountry?: string | null;
+  brandVerifiedAt?: unknown; brandOverride?: unknown;
 }): { score: number; conflict: boolean; exactName: boolean; reasons: string[] } {
   const n = norm(input);
   const reasons: string[] = [];
@@ -99,7 +120,8 @@ export function scoreCompanyMatch(input: CompanyInput, candidate: {
   }
   if (n.domain && candDomain) {
     if (n.domain === candDomain) { score += 100; reasons.push("exact domain (+100)"); }
-    else { score -= 50; reasons.push("conflicting domain (-50)"); conflict = true; }
+    else if (domainCanVeto(candidate)) { score -= 50; reasons.push("conflicting domain (-50)"); conflict = true; }
+    else { reasons.push(`domain differs from an unverified account domain ${candDomain} (no veto)`); }
   }
   if (n.linkedin && candLinkedin && n.linkedin === candLinkedin) {
     score += 95; reasons.push("linkedin company url (+95)");

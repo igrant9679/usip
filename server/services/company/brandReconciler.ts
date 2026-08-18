@@ -33,7 +33,7 @@
 import { createHash } from "node:crypto";
 import { and, desc, eq, gt, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { getDb } from "../../db";
-import { accounts, brandObservations, contacts, organizationEnrichmentEvents } from "../../../drizzle/schema";
+import { accounts, brandObservations, contacts, organizationEnrichmentEvents, prospects } from "../../../drizzle/schema";
 import { businessDomainFromEmail, nameSimilarity, normalizeCompanyName, normalizeDomain } from "./normalize";
 import { canonicalizeCompanyDisplayName } from "../enrichment/recordNormalize";
 import type { BrandSearchHit, BrandSearchOutcome } from "../brand/brandfetch";
@@ -275,19 +275,31 @@ async function loadProvider(): Promise<ProviderLike> {
   return createBrandfetchProvider();
 }
 
-/** The account's own domain evidence: website + contact mailbox domains. */
-async function corroboratorDomainsFor(workspaceId: number, accountId: number, websiteUrl: string | null): Promise<string[]> {
+/**
+ * The account's own domain evidence: website + the mailbox domains of the
+ * people attached to it. People (prospects.accountId) AND Contacts
+ * (contacts.accountId) — People are the sitewide record (owner directive
+ * 2026-08-17) and LSI's contacts table is empty by instruction, so a
+ * contacts-only read had gone blind there. Mailboxes CORROBORATE a provider
+ * hit; they never name a domain on their own (see associationService).
+ */
+export async function corroboratorDomainsFor(workspaceId: number, accountId: number, websiteUrl: string | null): Promise<string[]> {
   const out = new Set<string>();
   const w = normalizeDomain(websiteUrl);
   if (w) out.add(w);
   const db = await getDb();
   if (db) {
-    const rows = await db
+    const people = await db
+      .select({ email: prospects.email })
+      .from(prospects)
+      .where(and(eq(prospects.workspaceId, workspaceId), eq(prospects.accountId, accountId)))
+      .limit(200);
+    const contactRows = await db
       .select({ email: contacts.email })
       .from(contacts)
       .where(and(eq(contacts.workspaceId, workspaceId), eq(contacts.accountId, accountId)))
       .limit(200);
-    for (const r of rows) {
+    for (const r of [...people, ...contactRows]) {
       const d = businessDomainFromEmail(r.email);
       if (d) out.add(d);
     }

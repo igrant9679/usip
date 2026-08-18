@@ -39,6 +39,8 @@ export interface AssociationResult {
    *  person's LinkedIn profile rather than the record's own fields. */
   input?: { name: string | null; domain: string | null; emailDomain: string | null; viaLinkedIn: boolean; read: RecordCompanyRead };
   reasons?: string[];
+  /** On a conflict: the account the person was held off. */
+  conflictAccountId?: number | null;
 }
 
 /** How the record's own company fields were read — reported by dry runs. */
@@ -334,7 +336,7 @@ export async function associateProspectToCompany(prospect: {
         await db.update(prospects).set({ companyMatchStatus: "conflict" } as never)
           .where(and(eq(prospects.workspaceId, prospect.workspaceId), eq(prospects.id, prospect.id)));
       }
-      return { accountId: null, globalOrganizationId: null, created: false, status: "conflict", score: match.score, input: planInput, reasons: match.reasons };
+      return { accountId: null, globalOrganizationId: null, created: false, status: "conflict", score: match.score, input: planInput, reasons: match.reasons, conflictAccountId: match.accountId };
     } else if (dryRun) {
       // Would create. Nothing to point at yet.
       return { accountId: null, globalOrganizationId: null, created: true, status: "linked", score: match.score, input: planInput, reasons: match.reasons };
@@ -416,8 +418,13 @@ export interface AssociationPlan extends AssociationRunStats {
   domainVariants: Array<{ name: string; domains: string[]; people: number }>;
   /** Largest would-be creations, for eyeballing what is about to exist. */
   createSample: Array<{ name: string; domain: string | null; people: number; viaLinkedIn: number }>;
-  /** Some of the conflicts, with the matcher's reasons. */
-  conflictSample: Array<{ prospectId: number; name: string | null; domain: string | null; emailDomain: string | null; reasons: string[] }>;
+  /** Some of the conflicts, with the matcher's reasons and the account the
+   *  person was held off (its domain, and whether that domain is verified or
+   *  human-pinned — an unverified one no longer vetoes; see matchingService). */
+  conflictSample: Array<{
+    prospectId: number; name: string | null; domain: string | null; emailDomain: string | null; reasons: string[];
+    against: { accountId: number; name: string; domain: string | null; verified: boolean; overridden: boolean } | null;
+  }>;
 }
 
 /**
@@ -441,7 +448,7 @@ export async function associateUnlinkedProspects(
   const linkedin = await linkedInCompanyFactsFor(workspaceId, rows.map((p) => p.id));
 
   const creates = new Map<string, { name: string; domains: Map<string, number>; people: number; viaLinkedIn: number }>();
-  const conflicts: AssociationPlan["conflictSample"] = [];
+  const conflicts: Array<Omit<AssociationPlan["conflictSample"][number], "against"> & { accountId: number | null }> = [];
 
   for (const p of rows) {
     const r = await associateProspectToCompany(p as never, { sourceType, linkedin: linkedin.get(p.id) ?? null, dryRun });
@@ -468,8 +475,8 @@ export async function associateUnlinkedProspects(
       const d = normalizeDomain(r.input.domain);
       if (d) g.domains.set(d, (g.domains.get(d) ?? 0) + 1);
       creates.set(key, g);
-    } else if (r.status === "conflict" && conflicts.length < 25 && r.input) {
-      conflicts.push({ prospectId: p.id, name: r.input.name, domain: r.input.domain, emailDomain: r.input.emailDomain, reasons: r.reasons ?? [] });
+    } else if (r.status === "conflict" && conflicts.length < 100 && r.input) {
+      conflicts.push({ prospectId: p.id, name: r.input.name, domain: r.input.domain, emailDomain: r.input.emailDomain, reasons: r.reasons ?? [], accountId: r.conflictAccountId ?? null });
     }
   }
   if (!dryRun) return stats;
@@ -482,6 +489,18 @@ export async function associateUnlinkedProspects(
     const found = await db.select({ n: accounts.normalizedName }).from(accounts)
       .where(and(eq(accounts.workspaceId, workspaceId), isNull(accounts.archivedAt), inArray(accounts.normalizedName, chunk)));
     for (const f of found) if (f.n) existing.add(f.n);
+  }
+
+  // The accounts the conflicts were held off, so the plan explains itself.
+  const againstIds = Array.from(new Set(conflicts.map((c) => c.accountId).filter((x): x is number => !!x)));
+  const against = new Map<number, AssociationPlan["conflictSample"][number]["against"]>();
+  for (let i = 0; i < againstIds.length; i += 500) {
+    const chunk = againstIds.slice(i, i + 500);
+    const rows = await db.select({ id: accounts.id, name: accounts.name, domain: accounts.domain, brandVerifiedAt: accounts.brandVerifiedAt, brandOverride: accounts.brandOverride })
+      .from(accounts).where(and(eq(accounts.workspaceId, workspaceId), inArray(accounts.id, chunk)));
+    for (const a of rows) {
+      against.set(a.id, { accountId: a.id, name: a.name, domain: a.domain, verified: !!a.brandVerifiedAt, overridden: !!(a.brandOverride as { domain?: unknown } | null)?.domain });
+    }
   }
 
   const groups = Array.from(creates.entries());
@@ -497,7 +516,7 @@ export async function associateUnlinkedProspects(
       domain: g.domains.size ? Array.from(g.domains.entries()).sort((a, b) => b[1] - a[1])[0][0] : null,
       people: g.people, viaLinkedIn: g.viaLinkedIn,
     })),
-    conflictSample: conflicts,
+    conflictSample: conflicts.map(({ accountId, ...c }) => ({ ...c, against: (accountId && against.get(accountId)) || null })),
   };
   return plan;
 }
