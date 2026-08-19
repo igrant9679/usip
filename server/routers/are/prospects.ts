@@ -53,6 +53,7 @@ import { invokeLLM, isRetryableLLMError } from "../../_core/llm";
 import { router } from "../../_core/trpc";
 import { isAdminRole, requireMinRole, workspaceProcedure } from "../../_core/workspace";
 import { recordAudit } from "../../audit";
+import { BULK_INPUT, runBulkAction } from "./prospectsBulk";
 import { notifyIfEnabled } from "../../services/policyNotify";
 import { HUMAN_COPY_RULES, humanizeAiCopy } from "../../services/humanCopy";
 import { resolveVerifiedEmail } from "../../services/scraper";
@@ -1947,6 +1948,14 @@ export const prospectsRouter = router({
     }),
 
   /** Bulk approve a list of prospects */
+  /** Mass actions on this campaign's prospects — see prospectsBulk.ts. */
+  bulk: workspaceProcedure
+    .input(BULK_INPUT)
+    .mutation(async ({ ctx, input }) => {
+      requireMinRole(ctx.member.role, "manager", "Only managers and admins can run bulk actions.");
+      return runBulkAction(ctx as never, input);
+    }),
+
   bulkApprove: workspaceProcedure
     .input(z.object({ prospectIds: z.array(z.number()).min(1).max(200) }))
     .mutation(async ({ ctx, input }) => {

@@ -22,6 +22,7 @@ import { ProspectAvatar } from "@/components/usip/ProspectAvatar";
 import { emailStatusBadge, genericInboxBadge } from "@/components/usip/people/peopleShared";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Checkbox } from "@/components/ui/checkbox";
+import { AreBulkActionBar, useRowSelection, type BulkActionDef } from "@/components/usip/AreBulkActionBar";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -221,6 +222,44 @@ const REJECT_TEMPLATES = [
   "Budget constraints",
   "Not the right timing",
   "Duplicate prospect",
+];
+
+/* ── Mass-action catalogues per tab (what each tab offers; the server owns what each does) ── */
+const PROSPECT_TAB_ACTIONS: BulkActionDef[] = [
+  { key: "approve", label: "Approve", icon: <CheckCircle2 className="size-3 text-emerald-600" /> },
+  { key: "reject", label: "Reject", icon: <XCircle className="size-3 text-destructive" />, params: "reason", presets: REJECT_TEMPLATES, confirm: { title: "Reject", body: "{n} prospects are marked rejected and leave the review queue.", cta: "Reject" } },
+  { key: "skip", label: "Skip", title: "Skip without a reason (kept, not sequenced)" },
+  { key: "enrich", label: "Enrich", icon: <Sparkles className="size-3" />, title: "Run the enrich agent on each (may spend credits)" },
+  { key: "reEvaluate", label: "Re-evaluate", icon: <RefreshCcw className="size-3" />, title: "Re-score ICP fit" },
+  { key: "generateSequence", label: "Generate sequences", icon: <Sparkles className="size-3" />, params: "regenerate" },
+  { key: "addToList", label: "Add to list", params: "list" },
+  { key: "createTasks", label: "Create tasks", params: "task" },
+  { key: "linkToPeople", label: "Link to People", title: "Make sure each has a People record (site-wide)" },
+  { key: "suppress", label: "Suppress", variant: "destructive", params: "suppress", confirm: { title: "Suppress", body: "{n} prospects will never be emailed again, by any sender in Velocity.", cta: "Suppress" } },
+];
+const SEQUENCE_TAB_ACTIONS: BulkActionDef[] = [
+  { key: "pauseSequence", label: "Pause", icon: <Pause className="size-3 text-amber-600" /> },
+  { key: "resumeSequence", label: "Resume", icon: <Play className="size-3 text-emerald-600" /> },
+  { key: "cancelSequence", label: "Cancel sequence", variant: "destructive", icon: <X className="size-3" />, params: "reason", confirm: { title: "Cancel sequences", body: "{n} sequences stop; pending steps are dropped, sent steps stay in history.", cta: "Cancel sequences" } },
+  { key: "generateSequence", label: "Regenerate", icon: <Sparkles className="size-3" />, params: "regenerate" },
+  { key: "addToList", label: "Add to list", params: "list" },
+  { key: "createTasks", label: "Create tasks", params: "task" },
+  { key: "suppress", label: "Suppress", variant: "destructive", params: "suppress", confirm: { title: "Suppress", body: "{n} prospects will never be emailed again, by any sender in Velocity, and their sequences are canceled.", cta: "Suppress" } },
+];
+const REJECTION_TAB_ACTIONS: BulkActionDef[] = [
+  { key: "restore", label: "Restore to pending", icon: <RefreshCcw className="size-3" />, params: "reason", confirm: { title: "Restore", body: "{n} rejected prospects go back to pending and are screened again by the engine.", cta: "Restore" } },
+  { key: "reEvaluate", label: "Re-evaluate", icon: <RefreshCcw className="size-3" /> },
+  { key: "addToList", label: "Add to list", params: "list" },
+  { key: "createTasks", label: "Create tasks", params: "task" },
+  { key: "suppress", label: "Suppress", variant: "destructive", params: "suppress", confirm: { title: "Suppress", body: "{n} prospects will never be emailed again, by any sender in Velocity.", cta: "Suppress" } },
+];
+const SIGNAL_TAB_ACTIONS: BulkActionDef[] = [
+  { key: "createTasks", label: "Create tasks", params: "task" },
+  { key: "addToList", label: "Add to list", params: "list" },
+  { key: "pauseSequence", label: "Pause", icon: <Pause className="size-3 text-amber-600" /> },
+  { key: "cancelSequence", label: "Cancel sequence", variant: "destructive", icon: <X className="size-3" />, params: "reason", confirm: { title: "Cancel sequences", body: "{n} sequences stop; pending steps are dropped.", cta: "Cancel sequences" } },
+  { key: "linkToPeople", label: "Link to People" },
+  { key: "suppress", label: "Suppress", variant: "destructive", params: "suppress", confirm: { title: "Suppress", body: "{n} prospects will never be emailed again, by any sender in Velocity.", cta: "Suppress" } },
 ];
 
 /* ─── ICP score ring ───────────────────────────────────────────────────────── */
@@ -1192,6 +1231,7 @@ function SequencesTab({ campaignId, campaign }: { campaignId: number; campaign: 
     }
     return true;
   });
+  const seqSel = useRowSelection(filteredRows.map((r: any) => r.prospectId as number));
 
   // generate's onSuccess/onError already toast + invalidate; we only
   // need to track which row is generating so its button shows a spinner.
@@ -1263,6 +1303,14 @@ function SequencesTab({ campaignId, campaign }: { campaignId: number; campaign: 
           description={search ? "Try a different search term." : filter === "all" ? "Add prospects to this campaign to populate this list." : "Switch filter above to see other statuses."}
         />
       ) : (
+        <>
+        <div className="mb-2 flex items-center gap-2">
+          <label className="flex items-center gap-2 text-[11px] text-muted-foreground cursor-pointer select-none">
+            <Checkbox checked={seqSel.allSelected} onCheckedChange={seqSel.toggleAll} aria-label="Select all shown" />
+            Select all {filteredRows.length}
+          </label>
+        </div>
+        <div className="mb-2"><AreBulkActionBar campaignId={campaignId} selection={seqSel} actions={SEQUENCE_TAB_ACTIONS} onDone={() => refetch()} /></div>
         <div className="border rounded-lg bg-card divide-y overflow-hidden">
           {filteredRows.map((r: any) => {
             const steps = (r.generatedSequence ?? []) as any[];
@@ -1279,6 +1327,9 @@ function SequencesTab({ campaignId, campaign }: { campaignId: number; campaign: 
                 className="px-3 py-2 hover:bg-muted/40 transition-colors cursor-pointer flex items-center gap-2 text-xs"
                 onClick={() => setDrawerProspectId(r.prospectId)}
               >
+                <span onClick={(e) => e.stopPropagation()} className="shrink-0">
+                  <Checkbox checked={seqSel.isSelected(r.prospectId)} onCheckedChange={() => seqSel.toggle(r.prospectId)} aria-label="Select" />
+                </span>
                 {/* Identity */}
                 <div className="min-w-0 flex-1">
                   <div className="font-medium truncate">{nm} <span className="text-muted-foreground font-normal">· {r.title ?? "—"}</span></div>
@@ -1337,6 +1388,7 @@ function SequencesTab({ campaignId, campaign }: { campaignId: number; campaign: 
             );
           })}
         </div>
+        </>
       )}
 
       {/* Side drawer — full sequence details, edit, evidence */}
@@ -1753,7 +1805,7 @@ function SignalTypeChip({ label, count, active, onClick }: {
  * derived from data the row already carried: the two joins, and rawPayload,
  * which held the clicked URL and the reply text and was never read.
  */
-function SignalRow({ s, onOpen }: { s: SignalFeedRow; onOpen?: (execId: number) => void }) {
+function SignalRow({ s, onOpen, selected, onToggleSelect }: { s: SignalFeedRow; onOpen?: (execId: number) => void; selected?: boolean; onToggleSelect?: () => void }) {
   const meta = signalMeta(s.signalType);
   const Icon = SIGNAL_CHANNEL_ICON[meta.channel] ?? Activity;
   const sentiment = typeof s.sentiment === "string" ? s.sentiment : "";
@@ -1787,7 +1839,7 @@ function SignalRow({ s, onOpen }: { s: SignalFeedRow; onOpen?: (execId: number) 
 
   return (
     <div
-      className={`rounded-xl border bg-card px-4 py-3 ${openable ? "cursor-pointer transition-colors hover:border-primary/40" : ""}`}
+      className={`rounded-xl border bg-card px-4 py-3 ${openable ? "cursor-pointer transition-colors hover:border-primary/40" : ""} ${selected ? "border-primary/50 bg-primary/5" : ""} ${onToggleSelect ? "flex items-start gap-3" : ""}`}
       {...(openable
         ? {
             role: "button" as const,
@@ -1803,6 +1855,12 @@ function SignalRow({ s, onOpen }: { s: SignalFeedRow; onOpen?: (execId: number) 
           }
         : {})}
     >
+      {onToggleSelect && (
+        <span onClick={(e) => { e.stopPropagation(); onToggleSelect(); }} onKeyDown={(e) => e.stopPropagation()} className="mt-0.5 shrink-0">
+          <Checkbox checked={!!selected} onCheckedChange={() => onToggleSelect()} aria-label="Select" />
+        </span>
+      )}
+      <div className="min-w-0 flex-1">
       <div className="flex items-start gap-3">
         <span
           className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full"
@@ -1908,6 +1966,7 @@ function SignalRow({ s, onOpen }: { s: SignalFeedRow; onOpen?: (execId: number) 
           {via ? <div className="mt-0.5 text-[10px] text-muted-foreground/70 max-w-[150px]">{via}</div> : null}
         </div>
       </div>
+      </div>
     </div>
   );
 }
@@ -1938,6 +1997,9 @@ export default function ARECampaignDetail() {
     ...(signalType !== "all" ? { signalType } : {}),
     ...(signalSearchDebounced ? { search: signalSearchDebounced } : {}),
   });
+  // Signals are events; the selection is of the PEOPLE behind them (one person may have several signals).
+  const signalPersonIds = useMemo(() => Array.from(new Set(((signals ?? []) as Array<{ prospectQueueId: number }>).map((x) => x.prospectQueueId))), [signals]);
+  const sigSel = useRowSelection(signalPersonIds);
   const { data: signalCounts } = trpc.are.execution.getSignalCounts.useQuery({ campaignId });
   const { data: stepFunnel } = trpc.are.metrics.stepFunnel.useQuery({ campaignId });
   /**
@@ -2047,7 +2109,6 @@ export default function ARECampaignDetail() {
   const [respacePlan, setRespacePlan] = useState<{ gapDays: number; prospectsInFlight: number; prospectsTouched: number; rowsMoved: number; before: { earliest: string; latest: string } | null; after: { earliest: string; latest: string } | null; applied: boolean } | null>(null);
   // Bulk selection
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
-  const [rejectDialogOpen, setRejectDialogOpen] = useState(false);
   const [reEvaluateAllConfirmOpen, setReEvaluateAllConfirmOpen] = useState(false);
   const [thresholdOverride, setThresholdOverride] = useState<number | null>(null);
   const [showIcpSuggestion, setShowIcpSuggestion] = useState(false);
@@ -2057,6 +2118,11 @@ export default function ARECampaignDetail() {
   const [reasonFilter, setReasonFilterState] = useState<string | null>(
     urlParams.get("reason") || null
   );
+  // Mass-action selection over the rejections currently shown (respects the reason filter).
+  const rejectionIds = useMemo(() => ((rejectionStats?.items ?? []) as Array<{ id: number; rejectionReason?: string | null }>)
+    .filter((item) => reasonFilter === null || (item.rejectionReason?.trim() || "No reason given") === reasonFilter)
+    .map((item) => item.id), [rejectionStats, reasonFilter]);
+  const rejSel = useRowSelection(rejectionIds);
   const setReasonFilter = (r: string | null) => {
     setReasonFilterState(r);
     const params = new URLSearchParams(window.location.search);
@@ -2072,26 +2138,7 @@ export default function ARECampaignDetail() {
     if (r !== reasonFilter) setReasonFilterState(r);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const [rejectReason, setRejectReason] = useState("");
   const [dossierTab, setDossierTab] = useState<"intel" | "notes">("intel");
-  const bulkApprove = trpc.are.prospects.bulkApprove.useMutation({
-    onSuccess: (d) => {
-      toast.success(`Approved ${d.approved} prospects`);
-      setSelectedIds(new Set());
-      utils.are.prospects.list.invalidate();
-    },
-    onError: (e) => toast.error(e.message),
-  });
-  const bulkReject = trpc.are.prospects.bulkReject.useMutation({
-    onSuccess: (d) => {
-      toast.success(`Rejected ${d.rejected} prospects`);
-      setSelectedIds(new Set());
-      setRejectDialogOpen(false);
-      setRejectReason("");
-      utils.are.prospects.list.invalidate();
-    },
-    onError: (e) => toast.error(e.message),
-  });
   const toggleSelect = (id: number) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
@@ -2397,37 +2444,14 @@ export default function ARECampaignDetail() {
               <span className="flex items-center gap-1"><div className="size-2 rounded-full bg-[#F87171]" /> failed</span>
               <span className="ml-auto flex items-center gap-1"><Eye className="size-3" /> Click row to view dossier</span>
             </div>
-            {/* Floating bulk action bar */}
-            {selectedIds.size > 0 && (
-              <div className="flex items-center gap-3 mb-3 px-4 py-2.5 rounded-xl border border-primary/30 bg-primary/5 shadow-sm">
-                <span className="text-xs font-medium text-primary">{selectedIds.size} selected</span>
-                <div className="flex items-center gap-2 ml-auto">
-                  <Button
-                    size="sm" variant="outline"
-                    className="h-7 px-3 text-xs gap-1.5 border-emerald-500/30 text-emerald-600 hover:bg-emerald-500/10"
-                    onClick={() => bulkApprove.mutate({ prospectIds: Array.from(selectedIds) })}
-                    disabled={bulkApprove.isPending}
-                  >
-                    {bulkApprove.isPending ? <Loader2 className="size-3 animate-spin" /> : <CheckCircle2 className="size-3" />}
-                    Approve All
-                  </Button>
-                  <Button
-                    size="sm" variant="outline"
-                    className="h-7 px-3 text-xs gap-1.5 border-destructive/30 text-destructive hover:bg-destructive/10"
-                    onClick={() => setRejectDialogOpen(true)}
-                  >
-                    <XCircle className="size-3" /> Reject All
-                  </Button>
-                  <Button
-                    size="sm" variant="ghost"
-                    className="h-7 px-2 text-xs text-muted-foreground"
-                    onClick={() => setSelectedIds(new Set())}
-                  >
-                    <X className="size-3" />
-                  </Button>
-                </div>
-              </div>
-            )}
+            {/* Mass actions (shared bar; every action runs through are.prospects.bulk and is logged on the campaign + audit) */}
+            <div className="mb-3">
+              <AreBulkActionBar
+                campaignId={campaignId}
+                selection={{ selected: selectedIds, count: selectedIds.size, clear: () => setSelectedIds(new Set()) }}
+                actions={PROSPECT_TAB_ACTIONS}
+              />
+            </div>
 
             {loadingProspects ? (
               <div className="flex items-center gap-2 text-muted-foreground py-12 justify-center">
@@ -2766,8 +2790,15 @@ export default function ARECampaignDetail() {
               />
             ) : (
               <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <label className="flex items-center gap-2 text-[11px] text-muted-foreground cursor-pointer select-none">
+                    <Checkbox checked={sigSel.allSelected} onCheckedChange={sigSel.toggleAll} aria-label="Select all people shown" />
+                    Select all {signalPersonIds.length} {signalPersonIds.length === 1 ? "person" : "people"}
+                  </label>
+                </div>
+                <AreBulkActionBar campaignId={campaignId} selection={sigSel} actions={SIGNAL_TAB_ACTIONS} />
                 {signals.map((s) => (
-                  <SignalRow key={s.id} s={s} onOpen={(id) => setPreviewExecId(id)} />
+                  <SignalRow key={s.id} s={s} onOpen={(id) => setPreviewExecId(id)} selected={sigSel.isSelected(s.prospectQueueId)} onToggleSelect={() => sigSel.toggle(s.prospectQueueId)} />
                 ))}
                 {signals.length >= 200 && (
                   <p className="text-[11px] text-muted-foreground px-1">
@@ -3284,11 +3315,19 @@ export default function ARECampaignDetail() {
                     </button>
                   </div>
                 )}
+                <div className="flex items-center gap-2 mb-1">
+                  <label className="flex items-center gap-2 text-[11px] text-muted-foreground cursor-pointer select-none">
+                    <Checkbox checked={rejSel.allSelected} onCheckedChange={rejSel.toggleAll} aria-label="Select all shown" />
+                    Select all {rejectionIds.length}
+                  </label>
+                </div>
+                <AreBulkActionBar campaignId={campaignId} selection={rejSel} actions={REJECTION_TAB_ACTIONS} />
                 {(rejectionStats?.items ?? []).filter((item: any) =>
                   reasonFilter === null ||
                   (item.rejectionReason?.trim() || "No reason given") === reasonFilter
                 ).map((item: any) => (
-                  <div key={item.id} className="flex items-start gap-3 rounded-xl border px-3 py-2.5 bg-card">
+                  <div key={item.id} className={`flex items-start gap-3 rounded-xl border px-3 py-2.5 bg-card ${rejSel.isSelected(item.id) ? "border-primary/50 bg-primary/5" : ""}`}>
+                    <span className="mt-0.5 shrink-0"><Checkbox checked={rejSel.isSelected(item.id)} onCheckedChange={() => rejSel.toggle(item.id)} aria-label="Select" /></span>
                     <XCircle className="size-4 text-destructive/60 mt-0.5 shrink-0" />
                     <div className="flex-1 min-w-0">
                       <div className="text-sm font-medium truncate">
@@ -3466,55 +3505,6 @@ export default function ARECampaignDetail() {
             >
               {importRowsMut.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Upload className="size-3.5" />}
               Import {importParsed.length > 0 ? importParsed.length : ""}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* ── Reject Dialog ── */}
-      <Dialog open={rejectDialogOpen} onOpenChange={setRejectDialogOpen}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <XCircle className="size-4 text-destructive" />
-              Reject {selectedIds.size} Prospect{selectedIds.size !== 1 ? "s" : ""}
-            </DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3 py-2">
-            <p className="text-sm text-muted-foreground">
-              These prospects will be marked as rejected and removed from the review queue. You can optionally provide a reason for the rejection.
-            </p>
-            <div className="flex flex-wrap gap-1.5">
-              {REJECT_TEMPLATES.map((t) => (
-                <button
-                  key={t}
-                  onClick={() => setRejectReason(t)}
-                  className={`text-[10px] px-2 py-0.5 rounded-full border transition-all ${
-                    rejectReason === t
-                      ? "border-destructive/50 bg-destructive/10 text-destructive font-medium"
-                      : "border-border text-muted-foreground hover:border-destructive/30 hover:text-destructive/80"
-                  }`}
-                >
-                  {t}
-                </button>
-              ))}
-            </div>
-            <Textarea
-              value={rejectReason}
-              onChange={(e) => setRejectReason(e.target.value)}
-              placeholder="Or type a custom reason…"
-              className="text-sm min-h-[60px] resize-none"
-            />
-          </div>
-          <DialogFooter className="gap-2">
-            <Button variant="ghost" size="sm" onClick={() => setRejectDialogOpen(false)}>Cancel</Button>
-            <Button
-              variant="destructive" size="sm" className="gap-1.5"
-              onClick={() => bulkReject.mutate({ prospectIds: Array.from(selectedIds), reason: rejectReason || undefined })}
-              disabled={bulkReject.isPending}
-            >
-              {bulkReject.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <XCircle className="size-3.5" />}
-              Confirm Rejection
             </Button>
           </DialogFooter>
         </DialogContent>
