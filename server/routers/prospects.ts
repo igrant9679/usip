@@ -16,7 +16,7 @@ import { z } from "zod";
 import { and, asc, desc, eq, inArray, isNotNull, isNull, like, or, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { router } from "../_core/trpc";
-import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
+import { adminWsProcedure, requireMinRole, workspaceProcedure } from "../_core/workspace";
 import { getDb } from "../db";
 import { contacts, leads, prospects, scoreResults, scoreModels, workspaceSettings, prospectLinkedinEnrichments, prospectFieldHistory } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
@@ -348,6 +348,72 @@ export const prospectsRouter = router({
    *  name+company to launch a focused person-mode search. The pipeline's
    *  merge-on-dedup logic updates this prospect's row in place rather
    *  than creating a duplicate. */
+  /**
+   * Verify ONE person's email with Reoon (power mode) and record the verdict
+   * — on the current address, or on an address the user supplies (which
+   * replaces the current one). People are the sitewide record (owner
+   * directive 2026-08-17) and had no single-address verify while Contacts
+   * did (`emailVerification.verifySingle`); this is that seam, closed.
+   *
+   * Writes emailStatus (Reoon's normalized verdict: valid / accept_all /
+   * risky / invalid / unknown), emailVerifiedAt, and the email ledger entry
+   * (a supplied address is a human source at `user`·100 with the verdict
+   * attached; a re-verified one keeps its source and gets the new verdict).
+   * Never clears the address on an invalid verdict — it reports it; the
+   * person deciding sees the verdict and chooses.
+   */
+  verifyEmail: workspaceProcedure
+    .input(z.object({
+      prospectId: z.number().int(),
+      /** Replace the current address with this one, then verify it. */
+      email: z.string().trim().email().max(320).optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      requireMinRole(ctx.member.role, "manager", "Only managers and admins can verify a person's email.");
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [p] = await db.select().from(prospects)
+        .where(and(eq(prospects.id, input.prospectId), eq(prospects.workspaceId, ctx.workspace.id))).limit(1);
+      if (!p) throw new TRPCError({ code: "NOT_FOUND" });
+      const email = (input.email ?? p.email ?? "").toLowerCase();
+      if (!email) throw new TRPCError({ code: "BAD_REQUEST", message: "This person has no email address to verify." });
+      const apiKey = await getReoonKey(ctx.workspace.id);
+      if (!apiKey) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Reoon verification is not configured or is turned off for this workspace (Settings → Data sources)." });
+
+      const { reoonVerifySingle, reoonStatusToUsip } = await import("../services/reoon");
+      const raw = await reoonVerifySingle(email, apiKey, "power");
+      const verdict = reoonStatusToUsip(raw.status);
+
+      const ledger = { ...((p.fieldProvenance ?? {}) as Record<string, unknown>) } as Record<string, { source?: string; confidence?: number; verification?: string; at?: string } | undefined>;
+      const nowIso = new Date().toISOString();
+      const replaced = !!input.email && input.email.toLowerCase() !== (p.email ?? "").toLowerCase();
+      const confidence = verdict === "valid" ? (replaced ? CONFIDENCE.user : Math.max(ledger.email?.confidence ?? 0, CONFIDENCE.patternReoonValid))
+        : verdict === "accept_all" ? CONFIDENCE.emailAcceptAll
+        : verdict === "risky" ? CONFIDENCE.emailRisky
+        : verdict === "invalid" ? 0
+        : CONFIDENCE.emailUnknown;
+      ledger.email = { source: replaced ? "user" : (ledger.email?.source ?? "user_verify"), confidence, verification: verdict, at: nowIso };
+
+      const patch: Record<string, unknown> = {
+        email, emailStatus: verdict, emailVerifiedAt: new Date(), fieldProvenance: ledger,
+      };
+      await db.update(prospects).set(patch as never)
+        .where(and(eq(prospects.id, p.id), eq(prospects.workspaceId, ctx.workspace.id)));
+      if (replaced) {
+        const { recordFieldHistory } = await import("../services/enrichment/fieldHistory");
+        void recordFieldHistory(ctx.workspace.id, p.id, [{
+          field: "email", action: "replaced", value: email,
+          previous: p.email ? { value: p.email, provenance: (p.fieldProvenance as Record<string, unknown> | null)?.email as never } : undefined,
+          provenance: { source: "user", confidence, verification: verdict, at: nowIso },
+        } as never], "verify_email");
+      }
+      await recordAudit({
+        workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "prospect_email_verify",
+        entityId: p.id, before: { email: p.email, emailStatus: p.emailStatus }, after: { email, emailStatus: verdict, reoon: raw.status },
+      });
+      return { email, status: verdict, reoonStatus: raw.status, replaced, previousEmail: p.email ?? null };
+    }),
+
   reEnrich: workspaceProcedure
     .input(z.object({ id: z.number().int() }))
     .mutation(async ({ ctx, input }) => {
