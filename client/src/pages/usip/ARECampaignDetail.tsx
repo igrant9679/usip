@@ -23,7 +23,17 @@ import { emailStatusBadge, genericInboxBadge } from "@/components/usip/people/pe
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Checkbox } from "@/components/ui/checkbox";
 import { AreBulkActionBar, useRowSelection, type BulkActionDef } from "@/components/usip/AreBulkActionBar";
-import { describeEnrichmentError, ENRICHMENT_TONE_CLASS } from "@shared/enrichmentErrorLabel";
+import { describeEnrichmentError, type EnrichmentErrorTone } from "@shared/enrichmentErrorLabel";
+
+/** Tone → colour for an enrichment reason line: brown for information
+ *  ("Not in QuickEnrich"), amber for transient, red for a real failure.
+ *  Defined HERE (not in shared/) because Tailwind's content scan is rooted at
+ *  client/ — a class string it cannot see is never generated. */
+const ENRICHMENT_TONE_CLASS: Record<EnrichmentErrorTone, string> = {
+  info: "text-[#8B5A2B] dark:text-[#C08457]",
+  warn: "text-amber-600 dark:text-amber-500",
+  error: "text-destructive/90",
+};
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";

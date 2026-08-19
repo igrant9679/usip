@@ -30,9 +30,6 @@ export function describeEnrichmentError(raw: string | null | undefined): Enrichm
   return { label: s, tone: "error" };
 }
 
-/** Tailwind classes per tone — brown for information, amber for transient, red for failure. */
-export const ENRICHMENT_TONE_CLASS: Record<EnrichmentErrorTone, string> = {
-  info: "text-[#8B5A2B] dark:text-[#C08457]",
-  warn: "text-amber-600 dark:text-amber-500",
-  error: "text-destructive/90",
-};
+// NOTE: the Tailwind classes per tone live in the client (ARECampaignDetail),
+// not here — Tailwind v4's content scan is rooted at client/ and does not see
+// shared/, so a class string defined here is never generated.
