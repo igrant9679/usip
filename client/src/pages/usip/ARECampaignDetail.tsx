@@ -246,6 +246,20 @@ const SEQUENCE_TAB_ACTIONS: BulkActionDef[] = [
   { key: "createTasks", label: "Create tasks", params: "task" },
   { key: "suppress", label: "Suppress", variant: "destructive", params: "suppress", confirm: { title: "Suppress", body: "{n} prospects will never be emailed again, by any sender in Velocity, and their sequences are canceled.", cta: "Suppress" } },
 ];
+/**
+ * Under Pending / Approved the rows have no sequence yet, so the mass action
+ * is the same thing as the per-row "Generate sequence" button — generate,
+ * immediately, no prompt (owner ask 2026-08-19: "mass generate sequences for
+ * those in Pending"). Elsewhere it is a Regenerate that asks before it
+ * replaces an existing sequence.
+ */
+function sequenceTabActions(filter: FilterKey): BulkActionDef[] {
+  if (filter !== "pending" && filter !== "approved") return SEQUENCE_TAB_ACTIONS;
+  return [
+    { key: "generateSequence", label: "Generate", icon: <Sparkles className="size-3" />, title: "Generate a sequence for each selected prospect (same as the row button)" },
+    ...SEQUENCE_TAB_ACTIONS.filter((a) => a.key !== "generateSequence" && a.key !== "pauseSequence" && a.key !== "resumeSequence"),
+  ];
+}
 const REJECTION_TAB_ACTIONS: BulkActionDef[] = [
   { key: "restore", label: "Restore to pending", icon: <RefreshCcw className="size-3" />, params: "reason", confirm: { title: "Restore", body: "{n} rejected prospects go back to pending and are screened again by the engine.", cta: "Restore" } },
   { key: "reEvaluate", label: "Re-evaluate", icon: <RefreshCcw className="size-3" /> },
@@ -1310,7 +1324,7 @@ function SequencesTab({ campaignId, campaign }: { campaignId: number; campaign: 
             Select all {filteredRows.length}
           </label>
         </div>
-        <div className="mb-2"><AreBulkActionBar campaignId={campaignId} selection={seqSel} actions={SEQUENCE_TAB_ACTIONS} onDone={() => refetch()} /></div>
+        <div className="mb-2"><AreBulkActionBar campaignId={campaignId} selection={seqSel} actions={sequenceTabActions(filter)} onDone={() => refetch()} /></div>
         <div className="border rounded-lg bg-card divide-y overflow-hidden">
           {filteredRows.map((r: any) => {
             const steps = (r.generatedSequence ?? []) as any[];

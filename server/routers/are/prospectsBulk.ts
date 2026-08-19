@@ -130,6 +130,35 @@ export async function runBulkAction(ctx: Ctx, input: BulkInput): Promise<BulkRes
   };
   const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
 
+  // LLM-backed actions take seconds PER ROW, so a mass run cannot finish
+  // inside one request. Above a small batch they run in the background:
+  // the call returns at once, the campaign log gets a "started" line and a
+  // "finished" line with the per-row outcome, and the audit row is written
+  // when it finishes. The tab refreshes as rows change.
+  const LLM_ACTIONS: BulkAction[] = ["generateSequence", "reEvaluate"];
+  const INLINE_MAX = 5;
+  if (LLM_ACTIONS.includes(input.action) && rows.length > INLINE_MAX) {
+    const label = input.action === "generateSequence" ? "Generating sequences" : "Re-evaluating";
+    await emitBulkLog(ws, input.campaignId, "info", `Bulk ${input.action}: ${label} for ${plural(rows.length, "prospect")} — running in the background`, { prospectIds: input.prospectIds });
+    void (async () => {
+      const bg: BulkResult = { action: input.action, requested: rows.length, ok: 0, failed: [], summary: "" };
+      for (const r of rows) {
+        try {
+          if (input.action === "generateSequence") await caller.are.prospects.generateSequence({ prospectId: r.id, campaignId: input.campaignId, force: input.force ?? false });
+          else await caller.are.prospects.reEvaluate({ prospectId: r.id });
+          bg.ok++;
+        } catch (e) { bg.failed.push({ id: r.id, error: ((e as Error)?.message ?? String(e)).slice(0, 200) }); }
+      }
+      bg.summary = `${label} finished: ${bg.ok} of ${rows.length} done${bg.failed.length ? `, ${bg.failed.length} failed` : ""}`;
+      await recordAudit({ workspaceId: ws, actorUserId: ctx.user.id, action: "update", entityType: "are_prospect_bulk", entityId: input.campaignId,
+        after: { action: input.action, requested: bg.requested, ok: bg.ok, failed: bg.failed, prospectIds: input.prospectIds, background: true } });
+      await emitBulkLog(ws, input.campaignId, bg.failed.length ? "warn" : "info", `Bulk ${input.action}: ${bg.summary}`, { failed: bg.failed });
+    })().catch((e) => console.error("[are.bulk] background run failed:", e));
+    result.summary = `${label} for ${plural(rows.length, "prospect")} in the background — rows update as each finishes; the campaign log has the outcome`;
+    result.ok = rows.length; // accepted, not finished — the summary says so
+    return result;
+  }
+
   switch (input.action) {
     case "approve": await perRow((r) => caller.are.prospects.approve({ prospectId: r.id })); result.summary = `Approved ${plural(result.ok, "prospect")}`; break;
     case "reject": await perRow((r) => caller.are.prospects.reject({ prospectId: r.id, reason: input.reason })); result.summary = `Rejected ${plural(result.ok, "prospect")}`; break;

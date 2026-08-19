@@ -122,6 +122,30 @@ describe("are.prospects.bulk", () => {
     expect(cap.updates.some((u) => u.table === "prospect_queue" && u.set.sequenceStatus === "canceled")).toBe(true);
   });
 
+  it("LLM-backed actions above a small batch return at once and run in the background (start line logged now, outcome + audit when done)", async () => {
+    const cap: Cap = { updates: [], inserts: [] };
+    const rows = Array.from({ length: 8 }, (_, i) => row(i + 1, { sequenceStatus: "pending" }));
+    h.db = makeDb(rows, cap);
+    const r = await appRouter.createCaller(makeCtx()).are.prospects.bulk({ campaignId: 21, prospectIds: rows.map((x) => x.id), action: "generateSequence" });
+    expect(r.summary).toMatch(/Generating sequences for 8 prospects in the background/);
+    // The "started" campaign log line is written before returning…
+    expect(cap.inserts.some((i) => i.table === tname(areEngineLogs) && /running in the background/.test((i.values as any).message))).toBe(true);
+    // …and the audit row is NOT yet (it is written when the background loop finishes).
+    expect(cap.inserts.some((i) => i.table === tname(auditLog))).toBe(false);
+  });
+
+  it("the same action on a small batch runs inline and is audited on return", async () => {
+    const cap: Cap = { updates: [], inserts: [] };
+    h.db = makeDb([row(1, { sequenceStatus: "skipped", rejectedAt: new Date() })], cap);
+    // reEvaluate on ONE row: inline path (≤5). The fake db lacks what the
+    // real re-evaluation needs, so it fails per row — which is exactly the
+    // honest outcome we want reported, and the audit still lands.
+    const r = await appRouter.createCaller(makeCtx()).are.prospects.bulk({ campaignId: 21, prospectIds: [1], action: "reEvaluate" });
+    expect(r.requested).toBe(1);
+    expect(r.ok + r.failed.length).toBe(1);
+    expect(cap.inserts.some((i) => i.table === tname(auditLog) && (i.values as any).entityType === "are_prospect_bulk")).toBe(true);
+  });
+
   it("is manager-gated", async () => {
     const cap: Cap = { updates: [], inserts: [] };
     h.db = makeDb([row(1)], cap);

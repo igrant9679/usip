@@ -12,7 +12,7 @@
  * for all useful actions … track and save automatically within the campaign
  * and for all relevant info site-wide."
  */
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
@@ -90,17 +90,37 @@ export function AreBulkActionBar({ campaignId, selection, actions, onDone }: {
 
   const lists = trpc.recordLists.list.useQuery(undefined, { enabled: pending?.params === "list" });
 
+  const refreshAll = () => {
+    utils.are.prospects.list.invalidate();
+    utils.are.prospects.listSequences.invalidate();
+    utils.are.prospects.getRejectionStats.invalidate();
+    utils.are.execution.getQueue.invalidate();
+    utils.are.execution.getSignalLog.invalidate();
+    utils.are.engine.getLogs.invalidate();
+    utils.are.campaigns.get.invalidate({ id: campaignId });
+    utils.recordLists.list.invalidate();
+  };
+  // A background run (LLM-backed actions above a small batch) finishes rows
+  // one by one after the call returns; keep the tab fresh for a few minutes.
+  const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollUntil = useRef(0);
+  useEffect(() => () => { if (pollTimer.current) clearInterval(pollTimer.current); }, []);
+  const startBackgroundPolling = () => {
+    pollUntil.current = Date.now() + 5 * 60_000;
+    if (pollTimer.current) clearInterval(pollTimer.current);
+    pollTimer.current = setInterval(() => {
+      refreshAll();
+      if (Date.now() > pollUntil.current && pollTimer.current) { clearInterval(pollTimer.current); pollTimer.current = null; }
+    }, 10_000);
+  };
+
   const bulk = trpc.are.prospects.bulk.useMutation({
     onSuccess: (r) => {
-      if (r.failed.length === 0) toast.success(r.summary);
+      const background = /in the background/.test(r.summary);
+      if (r.failed.length === 0) toast.success(r.summary, background ? { duration: 8000 } : undefined);
       else toast.warning(`${r.summary} — ${r.failed.slice(0, 3).map((f) => `#${f.id}: ${f.error}`).join("; ")}${r.failed.length > 3 ? "…" : ""}`, { duration: 9000 });
-      utils.are.prospects.list.invalidate();
-      utils.are.prospects.listSequences.invalidate();
-      utils.are.prospects.getRejectionStats.invalidate();
-      utils.are.execution.getQueue.invalidate();
-      utils.are.execution.getSignalLog.invalidate();
-      utils.are.campaigns.get.invalidate({ id: campaignId });
-      utils.recordLists.list.invalidate();
+      refreshAll();
+      if (background) startBackgroundPolling();
       selection.clear();
       setPending(null);
       onDone?.();
