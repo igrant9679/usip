@@ -28,7 +28,7 @@
 import { useMemo, useState } from "react";
 import { ResponsiveContainer, Sankey, Tooltip, Layer, Rectangle } from "recharts";
 import { Info } from "lucide-react";
-import { layerFunnel } from "./stepFunnelLayering";
+import { layerFunnel, selectionFor } from "./stepFunnelLayering";
 
 export interface FunnelNodeDto {
   id: string;
@@ -43,6 +43,16 @@ export interface StepFunnelDto {
   links: FunnelLinkDto[];
   totalProspects: number;
   opensTracked: boolean;
+  /** Who is behind each node / link ("source|target") — prospect_queue ids. */
+  members?: { nodes: Record<string, number[]>; links: Record<string, number[]> };
+}
+
+/** What a click on any section resolves to: the people it counted. */
+export interface FunnelSelection {
+  title: string;
+  prospectIds: number[];
+  /** Set when the section is a step, so the list can also offer that step's message. */
+  stepIndex: number | null;
 }
 
 /** One colour per kind, so a band's meaning is readable without the legend. */
@@ -65,6 +75,8 @@ const KIND_LABEL: Record<FunnelNodeDto["kind"], string> = {
 };
 
 export type ChartNode = {
+  /** Server node id (absent on pass-through lanes). */
+  id?: string;
   name: string; kind: FunnelNodeDto["kind"]; stepIndex: number | null; total: number;
   /** Invisible routing node for a link that would otherwise skip columns. */
   passthrough?: boolean;
@@ -73,7 +85,7 @@ export type ChartNode = {
 };
 
 function SankeyNode(props: any) {
-  const { x, y, width, height, payload, onSelect } = props;
+  const { x, y, width, height, payload } = props;
   const node = payload as ChartNode & { value: number };
   const color = KIND_COLOR[node.kind] ?? "#64748B";
   // A pass-through is routing, not a thing that happened: no label, no
@@ -86,8 +98,7 @@ function SankeyNode(props: any) {
       </Layer>
     );
   }
-  const clickable = node.kind === "step";
-  // Labels sit outside the bar on the right unless the node is near the edge.
+  // Every real node lists its people on click (handled at the chart level).
   return (
     <Layer>
       <Rectangle
@@ -98,8 +109,7 @@ function SankeyNode(props: any) {
         fill={color}
         fillOpacity={0.9}
         radius={2}
-        style={{ cursor: clickable ? "pointer" : "default" }}
-        onClick={clickable && onSelect ? () => onSelect(node.stepIndex) : undefined}
+        style={{ cursor: "pointer" }}
       />
       <text
         x={x + width + 6}
@@ -137,6 +147,7 @@ function SankeyLink(props: any) {
       strokeWidth={Math.max(1, linkWidth)}
       strokeOpacity={0.28}
       fill="none"
+      style={{ cursor: "pointer" }}
     />
   );
 }
@@ -144,9 +155,13 @@ function SankeyLink(props: any) {
 export function StepFunnelSankey({
   funnel,
   onSelectStep,
+  onSelectMembers,
 }: {
   funnel: StepFunnelDto;
+  /** Legacy: read a step's message. Still offered from inside the members list. */
   onSelectStep?: (stepIndex: number | null) => void;
+  /** Any node or band → the people it counted. */
+  onSelectMembers?: (sel: FunnelSelection) => void;
 }) {
   const [hovered, setHovered] = useState<string | null>(null);
 
@@ -170,7 +185,7 @@ export function StepFunnelSankey({
       <p className="text-xs text-muted-foreground mb-3">
         Each band is a real count of people, not a rate. A prospect leaves the flow at their last send — into{" "}
         <strong>Replied</strong> if anything came back, otherwise into <strong>No reply yet</strong>, which includes
-        everyone still mid-sequence. Click a step to read the message it sent.
+        everyone still mid-sequence. Click any band or box to list the people in it.
       </p>
 
       {!funnel.opensTracked && (
@@ -191,7 +206,13 @@ export function StepFunnelSankey({
             nodeWidth={12}
             margin={{ top: 8, right: 150, bottom: 8, left: 8 }}
             link={<SankeyLink />}
-            node={<SankeyNode onSelect={onSelectStep} />}
+            node={<SankeyNode />}
+            onClick={(el: any, type: "node" | "link") => {
+              const sel = selectionFor(funnel, el, type);
+              if (!sel) return;
+              if (onSelectMembers) onSelectMembers(sel);
+              else if (sel.stepIndex !== null && onSelectStep) onSelectStep(sel.stepIndex);
+            }}
           >
             <Tooltip
               content={({ payload }) => {
@@ -213,6 +234,7 @@ export function StepFunnelSankey({
                         <div className="text-muted-foreground tabular-nums">
                           {Number(p.value).toLocaleString()} prospect{Number(p.value) === 1 ? "" : "s"} · {pct}% of all
                         </div>
+                        <div className="text-muted-foreground mt-0.5">Click to list these people</div>
                       </>
                     ) : (
                       <>
@@ -221,9 +243,7 @@ export function StepFunnelSankey({
                           {Number(p.value ?? p.total ?? 0).toLocaleString()} prospect
                           {Number(p.value ?? p.total ?? 0) === 1 ? "" : "s"}
                         </div>
-                        {p.kind === "step" && (
-                          <div className="text-muted-foreground mt-0.5">Click to read this step's message</div>
-                        )}
+                        <div className="text-muted-foreground mt-0.5">Click to list these people</div>
                       </>
                     )}
                   </div>

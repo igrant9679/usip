@@ -23,9 +23,13 @@
  * reply yet"); merged hops read "→ No reply yet". Every value survives: the
  * terminal still receives exactly what the server said it receives.
  */
-import type { ChartNode, FunnelNodeDto, StepFunnelDto } from "./StepFunnelSankey";
+import type { ChartNode, FunnelNodeDto, FunnelSelection, StepFunnelDto } from "./StepFunnelSankey";
 
-export function layerFunnel(funnel: StepFunnelDto): { nodes: ChartNode[]; links: Array<{ source: number; target: number; value: number }> } {
+/** A band's original endpoints (server ids) — a lane hop may carry several. */
+export type LinkOrigin = { source: string; target: string; sourceName: string; targetName: string };
+export type LayeredLink = { source: number; target: number; value: number; origins: LinkOrigin[] };
+
+export function layerFunnel(funnel: StepFunnelDto): { nodes: ChartNode[]; links: LayeredLink[] } {
   const byId = new Map(funnel.nodes.map((n) => [n.id, n] as const));
   const stepRanks = Array.from(new Set(funnel.nodes.filter((n) => n.stepIndex !== null).map((n) => n.stepIndex as number))).sort((a, b) => a - b);
   const rankOf = new Map(stepRanks.map((si, i) => [si, i] as const));
@@ -39,16 +43,18 @@ export function layerFunnel(funnel: StepFunnelDto): { nodes: ChartNode[]; links:
   const nodes: ChartNode[] = [];
   const index = new Map<string, number>();
   const addNode = (key: string, node: ChartNode) => { index.set(key, nodes.length); nodes.push(node); return nodes.length - 1; };
-  for (const n of funnel.nodes) addNode(n.id, { name: n.name, kind: n.kind, stepIndex: n.stepIndex, total: n.value });
+  for (const n of funnel.nodes) addNode(n.id, { id: n.id, name: n.name, kind: n.kind, stepIndex: n.stepIndex, total: n.value });
 
-  // Merged hops between lanes (and lane → terminal), keyed "from->to".
-  const merged = new Map<string, { source: number; target: number; value: number }>();
-  const addMerged = (source: number, target: number, value: number) => {
+  // Merged hops between lanes (and lane → terminal), keyed "from->to". Each
+  // hop remembers every original link it carries, so a click on it can list
+  // exactly those people.
+  const merged = new Map<string, LayeredLink>();
+  const addMerged = (source: number, target: number, value: number, origin: LinkOrigin) => {
     const k = `${source}->${target}`;
     const m = merged.get(k);
-    if (m) m.value += value; else merged.set(k, { source, target, value });
+    if (m) { m.value += value; m.origins.push(origin); } else merged.set(k, { source, target, value, origins: [origin] });
   };
-  const direct: Array<{ source: number; target: number; value: number }> = [];
+  const direct: LayeredLink[] = [];
 
   for (const l of funnel.links) {
     const src = byId.get(l.source), tgt = byId.get(l.target);
@@ -57,7 +63,8 @@ export function layerFunnel(funnel: StepFunnelDto): { nodes: ChartNode[]; links:
     if (!src || !tgt) continue;
     const ds = depthOf(src), dt = depthOf(tgt);
     const srcIdx = index.get(l.source)!, tgtIdx = index.get(l.target)!;
-    if (dt - ds <= 1) { direct.push({ source: srcIdx, target: tgtIdx, value: l.value }); continue; }
+    const origin: LinkOrigin = { source: l.source, target: l.target, sourceName: src.name, targetName: tgt.name };
+    if (dt - ds <= 1) { direct.push({ source: srcIdx, target: tgtIdx, value: l.value, origins: [origin] }); continue; }
 
     // One lane per terminal, per origin kind, per intermediate column; its
     // total grows with everyone who passes through it.
@@ -70,11 +77,29 @@ export function layerFunnel(funnel: StepFunnelDto): { nodes: ChartNode[]; links:
     let prev = srcIdx;
     for (let d = ds + 1; d < dt; d++) {
       const lane = laneAt(d);
-      if (d === ds + 1) direct.push({ source: prev, target: lane, value: l.value }); // keeps the origin's identity
-      else addMerged(prev, lane, l.value);
+      if (d === ds + 1) direct.push({ source: prev, target: lane, value: l.value, origins: [origin] }); // keeps the origin's identity
+      else addMerged(prev, lane, l.value, origin);
       prev = lane;
     }
-    addMerged(prev, tgtIdx, l.value);
+    addMerged(prev, tgtIdx, l.value, origin);
   }
   return { nodes, links: direct.concat(Array.from(merged.values())) };
 }
+
+/** Resolve a clicked node or band to the people it counted. */
+export function selectionFor(funnel: StepFunnelDto, el: any, type: "node" | "link"): FunnelSelection | null {
+  const members = funnel.members ?? { nodes: {}, links: {} };
+  const uniq = (ids: number[]) => Array.from(new Set(ids));
+  if (type === "node") {
+    const n = el?.payload as ChartNode | undefined;
+    if (!n || n.passthrough || !n.id) return null;
+    return { title: n.name, prospectIds: uniq(members.nodes[n.id] ?? []), stepIndex: n.kind === "step" ? n.stepIndex : null };
+  }
+  const origins = (el?.payload?.origins ?? []) as Array<{ source: string; target: string; sourceName: string; targetName: string }>;
+  if (origins.length === 0) return null;
+  const ids = uniq(origins.flatMap((o) => members.links[`${o.source}|${o.target}`] ?? []));
+  const sources = Array.from(new Set(origins.map((o) => o.sourceName)));
+  const targets = Array.from(new Set(origins.map((o) => o.targetName)));
+  return { title: `${sources.join(" / ")} → ${targets.join(" / ")}`, prospectIds: ids, stepIndex: null };
+}
+

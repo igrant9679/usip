@@ -54,7 +54,7 @@ import { trpc } from "@/lib/trpc";
 import { AddExistingProspectsDialog } from "@/components/usip/are/AddExistingProspectsDialog";
 import { ActiveSequenceTimeline } from "@/components/usip/are/ActiveSequenceTimeline";
 import { AreMessageDialog } from "@/components/usip/are/AreMessageDialog";
-import { StepFunnelSankey } from "@/components/usip/are/StepFunnelSankey";
+import { StepFunnelSankey, type FunnelSelection } from "@/components/usip/are/StepFunnelSankey";
 import { RichTextEditor } from "@/components/usip/RichTextEditor";
 import { sanitizeEmailHtml } from "@/lib/sanitizeHtml";
 import { isHtmlBody } from "@shared/emailBody";
@@ -2039,6 +2039,13 @@ export default function ARECampaignDetail() {
    * described a message and gave no way to read it.
    */
   const [previewExecId, setPreviewExecId] = useState<number | null>(null);
+  // A click on any Sankey node/band → the people it counted (owner ask 2026-08-19).
+  const [funnelList, setFunnelList] = useState<FunnelSelection | null>(null);
+  const funnelRows = trpc.are.prospects.byIds.useQuery(
+    { campaignId, prospectIds: funnelList?.prospectIds.slice(0, 500) ?? [1] },
+    { enabled: !!funnelList && funnelList.prospectIds.length > 0 },
+  );
+  const funnelSel = useRowSelection((funnelRows.data ?? []).map((r) => r.id));
   const utilsForPreview = trpc.useUtils();
   /** A step is not a message — resolve its most recent send, then open it. */
   const openStepPreview = async (stepIndex: number | null, variantKey = "A") => {
@@ -2690,7 +2697,7 @@ export default function ARECampaignDetail() {
                     an experiment that was not running — and a reader compares
                     the two labels it was promised. */}
                 {stepFunnel && stepFunnel.nodes.length > 0 && (
-                  <StepFunnelSankey funnel={stepFunnel} onSelectStep={(i) => void openStepPreview(i)} />
+                  <StepFunnelSankey funnel={stepFunnel} onSelectStep={(i) => void openStepPreview(i)} onSelectMembers={(sel) => { funnelSel.clear(); setFunnelList(sel); }} />
                 )}
                 <p className="text-sm text-muted-foreground">
                   The engine writes uniquely personalised copy for every prospect, so every dispatch is its own message. Each card below is <strong>one message that was actually sent</strong> — who it went to, what it said, and whether that person opened or replied — grouped by step. The bands above are the roll-up of these.
@@ -3540,6 +3547,60 @@ export default function ARECampaignDetail() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* ── Funnel section → its people ── */}
+      <Sheet open={funnelList != null} onOpenChange={(o) => { if (!o) { setFunnelList(null); funnelSel.clear(); } }}>
+        <SheetContent side="right" className="w-full sm:max-w-xl overflow-y-auto">
+          <SheetHeader>
+            <SheetTitle className="text-base">{funnelList?.title}</SheetTitle>
+            <SheetDescription>
+              {funnelList ? `${funnelList.prospectIds.length} prospect${funnelList.prospectIds.length === 1 ? "" : "s"} counted in this part of the funnel` : ""}
+              {funnelList && funnelList.prospectIds.length > 500 ? " — showing the first 500" : ""}
+            </SheetDescription>
+          </SheetHeader>
+          {funnelList?.stepIndex !== null && funnelList?.stepIndex !== undefined && (
+            <Button size="sm" variant="outline" className="mt-3 h-7 text-xs gap-1.5" onClick={() => void openStepPreview(funnelList.stepIndex)}>
+              <Eye className="size-3.5" /> Read the message step {funnelList.stepIndex + 1} sent
+            </Button>
+          )}
+          <div className="mt-3 space-y-2">
+            {(funnelRows.data?.length ?? 0) > 0 && (
+              <label className="flex items-center gap-2 text-[11px] text-muted-foreground cursor-pointer select-none">
+                <Checkbox checked={funnelSel.allSelected} onCheckedChange={funnelSel.toggleAll} aria-label="Select all listed" />
+                Select all {funnelRows.data!.length}
+              </label>
+            )}
+            <AreBulkActionBar campaignId={campaignId} selection={funnelSel} actions={PROSPECT_TAB_ACTIONS} onDone={() => funnelRows.refetch()} />
+            {funnelRows.isLoading ? (
+              <div className="text-xs text-muted-foreground py-6 text-center">Loading…</div>
+            ) : (funnelRows.data ?? []).length === 0 ? (
+              <div className="text-xs text-muted-foreground py-6 text-center">No prospects to show.</div>
+            ) : (
+              <div className="rounded-lg border bg-card divide-y overflow-hidden">
+                {(funnelRows.data ?? []).map((r) => {
+                  const nm = `${r.firstName ?? ""} ${r.lastName ?? ""}`.trim() || "(no name)";
+                  return (
+                    <div key={r.id}
+                      className={`px-3 py-2 flex items-center gap-2 text-xs hover:bg-muted/40 cursor-pointer ${funnelSel.isSelected(r.id) ? "bg-primary/5" : ""}`}
+                      onClick={() => { setSelectedProspectId(r.id); setDossierOpen(true); setDossierTab("intel"); }}
+                    >
+                      <span onClick={(e) => e.stopPropagation()} className="shrink-0">
+                        <Checkbox checked={funnelSel.isSelected(r.id)} onCheckedChange={() => funnelSel.toggle(r.id)} aria-label="Select" />
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <div className="font-medium truncate">{nm} <span className="text-muted-foreground font-normal">· {r.title ?? "—"}</span></div>
+                        <div className="text-[10px] text-muted-foreground truncate">{r.companyName ?? "—"}{r.email ? ` · ${r.email}` : ""}</div>
+                      </div>
+                      {typeof r.icpMatchScore === "number" && <span className="text-[10px] tabular-nums text-muted-foreground shrink-0">{r.icpMatchScore}</span>}
+                      <StatusBadgeMini status={r.sequenceStatus} />
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </SheetContent>
+      </Sheet>
 
       {/* ── Re-evaluate All confirmation ── */}
       <AlertDialog open={reEvaluateAllConfirmOpen} onOpenChange={setReEvaluateAllConfirmOpen}>

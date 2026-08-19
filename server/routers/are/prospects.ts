@@ -1948,6 +1948,29 @@ export const prospectsRouter = router({
     }),
 
   /** Bulk approve a list of prospects */
+  /**
+   * Display rows for a known set of this campaign's prospects — what a click
+   * on a funnel band resolves to (the funnel carries the ids; this carries the
+   * people). Scoped to the campaign, capped, ordered as requested.
+   */
+  byIds: workspaceProcedure
+    .input(z.object({ campaignId: z.number().int().positive(), prospectIds: z.array(z.number().int().positive()).min(1).max(500) }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const rows = await db
+        .select({
+          id: prospectQueue.id, firstName: prospectQueue.firstName, lastName: prospectQueue.lastName, title: prospectQueue.title,
+          companyName: prospectQueue.companyName, email: prospectQueue.email, linkedinUrl: prospectQueue.linkedinUrl,
+          sequenceStatus: prospectQueue.sequenceStatus, enrichmentStatus: prospectQueue.enrichmentStatus, icpMatchScore: prospectQueue.icpMatchScore,
+          personProspectId: prospectQueue.personProspectId,
+        })
+        .from(prospectQueue)
+        .where(and(eq(prospectQueue.workspaceId, ctx.workspace.id), eq(prospectQueue.campaignId, input.campaignId), inArray(prospectQueue.id, input.prospectIds)));
+      const order = new Map(input.prospectIds.map((id, i) => [id, i] as const));
+      return rows.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
+    }),
+
   /** Mass actions on this campaign's prospects — see prospectsBulk.ts. */
   bulk: workspaceProcedure
     .input(BULK_INPUT)

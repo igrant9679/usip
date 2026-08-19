@@ -743,6 +743,12 @@ export interface StepFunnel {
   /** Prospects with at least one dispatched send — the funnel's entry width. */
   totalProspects: number;
   /**
+   * WHO is behind each node and each link — prospect_queue ids, recorded in
+   * the same pass that counts them, so a click on the chart lists exactly the
+   * people the band counted (owner ask 2026-08-19). Links keyed "source|target".
+   */
+  members: { nodes: Record<string, number[]>; links: Record<string, number[]> };
+  /**
    * True when NO send in this campaign carries a tracking pixel, so the
    * opened/not-opened split cannot mean anything and the chart says so instead
    * of drawing every prospect as unopened.
@@ -801,10 +807,15 @@ export function computeStepFunnel(
   }
 
   const linkTotals: Record<string, number> = {};
+  const linkMembers: Record<string, number[]> = {};
+  const nodeMembers: Record<string, number[]> = {};
+  let currentPid = 0;
   const addLink = (source: string, target: string) => {
     const k = `${source}|${target}`;
     linkTotals[k] = (linkTotals[k] ?? 0) + 1;
+    (linkMembers[k] ??= []).push(currentPid);
   };
+  const addMember = (nodeId: string) => { (nodeMembers[nodeId] ??= []).push(currentPid); };
 
   const stepCount: Record<number, number> = {};
   const openedCount: Record<number, number> = {};
@@ -815,10 +826,12 @@ export function computeStepFunnel(
 
   for (const pid of prospectIds) {
     const timeline = byProspect[pid];
+    currentPid = Number(pid);
     for (let i = 0; i < timeline.length; i++) {
       const send = timeline[i];
       const step = Number(send.stepIndex ?? 0);
       stepCount[step] = (stepCount[step] ?? 0) + 1;
+      addMember(`step:${step}`);
 
       // The engagement branch. With no pixel on the send there is no honest
       // split to draw, so everyone takes the "not opened" side and the caller
@@ -827,6 +840,7 @@ export function computeStepFunnel(
       const branch = opened ? `opened:${step}` : `unopened:${step}`;
       if (opened) openedCount[step] = (openedCount[step] ?? 0) + 1;
       else unopenedCount[step] = (unopenedCount[step] ?? 0) + 1;
+      addMember(branch);
       addLink(`step:${step}`, branch);
 
       const next = timeline[i + 1];
@@ -837,13 +851,16 @@ export function computeStepFunnel(
       // Last send for this prospect — where do they end up?
       if (replied[pid] || booked[pid]) {
         addLink(branch, "replied");
+        addMember("replied");
         repliedTotal++;
         if (booked[pid]) {
           addLink("replied", "meeting");
+          addMember("meeting");
           meetingTotal++;
         }
       } else {
         addLink(branch, "dormant");
+        addMember("dormant");
         dormantTotal++;
       }
     }
@@ -879,7 +896,13 @@ export function computeStepFunnel(
     if (present[source] && present[target]) links.push({ source, target, value: linkTotals[k] });
   }
 
-  return { nodes, links, totalProspects: prospectIds.length, opensTracked };
+  // Only members of nodes/links that were actually emitted.
+  const memberNodes: Record<string, number[]> = {};
+  for (const n of nodes) if (nodeMembers[n.id]) memberNodes[n.id] = nodeMembers[n.id];
+  const memberLinks: Record<string, number[]> = {};
+  for (const l of links) { const k = `${l.source}|${l.target}`; if (linkMembers[k]) memberLinks[k] = linkMembers[k]; }
+
+  return { nodes, links, totalProspects: prospectIds.length, opensTracked, members: { nodes: memberNodes, links: memberLinks } };
 }
 
 /**
@@ -893,7 +916,7 @@ export async function getStepFunnel(
   campaignId: number,
 ): Promise<StepFunnel> {
   const db = await getDb();
-  if (!db) return { nodes: [], links: [], totalProspects: 0, opensTracked: false };
+  if (!db) return { nodes: [], links: [], totalProspects: 0, opensTracked: false, members: { nodes: {}, links: {} } };
 
   const sends = await db
     .select({
