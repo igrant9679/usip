@@ -67,6 +67,7 @@ import { ARE_DEFAULT_SOURCES, normalizeSources } from "@shared/areSources";
 // One rule for a step's index + variant key, shared with the A/B metadata
 // upsert in routers/are/prospects.ts — see shared/areSequenceSteps.ts.
 import { normalizeSequence } from "@shared/areSequenceSteps";
+import { effectiveStepGapDays, dueAtForPosition } from "@shared/areStepCadence";
 import { apolloPulledToday, apolloSearchPeople, getApolloDailyCap } from "./services/apollo";
 import { archivedWorkspaceIds } from "./_core/workspaceArchive";
 import { queueIdentityKeys } from "./services/are/queueIdentity";
@@ -648,6 +649,11 @@ async function enrollApprovedForCampaignUnlocked(
         .sort((a, b) => a - b)[0];
       const now = Date.now();
       const anchor = firstSendMs ?? now;
+      // The CAMPAIGN owns the cadence (0169): step k is due at anchor + k × gap,
+      // whatever `day` the generated sequence carried. Position counts ALL
+      // steps (sent ones included) so a resumed prospect stays on its grid.
+      const gapDays = effectiveStepGapDays((campaign as { stepGapDays?: number | null }).stepGapDays);
+      const positionOf = new Map<number, number>(steps.map((s, i) => [s.stepIndex, i]));
       const remaining = steps.filter((s) => !sentIdx.has(s.stepIndex));
       if (remaining.length === 0) {
         // Everything already sent: nothing to enrol, and the completion sweep
@@ -662,9 +668,9 @@ async function enrollApprovedForCampaignUnlocked(
         prospectQueueId: row.id,
         stepIndex: s.stepIndex,
         channel: s.channel,
-        // Never in the past: a resumed step whose day has already gone is due
+        // Never in the past: a resumed step whose slot has already gone is due
         // now, not overdue-and-dispatched-in-a-burst.
-        scheduledAt: new Date(Math.max(anchor + s.dayOffset * 86_400_000, now)),
+        scheduledAt: dueAtForPosition(anchor, positionOf.get(s.stepIndex) ?? 0, gapDays, now),
         status: "scheduled" as const,
         messageContent: { subject: s.subject, body: s.body, variantKey: s.variantKey },
       }));

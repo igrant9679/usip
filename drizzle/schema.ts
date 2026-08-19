@@ -3586,6 +3586,10 @@ export const areCampaigns = mysqlTable(
     // Channels
     channelsEnabled: json("channelsEnabled"), // {email:bool, linkedin:bool, sms:bool, voice:bool}
     sequenceTemplate: varchar("sequenceTemplate", { length: 64 }).default("standard_7step").notNull(),
+    /** Days between consecutive steps (migration 0169). The campaign owns its
+     *  cadence: enrolment schedules anchor + k × gap regardless of the `day`
+     *  values in a generated sequence. Owner directive 2026-08-19: 7. */
+    stepGapDays: int("stepGapDays").default(7).notNull(),
     /** Free-form instructions appended to the Sequence Agent system prompt
      *  for this campaign (voice/tone/constraints). Null → defaults only. */
     sequencePrompt: text("sequencePrompt"),

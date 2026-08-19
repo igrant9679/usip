@@ -3745,6 +3745,24 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0169: the campaign owns its step cadence (owner ask 2026-08-19) ─────
+  // "Make all of the current sequence steps automatically 1 week apart." The
+  // gap between steps was whatever `day` the Sequence Agent wrote into each
+  // prospect's generated sequence; DEFAULT_STEP_GAP_DAYS (7, owner directive
+  // 08-17) was only the fallback for steps without one. 141 in-flight
+  // CommunityForce prospects still carried the pre-08-17 rhythm (gaps of 1–4
+  // days). The campaign now carries `stepGapDays` (default 7); enrolment
+  // schedules anchor + k × gap, and are.campaigns.respaceSteps moves pending
+  // rows of in-flight prospects onto the same grid. Editable on the campaign's
+  // Settings tab next to the new Autonomy control.
+  {
+    name: "0169_are_campaign_step_gap.sql",
+    statements: [
+      // Plain ADD COLUMN — IF NOT EXISTS not supported on MySQL < 8.0.3. errno 1060 is tolerated.
+      "ALTER TABLE `are_campaigns` ADD COLUMN `stepGapDays` int NOT NULL DEFAULT 7",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

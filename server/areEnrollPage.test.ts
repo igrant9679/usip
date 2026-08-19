@@ -70,9 +70,12 @@ describe("phase 3 selects only enrollable rows", () => {
     expect(phase).toContain("steps.filter((s) => !sentIdx.has(s.stepIndex))");
   });
 
-  it("anchors remaining offsets to the FIRST send, never in the past", () => {
+  it("anchors remaining steps to the FIRST send on the campaign's cadence grid, never in the past", () => {
     expect(phase).toContain("const anchor = firstSendMs ?? now");
-    expect(phase).toContain("Math.max(anchor + s.dayOffset * 86_400_000, now)");
+    // 0169: the campaign owns the cadence — anchor + position × gap via the one
+    // shared rule (dueAtForPosition floors at now), not the generated dayOffset.
+    expect(phase).toContain("dueAtForPosition(anchor, positionOf.get(s.stepIndex) ?? 0, gapDays, now)");
+    expect(phase).not.toContain("anchor + s.dayOffset");
   });
 
   it("every exit from the enrol loop changes the row it examined", () => {

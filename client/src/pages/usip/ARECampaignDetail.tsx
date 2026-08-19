@@ -2039,6 +2039,12 @@ export default function ARECampaignDetail() {
   const [minConfDraft, setMinConfDraft] = useState<number | null>(null);
   const [s2oEnabled, setS2oEnabled] = useState<boolean | null>(null);
   const [sourcesDraft, setSourcesDraft] = useState<string[] | null>(null);
+  /** Autonomy + cadence drafts (0169). `fullAck` is the explicit acknowledgement
+   *  that switching to Full autonomy means sends with no one in the loop. */
+  const [autonomyDraft, setAutonomyDraft] = useState<"full" | "batch_approval" | "review_release" | null>(null);
+  const [fullAck, setFullAck] = useState(false);
+  const [gapDraft, setGapDraft] = useState<number | null>(null);
+  const [respacePlan, setRespacePlan] = useState<{ gapDays: number; prospectsInFlight: number; prospectsTouched: number; rowsMoved: number; before: { earliest: string; latest: string } | null; after: { earliest: string; latest: string } | null; applied: boolean } | null>(null);
   // Bulk selection
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [rejectDialogOpen, setRejectDialogOpen] = useState(false);
@@ -2107,6 +2113,20 @@ export default function ARECampaignDetail() {
       setMinConfDraft(null);
       setS2oEnabled(null);
       setSourcesDraft(null);
+      setAutonomyDraft(null);
+      setFullAck(false);
+      setGapDraft(null);
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const respace = trpc.are.campaigns.respaceSteps.useMutation({
+    onSuccess: (plan) => {
+      setRespacePlan(plan);
+      if (plan.applied) {
+        toast.success(`Moved ${plan.rowsMoved} pending step${plan.rowsMoved === 1 ? "" : "s"} across ${plan.prospectsTouched} prospect${plan.prospectsTouched === 1 ? "" : "s"} onto the ${plan.gapDays}-day cadence`);
+        utils.are.campaigns.get.invalidate({ id: campaignId });
+        utils.are.execution.getQueue.invalidate();
+      }
     },
     onError: (e) => toast.error(e.message),
   });
@@ -2180,6 +2200,10 @@ export default function ARECampaignDetail() {
   const autoThreshold = thresholdDraft !== null ? thresholdDraft : (campaign?.autoApproveThreshold ?? null);
   const minConfidence = minConfDraft !== null ? minConfDraft : ((campaign as any)?.minConfidence ?? 40);
   const s2oActive = s2oEnabled !== null ? s2oEnabled : (campaign?.signalToOpportunityEnabled ?? false);
+  const autonomyActive = autonomyDraft ?? (campaign?.autonomyMode ?? "batch_approval");
+  const gapActive = gapDraft ?? ((campaign as { stepGapDays?: number } | undefined)?.stepGapDays ?? 7);
+  // Going TO full autonomy from anything else needs the explicit acknowledgement.
+  const needsFullAck = autonomyDraft === "full" && campaign?.autonomyMode !== "full" && !fullAck;
   // Mirrors the engine exactly (areEngine.runDiscovery): a stored list that
   // normalizes to empty means "run every default source", so that is what the
   // checkboxes must show — anything else would be a lying surface.
@@ -2762,6 +2786,99 @@ export default function ARECampaignDetail() {
                 Configure automation behaviour for this campaign. Changes take effect immediately on the next agent run.
               </p>
 
+              {/* Autonomy (0169 settings) */}
+              <Card className="bg-card border">
+                <CardHeader className="pb-2 pt-4 px-4">
+                  <CardTitle className="text-sm flex items-center gap-2">
+                    <Bot className="size-4 text-emerald-500" />
+                    Autonomy
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="px-4 pb-4 space-y-3">
+                  <p className="text-xs text-muted-foreground leading-relaxed">
+                    Who is in the loop between "prospect found" and "email sent". Takes effect on the next engine tick; prospects already enrolled keep sending either way.
+                  </p>
+                  <div className="space-y-2">
+                    {([
+                      { v: "full", title: "Fully autonomous", body: "Everyone at or above the auto-approve threshold is approved, sequenced, enrolled and sent — nobody reviews. Below the threshold is skipped." },
+                      { v: "batch_approval", title: "Batch approval", body: "The engine screens out obvious misses; you approve the rest in batches before anything is sequenced or sent." },
+                      { v: "review_release", title: "Review & release", body: "Every prospect waits for your individual review before it moves." },
+                    ] as const).map((o) => (
+                      <button
+                        key={o.v} type="button"
+                        onClick={() => { setAutonomyDraft(o.v); if (o.v !== "full") setFullAck(false); }}
+                        className={`w-full text-left rounded-md border px-3 py-2 transition-colors ${autonomyActive === o.v ? "border-emerald-500/50 bg-emerald-500/5" : "border-border hover:bg-muted/40"}`}
+                      >
+                        <div className="flex items-center gap-2">
+                          <span className={`size-2 rounded-full ${autonomyActive === o.v ? "bg-emerald-500" : "bg-muted-foreground/30"}`} />
+                          <span className="text-xs font-medium">{o.title}</span>
+                          {campaign?.autonomyMode === o.v && <span className="text-[10px] text-muted-foreground">· current</span>}
+                        </div>
+                        <p className="text-[11px] text-muted-foreground mt-1 leading-relaxed">{o.body}</p>
+                      </button>
+                    ))}
+                  </div>
+                  {autonomyDraft === "full" && campaign?.autonomyMode !== "full" && (
+                    <label className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-[11px] leading-relaxed cursor-pointer">
+                      <input type="checkbox" className="mt-0.5" checked={fullAck} onChange={(e) => setFullAck(e.target.checked)} />
+                      <span>I understand that with <strong>Fully autonomous</strong> this campaign will approve and email prospects on its own, up to {campaign?.dailySendCap ?? 50}/day, with no human review between discovery and send. The auto-approve threshold {autoThreshold !== null ? `(${autoThreshold})` : "(currently off — set one below, or everyone is approved)"} is the only gate.</span>
+                    </label>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Step cadence (0169) */}
+              <Card className="bg-card border">
+                <CardHeader className="pb-2 pt-4 px-4">
+                  <CardTitle className="text-sm flex items-center gap-2">
+                    <CalendarClock className="size-4 text-emerald-500" />
+                    Step cadence
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="px-4 pb-4 space-y-3">
+                  <p className="text-xs text-muted-foreground leading-relaxed">
+                    Days between consecutive steps of a prospect's sequence. New enrolments use it automatically (step k is due first-send + k × gap). Prospects already mid-sequence keep their current dates until you re-space them below.
+                  </p>
+                  <div className="flex items-center gap-3">
+                    <span className="text-xs font-medium">Days between steps</span>
+                    <input
+                      type="number" min={1} max={30} step={1}
+                      value={gapActive}
+                      onChange={(e) => setGapDraft(Math.max(1, Math.min(30, Number(e.target.value) || 1)))}
+                      className="h-7 w-20 rounded-md border border-border bg-background px-2 text-xs tabular-nums"
+                    />
+                    <span className="text-[11px] text-muted-foreground">default 7 · a 7-step sequence spans {6 * gapActive} days</span>
+                  </div>
+                  <div className="rounded-md border border-border/70 px-3 py-2 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[11px] text-muted-foreground">Move prospects already mid-sequence onto the {gapActive}-day grid (anchored on each one's first send; sent steps never move).</span>
+                      <Button size="sm" variant="outline" className="h-7 text-[11px] shrink-0" disabled={respace.isPending}
+                        onClick={() => respace.mutate({ id: campaignId, gapDays: gapActive })}>
+                        {respace.isPending && !respacePlan?.applied ? <Loader2 className="size-3.5 animate-spin" /> : null} Preview re-space
+                      </Button>
+                    </div>
+                    {respacePlan && !respacePlan.applied && (
+                      <div className="text-[11px] leading-relaxed">
+                        {respacePlan.rowsMoved === 0 ? (
+                          <span className="text-muted-foreground">Everything pending is already on the {respacePlan.gapDays}-day grid ({respacePlan.prospectsInFlight} prospect{respacePlan.prospectsInFlight === 1 ? "" : "s"} in flight).</span>
+                        ) : (
+                          <>
+                            <p><strong>{respacePlan.rowsMoved}</strong> pending step{respacePlan.rowsMoved === 1 ? "" : "s"} across <strong>{respacePlan.prospectsTouched}</strong> of {respacePlan.prospectsInFlight} in-flight prospect{respacePlan.prospectsInFlight === 1 ? "" : "s"} would move — currently {respacePlan.before ? `${new Date(respacePlan.before.earliest).toLocaleDateString()} → ${new Date(respacePlan.before.latest).toLocaleDateString()}` : ""}, after {respacePlan.after ? `${new Date(respacePlan.after.earliest).toLocaleDateString()} → ${new Date(respacePlan.after.latest).toLocaleDateString()}` : ""}.</p>
+                            <Button size="sm" className="h-7 text-[11px] mt-2" disabled={respace.isPending}
+                              onClick={() => respace.mutate({ id: campaignId, gapDays: respacePlan.gapDays, apply: true })}>
+                              {respace.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <CheckCircle2 className="size-3.5" />} Apply re-space
+                            </Button>
+                          </>
+                        )}
+                      </div>
+                    )}
+                    {respacePlan?.applied && (
+                      <p className="text-[11px] text-emerald-600">Re-spaced {respacePlan.rowsMoved} step{respacePlan.rowsMoved === 1 ? "" : "s"} across {respacePlan.prospectsTouched} prospect{respacePlan.prospectsTouched === 1 ? "" : "s"} onto the {respacePlan.gapDays}-day cadence.</p>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+
               {/* Auto-approve threshold */}
               <Card className="bg-card border">
                 <CardHeader className="pb-2 pt-4 px-4">
@@ -2938,7 +3055,7 @@ export default function ARECampaignDetail() {
               </Card>
 
               {/* Save button */}
-              {(thresholdDraft !== null || minConfDraft !== null || s2oEnabled !== null || sourcesDraft !== null) && (
+              {(thresholdDraft !== null || minConfDraft !== null || s2oEnabled !== null || sourcesDraft !== null || autonomyDraft !== null || gapDraft !== null) && (
                 <div className="flex items-center gap-3">
                   <Button
                     onClick={() => updateCampaign.mutate({
@@ -2947,8 +3064,11 @@ export default function ARECampaignDetail() {
                       minConfidence,
                       signalToOpportunityEnabled: s2oActive,
                       ...(sourcesDraft !== null ? { prospectSources: sourcesDraft } : {}),
+                      ...(autonomyDraft !== null ? { autonomyMode: autonomyDraft } : {}),
+                      ...(gapDraft !== null ? { stepGapDays: gapDraft } : {}),
                     })}
-                    disabled={updateCampaign.isPending}
+                    disabled={updateCampaign.isPending || needsFullAck}
+                    title={needsFullAck ? "Tick the acknowledgement above to switch to fully autonomous" : undefined}
                     className="gap-1.5"
                   >
                     {updateCampaign.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <CheckCircle2 className="size-3.5" />}
@@ -2956,7 +3076,7 @@ export default function ARECampaignDetail() {
                   </Button>
                   <Button
                     variant="ghost" size="sm" className="text-xs text-muted-foreground"
-                    onClick={() => { setThresholdDraft(null); setMinConfDraft(null); setS2oEnabled(null); setSourcesDraft(null); }}
+                    onClick={() => { setThresholdDraft(null); setMinConfDraft(null); setS2oEnabled(null); setSourcesDraft(null); setAutonomyDraft(null); setFullAck(false); setGapDraft(null); }}
                   >
                     Discard
                   </Button>

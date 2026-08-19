@@ -12,8 +12,11 @@ import { getDb } from "../../db";
 import { router } from "../../_core/trpc";
 import { workspaceProcedure } from "../../_core/workspace";
 import { runAreEngine } from "../../areEngine";
+import { recordAudit } from "../../audit";
 import { invokeLLM } from "../../_core/llm";
 import { ARE_DEFAULT_SOURCES, normalizeSources } from "@shared/areSources";
+import { MIN_STEP_GAP_DAYS, MAX_STEP_GAP_DAYS, effectiveStepGapDays, planRespaceForProspect } from "@shared/areStepCadence";
+import { areExecutionQueue } from "../../../drizzle/schema";
 
 export const campaignsRouter = router({
   list: workspaceProcedure
@@ -81,6 +84,8 @@ export const campaignsRouter = router({
           voice: z.boolean().default(false),
         }).default({ email: true, linkedin: false, sms: false, voice: false }),
         sequenceTemplate: z.string().default("standard_7step"),
+        /** Days between consecutive steps (0169). Default one week. */
+        stepGapDays: z.number().int().min(MIN_STEP_GAP_DAYS).max(MAX_STEP_GAP_DAYS).default(7),
         /** Optional free-form instructions appended to the Sequence Agent's
          *  system prompt for this campaign — voice, tone, do/don't lists. */
         sequencePrompt: z.string().max(4000).nullable().optional(),
@@ -140,6 +145,7 @@ export const campaignsRouter = router({
           dailySendCap: input.dailySendCap,
           channelsEnabled: input.channelsEnabled,
           sequenceTemplate: input.sequenceTemplate,
+          stepGapDays: input.stepGapDays,
           sequencePrompt: input.sequencePrompt ?? null,
           promptSubject: input.promptSubject ?? null,
           promptBody: input.promptBody ?? null,
@@ -173,6 +179,7 @@ export const campaignsRouter = router({
         dailySendCap: z.number().min(1).max(500).optional(),
         channelsEnabled: z.any().optional(),
         sequenceTemplate: z.string().optional(),
+        stepGapDays: z.number().int().min(MIN_STEP_GAP_DAYS).max(MAX_STEP_GAP_DAYS).optional(),
         sequencePrompt: z.string().max(4000).nullable().optional(),
         promptSubject: z.string().max(2000).nullable().optional(),
         promptBody: z.string().max(4000).nullable().optional(),
@@ -197,6 +204,7 @@ export const campaignsRouter = router({
       if (rest.dailySendCap !== undefined) updates.dailySendCap = rest.dailySendCap;
       if (rest.channelsEnabled !== undefined) updates.channelsEnabled = rest.channelsEnabled;
       if (rest.sequenceTemplate !== undefined) updates.sequenceTemplate = rest.sequenceTemplate;
+      if (rest.stepGapDays !== undefined) updates.stepGapDays = effectiveStepGapDays(rest.stepGapDays);
       // sequencePrompt, promptSubject, and promptBody all feed the LLM prompts
       // that build the cached campaign skeleton. Editing any of them must clear
       // generatedTemplate so the change takes effect on the next generation —
@@ -234,6 +242,60 @@ export const campaignsRouter = router({
         .set(updates)
         .where(and(eq(areCampaigns.id, id), eq(areCampaigns.workspaceId, ctx.workspace.id)));
       return { success: true };
+    }),
+
+  /**
+   * Move a campaign's PENDING steps onto its cadence grid (0169): for every
+   * in-flight prospect, the k-th step of the ordered sequence is due at
+   * first-send + k × stepGapDays (a never-touched prospect keeps its first
+   * slot as the anchor); sent rows are untouched; nothing lands in the past.
+   * Dry run unless `apply` — the plan says how many rows move and from/to.
+   * Owner ask 2026-08-19: the 141 in-flight CommunityForce prospects carried
+   * 1–4-day gaps from before the one-week directive.
+   */
+  respaceSteps: workspaceProcedure
+    .input(z.object({ id: z.number(), apply: z.boolean().default(false), gapDays: z.number().int().min(MIN_STEP_GAP_DAYS).max(MAX_STEP_GAP_DAYS).optional() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [campaign] = await db.select().from(areCampaigns)
+        .where(and(eq(areCampaigns.id, input.id), eq(areCampaigns.workspaceId, ctx.workspace.id))).limit(1);
+      if (!campaign) throw new TRPCError({ code: "NOT_FOUND" });
+      const gapDays = effectiveStepGapDays(input.gapDays ?? (campaign as { stepGapDays?: number | null }).stepGapDays);
+
+      const rows = await db
+        .select({ id: areExecutionQueue.id, prospectQueueId: areExecutionQueue.prospectQueueId, stepIndex: areExecutionQueue.stepIndex, status: areExecutionQueue.status, scheduledAt: areExecutionQueue.scheduledAt, executedAt: areExecutionQueue.executedAt })
+        .from(areExecutionQueue)
+        .where(and(eq(areExecutionQueue.workspaceId, ctx.workspace.id), eq(areExecutionQueue.campaignId, input.id)));
+      const byProspect = new Map<number, typeof rows>();
+      for (const r of rows) { const a = byProspect.get(r.prospectQueueId) ?? []; a.push(r); byProspect.set(r.prospectQueueId, a); }
+
+      const nowMs = Date.now();
+      const changes: Array<{ id: number; prospectQueueId: number; stepIndex: number; from: Date; to: Date }> = [];
+      let prospectsTouched = 0, prospectsInFlight = 0;
+      byProspect.forEach((prows, pq) => {
+        if (!prows.some((r) => r.status === "scheduled")) return;
+        prospectsInFlight++;
+        const plan = planRespaceForProspect(prows, gapDays, nowMs);
+        if (plan.length) { prospectsTouched++; for (const c of plan) changes.push({ ...c, prospectQueueId: pq }); }
+      });
+      const times = (arr: Date[]) => arr.length ? { earliest: new Date(Math.min(...arr.map((d) => d.getTime()))).toISOString(), latest: new Date(Math.max(...arr.map((d) => d.getTime()))).toISOString() } : null;
+      const plan = {
+        campaignId: input.id, gapDays, applied: false,
+        prospectsInFlight, prospectsTouched, rowsMoved: changes.length,
+        before: times(changes.map((c) => c.from)), after: times(changes.map((c) => c.to)),
+        sample: changes.slice(0, 12).map((c) => ({ prospectQueueId: c.prospectQueueId, stepIndex: c.stepIndex, from: c.from.toISOString(), to: c.to.toISOString() })),
+      };
+      if (!input.apply || changes.length === 0) return plan;
+      for (const c of changes) {
+        await db.update(areExecutionQueue).set({ scheduledAt: c.to })
+          .where(and(eq(areExecutionQueue.id, c.id), eq(areExecutionQueue.workspaceId, ctx.workspace.id), eq(areExecutionQueue.status, "scheduled")));
+      }
+      if (input.gapDays && input.gapDays !== campaign.stepGapDays) {
+        await db.update(areCampaigns).set({ stepGapDays: gapDays } as never).where(and(eq(areCampaigns.id, input.id), eq(areCampaigns.workspaceId, ctx.workspace.id)));
+      }
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "are_campaign_respace", entityId: input.id, after: { gapDays, prospectsTouched, rowsMoved: changes.length, before: plan.before, after: plan.after } });
+      return { ...plan, applied: true };
     }),
 
   setStatus: workspaceProcedure
