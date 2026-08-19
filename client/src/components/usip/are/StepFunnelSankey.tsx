@@ -14,10 +14,21 @@
  * Recharts addresses links by node INDEX, so the id-based links from the
  * server are resolved to indices here; a link naming a node that was never
  * emitted is dropped rather than rendered against the wrong node.
+ *
+ * LAYERING (2026-08-19). The server's graph has links that skip columns: a
+ * prospect who left after step 1 flows from "Opened step 1" (column 1)
+ * straight to "No reply yet" (the last column), and Recharts draws that as
+ * one long band passing BEHIND the Step 2 column and across every band there
+ * — the overlap the owner flagged. A Sankey is only readable when every band
+ * spans exactly one column, so multi-column links are routed here through
+ * invisible pass-through nodes, one per intermediate column: the band keeps
+ * its width, colour and tooltip (origin → final), and simply travels straight
+ * through the gap in each column it crosses instead of behind it.
  */
 import { useMemo, useState } from "react";
 import { ResponsiveContainer, Sankey, Tooltip, Layer, Rectangle } from "recharts";
 import { Info } from "lucide-react";
+import { layerFunnel } from "./stepFunnelLayering";
 
 export interface FunnelNodeDto {
   id: string;
@@ -53,11 +64,19 @@ const KIND_LABEL: Record<FunnelNodeDto["kind"], string> = {
   dormant: "No reply yet",
 };
 
-type ChartNode = { name: string; kind: FunnelNodeDto["kind"]; stepIndex: number | null; total: number };
+export type ChartNode = {
+  name: string; kind: FunnelNodeDto["kind"]; stepIndex: number | null; total: number;
+  /** Invisible routing node for a link that would otherwise skip columns. */
+  passthrough?: boolean;
+  /** For a pass-through: the real endpoints, for the tooltip. */
+  origin?: string; final?: string;
+};
 
 function SankeyNode(props: any) {
   const { x, y, width, height, payload, onSelect } = props;
   const node = payload as ChartNode & { value: number };
+  // A pass-through is routing, not a thing that happened: no bar, no label.
+  if (node.passthrough) return <Layer />;
   const color = KIND_COLOR[node.kind] ?? "#64748B";
   const clickable = node.kind === "step";
   // Labels sit outside the bar on the right unless the node is near the edge.
@@ -123,25 +142,13 @@ export function StepFunnelSankey({
 }) {
   const [hovered, setHovered] = useState<string | null>(null);
 
-  const data = useMemo(() => {
-    const index: Record<string, number> = {};
-    funnel.nodes.forEach((n, i) => { index[n.id] = i; });
-    return {
-      nodes: funnel.nodes.map((n): ChartNode => ({
-        name: n.name, kind: n.kind, stepIndex: n.stepIndex, total: n.value,
-      })),
-      links: funnel.links
-        // A link whose endpoint was never emitted would attach to the wrong
-        // node once Recharts resolves it positionally.
-        .filter((l) => index[l.source] !== undefined && index[l.target] !== undefined)
-        .map((l) => ({ source: index[l.source], target: index[l.target], value: l.value })),
-    };
-  }, [funnel]);
+  const data = useMemo(() => layerFunnel(funnel), [funnel]);
 
   if (data.nodes.length === 0 || data.links.length === 0) return null;
 
-  // Height scales with the number of nodes or tall funnels crush together.
-  const height = Math.max(280, Math.min(760, data.nodes.length * 46));
+  // Height scales with the number of REAL nodes (pass-throughs are routing).
+  const realNodes = data.nodes.filter((n) => !n.passthrough).length;
+  const height = Math.max(280, Math.min(760, realNodes * 46));
   const kindsPresent = Array.from(new Set(funnel.nodes.map((n) => n.kind)));
 
   return (
@@ -182,6 +189,7 @@ export function StepFunnelSankey({
               content={({ payload }) => {
                 const p = payload?.[0]?.payload;
                 if (!p) return null;
+                if (p.passthrough) return null;
                 // Link payloads carry source/target; node payloads do not.
                 const isLink = !!p.source && !!p.target && typeof p.value === "number";
                 const pct = funnel.totalProspects > 0
@@ -192,7 +200,7 @@ export function StepFunnelSankey({
                     {isLink ? (
                       <>
                         <div className="font-medium">
-                          {p.source?.name} → {p.target?.name}
+                          {p.source?.passthrough ? "Still heading to" : `${p.source?.name} →`} {(p.target?.passthrough ? p.target.final : p.target?.name)}
                         </div>
                         <div className="text-muted-foreground tabular-nums">
                           {Number(p.value).toLocaleString()} prospect{Number(p.value) === 1 ? "" : "s"} · {pct}% of all
