@@ -75,9 +75,17 @@ export type ChartNode = {
 function SankeyNode(props: any) {
   const { x, y, width, height, payload, onSelect } = props;
   const node = payload as ChartNode & { value: number };
-  // A pass-through is routing, not a thing that happened: no bar, no label.
-  if (node.passthrough) return <Layer />;
   const color = KIND_COLOR[node.kind] ?? "#64748B";
+  // A pass-through is routing, not a thing that happened: no label, no
+  // click, and it is painted at the BAND's opacity so the lane reads as one
+  // continuous band through the column rather than a band with a notch.
+  if (node.passthrough) {
+    return (
+      <Layer>
+        <Rectangle x={x} y={y} width={width} height={height} fill={color} fillOpacity={0.28} style={{ pointerEvents: "none" }} />
+      </Layer>
+    );
+  }
   const clickable = node.kind === "step";
   // Labels sit outside the bar on the right unless the node is near the edge.
   return (
