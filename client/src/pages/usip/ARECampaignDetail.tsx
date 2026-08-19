@@ -23,6 +23,7 @@ import { emailStatusBadge, genericInboxBadge } from "@/components/usip/people/pe
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Checkbox } from "@/components/ui/checkbox";
 import { AreBulkActionBar, useRowSelection, type BulkActionDef } from "@/components/usip/AreBulkActionBar";
+import { describeEnrichmentError, ENRICHMENT_TONE_CLASS } from "@shared/enrichmentErrorLabel";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -455,14 +456,20 @@ function ProspectRow({
             {displayPhone ? <span className="shrink-0 tabular-nums">{displayPhone}</span> : null}
           </div>
         )}
-        {p.enrichmentStatus === "failed" && p.enrichmentError && (
-          <div
-            className="text-[11px] text-destructive/90 mt-0.5 line-clamp-2"
-            title={p.enrichmentError}
-          >
-            ⚠ {p.enrichmentError}
-          </div>
-        )}
+        {p.enrichmentStatus === "failed" && p.enrichmentError && (() => {
+          // "quickenrich: no_match" is a fact (not in that database), not a
+          // fault: shown as "Not in QuickEnrich" in brown; real failures stay
+          // red. The raw reason stays in the tooltip.
+          const e = describeEnrichmentError(p.enrichmentError)!;
+          return (
+            <div
+              className={`text-[11px] mt-0.5 line-clamp-2 ${ENRICHMENT_TONE_CLASS[e.tone]}`}
+              title={p.enrichmentError}
+            >
+              {e.tone === "error" ? "⚠ " : "ⓘ "}{e.label}
+            </div>
+          );
+        })()}
         {p.enrichmentStatus === "failed" && !p.enrichmentError && (
           <div className="text-[11px] text-destructive/70 mt-0.5 italic">
             ⚠ Enrichment failed (no reason recorded — try again to capture it)
