@@ -216,7 +216,8 @@ const SYSTEM_PROMPT = (pageKey: string | undefined) => `You are Velocity's in-ap
 Rules:
 - Use tools for facts. Never invent prospect ids, sequence names, or counts — search first. For "how do I…" questions call help_lookup and answer from what it returns.
 - Numeric ids may ONLY come from tool results — either this turn's, or an [assistant_context …] block at the end of an earlier assistant message (that block holds prior turns' tool results). If no real id is in context, look the person or object up again before proposing an action. The server rejects actions naming ids that don't exist.
-- Mutating tools (enroll_in_sequence, create_tasks, add_to_list, enrich_prospects, set_campaign_status, propose_meetings, create_list_from_filter) only PROPOSE: calling one shows the user a confirmation card. Call at most ONE per turn, only when the user asked for that action, and with ids you obtained from lookups this conversation.
+- Mutating tools (enroll_in_sequence, create_tasks, add_to_list, enrich_prospects, set_campaign_status, propose_meetings, create_list_from_filter, create_campaign) only PROPOSE: calling one shows the user a confirmation card. Call at most ONE per turn, only when the user asked for that action, and with ids you obtained from lookups this conversation.
+- create_campaign makes a DRAFT only: it never launches. If the user wants it running, that is a second step (set_campaign_status to active) in a later turn, after they have seen the draft. Fill targeting from what the user said; if they gave no name or no targeting, ask rather than invent.
 - For "make a list of everyone who…" requests, call preview_people_filter first and tell the user the real count, then propose create_list_from_filter with the same filter.
 - You cannot send email or LinkedIn messages, and must not promise to. Sends live behind the user's approval queues.
 - Use navigate to hand the user a link when the answer is "go to this page".
@@ -420,6 +421,34 @@ export const assistantRouter = router({
           }
           summary = `Drafted ${drafted} meeting proposal(s) — review them in the approval queue`
             + (failed.length ? `; ${failed.length} failed (#${failed.join(", #")})` : "");
+          break;
+        }
+        case "create_campaign": {
+          // DRAFT only, by construction: `launch` is not part of the tool's
+          // args and is never passed, so the engine never ticks this campaign
+          // until the user activates it (set_campaign_status or the page).
+          const tg = (args.targeting ?? {}) as Record<string, unknown>;
+          const ch = (args.channels ?? {}) as { email?: boolean; linkedin?: boolean };
+          const created = (await caller.are.campaigns.create({
+            name: args.name,
+            description: args.description,
+            autonomyMode: args.autonomyMode ?? "batch_approval",
+            icpOverrides: {
+              targetTitles: tg.targetTitles ?? [],
+              targetIndustries: tg.targetIndustries ?? [],
+              targetGeographies: tg.targetGeographies ?? [],
+              keywords: tg.keywords ?? [],
+              ...(tg.employeeMin ? { employeeMin: tg.employeeMin } : {}),
+              ...(tg.employeeMax ? { employeeMax: tg.employeeMax } : {}),
+            },
+            targetProspectCount: args.targetProspectCount ?? 100,
+            dailySendCap: args.dailySendCap ?? 25,
+            channelsEnabled: { email: ch.email !== false, linkedin: !!ch.linkedin, sms: false, voice: false },
+            goalType: args.goalType ?? "reply",
+            sequencePrompt: args.sequencePrompt ?? null,
+            launch: false,
+          } as never)) as { id: number; launched: boolean };
+          summary = `Created campaign "${args.name}" (#${created.id}) as a DRAFT — review it at /are/campaigns/${created.id}; it discovers and sends nothing until you activate it`;
           break;
         }
         case "create_list_from_filter": {

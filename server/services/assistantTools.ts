@@ -112,6 +112,34 @@ export const TOOL_ARGS = {
     filter: PEOPLE_FILTER.refine(filterIsNonEmpty, { message: "At least one filter field is required" }),
     limit: z.number().int().min(1).max(1000).default(500),
   }),
+  /**
+   * Create an autonomous (ARE) campaign as a DRAFT. Never launches: the
+   * campaign sits at status draft, which the engine never ticks, until the
+   * user activates it — a separate set_campaign_status confirmation or the
+   * campaign page. Autonomy is limited to the two human-in-the-loop modes;
+   * fully unattended sending is set on the campaign's settings page by a
+   * human, not proposed by the assistant. Caps sit well inside the
+   * procedure's own (target ≤ 1,000 of 10,000; daily cap ≤ 100 of 500).
+   */
+  create_campaign: z.object({
+    name: z.string().trim().min(2).max(200),
+    description: z.string().trim().max(2000).optional(),
+    targeting: z.object({
+      targetTitles: z.array(z.string().trim().min(1).max(120)).max(25).optional(),
+      targetIndustries: z.array(z.string().trim().min(1).max(120)).max(25).optional(),
+      targetGeographies: z.array(z.string().trim().min(1).max(120)).max(25).optional(),
+      keywords: z.array(z.string().trim().min(1).max(120)).max(25).optional(),
+      employeeMin: z.number().int().min(1).max(1_000_000).optional(),
+      employeeMax: z.number().int().min(1).max(1_000_000).optional(),
+    }).refine((v) => Object.values(v).some((x) => x !== undefined && !(Array.isArray(x) && x.length === 0)), { message: "Targeting needs at least one field" }),
+    targetProspectCount: z.number().int().min(1).max(1000).default(100),
+    dailySendCap: z.number().int().min(1).max(100).default(25),
+    autonomyMode: z.enum(["batch_approval", "review_release"]).default("batch_approval"),
+    channels: z.object({ email: z.boolean().default(true), linkedin: z.boolean().default(false) }).default({ email: true, linkedin: false }),
+    goalType: z.enum(["meeting_booked", "reply", "opportunity_created"]).default("reply"),
+    /** Voice/tone guidance for the Sequence Agent's copy. */
+    sequencePrompt: z.string().trim().max(4000).optional(),
+  }),
 } as const;
 
 export type AssistantToolName = keyof typeof TOOL_ARGS;
@@ -122,7 +150,7 @@ export const READ_TOOLS: AssistantToolName[] = [
 ];
 export const MUTATING_TOOLS: AssistantToolName[] = [
   "enroll_in_sequence", "create_tasks", "add_to_list", "enrich_prospects", "set_campaign_status",
-  "propose_meetings", "create_list_from_filter",
+  "propose_meetings", "create_list_from_filter", "create_campaign",
 ];
 
 export function isMutatingTool(name: string): name is AssistantToolName {
@@ -186,6 +214,19 @@ export function describeAction(name: AssistantToolName, args: Record<string, unk
       return `Draft ${n(args.prospectIds)} meeting proposal${n(args.prospectIds) === 1 ? "" : "s"} — they land in your approval queue; nothing is scheduled or mailed until you approve each one`;
     case "create_list_from_filter":
       return `Create list "${args.newListName}" from everyone ${describePeopleFilter((args.filter ?? {}) as PeopleFilter)} (up to ${args.limit ?? 500} people)`;
+    case "create_campaign": {
+      const tg = (args.targeting ?? {}) as Record<string, unknown>;
+      const bits: string[] = [];
+      if (Array.isArray(tg.targetTitles) && tg.targetTitles.length) bits.push(`titles ${tg.targetTitles.join("/")}`);
+      if (Array.isArray(tg.targetIndustries) && tg.targetIndustries.length) bits.push(`industries ${tg.targetIndustries.join("/")}`);
+      if (Array.isArray(tg.targetGeographies) && tg.targetGeographies.length) bits.push(`in ${tg.targetGeographies.join("/")}`);
+      if (Array.isArray(tg.keywords) && tg.keywords.length) bits.push(`keywords ${tg.keywords.join("/")}`);
+      if (tg.employeeMin || tg.employeeMax) bits.push(`${tg.employeeMin ?? 1}–${tg.employeeMax ?? "∞"} employees`);
+      const ch = (args.channels ?? {}) as { email?: boolean; linkedin?: boolean };
+      const channels = [ch.email !== false ? "email" : null, ch.linkedin ? "LinkedIn" : null].filter(Boolean).join(" + ") || "email";
+      const mode = args.autonomyMode === "review_release" ? "review & release" : "batch approval";
+      return `Create campaign "${args.name}" as a DRAFT — targeting ${bits.join(", ") || "the workspace ICP"}; up to ${args.targetProspectCount ?? 100} prospects, ${args.dailySendCap ?? 25}/day cap, ${channels}, ${mode}. Nothing runs until you activate it.`;
+    }
     default:
       return `Run ${name}`;
   }
@@ -303,5 +344,31 @@ export const ASSISTANT_TOOLS: Tool[] = [
       limit: { type: "number", description: "Max people to add (default 500, max 1000)" },
     },
     required: ["newListName", "filter"],
+  }),
+  t("create_campaign", "PROPOSE creating an autonomous (ARE) outbound campaign as a DRAFT from the user's description: who to target (titles, industries, geographies, keywords, company size), how many prospects, daily cap, channels, goal, and tone guidance. It is created as status draft — it discovers and sends nothing until the user activates it (set_campaign_status, a separate confirmation). Autonomy is batch_approval (default) or review_release; fully unattended mode is not available here. If the user gave no name or no targeting, ask before proposing. The user must confirm.", {
+    type: "object",
+    properties: {
+      name: { type: "string", description: "Campaign name (2-200 chars)" },
+      description: { type: "string", description: "One or two sentences on purpose/offer" },
+      targeting: {
+        type: "object",
+        description: "Who to find. At least one field.",
+        properties: {
+          targetTitles: { type: "array", items: { type: "string" }, description: "e.g. ['VP Finance','CFO']" },
+          targetIndustries: { type: "array", items: { type: "string" } },
+          targetGeographies: { type: "array", items: { type: "string" }, description: "Cities/states/countries" },
+          keywords: { type: "array", items: { type: "string" }, description: "Company/topic keywords" },
+          employeeMin: { type: "number" },
+          employeeMax: { type: "number" },
+        },
+      },
+      targetProspectCount: { type: "number", description: "How many prospects to work (default 100, max 1000)" },
+      dailySendCap: { type: "number", description: "Max sends per day once active (default 25, max 100)" },
+      autonomyMode: { type: "string", enum: ["batch_approval", "review_release"], description: "batch_approval (default): the user approves batches; review_release: the user reviews and releases each send" },
+      channels: { type: "object", properties: { email: { type: "boolean" }, linkedin: { type: "boolean" } } },
+      goalType: { type: "string", enum: ["meeting_booked", "reply", "opportunity_created"] },
+      sequencePrompt: { type: "string", description: "Voice/tone guidance for the generated emails" },
+    },
+    required: ["name", "targeting"],
   }),
 ];

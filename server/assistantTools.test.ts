@@ -12,6 +12,7 @@
  *    returnPath rule, one layer up.
  */
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
 import {
   ASSISTANT_TOOLS,
   MUTATING_TOOLS,
@@ -60,6 +61,41 @@ describe("argument gates", () => {
     expect(() => parseToolArgs("enroll_in_sequence", JSON.stringify({ sequenceId: 1, prospectIds: many }))).toThrow();
     expect(() => parseToolArgs("enroll_in_sequence", JSON.stringify({ sequenceId: 1, prospectIds: [] }))).toThrow();
     expect(() => parseToolArgs("enrich_prospects", JSON.stringify({ prospectIds: Array.from({ length: 26 }, (_, i) => i + 1) }))).toThrow();
+  });
+
+  it("create_campaign is mutating (confirm-carded), drafts only, human-in-the-loop only, and capped", () => {
+    expect(isMutatingTool("create_campaign")).toBe(true);
+    const ok = parseToolArgs("create_campaign", JSON.stringify({
+      name: "Higher-Ed CFO outreach", targeting: { targetTitles: ["CFO", "VP Finance"], targetIndustries: ["Higher Education"] },
+    })) as Record<string, unknown>;
+    // Safe defaults the model did not have to state.
+    expect(ok).toMatchObject({ autonomyMode: "batch_approval", targetProspectCount: 100, dailySendCap: 25, goalType: "reply", channels: { email: true, linkedin: false } });
+    // `launch` is not an argument — a draft is the only thing this tool can make.
+    expect("launch" in ok).toBe(false);
+    // A model that tries `launch: true` is ignored by the gate and the key is stripped.
+    expect("launch" in (parseToolArgs("create_campaign", JSON.stringify({ name: "xy", targeting: { targetTitles: ["CFO"] }, launch: true })) as object)).toBe(false);
+    // Unattended autonomy cannot be proposed from chat.
+    expect(() => parseToolArgs("create_campaign", JSON.stringify({ name: "xy", targeting: { targetTitles: ["CFO"] }, autonomyMode: "full" }))).toThrow();
+    // Targeting is required and must say something.
+    expect(() => parseToolArgs("create_campaign", JSON.stringify({ name: "xy" }))).toThrow();
+    expect(() => parseToolArgs("create_campaign", JSON.stringify({ name: "xy", targeting: {} }))).toThrow();
+    expect(() => parseToolArgs("create_campaign", JSON.stringify({ name: "xy", targeting: { targetTitles: [] } }))).toThrow();
+    // Caps sit inside the procedure's own.
+    expect(() => parseToolArgs("create_campaign", JSON.stringify({ name: "xy", targeting: { keywords: ["grants"] }, targetProspectCount: 1001 }))).toThrow();
+    expect(() => parseToolArgs("create_campaign", JSON.stringify({ name: "xy", targeting: { keywords: ["grants"] }, dailySendCap: 101 }))).toThrow();
+    // The card says DRAFT and that nothing runs.
+    const text = describeAction("create_campaign", ok);
+    expect(text).toContain("DRAFT");
+    expect(text).toContain("Nothing runs until you activate it");
+    expect(text).toContain("CFO/VP Finance");
+  });
+
+  it("the confirm dispatch never passes launch:true for create_campaign (draft by construction)", () => {
+    const src = readFileSync("server/routers/assistant.ts", "utf8");
+    const block = src.slice(src.indexOf('case "create_campaign"'), src.indexOf('case "create_list_from_filter"'));
+    expect(block).toContain("launch: false");
+    expect(block).not.toMatch(/launch:\s*true/);
+    expect(block).toContain("caller.are.campaigns.create(");
   });
 
   it("campaign status is active|paused only — no tool-side archive/delete", () => {
