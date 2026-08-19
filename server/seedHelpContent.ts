@@ -193,6 +193,15 @@ Accepting one starts a guided tour: the relevant control is spotlighted, a card 
 **Nothing is lost by dismissing a tour.** Every walkthrough stays available in the Help Center under Tours, so you can run any of them whenever you like.`,
   },
   {
+    slug: "ai-assistant",
+    categorySlug: "getting-started",
+    title: "The AI Assistant: what it looks up, what it can do, and what it never will",
+    summary: "Ask about your own data, have it propose real actions behind a confirm card, and know exactly where the line is.",
+    readingTimeMinutes: 4,
+    tags: ["ai", "assistant", "actions", "campaigns", "sequences", "lists", "tasks"],
+    bodyMarkdown: `**AI Assistant** sits in the sidebar's quick links. It does three things: it **looks things up** in your own workspace, it **proposes actions** that you confirm in the chat, and it **hands you links** to the right page.\n\n**It reads your data, not general knowledge.** Ask it to find everyone at a company, open a person and see where each fact came from, list your sequences, lists or autonomous campaigns, summarise what is waiting on you, show the deals pipeline by stage, or count who matches a filter ("CFOs in Texas with a valid email") before you act on it. For "how do I…" questions it reads the Help Center and answers from that. It never invents ids or counts — if it has not looked something up, it will look it up first.\n\n**What it can propose.** Each of these shows a **confirmation card** that states exactly what will happen, and nothing runs until you click **Confirm**:\n\n| Ask it to… | What runs on Confirm | Limit |\n|---|---|---|\n| Enroll people in a sequence | the enrolment, through the same rules as the Sequences page | 50 people |\n| Create follow-up tasks | one task per person, with type, priority and due date | 50 |\n| Add people to a list, or build a list from a filter | the list and its members — it previews the real count first | 50 / 1,000 |\n| Enrich people | the full enrichment pass — **this spends verification credits** | 25 |\n| Pause or activate a campaign | the status change on that autonomous campaign | 1 |\n| Draft meeting proposals | drafts into your approval queue; nothing is scheduled or mailed until you approve each one there | 5 |\n| **Create a campaign** | a new autonomous campaign as a **draft** from your description — targeting (titles, industries, geographies, keywords, company size), prospect count, daily cap, channels, goal and tone guidance | 1,000 prospects · 100/day |\n\n**Creating a campaign never launches it.** The draft discovers and sends nothing until you activate it — a separate step (ask the assistant to activate it, or use the campaign page) taken after you have looked at it. The assistant can only create it in **batch approval** (you approve batches) or **review & release** (you release each send); fully unattended mode is something a human sets on the campaign's settings page.\n\n**How the confirm card works.** A proposal is held by the server, not by the page: it can be confirmed **once**, it expires after **30 minutes**, and **Not now** closes it for good — ask again if you change your mind. Everything runs under *your* role and permissions, exactly as if you had done it from the page, and every confirmed action is logged. One proposal per message: it will not chain several writes behind a single click.\n\n**What it will never do**, whatever you type: send an email, LinkedIn message or reply (those stay behind the autopilot dials and your approval queues), fetch new prospects, edit or delete records, change autopilot or workspace settings, or launch a campaign. If you ask for one of these it will tell you where that lives and offer the link.\n\n**Two habits that make it useful.** Be specific — names, companies, numbers — and let it ask: when a request is missing something it needs (a campaign with no name or no targeting, a person it cannot find) it asks rather than guessing. It also knows which page you came from, so "this page" and "here" mean what you expect.`,
+  },
+  {
     slug: "multiple-workspaces",
     categorySlug: "settings-account",
     title: "Running multiple workspaces",
@@ -951,7 +960,7 @@ export const TOURS: TourSeed[] = [
   // rather than a target that would resolve to nothing.
   {
     name: "Ask the AI Assistant",
-    description: "Answer questions about your own pipeline in plain English.",
+    description: "Ask about your own pipeline in plain English — and have it propose actions you confirm.",
     type: "feature",
     estimatedMinutes: 2,
     pageKey: "ai-assistant",
@@ -960,6 +969,7 @@ export const TOURS: TourSeed[] = [
     steps: [
       { title: "Your data, asked in plain English", bodyMarkdown: "Ask about your own pipeline rather than reading dashboards. It answers from your records, not from general knowledge.", routeTo: "/v2/ai-assistant", targetDataTourId: "ai-assistant-panel", visualTreatment: "spotlight", advanceCondition: "next_button" },
       { title: "Good questions to start with", bodyMarkdown: "Which deals went quiet this week. Which prospects replied but never got a follow-up. What my best source was last month. Specific beats broad.", visualTreatment: "coach", advanceCondition: "next_button" },
+      { title: "It can act, behind a confirm card", bodyMarkdown: "Ask it to enroll people in a sequence, create tasks, build a list, enrich people, pause or activate a campaign, draft meeting proposals — or create a new campaign as a draft. Each shows a card; nothing runs until you click Confirm. It never sends email or LinkedIn messages, and never launches a campaign.", visualTreatment: "coach", advanceCondition: "next_button" },
     ],
   },
   {

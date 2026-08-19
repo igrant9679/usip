@@ -10,6 +10,7 @@
  */
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { pageKeyForRoute } from "@/components/usip/Elsie";
 import { useLocation } from "wouter";
 import { trpc } from "../../lib/trpc";
 import { useTourEngine, type Tour } from "./TourEngine";
@@ -17,7 +18,17 @@ import { toast } from "sonner";
 
 /* ─── helpers ────────────────────────────────────────────────────────────── */
 
+/**
+ * Route → the pageKey articles and tours are filed under. Uses the same
+ * longest-prefix table Elsie uses, so /v2/ai-assistant → "ai-assistant" and
+ * /v2/sequences → "sequences" — the first-segment rule it replaced mapped every
+ * /v2 route to "v2", a key no article has, so "for this page" was empty on all
+ * of them (found 2026-08-19). Falls back to the first segment for routes the
+ * table does not know.
+ */
 function routeToPageKey(path: string): string {
+  const mapped = pageKeyForRoute(path);
+  if (mapped) return mapped;
   const seg = path.split("/").filter(Boolean);
   return seg[0] ?? "dashboard";
 }
