@@ -80,6 +80,7 @@ import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import { ReactNode, useEffect, useLayoutEffect, useState, useRef, createContext, useContext } from "react";
 import { Link, useLocation } from "wouter";
+import { rememberPage } from "@/lib/lastPage";
 import { PageTransition } from "@/components/PageTransition";
 import { HelpDrawer } from "@/components/usip/HelpDrawer";
 import { useTheme, PALETTES } from "@/contexts/ThemeContext";
@@ -491,6 +492,8 @@ export const HOME_DASHBOARD_KEY = "velocity_home_dashboard";
 
 export function Shell({ children, title, actions }: { children: ReactNode; title?: string; actions?: ReactNode }) {
   const [location] = useLocation();
+  // The AI Assistant sends "the page the user came from" with each turn.
+  useEffect(() => { rememberPage(location); }, [location]);
   const { user, logout } = useAuth();
   const { workspaces, current, switchTo, isLoading } = useWorkspace();
   const [wsOpen, setWsOpen] = useState(false);

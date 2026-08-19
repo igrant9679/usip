@@ -14,12 +14,15 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "wouter";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
+import { pageKeyForRoute } from "@/components/usip/Elsie";
+import { lastPageBeforeAssistant } from "@/lib/lastPage";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Sparkles, Send, Loader2, RotateCcw, Wrench, ArrowRight, ShieldCheck, X } from "lucide-react";
 import { toast } from "sonner";
 
-type PendingAction = { tool: string; args: Record<string, unknown>; description: string };
+/** The server holds the proposal; the client holds only its nonce (0168). */
+type PendingAction = { nonce: string; tool: string; args: Record<string, unknown>; description: string; expiresAt?: string };
 type Message = {
   role: "user" | "assistant";
   body: string;
@@ -48,6 +51,9 @@ export default function AIAssistant() {
   const startConv = trpc.helpCenter.startConversation.useMutation({ onError: (e) => toast.error(e.message) });
   const chat = trpc.assistant.chat.useMutation({ onError: (e) => toast.error(e.message) });
   const confirm = trpc.assistant.confirmAction.useMutation({ onError: (e) => toast.error(e.message) });
+  const decline = trpc.assistant.declineAction.useMutation({ meta: { silentError: true } });
+  // Where the user came from — the page "here"/"this page" refers to.
+  const pageKey = pageKeyForRoute(lastPageBeforeAssistant() ?? "") ?? undefined;
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -66,7 +72,7 @@ export default function AIAssistant() {
         convId = res.conversationId;
         setConversationId(convId);
       }
-      const res = await chat.mutateAsync({ conversationId: convId, message: userMsg });
+      const res = await chat.mutateAsync({ conversationId: convId, message: userMsg, pageKey });
       setMessages((m) => [...m, {
         role: "assistant",
         body: res.answer,
@@ -84,7 +90,7 @@ export default function AIAssistant() {
   async function runPending(index: number, action: PendingAction) {
     setIsLoading(true);
     try {
-      const r = await confirm.mutateAsync({ tool: action.tool, args: action.args });
+      const r = await confirm.mutateAsync({ nonce: action.nonce });
       setMessages((m) => m.map((msg, i) => (i === index ? { ...msg, actionResolved: "done" as const } : msg))
         .concat([{ role: "assistant", body: `Done — ${r.summary}.` }]));
     } catch (e: any) {
@@ -94,7 +100,9 @@ export default function AIAssistant() {
     }
   }
 
-  const declinePending = (index: number) => {
+  const declinePending = (index: number, action?: PendingAction) => {
+    // Consume the proposal server-side too, so "Not now" can never become "yes" later.
+    if (action?.nonce) decline.mutate({ nonce: action.nonce });
     setMessages((m) => m.map((msg, i) => (i === index ? { ...msg, actionResolved: "declined" as const } : msg)));
   };
 
@@ -183,7 +191,7 @@ export default function AIAssistant() {
                               <Button size="sm" className="h-7 text-[12px]" style={{ backgroundColor: accent }} disabled={isLoading} onClick={() => runPending(i, m.pendingAction!)}>
                                 {isLoading ? <Loader2 className="size-3.5 animate-spin" /> : null} Confirm
                               </Button>
-                              <Button size="sm" variant="ghost" className="h-7 text-[12px]" disabled={isLoading} onClick={() => declinePending(i)}>
+                              <Button size="sm" variant="ghost" className="h-7 text-[12px]" disabled={isLoading} onClick={() => declinePending(i, m.pendingAction ?? undefined)}>
                                 <X className="size-3.5" /> Not now
                               </Button>
                             </div>

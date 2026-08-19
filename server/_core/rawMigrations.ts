@@ -3713,6 +3713,38 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0168: AI Assistant proposals — a server-held nonce per confirm card ───
+  // Until now assistant.confirmAction took {tool, args} straight from the
+  // client. Safe for privilege (it runs as the caller via createCaller), but
+  // it meant the confirmation card was a UI-side gate: any client code could
+  // "confirm" an action the assistant never proposed, with any args. A
+  // proposal is now a row the server writes when the model calls a mutating
+  // tool; the client gets back only a nonce; confirm/decline consume that row
+  // atomically (one outcome, once, within its TTL) and execute the STORED
+  // args. Owner ask 2026-08-19.
+  {
+    name: "0168_ai_assistant_proposals.sql",
+    statements: [
+      "CREATE TABLE IF NOT EXISTS `ai_assistant_proposals` (" +
+        "`id` int NOT NULL AUTO_INCREMENT PRIMARY KEY," +
+        "`workspaceId` int NOT NULL," +
+        "`userId` int NOT NULL," +
+        "`conversationId` int NOT NULL," +
+        "`nonce` varchar(64) NOT NULL," +
+        "`tool` varchar(64) NOT NULL," +
+        "`args` json NOT NULL," +
+        "`description` text NOT NULL," +
+        "`expiresAt` timestamp NOT NULL," +
+        "`consumedAt` timestamp NULL," +
+        "`outcome` varchar(16) NULL," +
+        "`resultSummary` text NULL," +
+        "`createdAt` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP" +
+        ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+      "CREATE UNIQUE INDEX `ix_aap_nonce` ON `ai_assistant_proposals` (`nonce`)",
+      "CREATE INDEX `ix_aap_ws_user` ON `ai_assistant_proposals` (`workspaceId`, `userId`)",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

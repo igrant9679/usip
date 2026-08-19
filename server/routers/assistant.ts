@@ -20,12 +20,13 @@
  */
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
+import { randomBytes } from "node:crypto";
 import { router } from "../_core/trpc";
 import { workspaceProcedure } from "../_core/workspace";
 import { inArray } from "drizzle-orm";
 import { getDb } from "../db";
-import { aiHelpConversations, aiHelpMessages, helpArticles, prospects } from "../../drizzle/schema";
+import { aiAssistantProposals, aiHelpConversations, aiHelpMessages, helpArticles, prospects } from "../../drizzle/schema";
 import { invokeLLM, type Message } from "../_core/llm";
 import { recordAudit } from "../audit";
 import {
@@ -41,6 +42,10 @@ import {
 } from "../services/assistantTools";
 
 const MAX_ROUNDS = 5;
+/** A proposal the user has not answered goes stale — the world it described
+ *  (ids, counts) drifts, and a card left open for a day should not still be
+ *  executable. */
+export const PROPOSAL_TTL_MS = 30 * 60 * 1000;
 
 /** Refuse any action whose prospectIds are not real rows in THIS workspace —
  *  the model can hallucinate an id, and the underlying procs create dangling
@@ -223,7 +228,7 @@ Rules:
 - Use navigate to hand the user a link when the answer is "go to this page".
 - Tool results arrive as [tool_result …] messages. After reading one, either call another tool or give your final answer as plain text.
 - Be concise and concrete. Short sentences, tight lists, real names and numbers from tool results.
-- Current page: ${pageKey ?? "unknown"}.`;
+- The user opened the assistant from this page: ${pageKey ?? "unknown"}. Use it to interpret "this page" / "here" and to pick navigate targets.`;
 
 export const assistantRouter = router({
   chat: workspaceProcedure
@@ -258,7 +263,7 @@ export const assistantRouter = router({
       const toolEvents: Array<{ tool: string; summary: string }> = [];
       const toolResults: Array<{ tool: string; result: unknown }> = [];
       const navigations: Array<{ href: string; label: string }> = [];
-      let pendingAction: { tool: string; args: Record<string, unknown>; description: string } | null = null;
+      let pendingAction: { nonce: string; tool: string; args: Record<string, unknown>; description: string; expiresAt: string } | null = null;
       let answer = "";
 
       for (let round = 0; round < MAX_ROUNDS; round++) {
@@ -290,8 +295,18 @@ export const assistantRouter = router({
           }
 
           if (isMutatingTool(name)) {
-            // First proposal wins the turn — the user decides from here.
-            pendingAction = { tool: name, args, description: describeAction(name, args) };
+            // First proposal wins the turn — the user decides from here. The
+            // proposal is a server-held row; the client only gets its nonce,
+            // and confirm/decline consume that row (0168). The args that run
+            // are the ones stored HERE, never the ones a client sends back.
+            const description = describeAction(name, args);
+            const nonce = randomBytes(24).toString("base64url");
+            const expiresAt = new Date(Date.now() + PROPOSAL_TTL_MS);
+            await db.insert(aiAssistantProposals).values({
+              workspaceId: ctx.workspace.id, userId: ctx.user.id, conversationId: input.conversationId,
+              nonce, tool: name, args, description, expiresAt,
+            } as never);
+            pendingAction = { nonce, tool: name, args, description, expiresAt: expiresAt.toISOString() };
             answer = text || `Ready when you are — confirm below to run it.`;
             break;
           }
@@ -338,21 +353,45 @@ export const assistantRouter = router({
       return { answer, toolEvents, navigations, pendingAction };
     }),
 
-  /** Execute a previously proposed mutating action. The payload round-trips
-   *  through the client, which is safe by construction: it executes under the
-   *  caller's own session via createCaller, so the user can only make the
-   *  assistant do what they could already do from the UI. */
+  /**
+   * Execute a proposal the assistant made in THIS user's conversation. The
+   * client sends only the nonce; the tool and args come from the stored
+   * proposal row, which is consumed atomically (one outcome, once, inside
+   * its TTL) BEFORE anything runs — so a double click, a replay, or a
+   * hand-crafted payload cannot execute twice or execute something the
+   * assistant never proposed. Execution still goes through createCaller under
+   * the caller's own role, so the assistant can only do what the user could
+   * do from the UI. (Before 0168 this took {tool,args} from the client.)
+   */
   confirmAction: workspaceProcedure
-    .input(z.object({
-      tool: z.string(),
-      args: z.record(z.string(), z.unknown()),
-    }))
+    .input(z.object({ nonce: z.string().min(16).max(64) }))
     .mutation(async ({ ctx, input }) => {
-      if (!isKnownTool(input.tool) || !isMutatingTool(input.tool)) {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [proposal] = await db.select().from(aiAssistantProposals)
+        .where(and(
+          eq(aiAssistantProposals.nonce, input.nonce),
+          eq(aiAssistantProposals.workspaceId, ctx.workspace.id),
+          eq(aiAssistantProposals.userId, ctx.user.id),
+        )).limit(1);
+      if (!proposal) throw new TRPCError({ code: "NOT_FOUND", message: "That proposal isn't in this conversation any more — ask the assistant again." });
+      if (proposal.consumedAt) throw new TRPCError({ code: "BAD_REQUEST", message: `That proposal was already ${proposal.outcome ?? "answered"}.` });
+      if (proposal.expiresAt.getTime() < Date.now()) throw new TRPCError({ code: "BAD_REQUEST", message: "That proposal has expired — ask the assistant again so it can re-check the details." });
+      if (!isKnownTool(proposal.tool) || !isMutatingTool(proposal.tool)) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Not a confirmable action" });
       }
-      const name = input.tool as AssistantToolName;
-      const args = (TOOL_ARGS[name] as z.ZodTypeAny).parse(input.args) as Record<string, unknown>;
+      const name = proposal.tool as AssistantToolName;
+      // Re-validate the STORED args through the same gate that admitted them.
+      const args = (TOOL_ARGS[name] as z.ZodTypeAny).parse(proposal.args) as Record<string, unknown>;
+
+      // Consume first, atomically: whoever flips consumedAt wins; a second
+      // confirm (double click, replay) sees 0 rows and stops here.
+      const res = await db.update(aiAssistantProposals)
+        .set({ consumedAt: new Date(), outcome: "confirmed" } as never)
+        .where(and(eq(aiAssistantProposals.id, proposal.id), isNull(aiAssistantProposals.consumedAt)));
+      const affected = Number((res as unknown as Array<{ affectedRows?: number }>)[0]?.affectedRows ?? 0);
+      if (affected !== 1) throw new TRPCError({ code: "BAD_REQUEST", message: "That proposal was already answered." });
+
       // Hallucinated-id guard: every prospect the action names must be a real
       // row in this workspace before anything executes.
       if (Array.isArray(args.prospectIds)) {
@@ -361,6 +400,7 @@ export const assistantRouter = router({
       const caller = await getCaller(ctx);
 
       let summary = "";
+      try {
       switch (name) {
         case "enroll_in_sequence": {
           const r = (await caller.sequences.bulkEnroll({
@@ -474,16 +514,45 @@ export const assistantRouter = router({
         default:
           throw new TRPCError({ code: "BAD_REQUEST", message: "Unhandled action" });
       }
+      } catch (e) {
+        // The proposal stays consumed (a partial action must not be re-run
+        // blind); the failure is on the row and in the reply.
+        const msg = (e as Error)?.message ?? "unknown error";
+        await db.update(aiAssistantProposals)
+          .set({ outcome: "failed", resultSummary: msg.slice(0, 2000) } as never)
+          .where(eq(aiAssistantProposals.id, proposal.id));
+        throw e;
+      }
 
+      await db.update(aiAssistantProposals)
+        .set({ resultSummary: summary.slice(0, 2000) } as never)
+        .where(eq(aiAssistantProposals.id, proposal.id));
       await recordAudit({
         workspaceId: ctx.workspace.id,
         actorUserId: ctx.user.id,
         action: "update",
         entityType: "assistant_action",
-        entityId: 0,
-        after: { tool: name, args, summary },
+        entityId: proposal.id,
+        after: { tool: name, args, summary, nonce: input.nonce },
       });
 
       return { ok: true as const, summary };
+    }),
+
+  /** "Not now" — consume the proposal so it can never be confirmed later. */
+  declineAction: workspaceProcedure
+    .input(z.object({ nonce: z.string().min(16).max(64) }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      await db.update(aiAssistantProposals)
+        .set({ consumedAt: new Date(), outcome: "declined" } as never)
+        .where(and(
+          eq(aiAssistantProposals.nonce, input.nonce),
+          eq(aiAssistantProposals.workspaceId, ctx.workspace.id),
+          eq(aiAssistantProposals.userId, ctx.user.id),
+          isNull(aiAssistantProposals.consumedAt),
+        ));
+      return { ok: true as const };
     }),
 });

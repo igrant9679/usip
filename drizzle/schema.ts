@@ -4410,6 +4410,35 @@ export const aiHelpMessages = mysqlTable(
 );
 export type AiHelpMessage = typeof aiHelpMessages.$inferSelect;
 
+/**
+ * A mutating action the AI Assistant PROPOSED and the user has not yet
+ * confirmed or declined (migration 0168). The server writes it when the
+ * model calls a mutating tool; the client only ever holds the nonce.
+ * confirm/decline consume the row atomically — one outcome, once, inside
+ * its TTL — and confirm executes the STORED args, never the client's.
+ */
+export const aiAssistantProposals = mysqlTable(
+  "ai_assistant_proposals",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    userId: int("userId").notNull(),
+    conversationId: int("conversationId").notNull(),
+    nonce: varchar("nonce", { length: 64 }).notNull(),
+    tool: varchar("tool", { length: 64 }).notNull(),
+    args: json("args").notNull(),
+    description: text("description").notNull(),
+    expiresAt: timestamp("expiresAt").notNull(),
+    consumedAt: timestamp("consumedAt"),
+    /** confirmed | declined | failed */
+    outcome: varchar("outcome", { length: 16 }),
+    resultSummary: text("resultSummary"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({ byNonce: uniqueIndex("ix_aap_nonce").on(t.nonce), byWsUser: index("ix_aap_ws_user").on(t.workspaceId, t.userId) }),
+);
+export type AiAssistantProposal = typeof aiAssistantProposals.$inferSelect;
+
 export const tours = mysqlTable(
   "tours",
   {
