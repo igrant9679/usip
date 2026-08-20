@@ -882,10 +882,47 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
 
   /* ── Phase 2: SEQUENCE generation for approved prospects ───────────── */
   try {
+    /* 2a. Heal the lie that wedges this phase (found live 2026-08-20, ARE
+     * audit): an approved row with enrichmentStatus 'complete' but NO
+     * prospect_intelligence row. runSequenceAgent refuses it ("no enrichment
+     * data" — correctly: there is nowhere to store a sequence and nothing to
+     * personalise from), but the page below kept re-selecting it: it stays
+     * approved with a NULL sequence, so it matches every tick, and with a
+     * page of SEQUENCE_PER_CAMPAIGN_TICK the same few rows occupied every
+     * slot forever — campaigns 19 and 20 retried the same 1+3 prospects each
+     * tick while 8 more approved prospects behind them never got a turn.
+     * The 320072b starvation shape, in phase 2.
+     *
+     * 'complete' with no dossier is a lie whichever way it arose, and the
+     * honest state is un-enriched: flip it back to 'pending' so the global
+     * enrichment pass (which these rows already qualify for — they were
+     * approved, so they scored at least the campaign threshold, which is at
+     * or above every gate in use) writes the dossier and re-marks it
+     * complete. Generation then proceeds on a later tick. Self-healing, no
+     * papering over — the refusal in runSequenceAgent stays exactly as is.
+     */
+    const [reQueue] = await db.execute(sql`
+      UPDATE \`prospect_queue\` pq
+      LEFT JOIN \`prospect_intelligence\` pi ON pi.\`prospectQueueId\` = pq.\`id\`
+      SET pq.\`enrichmentStatus\` = 'pending'
+      WHERE pq.\`campaignId\` = ${campId}
+        AND pq.\`workspaceId\` = ${wsId}
+        AND pq.\`sequenceStatus\` = 'approved'
+        AND pq.\`enrichmentStatus\` = 'complete'
+        AND pi.\`id\` IS NULL`);
+    const reQueued = (reQueue as { affectedRows?: number })?.affectedRows ?? 0;
+    if (reQueued > 0) {
+      await emitLog(wsId, campId, "sequence", "warn",
+        `${reQueued} approved prospect${reQueued === 1 ? "" : "s"} said enrichment was complete but had no stored intelligence — re-queued for enrichment so sequence generation can proceed`);
+    }
+
+    // The page holds only rows generation can actually act on: INNER join —
+    // a dossier must exist (2a re-queues the ones that lack it). Ordered, so
+    // the page is deterministic rather than whatever MySQL felt like.
     const needSequence = await db
       .select({ id: prospectQueue.id })
       .from(prospectQueue)
-      .leftJoin(
+      .innerJoin(
         prospectIntelligence,
         eq(prospectIntelligence.prospectQueueId, prospectQueue.id),
       )
@@ -897,6 +934,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
           sql`${prospectIntelligence.generatedSequence} IS NULL`,
         ),
       )
+      .orderBy(prospectQueue.id)
       .limit(SEQUENCE_PER_CAMPAIGN_TICK);
     if (needSequence.length > 0) {
       const settled = await Promise.allSettled(

@@ -614,12 +614,25 @@ export async function generateCampaignTemplate(
  * personalisation hook — a displayed field with no relationship to the copy
  * beside it.
  */
+/**
+ * Intelligence JSON columns are written from LLM output, and the model
+ * drifts: live on 2026-08-20 a prospect's painSignals arrived as a STRING,
+ * and `(x as Array) ?? []` — which only catches null — passed it through to
+ * `.slice(0,2).map(...)`, killing sequence generation for that prospect on
+ * every retry ("painSignals.slice(...).map is not a function", campaign 21).
+ * One coercion at every read: an array passes, anything else reads as empty.
+ * Same rule as normalizeSequence — normalise at the read, never trust `??`.
+ */
+export function intelArray<T>(v: unknown): T[] {
+  return Array.isArray(v) ? (v as T[]) : [];
+}
+
 export function primaryHookOf(
   intel: typeof prospectIntelligence.$inferSelect,
 ): { hook: string; hookType: string } {
-  const hooks = (intel.personalisationHooks as Array<{ hook?: string; hookType?: string }> | null) ?? [];
-  const triggerEvents = (intel.triggerEvents as Array<{ type?: string; description?: string }> | null) ?? [];
-  const painSignals = (intel.painSignals as Array<{ signal?: string; evidence?: string }> | null) ?? [];
+  const hooks = intelArray<{ hook?: string; hookType?: string }>(intel.personalisationHooks);
+  const triggerEvents = intelArray<{ type?: string; description?: string }>(intel.triggerEvents);
+  const painSignals = intelArray<{ signal?: string; evidence?: string }>(intel.painSignals);
   // Truthy checks, not `??`: an empty-string hook is not a hook, and it would
   // otherwise be interpolated into the prompt as a blank "Primary hook" section.
   if (hooks[0]?.hook) return { hook: hooks[0].hook, hookType: hooks[0].hookType || "personalisation" };
@@ -641,7 +654,10 @@ async function personalizeForProspect(
 ): Promise<Array<{ stepIndex: number; day: number; channel: string; subject: string; body: string; variantKey: string }>> {
   if (template.steps.length === 0) return [];
 
-  const painSignals = (intel.painSignals as Array<{ signal: string; evidence: string }>) ?? [];
+  // Through the drift guard, and only entries shaped like a pain signal — a
+  // string member would interpolate "- undefined: undefined" into the prompt.
+  const painSignals = intelArray<{ signal?: string; evidence?: string }>(intel.painSignals)
+    .filter((p) => p && typeof p === "object" && (p.signal || p.evidence));
   const { hook: primaryHook } = primaryHookOf(intel);
 
   const customInstructions = (campaign.sequencePrompt ?? "").trim();
@@ -666,7 +682,7 @@ async function personalizeForProspect(
     `## Template (do not change structure, only fill subject + body)\n${JSON.stringify(template.steps, null, 2)}\n\n` +
     `## Prospect\n- Name: ${prospect.firstName} ${prospect.lastName}\n- Title: ${prospect.title ?? "Unknown"}\n- Company: ${prospect.companyName ?? "Unknown"}\n- Industry: ${prospect.industry ?? "Unknown"}\n- Company one-liner: ${intel.companyOneLiner ?? ""}\n- LinkedIn summary: ${intel.linkedinSummary ?? ""}\n\n` +
     `## Primary hook\n${primaryHook}\n\n` +
-    `## Pain signals\n${painSignals.slice(0, 2).map((p) => `- ${p.signal}: ${p.evidence}`).join("\n") || "(none)"}\n\n` +
+    `## Pain signals\n${painSignals.slice(0, 2).map((p) => `- ${p.signal ?? ""}${p.evidence ? `: ${p.evidence}` : ""}`).join("\n") || "(none)"}\n\n` +
     `Return one filled step per template step (same stepIndex, day, channel). Keep emails under 120 words. Use {{firstName}} / {{company}} merge tags where natural. When a step's CTA is to book a meeting, make the ask a Markdown link to the sender's scheduling page — [grab 15 minutes]({{bookingLink}}) — instead of proposing specific times; {{bookingLink}} is substituted at send time. Never paste {{bookingLink}} as a raw token.`;
 
   const result = await invokeLLM({
@@ -1454,7 +1470,7 @@ export const prospectsRouter = router({
         .limit(1);
       if (!intel) throw new TRPCError({ code: "NOT_FOUND", message: "No intelligence record for this prospect" });
 
-      const steps = (intel.generatedSequence as Array<Record<string, unknown>>) ?? [];
+      const steps = intelArray<Record<string, unknown>>(intel.generatedSequence);
       if (steps.length === 0) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Prospect has no generated sequence to edit" });
       }
