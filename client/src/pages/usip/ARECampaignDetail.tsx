@@ -268,6 +268,24 @@ const SEQUENCE_TAB_ACTIONS: BulkActionDef[] = [
 function sequenceTabActions(filter: FilterKey): BulkActionDef[] {
   if (filter !== "pending" && filter !== "approved") return SEQUENCE_TAB_ACTIONS;
   return [
+    /**
+     * Activate = approve + enroll NOW (owner ask 2026-08-20: "mass activate
+     * the generated sequence"). This is the outward-facing one — on an
+     * active campaign, enrolled step 1s dispatch on the next engine cycle —
+     * so the confirm body states the number and the consequence in plain
+     * words (the 2026-08-16 bulk-approval incident is why it never runs
+     * without its own explicit confirmation).
+     */
+    {
+      key: "activateSequence", label: "Activate", variant: "default",
+      icon: <Play className="size-3" />,
+      title: "Approve the selected prospects and enroll their generated sequences now",
+      confirm: {
+        title: "Activate sequences",
+        body: "{n} selected prospects are approved for live outreach and their generated sequences enroll immediately. If this campaign is active, step 1 emails start going out on the next engine cycle (within minutes) under the daily send cap; if it is paused, nothing sends until it is activated. Prospects without a generated sequence are skipped and reported, and email-less prospects wait at enrolment until an address is found.",
+        cta: "Activate",
+      },
+    },
     { key: "generateSequence", label: "Generate", icon: <Sparkles className="size-3" />, title: "Generate a sequence for each selected prospect (same as the row button)" },
     // Timeline editing lives where sequences are still DRAFTS (owner ask
     // 2026-08-20): under Pending/Approved nothing has dispatched, so mass

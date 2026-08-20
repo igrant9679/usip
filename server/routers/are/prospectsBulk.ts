@@ -27,7 +27,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { MAX_TIMELINE_DAY_OFFSET, MAX_TIMELINE_STEPS } from "@shared/areStepCadence";
-import { areEngineLogs, emailSuppressions, prospectQueue } from "../../../drizzle/schema";
+import { areEngineLogs, emailSuppressions, prospectIntelligence, prospectQueue } from "../../../drizzle/schema";
 import { getDb } from "../../db";
 import { recordAudit } from "../../audit";
 import { upsertPersonForRow, type QueuePersonShape } from "../../services/personLink";
@@ -35,7 +35,7 @@ import { upsertPersonForRow, type QueuePersonShape } from "../../services/person
 export const BULK_ACTIONS = [
   // campaign state — via the single-row procedures
   "approve", "reject", "skip", "restore", "reEvaluate", "enrich", "generateSequence",
-  "pauseSequence", "resumeSequence", "cancelSequence", "editTimeline",
+  "pauseSequence", "resumeSequence", "cancelSequence", "editTimeline", "activateSequence",
   // people-level — via the linked People record
   "addToList", "createTasks", "suppress", "linkToPeople",
 ] as const;
@@ -196,6 +196,66 @@ export async function runBulkAction(ctx: Ctx, input: BulkInput): Promise<BulkRes
       result.summary = offsets
         ? `Timeline set for ${plural(result.ok, "prospect")} — steps on day ${offsets.join(", ")}`
         : `Timeline reset to campaign cadence for ${plural(result.ok, "prospect")}`;
+      break;
+    }
+    case "activateSequence": {
+      /**
+       * "Activate" = approve + enroll, because to the user a sequence is not
+       * active until its steps are actually scheduled — an approval that
+       * waits for the next cron tick looks like a button that did nothing.
+       *
+       * Guards per row, THEN one enrolment pass. A row only qualifies from
+       * `pending` (approved here, through the single-row procedure — the
+       * 2026-08-16 lesson lives in its COALESCE stamps) or `approved`
+       * (already decided, just not enrolled yet). A row with no generated
+       * sequence fails with a reason instead of being silently approved into
+       * a state the engine can do nothing with.
+       *
+       * Enrolment goes through are.engine.enrollOnly — enrol phase only, no
+       * dispatch, works on a paused campaign by design. On an ACTIVE campaign
+       * the dispatcher picks the new rows up on its next cycle under the
+       * daily cap; that consequence is what the client's confirm dialog says
+       * out loud. The email gate (day 16) still applies inside enrolment:
+       * an approved-but-email-less prospect stays approved and is counted,
+       * which the summary reports rather than rounding up to "activated".
+       */
+      const intel = await db
+        .select({ prospectQueueId: prospectIntelligence.prospectQueueId, seq: prospectIntelligence.generatedSequence })
+        .from(prospectIntelligence)
+        .where(and(eq(prospectIntelligence.workspaceId, ws), inArray(prospectIntelligence.prospectQueueId, input.prospectIds)));
+      const hasSeq = new Set(intel.filter((i) => Array.isArray(i.seq) && (i.seq as unknown[]).length > 0).map((i) => i.prospectQueueId));
+      await perRow(async (r) => {
+        if (r.sequenceStatus === "enrolled" || r.sequenceStatus === "paused") throw new Error(`already active (status ${r.sequenceStatus})`);
+        if (r.sequenceStatus !== "pending" && r.sequenceStatus !== "approved") throw new Error(`not activatable from status "${r.sequenceStatus}"`);
+        if (!hasSeq.has(r.id)) throw new Error("no generated sequence — run Generate first");
+        if (r.sequenceStatus === "pending") await caller.are.prospects.approve({ prospectId: r.id });
+      });
+      let enrolled = 0, enrollBlocked = false;
+      if (result.ok > 0) {
+        // enrollOnly is bounded per call (the engine's own page size); loop
+        // until a pass enrolls nobody. A held campaign lock ends the loop —
+        // the cron finishes the backlog, and the summary says so.
+        for (let pass = 0; pass < 25; pass++) {
+          const res = await caller.are.engine.enrollOnly({ campaignId: input.campaignId });
+          enrolled += res.enrolled;
+          if (res.skippedInFlight) { enrollBlocked = true; break; }
+          if (res.enrolled === 0) break;
+        }
+      }
+      // Honest outcome = the statuses NOW of the rows that passed the guards
+      // — never the intent, and never rows that failed (an already-enrolled
+      // row in the selection must not inflate "activated").
+      const failedIds = new Set(result.failed.map((f) => f.id));
+      const after = await db
+        .select({ id: prospectQueue.id, status: prospectQueue.sequenceStatus })
+        .from(prospectQueue)
+        .where(and(eq(prospectQueue.workspaceId, ws), inArray(prospectQueue.id, input.prospectIds)));
+      const okRows = after.filter((a) => !failedIds.has(a.id));
+      const nowEnrolled = okRows.filter((a) => a.status === "enrolled").length;
+      const stillApproved = okRows.filter((a) => a.status === "approved").length;
+      result.summary = `Activated ${plural(nowEnrolled, "sequence")}`
+        + (stillApproved > 0 ? `; ${stillApproved} approved but held at enrolment (waiting for an email address, or no usable steps — the campaign log names each hold)` : "")
+        + (enrollBlocked ? "; another enrol run held the campaign lock — the engine finishes the rest on its next cycle" : "");
       break;
     }
 

@@ -29,7 +29,7 @@ import { Loader2, X } from "lucide-react";
 
 export type BulkActionKey =
   | "approve" | "reject" | "skip" | "restore" | "reEvaluate" | "enrich" | "generateSequence"
-  | "pauseSequence" | "resumeSequence" | "cancelSequence" | "editTimeline"
+  | "pauseSequence" | "resumeSequence" | "cancelSequence" | "editTimeline" | "activateSequence"
   | "addToList" | "createTasks" | "suppress" | "linkToPeople";
 
 /** What a tab offers. `params` opens a small dialog; `confirm` an alert. */
