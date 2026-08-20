@@ -67,7 +67,7 @@ import { ARE_DEFAULT_SOURCES, normalizeSources } from "@shared/areSources";
 // One rule for a step's index + variant key, shared with the A/B metadata
 // upsert in routers/are/prospects.ts — see shared/areSequenceSteps.ts.
 import { normalizeSequence } from "@shared/areSequenceSteps";
-import { effectiveStepGapDays, dueAtForPosition } from "@shared/areStepCadence";
+import { effectiveStepGapDays, dueAtForDay, dayOffsetForPosition, sanitizeDayOffsets } from "@shared/areStepCadence";
 import { apolloPulledToday, apolloSearchPeople, getApolloDailyCap } from "./services/apollo";
 import { archivedWorkspaceIds } from "./_core/workspaceArchive";
 import { queueIdentityKeys } from "./services/are/queueIdentity";
@@ -456,6 +456,7 @@ async function enrollApprovedForCampaignUnlocked(
         email: prospectQueue.email,
         personProspectId: prospectQueue.personProspectId,
         sequence: prospectIntelligence.generatedSequence,
+        cadence: prospectIntelligence.cadenceDayOffsets,
       })
       .from(prospectQueue)
       .innerJoin(
@@ -468,6 +469,34 @@ async function enrollApprovedForCampaignUnlocked(
           eq(prospectQueue.workspaceId, wsId),
           eq(prospectQueue.sequenceStatus, "approved"),
           sql`${prospectIntelligence.generatedSequence} IS NOT NULL`,
+          /**
+           * THE EMAIL GATE (owner decision 2026-08-20). An email-less
+           * prospect whose sequence contains an email step used to be
+           * enrolled anyway, and every such step could only fail at its due
+           * time ("Prospect has no email address") — three identical 29-row
+           * failure batches between 08-16 and 08-20. Now enrolment waits:
+           * the row stays `approved`, and this WHERE re-admits it the moment
+           * enrichment lands an address. The dispatch-time fail + heal stay
+           * as the backstop for an address that vanishes AFTER enrolment.
+           * In SQL, not the loop — a loop `continue` leaves the row matching
+           * this WHERE, and ten of them starve the page (the 320072b shape,
+           * same as the zero-step case below).
+           *
+           * "Contains an email step" must agree with normalizeSequence,
+           * which defaults a MISSING channel to email: JSON_SEARCH finds
+           * explicit 'email' channels, and the JSON_EXTRACT length compare
+           * catches steps with no channel key at all. (A channel spelled
+           * "Email" escapes both arms — that row enrolls and its email steps
+           * fail healably at dispatch: the pre-gate behaviour, not a new
+           * failure mode.) LinkedIn-only sequences enroll regardless — they
+           * need no address.
+           */
+          sql`((${prospectQueue.email} IS NOT NULL AND ${prospectQueue.email} <> '')
+               OR NOT (
+                 JSON_SEARCH(${prospectIntelligence.generatedSequence}, 'one', 'email', NULL, '$[*].channel') IS NOT NULL
+                 OR COALESCE(JSON_LENGTH(JSON_EXTRACT(${prospectIntelligence.generatedSequence}, '$[*].channel')), 0)
+                    < JSON_LENGTH(${prospectIntelligence.generatedSequence})
+               ))`,
           // A stored sequence that yields no steps is the one exit from the
           // loop below that does not change the row: status stays `approved`
           // and generatedSequence stays non-null, so it matches this WHERE
@@ -514,6 +543,36 @@ async function enrollApprovedForCampaignUnlocked(
     if (unusableCount > 0) {
       await emitLog(wsId, campId, "enroll", "warn",
         `${unusableCount} approved prospect${unusableCount === 1 ? " has" : "s have"} a generated sequence with no usable steps — not enrolled. Regenerate the sequence for these prospects.`);
+    }
+
+    // Held by the email gate, and SAID so — same trade as the unusable
+    // counter: the SQL filter keeps these rows off the page, the count keeps
+    // them from being invisible (approved forever, no reason given).
+    const [waitingEmail] = await db
+      .select({ n: sql<number>`count(*)` })
+      .from(prospectQueue)
+      .innerJoin(
+        prospectIntelligence,
+        eq(prospectIntelligence.prospectQueueId, prospectQueue.id),
+      )
+      .where(
+        and(
+          eq(prospectQueue.campaignId, campId),
+          eq(prospectQueue.workspaceId, wsId),
+          eq(prospectQueue.sequenceStatus, "approved"),
+          sql`${prospectIntelligence.generatedSequence} IS NOT NULL`,
+          sql`(JSON_TYPE(${prospectIntelligence.generatedSequence}) = 'ARRAY'
+               AND JSON_LENGTH(${prospectIntelligence.generatedSequence}) > 0)`,
+          sql`(${prospectQueue.email} IS NULL OR ${prospectQueue.email} = '')`,
+          sql`(JSON_SEARCH(${prospectIntelligence.generatedSequence}, 'one', 'email', NULL, '$[*].channel') IS NOT NULL
+               OR COALESCE(JSON_LENGTH(JSON_EXTRACT(${prospectIntelligence.generatedSequence}, '$[*].channel')), 0)
+                  < JSON_LENGTH(${prospectIntelligence.generatedSequence}))`,
+        ),
+      );
+    const waitingEmailCount = Number(waitingEmail?.n ?? 0);
+    if (waitingEmailCount > 0) {
+      await emitLog(wsId, campId, "enroll", "info",
+        `${waitingEmailCount} approved prospect${waitingEmailCount === 1 ? " is" : "s are"} waiting for an email address — email steps are not scheduled until enrichment finds one`);
     }
 
     let finalChecksThisTick = 0;
@@ -653,6 +712,9 @@ async function enrollApprovedForCampaignUnlocked(
       // whatever `day` the generated sequence carried. Position counts ALL
       // steps (sent ones included) so a resumed prospect stays on its grid.
       const gapDays = effectiveStepGapDays((campaign as { stepGapDays?: number | null }).stepGapDays);
+      // The prospect's own timeline (0170) wins over the campaign grid when
+      // set — through the ONE sanitiser, never the raw column.
+      const dayOffsets = sanitizeDayOffsets(row.cadence);
       const positionOf = new Map<number, number>(steps.map((s, i) => [s.stepIndex, i]));
       const remaining = steps.filter((s) => !sentIdx.has(s.stepIndex));
       if (remaining.length === 0) {
@@ -670,7 +732,7 @@ async function enrollApprovedForCampaignUnlocked(
         channel: s.channel,
         // Never in the past: a resumed step whose slot has already gone is due
         // now, not overdue-and-dispatched-in-a-burst.
-        scheduledAt: dueAtForPosition(anchor, positionOf.get(s.stepIndex) ?? 0, gapDays, now),
+        scheduledAt: dueAtForDay(anchor, dayOffsetForPosition(dayOffsets, positionOf.get(s.stepIndex) ?? 0, gapDays), now),
         status: "scheduled" as const,
         messageContent: { subject: s.subject, body: s.body, variantKey: s.variantKey },
       }));

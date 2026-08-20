@@ -5,9 +5,9 @@
  *   list, get, create, update, setStatus, approveBatch
  */
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
-import { areCampaigns, personas, prospectQueue } from "../../../drizzle/schema";
+import { areCampaigns, personas, prospectIntelligence, prospectQueue } from "../../../drizzle/schema";
 import { getDb } from "../../db";
 import { router } from "../../_core/trpc";
 import { workspaceProcedure } from "../../_core/workspace";
@@ -15,7 +15,7 @@ import { runAreEngine } from "../../areEngine";
 import { recordAudit } from "../../audit";
 import { invokeLLM } from "../../_core/llm";
 import { ARE_DEFAULT_SOURCES, normalizeSources } from "@shared/areSources";
-import { MIN_STEP_GAP_DAYS, MAX_STEP_GAP_DAYS, effectiveStepGapDays, planRespaceForProspect } from "@shared/areStepCadence";
+import { MIN_STEP_GAP_DAYS, MAX_STEP_GAP_DAYS, effectiveStepGapDays, planRespaceForProspect, sanitizeDayOffsets } from "@shared/areStepCadence";
 import { areExecutionQueue } from "../../../drizzle/schema";
 
 export const campaignsRouter = router({
@@ -270,13 +270,28 @@ export const campaignsRouter = router({
       const byProspect = new Map<number, typeof rows>();
       for (const r of rows) { const a = byProspect.get(r.prospectQueueId) ?? []; a.push(r); byProspect.set(r.prospectQueueId, a); }
 
+      // Per-prospect timeline overrides (0170): a campaign respace RE-ANCHORS
+      // a custom rhythm, it does not flatten it back onto the uniform grid —
+      // clearing an override is the mass timeline editor's explicit call.
+      const overrides = new Map<number, number[]>();
+      if (byProspect.size > 0) {
+        const intel = await db
+          .select({ prospectQueueId: prospectIntelligence.prospectQueueId, cadence: prospectIntelligence.cadenceDayOffsets })
+          .from(prospectIntelligence)
+          .where(and(eq(prospectIntelligence.workspaceId, ctx.workspace.id), inArray(prospectIntelligence.prospectQueueId, Array.from(byProspect.keys()))));
+        for (const i of intel) {
+          const clean = sanitizeDayOffsets(i.cadence);
+          if (clean) overrides.set(i.prospectQueueId, clean);
+        }
+      }
+
       const nowMs = Date.now();
       const changes: Array<{ id: number; prospectQueueId: number; stepIndex: number; from: Date; to: Date }> = [];
       let prospectsTouched = 0, prospectsInFlight = 0;
       byProspect.forEach((prows, pq) => {
         if (!prows.some((r) => r.status === "scheduled")) return;
         prospectsInFlight++;
-        const plan = planRespaceForProspect(prows, gapDays, nowMs);
+        const plan = planRespaceForProspect(prows, gapDays, nowMs, overrides.get(pq) ?? null);
         if (plan.length) { prospectsTouched++; for (const c of plan) changes.push({ ...c, prospectQueueId: pq }); }
       });
       const times = (arr: Date[]) => arr.length ? { earliest: new Date(Math.min(...arr.map((d) => d.getTime()))).toISOString(), latest: new Date(Math.max(...arr.map((d) => d.getTime()))).toISOString() } : null;

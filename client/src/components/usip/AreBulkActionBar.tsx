@@ -29,7 +29,7 @@ import { Loader2, X } from "lucide-react";
 
 export type BulkActionKey =
   | "approve" | "reject" | "skip" | "restore" | "reEvaluate" | "enrich" | "generateSequence"
-  | "pauseSequence" | "resumeSequence" | "cancelSequence"
+  | "pauseSequence" | "resumeSequence" | "cancelSequence" | "editTimeline"
   | "addToList" | "createTasks" | "suppress" | "linkToPeople";
 
 /** What a tab offers. `params` opens a small dialog; `confirm` an alert. */
@@ -39,10 +39,24 @@ export interface BulkActionDef {
   icon?: ReactNode;
   variant?: "default" | "outline" | "secondary" | "ghost" | "destructive";
   confirm?: { title: string; body: string; cta?: string };
-  params?: "reason" | "list" | "task" | "suppress" | "regenerate";
+  params?: "reason" | "list" | "task" | "suppress" | "regenerate" | "timeline";
   /** Quick-pick chips for the reason prompt. */
   presets?: string[];
   title?: string;
+}
+
+/** What the timeline editor needs to know about the current selection —
+ *  supplied by the tab (it has the rows and the campaign; the bar stays dumb). */
+export interface TimelineInfo {
+  /** Longest generated sequence among the selected rows (≥ 1). */
+  stepCount: number;
+  /** The campaign's stepGapDays — the grid a cleared override falls back to. */
+  campaignGapDays: number;
+  /** Selected rows that have no generated sequence yet (the timeline still
+   *  saves for them and applies once a sequence is generated + enrolled). */
+  withoutSequence: number;
+  /** When every selected row stores the SAME override, it prefills the editor. */
+  commonOffsets: number[] | null;
 }
 
 /** What the bar needs from a selection — useRowSelection returns a superset,
@@ -68,12 +82,45 @@ export function useRowSelection(ids: number[]) {
   };
 }
 
-export function AreBulkActionBar({ campaignId, selection, actions, onDone }: {
+/**
+ * Live preview of the timeline being edited: one chip per step with its day
+ * offset and the calendar date it would land on for a prospect enrolled today
+ * (existing prospects anchor to their own first send, so their dates shift by
+ * the same rhythm from a different day — the RELATIVE spacing is what this
+ * shows truthfully for everyone).
+ */
+function TimelinePreview({ offsets }: { offsets: number[] }) {
+  if (offsets.length === 0) return null;
+  const today = Date.now();
+  const fmt = (ms: number) => new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  const last = offsets[offsets.length - 1];
+  return (
+    <div className="rounded-md border border-border/70 bg-muted/20 px-2.5 py-2">
+      <div className="mb-1.5 flex items-center gap-2 text-[10px] text-muted-foreground">
+        <span className="font-medium text-foreground/80">Preview</span>
+        <span>spans {last} day{last === 1 ? "" : "s"}{last >= 7 ? ` (~${Math.round(last / 7)} week${Math.round(last / 7) === 1 ? "" : "s"})` : ""}</span>
+        <span className="ml-auto">dates shown for an enrolment today</span>
+      </div>
+      <ol className="flex flex-wrap items-stretch gap-1">
+        {offsets.map((day, i) => (
+          <li key={i} className="flex min-w-0 flex-1 basis-[92px] flex-col gap-0.5 rounded border border-border bg-card px-1.5 py-1">
+            <span className="text-[10px] font-medium">Step {i + 1}</span>
+            <span className="text-[10px] text-muted-foreground tabular-nums">day {day} · {fmt(today + day * 86_400_000)}</span>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+export function AreBulkActionBar({ campaignId, selection, actions, onDone, timeline }: {
   campaignId: number;
   selection: BulkSelection;
   actions: BulkActionDef[];
   /** Called after any successful run (the bar already invalidates the ARE queries). */
   onDone?: () => void;
+  /** Required by tabs that offer the `editTimeline` action. */
+  timeline?: TimelineInfo;
 }) {
   const utils = trpc.useUtils();
   const [pending, setPending] = useState<BulkActionDef | null>(null);
@@ -87,6 +134,12 @@ export function AreBulkActionBar({ campaignId, selection, actions, onDone }: {
   const [dueInDays, setDueInDays] = useState(2);
   const [suppressionReason, setSuppressionReason] = useState<"do_not_contact" | "unsubscribe" | "competitor" | "existing_customer" | "manual">("do_not_contact");
   const [force, setForce] = useState(false);
+  // timeline editor state — waits[0] is the delay before step 1, waits[k] the
+  // gap after the previous step; cumulative sums are the stored day offsets.
+  const [tlMode, setTlMode] = useState<"campaign" | "uniform" | "custom">("uniform");
+  const [tlGap, setTlGap] = useState(7);
+  const [tlStart, setTlStart] = useState(0);
+  const [tlWaits, setTlWaits] = useState<number[]>([]);
 
   const lists = trpc.recordLists.list.useQuery(undefined, { enabled: pending?.params === "list" });
 
@@ -128,6 +181,21 @@ export function AreBulkActionBar({ campaignId, selection, actions, onDone }: {
     onError: (e) => toast.error(e.message),
   });
 
+  // The timeline the editor currently describes, as cumulative day offsets.
+  const tlStepCount = Math.min(20, Math.max(1, timeline?.stepCount ?? 7));
+  const tlCampaignGap = timeline?.campaignGapDays ?? 7;
+  const tlOffsets = useMemo(() => {
+    if (tlMode === "uniform") return Array.from({ length: tlStepCount }, (_, i) => tlStart + i * tlGap);
+    if (tlMode === "custom") {
+      let acc = 0;
+      return Array.from({ length: tlStepCount }, (_, i) => (acc += tlWaits[i] ?? tlCampaignGap));
+    }
+    // campaign mode — preview only; the mutation sends clearTimeline instead.
+    return Array.from({ length: tlStepCount }, (_, i) => i * tlCampaignGap);
+  }, [tlMode, tlStepCount, tlStart, tlGap, tlWaits, tlCampaignGap]);
+  const tlLastDay = tlOffsets[tlOffsets.length - 1] ?? 0;
+  const tlTooLong = tlLastDay > 365;
+
   const run = (a: BulkActionDef) => {
     const prospectIds = Array.from(selection.selected);
     const base = { campaignId, prospectIds, action: a.key } as const;
@@ -137,12 +205,32 @@ export function AreBulkActionBar({ campaignId, selection, actions, onDone }: {
       case "task": return bulk.mutate({ ...base, taskTitle: taskTitle.trim(), taskType, taskPriority, dueInDays });
       case "suppress": return bulk.mutate({ ...base, suppressionReason, reason: reason.trim() || undefined });
       case "regenerate": return bulk.mutate({ ...base, force });
+      case "timeline": return bulk.mutate({ ...base, ...(tlMode === "campaign" ? { clearTimeline: true } : { dayOffsets: tlOffsets }) });
       default: return bulk.mutate(base);
     }
   };
 
   const open = (a: BulkActionDef) => {
     setReason(""); setForce(false);
+    if (a.params === "timeline") {
+      // Prefill from what the selection already stores: a shared override
+      // opens in custom mode showing THAT timeline, otherwise the campaign
+      // gap seeds a uniform edit.
+      const common = timeline?.commonOffsets ?? null;
+      if (common && common.length > 0) {
+        setTlMode("custom");
+        setTlWaits(Array.from({ length: tlStepCount }, (_, i) => {
+          if (i === 0) return Math.max(0, common[0] ?? 0);
+          if (i < common.length) return Math.max(0, (common[i] ?? 0) - (common[i - 1] ?? 0));
+          return tlCampaignGap;
+        }));
+      } else {
+        setTlMode("uniform");
+        setTlWaits(Array.from({ length: tlStepCount }, (_, i) => (i === 0 ? 0 : tlCampaignGap)));
+      }
+      setTlGap(tlCampaignGap);
+      setTlStart(0);
+    }
     if (a.params || a.confirm) setPending(a);
     else run(a);
   };
@@ -185,7 +273,7 @@ export function AreBulkActionBar({ campaignId, selection, actions, onDone }: {
 
       {/* Parameter actions */}
       <Dialog open={!!pending && !!pending.params} onOpenChange={(o) => !o && setPending(null)}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className={pending?.params === "timeline" ? "sm:max-w-xl" : "sm:max-w-md"}>
           <DialogHeader>
             <DialogTitle>{pending?.label} — {n} prospect{n === 1 ? "" : "s"}</DialogTitle>
           </DialogHeader>
@@ -280,10 +368,83 @@ export function AreBulkActionBar({ campaignId, selection, actions, onDone }: {
                 Regenerate even where a sequence already exists (replaces it; sent steps are kept)
               </label>
             )}
+            {pending?.params === "timeline" && (
+              <>
+                {/* Mode picker */}
+                <div className="flex flex-wrap gap-1.5">
+                  {([
+                    { k: "campaign", label: `Campaign cadence (every ${tlCampaignGap}d)` },
+                    { k: "uniform", label: "Same gap between steps" },
+                    { k: "custom", label: "Custom per step" },
+                  ] as const).map((m) => (
+                    <button key={m.k} type="button" onClick={() => setTlMode(m.k)}
+                      className={`text-[11px] px-2 py-1 rounded-full border transition-all ${tlMode === m.k ? "border-primary/50 bg-primary/10 text-primary font-medium" : "border-border text-muted-foreground hover:border-primary/30"}`}>
+                      {m.label}
+                    </button>
+                  ))}
+                </div>
+
+                {tlMode === "campaign" && (
+                  <p className="text-[11px] text-muted-foreground">
+                    Removes any custom timing from the selected prospects — their steps follow the
+                    campaign's step cadence again (changeable on the Settings tab).
+                  </p>
+                )}
+                {tlMode === "uniform" && (
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Start delay (days before step 1)</Label>
+                      <Input type="number" min={0} max={60} value={tlStart}
+                        onChange={(e) => setTlStart(Math.max(0, Math.min(60, Math.round(Number(e.target.value) || 0))))}
+                        className="h-8 text-sm" />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Days between steps</Label>
+                      <Input type="number" min={1} max={30} value={tlGap}
+                        onChange={(e) => setTlGap(Math.max(1, Math.min(30, Math.round(Number(e.target.value) || 1))))}
+                        className="h-8 text-sm" />
+                    </div>
+                  </div>
+                )}
+                {tlMode === "custom" && (
+                  <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 sm:grid-cols-3">
+                    {Array.from({ length: tlStepCount }, (_, i) => (
+                      <label key={i} className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                        <span className="w-11 shrink-0 font-medium text-foreground/80">Step {i + 1}</span>
+                        <span className="shrink-0">{i === 0 ? "after" : "+"}</span>
+                        <Input type="number" min={0} max={60} value={tlWaits[i] ?? tlCampaignGap}
+                          onChange={(e) => {
+                            const v = Math.max(0, Math.min(60, Math.round(Number(e.target.value) || 0)));
+                            setTlWaits((prev) => Array.from({ length: tlStepCount }, (_, k) => (k === i ? v : prev[k] ?? tlCampaignGap)));
+                          }}
+                          className="h-7 w-14 text-xs" />
+                        <span className="shrink-0">d</span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+
+                <TimelinePreview offsets={tlOffsets} />
+                {tlTooLong && (
+                  <p className="text-[11px] text-destructive">The last step lands more than a year out — shorten the gaps.</p>
+                )}
+                {(timeline?.withoutSequence ?? 0) > 0 && (
+                  <p className="text-[11px] text-amber-600">
+                    {timeline!.withoutSequence} of the selected prospect{timeline!.withoutSequence === 1 ? " has" : "s have"} no
+                    generated sequence yet — the timing still saves and applies once their sequence is generated.
+                  </p>
+                )}
+                <p className="text-[11px] text-muted-foreground">
+                  Saved on each selected prospect: steps that are scheduled but unsent move immediately, sent steps never
+                  move, and enrolment schedules new steps on this timing. Days count from each prospect's first send (or
+                  their enrolment, if nothing has gone yet).
+                </p>
+              </>
+            )}
           </div>
           <DialogFooter>
             <Button variant="ghost" size="sm" onClick={() => setPending(null)}>Cancel</Button>
-            <Button size="sm" variant={pending?.variant === "destructive" ? "destructive" : "default"} disabled={bulk.isPending || (pending?.params === "list" && !listId && !newListName.trim()) || (pending?.params === "task" && !taskTitle.trim())}
+            <Button size="sm" variant={pending?.variant === "destructive" ? "destructive" : "default"} disabled={bulk.isPending || (pending?.params === "list" && !listId && !newListName.trim()) || (pending?.params === "task" && !taskTitle.trim()) || (pending?.params === "timeline" && tlMode !== "campaign" && tlTooLong)}
               onClick={() => pending && run(pending)}>
               {bulk.isPending ? <Loader2 className="size-3.5 animate-spin" /> : null} {pending?.confirm?.cta ?? pending?.label}
             </Button>

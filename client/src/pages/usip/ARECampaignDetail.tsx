@@ -59,6 +59,7 @@ import { RichTextEditor } from "@/components/usip/RichTextEditor";
 import { sanitizeEmailHtml } from "@/lib/sanitizeHtml";
 import { isHtmlBody } from "@shared/emailBody";
 import { ARE_SOURCES, ARE_DEFAULT_SOURCES, normalizeSources } from "@shared/areSources";
+import { dayOffsetForPosition, sanitizeDayOffsets } from "@shared/areStepCadence";
 import {
   signalMeta, describeSignal, actionLabel, signalSourceLabel, stepLabelFromPayload,
   type AreSignalChannel,
@@ -268,6 +269,11 @@ function sequenceTabActions(filter: FilterKey): BulkActionDef[] {
   if (filter !== "pending" && filter !== "approved") return SEQUENCE_TAB_ACTIONS;
   return [
     { key: "generateSequence", label: "Generate", icon: <Sparkles className="size-3" />, title: "Generate a sequence for each selected prospect (same as the row button)" },
+    // Timeline editing lives where sequences are still DRAFTS (owner ask
+    // 2026-08-20): under Pending/Approved nothing has dispatched, so mass
+    // re-timing is review-stage planning, not moving live sends. In-flight
+    // prospects are re-timed by the campaign-wide cadence on Settings.
+    { key: "editTimeline", label: "Edit timeline", icon: <CalendarClock className="size-3" />, params: "timeline", title: "Set when each step goes out for the selected prospects" },
     ...SEQUENCE_TAB_ACTIONS.filter((a) => a.key !== "generateSequence" && a.key !== "pauseSequence" && a.key !== "resumeSequence"),
   ];
 }
@@ -1264,6 +1270,21 @@ function SequencesTab({ campaignId, campaign }: { campaignId: number; campaign: 
   });
   const seqSel = useRowSelection(filteredRows.map((r: any) => r.prospectId as number));
 
+  // What the mass timeline editor needs to know about the selection: how many
+  // step rows to offer, the campaign grid it falls back to, and — when every
+  // selected prospect already stores the SAME override — that override, so
+  // the dialog opens showing the timeline they actually have.
+  const selectedRows = filteredRows.filter((r: any) => seqSel.isSelected(r.prospectId));
+  const selectedWithSeq = selectedRows.filter((r: any) => Array.isArray(r.generatedSequence) && r.generatedSequence.length > 0);
+  const commonOffsetKeys = new Set(selectedRows.map((r: any) => JSON.stringify(sanitizeDayOffsets(r.cadenceDayOffsets))));
+  const commonOffsets = commonOffsetKeys.size === 1 ? sanitizeDayOffsets(selectedRows[0]?.cadenceDayOffsets) : null;
+  const timelineInfo = {
+    stepCount: selectedWithSeq.length > 0 ? Math.max(...selectedWithSeq.map((r: any) => (r.generatedSequence as unknown[]).length)) : 7,
+    campaignGapDays: (campaign?.stepGapDays as number | undefined) ?? 7,
+    withoutSequence: selectedRows.length - selectedWithSeq.length,
+    commonOffsets,
+  };
+
   // generate's onSuccess/onError already toast + invalidate; we only
   // need to track which row is generating so its button shows a spinner.
   const generateFor = async (prospectId: number) => {
@@ -1341,7 +1362,7 @@ function SequencesTab({ campaignId, campaign }: { campaignId: number; campaign: 
             Select all {filteredRows.length}
           </label>
         </div>
-        <div className="mb-2"><AreBulkActionBar campaignId={campaignId} selection={seqSel} actions={sequenceTabActions(filter)} onDone={() => refetch()} /></div>
+        <div className="mb-2"><AreBulkActionBar campaignId={campaignId} selection={seqSel} actions={sequenceTabActions(filter)} timeline={timelineInfo} onDone={() => refetch()} /></div>
         <div className="border rounded-lg bg-card divide-y overflow-hidden">
           {filteredRows.map((r: any) => {
             const steps = (r.generatedSequence ?? []) as any[];
@@ -1372,6 +1393,20 @@ function SequencesTab({ campaignId, campaign }: { campaignId: number; campaign: 
                 ) : (
                   <span className="text-[10px] text-muted-foreground italic shrink-0">no sequence</span>
                 )}
+                {/* Custom timeline marker (0170) — the row must say its rhythm
+                    differs from the campaign grid, or the override is invisible
+                    until a send surprises someone. */}
+                {(() => {
+                  const off = sanitizeDayOffsets(r.cadenceDayOffsets);
+                  return off ? (
+                    <span
+                      className="text-[10px] px-1.5 py-0.5 rounded-full border border-sky-400/40 bg-sky-400/10 text-sky-600 dark:text-sky-400 shrink-0"
+                      title={`Custom timeline — steps on day ${off.join(", ")}`}
+                    >
+                      custom timing
+                    </span>
+                  ) : null;
+                })()}
                 {/* Status */}
                 <StatusBadgeMini status={r.sequenceStatus} />
                 {/* Quick actions */}
@@ -1425,7 +1460,7 @@ function SequencesTab({ campaignId, campaign }: { campaignId: number; campaign: 
       {/* Side drawer — full sequence details, edit, evidence */}
       <Sheet open={drawerRow != null} onOpenChange={(o) => !o && setDrawerProspectId(null)}>
         <SheetContent side="right" className="w-full sm:max-w-xl overflow-y-auto">
-          {drawerRow && <SequenceDrawer row={drawerRow} onClose={() => setDrawerProspectId(null)} refetch={refetch} />}
+          {drawerRow && <SequenceDrawer row={drawerRow} campaignGapDays={(campaign?.stepGapDays as number | undefined) ?? 7} onClose={() => setDrawerProspectId(null)} refetch={refetch} />}
         </SheetContent>
       </Sheet>
 
@@ -1457,10 +1492,14 @@ function SequencesTab({ campaignId, campaign }: { campaignId: number; campaign: 
 }
 
 /** Right-side drawer: full sequence detail + inline step edit. */
-function SequenceDrawer({ row, onClose, refetch }: { row: any; onClose: () => void; refetch: () => void }) {
+function SequenceDrawer({ row, campaignGapDays, onClose, refetch }: { row: any; campaignGapDays: number; onClose: () => void; refetch: () => void }) {
   const editStep = trpc.are.prospects.editSequenceStep.useMutation();
   const [editing, setEditing] = useState<{ arrayIndex: number; subject: string; body: string } | null>(null);
   const steps = (row.generatedSequence ?? []) as any[];
+  // The timing that will actually be USED: the prospect's override (0170) or
+  // the campaign grid. The steps' own `day` fields stopped driving anything
+  // at 0169 — showing them here was showing a schedule that no longer exists.
+  const dayOffsets = sanitizeDayOffsets(row.cadenceDayOffsets);
 
   const save = async () => {
     if (!editing) return;
@@ -1500,14 +1539,16 @@ function SequenceDrawer({ row, onClose, refetch }: { row: any; onClose: () => vo
             // step-performance tab beside it showed the same step as "Step 1"
             // — one page, two numbering schemes for one step.
             const labelIdx = (s.stepIndex ?? s.step ?? idx) + 1;
-            const day = typeof s.day === "number" ? s.day : typeof s.waitDays === "number" ? s.waitDays : null;
+            const day = dayOffsetForPosition(dayOffsets, idx, campaignGapDays);
             const body = String(s.body ?? "");
             return (
               <div key={idx} className="border rounded-lg p-3 text-xs space-y-1.5">
                 <div className="flex items-center gap-2 text-muted-foreground">
                   <Badge variant="secondary" className="text-[10px]">Step {labelIdx}</Badge>
                   <span>{s.channel ?? "email"}</span>
-                  {day !== null && <span>· {typeof s.day === "number" ? `day ${day}` : `wait ${day}d`}</span>}
+                  <span title={dayOffsets ? "Custom timeline set for this prospect" : `Campaign cadence — every ${campaignGapDays} days`}>
+                    · day {day}{dayOffsets ? " (custom)" : ""}
+                  </span>
                   <Button size="sm" variant="ghost" className="ml-auto h-6 px-2 text-[11px]"
                     onClick={() => setEditing({ arrayIndex: idx, subject: String(s.subject ?? ""), body })}>
                     <Pencil className="size-3 mr-1" /> Edit

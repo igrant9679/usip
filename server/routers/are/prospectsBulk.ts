@@ -26,6 +26,7 @@
 import { and, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
+import { MAX_TIMELINE_DAY_OFFSET, MAX_TIMELINE_STEPS } from "@shared/areStepCadence";
 import { areEngineLogs, emailSuppressions, prospectQueue } from "../../../drizzle/schema";
 import { getDb } from "../../db";
 import { recordAudit } from "../../audit";
@@ -34,7 +35,7 @@ import { upsertPersonForRow, type QueuePersonShape } from "../../services/person
 export const BULK_ACTIONS = [
   // campaign state — via the single-row procedures
   "approve", "reject", "skip", "restore", "reEvaluate", "enrich", "generateSequence",
-  "pauseSequence", "resumeSequence", "cancelSequence",
+  "pauseSequence", "resumeSequence", "cancelSequence", "editTimeline",
   // people-level — via the linked People record
   "addToList", "createTasks", "suppress", "linkToPeople",
 ] as const;
@@ -58,6 +59,10 @@ export const BULK_INPUT = z.object({
   dueInDays: z.number().int().min(0).max(60).optional(),
   /** suppress: why — lands on both the ARE suppression list and the site-wide email suppressions */
   suppressionReason: z.enum(["unsubscribe", "bounce", "competitor", "existing_customer", "manual", "do_not_contact"]).optional(),
+  /** editTimeline: cumulative day offsets for each ordered step (0170).
+   *  Omit with clearTimeline=true to return the selection to campaign cadence. */
+  dayOffsets: z.array(z.number().int().min(0).max(MAX_TIMELINE_DAY_OFFSET)).min(1).max(MAX_TIMELINE_STEPS).optional(),
+  clearTimeline: z.boolean().optional(),
 });
 export type BulkInput = z.infer<typeof BULK_INPUT>;
 
@@ -180,6 +185,19 @@ export async function runBulkAction(ctx: Ctx, input: BulkInput): Promise<BulkRes
     case "pauseSequence": await perRow((r) => caller.are.prospects.pauseSequence({ prospectId: r.id })); result.summary = `Paused ${plural(result.ok, "sequence")}`; break;
     case "resumeSequence": await perRow((r) => caller.are.prospects.resumeSequence({ prospectId: r.id })); result.summary = `Resumed ${plural(result.ok, "sequence")}`; break;
     case "cancelSequence": await perRow((r) => caller.are.prospects.cancelSequence({ prospectId: r.id, reason: input.reason })); result.summary = `Canceled ${plural(result.ok, "sequence")}`; break;
+    case "editTimeline": {
+      // One timeline applied to the whole selection — cumulative day offsets
+      // per ordered step, or an explicit return to the campaign grid. The
+      // single-row procedure moves each prospect's already-scheduled rows too,
+      // so the edit is real immediately, not at the next respace.
+      if (!input.clearTimeline && !input.dayOffsets) throw new TRPCError({ code: "BAD_REQUEST", message: "Provide the timeline's day offsets, or clearTimeline to return to campaign cadence." });
+      const offsets = input.clearTimeline ? null : input.dayOffsets!;
+      await perRow((r) => caller.are.prospects.setSequenceTimeline({ prospectId: r.id, dayOffsets: offsets }));
+      result.summary = offsets
+        ? `Timeline set for ${plural(result.ok, "prospect")} — steps on day ${offsets.join(", ")}`
+        : `Timeline reset to campaign cadence for ${plural(result.ok, "prospect")}`;
+      break;
+    }
 
     case "linkToPeople": {
       const { byQueueId, linked, unlinkable } = await peopleIdsFor(ws, rows);
@@ -256,7 +274,7 @@ export async function runBulkAction(ctx: Ctx, input: BulkInput): Promise<BulkRes
 
   await recordAudit({
     workspaceId: ws, actorUserId: ctx.user.id, action: "update", entityType: "are_prospect_bulk", entityId: input.campaignId,
-    after: { action: input.action, requested: result.requested, ok: result.ok, failed: result.failed, prospectIds: input.prospectIds, params: { reason: input.reason, listId: result.listId ?? input.listId, newListName: input.newListName, taskTitle: input.taskTitle, suppressionReason: input.suppressionReason } },
+    after: { action: input.action, requested: result.requested, ok: result.ok, failed: result.failed, prospectIds: input.prospectIds, params: { reason: input.reason, listId: result.listId ?? input.listId, newListName: input.newListName, taskTitle: input.taskTitle, suppressionReason: input.suppressionReason, dayOffsets: input.dayOffsets, clearTimeline: input.clearTimeline } },
   });
   await emitBulkLog(ws, input.campaignId, result.failed.length ? "warn" : "info",
     `Bulk ${input.action}: ${result.summary}`, { prospectIds: input.prospectIds, failed: result.failed });

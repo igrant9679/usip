@@ -3730,6 +3730,11 @@ export const prospectIntelligence = mysqlTable(
     enrichmentConfidence: int("enrichmentConfidence").default(0).notNull(), // 0-100
     // Generated sequence
     generatedSequence: json("generatedSequence"), // [{stepIndex, day, channel, subject?, body, variantKey}]
+    /** Per-prospect timeline override (0170): cumulative day offsets for the
+     *  ordered steps, set by the mass timeline editor. null = campaign cadence
+     *  (are_campaigns.stepGapDays). Read ONLY through
+     *  @shared/areStepCadence.sanitizeDayOffsets. */
+    cadenceDayOffsets: json("cadenceDayOffsets"),
     sequenceQualityScore: int("sequenceQualityScore"), // 0-40 (sum of 4 dimensions × 10)
     sequenceQualityBreakdown: json("sequenceQualityBreakdown"), // {specificity, clarity, brevity, cta}
     sequenceRewriteCount: int("sequenceRewriteCount").default(0).notNull(),

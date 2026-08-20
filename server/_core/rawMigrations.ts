@@ -3763,6 +3763,22 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0170: per-prospect sequence timeline override (owner ask 2026-08-20) ─
+  // "Mass edit the sequences, especially the sequence timeline" on the
+  // campaign's Sequences tab. 0169 made the campaign own the cadence, which
+  // left no honest place for a per-prospect schedule — a timeline editor
+  // writing the sequence JSON's `day` fields would be editing values nothing
+  // reads (the inert-settings shape). The override is cumulative day offsets,
+  // position-aligned with the ordered steps; null = campaign cadence.
+  // Enrolment and respace both read it through the ONE sanitiser
+  // (@shared/areStepCadence.sanitizeDayOffsets).
+  {
+    name: "0170_prospect_intelligence_cadence_offsets.sql",
+    statements: [
+      "ALTER TABLE `prospect_intelligence` ADD COLUMN `cadenceDayOffsets` json NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

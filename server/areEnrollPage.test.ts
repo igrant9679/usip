@@ -72,10 +72,30 @@ describe("phase 3 selects only enrollable rows", () => {
 
   it("anchors remaining steps to the FIRST send on the campaign's cadence grid, never in the past", () => {
     expect(phase).toContain("const anchor = firstSendMs ?? now");
-    // 0169: the campaign owns the cadence — anchor + position × gap via the one
-    // shared rule (dueAtForPosition floors at now), not the generated dayOffset.
-    expect(phase).toContain("dueAtForPosition(anchor, positionOf.get(s.stepIndex) ?? 0, gapDays, now)");
+    // 0169: the campaign owns the cadence; 0170: a per-prospect timeline
+    // override wins when set. Both flow through the shared rules
+    // (dayOffsetForPosition picks the day, dueAtForDay floors at now) — never
+    // the generated sequence's own dayOffset.
+    expect(phase).toContain("dueAtForDay(anchor, dayOffsetForPosition(dayOffsets, positionOf.get(s.stepIndex) ?? 0, gapDays), now)");
+    expect(phase).toContain("sanitizeDayOffsets(row.cadence)");
     expect(phase).not.toContain("anchor + s.dayOffset");
+  });
+
+  it("the email gate holds email-needing prospects in SQL, and still reports them", () => {
+    // Owner decision 2026-08-20: an email-less prospect whose sequence has an
+    // email step is NOT enrolled — the row stays approved until enrichment
+    // lands an address. The gate must be in the WHERE (a loop `continue`
+    // would starve the page, the exact 320072b shape this file exists for),
+    // and the held rows must be counted into the campaign log, not vanish.
+    expect(phase).toMatch(/JSON_SEARCH\(\$\{prospectIntelligence\.generatedSequence\}, 'one', 'email', NULL, '\$\[\*\]\.channel'\)/);
+    // The normalizeSequence agreement arm: a step with NO channel key
+    // defaults to email, so the SQL must catch those too.
+    expect(phase).toMatch(/JSON_EXTRACT\(\$\{prospectIntelligence\.generatedSequence\}, '\$\[\*\]\.channel'\)/);
+    expect(phase).toContain("waiting for an email address");
+    // The gate holds rows back; it must NOT change their status — approved is
+    // what re-admits them when the address arrives.
+    const gateLog = phase.slice(phase.indexOf("waitingEmail"), phase.indexOf("waiting for an email address"));
+    expect(gateLog).not.toContain('sequenceStatus: "skipped"');
   });
 
   it("every exit from the enrol loop changes the row it examined", () => {

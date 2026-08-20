@@ -99,10 +99,10 @@ describe("wiring", () => {
   const engine = readFileSync("server/areEngine.ts", "utf8");
   const router = readFileSync("server/routers/are/campaigns.ts", "utf8");
 
-  it("enrolment schedules from the campaign cadence, not the generated day offsets", () => {
+  it("enrolment schedules from the campaign cadence (or the 0170 prospect override), not the generated day offsets", () => {
     const enrol = engine.slice(engine.indexOf("async function enrollApprovedForCampaignUnlocked"), engine.indexOf("async function tickCampaign"));
     expect(enrol).toContain("effectiveStepGapDays(");
-    expect(enrol).toContain("dueAtForPosition(anchor, positionOf.get(s.stepIndex)");
+    expect(enrol).toContain("dueAtForDay(anchor, dayOffsetForPosition(dayOffsets, positionOf.get(s.stepIndex)");
     expect(enrol).not.toMatch(/anchor \+ s\.dayOffset/);
   });
 

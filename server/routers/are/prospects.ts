@@ -61,6 +61,7 @@ import { buildBrandContext } from "../../services/brandContext";
 // The A/B metadata row must be keyed by the same step index + variant key the
 // execution queue uses, so both sides read one rule. See shared/variantKeys.ts.
 import { DEFAULT_STEP_GAP_DAYS, defaultDayForStep, stepIndexOf } from "@shared/areSequenceSteps";
+import { MAX_TIMELINE_DAY_OFFSET, MAX_TIMELINE_STEPS, effectiveStepGapDays, planRespaceForProspect, sanitizeDayOffsets } from "@shared/areStepCadence";
 import { DEFAULT_VARIANT_KEY, normalizeVariantKey } from "@shared/variantKeys";
 
 /* ─── ICP Match Scorer ───────────────────────────────────────────────────── */
@@ -1362,6 +1363,7 @@ export const prospectsRouter = router({
           sequenceStatus: prospectQueue.sequenceStatus,
           enrichmentStatus: prospectQueue.enrichmentStatus,
           generatedSequence: prospectIntelligence.generatedSequence,
+          cadenceDayOffsets: prospectIntelligence.cadenceDayOffsets,
           sequenceQualityScore: prospectIntelligence.sequenceQualityScore,
           sequenceQualityBreakdown: prospectIntelligence.sequenceQualityBreakdown,
         })
@@ -1520,6 +1522,85 @@ export const prospectsRouter = router({
       }
 
       return { success: true, scheduledRowsUpdated };
+    }),
+
+  /**
+   * Set (or clear) a prospect's sequence TIMELINE — the per-prospect override
+   * of the campaign cadence (0170). `dayOffsets` are cumulative days from the
+   * enrolment anchor, position-aligned with the ordered steps; null returns
+   * the prospect to the campaign grid.
+   *
+   * Written for the mass timeline editor on the Sequences tab (owner ask
+   * 2026-08-20: "mass edit the sequences, especially the sequence timeline"),
+   * and called per-row by are.prospects.bulk — the same single-procedure rule
+   * as every other bulk action, so the mass path and a future per-row button
+   * cannot disagree.
+   *
+   * The override is only real because BOTH schedulers read it: enrolment
+   * (areEngine) schedules new rows at anchor + offset, and this procedure
+   * re-spaces any ALREADY-SCHEDULED rows immediately (sent rows are history
+   * and never move) — a prospect edited after enrolment does not keep the old
+   * rhythm until the next respace. Storing a timeline nothing consults would
+   * be the inert-settings shape.
+   */
+  setSequenceTimeline: workspaceProcedure
+    .input(z.object({
+      prospectId: z.number(),
+      /** Cumulative day offsets per ordered step; null clears the override. */
+      dayOffsets: z.array(z.number().int().min(0).max(MAX_TIMELINE_DAY_OFFSET)).min(1).max(MAX_TIMELINE_STEPS).nullable(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [row] = await db
+        .select()
+        .from(prospectQueue)
+        .where(and(eq(prospectQueue.id, input.prospectId), eq(prospectQueue.workspaceId, ctx.workspace.id)))
+        .limit(1);
+      if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Prospect not found" });
+      const [intel] = await db
+        .select({ id: prospectIntelligence.id })
+        .from(prospectIntelligence)
+        .where(and(eq(prospectIntelligence.prospectQueueId, input.prospectId), eq(prospectIntelligence.workspaceId, ctx.workspace.id)))
+        .limit(1);
+      if (!intel) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "No intelligence record yet — enrich the prospect first, then set its timeline" });
+      }
+
+      // The ONE sanitiser — what is stored is exactly what every reader will
+      // see, so a non-decreasing 300-day-max timeline is a storage invariant,
+      // not a hope.
+      const clean = input.dayOffsets === null ? null : sanitizeDayOffsets(input.dayOffsets);
+      if (input.dayOffsets !== null && clean === null) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Timeline offsets must be a short list of whole day counts" });
+      }
+      await db
+        .update(prospectIntelligence)
+        .set({ cadenceDayOffsets: clean })
+        .where(and(eq(prospectIntelligence.prospectQueueId, input.prospectId), eq(prospectIntelligence.workspaceId, ctx.workspace.id)));
+
+      // Move any live scheduled rows onto the new timeline NOW. Clearing the
+      // override re-spaces onto the campaign grid the same way.
+      const execRows = await db
+        .select({ id: areExecutionQueue.id, stepIndex: areExecutionQueue.stepIndex, status: areExecutionQueue.status, scheduledAt: areExecutionQueue.scheduledAt, executedAt: areExecutionQueue.executedAt })
+        .from(areExecutionQueue)
+        .where(and(eq(areExecutionQueue.workspaceId, ctx.workspace.id), eq(areExecutionQueue.prospectQueueId, input.prospectId)));
+      let scheduledRowsMoved = 0;
+      if (execRows.some((r) => r.status === "scheduled")) {
+        const [campaign] = await db
+          .select({ stepGapDays: areCampaigns.stepGapDays })
+          .from(areCampaigns)
+          .where(and(eq(areCampaigns.id, row.campaignId), eq(areCampaigns.workspaceId, ctx.workspace.id)))
+          .limit(1);
+        const gapDays = effectiveStepGapDays(campaign?.stepGapDays);
+        const plan = planRespaceForProspect(execRows, gapDays, Date.now(), clean);
+        for (const c of plan) {
+          await db.update(areExecutionQueue).set({ scheduledAt: c.to })
+            .where(and(eq(areExecutionQueue.id, c.id), eq(areExecutionQueue.workspaceId, ctx.workspace.id), eq(areExecutionQueue.status, "scheduled")));
+        }
+        scheduledRowsMoved = plan.length;
+      }
+      return { success: true, cleared: clean === null, scheduledRowsMoved };
     }),
 
   /**
