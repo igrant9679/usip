@@ -344,6 +344,15 @@ async function enrichPendingGlobally(result: AreEngineResult): Promise<void> {
   // Rows scored 0 are legacy (queued before scoring existed) and always pass.
   // 'enriching' is included to recover rows left stuck by a crashed run —
   // runEnrichAgent is idempotent and overwrites cleanly.
+  //
+  // APPROVED rows pass regardless of score (ARE audit, 2026-08-20). The gate
+  // is a screening-budget rule: don't spend enrichment on prospects we may
+  // never contact. A row a HUMAN approved is past screening — we WILL contact
+  // them, and without a dossier sequence generation refuses them. Live: four
+  // owner-approved prospects scored 33 against gates of 35 sat
+  // approved/pending, invisible to this selector, while phase 2 waited on
+  // dossiers that could never come. The approval decision outranks the score
+  // — override supremacy, same as everywhere else the owner has spoken.
   const pending = await db
     .select({
       id: prospectQueue.id,
@@ -356,7 +365,7 @@ async function enrichPendingGlobally(result: AreEngineResult): Promise<void> {
       and(
         eq(areCampaigns.status, "active"),
         inArray(prospectQueue.enrichmentStatus, ["pending", "enriching"]),
-        sql`(${prospectQueue.icpMatchScore} >= COALESCE(${areCampaigns.minConfidence}, ${ENRICH_MIN_CONFIDENCE_DEFAULT}) OR ${prospectQueue.icpMatchScore} = 0)`,
+        sql`(${prospectQueue.icpMatchScore} >= COALESCE(${areCampaigns.minConfidence}, ${ENRICH_MIN_CONFIDENCE_DEFAULT}) OR ${prospectQueue.icpMatchScore} = 0 OR ${prospectQueue.sequenceStatus} = 'approved')`,
       ),
     )
     .orderBy(desc(prospectQueue.icpMatchScore))
@@ -895,11 +904,13 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
      *
      * 'complete' with no dossier is a lie whichever way it arose, and the
      * honest state is un-enriched: flip it back to 'pending' so the global
-     * enrichment pass (which these rows already qualify for — they were
-     * approved, so they scored at least the campaign threshold, which is at
-     * or above every gate in use) writes the dossier and re-marks it
-     * complete. Generation then proceeds on a later tick. Self-healing, no
-     * papering over — the refusal in runSequenceAgent stays exactly as is.
+     * enrichment pass writes the dossier and re-marks it complete. The
+     * selector admits approved rows REGARDLESS of score for exactly this
+     * hand-off — the four live wedgers were owner-approved at score 33
+     * against gates of 35, so "approved rows always clear the gate" is an
+     * assumption a human can falsify with one click. Generation then
+     * proceeds on a later tick. Self-healing, no papering over — the
+     * refusal in runSequenceAgent stays exactly as is.
      */
     const [reQueue] = await db.execute(sql`
       UPDATE \`prospect_queue\` pq

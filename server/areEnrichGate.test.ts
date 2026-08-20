@@ -46,6 +46,18 @@ describe("the gate is defined once and read the same way twice", () => {
     expect(selector).not.toMatch(/COALESCE\(\$\{areCampaigns\.minConfidence\},\s*\d+\)/);
   });
 
+  it("an APPROVED row is admitted regardless of score — the human decision outranks the budget gate", () => {
+    // ARE audit 2026-08-20: four owner-approved prospects at score 33 (gates
+    // 35) sat approved/pending forever — invisible to this selector, while
+    // phase 2 waited on dossiers that could never come. The gate exists to
+    // protect enrichment spend from prospects we may never contact; a row a
+    // human approved WILL be contacted and needs its dossier.
+    expect(selector).toContain("OR ${prospectQueue.sequenceStatus} = 'approved'");
+    // The screen pass's reject arm stays the complement for PENDING rows
+    // only — approved rows in the below-gate band are enriched, not rejected.
+    expect(screen).toContain("`sequenceStatus` = 'pending'");
+  });
+
   it("the screen pass derives its gate from the same constant", () => {
     expect(screen).toContain("campaign.minConfidence ?? ENRICH_MIN_CONFIDENCE_DEFAULT");
     // No second opinion about what the default is.

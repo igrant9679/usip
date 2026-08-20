@@ -76,6 +76,16 @@ describe("phase 2 — wiring", () => {
     expect(router).toContain("Prospect has no enrichment data");
   });
 
+  it("the re-queue hand-off actually lands: the enricher admits approved rows regardless of score", () => {
+    // Without this arm the heal moves a human-approved below-gate row from a
+    // loud wedge into a silent parking lot (live: 4 rows at score 33, gates
+    // 35, approved/pending forever). The full check lives in
+    // areEnrichGate.test.ts; asserted here too because the 2a heal DEPENDS
+    // on it — these two pieces drifting apart recreates the dead state.
+    const enricher = engine.slice(engine.indexOf("async function enrichPendingGlobally"), engine.indexOf("\nasync function tickCampaign"));
+    expect(enricher).toContain("OR ${prospectQueue.sequenceStatus} = 'approved'");
+  });
+
   it("the generation prompt reads pain signals through the guard", () => {
     const fn = router.slice(router.indexOf("async function personalizeForProspect"), router.indexOf("export async function runSequenceAgent"));
     expect(fn).toContain("intelArray<{ signal?: string; evidence?: string }>(intel.painSignals)");
