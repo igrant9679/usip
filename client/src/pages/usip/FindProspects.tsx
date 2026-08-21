@@ -12,10 +12,10 @@
  *      source link clickable.
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { trpc } from "@/lib/trpc";
-import { Link, useLocation } from "wouter";
-import { PageHeader, Shell } from "@/components/usip/Shell";
+import { useLocation } from "wouter";
+import { foldRedirectUrl } from "./dataEnrichmentTabs";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -406,7 +406,7 @@ function LinkedInSearchCard() {
   );
 }
 
-/* ─── Main page ─────────────────────────────────────────────────────── */
+/* ─── Main panel ────────────────────────────────────────────────────── */
 /** Read a query-string param without depending on wouter's search hook,
  *  which isn't wired for this route. */
 function initialParams(): { runId: number | null; q: string } {
@@ -419,7 +419,15 @@ function initialParams(): { runId: number | null; q: string } {
   };
 }
 
-export default function FindProspectsPage() {
+/**
+ * The whole Find-Prospects surface as an embeddable panel. Since 2026-08-21
+ * it renders inside Data Enrichment's "Find prospects" tab (owner fold ask);
+ * /find-prospects is a query-preserving redirect there. The panel still reads
+ * runId/q straight off the URL — the redirect carries them through
+ * (dataEnrichmentTabs.foldRedirectUrl), so ProspectDetail's "Run #N" link and
+ * People's typed-query link keep landing on exactly what they name.
+ */
+export function FindProspectsPanel() {
   // This page ignored its own URL params entirely, so two links elsewhere in
   // the app quietly went nowhere useful: ProspectDetail's "Run #N" link
   // (/find-prospects?runId=…) landed on a blank new-search page instead of the
@@ -466,15 +474,7 @@ export default function FindProspectsPage() {
   };
 
   return (
-    <Shell title="Find Prospects">
-      <PageHeader
-        title="Find Prospects"
-        description="Search for individual prospects or business accounts. Results fan out across LinkedIn, web pages, news, and business directories — then get consolidated, verified, and scored before landing in your Prospects list."
-        pageKey="find-prospects"
-        icon={<Search className="size-5" />}
-      />
-
-      <div className="p-4 md:p-6 max-w-7xl mx-auto space-y-6">
+      <div className="max-w-7xl mx-auto space-y-6">
         {/* ── Search wizard ── */}
         <Card>
           <CardHeader className="pb-3">
@@ -516,6 +516,9 @@ export default function FindProspectsPage() {
         {/* ── Run details (logs + raw finds) ── */}
         {activeRunId !== null && <RunDetail runId={activeRunId} />}
 
+        {/* ── Run history — reopen any past run without hunting for its link ── */}
+        <RecentRuns activeRunId={activeRunId} onOpen={setActiveRunId} />
+
         {/* ── Always-on queues ── */}
         <Tabs defaultValue="needs_review">
           <TabsList>
@@ -530,8 +533,22 @@ export default function FindProspectsPage() {
           </TabsContent>
         </Tabs>
       </div>
-    </Shell>
   );
+}
+
+/**
+ * The /find-prospects route since the fold: a query-preserving redirect into
+ * Data Enrichment's "Find prospects" tab. A plain redirect would strip
+ * ?runId=/?q= and orphan the two deep links built for this page — the URL
+ * builder in dataEnrichmentTabs carries every param through.
+ */
+export default function FindProspectsRedirect() {
+  const [, setLocation] = useLocation();
+  useEffect(() => {
+    setLocation(foldRedirectUrl(window.location.search), { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  return null;
 }
 
 /* ─── Per-run detail card (raw finds + logs) ─────────────────────────── */
@@ -564,6 +581,51 @@ function RunDetail({ runId }: { runId: number }) {
               </div>
             ))
           }
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+/* ─── Run history ────────────────────────────────────────────────────── */
+/**
+ * Recent discovery runs, reopenable in place. discovery.listRuns existed on
+ * the server with NO consumer — the only ways back to a past run were the
+ * toast you dismissed or a prospect's "Run #N" link. Operators re-check runs
+ * constantly; hunting for a link is the slow path this card removes.
+ */
+function RecentRuns({ activeRunId, onOpen }: { activeRunId: number | null; onOpen: (id: number) => void }) {
+  const { data: runs = [], isLoading } = trpc.discovery.listRuns.useQuery({ limit: 12 });
+  if (isLoading || runs.length === 0) return null;
+  const when = (d: unknown) => {
+    const dt = new Date(d as string);
+    return Number.isNaN(dt.getTime()) ? "" : dt.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  };
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm">Recent discovery runs</CardTitle>
+        <CardDescription className="text-[11px]">Click a run to reopen its logs and raw finds.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="rounded-lg border divide-y">
+          {(runs as any[]).map((r) => (
+            <button
+              key={r.id}
+              type="button"
+              onClick={() => onOpen(r.id)}
+              aria-current={activeRunId === r.id ? "true" : undefined}
+              className={`flex w-full items-center gap-3 px-3 py-2 text-left text-xs transition-colors hover:bg-muted/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary ${activeRunId === r.id ? "bg-primary/5" : ""}`}
+            >
+              <span className="font-medium tabular-nums shrink-0">#{r.id}</span>
+              <span className="shrink-0 capitalize text-muted-foreground">{r.mode}</span>
+              <span className="min-w-0 flex-1 truncate text-muted-foreground">
+                {r.rawFindCount ?? 0} raw · {r.prospectsCreated ?? 0} new · {r.highConfidenceCount ?? 0}H {r.mediumConfidenceCount ?? 0}M {r.lowConfidenceCount ?? 0}L
+              </span>
+              <span className={`shrink-0 ${r.status === "failed" ? "text-red-500" : r.status === "running" ? "text-amber-600" : "text-muted-foreground"}`}>{r.status}</span>
+              <span className="shrink-0 text-muted-foreground">{when(r.startedAt)}</span>
+            </button>
+          ))}
         </div>
       </CardContent>
     </Card>

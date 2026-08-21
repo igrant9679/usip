@@ -283,7 +283,7 @@ export default function ProspectDetail() {
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <Link href={`/find-prospects?runId=${p.lastDiscoveryRunId}`}>
+              <Link href={`/v2/data-enrichment?tab=find-prospects&runId=${p.lastDiscoveryRunId}`}>
                 <Button variant="outline" size="sm" className="gap-1.5 text-xs">
                   Run #{p.lastDiscoveryRunId} <ExternalLink className="size-3" />
                 </Button>

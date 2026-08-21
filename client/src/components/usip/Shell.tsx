@@ -186,9 +186,9 @@ const _LEGACY_NAV: NavGroup[] = [
       { href: "/v2/people", label: "People", icon: Users },
       { href: "/v2/companies", label: "Companies", icon: Building2 },
       { kind: "subhead", label: "Tools", color: "#EA580C", darkColor: "#FB923C" },
-      // Phase 1 of the multi-source prospect finder (Google Places now,
-      // arbitrary-URL scrape + LinkedIn coming in phases 2-3).
-      { href: "/find-prospects", label: "Find Prospects", icon: Search },
+      // Find Prospects folded into Data Enrichment's "Find prospects" tab
+      // (owner ask 2026-08-21); /find-prospects redirects there with its
+      // query params intact, and the tool registry still lists it by name.
       { href: "/import", label: "Import Contacts", icon: Upload },
       { href: "/data-health", label: "Data Health", icon: BarChart3 },
       // Moved from Operate — Lead Routing manages how new leads are

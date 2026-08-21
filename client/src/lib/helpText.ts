@@ -48,7 +48,9 @@ export const NAV_HELP: Record<string, HelpEntry> = {
   "/v2/lists": { body: "Hand-picked groups of contacts you want to work as a set." },
   "/v2/saved-people": { body: "People you saved from a prospect search, before deciding whether to work them." },
   "/v2/saved-companies": { body: "Companies you saved from a search, ready to pull contacts from." },
-  "/find-prospects": { body: "Search for new people who match your ideal customer, and add them to the queue.", article: "find-prospects-discovery" },
+  // Re-keyed 2026-08-21: Find Prospects folded into Data Enrichment's tab;
+  // navHelpFor matches EXACTLY, so the key must be the registry tool's href.
+  "/v2/data-enrichment?tab=find-prospects": { body: "Search for new people who match your ideal customer, and add them to the queue.", article: "find-prospects-discovery" },
   "/v2/data-enrichment": { body: "Fill in missing details — company, job title, email — on contacts you already have.", article: "how-email-finding-works" },
   "/data-health": { body: "What's missing or wrong across your data, and what that's costing you in reach." },
   "/import": { body: "Bring contacts in from a CSV file.", article: "import-prospects-csv" },

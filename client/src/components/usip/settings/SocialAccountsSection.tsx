@@ -379,7 +379,7 @@ export function SocialAccountsSection() {
           {/* Where these accounts get used */}
           <Card title="Where these accounts are used" description="Connecting an account switches these on — no extra setup needed.">
             <div className="flex flex-wrap gap-2">
-              <Button variant="outline" size="sm" className="gap-1.5" onClick={() => navigate("/find-prospects")}>
+              <Button variant="outline" size="sm" className="gap-1.5" onClick={() => navigate("/v2/data-enrichment?tab=find-prospects")}>
                 <Search className="size-3.5" /> Find prospects <ExternalLink className="size-3 opacity-60" />
               </Button>
               <Button variant="outline" size="sm" className="gap-1.5" onClick={() => navigate("/unified-inbox")}>

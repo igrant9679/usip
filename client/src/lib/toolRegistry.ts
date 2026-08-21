@@ -97,8 +97,10 @@ export const TOOLS: Tool[] = [
     description: "Won accounts — health, notes, and expansion.", keywords: ["customer success", "accounts"] },
 
   /* ── Prospect & enrich ─────────────────────────────────────────────── */
-  { href: "/find-prospects", label: "Find Prospects", icon: Radar, group: "Prospect & enrich", primary: true,
-    description: "Source new prospects from external databases.", keywords: ["apollo", "search"] },
+  // Folded into Data Enrichment (2026-08-21) — the entry stays so Ctrl+K /
+  // Library still find it by name; the href is the tab's canonical URL.
+  { href: "/v2/data-enrichment?tab=find-prospects", label: "Find Prospects", icon: Radar, group: "Prospect & enrich", primary: true,
+    description: "Source new prospects — a tab of Data Enrichment.", keywords: ["apollo", "search", "discovery"] },
   { href: "/v2/data-enrichment", label: "Data Enrichment", icon: Database, group: "Prospect & enrich", primary: true,
     description: "Fill in missing emails, titles, and companies.", keywords: ["quickenrich", "linkedin"] },
   { href: "/data-health", label: "Data Health", icon: BarChart3, group: "Prospect & enrich",

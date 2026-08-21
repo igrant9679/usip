@@ -12,6 +12,8 @@ import { useLocation } from "wouter";
 import { toast } from "sonner";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
 import { EnrichmentJobDrawer } from "@/components/usip/enrichment/EnrichmentJobDrawer";
+import { FindProspectsPanel } from "@/pages/usip/FindProspects";
+import { DATA_ENRICHMENT_TABS, tabFromSlug, tabSlug, type DataEnrichmentTab } from "@/pages/usip/dataEnrichmentTabs";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -79,16 +81,27 @@ function Card({ title, tag, children, footer }: { title: string; tag?: string; c
   );
 }
 
-const TABS = ["Data health center", "CRM", "CSV", "Job change alerts", "Form enrichment"] as const;
-type Tab = (typeof TABS)[number];
-
 export default function DataEnrichment() {
   const [, setLocation] = useLocation();
   const accent = useAccentColor();
-  const [tab, setTab] = useState<Tab>("Data health center");
+  // The active tab lives in the URL (?tab=…): the Find Prospects fold's
+  // redirect names its tab this way, and a reload/share keeps the operator
+  // where they were instead of bouncing to the default.
+  const [tab, setTabState] = useState<DataEnrichmentTab>(() =>
+    tabFromSlug(new URLSearchParams(window.location.search).get("tab")));
+  const setTab = (t: DataEnrichmentTab) => {
+    setTabState(t);
+    const sp = new URLSearchParams(window.location.search);
+    sp.set("tab", tabSlug(t));
+    window.history.replaceState(null, "", `${window.location.pathname}?${sp.toString()}`);
+  };
   const [jobDrawerOpen, setJobDrawerOpen] = useState(false);
 
-  const { data: m, isLoading } = trpc.dataHealth.getMetrics.useQuery();
+  const { data: m, isLoading, error: metricsError, refetch: refetchMetrics } = trpc.dataHealth.getMetrics.useQuery();
+  // "What needs me" on the tab itself: discovery rows awaiting human review.
+  // perPage 1 — only the total is wanted.
+  const needsReviewQ = trpc.prospects.list.useQuery({ verificationStatus: "needs_review", perPage: 1, page: 1 } as never);
+  const needsReview = Number((needsReviewQ.data as { total?: number } | undefined)?.total ?? 0);
   const metrics = m as
     | { total: number; withEmail: number; withPhone: number; pctWithEmail: number; pctWithPhone: number; pctEnriched: number; pctVerified: number; enrichedLast90Days: number }
     | undefined;
@@ -158,14 +171,14 @@ export default function DataEnrichment() {
 
         {/* tabs */}
         <div className="shrink-0 border-b border-border px-4 flex items-center gap-1 bg-card/40 overflow-x-auto">
-          {TABS.map((t) => (
+          {DATA_ENRICHMENT_TABS.map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
               className={cn("relative px-3 py-2 text-[13px] whitespace-nowrap transition-colors", tab === t ? "font-semibold" : "text-muted-foreground hover:text-foreground")}
               style={tab === t ? { color: accent } : undefined}
             >
-              <span className="inline-flex items-center gap-1.5">{t}{t === "CRM" && <span className="text-[9px] font-medium px-1 py-0.5 rounded bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">New</span>}{t === "Job change alerts" && pendingMoves > 0 && <span className="text-[9px] font-semibold px-1 py-0.5 rounded-full text-white tabular-nums" style={{ backgroundColor: accent }}>{pendingMoves}</span>}</span>
+              <span className="inline-flex items-center gap-1.5">{t}{t === "CRM" && <span className="text-[9px] font-medium px-1 py-0.5 rounded bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">New</span>}{t === "Job change alerts" && pendingMoves > 0 && <span className="text-[9px] font-semibold px-1 py-0.5 rounded-full text-white tabular-nums" style={{ backgroundColor: accent }}>{pendingMoves}</span>}{t === "Find prospects" && needsReview > 0 && <span className="text-[9px] font-semibold px-1 py-0.5 rounded-full text-white tabular-nums" style={{ backgroundColor: accent }} title={`${needsReview} discovered prospect${needsReview === 1 ? "" : "s"} awaiting review`}>{needsReview}</span>}</span>
               {tab === t && <span className="absolute inset-x-2 bottom-0 h-0.5 rounded-full" style={{ backgroundColor: accent }} />}
             </button>
           ))}
@@ -173,8 +186,19 @@ export default function DataEnrichment() {
 
         {/* body */}
         <div className="flex-1 min-h-0 overflow-auto p-4 md:p-6">
+          {/* The folded Find Prospects surface — full panel, honoring ?runId=/?q=. */}
+          {tab === "Find prospects" && <FindProspectsPanel />}
+
           {tab === "Data health center" && (
             <div className="space-y-5">
+              {/* A failed metrics load must say so — zeros that mean "error"
+                  are indistinguishable from zeros that mean "empty". */}
+              {metricsError && (
+                <div className="flex items-center gap-3 rounded-lg border border-red-500/40 bg-red-500/5 px-3 py-2 text-xs text-red-700 dark:text-red-400">
+                  <span className="min-w-0 flex-1 truncate">Data health metrics failed to load: {metricsError.message}</span>
+                  <Button variant="outline" size="sm" className="h-7 shrink-0" onClick={() => refetchMetrics()}>Retry</Button>
+                </div>
+              )}
               {/* top stats */}
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
                 {stat(Users, "Total contacts", isLoading ? "—" : (metrics?.total ?? 0).toLocaleString())}
