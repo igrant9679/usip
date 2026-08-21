@@ -289,6 +289,26 @@ describe("quickenrichContactFinder — free discovery, defensively parsed", () =
   });
   const BODY = { title: { include: ["CFO"] }, page: 1 };
 
+  it("reads the 2026-08 schema's employee_linkedin field, normalising a bare slug to a URL", async () => {
+    // Probe-verified row keys: linkedin_url became employee_linkedin, and the
+    // value can be a slug. This field is the enrichment lookup's KEY — a
+    // dropped or non-URL value makes the person unenrichable, which is how
+    // every discovered row silently vanished on 2026-08-21 (found: 0 while
+    // the probe counted 10).
+    mocks.fetch.mockResolvedValue(jsonResponse(200, {
+      data: [
+        { first_name: "Rosa", last_name: "Nunez", title: "CFO", employee_linkedin: "rosa-nunez-1a2b", company_name: "Acme", email_domain: "acme.org", has_email: true },
+        { first_name: "Full", last_name: "Url", employee_linkedin: "https://www.linkedin.com/in/full-url", has_email: false },
+      ],
+    }));
+    const r = await quickenrichContactFinder("k", BODY);
+    if (!r.ok) throw new Error(r.error);
+    expect(r.people).toHaveLength(2);
+    expect(r.people[0].linkedinUrl).toBe("https://www.linkedin.com/in/rosa-nunez-1a2b");
+    expect(r.people[0].companyDomain).toBe("acme.org"); // email_domain fallback
+    expect(r.people[1].linkedinUrl).toBe("https://www.linkedin.com/in/full-url");
+  });
+
   it("maps their row shape to prospect fields, normalising the company URL to a domain", async () => {
     mocks.fetch.mockResolvedValue(jsonResponse(200, {
       data: [{

@@ -214,7 +214,15 @@ export async function quickenrichContactFinder(
     const str = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim() : null);
     const people: QuickEnrichDiscoveredPerson[] = [];
     for (const r of rows) {
-      const linkedinUrl = str(r.linkedin_url) ?? str(r.linkedin) ?? str(r.li_url);
+      // `employee_linkedin` is the 2026-08-21 schema's name (probe-verified
+      // row keys); the older candidates stay for tolerance. The value may be
+      // a bare profile slug rather than a URL — normalise, because this field
+      // is the enrichment lookup's KEY and a slug that isn't a URL would make
+      // every discovered person unenrichable.
+      const linkedinRaw = str(r.linkedin_url) ?? str(r.linkedin) ?? str(r.li_url) ?? str(r.employee_linkedin);
+      const linkedinUrl = linkedinRaw
+        ? (/^https?:\/\//i.test(linkedinRaw) ? linkedinRaw : `https://www.linkedin.com/in/${linkedinRaw.replace(/^\/+/, "")}`)
+        : null;
       // QuickEnrich's DB is LinkedIn-keyed, so its names carry the same
       // credential suffixes ("…, PMP") — owner rule: they never enter a name.
       const firstName = stripNameCredentials(str(r.first_name)) ?? "";
@@ -229,7 +237,7 @@ export async function quickenrichContactFinder(
         title: str(r.title) ?? str(r.job_title),
         linkedinUrl,
         companyName: str(r.company_name) ?? str(r.company),
-        companyDomain: normalizeDomain(str(r.company_url) ?? str(r.company_domain) ?? str(r.company_website)),
+        companyDomain: normalizeDomain(str(r.company_url) ?? str(r.company_domain) ?? str(r.company_website) ?? str(r.email_domain)),
         hasEmail: r.has_email === true,
       });
     }
