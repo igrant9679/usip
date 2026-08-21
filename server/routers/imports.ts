@@ -937,15 +937,50 @@ export const importsRouter = router({
         })
         .where(eq(contactImports.id, importId));
 
-      // People-as-master (0160): contacts imported here must appear on the
-      // People tab, so link the batch to canonical People records now.
-      // Fire-and-forget, same as the post-import company association above —
-      // never blocks the import response; the daily backfill heals misses.
+      /**
+       * People-as-master (owner directive 2026-08-21: "when a user imports
+       * contacts, they should all go to the People tab").
+       *
+       * The prospects destination IS People (the tab lists `prospects`), so
+       * only the contacts destination needs linking — and "fire-and-forget,
+       * the daily backfill heals misses" was not a guarantee: a user could
+       * finish the wizard, open People, and not find the rows for a day.
+       *
+       * Now the link pass is AWAITED for normal-size imports and scoped to
+       * exactly this batch (afterId = lowest new contact id − 1, so a backlog
+       * of older unlinked contacts can't exhaust the page budget first). The
+       * per-row tiered matcher is ~10-30ms each, so huge imports would blow
+       * the request budget the chunked inserts exist to respect — above the
+       * threshold the same scoped pass runs in the background and the result
+       * SAYS so instead of implying it finished.
+       */
+      let peopleLinked = 0, peopleCreated = 0, peopleLinkFailed = 0;
+      let peopleLinkMode: "synchronous" | "background" | "none" = "none";
       if (!toProspects && importedRows > 0) {
-        void import("../services/personLink")
-          .then((m) => m.linkUnlinkedContacts({ workspaceId: wsId, limit: 3000 }))
-          .then((s) => console.log(`[personLink] post-import contacts: scanned=${s.scanned} linked=${s.linked} created=${s.created}`))
-          .catch((e) => console.error("[personLink] post-import contact link failed:", (e as Error).message));
+        const newContactIds = importRowValues
+          .map((v) => v.contactId as number | null)
+          .filter((id): id is number => typeof id === "number" && id > 0);
+        const afterId = newContactIds.length ? Math.min(...newContactIds) - 1 : 0;
+        const maxPages = Math.ceil(importedRows / 500) + 1;
+        const SYNC_LINK_MAX_ROWS = 1000;
+        const { linkUnlinkedContacts } = await import("../services/personLink");
+        if (importedRows <= SYNC_LINK_MAX_ROWS) {
+          try {
+            const s = await linkUnlinkedContacts({ workspaceId: wsId, limit: 500, maxPages, afterId });
+            peopleLinked = s.linked;
+            peopleCreated = s.created;
+            peopleLinkFailed = s.failed + s.skippedNoIdentity;
+            peopleLinkMode = "synchronous";
+          } catch (e) {
+            peopleLinkMode = "background"; // the daily backfill still heals
+            console.error("[personLink] post-import contact link failed:", (e as Error).message);
+          }
+        } else {
+          peopleLinkMode = "background";
+          void linkUnlinkedContacts({ workspaceId: wsId, limit: 500, maxPages, afterId })
+            .then((s) => console.log(`[personLink] post-import contacts (bg): scanned=${s.scanned} linked=${s.linked} created=${s.created}`))
+            .catch((e) => console.error("[personLink] post-import contact link failed:", (e as Error).message));
+        }
       }
 
       return {
@@ -957,6 +992,14 @@ export const importsRouter = router({
         /** Imported without an email — duplicate detection could not see these. */
         noEmailCount: noEmailRows,
         matchOnNameCompany: input.matchOnNameCompany,
+        /** People-tab visibility for the contacts destination (see above).
+         *  "synchronous" = counts are final; "background" = large import,
+         *  linking continues and the daily backfill guarantees completion;
+         *  "none" = prospects destination (rows ARE People already). */
+        peopleLinkMode,
+        peopleLinked,
+        peopleCreated,
+        peopleLinkFailed,
       };
     }),
 

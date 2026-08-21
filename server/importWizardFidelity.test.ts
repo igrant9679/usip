@@ -77,6 +77,24 @@ describe("wiring — every stage renders what the server now returns", () => {
     expect(page).toContain('href={destination === "prospects" ? "/prospects" : "/v2/people"}');
   });
 
+  it("every imported contact reaches the People tab — awaited, batch-scoped, reported", () => {
+    // Owner directive 2026-08-21. The old pass was fire-and-forget with the
+    // daily backfill as the guarantee — i.e., no guarantee the user could see.
+    const personLink = readFileSync("server/services/personLink.ts", "utf8");
+    // The seam can start its keyset scan AT the batch, so an older backlog of
+    // unlinked contacts cannot exhaust the page budget first.
+    expect(personLink).toContain("afterId?: number");
+    expect(personLink).toContain("let lastId = opts.afterId ?? 0");
+    // Awaited under the threshold, with the batch's own keyset start; the
+    // large-import path is scoped the same way and the result names its mode.
+    expect(router).toContain("await linkUnlinkedContacts({ workspaceId: wsId, limit: 500, maxPages, afterId })");
+    expect(router).toContain("void linkUnlinkedContacts({ workspaceId: wsId, limit: 500, maxPages, afterId })");
+    expect(router).toContain("peopleLinkMode,");
+    // The Done step SAYS where the rows are, in both modes and for prospects.
+    expect(page).toContain("are on the People tab");
+    expect(page).toContain("linking to the People tab is finishing in the background");
+  });
+
   it("imports.getHistory finally has a consumer, refreshed after each commit", () => {
     expect(page).toContain("trpc.imports.getHistory.useQuery({ limit: 8 })");
     expect(page).toContain("utils.imports.getHistory.invalidate()");

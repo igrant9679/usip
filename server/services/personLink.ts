@@ -580,6 +580,14 @@ export async function linkUnlinkedContacts(opts: {
   /** Page size per pass, not a total cap. */
   limit?: number;
   maxPages?: number;
+  /**
+   * Start the keyset scan AFTER this contact id. A just-committed import
+   * passes its lowest new id minus one, so the pass covers exactly that
+   * batch — without this, a backlog of older unlinked contacts could
+   * exhaust maxPages before the scan ever reached the rows the caller
+   * actually imported.
+   */
+  afterId?: number;
 } = {}): Promise<LinkSummary> {
   const summary: LinkSummary = { scanned: 0, linked: 0, created: 0, skippedNoIdentity: 0, failed: 0 };
   const db = await getDb();
@@ -589,7 +597,7 @@ export async function linkUnlinkedContacts(opts: {
   const maxPages = opts.maxPages ?? 20;
   // Keyset pagination, not OFFSET: skipped rows keep personProspectId NULL,
   // so a plain re-select would return the same page forever.
-  let lastId = 0;
+  let lastId = opts.afterId ?? 0;
 
   for (let page = 0; page < maxPages; page++) {
     const conds = [isNull(contacts.personProspectId), gt(contacts.id, lastId)];

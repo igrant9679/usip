@@ -155,6 +155,9 @@ export default function ImportContacts() {
     importedRows: number;
     skippedRows: number;
     errorRows: number;
+    peopleLinkMode?: "synchronous" | "background" | "none";
+    peopleLinked?: number;
+    peopleCreated?: number;
   } | null>(null);
 
   /* ── tRPC mutations ── */
@@ -604,8 +607,8 @@ export default function ImportContacts() {
                 </Select>
                 <p className="text-xs text-muted-foreground">
                   {destination === "contacts"
-                    ? "Rows become contacts immediately. Nothing verifies their email addresses."
-                    : "Rows join the prospect backlog. The enrichment sweeper finds and verifies an address for each one, and only those that come back verified are promoted to contacts — where your segment rules can enrol them."}
+                    ? "Rows become contacts immediately and are linked onto the People tab as part of the import. Nothing verifies their email addresses."
+                    : "Rows join the prospect backlog — which is the People tab — and the enrichment sweeper finds and verifies an address for each one; only those that come back verified are promoted to contacts, where your segment rules can enrol them."}
                 </p>
                 {destination === "prospects" && (
                   <p className="text-xs text-muted-foreground">
@@ -935,8 +938,10 @@ export default function ImportContacts() {
                 <h2 className="text-xl font-bold">Import Complete</h2>
                 <p className="text-muted-foreground mt-1">
                   {destination === "prospects"
-                    ? "Your rows joined the prospect backlog. The enrichment sweeper finds and verifies an email for each (on its daily cap), and verified ones are promoted to contacts automatically."
-                    : "Your contacts have been added to the workspace."}
+                    ? "Your rows joined the prospect backlog — they are on the People tab now. The enrichment sweeper finds and verifies an email for each (on its daily cap)."
+                    : importResult.peopleLinkMode === "background"
+                    ? "Your contacts have been added. This was a large import, so linking to the People tab is finishing in the background — every row will appear there."
+                    : `Your contacts have been added and are on the People tab${importResult.peopleLinked ? ` — ${importResult.peopleLinked} linked${importResult.peopleCreated ? ` (${importResult.peopleCreated} new People records)` : ""}` : ""}.`}
                 </p>
               </div>
 
