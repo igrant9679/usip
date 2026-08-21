@@ -87,6 +87,7 @@ import {
 import { appBaseUrl as publicAppOrigin } from "./appUrl";
 import { escapeHtml } from "@shared/escapeHtml";
 import { isHtmlBody, htmlBodyToText } from "@shared/emailBody";
+import { cleanScrapedField } from "@shared/fieldHygiene";
 import { buildMergeLookup, isEmptyLinkToken, parseMergeToken, resolveMergeName, stripEmptyLinkCarriers } from "@shared/mergeKeys";
 
 /* ─── Per-tick bounds (keep LLM cost + wall-time predictable) ───────────── */
@@ -167,12 +168,29 @@ export interface AreEngineResult {
  * that cannot leak braces to a prospect, and that is deliberate.
  */
 export function applyMerge(text: string, p: Prospect, bookingUrl = ""): string {
+  /**
+   * Placeholder hygiene at the merge seam (owner-approved fix 2026-08-21,
+   * after a live send). The queue row's companyName held the literal scraper
+   * token "<UNKNOWN>" — truthy, so `?? "your company"` waved it through and a
+   * prospect received "Grants administration at <UNKNOWN>" as a subject line.
+   * An EMPTY string is the same class from the other side: not null, so no
+   * fallback, and the tag vanishes leaving a hole mid-sentence ("…at .").
+   * The ONE cleaner (shared/fieldHygiene) decides what counts as data;
+   * placeholders and empties now fall back exactly like null. Substitution
+   * happens at send time, so this covers every already-queued step too —
+   * 20 in-sequence prospects carried an empty or placeholder company when
+   * this shipped.
+   */
+  const firstName = cleanScrapedField(p.firstName, 100);
+  const lastName = cleanScrapedField(p.lastName, 100);
+  const company = cleanScrapedField(p.companyName, 200);
+  const title = cleanScrapedField(p.title, 200);
   const lookup = buildMergeLookup(Object.entries({
-    firstName: p.firstName ?? "there",
-    lastName: p.lastName ?? "",
-    company: p.companyName ?? "your company",
-    companyName: p.companyName ?? "your company",
-    title: p.title ?? "",
+    firstName: firstName ?? "there",
+    lastName: lastName ?? "",
+    company: company ?? "your company",
+    companyName: company ?? "your company",
+    title: title ?? "",
     bookingLink: bookingUrl,
   }));
   /**
