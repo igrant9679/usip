@@ -341,10 +341,14 @@ export async function quickenrichFindEmailByLinkedIn(
  * plausible nestings.
  */
 export const QUICKENRICH_PROBE_CANDIDATES: Array<{ label: string; body: Record<string, unknown> }> = [
-  { label: "include-nesting", body: { filters: { include: { title: ["CEO"] } }, page: 1 } },
+  // Round 2 verdict: `{ has_email: true, page: 1 }` — top level, NO `filters`
+  // key — answered 200 with rows; every body containing `filters` 422s. Their
+  // schema moved constraints to the body root. Round 3 pins the dimension
+  // syntax at the root, has_email kept as the known-good control.
+  { label: "top-level-dimension-object", body: { title: { include: ["CEO"] }, page: 1 } },
+  { label: "top-level-include-map", body: { include: { title: ["CEO"] }, page: 1 } },
+  { label: "top-level-bare-array", body: { title: ["CEO"], page: 1 } },
   { label: "top-level-has_email", body: { has_email: true, page: 1 } },
-  { label: "bare-array-dimension", body: { filters: { title: ["CEO"] }, page: 1 } },
-  { label: "singular-filter-key", body: { filter: { title: { include: ["CEO"] } }, page: 1 } },
 ];
 
 export async function quickenrichTestKey(apiKey: string): Promise<QuickEnrichTestResult> {
