@@ -712,7 +712,9 @@ export default function ImportContacts() {
                           <span className="shrink-0 text-muted-foreground tabular-nums">Row {d.rowIndex}</span>
                           <span className="font-medium">{d.name}</span>
                           {d.email && <span className="font-mono text-[11px] text-muted-foreground">{d.email}</span>}
-                          <span className="text-muted-foreground">↔ {d.existingName ? `existing “${d.existingName}”` : "an earlier row"} · by {d.matchedBy}</span>
+                          <span className="text-muted-foreground">
+                            {d.existingName ? `↔ existing “${d.existingName}” · by ${d.matchedBy}` : `↔ ${d.matchedBy}`}
+                          </span>
                         </div>
                       ))}
                     </div>
