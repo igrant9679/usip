@@ -97,9 +97,10 @@ export const TOOLS: Tool[] = [
     description: "Won accounts — health, notes, and expansion.", keywords: ["customer success", "accounts"] },
 
   /* ── Prospect & enrich ─────────────────────────────────────────────── */
-  // Folded into Data Enrichment (2026-08-21) — the entry stays so Ctrl+K /
-  // Library still find it by name; the href is the tab's canonical URL.
-  { href: "/v2/data-enrichment?tab=find-prospects", label: "Find Prospects", icon: Radar, group: "Prospect & enrich", primary: true,
+  // Folded into Data Enrichment (2026-08-21) — deliberately NOT primary, so
+  // the rail shows one entry for the merged surface; Ctrl+K and the Library
+  // still find "Find Prospects" by name and land on its tab.
+  { href: "/v2/data-enrichment?tab=find-prospects", label: "Find Prospects", icon: Radar, group: "Prospect & enrich",
     description: "Source new prospects — a tab of Data Enrichment.", keywords: ["apollo", "search", "discovery"] },
   { href: "/v2/data-enrichment", label: "Data Enrichment", icon: Database, group: "Prospect & enrich", primary: true,
     description: "Fill in missing emails, titles, and companies.", keywords: ["quickenrich", "linkedin"] },
