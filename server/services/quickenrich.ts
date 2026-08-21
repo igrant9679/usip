@@ -327,6 +327,26 @@ export async function quickenrichFindEmailByLinkedIn(
   }
 }
 
+/**
+ * The filter-shape candidates the key test probes, exported so the unit test
+ * derives its call count instead of pinning a number that changes per round.
+ *
+ * Round 1 (2026-08-21) sent per-dimension include objects
+ * ({title:{include:[…]}}), has_email inside filters, and a dimension array —
+ * all four answered the same 422 "At least one filter is required: a
+ * non-empty include/exclude dimension, has_email, or has_phone", INCLUDING
+ * the has_email one their own message names as sufficient. Conclusion: the
+ * parser does not recognise our nesting at all. Round 2 reads their message
+ * literally — include/exclude as the keys INSIDE filters — plus the other
+ * plausible nestings.
+ */
+export const QUICKENRICH_PROBE_CANDIDATES: Array<{ label: string; body: Record<string, unknown> }> = [
+  { label: "include-nesting", body: { filters: { include: { title: ["CEO"] } }, page: 1 } },
+  { label: "top-level-has_email", body: { has_email: true, page: 1 } },
+  { label: "bare-array-dimension", body: { filters: { title: ["CEO"] }, page: 1 } },
+  { label: "singular-filter-key", body: { filter: { title: { include: ["CEO"] } }, page: 1 } },
+];
+
 export async function quickenrichTestKey(apiKey: string): Promise<QuickEnrichTestResult> {
   /**
    * A battery, not one probe (2026-08-21): their contact-finder started
@@ -336,12 +356,7 @@ export async function quickenrichTestKey(apiKey: string): Promise<QuickEnrichTes
    * shapes in one pass both proves the key AND names the vocabulary their
    * API currently accepts, which is the fact buildQuickenrichFilters needs.
    */
-  const candidates: Array<{ label: string; body: Record<string, unknown> }> = [
-    { label: "has_email", body: { filters: { has_email: true }, page: 1 } },
-    { label: "title-object", body: { filters: { title: { include: ["CEO"] } }, page: 1 } },
-    { label: "job_title-object", body: { filters: { job_title: { include: ["CEO"] } }, page: 1 } },
-    { label: "dimension-array", body: { filters: [{ dimension: "title", include: ["CEO"] }], page: 1 } },
-  ];
+  const candidates = QUICKENRICH_PROBE_CANDIDATES;
   const accepted: string[] = [];
   const rejected: string[] = [];
   let lastStatus = 0;

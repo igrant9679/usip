@@ -39,6 +39,7 @@ import {
   quickenrichFindEmailByLinkedIn,
   quickenrichTestKey,
   QUICKENRICH_BASE,
+  QUICKENRICH_PROBE_CANDIDATES,
 } from "./services/quickenrich";
 import { ARE_SOURCE_IDS } from "@shared/areSources";
 
@@ -112,18 +113,24 @@ describe("quickenrichTestKey — proves the key without spending", () => {
     status,
     ok: status >= 200 && status < 300,
     json: async () => body,
+    // A real fetch Response ALWAYS has .text() — a mock without it made the
+    // error-body capture look broken when only the mock was (CI run #871).
+    text: async () => JSON.stringify(body),
   });
 
-  it("calls the FREE endpoint, never a paid one", async () => {
+  it("calls the FREE endpoint, never a paid one — once per probe candidate", async () => {
     // contact-finder is the one endpoint their docs price at 0 credits. A test
-    // that spends a credit per click is a meter, not a test.
+    // that spends a credit per click is a meter, not a test. Since the 422
+    // schema change the test probes every candidate shape, so the count is
+    // derived from the exported list, not pinned.
     mocks.fetch.mockResolvedValue(jsonResponse(200, { data: [] }));
     await quickenrichTestKey("k");
-    expect(mocks.fetch).toHaveBeenCalledTimes(1);
-    const [url, opts] = mocks.fetch.mock.calls[0];
-    expect(url).toBe(`${QUICKENRICH_BASE}/api/employees/contact-finder`);
-    expect(opts.headers.Authorization).toBe("Bearer k");
-    expect(url).not.toContain("/api/employees/search");
+    expect(mocks.fetch).toHaveBeenCalledTimes(QUICKENRICH_PROBE_CANDIDATES.length);
+    for (const [url, opts] of mocks.fetch.mock.calls) {
+      expect(url).toBe(`${QUICKENRICH_BASE}/api/employees/contact-finder`);
+      expect(opts.headers.Authorization).toBe("Bearer k");
+      expect(url).not.toContain("/api/employees/search");
+    }
   });
 
   it("reads a 401/403 as a bad key, with a message that says so", async () => {
