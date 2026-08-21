@@ -500,7 +500,11 @@ export function FindProspectsPanel() {
             </Tabs>
             <div className="flex items-center justify-between pt-2 border-t">
               <div className="text-[11px] text-muted-foreground">
-                Fans out to LinkedIn · Web · News{mode === "account" ? " · Google Business" : ""}. Typical run: 5–15 s.
+                {/* The list matches the fan-out (services/discovery), Apollo
+                    included — the old copy under-reported it. */}
+                Fans out to {mode === "person"
+                  ? "LinkedIn · Web · News · Apollo · QuickEnrich"
+                  : "Google Business · Web · News · Apollo"}. Typical run: 5–15 s.
               </div>
               <Button onClick={runSearch} disabled={search.isPending} className="gap-1.5">
                 {search.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Search className="size-3.5" />}

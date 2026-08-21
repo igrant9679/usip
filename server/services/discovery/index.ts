@@ -26,6 +26,7 @@
 import { and, eq } from "drizzle-orm";
 import { getDb } from "../../db";
 import {
+  areScrapeJobs,
   discoveryLogs,
   discoveryRuns,
   rawFinds,
@@ -37,6 +38,13 @@ import {
 } from "../../routers/are/scraper";
 import { searchLinkedInProfiles } from "../linkedinLookup";
 import { apolloSearchPeople, getApolloDailyCap, apolloPulledToday } from "../apollo";
+import {
+  buildQuickenrichFilters,
+  getQuickEnrichKey,
+  getQuickenrichDailyPullCap,
+  quickenrichContactFinder,
+  quickenrichPulledToday,
+} from "../quickenrich";
 import { processRun } from "./consolidate";
 
 /**
@@ -78,6 +86,38 @@ async function discoverLinkedInPeople(
  * configured or the daily cap is spent, so the rest of the fan-out is
  * unaffected.
  */
+/**
+ * Record a discovery pull into the SAME daily ledger the ARE campaigns read
+ * (are_scrape_jobs). The Apollo and QuickEnrich caps are ONE budget across
+ * both surfaces — apolloPulledToday / quickenrichPulledToday SUM this table —
+ * so a pull that skips the ledger silently double-spends the allowance.
+ * (Apollo here consulted the budget but never wrote it back; found while
+ * wiring QuickEnrich, fixed for both.)
+ */
+async function recordPullLedger(
+  workspaceId: number,
+  sourceType: "apollo" | "quickenrich",
+  query: string,
+  resultCount: number,
+): Promise<void> {
+  if (resultCount <= 0) return;
+  const db = await getDb();
+  if (!db) return;
+  try {
+    await db.insert(areScrapeJobs).values({
+      workspaceId,
+      campaignId: null,
+      sourceType,
+      query: query.slice(0, 2000),
+      status: "complete",
+      resultCount,
+      scrapedAt: new Date(),
+    } as never);
+  } catch (e) {
+    console.error("[discovery] pull-ledger write failed:", (e as Error).message);
+  }
+}
+
 async function discoverViaApollo(
   workspaceId: number,
   mode: SearchMode,
@@ -104,7 +144,54 @@ async function discoverViaApollo(
     perPage: Math.min(headroom, 25),
   });
   if (!res.ok) return [];
+  await recordPullLedger(workspaceId, "apollo", buildQuery(mode, input), res.prospects.length);
   return res.prospects.map((x) => ({ ...x }));
+}
+
+/**
+ * QuickEnrich as a Find-prospects source (owner ask 2026-08-21) — the same
+ * free contact-finder the ARE campaigns' `quickenrich` source uses: their
+ * LinkedIn-keyed DB, people returned WITHOUT emails (has_email flags only;
+ * enrichment spends the credit later, per hit). Person mode only — it is a
+ * people database. Shares the campaigns' daily pull budget: same cap, same
+ * ledger, same has_email-first ranking of the headroom, so the two surfaces
+ * cannot double-spend one allowance. Skips silently (Apollo convention in
+ * this file) when there is no key, no headroom, or no title/industry to
+ * filter on — searching their entire database on keywords alone is refused
+ * for the same reason the ARE source refuses it.
+ */
+async function discoverViaQuickEnrich(
+  workspaceId: number,
+  input: PersonSearchInput,
+): Promise<Array<Record<string, unknown>>> {
+  const apiKey = await getQuickEnrichKey(workspaceId);
+  if (!apiKey) return [];
+  const cap = await getQuickenrichDailyPullCap(workspaceId);
+  const headroom = cap - (await quickenrichPulledToday(workspaceId));
+  if (headroom <= 0) return [];
+  const { body } = buildQuickenrichFilters({
+    titles: input.jobTitle ? [input.jobTitle] : [],
+    industries: input.industry ? [input.industry] : [],
+    geos: input.location ? [input.location] : [],
+  });
+  if (!body) return [];
+  const res = await quickenrichContactFinder(apiKey, body);
+  // A real API failure surfaces as this source's error in perSource + the
+  // run log, exactly like every other source in the fan-out.
+  if (!res.ok) throw new Error(`QuickEnrich contact-finder failed: ${res.error}`);
+  const kept = [...res.people]
+    .sort((a, b) => Number(b.hasEmail) - Number(a.hasEmail))
+    .slice(0, headroom);
+  await recordPullLedger(workspaceId, "quickenrich", [input.jobTitle, input.industry, input.location].filter(Boolean).join(" · ") || "person search", kept.length);
+  return kept.map((p) => ({
+    firstName: p.firstName,
+    lastName: p.lastName,
+    title: p.title,
+    linkedinUrl: p.linkedinUrl,
+    sourceUrl: p.linkedinUrl,
+    companyName: p.companyName,
+    companyDomain: p.companyDomain,
+  }));
 }
 
 export type SearchMode = "person" | "account";
@@ -317,6 +404,7 @@ export async function runDiscovery(
       scrapeWeb(workspaceId, null, query, icpContext).then((raw) => ({ source: "web", raw })),
       scrapeNews(workspaceId, null, query, icpContext).then((raw) => ({ source: "news", raw })),
       discoverViaApollo(workspaceId, mode, input).then((raw) => ({ source: "apollo", raw })),
+      discoverViaQuickEnrich(workspaceId, input as PersonSearchInput).then((raw) => ({ source: "quickenrich", raw })),
     );
   } else {
     // Account mode keeps the company-shaped sources. LinkedIn's classic
