@@ -1,6 +1,7 @@
-import { useState, useCallback, useRef } from "react";
+import { useEffect, useState, useRef } from "react";
 import { trpc } from "@/lib/trpc";
-import { Shell, PageHeader } from "@/components/usip/Shell";
+import { useLocation } from "wouter";
+import { tabRedirectUrl } from "@/pages/usip/dataEnrichmentTabs";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -99,8 +100,15 @@ const STATUS_BADGE: Record<string, { label: string; className: string }> = {
   unknown: { label: "Unknown", className: "bg-muted text-muted-foreground border-border" },
 };
 
-/* ─── Main component ────────────────────────────────────────────────────── */
-export default function ImportContacts() {
+/* ─── Main panel ────────────────────────────────────────────────────────── */
+/**
+ * The whole import wizard as an embeddable panel. Since 2026-08-21 it renders
+ * inside Data Enrichment's "Import contacts" tab (owner fold ask — same
+ * protocol as the Find Prospects fold, replacing that page's mock "CSV"
+ * upsell tab whose only CTAs navigated here anyway); /import is a
+ * query-preserving redirect there.
+ */
+export function ImportContactsPanel() {
   const [step, setStep] = useState(1);
 
   // Step 1: file upload
@@ -309,14 +317,6 @@ export default function ImportContacts() {
   });
 
   return (
-    <Shell>
-      <PageHeader
-        title="Import Contacts" pageKey="import-contacts"
-        description="Bulk-import contacts from a CSV file, enrichment providers, or third-party integrations. Map columns, validate data, and resolve duplicates before committing records to your CRM."
-      
-        icon={<Upload className="size-5" />}
-      />
-
       <div className="max-w-4xl">
         <StepIndicator current={step} />
 
@@ -1000,8 +1000,20 @@ export default function ImportContacts() {
           </Card>
         )}
       </div>
-    </Shell>
   );
+}
+
+/**
+ * The /import route since the fold: a query-preserving redirect into Data
+ * Enrichment's "Import contacts" tab (same protocol as /find-prospects).
+ */
+export default function ImportContactsRedirect() {
+  const [, setLocation] = useLocation();
+  useEffect(() => {
+    setLocation(tabRedirectUrl("Import contacts", window.location.search), { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  return null;
 }
 
 /* ─── Import history ─────────────────────────────────────────────────────

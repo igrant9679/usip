@@ -341,7 +341,7 @@ export default function Companies() {
               <Sparkles className={`size-3.5 ${resolving ? "animate-pulse" : ""}`} /> {resolving ? "Resolving…" : "Resolve brands"}
             </Button>
           )}
-          <Button variant="outline" size="sm" className="h-7 gap-1.5" onClick={() => setLocation("/import")}><Upload className="size-3.5" /> Import</Button>
+          <Button variant="outline" size="sm" className="h-7 gap-1.5" onClick={() => setLocation("/v2/data-enrichment?tab=import-contacts")}><Upload className="size-3.5" /> Import</Button>
         </div>
 
         <div className="flex flex-1 min-h-0">

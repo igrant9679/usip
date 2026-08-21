@@ -13,8 +13,8 @@
 export const DATA_ENRICHMENT_TABS = [
   "Data health center",
   "Find prospects",
+  "Import contacts",
   "CRM",
-  "CSV",
   "Job change alerts",
   "Form enrichment",
 ] as const;
@@ -35,12 +35,17 @@ export function tabFromSlug(slug: string | null | undefined): DataEnrichmentTab 
 }
 
 /**
- * Where /find-prospects sends its visitors now. Every OLD query param
- * (runId, q, …) survives the move — the fold must not orphan the two deep
- * links that already point there.
+ * Where a folded page sends its visitors: this page, with the named tab and
+ * every OLD query param carried through — a fold must not orphan the deep
+ * links that already point at the retired route.
  */
-export function foldRedirectUrl(search: string): string {
+export function tabRedirectUrl(tab: DataEnrichmentTab, search: string): string {
   const sp = new URLSearchParams(search || "");
-  sp.set("tab", tabSlug("Find prospects"));
+  sp.set("tab", tabSlug(tab));
   return `/v2/data-enrichment?${sp.toString()}`;
+}
+
+/** The Find Prospects fold's redirect (kept by name — first of the folds). */
+export function foldRedirectUrl(search: string): string {
+  return tabRedirectUrl("Find prospects", search);
 }

@@ -186,10 +186,10 @@ const _LEGACY_NAV: NavGroup[] = [
       { href: "/v2/people", label: "People", icon: Users },
       { href: "/v2/companies", label: "Companies", icon: Building2 },
       { kind: "subhead", label: "Tools", color: "#EA580C", darkColor: "#FB923C" },
-      // Find Prospects folded into Data Enrichment's "Find prospects" tab
-      // (owner ask 2026-08-21); /find-prospects redirects there with its
-      // query params intact, and the tool registry still lists it by name.
-      { href: "/import", label: "Import Contacts", icon: Upload },
+      // Find Prospects AND Import Contacts folded into Data Enrichment's
+      // tabs (owner asks 2026-08-21); /find-prospects and /import redirect
+      // there with their query params intact, and the tool registry still
+      // lists both by name.
       { href: "/data-health", label: "Data Health", icon: BarChart3 },
       // Moved from Operate — Lead Routing manages how new leads are
       // assigned to reps, which is conceptually a funnel-stage tool.

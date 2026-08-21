@@ -53,7 +53,8 @@ export const NAV_HELP: Record<string, HelpEntry> = {
   "/v2/data-enrichment?tab=find-prospects": { body: "Search for new people who match your ideal customer, and add them to the queue.", article: "find-prospects-discovery" },
   "/v2/data-enrichment": { body: "Fill in missing details — company, job title, email — on contacts you already have.", article: "how-email-finding-works" },
   "/data-health": { body: "What's missing or wrong across your data, and what that's costing you in reach." },
-  "/import": { body: "Bring contacts in from a CSV file.", article: "import-prospects-csv" },
+  // Re-keyed 2026-08-21: Import Contacts folded into Data Enrichment's tab.
+  "/v2/data-enrichment?tab=import-contacts": { body: "Bring contacts in from a CSV file.", article: "import-prospects-csv" },
   "/leads": { body: "Inbound people who haven't been qualified yet — from the chat agent, booking pages and forms.", article: "leads-contacts-accounts" },
 
   // ── Engage ──

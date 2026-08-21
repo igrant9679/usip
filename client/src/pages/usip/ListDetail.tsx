@@ -152,7 +152,7 @@ export default function ListDetail() {
             )}
             <span className="text-[12px] text-muted-foreground">{members.length} {members.length === 1 ? "record" : "records"}</span>
             <div className="flex-1" />
-            <Button variant="outline" size="sm" className="h-7 gap-1.5" onClick={() => setLocation("/import")}><Upload className="size-3.5" /> Import</Button>
+            <Button variant="outline" size="sm" className="h-7 gap-1.5" onClick={() => setLocation("/v2/data-enrichment?tab=import-contacts")}><Upload className="size-3.5" /> Import</Button>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button size="sm" className="h-7 gap-1.5" style={{ backgroundColor: accent }}><Plus className="size-3.5" /> Add records to list <ChevronDown className="size-3 opacity-70" /></Button>
@@ -210,7 +210,7 @@ export default function ListDetail() {
           {membersQ.isLoading ? (
             <div className="p-3 space-y-2">{Array.from({ length: 6 }).map((_, i) => <div key={i} className="h-11 rounded bg-muted/50 animate-pulse" />)}</div>
           ) : members.length === 0 ? (
-            <EmptyState isCompanies={!!isCompanies} onFind={() => { setPicked(new Set()); setAddOpen(true); }} onImport={() => setLocation("/import")} onWorkflow={() => setLocation("/v2/workflows")} />
+            <EmptyState isCompanies={!!isCompanies} onFind={() => { setPicked(new Set()); setAddOpen(true); }} onImport={() => setLocation("/v2/data-enrichment?tab=import-contacts")} onWorkflow={() => setLocation("/v2/workflows")} />
           ) : rows.length === 0 ? (
             <div className="text-center py-16 px-4">
               <p className="text-sm text-muted-foreground">No records match “{search}”.</p>

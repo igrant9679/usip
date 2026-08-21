@@ -118,7 +118,7 @@ const GROUPS: HubGroup[] = [
     label: "Data management",
     items: [
       { id: "custom-fields", label: "Custom fields", icon: Tag, href: "/custom-fields" },
-      { id: "imports", label: "Imports and exports", icon: Upload, href: "/import" },
+      { id: "imports", label: "Imports and exports", icon: Upload, href: "/v2/data-enrichment?tab=import-contacts" },
       { id: "enrichment", label: "Data enrichment", icon: Sparkles, href: "/v2/data-enrichment" },
     ],
   },

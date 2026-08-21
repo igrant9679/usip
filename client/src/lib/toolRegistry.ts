@@ -91,7 +91,10 @@ export const TOOLS: Tool[] = [
     description: "Your to-dos, including AI-proposed drafts." },
   { href: "/v2/calls", label: "Calls", icon: Phone, group: "CRM",
     description: "Call logs, outcomes, and AI call summaries." },
-  { href: "/import", label: "Import Contacts", icon: Upload, group: "CRM", primary: true,
+  // Folded into Data Enrichment (2026-08-21) — deliberately NOT primary, so
+  // the rail shows one entry for the merged surface; Ctrl+K and the Library
+  // still find "Import Contacts" by name and land on its tab.
+  { href: "/v2/data-enrichment?tab=import-contacts", label: "Import Contacts", icon: Upload, group: "CRM",
     description: "Bring in a CSV of people or prospects.", keywords: ["csv", "upload"] },
   { href: "/customers", label: "Customers", icon: Heart, group: "CRM", primary: true,
     description: "Won accounts — health, notes, and expansion.", keywords: ["customer success", "accounts"] },

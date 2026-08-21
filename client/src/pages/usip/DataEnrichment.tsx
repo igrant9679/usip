@@ -13,6 +13,7 @@ import { toast } from "sonner";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
 import { EnrichmentJobDrawer } from "@/components/usip/enrichment/EnrichmentJobDrawer";
 import { FindProspectsPanel } from "@/pages/usip/FindProspects";
+import { ImportContactsPanel } from "@/pages/usip/ImportContacts";
 import { DATA_ENRICHMENT_TABS, tabFromSlug, tabSlug, type DataEnrichmentTab } from "@/pages/usip/dataEnrichmentTabs";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
@@ -300,31 +301,10 @@ export default function DataEnrichment() {
             </div>
           )}
 
-          {tab === "CSV" && (
-            <div className="max-w-2xl mx-auto text-center py-10">
-              <div className="flex items-center justify-end mb-2">
-                <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setLocation("/import")}><Upload className="size-4" /> Import CSV</Button>
-              </div>
-              <div className="rounded-xl border bg-card shadow-sm p-4 text-left">
-                <div className="flex items-center gap-1.5 text-[12px] text-muted-foreground mb-2"><Database className="size-3.5" /> Sample · records with missing data</div>
-                <table className="w-full text-sm">
-                  <thead><tr className="text-left text-[10px] uppercase tracking-wide text-muted-foreground"><th className="py-1">Name</th><th>Company</th><th>Email</th><th>Phone</th></tr></thead>
-                  <tbody>
-                    {["Sarah Chen", "James Miller", "Maria Santos", "Alex Kim", "Tom Wright"].map((n) => (
-                      <tr key={n} className="border-t border-border/60">
-                        <td className="py-2 font-medium">{n}</td>
-                        {[0, 1, 2].map((i) => <td key={i} className="py-2"><span className="block h-2 w-20 rounded bg-muted" /></td>)}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <h2 className="text-base font-semibold mt-6">Fill data gaps in any list</h2>
-              <p className="text-sm text-muted-foreground mt-1">Upload a CSV and fill missing fields with verified data to complete your records faster.</p>
-              <Button className="mt-4" style={{ backgroundColor: accent }} onClick={() => setLocation("/import")}>Import a CSV to enrich</Button>
-              <p className="text-[11px] text-muted-foreground mt-4 inline-flex items-center gap-1"><Activity className="size-3" /> 97% email accuracy, verified in real time</p>
-            </div>
-          )}
+          {/* The folded import wizard — replaces the old "CSV" tab, a mock
+              upsell (fake sample table, invented accuracy claim) whose only
+              CTAs navigated to the page now living right here. */}
+          {tab === "Import contacts" && <ImportContactsPanel />}
 
           {tab === "Job change alerts" && (
             <div className="max-w-4xl mx-auto space-y-4">
