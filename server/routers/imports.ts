@@ -314,6 +314,56 @@ async function existingRowsForDestination(
     .where(eq(contacts.workspaceId, wsId));
 }
 
+/* ─── Wizard-fidelity helpers (pure, exported for tests) ─────────────────── */
+
+/**
+ * Per-column profile from the ONE parse: how many rows carry a value, and up
+ * to two distinct sample values. The mapping step renders these so the user
+ * maps columns by what is IN them, not by guessing from a header — the
+ * substring-mismap incident (8c967cc) started with a header that read like
+ * one thing and held another. Server-side on purpose: a client-side profile
+ * would be a second parser, and two parsers is how previews drift from
+ * imports.
+ */
+export function buildColumnStats(
+  headers: string[],
+  rows: Array<Record<string, string>>,
+): Array<{ header: string; filled: number; samples: string[] }> {
+  return headers.map((header) => {
+    let filled = 0;
+    const samples: string[] = [];
+    // Dedupe on the RAW value, not the clipped one — clipping before comparing
+    // let two identical long values both through.
+    const seen = new Set<string>();
+    for (const row of rows) {
+      const v = (row[header] ?? "").trim();
+      if (!v) continue;
+      filled++;
+      if (samples.length < 2 && !seen.has(v)) {
+        seen.add(v);
+        samples.push(v.length > 60 ? `${v.slice(0, 57)}…` : v);
+      }
+    }
+    return { header, filled, samples };
+  });
+}
+
+/**
+ * Error rows grouped by reason, counted over ALL of them — the client only
+ * receives the first 200 rows, so a client-side tally would under-count
+ * exactly when errors are numerous enough to need a summary.
+ */
+export function summarizeErrorReasons(
+  errorRows: Array<{ rowIndex: number; reason: string }>,
+): Array<{ reason: string; count: number }> {
+  const counts = new Map<string, number>();
+  for (const r of errorRows) counts.set(r.reason, (counts.get(r.reason) ?? 0) + 1);
+  return Array.from(counts.entries())
+    .map(([reason, count]) => ({ reason, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 8);
+}
+
 export const importsRouter = router({
   /** Step 1: Parse CSV text, return headers + first 5 preview rows */
   parseCSV: workspaceProcedure
@@ -341,6 +391,8 @@ export const importsRouter = router({
         previewRows: rows.slice(0, 5),
         totalRows: rows.length,
         systemFields: SYSTEM_FIELDS,
+        /** Fill counts + samples per column, for the mapping step's context. */
+        columnStats: buildColumnStats(headers, rows),
       };
     }),
 
@@ -389,6 +441,24 @@ export const importsRouter = router({
         }
       }
 
+      // WHO a duplicate row matched — a count alone can't be sanity-checked.
+      // ("Duplicates found: 37" says nothing about whether matching is right;
+      // "Row 12 ↔ Jane Doe, by email" can be eyeballed.) First 10 only.
+      const existingByEmail = new Map<string, string>();
+      const existingByNameKey = new Map<string, string>();
+      for (const c of existingContacts) {
+        const nm = [c.firstName, c.lastName].filter(Boolean).join(" ").trim() || (c.email ?? "");
+        const e = c.email?.toLowerCase();
+        if (e && !existingByEmail.has(e)) existingByEmail.set(e, nm);
+        const k = nameCompanyKey(c.firstName, c.lastName, c.companyName);
+        if (k && !existingByNameKey.has(k)) existingByNameKey.set(k, nm);
+      }
+      const duplicateSamples: Array<{
+        rowIndex: number; name: string; email: string | null;
+        matchedBy: "email" | "name + company" | "earlier row in this file";
+        existingName: string | null;
+      }> = [];
+
       // Validate each row
       const validRows: number[] = [];
       const duplicateRows: number[] = [];
@@ -428,7 +498,21 @@ export const importsRouter = router({
           errorRows.push({ rowIndex, reason: verdict.reason });
           return;
         }
-        if (verdict.isDuplicate) duplicateRows.push(rowIndex);
+        if (verdict.isDuplicate) {
+          duplicateRows.push(rowIndex);
+          if (duplicateSamples.length < 10) {
+            const rowName = [mapped.firstName, mapped.lastName].filter(Boolean).join(" ").trim() || mapped.email || `Row ${rowIndex}`;
+            const e = verdict.emailKey;
+            const matchedBy = e && existingEmails.has(e) ? "email" as const
+              : e && seenEmails.has(e) ? "earlier row in this file" as const
+              : verdict.nameKey && existingNameKeys.has(verdict.nameKey) ? "name + company" as const
+              : "earlier row in this file" as const;
+            const existingName = e && existingByEmail.get(e)
+              ? existingByEmail.get(e)!
+              : (verdict.nameKey && existingByNameKey.get(verdict.nameKey)) || null;
+            duplicateSamples.push({ rowIndex, name: rowName, email: mapped.email || null, matchedBy, existingName });
+          }
+        }
         if (verdict.status === "duplicate") return;
 
         // Record this row's identity so later rows in the same file dedupe
@@ -455,6 +539,10 @@ export const importsRouter = router({
         /** No email AND no name+company — undedupable however the flags are set. */
         unmatchableCount: unmatchableRows,
         matchOnNameCompany: input.matchOnNameCompany,
+        /** First 10 duplicate matches with WHO they matched — eyeballable. */
+        duplicateSamples,
+        /** Reasons over ALL error rows (the row list below caps at 200). */
+        errorReasonSummary: summarizeErrorReasons(errorRows),
       };
     }),
 
