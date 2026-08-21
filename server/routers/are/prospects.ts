@@ -61,6 +61,7 @@ import { buildBrandContext } from "../../services/brandContext";
 // The A/B metadata row must be keyed by the same step index + variant key the
 // execution queue uses, so both sides read one rule. See shared/variantKeys.ts.
 import { DEFAULT_STEP_GAP_DAYS, defaultDayForStep, stepIndexOf } from "@shared/areSequenceSteps";
+import { cleanScrapedField } from "@shared/fieldHygiene";
 import { MAX_TIMELINE_DAY_OFFSET, MAX_TIMELINE_STEPS, effectiveStepGapDays, planRespaceForProspect, sanitizeDayOffsets } from "@shared/areStepCadence";
 import { DEFAULT_VARIANT_KEY, normalizeVariantKey } from "@shared/variantKeys";
 
@@ -403,7 +404,13 @@ Produce:
     // name but no domain now wait for the comprehensive pass's LinkedIn/
     // email-domain paths instead. Best-effort: a failure here never fails
     // the enrichment.
-    const inferredCompany = String((enrichData as Record<string, unknown>).inferredCompanyName ?? "").trim();
+    // Through the ONE cleaner: inferredCompanyName is raw LLM output, and the
+    // model's dunno-token is "<UNKNOWN>" — truthy, so a bare trim wrote it to
+    // prospect_queue.companyName verbatim (pq 16331/16386, enriched 08-16/17,
+    // four days AFTER 0159 scrubbed the table; 16331's subject line then went
+    // to a real recipient as "…at <UNKNOWN>"). Migration 0171 re-repairs the
+    // stored rows; this is the writer that leaked them.
+    const inferredCompany = cleanScrapedField((enrichData as Record<string, unknown>).inferredCompanyName, 200) ?? "";
     const effCompanyName = prospect.companyName ?? (inferredCompany || null);
     const effCompanyDomain: string | null = prospect.companyDomain ?? null;
     let resolvedEmail: string | null = null;

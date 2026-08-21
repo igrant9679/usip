@@ -33,7 +33,7 @@ import { contacts, prospects, prospectQueue, prospectLinkedinEnrichments } from 
 import { CONFIDENCE, mergeAll, type Candidate, type ProvenanceMap } from "./enrichment/fieldMerge";
 import { stripNameCredentials } from "./enrichment/personName";
 import { cleanPlaceholder, normalizeJobTitle } from "./enrichment/recordNormalize";
-import { isPlaceholderToken, usableEmailOrNull } from "@shared/fieldHygiene";
+import { cleanScrapedField, isPlaceholderToken, usableEmailOrNull } from "@shared/fieldHygiene";
 import { normalizeCompanyName, normalizeDomain } from "./company/normalize";
 import { extractLinkedInIdentifier } from "./linkedinLookup";
 
@@ -319,7 +319,12 @@ export async function mergeIntoPerson(
       cands.push({ field: "email", value: data.email.trim(), source: data.source, confidence: conf, at: now, ...(v ? { verification: v } : {}) });
     }
     const add = (field: Candidate["field"], value: string | null | undefined) => {
-      if (value?.trim()) cands.push({ field, value: value.trim(), source: data.source, confidence: CONFIDENCE.scrapeFound, at: now });
+      // Hygiene at the candidate boundary: callers hand this raw scraped/LLM
+      // values, and a placeholder ("<UNKNOWN>", "N/A", "—") must never become
+      // a merge candidate for the MASTER record — a trim alone let it through
+      // (2026-08-21, same leak that stamped prospect_queue rows).
+      const clean = cleanScrapedField(value, 200);
+      if (clean) cands.push({ field, value: clean, source: data.source, confidence: CONFIDENCE.scrapeFound, at: now });
     };
     add("company", data.companyName);
     add("companyDomain", data.companyDomain);

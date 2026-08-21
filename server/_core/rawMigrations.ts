@@ -3779,6 +3779,31 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0171: re-scrub prospect_queue placeholders (the enrich-agent leak) ────
+  // 0159 scrubbed these on 2026-08-12, but ONE writer kept minting them: the
+  // enrich agent's company backfill wrote the LLM's `inferredCompanyName`
+  // after a bare trim, and the model's dunno-token is "<UNKNOWN>" — truthy,
+  // so it landed verbatim (pq 16331/16386, enriched 08-16/17). One of them
+  // then went to a real recipient as a subject line reading
+  // "Grants administration at <UNKNOWN>" (send of 08-20; the merge seam now
+  // guards display, this repairs the rows). The writer reads through
+  // shared/fieldHygiene as of the same commit; mergeIntoPerson's candidate
+  // boundary too. Statements are 0159's, idempotent, prospect_queue only —
+  // names stay excluded (the "(unknown)" first-name sentinel is load-bearing
+  // for isSyntheticNameProspect).
+  {
+    name: "0171_rescrub_prospect_queue_placeholders.sql",
+    statements: [
+      "UPDATE `prospect_queue` SET `email` = NULL WHERE `email` IS NOT NULL AND `email` NOT LIKE '%@%'",
+      "UPDATE `prospect_queue` SET `phone` = NULL WHERE `phone` IS NOT NULL AND `phone` NOT REGEXP '[0-9]'",
+      "UPDATE `prospect_queue` SET `companyDomain` = NULL WHERE `companyDomain` IS NOT NULL AND `companyDomain` NOT LIKE '%.%'",
+      "UPDATE `prospect_queue` SET `title` = NULL WHERE `title` IS NOT NULL AND LOWER(TRIM(REPLACE(REPLACE(REPLACE(REPLACE(`title`, '<', ''), '>', ''), '(', ''), ')', ''))) IN ('unknown','n/a','na','none','null','not available','not found','not known','-','--','---')",
+      "UPDATE `prospect_queue` SET `companyName` = NULL WHERE `companyName` IS NOT NULL AND LOWER(TRIM(REPLACE(REPLACE(REPLACE(REPLACE(`companyName`, '<', ''), '>', ''), '(', ''), ')', ''))) IN ('unknown','n/a','na','none','null','not available','not found','not known','-','--','---')",
+      "UPDATE `prospect_queue` SET `industry` = NULL WHERE `industry` IS NOT NULL AND LOWER(TRIM(REPLACE(REPLACE(REPLACE(REPLACE(`industry`, '<', ''), '>', ''), '(', ''), ')', ''))) IN ('unknown','n/a','na','none','null','not available','not found','not known','-','--','---')",
+      "UPDATE `prospect_queue` SET `geography` = NULL WHERE `geography` IS NOT NULL AND LOWER(TRIM(REPLACE(REPLACE(REPLACE(REPLACE(`geography`, '<', ''), '>', ''), '(', ''), ')', ''))) IN ('unknown','n/a','na','none','null','not available','not found','not known','-','--','---')",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

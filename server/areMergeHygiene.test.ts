@@ -49,3 +49,36 @@ describe("applyMerge — person fields", () => {
     expect(applyMerge("As {{title}}", P({ title: "N/A" }))).toBe("As ");
   });
 });
+
+describe("the writers are plugged, not just the display", () => {
+  // 0159 scrubbed the rows on 08-12; pq 16331/16386 were stamped "<UNKNOWN>"
+  // on 08-16/17 anyway — proof the leak was a WRITER, not stale data. Display
+  // hygiene without writer hygiene means the garbage keeps flowing and every
+  // reader needs its own guard.
+  const { readFileSync } = require("node:fs") as typeof import("node:fs");
+  const prospectsRouter = readFileSync("server/routers/are/prospects.ts", "utf8");
+  const personLink = readFileSync("server/services/personLink.ts", "utf8");
+  const mig = readFileSync("server/_core/rawMigrations.ts", "utf8");
+
+  it("the enrich agent's company backfill reads the LLM's inferredCompanyName through the cleaner", () => {
+    expect(prospectsRouter).toContain("cleanScrapedField((enrichData as Record<string, unknown>).inferredCompanyName, 200)");
+    expect(prospectsRouter).not.toContain("String((enrichData as Record<string, unknown>).inferredCompanyName");
+  });
+
+  it("mergeIntoPerson's candidate boundary cleans before a value can compete for the master record", () => {
+    const start = personLink.indexOf("export async function mergeIntoPerson");
+    const fn = personLink.slice(start, personLink.indexOf("const merged = mergeAll", start));
+    expect(fn).toContain("cleanScrapedField(value, 200)");
+    expect(fn).not.toMatch(/if \(value\?\.trim\(\)\) cands\.push/);
+  });
+
+  it("migration 0171 re-repairs the stored rows, idempotently, names excluded", () => {
+    expect(mig).toContain('name: "0171_rescrub_prospect_queue_placeholders.sql"');
+    const block = mig.slice(mig.indexOf('name: "0171_rescrub'), mig.indexOf("];", mig.indexOf('name: "0171_rescrub')));
+    expect(block).toContain("SET `companyName` = NULL");
+    expect(block).toContain("SET `title` = NULL");
+    // The "(unknown)" first-name sentinel is load-bearing (isSyntheticNameProspect).
+    expect(block).not.toContain("`firstName`");
+    expect(block).not.toContain("`lastName`");
+  });
+});
