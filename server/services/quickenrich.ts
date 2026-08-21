@@ -152,7 +152,14 @@ export function buildQuickenrichFilters(targeting: {
   if (!filters.title && !filters.industry_linkedin) {
     return { body: null, unmappedGeos };
   }
-  return { body: { filters, logic: "AND", page: 1 }, unmappedGeos };
+  // Dimensions at the BODY ROOT — proven by probe on 2026-08-21. Their API
+  // changed schema at some point after key setup: any body containing a
+  // `filters` wrapper now 422s ("at least one filter is required", because
+  // the wrapper reads as no filter at all), while the same per-dimension
+  // include objects at the top level answer 200. `logic` was dropped with
+  // the wrapper: the accepted probe carried no such key, and an unproven key
+  // is how the last 422 started.
+  return { body: { ...filters, page: 1 }, unmappedGeos };
 }
 
 export type QuickEnrichDiscoveredPerson = {

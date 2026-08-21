@@ -240,14 +240,16 @@ describe("buildQuickenrichFilters — targeting → their vocabulary, conservati
       industries: ["non-profit organizations"],
       geos: [],
     });
+    // Dimensions at the BODY ROOT, no `filters` wrapper and no `logic` key —
+    // their API changed schema (probe-proven 2026-08-21): any body carrying a
+    // `filters` wrapper 422s as "no filter at all".
     expect(body).toMatchObject({
-      logic: "AND",
       page: 1,
-      filters: {
-        title: { include: ["CFO", "Executive Director"] },
-        industry_linkedin: { include: ["non-profit organizations"] },
-      },
+      title: { include: ["CFO", "Executive Director"] },
+      industry_linkedin: { include: ["non-profit organizations"] },
     });
+    expect(body).not.toHaveProperty("filters");
+    expect(body).not.toHaveProperty("logic");
   });
 
   it("sends a geo ONLY when it maps cleanly to a country code, and reports the rest", () => {
@@ -258,7 +260,7 @@ describe("buildQuickenrichFilters — targeting → their vocabulary, conservati
       industries: [],
       geos: ["United States", "California", "UK"],
     });
-    expect((body as any).filters.country_code.include.sort()).toEqual(["GB", "US"]);
+    expect((body as any).country_code.include.sort()).toEqual(["GB", "US"]);
     expect(unmappedGeos).toEqual(["California"]);
   });
 
@@ -275,7 +277,7 @@ describe("buildQuickenrichFilters — targeting → their vocabulary, conservati
       industries: [],
       geos: [],
     });
-    expect((body as any).filters.title.include).toHaveLength(12);
+    expect((body as any).title.include).toHaveLength(12);
   });
 });
 
@@ -285,7 +287,7 @@ describe("quickenrichContactFinder — free discovery, defensively parsed", () =
     ok: status >= 200 && status < 300,
     json: async () => body,
   });
-  const BODY = { filters: { title: { include: ["CFO"] } }, logic: "AND", page: 1 };
+  const BODY = { title: { include: ["CFO"] }, page: 1 };
 
   it("maps their row shape to prospect fields, normalising the company URL to a domain", async () => {
     mocks.fetch.mockResolvedValue(jsonResponse(200, {
