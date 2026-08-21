@@ -357,6 +357,8 @@ function useCampaignSync(campaignId: number) {
       // Per-prospect data
       utils.are.prospects.list.invalidate();
       utils.are.prospects.listSequences.invalidate({ campaignId });
+      // Inline sequence-progress timelines (per-step representative rows)
+      utils.are.execution.getStepStates.invalidate({ campaignId });
       // Step-performance tab (was never being invalidated — root cause of
       // the "A/B tab out of sync" report)
       utils.are.prospects.getAbVariants.invalidate({ campaignId });
@@ -1207,15 +1209,21 @@ function SequencesTab({ campaignId, campaign }: { campaignId: number; campaign: 
   // Explicit limit: the default was 100 and a live campaign's queue held 101
   // rows, which silently truncated the page.
   const { data: rows = [], refetch, isLoading } = trpc.are.prospects.listSequences.useQuery({ campaignId, limit: 500 });
-  // Execution rows for the whole campaign, indexed per prospect. One query
-  // rather than one per row: an active campaign has a handful of enrolled
-  // prospects and a few steps each, and the queue is already campaign-scoped.
-  const { data: execRows = [] } = trpc.are.execution.getQueue.useQuery({ campaignId, limit: 200 });
+  // ONE representative execution row per (prospect, step), for the whole
+  // campaign — server-reduced (are.execution.getStepStates), never truncated.
+  // This used to read raw getQueue with limit 200 ("an active campaign has a
+  // handful of enrolled prospects…") — campaign 21 holds 1,000+ rows, the
+  // page was the 200 future-most by scheduledAt, and every SENT row fell off
+  // it: a prospect two emails into her sequence rendered as "0/7 sent · next
+  // step 4" (owner report 2026-08-20).
+  const { data: execRows = [] } = trpc.are.execution.getStepStates.useQuery({ campaignId });
   const execByProspect = useMemo(() => {
     const m = new Map<number, any[]>();
     for (const e of execRows as any[]) {
       const list = m.get(e.prospectQueueId) ?? [];
-      list.push(e);
+      // The timeline dates a sent step by sentAt ?? scheduledAt — executedAt
+      // is when it actually went, so surface it under that name.
+      list.push({ ...e, sentAt: e.executedAt ?? null });
       m.set(e.prospectQueueId, list);
     }
     return m;

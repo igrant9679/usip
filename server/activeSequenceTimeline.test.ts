@@ -95,8 +95,13 @@ describe("it is mounted where the owner asked", () => {
     expect(page).toContain("{isActive && hasSeq && (");
   });
 
-  it("fetches the execution queue ONCE for the campaign, not per row", () => {
-    expect(page).toContain("trpc.are.execution.getQueue.useQuery({ campaignId, limit: 200 })");
+  it("fetches per-step states ONCE for the campaign, not per row — and never a truncatable raw page", () => {
+    // 2026-08-20: the raw getQueue read with limit 200 dropped every SENT row
+    // of a 1,000+-row campaign (past dates sort last under scheduledAt DESC),
+    // so mid-flight prospects rendered "0/7 sent". The tab now reads the
+    // server-side reduction — one representative row per (prospect, step).
+    expect(page).toContain("trpc.are.execution.getStepStates.useQuery({ campaignId })");
     expect(page).toContain("execByProspect");
+    expect(page).not.toContain("are.execution.getQueue.useQuery");
   });
 });

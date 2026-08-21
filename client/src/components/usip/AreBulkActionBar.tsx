@@ -148,6 +148,7 @@ export function AreBulkActionBar({ campaignId, selection, actions, onDone, timel
     utils.are.prospects.listSequences.invalidate();
     utils.are.prospects.getRejectionStats.invalidate();
     utils.are.execution.getQueue.invalidate();
+    utils.are.execution.getStepStates.invalidate();
     utils.are.execution.getSignalLog.invalidate();
     utils.are.engine.getLogs.invalidate();
     utils.are.campaigns.get.invalidate({ id: campaignId });

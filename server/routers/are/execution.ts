@@ -572,9 +572,72 @@ export async function attributeMeetingBookingToAre(
   }
 }
 
+/* ─── Per-step representative rows (the Sequences tab's progress truth) ──── */
+
+/**
+ * A (prospect, stepIndex) pair accumulates rows over its life: the canceled
+ * copy from a regeneration, the failed no-email attempt, the re-enrolled
+ * scheduled row, eventually a sent one. The question the Sequences tab asks —
+ * "where is this step up to" — has ONE answer per step, and it is the row
+ * ranked here: a send is history and outranks everything; a scheduled row is
+ * the live plan and outranks any dead attempt; among equals the newest row is
+ * the current generation.
+ *
+ * Exists because the tab used to read raw `getQueue` rows with `limit: 200`
+ * (its comment: "an active campaign has a handful of enrolled prospects") —
+ * campaign 21 holds 1,000+ rows, the page was the 200 FUTURE-most by
+ * scheduledAt, and every SENT row (past dates) fell off it. Live 2026-08-20:
+ * a prospect two emails into her sequence rendered as "0/7 sent · next:
+ * step 4 Sep 6" (owner report). The unfiltered-page-boundary class again —
+ * the fix is a reduction, not a bigger limit.
+ */
+const STEP_STATE_PRECEDENCE: Record<string, number> = { sent: 0, scheduled: 1, paused: 2, failed: 3, skipped: 4 };
+
+export function reduceStepStates<T extends { id: number; prospectQueueId: number; stepIndex: number; status: string }>(rows: T[]): T[] {
+  const best = new Map<string, T>();
+  for (const r of rows) {
+    const k = `${r.prospectQueueId}:${r.stepIndex}`;
+    const cur = best.get(k);
+    if (!cur) { best.set(k, r); continue; }
+    const a = STEP_STATE_PRECEDENCE[r.status] ?? 9;
+    const b = STEP_STATE_PRECEDENCE[cur.status] ?? 9;
+    if (a < b || (a === b && r.id > cur.id)) best.set(k, r);
+  }
+  return Array.from(best.values());
+}
+
 /* ─── Router ─────────────────────────────────────────────────────────────── */
 
 export const executionRouter = router({
+  /**
+   * One representative row per (prospect, stepIndex) for a whole campaign —
+   * see reduceStepStates. Deliberately NO LIMIT on the scan: the reduction is
+   * the bound (≤ prospects × steps rows out), and a limited scan is exactly
+   * the truncation this endpoint exists to replace.
+   */
+  getStepStates: workspaceProcedure
+    .input(z.object({ campaignId: z.number() }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const rows = await db
+        .select({
+          id: areExecutionQueue.id,
+          prospectQueueId: areExecutionQueue.prospectQueueId,
+          stepIndex: areExecutionQueue.stepIndex,
+          channel: areExecutionQueue.channel,
+          status: areExecutionQueue.status,
+          scheduledAt: areExecutionQueue.scheduledAt,
+          executedAt: areExecutionQueue.executedAt,
+        })
+        .from(areExecutionQueue)
+        .where(and(
+          eq(areExecutionQueue.workspaceId, ctx.workspace.id),
+          eq(areExecutionQueue.campaignId, input.campaignId),
+        ));
+      return reduceStepStates(rows);
+    }),
+
   getQueue: workspaceProcedure
     .input(z.object({
       campaignId: z.number().optional(),
