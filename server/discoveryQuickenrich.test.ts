@@ -10,6 +10,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
+import { toRawFindRow } from "../server/services/discovery/index";
 
 const svc = readFileSync("server/services/discovery/index.ts", "utf8");
 const engine = readFileSync("server/areEngine.ts", "utf8");
@@ -48,6 +49,28 @@ describe("QuickEnrich as a Find-prospects source", () => {
     const ledger = svc.slice(svc.indexOf("async function recordPullLedger"), svc.indexOf("async function discoverViaApollo"));
     expect(ledger).toContain("db.insert(areScrapeJobs)");
     expect(ledger).toContain('status: "complete"');
+  });
+
+  it("raw-find rows are clamped to COLUMN widths — one long headline must never lose a run", () => {
+    // Live 2026-08-21: the generic 400-char clamp exceeded varchar(80/200)
+    // columns, MySQL strict mode rejected the row, and the multi-row insert
+    // took the whole run's finds down with it. QuickEnrich rows were merely
+    // the first with a >200-char title.
+    const long = "x".repeat(500);
+    const row = toRawFindRow(1, 1, "quickenrich", {
+      firstName: long, lastName: long, title: long, companyName: long,
+      companyDomain: long, location: long, pageTitle: long,
+    });
+    expect(row.firstName!.length).toBeLessThanOrEqual(80);
+    expect(row.lastName!.length).toBeLessThanOrEqual(80);
+    expect(row.title!.length).toBeLessThanOrEqual(200);
+    expect(row.companyName!.length).toBeLessThanOrEqual(200);
+    expect(row.companyDomain!.length).toBeLessThanOrEqual(200);
+    expect(row.location!.length).toBeLessThanOrEqual(200);
+    expect(row.pageTitle!.length).toBeLessThanOrEqual(400);
+    // And the insert has a per-row fallback so an unstorable row is skipped,
+    // not fatal to every source's finds.
+    expect(svc).toContain("raw_find row unstorable, skipped");
   });
 
   it("the wizard's source list matches the fan-out per mode, QuickEnrich and Apollo included", () => {

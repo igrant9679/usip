@@ -315,32 +315,41 @@ async function emitLog(
  *  sources return slightly different field names; we collapse them
  *  here so downstream consolidation has one canonical shape to work
  *  against. */
-function toRawFindRow(
+export function toRawFindRow(
   workspaceId: number,
   runId: number,
   source: string,
   raw: Record<string, unknown>,
 ): typeof rawFinds.$inferInsert {
-  const s = (k: string) => {
+  /**
+   * Clamps must match the COLUMN widths, not a generic 400: MySQL strict
+   * mode REJECTS an over-long value, and one rejected row killed the whole
+   * multi-row insert — a full run's finds, every source, lost (live
+   * 2026-08-21, the first QuickEnrich rows carried a >200-char headline;
+   * the older sources had just never produced one). firstName/lastName are
+   * varchar(80); title/company/domain/location varchar(200); pageTitle
+   * varchar(400).
+   */
+  const s = (k: string, max: number) => {
     const v = raw[k];
-    return v == null ? null : String(v).slice(0, 400);
+    return v == null ? null : String(v).slice(0, max);
   };
   return {
     workspaceId,
     runId,
     source,
     sourceUrl: raw.sourceUrl ? String(raw.sourceUrl) : null,
-    pageTitle: s("pageTitle") || s("title") || null,
+    pageTitle: s("pageTitle", 400) || s("title", 400) || null,
     snippet: raw.snippet ? String(raw.snippet).slice(0, 2000) : null,
-    firstName: s("firstName"),
-    lastName: s("lastName"),
-    title: s("title"),
-    companyName: s("companyName") || s("company"),
-    companyDomain: s("companyDomain") || s("domain"),
+    firstName: s("firstName", 80),
+    lastName: s("lastName", 80),
+    title: s("title", 200),
+    companyName: s("companyName", 200) || s("company", 200),
+    companyDomain: s("companyDomain", 200) || s("domain", 200),
     linkedinUrl: raw.linkedinUrl ? String(raw.linkedinUrl) : null,
     email: raw.email ? String(raw.email).slice(0, 320) : null,
     phone: raw.phone ? String(raw.phone).slice(0, 40) : null,
-    location: s("location") || s("geography") || null,
+    location: (s("location", 200) || s("geography", 200)) ?? null,
     rawJson: raw as any,
   };
 }
@@ -442,9 +451,26 @@ export async function runDiscovery(
   }
 
   if (rowsToInsert.length > 0) {
-    // Insert in chunks of 50 to keep a single statement reasonable.
+    // Insert in chunks of 50 to keep a single statement reasonable. A failed
+    // chunk falls back to per-row so ONE unstorable row cannot lose the whole
+    // run's finds across every source (which is exactly what happened live on
+    // 2026-08-21 before the clamps above matched the column widths — the
+    // imports commit uses the same chunk-then-per-row shape for the same
+    // reason).
     for (let i = 0; i < rowsToInsert.length; i += 50) {
-      await db.insert(rawFinds).values(rowsToInsert.slice(i, i + 50));
+      const chunk = rowsToInsert.slice(i, i + 50);
+      try {
+        await db.insert(rawFinds).values(chunk);
+      } catch {
+        for (const row of chunk) {
+          try {
+            await db.insert(rawFinds).values(row);
+          } catch (e) {
+            totalFinds--;
+            console.error("[discovery] raw_find row unstorable, skipped:", (e as Error)?.cause ?? (e as Error)?.message);
+          }
+        }
+      }
     }
   }
 
