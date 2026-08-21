@@ -11,6 +11,7 @@ import { useState } from "react";
 import { useLocation } from "wouter";
 import { toast } from "sonner";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
+import { EnrichmentJobDrawer } from "@/components/usip/enrichment/EnrichmentJobDrawer";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -85,6 +86,7 @@ export default function DataEnrichment() {
   const [, setLocation] = useLocation();
   const accent = useAccentColor();
   const [tab, setTab] = useState<Tab>("Data health center");
+  const [jobDrawerOpen, setJobDrawerOpen] = useState(false);
 
   const { data: m, isLoading } = trpc.dataHealth.getMetrics.useQuery();
   const metrics = m as
@@ -147,7 +149,8 @@ export default function DataEnrichment() {
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
                 <DropdownMenuItem onClick={() => setLocation("/are")}><Sparkles className="size-4 mr-2" /> Auto-enrich with ARE</DropdownMenuItem>
-                <DropdownMenuItem onClick={() => setLocation("/data-health")}><Activity className="size-4 mr-2" /> Schedule enrichment job</DropdownMenuItem>
+                {/* Opens the job-builder drawer (was a bare redirect to /data-health). */}
+                <DropdownMenuItem onClick={() => setJobDrawerOpen(true)}><Activity className="size-4 mr-2" /> Schedule enrichment job</DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
@@ -400,6 +403,11 @@ export default function DataEnrichment() {
           {tab === "Form enrichment" && <FormEnrichmentTab />}
         </div>
       </div>
+
+      {/* New-enrichment-job builder (header ▸ Automate Enrichment ▸ Schedule
+          enrichment job). Mounted outside the scroll container; open state is
+          the only coupling. */}
+      <EnrichmentJobDrawer open={jobDrawerOpen} onOpenChange={setJobDrawerOpen} />
     </Shell>
   );
 }
