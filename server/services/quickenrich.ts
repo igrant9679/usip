@@ -187,7 +187,12 @@ export async function quickenrichContactFinder(
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(20_000),
     });
-    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+    if (!res.ok) {
+      // A 422 carries THEIR validation message — discarding it made the
+      // 2026-08-21 API-schema change undiagnosable ("HTTP 422", nothing else).
+      const detail = await res.text().then((t) => t.slice(0, 300)).catch(() => "");
+      return { ok: false, error: `HTTP ${res.status}${detail ? ` — ${detail}` : ""}` };
+    }
     let json: unknown;
     try {
       json = await res.json();
@@ -338,7 +343,8 @@ export async function quickenrichTestKey(apiKey: string): Promise<QuickEnrichTes
       return { ok: false, status: res.status, sampleRows: null, message: "QuickEnrich rejected that key." };
     }
     if (!res.ok) {
-      return { ok: false, status: res.status, sampleRows: null, message: `QuickEnrich answered HTTP ${res.status}.` };
+      const detail = await res.text().then((t) => t.slice(0, 300)).catch(() => "");
+      return { ok: false, status: res.status, sampleRows: null, message: `QuickEnrich answered HTTP ${res.status}${detail ? ` — ${detail}` : "."}` };
     }
     let sampleRows: number | null = null;
     try {
