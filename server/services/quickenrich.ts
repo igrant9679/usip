@@ -393,8 +393,17 @@ export async function quickenrichTestKey(apiKey: string): Promise<QuickEnrichTes
         if (sampleRows === null) {
           try {
             const json = (await res.json()) as Record<string, unknown>;
-            const rows = [json.data, json.results, json.items, json].find(Array.isArray);
-            if (rows) sampleRows = rows.length;
+            const rows = [json.data, json.results, json.items, json].find(Array.isArray) as Array<Record<string, unknown>> | undefined;
+            if (rows) {
+              sampleRows = rows.length;
+              // KEYS ONLY, never values — enough to diagnose a response-field
+              // rename (2026-08-21: rows arrived but the mapper dropped all of
+              // them, so the linkedin/name fields must have moved) without
+              // putting anyone's data in a log line.
+              if (rows[0] && typeof rows[0] === "object") {
+                accepted.push(`row-keys: ${Object.keys(rows[0]).slice(0, 25).join(",")}`);
+              }
+            }
           } catch { /* a 2xx with an unparseable body still proves the key */ }
         }
       } else {
