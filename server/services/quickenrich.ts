@@ -328,33 +328,61 @@ export async function quickenrichFindEmailByLinkedIn(
 }
 
 export async function quickenrichTestKey(apiKey: string): Promise<QuickEnrichTestResult> {
+  /**
+   * A battery, not one probe (2026-08-21): their contact-finder started
+   * answering 422 "at least one filter is required" to the very body that
+   * proved the key at setup — i.e. their filter schema changed and an
+   * unknown dimension parses as "no filter at all". Trying the candidate
+   * shapes in one pass both proves the key AND names the vocabulary their
+   * API currently accepts, which is the fact buildQuickenrichFilters needs.
+   */
+  const candidates: Array<{ label: string; body: Record<string, unknown> }> = [
+    { label: "has_email", body: { filters: { has_email: true }, page: 1 } },
+    { label: "title-object", body: { filters: { title: { include: ["CEO"] } }, page: 1 } },
+    { label: "job_title-object", body: { filters: { job_title: { include: ["CEO"] } }, page: 1 } },
+    { label: "dimension-array", body: { filters: [{ dimension: "title", include: ["CEO"] }], page: 1 } },
+  ];
+  const accepted: string[] = [];
+  const rejected: string[] = [];
+  let lastStatus = 0;
+  let sampleRows: number | null = null;
   try {
-    const res = await fetch(`${QUICKENRICH_BASE}/api/employees/contact-finder`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body: JSON.stringify({ filters: { title: { include: ["CEO"] } }, page: 1 }),
-      signal: AbortSignal.timeout(15_000),
-    });
-    if (res.status === 401 || res.status === 403) {
-      return { ok: false, status: res.status, sampleRows: null, message: "QuickEnrich rejected that key." };
+    for (const c of candidates) {
+      const res = await fetch(`${QUICKENRICH_BASE}/api/employees/contact-finder`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify(c.body),
+        signal: AbortSignal.timeout(15_000),
+      });
+      lastStatus = res.status;
+      if (res.status === 401 || res.status === 403) {
+        return { ok: false, status: res.status, sampleRows: null, message: "QuickEnrich rejected that key." };
+      }
+      if (res.ok) {
+        accepted.push(c.label);
+        if (sampleRows === null) {
+          try {
+            const json = (await res.json()) as Record<string, unknown>;
+            const rows = [json.data, json.results, json.items, json].find(Array.isArray);
+            if (rows) sampleRows = rows.length;
+          } catch { /* a 2xx with an unparseable body still proves the key */ }
+        }
+      } else {
+        const detail = await res.text().then((t) => t.slice(0, 160)).catch(() => "");
+        rejected.push(`${c.label} (HTTP ${res.status}${detail ? `: ${detail}` : ""})`);
+      }
     }
-    if (!res.ok) {
-      const detail = await res.text().then((t) => t.slice(0, 300)).catch(() => "");
-      return { ok: false, status: res.status, sampleRows: null, message: `QuickEnrich answered HTTP ${res.status}${detail ? ` — ${detail}` : "."}` };
+    if (accepted.length > 0) {
+      return {
+        ok: true, status: 200, sampleRows,
+        message: `Connected. Filter shapes accepted: ${accepted.join(", ")}${rejected.length ? ` · rejected: ${rejected.join(" | ")}` : ""}`,
+      };
     }
-    let sampleRows: number | null = null;
-    try {
-      const json = (await res.json()) as Record<string, unknown>;
-      const rows = [json.data, json.results, json.items, json].find(Array.isArray);
-      if (rows) sampleRows = rows.length;
-    } catch {
-      /* a 2xx with an unparseable body still proves the key authenticates */
-    }
-    return { ok: true, status: res.status, sampleRows, message: "Connected." };
+    return { ok: false, status: lastStatus, sampleRows: null, message: `No candidate filter shape accepted — ${rejected.join(" | ")}` };
   } catch (e) {
     return { ok: false, status: 0, sampleRows: null, message: `Could not reach QuickEnrich: ${(e as Error).message}` };
   }
