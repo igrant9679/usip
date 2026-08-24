@@ -818,9 +818,9 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
      * is the point — the previous state was indistinguishable from "we have
      * not got to it yet".
      *
-     * ⚠️ Note what this does NOT do: `targetProspectCount` is checked with an
-     * unfiltered count(*), so rejected rows still count toward it. This does
-     * not free queue headroom and will not unblock discovery.
+     * Since 2026-08-24 rejecting DOES free queue headroom: phase 7 counts
+     * only non-'skipped' rows against `targetProspectCount`, so rows this
+     * pass rejects stop occupying the queue and discovery resumes.
      *
      * The predicate is deliberately the exact inverse of the selector's and
      * shares its constant. Written out in full rather than assembled from
@@ -1527,23 +1527,31 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
   try {
     const [counts] = await db
       .select({
-        total: sql<number>`count(*)`,
-        pending: sql<number>`sum(case when ${prospectQueue.enrichmentStatus} = 'pending' then 1 else 0 end)`,
+        // The target is the WORKING set, not all-time rows (owner decision
+        // 2026-08-24). reject/bulkReject/auto-screen set
+        // sequenceStatus='skipped', and those rows are inert — an unfiltered
+        // count(*) here held every campaign at "queue full" forever once
+        // rejects accumulated, which killed discovery on all three live
+        // campaigns.
+        working: sql<number>`sum(case when ${prospectQueue.sequenceStatus} <> 'skipped' then 1 else 0 end)`,
+        rejected: sql<number>`sum(case when ${prospectQueue.sequenceStatus} = 'skipped' then 1 else 0 end)`,
       })
       .from(prospectQueue)
       .where(and(eq(prospectQueue.campaignId, campId), eq(prospectQueue.workspaceId, wsId)));
-    const total = Number(counts?.total ?? 0);
+    const working = Number(counts?.working ?? 0);
+    const rejectedCount = Number(counts?.rejected ?? 0);
     // Continuous discovery: run every tick while we're below target. The
     // scraper sources are bounded per call and the engine itself is bounded
     // per tick, so this can't blow up cost. Earlier we gated on
     // pendingCount===0 which stalled new prospects whenever even one row was
     // still enriching — that made the engine appear "idle" for hours.
-    if (total < campaign.targetProspectCount) {
+    if (working < campaign.targetProspectCount) {
       // runDiscovery emits its own detailed per-source summary log.
       result.discovered += await runDiscovery(campaign);
     } else {
       await emitLog(wsId, campId, "discovery", "info",
-        `Discovery skipped — queue full (${total}/${campaign.targetProspectCount})`);
+        `Discovery skipped — queue full (${working}/${campaign.targetProspectCount} working` +
+        (rejectedCount > 0 ? `; ${rejectedCount} rejected row${rejectedCount === 1 ? "" : "s"} excluded` : "") + `)`);
     }
   } catch (e) {
     console.error(`[AreEngine] campaign ${campId} discovery phase failed:`, e);
