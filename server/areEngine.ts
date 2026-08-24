@@ -73,11 +73,14 @@ import { archivedWorkspaceIds } from "./_core/workspaceArchive";
 import { queueIdentityKeys } from "./services/are/queueIdentity";
 import {
   buildQuickenrichFilters,
+  currentQuickenrichPage,
   getQuickEnrichKey,
   getQuickenrichDailyPullCap,
   getQuickenrichIndustries,
+  nextQuickenrichPage,
   quickenrichContactFinder,
   quickenrichPulledToday,
+  type QuickenrichPageState,
 } from "./services/quickenrich";
 import { stripNameCredentials } from "./services/enrichment/personName";
 import {
@@ -1635,10 +1638,11 @@ async function runDiscovery(campaign: Campaign): Promise<number> {
       `Campaign has no targeting of its own — discovery is using the workspace ICP profile instead (titles: ${titles.slice(0, 3).join(", ") || "—"}; industries: ${industries.slice(0, 3).join(", ") || "—"}). If that's not this campaign's audience, add Targeting to the campaign or apply a Persona.`);
   }
 
-  // Merge with persisted state so we know which slice to run next.
+  // Merge with persisted state so we know which slice to run next. The same
+  // JSON carries the QuickEnrich page cursor (`qe`) — see nextQuickenrichPage.
   const persistedState =
-    (campaign as { discoveryQueryState?: { slices?: Array<{ id: string; q: string; lastSearchedAt?: number | null; lastNewCount?: number | null }> } | null }).discoveryQueryState
-    ?? { slices: [] };
+    (campaign as { discoveryQueryState?: { slices?: Array<{ id: string; q: string; lastSearchedAt?: number | null; lastNewCount?: number | null }>; qe?: QuickenrichPageState | null } | null }).discoveryQueryState
+    ?? { slices: [] as Array<{ id: string; q: string; lastSearchedAt?: number | null; lastNewCount?: number | null }>, qe: null };
   const stateById = new Map<string, { id: string; q: string; lastSearchedAt: number | null; lastNewCount: number | null }>();
   for (const s of persistedState.slices ?? []) {
     stateById.set(s.id, { id: s.id, q: s.q, lastSearchedAt: s.lastSearchedAt ?? null, lastNewCount: s.lastNewCount ?? null });
@@ -1723,7 +1727,17 @@ async function runDiscovery(campaign: Campaign): Promise<number> {
     raw: Array<Record<string, unknown>>;
   };
 
+  // Task ORDER is dedup PRIORITY: the settled results are walked in this
+  // order and identity claims are first-wins, so when two sources find the
+  // same person, the earlier task's row is the one that enters the queue.
+  // Owner decision 2026-08-24: QuickEnrich is the PRIMARY external source —
+  // its rows arrive LinkedIn-keyed with has_email flags and enrich at ~85%,
+  // where scraper rows are what built the email-less sediment — so it runs
+  // ahead of every scraper. Internal CRM stays first: those are people the
+  // workspace already knows, with real emails and history a fresh
+  // QuickEnrich row cannot match.
   const tasks: Array<Promise<SourceResult>> = [];
+  let quickenrichNextPage: QuickenrichPageState | null = null;
   if (sources.includes("internal")) {
     tasks.push(
       discoverViaInternalCrm(campaign, titles).then((raw) => ({
@@ -1731,6 +1745,18 @@ async function runDiscovery(campaign: Campaign): Promise<number> {
         query,
         raw,
       })),
+    );
+  }
+  if (sources.includes("quickenrich")) {
+    tasks.push(
+      discoverViaQuickenrich(campaign, { titles, industries, geos }, persistedState.qe ?? null).then(({ raw, nextQe }) => {
+        quickenrichNextPage = nextQe;
+        return {
+          sourceType: "quickenrich" as const,
+          query,
+          raw,
+        };
+      }),
     );
   }
   if (sources.includes("linkedin")) {
@@ -1746,15 +1772,6 @@ async function runDiscovery(campaign: Campaign): Promise<number> {
     tasks.push(
       discoverViaApollo(campaign, { titles, industries, geos, keywords, overrides }).then((raw) => ({
         sourceType: "apollo" as const,
-        query,
-        raw,
-      })),
-    );
-  }
-  if (sources.includes("quickenrich")) {
-    tasks.push(
-      discoverViaQuickenrich(campaign, { titles, industries, geos }).then((raw) => ({
-        sourceType: "quickenrich" as const,
         query,
         raw,
       })),
@@ -1854,6 +1871,10 @@ async function runDiscovery(campaign: Campaign): Promise<number> {
   const newState = {
     slices: Array.from(stateById.values()),
     updatedAt: now,
+    // The QuickEnrich page cursor rides the same JSON: the advanced state
+    // when this tick pulled, else whatever was stored (a skipped pull — no
+    // key, no headroom — must not reset the rotation).
+    qe: quickenrichNextPage ?? persistedState.qe ?? null,
   };
   try {
     await db.update(areCampaigns).set({ discoveryQueryState: newState as any })
@@ -2050,12 +2071,13 @@ async function discoverViaApollo(
 async function discoverViaQuickenrich(
   campaign: Campaign,
   targeting: { titles: string[]; industries: string[]; geos: string[] },
-): Promise<Array<Record<string, unknown>>> {
+  qePageState: QuickenrichPageState | null,
+): Promise<{ raw: Array<Record<string, unknown>>; nextQe: QuickenrichPageState | null }> {
   const apiKey = await getQuickEnrichKey(campaign.workspaceId);
   if (!apiKey) {
     await emitLog(campaign.workspaceId, campaign.id, "discovery", "warn",
       "QuickEnrich skipped — no API key configured (Settings → Data sources).");
-    return [];
+    return { raw: [], nextQe: null };
   }
 
   const cap = await getQuickenrichDailyPullCap(campaign.workspaceId);
@@ -2064,7 +2086,7 @@ async function discoverViaQuickenrich(
   if (headroom <= 0) {
     await emitLog(campaign.workspaceId, campaign.id, "discovery", "warn",
       `QuickEnrich skipped — daily pull cap reached (${used}/${cap}). Raise it in Settings → Data sources if you want more per day.`);
-    return [];
+    return { raw: [], nextQe: null };
   }
 
   // Industries must be validated against their controlled vocabulary — one
@@ -2079,15 +2101,27 @@ async function discoverViaQuickenrich(
   if (!body) {
     await emitLog(campaign.workspaceId, campaign.id, "discovery", "warn",
       "QuickEnrich skipped — no target titles, and no industries that map to QuickEnrich's vocabulary (refusing to search their entire database).");
-    return [];
+    return { raw: [], nextQe: null };
   }
+
+  // Page rotation: the builder's body says page 1; the persisted cursor says
+  // where this QUERY actually is. Keyed on the filters actually sent, so a
+  // retargeted campaign (or a vocabulary change altering the mapped
+  // industries) starts back at page 1.
+  const qeKey = createHash("sha1")
+    .update(JSON.stringify([body.title ?? null, body.industry_linkedin ?? null, body.country_code ?? null]))
+    .digest("hex").slice(0, 16);
+  body.page = currentQuickenrichPage(qePageState, qeKey);
 
   const res = await quickenrichContactFinder(apiKey, body);
   if (!res.ok) {
     await emitLog(campaign.workspaceId, campaign.id, "discovery", "error",
       `QuickEnrich search failed: ${res.error}`);
-    return [];
+    // A failed request says nothing about the page's contents — hold the
+    // cursor where it was rather than advancing past people we never saw.
+    return { raw: [], nextQe: null };
   }
+  const nextQe = nextQuickenrichPage(qePageState, qeKey, res.people.length);
 
   // has_email first: those rows are the ones the paid lookup will convert, so
   // they get the pull headroom before the maybes.
@@ -2096,7 +2130,7 @@ async function discoverViaQuickenrich(
   const withEmailFlag = kept.filter((p) => p.hasEmail).length;
 
   await emitLog(campaign.workspaceId, campaign.id, "discovery", "info",
-    `QuickEnrich returned ${res.people.length} people (kept ${kept.length}, ${withEmailFlag} flagged has_email). `
+    `QuickEnrich returned ${res.people.length} people (page ${body.page}, kept ${kept.length}, ${withEmailFlag} flagged has_email). `
     + `Emails are resolved during enrichment — discovery is free and never includes them.`
     + (unmappedGeos.length > 0
       ? ` Geo filters not sent (no clean country mapping): ${unmappedGeos.join(", ")}.`
@@ -2107,14 +2141,17 @@ async function discoverViaQuickenrich(
         : ` Industry filters dropped (not in QuickEnrich's vocabulary): ${unmappedIndustries.join(", ")}.`)
       : ""));
 
-  return kept.map((p) => ({
-    firstName: p.firstName,
-    lastName: p.lastName,
-    title: p.title,
-    linkedinUrl: p.linkedinUrl,
-    companyName: p.companyName,
-    companyDomain: p.companyDomain,
-  }));
+  return {
+    raw: kept.map((p) => ({
+      firstName: p.firstName,
+      lastName: p.lastName,
+      title: p.title,
+      linkedinUrl: p.linkedinUrl,
+      companyName: p.companyName,
+      companyDomain: p.companyDomain,
+    })),
+    nextQe,
+  };
 }
 
 /**

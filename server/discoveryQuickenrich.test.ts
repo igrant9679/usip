@@ -78,3 +78,60 @@ describe("QuickEnrich as a Find-prospects source", () => {
     expect(page).toContain("Google Business · Web · News · Apollo");
   });
 });
+
+describe("QuickEnrich is the PRIMARY external ARE source (owner decision 2026-08-24)", () => {
+  // Task order IS dedup priority: settled results are walked in tasks order
+  // and identity claims are first-wins, so an earlier source's row is the
+  // one that enters the queue when two sources find the same person.
+  const tasksBlock = engine.slice(
+    engine.indexOf("const tasks: Array<Promise<SourceResult>>"),
+    engine.indexOf("if (tasks.length === 0)"),
+  );
+
+  it("the tasks block boundary is where we think it is", () => {
+    expect(tasksBlock.length).toBeGreaterThan(0);
+    expect(tasksBlock).toContain('sources.includes("quickenrich")');
+  });
+
+  it("quickenrich is queued after internal CRM and before every scraper", () => {
+    const at = (marker: string) => {
+      const i = tasksBlock.indexOf(`sources.includes("${marker}")`);
+      expect(i, `source "${marker}" missing from the tasks block`).toBeGreaterThan(-1);
+      return i;
+    };
+    // Internal first: people the workspace already knows, with real emails
+    // and history a fresh QuickEnrich row cannot match.
+    expect(at("internal")).toBeLessThan(at("quickenrich"));
+    // QuickEnrich ahead of every external scraper — its rows arrive
+    // LinkedIn-keyed with has_email flags; scraper rows are what built the
+    // email-less sediment.
+    for (const scraper of ["linkedin", "apollo", "google_business", "news", "web"]) {
+      expect(at("quickenrich"), `quickenrich must precede ${scraper}`).toBeLessThan(at(scraper));
+    }
+  });
+
+  it("the settled walk preserves task order (first-claim-wins depends on it)", () => {
+    expect(engine).toContain("const settled = await Promise.allSettled(tasks)");
+    expect(engine).toContain("for (const s of settled)");
+  });
+});
+
+describe("QuickEnrich page rotation is threaded through the engine", () => {
+  it("the pull requests the persisted cursor's page, keyed to the filters actually sent", () => {
+    expect(engine).toContain("body.page = currentQuickenrichPage(qePageState, qeKey)");
+    expect(engine).toContain("nextQuickenrichPage(qePageState, qeKey, res.people.length)");
+  });
+
+  it("runDiscovery persists the advanced cursor WITHOUT clobbering it on a skipped pull", () => {
+    expect(engine).toContain("qe: quickenrichNextPage ?? persistedState.qe ?? null");
+  });
+
+  it("a failed request holds the cursor (nextQe null) rather than skipping unseen people", () => {
+    const fn = engine.slice(
+      engine.indexOf("async function discoverViaQuickenrich"),
+      engine.indexOf("async function discoverViaInternalCrm"),
+    );
+    const failBranch = fn.slice(fn.indexOf("if (!res.ok)"), fn.indexOf("const nextQe"));
+    expect(failBranch).toContain("nextQe: null");
+  });
+});

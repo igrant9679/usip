@@ -34,13 +34,16 @@ vi.mock("./db", () => ({ getDb: mocks.getDb, checkPermission: vi.fn() }));
 import { encryptSecret } from "./_core/crypto";
 import {
   buildQuickenrichFilters,
+  currentQuickenrichPage,
   getQuickEnrichKey,
   getQuickenrichIndustries,
   mapIndustriesToVocabulary,
+  nextQuickenrichPage,
   quickenrichContactFinder,
   quickenrichFindEmailByLinkedIn,
   quickenrichTestKey,
   QUICKENRICH_BASE,
+  QUICKENRICH_MAX_PAGE,
   QUICKENRICH_PROBE_CANDIDATES,
 } from "./services/quickenrich";
 import { ARE_SOURCE_IDS } from "@shared/areSources";
@@ -201,12 +204,41 @@ describe("quickenrichFindEmailByLinkedIn — envelope-agnostic on purpose", () =
     expect(r.email).toBe("ada@acme.io"); // lowercased
   });
 
-  it("sends the LinkedIn URL encoded, with the bearer key", async () => {
+  it("sends the LinkedIn URL encoded, with the bearer key — under BOTH param spellings on a miss", async () => {
+    // Their 08-21 drift renamed the employee-LinkedIn field; a dead GET param
+    // can 200 with no rows, which reads exactly like "not in their DB". So a
+    // miss on the historical param retries once under the renamed one.
     mocks.fetch.mockResolvedValue(jsonResponse(200, { data: {} }));
     await quickenrichFindEmailByLinkedIn("k", LI);
-    const [url, opts] = mocks.fetch.mock.calls[0];
-    expect(url).toBe(`${QUICKENRICH_BASE}/api/employees/search?linkedin_url=${encodeURIComponent(LI)}`);
+    expect(mocks.fetch).toHaveBeenCalledTimes(2);
+    const [url1, opts] = mocks.fetch.mock.calls[0];
+    const [url2] = mocks.fetch.mock.calls[1];
+    expect(url1).toBe(`${QUICKENRICH_BASE}/api/employees/search?linkedin_url=${encodeURIComponent(LI)}`);
+    expect(url2).toBe(`${QUICKENRICH_BASE}/api/employees/search?employee_linkedin=${encodeURIComponent(LI)}`);
     expect(opts.headers.Authorization).toBe("Bearer k");
+  });
+
+  it("a hit on the first param never spends the second call", async () => {
+    mocks.fetch.mockResolvedValue(jsonResponse(200, { data: { email: "ada@acme.io" } }));
+    const r = await quickenrichFindEmailByLinkedIn("k", LI);
+    expect(r.reason).toBe("found");
+    expect(mocks.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("a hit under the RENAMED param rescues a dead historical param", async () => {
+    mocks.fetch
+      .mockResolvedValueOnce(jsonResponse(404, {}))
+      .mockResolvedValueOnce(jsonResponse(200, { data: { email: "ada@acme.io" } }));
+    const r = await quickenrichFindEmailByLinkedIn("k", LI);
+    expect(r.reason).toBe("found");
+    expect(r.email).toBe("ada@acme.io");
+  });
+
+  it("verdict merge: a definitive no_match beats a transport failure", async () => {
+    mocks.fetch
+      .mockResolvedValueOnce(jsonResponse(500, {}))
+      .mockResolvedValueOnce(jsonResponse(404, {}));
+    expect((await quickenrichFindEmailByLinkedIn("k", LI)).reason).toBe("no_match");
   });
 
   it("a 404 is a no_match, not an error", async () => {
@@ -381,6 +413,36 @@ describe("getQuickenrichIndustries — their controlled vocabulary, defensively 
     await getQuickenrichIndustries("k-cache");
     await getQuickenrichIndustries("k-cache");
     expect(mocks.fetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("contact-finder page rotation — pulls must not re-read page 1 forever", () => {
+  it("a fresh or retargeted query starts at page 1", () => {
+    expect(currentQuickenrichPage(null, "abc")).toBe(1);
+    expect(currentQuickenrichPage({ key: "other", page: 7 }, "abc")).toBe(1);
+    // Garbage from a hand-edited JSON column must not become a request page.
+    expect(currentQuickenrichPage({ key: "abc", page: 0 }, "abc")).toBe(1);
+    expect(currentQuickenrichPage({ key: "abc", page: 2.5 }, "abc")).toBe(1);
+  });
+
+  it("an unchanged query resumes at its stored page", () => {
+    expect(currentQuickenrichPage({ key: "abc", page: 7 }, "abc")).toBe(7);
+  });
+
+  it("advances one page per non-empty pull, keyed to the query", () => {
+    const s1 = nextQuickenrichPage(null, "abc", 10);
+    expect(s1).toEqual({ key: "abc", page: 2 });
+    const s2 = nextQuickenrichPage(s1, "abc", 10);
+    expect(s2).toEqual({ key: "abc", page: 3 });
+  });
+
+  it("wraps to page 1 on an empty page (past the end) and at the cap", () => {
+    expect(nextQuickenrichPage({ key: "abc", page: 9 }, "abc", 0)).toEqual({ key: "abc", page: 1 });
+    expect(nextQuickenrichPage({ key: "abc", page: QUICKENRICH_MAX_PAGE }, "abc", 10)).toEqual({ key: "abc", page: 1 });
+  });
+
+  it("a query change resets the walk — the old cursor never leaks into the new query", () => {
+    expect(nextQuickenrichPage({ key: "old", page: 30 }, "new", 10)).toEqual({ key: "new", page: 2 });
   });
 });
 

@@ -281,6 +281,41 @@ export function buildQuickenrichFilters(targeting: {
   return { body: { ...filters, page: 1 }, unmappedGeos, unmappedIndustries, industryLookupUnavailable };
 }
 
+/* ─── Contact-finder page rotation ──────────────────────────────────────── */
+
+export type QuickenrichPageState = { key: string; page: number };
+
+/** Highest page the rotation will request before wrapping — their pagination
+ *  depth is undocumented, and the wrap guarantees we can never walk off into
+ *  requesting page 900 of a three-page result set forever. */
+export const QUICKENRICH_MAX_PAGE = 50;
+
+/** The page a pull should request NOW: the stored cursor when the query is
+ *  unchanged (key match), else 1 — a retargeted campaign starts over. */
+export function currentQuickenrichPage(
+  prev: QuickenrichPageState | null | undefined,
+  key: string,
+): number {
+  return prev && prev.key === key && Number.isInteger(prev.page) && prev.page >= 1 ? prev.page : 1;
+}
+
+/**
+ * Advance the cursor after a pull. The body used to carry a hardcoded
+ * `page: 1`, so every pull of an unchanged query re-fetched the same people
+ * and deduped to zero new — "fresh prospects from QuickEnrich" was one page
+ * deep. One page forward per non-empty pull; wrap to 1 when a page comes
+ * back empty (past the end of their result set) or at the cap.
+ */
+export function nextQuickenrichPage(
+  prev: QuickenrichPageState | null | undefined,
+  key: string,
+  peopleReturned: number,
+): QuickenrichPageState {
+  const cur = currentQuickenrichPage(prev, key);
+  if (peopleReturned <= 0 || cur >= QUICKENRICH_MAX_PAGE) return { key, page: 1 };
+  return { key, page: cur + 1 };
+}
+
 export type QuickEnrichDiscoveredPerson = {
   firstName: string;
   lastName: string;
@@ -411,9 +446,31 @@ export async function quickenrichFindEmailByLinkedIn(
   apiKey: string,
   linkedinUrl: string,
 ): Promise<QuickEnrichLookup> {
+  // Their 2026-08-21 schema drift renamed the employee-LinkedIn field
+  // (`employee_linkedin` replaced `linkedin_url` in contact-finder responses);
+  // whether this GET endpoint's search param followed is unprobed — and a
+  // DEAD param can answer 200 with no rows, which reads exactly like "not in
+  // their DB" (the failure-masking class), so a single-param miss is not
+  // trustworthy. Try the historical param, then the renamed one. Verdict
+  // merge: any found wins; else a definitive no_match beats a transport
+  // failure; else the first failure stands.
+  const results: QuickEnrichLookup[] = [];
+  for (const param of ["linkedin_url", "employee_linkedin"] as const) {
+    const r = await quickenrichLookupOnce(apiKey, param, linkedinUrl);
+    if (r.reason === "found") return r;
+    results.push(r);
+  }
+  return results.find((r) => r.reason === "no_match") ?? results[0];
+}
+
+async function quickenrichLookupOnce(
+  apiKey: string,
+  param: "linkedin_url" | "employee_linkedin",
+  linkedinUrl: string,
+): Promise<QuickEnrichLookup> {
   try {
     const res = await fetch(
-      `${QUICKENRICH_BASE}/api/employees/search?linkedin_url=${encodeURIComponent(linkedinUrl)}`,
+      `${QUICKENRICH_BASE}/api/employees/search?${param}=${encodeURIComponent(linkedinUrl)}`,
       {
         headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json" },
         signal: AbortSignal.timeout(15_000),
