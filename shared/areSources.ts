@@ -80,3 +80,54 @@ export function normalizeSources(raw: unknown): AreSourceId[] {
   const valid = new Set<string>(ARE_SOURCE_IDS);
   return raw.filter((s): s is AreSourceId => typeof s === "string" && valid.has(s));
 }
+
+/**
+ * The default CHECKING order (owner decision 2026-08-24): QuickEnrich first.
+ *
+ * Order is not cosmetics — runDiscovery builds its source tasks in this
+ * order and identity claims are first-wins across the settled results, so
+ * the earlier source's row is the one that enters the queue when two
+ * sources find the same person. QuickEnrich rows arrive LinkedIn-keyed
+ * with has_email flags and enrich at ~85%; scraper rows are what built
+ * the email-less sediment.
+ */
+export const ARE_DEFAULT_SOURCE_ORDER: AreSourceId[] = [
+  "quickenrich",
+  "internal",
+  "linkedin",
+  "apollo",
+  "google_business",
+  "news",
+  "web",
+];
+
+/**
+ * The ONE resolver from (workspace order, workspace enable mask, campaign
+ * selection) to the ordered list of sources a discovery run actually
+ * executes. Every consumer — the engine, the settings surface, the
+ * Find-prospects mask — reads through this, so the UI can never show an
+ * order the engine doesn't run.
+ *
+ * `orderRaw` is workspace_settings.areSourceOrder (migration 0172): unknown
+ * ids are dropped (normalizeSources), and sources it does not mention are
+ * appended in the DEFAULT order — a new vocabulary entry must not vanish
+ * behind a stale stored order.
+ *
+ * `maskRaw` is workspace_settings.areScraperSources — the EXISTING
+ * per-workspace source toggles (Record<sourceId, boolean>). It used to seed
+ * only the campaign wizard's defaults; since 2026-08-24 (owner ask) it is
+ * the runtime enable mask too: `false` disables the source workspace-wide,
+ * absent/other means enabled. One vocabulary, not a second parallel one.
+ */
+export function resolveSourceOrder(
+  orderRaw: unknown,
+  maskRaw: unknown,
+  selected: AreSourceId[],
+): AreSourceId[] {
+  const order = normalizeSources(orderRaw);
+  const mask = (maskRaw && typeof maskRaw === "object" ? maskRaw : {}) as Record<string, unknown>;
+  const mentioned = new Set<AreSourceId>(order);
+  const full = [...order, ...ARE_DEFAULT_SOURCE_ORDER.filter((s) => !mentioned.has(s))];
+  const sel = new Set<AreSourceId>(selected);
+  return full.filter((s) => sel.has(s) && mask[s] !== false);
+}

@@ -424,6 +424,15 @@ export type QuickEnrichLookup = {
   email: string | null;
   /** Why null, when it is: distinguishes "not in their DB" from "call failed". */
   reason: "found" | "no_match" | "http_error" | "network_error" | "unrecognised_shape";
+  /**
+   * Company identity harvested from the same employee record, when their DB
+   * carries it — INCLUDING on a no-email miss. Owner decision 2026-08-24 (CF
+   * runs without Apollo): QuickEnrich and LinkedIn are the name→domain path,
+   * so a lookup that finds the person but no address must still hand back
+   * the domain — that is what lets the pattern+Reoon pass work the row next.
+   */
+  companyName: string | null;
+  companyDomain: string | null;
 };
 
 /** Track whether we've already dumped one unrecognised body this process — one
@@ -460,7 +469,14 @@ export async function quickenrichFindEmailByLinkedIn(
     if (r.reason === "found") return r;
     results.push(r);
   }
-  return results.find((r) => r.reason === "no_match") ?? results[0];
+  // No address anywhere — but company identity harvested by EITHER attempt
+  // still rides the verdict (a no-email record's domain is the whole point
+  // of the harvest).
+  const verdict = results.find((r) => r.reason === "no_match") ?? results[0];
+  const withCompany = results.find((r) => r.companyDomain || r.companyName);
+  return withCompany
+    ? { ...verdict, companyName: verdict.companyName ?? withCompany.companyName, companyDomain: verdict.companyDomain ?? withCompany.companyDomain }
+    : verdict;
 }
 
 async function quickenrichLookupOnce(
@@ -476,14 +492,16 @@ async function quickenrichLookupOnce(
         signal: AbortSignal.timeout(15_000),
       },
     );
-    if (res.status === 404) return { email: null, reason: "no_match" };
-    if (!res.ok) return { email: null, reason: "http_error" };
+    const miss = (reason: QuickEnrichLookup["reason"]): QuickEnrichLookup =>
+      ({ email: null, reason, companyName: null, companyDomain: null });
+    if (res.status === 404) return miss("no_match");
+    if (!res.ok) return miss("http_error");
 
     let json: unknown;
     try {
       json = await res.json();
     } catch {
-      return { email: null, reason: "unrecognised_shape" };
+      return miss("unrecognised_shape");
     }
 
     // Common envelopes: bare object, {data: {...}}, {data: [...]}, {results: [...]}.
@@ -495,12 +513,24 @@ async function quickenrichLookupOnce(
       Array.isArray(j.results) ? j.results[0] : undefined,
       Array.isArray(j.employees) ? j.employees[0] : undefined,
     ];
+    const str = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim() : null);
+    // Company identity from the first record-shaped candidate that carries
+    // it — harvested whether or not an address turns up, because a no-email
+    // record's domain is what lets the pattern pass work the row next.
+    let companyName: string | null = null;
+    let companyDomain: string | null = null;
+    for (const c of candidates) {
+      if (!c || typeof c !== "object") continue;
+      const rec = c as Record<string, unknown>;
+      if (!companyName) companyName = str(rec.company_name) ?? str(rec.company);
+      if (!companyDomain) companyDomain = normalizeDomain(str(rec.company_url) ?? str(rec.company_domain) ?? str(rec.company_website) ?? str(rec.email_domain));
+    }
     for (const c of candidates) {
       if (!c || typeof c !== "object") continue;
       const rec = c as Record<string, unknown>;
       const email = [rec.email, rec.work_email, rec.professional_email]
         .find((v): v is string => typeof v === "string" && v.includes("@"));
-      if (email) return { email: email.trim().toLowerCase(), reason: "found" };
+      if (email) return { email: email.trim().toLowerCase(), reason: "found", companyName, companyDomain };
     }
     // A 200 with no recognisable address is a miss ("has no email for this
     // person") unless the shape is entirely alien — then say so, once.
@@ -510,11 +540,11 @@ async function quickenrichLookupOnce(
         loggedUnrecognisedShape = true;
         console.warn("[quickenrich] unrecognised response shape, keys:", keys.slice(0, 12).join(","));
       }
-      return { email: null, reason: "unrecognised_shape" };
+      return miss("unrecognised_shape");
     }
-    return { email: null, reason: "no_match" };
+    return { email: null, reason: "no_match", companyName, companyDomain };
   } catch {
-    return { email: null, reason: "network_error" };
+    return { email: null, reason: "network_error", companyName: null, companyDomain: null };
   }
 }
 

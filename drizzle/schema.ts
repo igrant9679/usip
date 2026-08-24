@@ -1673,6 +1673,12 @@ export const workspaceSettings = mysqlTable("workspace_settings", {
   // endpoint; credits are spent later by the sweep's lookup pass, only on
   // delivery. Consumed by discoverViaQuickenrich in areEngine.
   quickenrichDailyPullCap: int("quickenrichDailyPullCap").default(50).notNull(),
+  // Per-workspace ARE source checking ORDER (Migration 0172): AreSourceId[].
+  // Read ONLY through @shared/areSources.resolveSourceOrder together with
+  // areScraperSources (the EXISTING enable mask — one vocabulary, runtime-
+  // honored since 08-24); null = default order (quickenrich first). Order is
+  // dedup PRIORITY in runDiscovery, not just cosmetics.
+  areSourceOrder: json("areSourceOrder"),
   // ── Backlog enrichment sweeper (Migration 0132) ──
   // off      = never sweeps
   // approval = sweeps only when a human presses "Run sweep"

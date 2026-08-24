@@ -37,6 +37,7 @@ import { checkPermission, getDb } from "../db";
 import { adminWsProcedure, roleRank, workspaceProcedure } from "../_core/workspace";
 import { publicProcedure, protectedProcedure, router } from "../_core/trpc";
 import { recordAudit } from "../audit";
+import { normalizeSources } from "@shared/areSources";
 import { appBaseUrl as publicAppOrigin } from "../appUrl";
 import { activeTaskStatuses } from "@shared/taskStatus";
 import {
@@ -339,6 +340,7 @@ export const settingsRouter = router({
       areNotifyOnIcpUpdate: s.areNotifyOnIcpUpdate,
       areBrandVoice: (s as any).areBrandVoice ?? null,
       areScraperSources: (s as any).areScraperSources ?? null,
+      areSourceOrder: (s as any).areSourceOrder ?? null,
       areIcpRegenSchedule: (s as any).areIcpRegenSchedule ?? null,
       areSequenceQualityThreshold: (s as any).areSequenceQualityThreshold ?? null,
     };
@@ -361,6 +363,7 @@ export const settingsRouter = router({
       areNotifyOnIcpUpdate: z.boolean().optional(),
       areBrandVoice: z.string().max(40).optional(),
       areScraperSources: z.record(z.string(), z.boolean()).optional(),
+      areSourceOrder: z.array(z.string()).max(20).optional(),
       areIcpRegenSchedule: z.string().max(20).optional(),
       areSequenceQualityThreshold: z.number().int().min(0).max(100).optional(),
     }))
@@ -372,6 +375,10 @@ export const settingsRouter = router({
       for (const [k, v] of Object.entries(input)) {
         if (v !== undefined) patch[k] = v;
       }
+      // The order is normalized at the WRITE — unknown/retired source ids
+      // never enter the row (resolveSourceOrder would drop them at the read
+      // anyway, but a clean row beats a defended one).
+      if (patch.areSourceOrder !== undefined) patch.areSourceOrder = normalizeSources(patch.areSourceOrder);
       if (Object.keys(patch).length === 0) return { ok: true };
       await db.update(workspaceSettings).set(patch).where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
       return { ok: true };

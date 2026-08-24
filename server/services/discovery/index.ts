@@ -30,7 +30,9 @@ import {
   discoveryLogs,
   discoveryRuns,
   rawFinds,
+  workspaceSettings,
 } from "../../../drizzle/schema";
+import { ARE_SOURCE_IDS, resolveSourceOrder, type AreSourceId } from "@shared/areSources";
 import {
   scrapeGoogleBusiness,
   scrapeNews,
@@ -411,26 +413,41 @@ export async function runDiscovery(
   // (LinkedIn + web pages with team bios). Account mode favors
   // company-shaped sources (Google Business + company sites + news).
   // Both run in parallel so one slow source doesn't gate the others.
-  const tasks: Array<Promise<{ source: string; raw: Array<Record<string, unknown>> }>> = [];
-  if (mode === "person") {
-    tasks.push(
-      discoverLinkedInPeople(workspaceId, query).then((raw) => ({ source: "linkedin_people", raw })),
-      scrapeWeb(workspaceId, null, query, icpContext).then((raw) => ({ source: "web", raw })),
-      scrapeNews(workspaceId, null, query, icpContext).then((raw) => ({ source: "news", raw })),
-      discoverViaApollo(workspaceId, mode, input).then((raw) => ({ source: "apollo", raw })),
-      discoverViaQuickEnrich(workspaceId, input as PersonSearchInput).then((raw) => ({ source: "quickenrich", raw })),
-    );
-  } else {
-    // Account mode keeps the company-shaped sources. LinkedIn's classic
-    // search is people-only, so there's no real "company" LinkedIn source to
-    // include here — the old scrapeLinkedIn(...,"company") just fabricated.
-    tasks.push(
-      scrapeGoogleBusiness(workspaceId, null, query, icpContext).then((raw) => ({ source: "google_business", raw })),
-      scrapeWeb(workspaceId, null, query, icpContext).then((raw) => ({ source: "web", raw })),
-      scrapeNews(workspaceId, null, query, icpContext).then((raw) => ({ source: "news", raw })),
-      discoverViaApollo(workspaceId, mode, input).then((raw) => ({ source: "apollo", raw })),
-    );
+  //
+  // The workspace's source mask (Settings, workspace_settings.areSourceConfig,
+  // migration 0172) applies on this surface exactly as in the ARE engine: a
+  // source the workspace disabled never runs, whatever the mode mix says.
+  // ORDER is irrelevant here — raw finds are consolidated, not first-claimed.
+  type SourceTask = { id: AreSourceId; run: () => Promise<{ source: string; raw: Array<Record<string, unknown>> }> };
+  const candidates: SourceTask[] = mode === "person"
+    ? [
+      { id: "linkedin", run: () => discoverLinkedInPeople(workspaceId, query).then((raw) => ({ source: "linkedin_people", raw })) },
+      { id: "web", run: () => scrapeWeb(workspaceId, null, query, icpContext).then((raw) => ({ source: "web", raw })) },
+      { id: "news", run: () => scrapeNews(workspaceId, null, query, icpContext).then((raw) => ({ source: "news", raw })) },
+      { id: "apollo", run: () => discoverViaApollo(workspaceId, mode, input).then((raw) => ({ source: "apollo", raw })) },
+      { id: "quickenrich", run: () => discoverViaQuickEnrich(workspaceId, input as PersonSearchInput).then((raw) => ({ source: "quickenrich", raw })) },
+    ]
+    : [
+      // Account mode keeps the company-shaped sources. LinkedIn's classic
+      // search is people-only, so there's no real "company" LinkedIn source to
+      // include here — the old scrapeLinkedIn(...,"company") just fabricated.
+      { id: "google_business", run: () => scrapeGoogleBusiness(workspaceId, null, query, icpContext).then((raw) => ({ source: "google_business", raw })) },
+      { id: "web", run: () => scrapeWeb(workspaceId, null, query, icpContext).then((raw) => ({ source: "web", raw })) },
+      { id: "news", run: () => scrapeNews(workspaceId, null, query, icpContext).then((raw) => ({ source: "news", raw })) },
+      { id: "apollo", run: () => discoverViaApollo(workspaceId, mode, input).then((raw) => ({ source: "apollo", raw })) },
+    ];
+  const [wsSourceRow] = await db
+    .select({ order: workspaceSettings.areSourceOrder, mask: workspaceSettings.areScraperSources })
+    .from(workspaceSettings)
+    .where(eq(workspaceSettings.workspaceId, workspaceId))
+    .limit(1);
+  const enabledSources = new Set(resolveSourceOrder(wsSourceRow?.order, wsSourceRow?.mask, ARE_SOURCE_IDS));
+  const maskedSources = candidates.filter((c) => !enabledSources.has(c.id)).map((c) => c.id);
+  if (maskedSources.length > 0) {
+    await emitLog(workspaceId, runId, "discovery.mask", "info",
+      `Skipped — disabled in workspace Settings: ${maskedSources.join(", ")}`);
   }
+  const tasks = candidates.filter((c) => enabledSources.has(c.id)).map((c) => c.run());
 
   const settled = await Promise.allSettled(tasks);
   const perSource: Record<string, { found: number; error?: string }> = {};

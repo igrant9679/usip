@@ -265,6 +265,38 @@ describe("quickenrichFindEmailByLinkedIn — envelope-agnostic on purpose", () =
     mocks.fetch.mockRejectedValue(new Error("ETIMEDOUT"));
     expect((await quickenrichFindEmailByLinkedIn("k", LI)).reason).toBe("network_error");
   });
+
+  it("harvests company identity alongside the address", async () => {
+    // Owner decision 2026-08-24 (no Apollo): QuickEnrich is the name→domain
+    // path, so the employer on their record must ride every hit.
+    mocks.fetch.mockResolvedValue(jsonResponse(200, {
+      data: { email: "ada@acme.io", company_name: "Acme Inc", company_url: "https://www.acme.io/about" },
+    }));
+    const r = await quickenrichFindEmailByLinkedIn("k", LI);
+    expect(r.reason).toBe("found");
+    expect(r.companyName).toBe("Acme Inc");
+    expect(r.companyDomain).toBe("acme.io");
+  });
+
+  it("a no-email record still hands back the domain — that IS the unlock", async () => {
+    mocks.fetch.mockResolvedValue(jsonResponse(200, {
+      data: { first_name: "Ada", company_name: "Acme Inc", email_domain: "acme.io" },
+    }));
+    const r = await quickenrichFindEmailByLinkedIn("k", LI);
+    expect(r.reason).toBe("no_match");
+    expect(r.email).toBeNull();
+    expect(r.companyDomain).toBe("acme.io");
+    expect(r.companyName).toBe("Acme Inc");
+  });
+
+  it("company harvested by one param attempt survives a miss verdict from the other", async () => {
+    mocks.fetch
+      .mockResolvedValueOnce(jsonResponse(200, { data: { first_name: "Ada", company_domain: "acme.io" } }))
+      .mockResolvedValueOnce(jsonResponse(404, {}));
+    const r = await quickenrichFindEmailByLinkedIn("k", LI);
+    expect(r.reason).toBe("no_match");
+    expect(r.companyDomain).toBe("acme.io");
+  });
 });
 
 describe("buildQuickenrichFilters — targeting → their vocabulary, conservatively", () => {
@@ -541,12 +573,17 @@ describe("the areSources rule, now enforced: a source exists only if the engine 
    * branch in runDiscovery — adding an entry without one now fails here
    * instead of shipping a checkbox that does nothing.
    */
-  it("every ARE source id has a runDiscovery branch", () => {
+  it("every ARE source id has a runDiscovery task factory", () => {
+    // The dispatch is a Record<AreSourceId, () => Promise<SourceResult>>, so
+    // a vocabulary entry without a factory is ALSO a compile error — this
+    // pins the shape so a refactor away from the Record re-opens the check.
     const engine = read("server/areEngine.ts");
+    expect(engine).toContain("const taskFactories: Record<AreSourceId, () => Promise<SourceResult>>");
+    const block = engine.slice(engine.indexOf("const taskFactories:"), engine.indexOf("const [wsSourceRow]"));
     for (const id of ARE_SOURCE_IDS) {
       expect(
-        engine.includes(`sources.includes("${id}")`),
-        `source "${id}" is offered but the engine never runs it — the silent-checkbox class`,
+        block.includes(`${id}: () =>`),
+        `source "${id}" is offered but the engine has no task factory for it — the silent-checkbox class`,
       ).toBe(true);
     }
   });
@@ -562,6 +599,17 @@ describe("migration parity — the dominant prod-breaking bug, pre-empted", () =
 
     const schema = read("drizzle/schema.ts");
     expect(schema).toContain('quickenrichApiKeyEnc: text("quickenrichApiKeyEnc")');
+  });
+
+  it("0172 exists in rawMigrations and adds the areSourceOrder column schema declares", () => {
+    const migrations = read("server/_core/rawMigrations.ts");
+    const at = migrations.indexOf("0172_workspace_are_source_order.sql");
+    expect(at, "migration 0172 missing from rawMigrations — schema-only columns break prod silently").toBeGreaterThan(-1);
+    const block = migrations.slice(at, at + 400);
+    expect(block).toContain("ADD COLUMN `areSourceOrder` json NULL");
+
+    const schema = read("drizzle/schema.ts");
+    expect(schema).toContain('areSourceOrder: json("areSourceOrder")');
   });
 });
 

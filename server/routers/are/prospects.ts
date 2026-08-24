@@ -57,6 +57,8 @@ import { BULK_INPUT, runBulkAction } from "./prospectsBulk";
 import { notifyIfEnabled } from "../../services/policyNotify";
 import { HUMAN_COPY_RULES, humanizeAiCopy } from "../../services/humanCopy";
 import { resolveVerifiedEmail } from "../../services/scraper";
+import { getQuickEnrichKey, quickenrichFindEmailByLinkedIn } from "../../services/quickenrich";
+import { getReoonKey, reoonStatusToUsip, reoonVerifySingle } from "../../services/reoon";
 import { buildBrandContext } from "../../services/brandContext";
 // The A/B metadata row must be keyed by the same step index + variant key the
 // execution queue uses, so both sides read one rule. See shared/variantKeys.ts.
@@ -411,13 +413,48 @@ Produce:
     // to a real recipient as "…at <UNKNOWN>"). Migration 0171 re-repairs the
     // stored rows; this is the writer that leaked them.
     const inferredCompany = cleanScrapedField((enrichData as Record<string, unknown>).inferredCompanyName, 200) ?? "";
-    const effCompanyName = prospect.companyName ?? (inferredCompany || null);
-    const effCompanyDomain: string | null = prospect.companyDomain ?? null;
+    let effCompanyName = prospect.companyName ?? (inferredCompany || null);
+    let effCompanyDomain: string | null = prospect.companyDomain ?? null;
     let resolvedEmail: string | null = null;
     let resolvedStatus: string | null = null;
+    let qeFilledDomain = false;
     if (!prospect.email) {
       try {
-        if (effCompanyDomain) {
+        // No Apollo in the waterfall (owner decision 2026-08-12, reaffirmed
+        // 2026-08-24: CF runs without an Apollo key — QuickEnrich/LinkedIn
+        // supply domains). A domain-less row with a LinkedIn URL asks
+        // QuickEnrich's LinkedIn-keyed record for the employer — and often
+        // the address itself. Same finder and the same Reoon gate as the
+        // sweep's pass: a QuickEnrich address is never send-safe on their
+        // word, and an invalid verdict means it is NOT written.
+        if (!effCompanyDomain && prospect.linkedinUrl) {
+          const qeKey = await getQuickEnrichKey(workspaceId);
+          if (qeKey) {
+            const qe = await quickenrichFindEmailByLinkedIn(qeKey, prospect.linkedinUrl);
+            if (qe.companyDomain) {
+              effCompanyDomain = qe.companyDomain;
+              qeFilledDomain = true;
+            }
+            if (qe.companyName && !effCompanyName) effCompanyName = qe.companyName;
+            if (qe.email) {
+              let status = "unknown";
+              try {
+                const reoonKey = await getReoonKey(workspaceId);
+                if (reoonKey) {
+                  const v = await reoonVerifySingle(qe.email, reoonKey, "power");
+                  status = reoonStatusToUsip(v.status);
+                }
+              } catch {
+                /* verification unavailable → keep the address, flagged by status "unknown" */
+              }
+              if (status !== "invalid") {
+                resolvedEmail = qe.email;
+                resolvedStatus = status;
+              }
+            }
+          }
+        }
+        if (!resolvedEmail && effCompanyDomain) {
           const found = await resolveVerifiedEmail({
             firstName: prospect.firstName,
             lastName: prospect.lastName,
@@ -443,6 +480,7 @@ Produce:
       enrichedAt: new Date(),
       ...(resolvedEmail ? { email: resolvedEmail } : {}),
       ...(effCompanyName && !prospect.companyName ? { companyName: effCompanyName.slice(0, 200) } : {}),
+      ...(qeFilledDomain && effCompanyDomain ? { companyDomain: effCompanyDomain.slice(0, 200) } : {}),
     }).where(eq(prospectQueue.id, prospectId));
     if (resolvedEmail) {
       await emitSeqLog(db, workspaceId, prospect.campaignId, "info", "enrich",

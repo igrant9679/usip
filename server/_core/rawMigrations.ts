@@ -3804,6 +3804,24 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0172: per-workspace ARE source checking order (owner ask 08-24) ──────
+  // "Make QuickEnrich the first source the system checks; give me the
+  // ability to change the source checking order and unselect/select
+  // configured sources for each workspace." The order is a JSON array of
+  // source ids read ONLY through @shared/areSources.resolveSourceOrder
+  // (unknown ids dropped, unmentioned sources appended in the default order
+  // so a new vocabulary entry cannot vanish behind a stale stored order).
+  // Enable/disable reuses the EXISTING areScraperSources mask — same column
+  // the wizard seeds from, now honored at engine runtime too, one
+  // vocabulary. NULL order = the default, which since this date puts
+  // quickenrich FIRST — order is dedup priority in runDiscovery.
+  {
+    name: "0172_workspace_are_source_order.sql",
+    statements: [
+      "ALTER TABLE `workspace_settings` ADD COLUMN `areSourceOrder` json NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

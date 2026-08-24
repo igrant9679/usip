@@ -12,7 +12,7 @@ import { Shell, PageHeader } from "@/components/usip/Shell";
 import { ApolloSourceCard } from "@/components/usip/settings/ApolloSourceCard";
 import { ReoonVerifierCard } from "@/components/usip/settings/ReoonVerifierCard";
 import { QuickEnrichSourceCard } from "@/components/usip/settings/QuickEnrichSourceCard";
-import { ARE_SOURCES, ARE_SOURCE_IDS } from "@shared/areSources";
+import { ARE_SOURCES, ARE_SOURCE_IDS, resolveSourceOrder } from "@shared/areSources";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -42,7 +42,7 @@ import {
   Sliders,
   Sparkles,
   Star,
-  Zap, Settings2, MailCheck, Radar
+  Zap, Settings2, MailCheck, Radar, ChevronUp, ChevronDown
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -146,6 +146,11 @@ export default function ARESettings() {
   const [scraperSources, setScraperSources] = useState<Record<string, boolean>>(
     Object.fromEntries(ARE_SOURCE_IDS.map((id) => [id, true])),
   );
+  // Checking order — the engine's dedup priority, through the ONE resolver
+  // (mask {} so disabled sources stay visible/reorderable on this card).
+  const [sourceOrder, setSourceOrder] = useState<string[]>(
+    resolveSourceOrder(null, {}, ARE_SOURCE_IDS),
+  );
   const [icpRegenSchedule, setIcpRegenSchedule] = useState("weekly");
   const [sequenceQualityThreshold, setSequenceQualityThreshold] = useState(65);
   const [dirty, setDirty] = useState(false);
@@ -173,6 +178,7 @@ export default function ARESettings() {
         Object.fromEntries(ARE_SOURCE_IDS.map((id) => [id, saved[id] ?? true])),
       );
     }
+    setSourceOrder(resolveSourceOrder((settings as any).areSourceOrder ?? null, {}, ARE_SOURCE_IDS));
     setIcpRegenSchedule((settings as any).areIcpRegenSchedule ?? "weekly");
     setSequenceQualityThreshold((settings as any).areSequenceQualityThreshold ?? 65);
     setDirty(false);
@@ -201,6 +207,7 @@ export default function ARESettings() {
       areDefaultSequenceTemplate: sequenceTemplate,
       areBrandVoice: brandVoice,
       areScraperSources: scraperSources,
+      areSourceOrder: sourceOrder,
       areIcpRegenSchedule: icpRegenSchedule,
       areSequenceQualityThreshold: sequenceQualityThreshold,
     });
@@ -521,30 +528,59 @@ export default function ARESettings() {
           </div>
         </Section>
 
-        {/* -- 8. Scraper Source Defaults -- */}
+        {/* -- 8. Prospect sources: checking order + workspace enable mask -- */}
         <Section
           icon={Search}
-          title="Default Scraper Sources"
-          description="New campaigns start with these sources pre-enabled. Each campaign can still narrow the list in its own settings."
+          title="Prospect Sources & Checking Order"
+          description="Sources are checked top-to-bottom: when two find the same person, the higher one's record wins. A source toggled off never runs anywhere in this workspace — discovery, Find prospects, or campaigns — whatever a campaign selected. New campaigns start with the enabled sources pre-selected."
         >
           <div className="space-y-2">
-            {[
-              { key: "internal", label: "Internal CRM", desc: ARE_SOURCE_DESC.internal, icon: Database, color: "text-slate-500" },
-              { key: "google_business", label: "Google Business", desc: ARE_SOURCE_DESC.google_business, icon: Globe, color: "text-blue-500" },
-              { key: "linkedin", label: "LinkedIn", desc: ARE_SOURCE_DESC.linkedin, icon: Linkedin, color: "text-blue-600" },
-              { key: "web", label: "Web scraping", desc: ARE_SOURCE_DESC.web, icon: Globe, color: "text-emerald-500" },
-              { key: "news", label: "News & trigger events", desc: ARE_SOURCE_DESC.news, icon: Newspaper, color: "text-amber-500" },
-              { key: "apollo", label: "Apollo.io", desc: ARE_SOURCE_DESC.apollo, icon: Database, color: "text-violet-500" },
-            ].map(({ key, label, desc, icon: Icon, color }) => {
+            {sourceOrder.map((key, idx) => {
+              const meta = ARE_SOURCES.find((s) => s.id === key);
+              if (!meta) return null;
+              const iconFor: Record<string, { icon: typeof Database; color: string }> = {
+                internal: { icon: Database, color: "text-slate-500" },
+                google_business: { icon: Globe, color: "text-blue-500" },
+                linkedin: { icon: Linkedin, color: "text-blue-600" },
+                web: { icon: Globe, color: "text-emerald-500" },
+                news: { icon: Newspaper, color: "text-amber-500" },
+                apollo: { icon: Database, color: "text-violet-500" },
+                quickenrich: { icon: Radar, color: "text-cyan-600" },
+              };
+              const { icon: Icon, color } = iconFor[key] ?? { icon: Database, color: "text-slate-500" };
               const active = !!scraperSources[key];
+              const move = (dir: -1 | 1) => {
+                setSourceOrder((prev) => {
+                  const i = prev.indexOf(key);
+                  const j = i + dir;
+                  if (i < 0 || j < 0 || j >= prev.length) return prev;
+                  const next = [...prev];
+                  [next[i], next[j]] = [next[j], next[i]];
+                  return next;
+                });
+                mark();
+              };
               return (
                 <div key={key} className={`flex items-center gap-3 p-2.5 rounded-xl border transition-all ${
-                  active ? "border-primary/30 bg-primary/5" : "border-border bg-card"
+                  active ? "border-primary/30 bg-primary/5" : "border-border bg-card opacity-70"
                 }`}>
+                  <span className="w-5 text-center text-[10px] font-semibold tabular-nums text-muted-foreground shrink-0">{idx + 1}</span>
+                  <div className="flex flex-col shrink-0">
+                    <button
+                      type="button" aria-label={`Move ${meta.label} up`} disabled={idx === 0}
+                      className="text-muted-foreground hover:text-foreground disabled:opacity-30"
+                      onClick={() => move(-1)}
+                    ><ChevronUp className="size-3.5" /></button>
+                    <button
+                      type="button" aria-label={`Move ${meta.label} down`} disabled={idx === sourceOrder.length - 1}
+                      className="text-muted-foreground hover:text-foreground disabled:opacity-30"
+                      onClick={() => move(1)}
+                    ><ChevronDown className="size-3.5" /></button>
+                  </div>
                   <Icon className={`size-4 shrink-0 ${active ? color : "text-muted-foreground"}`} />
                   <div className="flex-1 min-w-0">
-                    <div className="text-xs font-medium">{label}</div>
-                    <div className="text-[10px] text-muted-foreground">{desc}</div>
+                    <div className="text-xs font-medium">{meta.label}</div>
+                    <div className="text-[10px] text-muted-foreground">{ARE_SOURCE_DESC[key]}</div>
                   </div>
                   <Toggle checked={active} onChange={() => { setScraperSources(prev => ({ ...prev, [key]: !prev[key] })); mark(); }} />
                 </div>

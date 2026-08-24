@@ -321,6 +321,8 @@ async function quickenrichCandidatesFor(workspaceId: number, limit: number, retr
       // Carried so a hit can be pushed to the canonical People row (see the
       // write site). Without it the sweeper's finds stopped at the queue.
       personProspectId: prospectQueue.personProspectId,
+      // Carried so the company-name harvest stays fill-only at the write.
+      companyName: prospectQueue.companyName,
     })
     .from(prospectQueue)
     .innerJoin(areCampaigns, eq(prospectQueue.campaignId, areCampaigns.id))
@@ -662,6 +664,13 @@ export async function sweepWorkspace(
         // Stamp enrichedAt on EVERY attempt, hit or miss — same contract as the
         // pattern pass: the marker that stops the next run paying to re-check.
         const patch: Record<string, unknown> = { enrichedAt: new Date() };
+        // Company identity harvested from their employee record writes on
+        // every outcome that carries it — the domain is fill-only by this
+        // pass's own predicate (rows here HAVE no domain), the name is
+        // fill-only by the check. Owner decision 2026-08-24 (no Apollo):
+        // QuickEnrich is the name→domain path.
+        if (found.companyDomain) patch.companyDomain = found.companyDomain.slice(0, 200);
+        if (found.companyName && !q.companyName) patch.companyName = found.companyName.slice(0, 200);
         if (found.email) {
           result.quickenrichCredits++; // their billing charges only on delivery
           // Their word is never send-safe: Reoon power-verifies every hit. An
@@ -707,6 +716,8 @@ export async function sweepWorkspace(
                 .then((m) => m.mergeIntoPerson(workspaceId, q.personProspectId!, {
                   email: found.email,
                   emailVerification: status,
+                  companyName: found.companyName,
+                  companyDomain: found.companyDomain,
                   source: "enrichment_sweeper_quickenrich",
                 }))
                 .catch((e) => console.error("[EnrichmentSweep] People writeback failed:", (e as Error)?.message ?? e));
@@ -731,6 +742,19 @@ export async function sweepWorkspace(
            */
           patch.enrichmentError = `quickenrich: ${found.reason} — transport failure, will retry`.slice(0, 500);
           delete patch.enrichedAt;
+        } else if (found.companyDomain) {
+          /**
+           * Their record knows the person and the employer but holds no
+           * address. The domain IS the unlock: writing it moves the row out
+           * of this pass's pool (the predicate requires no domain) and into
+           * the pattern+Reoon pass. The attempt marker is CLEARED, not
+           * stamped — a stamp from the domain-less era says nothing about
+           * pattern-with-domain (the 76e5f74 pass-specific-marker lesson),
+           * and an old stamp would keep the graduated row invisible to the
+           * nightly sweep forever.
+           */
+          patch.enrichedAt = null;
+          patch.enrichmentError = "quickenrich: no email on record — company domain filled, pattern pass will retry";
         } else {
           // A genuine miss: the vendor answered, and this person is not in it.
           patch.enrichmentStatus = "failed";

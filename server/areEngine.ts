@@ -48,6 +48,7 @@ import {
   leads,
   prospectIntelligence,
   prospectQueue,
+  workspaceSettings,
 } from "../drizzle/schema";
 import { runEnrichAgent, runSequenceAgent } from "./routers/are/prospects";
 import {
@@ -63,7 +64,7 @@ import { sendWorkspaceEmail, sendCampaignEmailViaPool } from "./emailDelivery";
 import { dispatchLinkedInStep, HEALABLE_NO_LINKEDIN } from "./services/are/linkedinStep";
 import { injectTracking } from "./mergeVars";
 import { resolveBookingUrl } from "./mergeVars";
-import { ARE_DEFAULT_SOURCES, normalizeSources } from "@shared/areSources";
+import { ARE_DEFAULT_SOURCES, normalizeSources, resolveSourceOrder, type AreSourceId } from "@shared/areSources";
 // One rule for a step's index + variant key, shared with the A/B metadata
 // upsert in routers/are/prospects.ts — see shared/areSequenceSteps.ts.
 import { normalizeSequence } from "@shared/areSequenceSteps";
@@ -1730,25 +1731,22 @@ async function runDiscovery(campaign: Campaign): Promise<number> {
   // Task ORDER is dedup PRIORITY: the settled results are walked in this
   // order and identity claims are first-wins, so when two sources find the
   // same person, the earlier task's row is the one that enters the queue.
-  // Owner decision 2026-08-24: QuickEnrich is the PRIMARY external source —
-  // its rows arrive LinkedIn-keyed with has_email flags and enrich at ~85%,
-  // where scraper rows are what built the email-less sediment — so it runs
-  // ahead of every scraper. Internal CRM stays first: those are people the
-  // workspace already knows, with real emails and history a fresh
-  // QuickEnrich row cannot match.
-  const tasks: Array<Promise<SourceResult>> = [];
+  // The order comes from the workspace's areSourceConfig through the ONE
+  // resolver (@shared/areSources.resolveSourceOrder); the default puts
+  // QuickEnrich first (owner decision 2026-08-24) — its rows arrive
+  // LinkedIn-keyed with has_email flags and enrich at ~85%, where scraper
+  // rows are what built the email-less sediment. The Record type IS the
+  // "every source id has a branch" rule: a vocabulary entry without a
+  // factory here no longer compiles.
   let quickenrichNextPage: QuickenrichPageState | null = null;
-  if (sources.includes("internal")) {
-    tasks.push(
+  const taskFactories: Record<AreSourceId, () => Promise<SourceResult>> = {
+    internal: () =>
       discoverViaInternalCrm(campaign, titles).then((raw) => ({
         sourceType: "internal" as const,
         query,
         raw,
       })),
-    );
-  }
-  if (sources.includes("quickenrich")) {
-    tasks.push(
+    quickenrich: () =>
       discoverViaQuickenrich(campaign, { titles, industries, geos }, persistedState.qe ?? null).then(({ raw, nextQe }) => {
         quickenrichNextPage = nextQe;
         return {
@@ -1757,55 +1755,47 @@ async function runDiscovery(campaign: Campaign): Promise<number> {
           raw,
         };
       }),
-    );
-  }
-  if (sources.includes("linkedin")) {
-    tasks.push(
+    linkedin: () =>
       discoverViaLinkedIn(campaign, query).then((raw) => ({
         sourceType: "linkedin_people" as const,
         query,
         raw,
       })),
-    );
-  }
-  if (sources.includes("apollo")) {
-    tasks.push(
+    apollo: () =>
       discoverViaApollo(campaign, { titles, industries, geos, keywords, overrides }).then((raw) => ({
         sourceType: "apollo" as const,
         query,
         raw,
       })),
-    );
-  }
-  if (sources.includes("google_business")) {
-    tasks.push(
+    google_business: () =>
       scrapeGoogleBusiness(campaign.workspaceId, campaign.id, query, icpContext).then(
         (raw) => ({ sourceType: "google_business" as const, query, raw }),
       ),
-    );
-  }
-  if (sources.includes("news")) {
-    tasks.push(
+    news: () =>
       scrapeNews(campaign.workspaceId, campaign.id, query, icpContext).then((raw) => ({
         sourceType: "news" as const,
         query,
         raw,
       })),
-    );
-  }
-  if (sources.includes("web")) {
-    tasks.push(
+    web: () =>
       scrapeWeb(campaign.workspaceId, campaign.id, query, icpContext).then((raw) => ({
         sourceType: "web_scrape" as const,
         query,
         raw,
       })),
-    );
-  }
+  };
+
+  const [wsSourceRow] = await db
+    .select({ order: workspaceSettings.areSourceOrder, mask: workspaceSettings.areScraperSources })
+    .from(workspaceSettings)
+    .where(eq(workspaceSettings.workspaceId, campaign.workspaceId))
+    .limit(1);
+  const runOrder = resolveSourceOrder(wsSourceRow?.order, wsSourceRow?.mask, sources as AreSourceId[]);
+  const tasks: Array<Promise<SourceResult>> = runOrder.map((id) => taskFactories[id]());
 
   if (tasks.length === 0) {
     await emitLog(campaign.workspaceId, campaign.id, "discovery", "warn",
-      `Discovery skipped — no usable sources configured (campaign.prospectSources=${JSON.stringify(sources)})`);
+      `Discovery skipped — no usable sources (campaign.prospectSources=${JSON.stringify(sources)}; workspace Settings may have disabled the rest).`);
     return 0;
   }
 
@@ -2041,8 +2031,15 @@ async function discoverViaApollo(
   });
 
   if (!res.ok) {
-    await emitLog(campaign.workspaceId, campaign.id, "discovery", "error",
-      `Apollo search failed: ${res.error}`);
+    // No key is a configuration CHOICE, not a failure (owner decision
+    // 2026-08-24: CF runs without Apollo — QuickEnrich/LinkedIn supply
+    // domains). A red error every tick for a deliberate absence trains
+    // people to ignore the error level.
+    const keyless = /No Apollo API key/i.test(res.error ?? "");
+    await emitLog(campaign.workspaceId, campaign.id, "discovery", keyless ? "info" : "error",
+      keyless
+        ? "Apollo skipped — no API key configured for this workspace. Company domains come from QuickEnrich/LinkedIn instead."
+        : `Apollo search failed: ${res.error}`);
     return [];
   }
 

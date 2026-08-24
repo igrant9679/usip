@@ -11,6 +11,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { toRawFindRow } from "../server/services/discovery/index";
+import { ARE_DEFAULT_SOURCE_ORDER, ARE_SOURCE_IDS, resolveSourceOrder } from "../shared/areSources";
 
 const svc = readFileSync("server/services/discovery/index.ts", "utf8");
 const engine = readFileSync("server/areEngine.ts", "utf8");
@@ -79,40 +80,40 @@ describe("QuickEnrich as a Find-prospects source", () => {
   });
 });
 
-describe("QuickEnrich is the PRIMARY external ARE source (owner decision 2026-08-24)", () => {
+describe("QuickEnrich is the PRIMARY source (owner decision 2026-08-24), and the order is workspace-configurable", () => {
   // Task order IS dedup priority: settled results are walked in tasks order
   // and identity claims are first-wins, so an earlier source's row is the
-  // one that enters the queue when two sources find the same person.
-  const tasksBlock = engine.slice(
-    engine.indexOf("const tasks: Array<Promise<SourceResult>>"),
-    engine.indexOf("if (tasks.length === 0)"),
-  );
-
-  it("the tasks block boundary is where we think it is", () => {
-    expect(tasksBlock.length).toBeGreaterThan(0);
-    expect(tasksBlock).toContain('sources.includes("quickenrich")');
+  // one that enters the queue when two sources find the same person. The
+  // order comes from resolveSourceOrder — EXECUTED here, not grepped.
+  it("the default checking order puts quickenrich first and covers every source", () => {
+    expect(ARE_DEFAULT_SOURCE_ORDER[0]).toBe("quickenrich");
+    expect([...ARE_DEFAULT_SOURCE_ORDER].sort()).toEqual([...ARE_SOURCE_IDS].sort());
   });
 
-  it("quickenrich is queued after internal CRM and before every scraper", () => {
-    const at = (marker: string) => {
-      const i = tasksBlock.indexOf(`sources.includes("${marker}")`);
-      expect(i, `source "${marker}" missing from the tasks block`).toBeGreaterThan(-1);
-      return i;
-    };
-    // Internal first: people the workspace already knows, with real emails
-    // and history a fresh QuickEnrich row cannot match.
-    expect(at("internal")).toBeLessThan(at("quickenrich"));
-    // QuickEnrich ahead of every external scraper — its rows arrive
-    // LinkedIn-keyed with has_email flags; scraper rows are what built the
-    // email-less sediment.
-    for (const scraper of ["linkedin", "apollo", "google_business", "news", "web"]) {
-      expect(at("quickenrich"), `quickenrich must precede ${scraper}`).toBeLessThan(at(scraper));
-    }
+  it("resolveSourceOrder: stored order wins, unmentioned sources append in default order", () => {
+    const r = resolveSourceOrder(["news", "internal"], null, ARE_SOURCE_IDS);
+    expect(r.slice(0, 2)).toEqual(["news", "internal"]);
+    expect(r).toEqual(["news", "internal", ...ARE_DEFAULT_SOURCE_ORDER.filter((s) => s !== "news" && s !== "internal")]);
   });
 
-  it("the settled walk preserves task order (first-claim-wins depends on it)", () => {
+  it("resolveSourceOrder: the workspace mask disables a source everywhere, unknown ids drop, selection filters", () => {
+    expect(resolveSourceOrder(null, { apollo: false }, ARE_SOURCE_IDS)).not.toContain("apollo");
+    // absent/true = enabled — an old sparse mask must not disable working sources
+    expect(resolveSourceOrder(null, { apollo: true }, ARE_SOURCE_IDS)).toContain("quickenrich");
+    expect(resolveSourceOrder(["events", "quickenrich"], null, ARE_SOURCE_IDS)[0]).toBe("quickenrich");
+    expect(resolveSourceOrder(null, null, ["web"])).toEqual(["web"]);
+  });
+
+  it("the engine builds its tasks FROM the resolver and walks them in order", () => {
+    expect(engine).toContain("resolveSourceOrder(wsSourceRow?.order, wsSourceRow?.mask, sources as AreSourceId[])");
+    expect(engine).toContain("runOrder.map((id) => taskFactories[id]())");
     expect(engine).toContain("const settled = await Promise.allSettled(tasks)");
     expect(engine).toContain("for (const s of settled)");
+  });
+
+  it("the Find-prospects fan-out honours the same mask through the same resolver", () => {
+    expect(svc).toContain("resolveSourceOrder(wsSourceRow?.order, wsSourceRow?.mask, ARE_SOURCE_IDS)");
+    expect(svc).toContain("disabled in workspace Settings");
   });
 });
 
