@@ -455,18 +455,46 @@ async function assertTemplateEditable(db: any, ctx: any, id: number): Promise<vo
   }
 }
 
+/**
+ * Live enrolled counts per sequence, computed from the enrollments table.
+ *
+ * `sequences.enrolledCount` is a stored column NO write path maintains:
+ * enroll/bulkEnroll insert enrollments rows and never bump it (the
+ * sequence-enrollment spec says to; nothing does), so every surface reading
+ * the column — the Sequences list, the editor's "No contacts enrolled yet",
+ * EntityPicker's "N enrolled" — showed 0 no matter how many people were
+ * enrolled. Rather than chase every mutation site with counter maintenance
+ * that drifts, the read paths compute the truth. 'finished' still counts —
+ * someone who completed the sequence was enrolled in it; 'exited' rows were
+ * removed from it and are not.
+ */
+export async function liveEnrolledCounts(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  workspaceId: number,
+): Promise<Map<number, number>> {
+  const rows = await db
+    .select({ sequenceId: enrollments.sequenceId, n: sql<number>`count(*)` })
+    .from(enrollments)
+    .where(and(eq(enrollments.workspaceId, workspaceId), inArray(enrollments.status, ["active", "paused", "finished"])))
+    .groupBy(enrollments.sequenceId);
+  return new Map(rows.map((r) => [r.sequenceId, Number(r.n)]));
+}
+
 export const sequencesRouter = router({
   list: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
     if (!db) return [];
     // Actual (non-template) sequences. Managers+ see all; reps see team-visible
-    // ones plus their own + ones assigned to them.
+    // ones plus their own + ones assigned to them. enrolledCount is computed
+    // live — see liveEnrolledCounts.
     const rows = await db.select().from(sequences)
       .where(and(eq(sequences.workspaceId, ctx.workspace.id), eq(sequences.isTemplate, false)))
       .orderBy(desc(sequences.updatedAt));
-    if (roleRank(ctx.member.role) >= roleRank("manager")) return rows;
+    const enrolled = await liveEnrolledCounts(db, ctx.workspace.id);
+    const withLive = rows.map((s) => ({ ...s, enrolledCount: enrolled.get(s.id) ?? 0 }));
+    if (roleRank(ctx.member.role) >= roleRank("manager")) return withLive;
     const me = ctx.user.id;
-    return rows.filter((s) => s.visibility === "team" || s.ownerUserId === me || s.assignedToUserId === me);
+    return withLive.filter((s) => s.visibility === "team" || s.ownerUserId === me || s.assignedToUserId === me);
   }),
 
   /** The shared template library (admin-published master sequences reps fork). */
@@ -485,7 +513,9 @@ export const sequencesRouter = router({
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const [row] = await db.select().from(sequences).where(and(eq(sequences.id, input.id), eq(sequences.workspaceId, ctx.workspace.id)));
-    return row ?? null;
+    if (!row) return null;
+    const enrolled = await liveEnrolledCounts(db, ctx.workspace.id);
+    return { ...row, enrolledCount: enrolled.get(row.id) ?? 0 };
   }),
 
   create: repProcedure.input(z.object({ name: z.string().min(1), description: z.string().optional(), steps: z.array(stepSchema).default([]) })).mutation(async ({ ctx, input }) => {
