@@ -30,6 +30,7 @@ import { tryDecryptSecret } from "../_core/crypto";
 import { normalizeDomain } from "./scraper/domain";
 import { stripNameCredentials } from "./enrichment/personName";
 import { utcDayStart } from "@shared/timeWindows";
+import { canonicalText } from "@shared/canonicalText";
 
 export const QUICKENRICH_BASE = "https://app.quickenrich.io";
 
@@ -106,32 +107,150 @@ const COUNTRY_CODES: Record<string, string> = {
   india: "IN", singapore: "SG",
 };
 
+/**
+ * In-process cache of their industries vocabulary (GET /api/lookups/industries).
+ * Their contact-finder 422s the WHOLE request when any `industry_linkedin`
+ * value is not an exact member of this list (observed live 2026-08-24:
+ * "The value \"Colleges & Universities\" is not allowed. Use an exact value
+ * from GET /api/lookups/industries"), so every industry we send must be
+ * validated against it first. 12h TTL — a controlled vocabulary changes on
+ * their release cadence, not per request.
+ */
+let industriesCache: { key: string; at: number; values: string[] } | null = null;
+const INDUSTRIES_TTL_MS = 12 * 60 * 60 * 1000;
+
+/** Their allowed industry values, or null when the lookup can't be fetched —
+ *  callers must then OMIT the industry dimension rather than guess (an
+ *  unvalidated value 422s the whole search). Never throws. */
+export async function getQuickenrichIndustries(apiKey: string): Promise<string[] | null> {
+  if (industriesCache && industriesCache.key === apiKey && Date.now() - industriesCache.at < INDUSTRIES_TTL_MS) {
+    return industriesCache.values;
+  }
+  try {
+    const res = await fetch(`${QUICKENRICH_BASE}/api/lookups/industries`, {
+      headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json" },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) return null;
+    let json: unknown;
+    try {
+      json = await res.json();
+    } catch {
+      return null;
+    }
+    // Envelope tolerance, same posture as quickenrichContactFinder: bare
+    // array, or the list under a common wrapper key. Entries may be bare
+    // strings or objects naming the value.
+    const j = json as Record<string, unknown>;
+    const rows = [Array.isArray(json) ? json : undefined, j.data, j.results, j.items, j.industries]
+      .find(Array.isArray) as unknown[] | undefined;
+    if (!rows) return null;
+    const values = rows
+      .map((r) => {
+        if (typeof r === "string") return r.trim();
+        if (r && typeof r === "object") {
+          const o = r as Record<string, unknown>;
+          const v = [o.value, o.name, o.label, o.industry].find((x) => typeof x === "string" && x.trim());
+          return typeof v === "string" ? v.trim() : "";
+        }
+        return "";
+      })
+      .filter(Boolean);
+    if (values.length === 0) return null;
+    industriesCache = { key: apiKey, at: Date.now(), values };
+    return values;
+  } catch {
+    return null;
+  }
+}
+
+/** Compact form for vocabulary matching: "&"→"and", then the ONE canonical
+ *  collapse (@shared/canonicalText) with its spaces removed — so
+ *  "Non-profit Organizations" meets "nonprofit organizations" without a fuzzy
+ *  library. Spaces are dropped because this matches vocabulary IDENTIFIERS,
+ *  not tokenised names (the mergeKeys-vs-canonicalText distinction). */
+function compactIndustry(s: string): string {
+  return canonicalText(s.replace(/&/g, " and ")).replace(/ /g, "");
+}
+
+/**
+ * Map OUR industry strings onto THEIR controlled vocabulary. A value maps by
+ * compact-form equality, or by unambiguous containment (exactly ONE candidate
+ * whose compact form contains ours or vice versa). Anything else is dropped
+ * and reported — "similarity is not meaning" is what got the whole request
+ * 422'd, so an ambiguous near-match is a miss, not a pick.
+ */
+export function mapIndustriesToVocabulary(
+  ours: string[],
+  allowed: string[],
+): { mapped: string[]; unmapped: string[] } {
+  const byCompact = new Map<string, string>();
+  for (const a of allowed) {
+    const c = compactIndustry(a);
+    if (c && !byCompact.has(c)) byCompact.set(c, a);
+  }
+  const mapped: string[] = [];
+  const unmapped: string[] = [];
+  const taken = new Set<string>();
+  for (const raw of ours) {
+    const c = compactIndustry(raw);
+    if (!c) continue;
+    let hit = byCompact.get(c) ?? null;
+    if (!hit) {
+      const containing = Array.from(byCompact.entries())
+        .filter(([ac]) => ac.includes(c) || c.includes(ac));
+      if (containing.length === 1) hit = containing[0][1];
+    }
+    if (hit) {
+      if (!taken.has(hit)) {
+        taken.add(hit);
+        mapped.push(hit);
+      }
+    } else {
+      unmapped.push(raw);
+    }
+  }
+  return { mapped, unmapped };
+}
+
 export type QuickEnrichFilterBuild = {
   /** Body for POST /api/employees/contact-finder, or null when nothing mapped. */
   body: Record<string, unknown> | null;
   /** Geos that could not be mapped to a country code — for the discovery log. */
   unmappedGeos: string[];
+  /** Industries dropped: not in their vocabulary, or the vocabulary was unavailable. */
+  unmappedIndustries: string[];
+  /** True when industries were requested but GET /api/lookups/industries failed —
+   *  they were ALL dropped for that reason, not because they don't exist there. */
+  industryLookupUnavailable: boolean;
 };
 
 /**
- * Campaign targeting → contact-finder filters. Titles and industries map
- * directly (their filter fields are `title` and `industry_linkedin`); geos map
- * only through the country table above. Employee-count bands are deliberately
- * NOT sent: their band format is undocumented, and a mis-formatted filter
- * silently empties results — the Email Status lesson says similarity is not
- * meaning, and that applies to filter vocabularies too.
+ * Campaign targeting → contact-finder filters. Titles map directly (their
+ * filter field is `title`); industries are validated against their controlled
+ * vocabulary (`allowedIndustries` from getQuickenrichIndustries — one
+ * unrecognised value 422s the whole request, so pass null to omit the
+ * dimension when the lookup is unavailable); geos map only through the
+ * country table above. Employee-count bands are deliberately NOT sent: their
+ * band format is undocumented, and a mis-formatted filter silently empties
+ * results — the Email Status lesson says similarity is not meaning, and that
+ * applies to filter vocabularies too.
  */
 export function buildQuickenrichFilters(targeting: {
   titles: string[];
   industries: string[];
   geos: string[];
-}): QuickEnrichFilterBuild {
+}, allowedIndustries: string[] | null): QuickEnrichFilterBuild {
   const clean = (xs: string[], max: number) =>
     xs.map((s) => s.trim()).filter(Boolean).slice(0, max);
 
   const filters: Record<string, unknown> = {};
   const titles = clean(targeting.titles, 12);
-  const industries = clean(targeting.industries, 12);
+  const requestedIndustries = clean(targeting.industries, 12);
+  const industryLookupUnavailable = requestedIndustries.length > 0 && allowedIndustries === null;
+  const { mapped: industries, unmapped: unmappedIndustries } = industryLookupUnavailable
+    ? { mapped: [] as string[], unmapped: requestedIndustries }
+    : mapIndustriesToVocabulary(requestedIndustries, allowedIndustries ?? []);
   if (titles.length > 0) filters.title = { include: titles };
   if (industries.length > 0) filters.industry_linkedin = { include: industries };
 
@@ -150,7 +269,7 @@ export function buildQuickenrichFilters(targeting: {
   // would be "every contact they have", which is never a campaign audience
   // (the internal-CRM source refuses for the same reason).
   if (!filters.title && !filters.industry_linkedin) {
-    return { body: null, unmappedGeos };
+    return { body: null, unmappedGeos, unmappedIndustries, industryLookupUnavailable };
   }
   // Dimensions at the BODY ROOT — proven by probe on 2026-08-21. Their API
   // changed schema at some point after key setup: any body containing a
@@ -159,7 +278,7 @@ export function buildQuickenrichFilters(targeting: {
   // include objects at the top level answer 200. `logic` was dropped with
   // the wrapper: the accepted probe carried no such key, and an unproven key
   // is how the last 422 started.
-  return { body: { ...filters, page: 1 }, unmappedGeos };
+  return { body: { ...filters, page: 1 }, unmappedGeos, unmappedIndustries, industryLookupUnavailable };
 }
 
 export type QuickEnrichDiscoveredPerson = {

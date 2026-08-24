@@ -75,6 +75,7 @@ import {
   buildQuickenrichFilters,
   getQuickEnrichKey,
   getQuickenrichDailyPullCap,
+  getQuickenrichIndustries,
   quickenrichContactFinder,
   quickenrichPulledToday,
 } from "./services/quickenrich";
@@ -2066,10 +2067,18 @@ async function discoverViaQuickenrich(
     return [];
   }
 
-  const { body, unmappedGeos } = buildQuickenrichFilters(targeting);
+  // Industries must be validated against their controlled vocabulary — one
+  // unrecognised value 422s the entire request (observed live 2026-08-24,
+  // which made this source contribute zero for days). Lookup unavailable →
+  // industries are omitted, titles still search.
+  const allowedIndustries = targeting.industries.length > 0
+    ? await getQuickenrichIndustries(apiKey)
+    : null;
+  const { body, unmappedGeos, unmappedIndustries, industryLookupUnavailable } =
+    buildQuickenrichFilters(targeting, allowedIndustries);
   if (!body) {
     await emitLog(campaign.workspaceId, campaign.id, "discovery", "warn",
-      "QuickEnrich skipped — no target titles or industries configured (refusing to search their entire database).");
+      "QuickEnrich skipped — no target titles, and no industries that map to QuickEnrich's vocabulary (refusing to search their entire database).");
     return [];
   }
 
@@ -2091,6 +2100,11 @@ async function discoverViaQuickenrich(
     + `Emails are resolved during enrichment — discovery is free and never includes them.`
     + (unmappedGeos.length > 0
       ? ` Geo filters not sent (no clean country mapping): ${unmappedGeos.join(", ")}.`
+      : "")
+    + (unmappedIndustries.length > 0
+      ? (industryLookupUnavailable
+        ? ` Industry filters not sent — their vocabulary lookup was unavailable: ${unmappedIndustries.join(", ")}.`
+        : ` Industry filters dropped (not in QuickEnrich's vocabulary): ${unmappedIndustries.join(", ")}.`)
       : ""));
 
   return kept.map((p) => ({

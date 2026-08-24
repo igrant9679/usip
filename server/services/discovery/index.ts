@@ -42,6 +42,7 @@ import {
   buildQuickenrichFilters,
   getQuickEnrichKey,
   getQuickenrichDailyPullCap,
+  getQuickenrichIndustries,
   quickenrichContactFinder,
   quickenrichPulledToday,
 } from "../quickenrich";
@@ -169,11 +170,15 @@ async function discoverViaQuickEnrich(
   const cap = await getQuickenrichDailyPullCap(workspaceId);
   const headroom = cap - (await quickenrichPulledToday(workspaceId));
   if (headroom <= 0) return [];
+  // Industries must be validated against their controlled vocabulary — one
+  // unrecognised value 422s the entire request (observed live 2026-08-24).
+  // Lookup unavailable → the industry dimension is omitted, titles still search.
+  const allowedIndustries = input.industry ? await getQuickenrichIndustries(apiKey) : null;
   const { body } = buildQuickenrichFilters({
     titles: input.jobTitle ? [input.jobTitle] : [],
     industries: input.industry ? [input.industry] : [],
     geos: input.location ? [input.location] : [],
-  });
+  }, allowedIndustries);
   if (!body) return [];
   const res = await quickenrichContactFinder(apiKey, body);
   // A real API failure surfaces as this source's error in perSource + the

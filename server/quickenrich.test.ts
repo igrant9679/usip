@@ -35,6 +35,8 @@ import { encryptSecret } from "./_core/crypto";
 import {
   buildQuickenrichFilters,
   getQuickEnrichKey,
+  getQuickenrichIndustries,
+  mapIndustriesToVocabulary,
   quickenrichContactFinder,
   quickenrichFindEmailByLinkedIn,
   quickenrichTestKey,
@@ -234,22 +236,58 @@ describe("quickenrichFindEmailByLinkedIn — envelope-agnostic on purpose", () =
 });
 
 describe("buildQuickenrichFilters — targeting → their vocabulary, conservatively", () => {
-  it("maps titles and industries to their documented filter fields", () => {
+  it("maps titles directly and industries THROUGH their vocabulary", () => {
     const { body } = buildQuickenrichFilters({
       titles: ["CFO", " Executive Director "],
       industries: ["non-profit organizations"],
       geos: [],
-    });
+    }, ["Non-profit Organizations", "Higher Education"]);
     // Dimensions at the BODY ROOT, no `filters` wrapper and no `logic` key —
     // their API changed schema (probe-proven 2026-08-21): any body carrying a
-    // `filters` wrapper 422s as "no filter at all".
+    // `filters` wrapper 422s as "no filter at all". The industry value sent is
+    // THEIR exact string, never ours — one unrecognised value 422s the whole
+    // request (observed live 2026-08-24).
     expect(body).toMatchObject({
       page: 1,
       title: { include: ["CFO", "Executive Director"] },
-      industry_linkedin: { include: ["non-profit organizations"] },
+      industry_linkedin: { include: ["Non-profit Organizations"] },
     });
     expect(body).not.toHaveProperty("filters");
     expect(body).not.toHaveProperty("logic");
+  });
+
+  it("drops industries not in their vocabulary and reports them — titles still search", () => {
+    const { body, unmappedIndustries, industryLookupUnavailable } = buildQuickenrichFilters({
+      titles: ["CFO"],
+      industries: ["Colleges & Universities", "Higher Education"],
+      geos: [],
+    }, ["Higher Education", "Government Administration"]);
+    expect((body as any).industry_linkedin.include).toEqual(["Higher Education"]);
+    expect(unmappedIndustries).toEqual(["Colleges & Universities"]);
+    expect(industryLookupUnavailable).toBe(false);
+  });
+
+  it("omits the industry dimension entirely when the vocabulary lookup is unavailable", () => {
+    // Sending an unvalidated value 422s the WHOLE request — a broader
+    // titles-only search that returns people beats a precise one that errors.
+    const { body, unmappedIndustries, industryLookupUnavailable } = buildQuickenrichFilters({
+      titles: ["CFO"],
+      industries: ["Higher Education"],
+      geos: [],
+    }, null);
+    expect(body).not.toHaveProperty("industry_linkedin");
+    expect((body as any).title.include).toEqual(["CFO"]);
+    expect(unmappedIndustries).toEqual(["Higher Education"]);
+    expect(industryLookupUnavailable).toBe(true);
+  });
+
+  it("returns null when nothing survives mapping (industries-only targeting, none map)", () => {
+    const { body } = buildQuickenrichFilters({
+      titles: [],
+      industries: ["Colleges & Universities"],
+      geos: [],
+    }, ["Government Administration"]);
+    expect(body).toBeNull();
   });
 
   it("sends a geo ONLY when it maps cleanly to a country code, and reports the rest", () => {
@@ -259,7 +297,7 @@ describe("buildQuickenrichFilters — targeting → their vocabulary, conservati
       titles: ["CFO"],
       industries: [],
       geos: ["United States", "California", "UK"],
-    });
+    }, null);
     expect((body as any).country_code.include.sort()).toEqual(["GB", "US"]);
     expect(unmappedGeos).toEqual(["California"]);
   });
@@ -267,7 +305,7 @@ describe("buildQuickenrichFilters — targeting → their vocabulary, conservati
   it("refuses to search with no titles and no industries", () => {
     // A filter-less search is 'every contact they have' — never a campaign
     // audience. Same refusal, same reason, as the internal-CRM source.
-    const { body } = buildQuickenrichFilters({ titles: [], industries: [], geos: ["United States"] });
+    const { body } = buildQuickenrichFilters({ titles: [], industries: [], geos: ["United States"] }, null);
     expect(body).toBeNull();
   });
 
@@ -276,8 +314,73 @@ describe("buildQuickenrichFilters — targeting → their vocabulary, conservati
       titles: Array.from({ length: 40 }, (_, i) => `T${i}`),
       industries: [],
       geos: [],
-    });
+    }, null);
     expect((body as any).title.include).toHaveLength(12);
+  });
+});
+
+describe("mapIndustriesToVocabulary — exact or unambiguous, never a guess", () => {
+  it("matches on compact form: case, '&'→'and', punctuation and spacing ignored", () => {
+    const { mapped, unmapped } = mapIndustriesToVocabulary(
+      ["non-profit organizations", "colleges and universities"],
+      ["Non-profit Organizations", "Colleges & Universities"],
+    );
+    // Always THEIR exact strings — that is what their validator accepts.
+    expect(mapped).toEqual(["Non-profit Organizations", "Colleges & Universities"]);
+    expect(unmapped).toEqual([]);
+  });
+
+  it("containment maps ONLY when exactly one candidate matches", () => {
+    const one = mapIndustriesToVocabulary(["Grantmaking"], ["Philanthropic Grantmaking Services", "Higher Education"]);
+    expect(one.mapped).toEqual(["Philanthropic Grantmaking Services"]);
+    // Two candidates contain the term → ambiguous → dropped, not picked.
+    const two = mapIndustriesToVocabulary(["Education"], ["Higher Education", "Primary Education"]);
+    expect(two.mapped).toEqual([]);
+    expect(two.unmapped).toEqual(["Education"]);
+  });
+
+  it("dedupes when two of ours map to the same one of theirs", () => {
+    const { mapped } = mapIndustriesToVocabulary(
+      ["Higher Education", "higher-education"],
+      ["Higher Education"],
+    );
+    expect(mapped).toEqual(["Higher Education"]);
+  });
+});
+
+describe("getQuickenrichIndustries — their controlled vocabulary, defensively parsed", () => {
+  const jsonResponse = (status: number, body: unknown) => ({
+    status,
+    ok: status >= 200 && status < 300,
+    json: async () => body,
+  });
+
+  // The 12h in-process cache is keyed by API key — every test uses a fresh
+  // key so one test's cached vocabulary can't leak into the next.
+  it("accepts a bare string array", async () => {
+    mocks.fetch.mockResolvedValue(jsonResponse(200, ["Higher Education", "Philanthropy"]));
+    expect(await getQuickenrichIndustries("k-bare")).toEqual(["Higher Education", "Philanthropy"]);
+  });
+
+  it("accepts wrapped arrays and object entries", async () => {
+    mocks.fetch.mockResolvedValue(jsonResponse(200, { data: [{ name: "Higher Education" }, { value: "Philanthropy" }] }));
+    expect(await getQuickenrichIndustries("k-wrapped")).toEqual(["Higher Education", "Philanthropy"]);
+  });
+
+  it("returns null on HTTP error, alien shape, or an empty list — callers must then omit the dimension", async () => {
+    mocks.fetch.mockResolvedValue(jsonResponse(500, {}));
+    expect(await getQuickenrichIndustries("k-500")).toBeNull();
+    mocks.fetch.mockResolvedValue(jsonResponse(200, { weird: true }));
+    expect(await getQuickenrichIndustries("k-alien")).toBeNull();
+    mocks.fetch.mockResolvedValue(jsonResponse(200, []));
+    expect(await getQuickenrichIndustries("k-empty")).toBeNull();
+  });
+
+  it("caches per key — a second call does not re-fetch", async () => {
+    mocks.fetch.mockResolvedValue(jsonResponse(200, ["Higher Education"]));
+    await getQuickenrichIndustries("k-cache");
+    await getQuickenrichIndustries("k-cache");
+    expect(mocks.fetch).toHaveBeenCalledTimes(1);
   });
 });
 
