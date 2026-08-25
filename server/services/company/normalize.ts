@@ -47,6 +47,7 @@ export function normalizeCompanyName(name?: string | null): string {
 const NAME_CONNECTORS = new Set([
   "of", "the", "and", "for", "at", "in", "on", "a", "an", "to",
   "de", "la", "du", "von", "van", "der", "des", "di", "da", "del",
+  "y", "e", "with", "from", "into", "is", "as", "by", "en",
 ]);
 
 /** Legal suffixes with a FIXED conventional casing, keyed by their
@@ -96,6 +97,11 @@ export function normalizeCompanyDisplayName(raw: string | null | undefined): str
 
   const letters = input.replace(/[^a-zA-Z]/g, "");
   const wholeNameCaps = letters.length >= 2 && input === input.toUpperCase();
+  // Lowercase repair applies ONLY to a fully lowercase name (a slug/import
+  // artifact). One lowercase word inside a mixed name — "Journey into
+  // Education", "Andrés y María", "d/b/a" — is somebody's deliberate casing.
+  // First prod run title-cased those (2026-08-25); rows were reverted.
+  const wholeNameLower = letters.length >= 2 && input === input.toLowerCase();
 
   const toks = input.split(" ");
   const out = toks.map((tok, i) => {
@@ -117,7 +123,9 @@ export function normalizeCompanyDisplayName(raw: string | null | undefined): str
       if (tokLetters.length <= 4) return tok; // acronym-shaped: keep
       return wholeNameCaps ? titleCaseCompanyToken(tok) : tok;
     }
-    // all-lowercase
+    // all-lowercase — repaired only when the WHOLE name is lowercase.
+    if (!wholeNameLower) return tok;
+    if (/^d\/b\/a$/i.test(bare)) return "d/b/a"; // legal idiom, always down
     if (i > 0 && NAME_CONNECTORS.has(bare) && !trailing) return tok;
     return titleCaseCompanyToken(tok);
   });

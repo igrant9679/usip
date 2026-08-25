@@ -21,6 +21,17 @@ describe("normalizeCompanyDisplayName", () => {
     expect(normalizeCompanyDisplayName("UNICEF USA Foundation")).toBe("UNICEF USA Foundation");
   });
 
+  it("a lowercase WORD inside a mixed name is deliberate — the whole name must be lowercase to repair", () => {
+    // All four damaged the first prod run (2026-08-25) and were reverted:
+    expect(normalizeCompanyDisplayName("Journey into Education & Teaching")).toBe("Journey into Education & Teaching");
+    expect(normalizeCompanyDisplayName("Andrés y María Cárdenas Family Foundation")).toBe("Andrés y María Cárdenas Family Foundation");
+    expect(normalizeCompanyDisplayName("The Miller Institute for Learning with Technology")).toBe("The Miller Institute for Learning with Technology");
+    expect(normalizeCompanyDisplayName("Bangor Children’s Home d/b/a Hilltop School")).toBe("Bangor Children’s Home d/b/a Hilltop School");
+    // And d/b/a stays down even in a fully lowercase name being repaired:
+    expect(normalizeCompanyDisplayName("bangor children's home d/b/a hilltop school"))
+      .toBe("Bangor Children's Home d/b/a Hilltop School");
+  });
+
   it("keeps short ALL-CAPS tokens — acronym-shaped (SAP, CDW, AAMC, IBM)", () => {
     expect(normalizeCompanyDisplayName("SAP")).toBe("SAP");
     expect(normalizeCompanyDisplayName("AAMC")).toBe("AAMC");
@@ -60,6 +71,7 @@ describe("normalizeCompanyDisplayName", () => {
   it("null-in/null-out; never empties non-empty input", () => {
     expect(normalizeCompanyDisplayName(null)).toBeNull();
     expect(normalizeCompanyDisplayName("  ")).toBeNull();
-    expect(normalizeCompanyDisplayName("x")).toBe("X");
+    // Single letters sit below the shapeless threshold — untouched.
+    expect(normalizeCompanyDisplayName("x")).toBe("x");
   });
 });
