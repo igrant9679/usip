@@ -133,8 +133,11 @@ describe("normalizePersonNamePair", () => {
   it("keeps surname particles lowercase — but a particle AS the surname capitalizes", () => {
     expect(normalizePersonNamePair("ANA", "VAN DER BERG")).toEqual({ firstName: "Ana", lastName: "van der Berg" });
     expect(normalizePersonNamePair("maria", "de la cruz")).toEqual({ firstName: "Maria", lastName: "de la Cruz" });
-    // Vietnamese surnames: the particle list must not eat a real surname.
-    expect(normalizePersonNamePair("thanh", "LE")).toEqual({ firstName: "Thanh", lastName: "Le" });
+    // Vietnamese surnames: the particle list must not LOWERCASE a real
+    // surname — "le" as the final token capitalizes. (ALL-CAPS "LE" instead
+    // falls under the two-letter undecidability rule below and stays put.)
+    expect(normalizePersonNamePair("thanh", "le")).toEqual({ firstName: "Thanh", lastName: "Le" });
+    expect(normalizePersonNamePair("thanh", "LE")).toEqual({ firstName: "Thanh", lastName: "LE" });
   });
 
   it("firstName keeps only its first token — middles drop, per the rule", () => {
@@ -173,5 +176,26 @@ describe("normalizePersonNamePair", () => {
     // Found on prod 2026-08-25: "de los Santos" was raised to "de Los
     // Santos" because los/las were missing from the particle list.
     expect(normalizePersonNamePair("LENI", "de los santos")).toEqual({ firstName: "Leni", lastName: "de los Santos" });
+  });
+
+  it("a whole-name blob splits within its FIRST comma segment only", () => {
+    // Prod 2026-08-25: taking the blob's last token minted "Michael Fellow"
+    // out of "Michael H. Conn, CFtP, GFI Chartered Fellow". The tail
+    // segments are junk the credential strip could not prove; the name
+    // lives in segment one.
+    expect(normalizePersonNamePair("Michael H. Conn, CFtP, GFI Chartered Fellow", ""))
+      .toEqual({ firstName: "Michael", lastName: "Conn" });
+  });
+
+  it("dotless one/two-letter ALL-CAPS is undecidable — untouched", () => {
+    // Prod 2026-08-25: "LJ" briefly became "Lj".
+    expect(normalizePersonNamePair("LJ", "A.")).toEqual({ firstName: "LJ", lastName: "A." });
+  });
+
+  it("placeholder sentinels pass through untouched — garbage is not a name", () => {
+    // Prod 2026-08-25: "<UNKNOWN>" was case-mangled to "<unknown>".
+    expect(normalizePersonNamePair("<UNKNOWN>", "<UNKNOWN>"))
+      .toEqual({ firstName: "<UNKNOWN>", lastName: "<UNKNOWN>" });
+    expect(normalizePersonNamePair("(unknown)", "Smith").firstName).toBe("(unknown)");
   });
 });

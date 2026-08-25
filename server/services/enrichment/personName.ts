@@ -125,6 +125,10 @@ function capitalizeNameToken(tok: string, isFinalToken: boolean): string {
   // upper — checked before the shapeless gate, because a botched mixed-case
   // initial must heal on a re-run rather than hide behind "deliberate casing".
   if (/^([a-zA-Z]\.){1,3}[a-zA-Z]?\.?$/.test(tok)) return tok.toUpperCase();
+  // Dotless ALL-CAPS of one or two letters ("LJ", "TJ", "A") is usually an
+  // initialism, sometimes a name ("AL") — undecidable, so untouched.
+  // (Prod 2026-08-25: "LJ" briefly became "Lj".)
+  if (/^[A-Z]{1,2}$/.test(tok)) return tok;
   const shapeless = tok === tok.toUpperCase() || tok === tok.toLowerCase();
   if (!shapeless) return tok;
   if (!isFinalToken && SURNAME_PARTICLES.has(tok.toLowerCase())) return tok.toLowerCase();
@@ -157,18 +161,32 @@ export function normalizePersonNamePair(
   first: string | null | undefined,
   last: string | null | undefined,
 ): { firstName: string | null; lastName: string | null } {
+  // Placeholder sentinels ("<UNKNOWN>", "(unknown)", "N/A") are not names —
+  // pass them through untouched rather than "normalizing" garbage. (Prod
+  // 2026-08-25: "<UNKNOWN>" was case-mangled to "<unknown>".)
+  const isPlaceholder = (s: string | null | undefined) =>
+    !!s && /^[<(\[]?\s*(unknown|n\/?a|none|null|not available|not found)\s*[>)\]]?$/i.test(s.trim());
+  if (isPlaceholder(first) || isPlaceholder(last)) {
+    return { firstName: first ?? null, lastName: last ?? null };
+  }
+
   const repaired = repairNamePair(first, last);
   let f = (repaired.firstName ?? "").trim();
   let l = (repaired.lastName ?? "").trim();
 
   if (!l && f) {
-    const toks = f.split(/\s+/).filter(Boolean);
+    // A whole name stored in firstName splits first-token / last-token —
+    // but ONLY within the FIRST comma segment. The tail segments are the
+    // junk the credential strip could not prove ("…, CFtP, GFI Chartered
+    // Fellow"), and taking the blob's last token minted "Michael Fellow"
+    // out of Michael Conn on prod 2026-08-25.
+    const toks = f.split(",")[0].trim().split(/\s+/).filter(Boolean);
     if (toks.length >= 2) {
       f = toks[0];
       l = toks[toks.length - 1];
     }
   }
-  if (f) f = f.split(/\s+/).filter(Boolean)[0] ?? f;
+  if (f) f = (f.split(/\s+/).filter(Boolean)[0] ?? f).replace(/,+$/, "");
 
   const cap = (s: string) => {
     const toks = s.split(/\s+/).filter(Boolean);
