@@ -116,11 +116,15 @@ export function stripNameCredentials(raw: string | null | undefined): string | n
  *  a particle before the main surname stays down. */
 const SURNAME_PARTICLES = new Set([
   "van", "der", "de", "la", "von", "di", "da", "del", "den", "ter", "ten",
-  "bin", "al", "le", "du", "dos", "das", "el",
+  "bin", "al", "le", "du", "dos", "das", "el", "los", "las",
 ]);
 
 function capitalizeNameToken(tok: string, isFinalToken: boolean): string {
   if (!/[a-zA-Z]/.test(tok)) return tok;
+  // Initials ("W.B.", "j.r.", and the half-healed "W.b.") are ALWAYS
+  // upper — checked before the shapeless gate, because a botched mixed-case
+  // initial must heal on a re-run rather than hide behind "deliberate casing".
+  if (/^([a-zA-Z]\.){1,3}[a-zA-Z]?\.?$/.test(tok)) return tok.toUpperCase();
   const shapeless = tok === tok.toUpperCase() || tok === tok.toLowerCase();
   if (!shapeless) return tok;
   if (!isFinalToken && SURNAME_PARTICLES.has(tok.toLowerCase())) return tok.toLowerCase();

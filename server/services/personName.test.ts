@@ -159,4 +159,19 @@ describe("normalizePersonNamePair", () => {
     expect(normalizePersonNamePair(null, null)).toEqual({ firstName: null, lastName: null });
     expect(normalizePersonNamePair("Cher", null).firstName).toBe("Cher");
   });
+
+  it("initials stay upper — including healing a previously-botched 'W.b.'", () => {
+    // Found on prod 2026-08-25: the first backfill run lowercased "W.B." to
+    // "W.b.", and the shapeless gate then protected the damage as
+    // "deliberate casing". Initials are checked BEFORE that gate.
+    expect(normalizePersonNamePair("W.B.", "Warsame")).toEqual({ firstName: "W.B.", lastName: "Warsame" });
+    expect(normalizePersonNamePair("W.b.", "Warsame")).toEqual({ firstName: "W.B.", lastName: "Warsame" });
+    expect(normalizePersonNamePair("j.r.", "smith")).toEqual({ firstName: "J.R.", lastName: "Smith" });
+  });
+
+  it("Spanish particles: los/las stay down mid-surname", () => {
+    // Found on prod 2026-08-25: "de los Santos" was raised to "de Los
+    // Santos" because los/las were missing from the particle list.
+    expect(normalizePersonNamePair("LENI", "de los santos")).toEqual({ firstName: "Leni", lastName: "de los Santos" });
+  });
 });
