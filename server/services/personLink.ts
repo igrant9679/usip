@@ -31,7 +31,7 @@ import type { AnyMySqlColumn } from "drizzle-orm/mysql-core";
 import { getDb } from "../db";
 import { contacts, prospects, prospectQueue, prospectLinkedinEnrichments } from "../../drizzle/schema";
 import { CONFIDENCE, mergeAll, type Candidate, type ProvenanceMap } from "./enrichment/fieldMerge";
-import { stripNameCredentials } from "./enrichment/personName";
+import { normalizePersonNamePair, stripNameCredentials } from "./enrichment/personName";
 import { cleanPlaceholder, normalizeJobTitle } from "./enrichment/recordNormalize";
 import { cleanScrapedField, isPlaceholderToken, usableEmailOrNull } from "@shared/fieldHygiene";
 import { normalizeCompanyName, normalizeDomain } from "./company/normalize";
@@ -260,8 +260,11 @@ export async function upsertPersonForRow(
   }
 
   // New person — normalized through the same seams every import uses.
-  const first = (stripNameCredentials(row.firstName ?? "") ?? row.firstName ?? "").trim().slice(0, 80);
-  const last = (stripNameCredentials(row.lastName ?? "") ?? row.lastName ?? "").trim().slice(0, 80);
+  // People "Name" rule (owner 2026-08-25): first + last only, capitalization
+  // normalized — the pair normalizer wraps the credential strip.
+  const pair = normalizePersonNamePair(row.firstName, row.lastName);
+  const first = (pair.firstName ?? row.firstName ?? "").trim().slice(0, 80);
+  const last = (pair.lastName ?? row.lastName ?? "").trim().slice(0, 80);
   const merged = mergeAll({}, {}, candidatesFromRow(row, now, provenance));
   const values: typeof prospects.$inferInsert = {
     workspaceId,

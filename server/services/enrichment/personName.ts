@@ -102,6 +102,81 @@ export function stripNameCredentials(raw: string | null | undefined): string | n
 }
 
 /**
+ * Capitalization repair for ONE name token — applied only when the token
+ * arrived shapeless: ALL-CAPS ("SMITH") or all-lowercase ("smith"). A
+ * mixed-case token is already human-shaped ("McDonald", "DiCaprio", "van")
+ * and is never touched — we cannot out-guess a human's own casing.
+ * Hyphen/apostrophe segments re-case independently ("o'brien-SMITH" →
+ * "O'Brien-Smith"); a "Mc" prefix gets its inner capital back. "Mac" is
+ * deliberately NOT special-cased — "Macias" and "Mack" are real surnames.
+ */
+/** Surname particles that conventionally stay lowercase ("van der Berg",
+ *  "de la Cruz"). Applied only to NON-FINAL tokens: "Le" and "Van" standing
+ *  as the surname itself (common Vietnamese surnames) must capitalize, while
+ *  a particle before the main surname stays down. */
+const SURNAME_PARTICLES = new Set([
+  "van", "der", "de", "la", "von", "di", "da", "del", "den", "ter", "ten",
+  "bin", "al", "le", "du", "dos", "das", "el",
+]);
+
+function capitalizeNameToken(tok: string, isFinalToken: boolean): string {
+  if (!/[a-zA-Z]/.test(tok)) return tok;
+  const shapeless = tok === tok.toUpperCase() || tok === tok.toLowerCase();
+  if (!shapeless) return tok;
+  if (!isFinalToken && SURNAME_PARTICLES.has(tok.toLowerCase())) return tok.toLowerCase();
+  return tok
+    .toLowerCase()
+    .split(/([-'’])/)
+    .map((seg) =>
+      /[-'’]/.test(seg) || seg === ""
+        ? seg
+        : (seg[0].toUpperCase() + seg.slice(1)).replace(/^Mc([a-z])/, (_, c: string) => "Mc" + c.toUpperCase()),
+    )
+    .join("");
+}
+
+/**
+ * The People "Name" rule (owner directive 2026-08-25): the stored pair holds
+ * ONLY a first name and a last name, capitalization normalized.
+ *
+ * Built ON TOP of repairNamePair (credentials + wrong-split repair), then:
+ *  - lastName empty + multi-word firstName → first token / last token
+ *    (the middle drops — that is the instruction, not an accident);
+ *  - firstName keeps its FIRST token only ("John A." → "John",
+ *    "Mary Ann" → "Mary");
+ *  - lastName is kept WHOLE — "van der Berg" and "Smith Jr" ARE the last
+ *    name (multi-token surnames and generational suffixes survive);
+ *  - every kept token goes through capitalizeNameToken.
+ * Never returns empty when the input was not.
+ */
+export function normalizePersonNamePair(
+  first: string | null | undefined,
+  last: string | null | undefined,
+): { firstName: string | null; lastName: string | null } {
+  const repaired = repairNamePair(first, last);
+  let f = (repaired.firstName ?? "").trim();
+  let l = (repaired.lastName ?? "").trim();
+
+  if (!l && f) {
+    const toks = f.split(/\s+/).filter(Boolean);
+    if (toks.length >= 2) {
+      f = toks[0];
+      l = toks[toks.length - 1];
+    }
+  }
+  if (f) f = f.split(/\s+/).filter(Boolean)[0] ?? f;
+
+  const cap = (s: string) => {
+    const toks = s.split(/\s+/).filter(Boolean);
+    return toks.map((t, i) => capitalizeNameToken(t, i === toks.length - 1)).join(" ");
+  };
+  return {
+    firstName: f ? cap(f) : repaired.firstName,
+    lastName: l ? cap(l) : repaired.lastName,
+  };
+}
+
+/**
  * Repair a stored first/last pair AS A PAIR.
  *
  * Historic imports split "Ron Flournoy, PSP" at the LAST SPACE, landing the

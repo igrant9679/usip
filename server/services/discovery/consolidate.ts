@@ -24,6 +24,7 @@
 import { and, eq, or } from "drizzle-orm";
 import { canonicalText } from "@shared/canonicalText";
 import { CONFIDENCE, mergeAll, type Candidate, type ProvenanceMap } from "../enrichment/fieldMerge";
+import { normalizePersonNamePair } from "../enrichment/personName";
 import { getDb } from "../../db";
 import {
   discoveryLogs,
@@ -346,11 +347,14 @@ export async function persistAsProspects(
       updated++;
     } else {
       // Fresh insert keeps its shape and now carries a ledger from birth.
+      // People "Name" rule (owner 2026-08-25): first + last only,
+      // capitalization normalized, at the birth seam.
+      const namePair = normalizePersonNamePair(c.firstName, c.lastName);
       const merged = mergeAll({}, {}, discoveryCandidates);
       await db.insert(prospects).values({
         workspaceId,
-        firstName: c.firstName,
-        lastName: c.lastName,
+        firstName: namePair.firstName ?? c.firstName,
+        lastName: namePair.lastName ?? c.lastName,
         title: merged.fields.title?.slice(0, 120) ?? c.title,
         company: merged.fields.company?.slice(0, 200) ?? c.companyName,
         companyDomain: merged.fields.companyDomain?.slice(0, 200) ?? c.companyDomain,

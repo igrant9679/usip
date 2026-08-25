@@ -23,7 +23,7 @@ import { recordAudit } from "../audit";
 import { runComprehensiveEnrichment } from "../services/enrichment/comprehensivePass";
 import { CONFIDENCE } from "../services/enrichment/fieldMerge";
 import { companyFromHeadline } from "../services/enrichment/headlineCompany";
-import { repairNamePair } from "../services/enrichment/personName";
+import { normalizePersonNamePair, repairNamePair } from "../services/enrichment/personName";
 import { businessDomainFromEmail } from "../services/company/normalize";
 import { lookupContactInfo, type LookupResult } from "../services/scraper";
 // Shared synthetic-name detector — anchored to the lastName sentinel so it
@@ -329,6 +329,53 @@ export const prospectsRouter = router({
         after: { ...before, ...patch },
       });
       return { ok: true };
+    }),
+
+  /**
+   * One-shot repair: apply the People "Name" rule (owner 2026-08-25 — first
+   * + last only, capitalization normalized) to every STORED row in the
+   * workspace. The same normalizer now runs at the birth seams (personLink,
+   * discovery consolidate), so this is the backfill for rows that predate
+   * it. Admin-gated: it rewrites names in bulk. Returns the changed count
+   * and a sample of before→after pairs so the caller can see what it did.
+   * The "(unknown)" sentinel is load-bearing (isSyntheticNameProspect) and
+   * is never touched.
+   */
+  normalizeNames: adminWsProcedure
+    .mutation(async ({ ctx }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const rows = await db
+        .select({ id: prospects.id, firstName: prospects.firstName, lastName: prospects.lastName })
+        .from(prospects)
+        .where(eq(prospects.workspaceId, ctx.workspace.id));
+      let changed = 0;
+      const samples: Array<{ id: number; before: string; after: string }> = [];
+      for (const r of rows) {
+        if (r.firstName === "(unknown)" || r.lastName === "(unknown)") continue;
+        const pair = normalizePersonNamePair(r.firstName, r.lastName);
+        const nf = (pair.firstName ?? "").slice(0, 80);
+        const nl = (pair.lastName ?? "").slice(0, 80);
+        if (!nf && !nl) continue;
+        if (nf === (r.firstName ?? "") && nl === (r.lastName ?? "")) continue;
+        await db.update(prospects)
+          .set({ firstName: nf || r.firstName, lastName: nl || r.lastName })
+          .where(and(eq(prospects.id, r.id), eq(prospects.workspaceId, ctx.workspace.id)));
+        changed++;
+        if (samples.length < 10) {
+          samples.push({
+            id: r.id,
+            before: `${r.firstName ?? ""} ${r.lastName ?? ""}`.trim(),
+            after: `${nf || r.firstName} ${nl || r.lastName}`.trim(),
+          });
+        }
+      }
+      await recordAudit({
+        workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update",
+        entityType: "prospect_names_normalize", entityId: 0,
+        after: { scanned: rows.length, changed },
+      });
+      return { scanned: rows.length, changed, samples };
     }),
 
   /** Soft-archive — flips verificationStatus to 'rejected'. Keeps the row

@@ -105,3 +105,58 @@ describe("repairNamePair", () => {
     expect(repairNamePair(null, null)).toEqual({ firstName: null, lastName: null });
   });
 });
+
+/**
+ * The People "Name" rule (owner 2026-08-25): first + last only,
+ * capitalization normalized. Same restraint philosophy — mixed-case tokens
+ * are somebody's own casing and must survive untouched.
+ */
+import { normalizePersonNamePair } from "./enrichment/personName";
+
+describe("normalizePersonNamePair", () => {
+  it("title-cases shapeless tokens (ALL-CAPS and all-lowercase)", () => {
+    expect(normalizePersonNamePair("JOHN", "SMITH")).toEqual({ firstName: "John", lastName: "Smith" });
+    expect(normalizePersonNamePair("mary", "jones")).toEqual({ firstName: "Mary", lastName: "Jones" });
+  });
+
+  it("never touches mixed-case tokens — that shape is deliberate", () => {
+    expect(normalizePersonNamePair("Ronald", "McDonald")).toEqual({ firstName: "Ronald", lastName: "McDonald" });
+    expect(normalizePersonNamePair("Leonardo", "DiCaprio")).toEqual({ firstName: "Leonardo", lastName: "DiCaprio" });
+  });
+
+  it("re-caps apostrophe/hyphen segments and the Mc prefix", () => {
+    expect(normalizePersonNamePair("SEAN", "O'BRIEN")).toEqual({ firstName: "Sean", lastName: "O'Brien" });
+    expect(normalizePersonNamePair("ann", "smith-jones")).toEqual({ firstName: "Ann", lastName: "Smith-Jones" });
+    expect(normalizePersonNamePair("ronald", "mcdonald")).toEqual({ firstName: "Ronald", lastName: "McDonald" });
+  });
+
+  it("keeps surname particles lowercase — but a particle AS the surname capitalizes", () => {
+    expect(normalizePersonNamePair("ANA", "VAN DER BERG")).toEqual({ firstName: "Ana", lastName: "van der Berg" });
+    expect(normalizePersonNamePair("maria", "de la cruz")).toEqual({ firstName: "Maria", lastName: "de la Cruz" });
+    // Vietnamese surnames: the particle list must not eat a real surname.
+    expect(normalizePersonNamePair("thanh", "LE")).toEqual({ firstName: "Thanh", lastName: "Le" });
+  });
+
+  it("firstName keeps only its first token — middles drop, per the rule", () => {
+    expect(normalizePersonNamePair("John A.", "Smith")).toEqual({ firstName: "John", lastName: "Smith" });
+    expect(normalizePersonNamePair("Mary Ann", "Smith")).toEqual({ firstName: "Mary", lastName: "Smith" });
+  });
+
+  it("splits a whole name stored in firstName: first token / last token", () => {
+    expect(normalizePersonNamePair("John Smith", "")).toEqual({ firstName: "John", lastName: "Smith" });
+    expect(normalizePersonNamePair("John Michael Smith", null)).toEqual({ firstName: "John", lastName: "Smith" });
+  });
+
+  it("lastName stays whole — multi-token surnames and generational suffixes ARE the name", () => {
+    expect(normalizePersonNamePair("Bob", "Smith Jr")).toEqual({ firstName: "Bob", lastName: "Smith Jr" });
+  });
+
+  it("still strips credentials (built on repairNamePair)", () => {
+    expect(normalizePersonNamePair("RACHELE", "THOMAS, BSN, RN, CDAL")).toEqual({ firstName: "Rachele", lastName: "Thomas" });
+  });
+
+  it("null-in, null-out; never empties a non-empty input", () => {
+    expect(normalizePersonNamePair(null, null)).toEqual({ firstName: null, lastName: null });
+    expect(normalizePersonNamePair("Cher", null).firstName).toBe("Cher");
+  });
+});
