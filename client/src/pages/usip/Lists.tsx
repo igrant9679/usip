@@ -1,5 +1,5 @@
 /**
- * Lists — the Prospect & enrich → "Lists" index (/v2/lists).
+ * Lists — the CRM → "Lists" index (/v2/lists).
  *
  * Apollo's "My lists": search/sort toolbar + collapsible People and Companies
  * groups, each showing saved lists with member counts, plus a "Create a list"

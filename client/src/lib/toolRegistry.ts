@@ -27,7 +27,6 @@ import {
 export type ToolGroup =
   | "Daily"
   | "CRM"
-  | "Prospect & enrich"
   | "Engage"
   | "Win deals"
   | "Customer success"
@@ -53,7 +52,6 @@ export interface Tool {
 export const TOOL_GROUPS: ToolGroup[] = [
   "Daily",
   "CRM",
-  "Prospect & enrich",
   "Engage",
   "Win deals",
   "Customer success",
@@ -99,19 +97,18 @@ export const TOOLS: Tool[] = [
   { href: "/customers", label: "Customers", icon: Heart, group: "CRM", primary: true,
     description: "Won accounts — health, notes, and expansion.", keywords: ["customer success", "accounts"] },
 
-  /* ── Prospect & enrich ─────────────────────────────────────────────── */
-  // Folded into Data Enrichment (2026-08-21) — deliberately NOT primary, so
-  // the rail shows one entry for the merged surface; Ctrl+K and the Library
-  // still find "Find Prospects" by name and land on its tab.
-  { href: "/v2/data-enrichment?tab=find-prospects", label: "Find Prospects", icon: Radar, group: "Prospect & enrich",
+  // The "Prospect & enrich" category was dissolved into CRM (owner ask
+  // 2026-08-25) — Data Enrichment is the rail entry; the rest stay
+  // Ctrl+K/Library-reachable, same as Import Contacts above.
+  { href: "/v2/data-enrichment", label: "Data Enrichment", icon: Database, group: "CRM", primary: true,
+    description: "Fill in missing emails, titles, and companies.", keywords: ["quickenrich", "linkedin", "prospect"] },
+  { href: "/v2/data-enrichment?tab=find-prospects", label: "Find Prospects", icon: Radar, group: "CRM",
     description: "Source new prospects — a tab of Data Enrichment.", keywords: ["apollo", "search", "discovery"] },
-  { href: "/v2/data-enrichment", label: "Data Enrichment", icon: Database, group: "Prospect & enrich", primary: true,
-    description: "Fill in missing emails, titles, and companies.", keywords: ["quickenrich", "linkedin"] },
-  { href: "/data-health", label: "Data Health", icon: BarChart3, group: "Prospect & enrich",
+  { href: "/data-health", label: "Data Health", icon: BarChart3, group: "CRM",
     description: "Duplicates, gaps, and import-mapping audits." },
-  { href: "/v2/saved-people", label: "Saved People", icon: Users, group: "Prospect & enrich",
+  { href: "/v2/saved-people", label: "Saved People", icon: Users, group: "CRM",
     description: "People you bookmarked while sourcing." },
-  { href: "/v2/saved-companies", label: "Saved Companies", icon: Building2, group: "Prospect & enrich",
+  { href: "/v2/saved-companies", label: "Saved Companies", icon: Building2, group: "CRM",
     description: "Companies you bookmarked while sourcing." },
 
   /* ── Engage ────────────────────────────────────────────────────────── */

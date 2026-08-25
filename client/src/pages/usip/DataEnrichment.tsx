@@ -1,5 +1,5 @@
 /**
- * DataEnrichment — Prospect & enrich → "Data enrichment" (/v2/data-enrichment).
+ * DataEnrichment — CRM → "Data enrichment" (/v2/data-enrichment).
  *
  * Modelled on Apollo's Data enrichment area: a tabbed page
  * (Data health center / CRM / CSV / Job change alerts / Form enrichment).
