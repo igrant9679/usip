@@ -36,6 +36,95 @@ export function normalizeCompanyName(name?: string | null): string {
   return s.replace(/\s+/g, " ").trim();
 }
 
+/* ─── Display-name normalization (owner ask 2026-08-25) ─────────────────────
+ * The MATCHING canonicalizer above lowercases everything; this is the other
+ * direction — how a company name should LOOK on-site. Same restraint
+ * philosophy as personName.ts: mixed-case tokens are somebody's deliberate
+ * casing and are never touched; only shapeless input is repaired. */
+
+/** Connector words that stay lowercase mid-name ("Community Foundation of
+ *  Greater Atlanta"). The first token always capitalizes. */
+const NAME_CONNECTORS = new Set([
+  "of", "the", "and", "for", "at", "in", "on", "a", "an", "to",
+  "de", "la", "du", "von", "van", "der", "des", "di", "da", "del",
+]);
+
+/** Legal suffixes with a FIXED conventional casing, keyed by their
+ *  dot/comma-stripped lowercase form. */
+const SUFFIX_CASING: Record<string, string> = {
+  llc: "LLC", llp: "LLP", pllc: "PLLC", plc: "PLC", pc: "PC", pa: "PA",
+  inc: "Inc", corp: "Corp", ltd: "Ltd", co: "Co", gmbh: "GmbH",
+  sa: "SA", ag: "AG", bv: "BV", nv: "NV", usa: "USA",
+};
+
+function isPlaceholderText(s: string): boolean {
+  return /^[<(\[]?\s*(unknown|n\/?a|none|null|not available|not found)\s*[>)\]]?$/i.test(s.trim());
+}
+
+function titleCaseCompanyToken(tok: string): string {
+  return tok
+    .toLowerCase()
+    .split(/([-'’])/)
+    .map((seg) =>
+      /[-'’]/.test(seg) || seg === ""
+        ? seg
+        : (seg[0].toUpperCase() + seg.slice(1)).replace(/^Mc([a-z])/, (_, c: string) => "Mc" + c.toUpperCase()),
+    )
+    .join("")
+    // A lone letter after a trailing apostrophe is a possessive, not a name
+    // segment: "McDonald's", never "McDonald'S".
+    .replace(/(['’])S$/, "$1s");
+}
+
+/**
+ * Normalize a company name's capitalization for display. Rules, in order of
+ * restraint:
+ *  - placeholders and URL-shaped values pass through untouched;
+ *  - mixed-case tokens are never touched ("QuickBooks", "eBay", "McKinsey");
+ *  - legal suffixes take their conventional casing (llc → LLC, INC → Inc);
+ *  - ALL-CAPS tokens of ≤4 letters are kept — likely acronyms (IBM, CDW,
+ *    SAP, AAMC); longer ALL-CAPS tokens title-case ONLY when the ENTIRE
+ *    name is caps (a fully shouted name is an import artifact; a caps word
+ *    inside a mixed name — "UNICEF USA Foundation" — is deliberate);
+ *  - all-lowercase tokens title-case, except connectors mid-name.
+ * Null-in/null-out; never empties a non-empty input.
+ */
+export function normalizeCompanyDisplayName(raw: string | null | undefined): string | null {
+  const input = (raw ?? "").trim().replace(/\s+/g, " ");
+  if (!input) return null;
+  if (isPlaceholderText(input) || /^https?:\/\//i.test(input)) return input;
+
+  const letters = input.replace(/[^a-zA-Z]/g, "");
+  const wholeNameCaps = letters.length >= 2 && input === input.toUpperCase();
+
+  const toks = input.split(" ");
+  const out = toks.map((tok, i) => {
+    const tokLetters = tok.replace(/[^a-zA-Z]/g, "");
+    if (!tokLetters) return tok;
+    const bare = tok.toLowerCase().replace(/[.,]+$/g, "");
+    const trailing = /[.,]+$/.exec(tok)?.[0] ?? "";
+    // Legal suffix casing applies to the final token (or before trailing
+    // punctuation) wherever the shape is shapeless.
+    const shapeless = tok === tok.toUpperCase() || tok === tok.toLowerCase();
+    if (shapeless && i === toks.length - 1 && SUFFIX_CASING[bare]) return SUFFIX_CASING[bare] + trailing;
+    if (!shapeless) return tok;
+    if (tok === tok.toUpperCase()) {
+      // In a fully shouted name, connector words are words, not acronyms:
+      // "THE UNIVERSITY OF GEORGIA" → "The University of Georgia".
+      if (wholeNameCaps && NAME_CONNECTORS.has(bare) && !trailing) {
+        return i === 0 ? titleCaseCompanyToken(tok) : bare;
+      }
+      if (tokLetters.length <= 4) return tok; // acronym-shaped: keep
+      return wholeNameCaps ? titleCaseCompanyToken(tok) : tok;
+    }
+    // all-lowercase
+    if (i > 0 && NAME_CONNECTORS.has(bare) && !trailing) return tok;
+    return titleCaseCompanyToken(tok);
+  });
+  const result = out.join(" ").trim();
+  return result || input;
+}
+
 /** Lowercase host, strip protocol/www/path/port. Returns "" if not a domain. */
 export function normalizeDomain(input?: string | null): string {
   if (!input) return "";

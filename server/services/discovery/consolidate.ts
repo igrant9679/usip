@@ -25,6 +25,7 @@ import { and, eq, or } from "drizzle-orm";
 import { canonicalText } from "@shared/canonicalText";
 import { CONFIDENCE, mergeAll, type Candidate, type ProvenanceMap } from "../enrichment/fieldMerge";
 import { normalizePersonNamePair } from "../enrichment/personName";
+import { normalizeCompanyDisplayName } from "../company/normalize";
 import { getDb } from "../../db";
 import {
   discoveryLogs,
@@ -356,7 +357,8 @@ export async function persistAsProspects(
         firstName: namePair.firstName ?? c.firstName,
         lastName: namePair.lastName ?? c.lastName,
         title: merged.fields.title?.slice(0, 120) ?? c.title,
-        company: merged.fields.company?.slice(0, 200) ?? c.companyName,
+        // Company display rule (owner 2026-08-25): capitalization normalized at birth.
+        company: (normalizeCompanyDisplayName(merged.fields.company ?? c.companyName) ?? c.companyName)?.slice(0, 200),
         companyDomain: merged.fields.companyDomain?.slice(0, 200) ?? c.companyDomain,
         linkedinUrl: merged.fields.linkedinUrl ?? c.linkedinUrl,
         email: merged.fields.email?.slice(0, 320) ?? c.email,

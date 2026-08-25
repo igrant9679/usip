@@ -196,6 +196,59 @@ export const companiesRouter = router({
   duplicates: workspaceProcedure.query(async ({ ctx }) => findDuplicateAccounts(ctx.workspace.id)),
 
   /**
+   * One-shot repair (owner ask 2026-08-25): normalize display capitalization
+   * of account names through the one company display normalizer — the
+   * lowercase URL-slug names the historic repair left behind ("scuter",
+   * "argosidentity") title-case; acronyms and mixed-case stay put. Skips
+   * accounts with a brand override (owner-decided names are supreme) and
+   * archived rows. Returns changed count + before/after samples.
+   */
+  normalizeNames: workspaceProcedure
+    .mutation(async ({ ctx }) => {
+      requireRole(ctx.member.role, "admin");
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const { normalizeCompanyDisplayName } = await import("../services/company/normalize");
+      const { isNull: isNull0 } = await import("drizzle-orm");
+      const rows = await db
+        .select({ id: accounts.id, name: accounts.name, brandOverride: accounts.brandOverride })
+        .from(accounts)
+        .where(and(eq(accounts.workspaceId, ctx.workspace.id), isNull0(accounts.archivedAt)));
+      let changed = 0;
+      const samples: Array<{ id: number; before: string; after: string }> = [];
+      for (const r of rows) {
+        if (r.brandOverride) continue; // owner-decided identity is supreme
+        const before = (r.name ?? "").trim();
+        if (!before) continue;
+        const after = (normalizeCompanyDisplayName(before) ?? before).slice(0, 200);
+        if (after === before) continue;
+        await db.update(accounts).set({ name: after })
+          .where(and(eq(accounts.id, r.id), eq(accounts.workspaceId, ctx.workspace.id)));
+        changed++;
+        if (samples.length < 10) samples.push({ id: r.id, before, after });
+      }
+      await recordAudit({
+        workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update",
+        entityType: "account_names_normalize", entityId: 0,
+        after: { scanned: rows.length, changed },
+      });
+      return { scanned: rows.length, changed, samples };
+    }),
+
+  /**
+   * Manual drain for the logo backfill the 6h cron runs at 50/pass — after a
+   * bulk domain resolution, hundreds of accounts gain domains at once and
+   * waiting days for the cron defeats the point. Same bounded worker.
+   */
+  runLogoBackfill: workspaceProcedure
+    .input(z.object({ limit: z.number().int().min(1).max(200).default(100) }).optional())
+    .mutation(async ({ ctx, input }) => {
+      requireRole(ctx.member.role, "admin");
+      const { backfillCompanyLogos } = await import("../services/company/logoBackfill");
+      return backfillCompanyLogos(input?.limit ?? 100);
+    }),
+
+  /**
    * Bulk brand resolution (owner ask 2026-08-13: every company gets its
    * domain + icon). One call = repair URL-shaped account names in THIS
    * workspace, then run one bounded Brandfetch sweep pass (the same

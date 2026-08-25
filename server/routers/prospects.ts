@@ -378,6 +378,42 @@ export const prospectsRouter = router({
       return { scanned: rows.length, changed, samples };
     }),
 
+  /**
+   * One-shot repair sibling of normalizeNames, for the COMPANY field (owner
+   * ask 2026-08-25): normalize display capitalization of prospects.company
+   * through the one company display normalizer. Placeholders pass through;
+   * mixed-case names are never touched. Returns changed count + samples —
+   * READ the samples (the person-name run's five defects all surfaced there).
+   */
+  normalizeCompanyNames: adminWsProcedure
+    .mutation(async ({ ctx }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const { normalizeCompanyDisplayName } = await import("../services/company/normalize");
+      const rows = await db
+        .select({ id: prospects.id, company: prospects.company })
+        .from(prospects)
+        .where(eq(prospects.workspaceId, ctx.workspace.id));
+      let changed = 0;
+      const samples: Array<{ id: number; before: string; after: string }> = [];
+      for (const r of rows) {
+        const before = (r.company ?? "").trim();
+        if (!before) continue;
+        const after = (normalizeCompanyDisplayName(before) ?? before).slice(0, 200);
+        if (after === before) continue;
+        await db.update(prospects).set({ company: after })
+          .where(and(eq(prospects.id, r.id), eq(prospects.workspaceId, ctx.workspace.id)));
+        changed++;
+        if (samples.length < 10) samples.push({ id: r.id, before, after });
+      }
+      await recordAudit({
+        workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update",
+        entityType: "prospect_company_names_normalize", entityId: 0,
+        after: { scanned: rows.length, changed },
+      });
+      return { scanned: rows.length, changed, samples };
+    }),
+
   /** Soft-archive — flips verificationStatus to 'rejected'. Keeps the row
    *  for audit/history; bulkDelete is still available for hard removal. */
   archive: workspaceProcedure

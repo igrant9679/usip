@@ -34,7 +34,7 @@ import { CONFIDENCE, mergeAll, type Candidate, type ProvenanceMap } from "./enri
 import { normalizePersonNamePair, stripNameCredentials } from "./enrichment/personName";
 import { cleanPlaceholder, normalizeJobTitle } from "./enrichment/recordNormalize";
 import { cleanScrapedField, isPlaceholderToken, usableEmailOrNull } from "@shared/fieldHygiene";
-import { normalizeCompanyName, normalizeDomain } from "./company/normalize";
+import { normalizeCompanyDisplayName, normalizeCompanyName, normalizeDomain } from "./company/normalize";
 import { extractLinkedInIdentifier } from "./linkedinLookup";
 
 /** How many same-name people the name tiers will reason about. Past this the
@@ -273,7 +273,8 @@ export async function upsertPersonForRow(
     title: cleanPlaceholder(normalizeJobTitle(row.title))?.slice(0, 120) ?? undefined,
     email: merged.fields.email?.slice(0, 320),
     phone: merged.fields.phone?.slice(0, 40),
-    company: merged.fields.company?.slice(0, 200),
+    // Company display rule (owner 2026-08-25): capitalization normalized at birth.
+    company: (normalizeCompanyDisplayName(merged.fields.company) ?? undefined)?.slice(0, 200),
     companyDomain: merged.fields.companyDomain?.slice(0, 200),
     linkedinUrl: merged.fields.linkedinUrl,
     fieldProvenance: merged.ledger,
