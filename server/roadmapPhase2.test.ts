@@ -97,6 +97,23 @@ describe("the writers are wired (structural)", () => {
     const src = read("server/routers/companies.ts");
     expect(src).toContain("userPinProvenance(override.at)");
   });
+  it("a name pin propagates to linked People/Contacts company strings — by link or domain, never by name match", () => {
+    // The People tab renders each prospect's own `company` string, so a
+    // rename that stops at the accounts row is invisible there (owner report
+    // 2026-08-26). The propagation must be inside the name branch, scoped to
+    // this workspace, and keyed on accountId/companyDomain only.
+    const src = read("server/routers/companies.ts");
+    const proc = src.slice(src.indexOf("setBrandOverride:"), src.indexOf("removeBrandOverride:"));
+    const block = proc.slice(proc.indexOf("if (input.name) {"));
+    expect(block).toContain("db.update(prospects).set({ company: input.name })");
+    expect(block).toContain("db.update(contacts).set({ companyName: input.name })");
+    expect(block).toContain("eq(prospects.workspaceId, ctx.workspace.id)");
+    expect(block).toContain("eq(contacts.workspaceId, ctx.workspace.id)");
+    expect(block).toContain("eq(prospects.accountId, input.accountId)");
+    // Name-string matching is the identity-source trap — it must not appear.
+    expect(block).not.toMatch(/eq\(prospects\.company,/);
+    expect(block).not.toMatch(/like\(/);
+  });
 });
 
 describe("2.2 mergeAccounts repoints the evidence tables", () => {

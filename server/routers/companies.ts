@@ -109,6 +109,24 @@ export const companiesRouter = router({
       }
       set.fieldProvenance = ledger;
       await db.update(accounts).set(set as never).where(and(eq(accounts.workspaceId, ctx.workspace.id), eq(accounts.id, input.accountId)));
+      // A name pin must reach the People/Contacts tabs: those rows carry their
+      // own company STRING (peopleShared renders p.company), so a rename that
+      // stops at the accounts row is invisible exactly where users look
+      // (owner report 2026-08-26). Propagate to rows tied to this account by
+      // the authoritative link or by the account's own domain — never by
+      // name-string matching, which can hit a different same-named org.
+      if (input.name) {
+        const { prospects, contacts } = await import("../../drizzle/schema");
+        const { or } = await import("drizzle-orm");
+        const [acct] = await db.select({ normalizedDomain: accounts.normalizedDomain }).from(accounts)
+          .where(and(eq(accounts.workspaceId, ctx.workspace.id), eq(accounts.id, input.accountId))).limit(1);
+        const linked = [eq(prospects.accountId, input.accountId)];
+        if (acct?.normalizedDomain) linked.push(eq(prospects.companyDomain, acct.normalizedDomain));
+        await db.update(prospects).set({ company: input.name })
+          .where(and(eq(prospects.workspaceId, ctx.workspace.id), or(...linked)));
+        await db.update(contacts).set({ companyName: input.name })
+          .where(and(eq(contacts.workspaceId, ctx.workspace.id), eq(contacts.accountId, input.accountId)));
+      }
       await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "brand_override", entityId: input.accountId, after: override });
       return { ok: true };
     }),
