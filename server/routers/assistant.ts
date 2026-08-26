@@ -40,6 +40,7 @@ import {
   parseToolArgs,
   validateNavigateHref,
 } from "../services/assistantTools";
+import { buildEntityCatalog, runExplorerQuery } from "../services/assistantDataExplorer";
 
 const MAX_ROUNDS = 5;
 /** A proposal the user has not answered goes stale — the world it described
@@ -183,6 +184,56 @@ async function runReadTool(
         summary: `Previewed a people filter — ${res.total} match(es)`,
       };
     }
+    case "list_data_entities":
+      return { result: { entities: buildEntityCatalog() }, summary: "Listed the queryable data entities" };
+    case "query_data": {
+      const spec = args as { entity?: unknown };
+      const r = await runExplorerQuery(ctx.workspace.id, args);
+      return {
+        result: r,
+        summary: `Queried ${String(spec.entity)} — ${r.rows.length} row(s)${r.total !== undefined ? ` of ${r.total}` : ""}`,
+      };
+    }
+    case "search_companies": {
+      const limit = Math.min(50, Number(args.limit ?? 15));
+      const res = (await caller.companies.search({
+        page: 1, perPage: 200,
+        filters: args.query ? { q: String(args.query) } : {},
+      } as never)) as { total: number; data: Record<string, unknown>[] };
+      let rows = res.data;
+      if (args.hasDomain === true) rows = rows.filter((c) => c.domain);
+      if (args.hasDomain === false) rows = rows.filter((c) => !c.domain);
+      return {
+        result: {
+          total: args.hasDomain === undefined ? res.total : rows.length,
+          companies: rows.slice(0, limit).map((c) => ({
+            id: c.id, name: c.name, domain: c.domain ?? null, industry: c.industry ?? null,
+            employeeCount: c.employeeCount ?? null, accountStage: c.accountStage ?? null,
+            contactCount: c.contactCount ?? 0,
+          })),
+        },
+        summary: `Searched companies${args.query ? ` for "${args.query}"` : ""} — ${args.hasDomain === undefined ? res.total : rows.length} match(es)`,
+      };
+    }
+    case "get_company": {
+      const c = (await caller.companies.get({ accountId: Number(args.companyId) } as never)) as Record<string, unknown> | null;
+      if (!c) return { result: { error: "not found" }, summary: `Company #${args.companyId} not found` };
+      const override = c.brandOverride as { domain?: string; name?: string } | null;
+      return {
+        result: {
+          id: c.id, name: c.name, domain: c.domain ?? null, websiteUrl: c.websiteUrl ?? null,
+          industry: c.industry ?? null, employeeCount: c.employeeCount ?? null, revenue: c.revenue ?? null,
+          hq: [c.hqCity, c.hqState, c.hqCountry].filter(Boolean).join(", ") || null,
+          accountStage: c.accountStage ?? null, accountScore: c.accountScore ?? null,
+          accountRating: c.accountRating ?? null, contactCount: c.contactCount ?? 0,
+          brandPinned: !!override,
+          brandPin: override ? { domain: override.domain ?? null, name: override.name ?? null } : null,
+          archived: !!c.archivedAt,
+          description: typeof c.description === "string" ? c.description.slice(0, 400) : null,
+        },
+        summary: `Fetched company #${args.companyId}`,
+      };
+    }
     case "help_lookup": {
       const db = await getDb();
       if (!db) return { result: { articles: [] }, summary: "Help lookup unavailable" };
@@ -220,8 +271,9 @@ const SYSTEM_PROMPT = (pageKey: string | undefined) => `You are Velocity's in-ap
 
 Rules:
 - Use tools for facts. Never invent prospect ids, sequence names, or counts — search first. For "how do I…" questions call help_lookup and answer from what it returns.
+- You can see ALL of the workspace's data: query_data runs read-only filter/group/aggregate queries over every core table (people, companies, campaigns, email log, replies, meetings, tasks, deals, sequences, brand observations, audit log…). Use it for counting, auditing, "which rows…", and any question the purpose-built tools don't cover. Call list_data_entities first when unsure of an entity or column name — never guess one.
 - Numeric ids may ONLY come from tool results — either this turn's, or an [assistant_context …] block at the end of an earlier assistant message (that block holds prior turns' tool results). If no real id is in context, look the person or object up again before proposing an action. The server rejects actions naming ids that don't exist.
-- Mutating tools (enroll_in_sequence, create_tasks, add_to_list, enrich_prospects, set_campaign_status, propose_meetings, create_list_from_filter, create_campaign) only PROPOSE: calling one shows the user a confirmation card. Call at most ONE per turn, only when the user asked for that action, and with ids you obtained from lookups this conversation.
+- Mutating tools (enroll_in_sequence, create_tasks, add_to_list, enrich_prospects, set_campaign_status, propose_meetings, create_list_from_filter, create_campaign, set_company_brand, update_prospect, archive_prospects) only PROPOSE: calling one shows the user a confirmation card. Call at most ONE per turn, only when the user asked for that action, and with ids you obtained from lookups this conversation.
 - create_campaign makes a DRAFT only: it never launches. If the user wants it running, that is a second step (set_campaign_status to active) in a later turn, after they have seen the draft. Fill targeting from what the user said; if they gave no name or no targeting, ask rather than invent.
 - For "make a list of everyone who…" requests, call preview_people_filter first and tell the user the real count, then propose create_list_from_filter with the same filter.
 - You cannot send email or LinkedIn messages, and must not promise to. Sends live behind the user's approval queues.
@@ -509,6 +561,35 @@ export const assistantRouter = router({
             listId: created.id, recordType: "prospect", recordIds: capped,
           } as never)) as { added?: number };
           summary = `Created list "${args.newListName}" (#${created.id}) with ${r.added ?? capped.length} people`;
+          break;
+        }
+        case "set_company_brand": {
+          // Hallucinated-id guard: get() 404s on ids outside this workspace,
+          // where setBrandOverride would no-op and falsely report success.
+          await caller.companies.get({ accountId: args.companyId } as never);
+          await caller.companies.setBrandOverride({
+            accountId: args.companyId,
+            ...(args.name ? { name: args.name } : {}),
+            ...(args.domain ? { domain: args.domain } : {}),
+            reason: args.reason ?? "assistant-proposed pin",
+          } as never);
+          summary = `Pinned company #${args.companyId}${args.domain ? ` — domain ${args.domain}` : ""}${args.name ? ` — name "${args.name}"` : ""}`;
+          break;
+        }
+        case "update_prospect": {
+          await caller.prospects.update({ id: args.prospectId, ...(args.fields as object) } as never);
+          const changed = Object.keys((args.fields ?? {}) as object).join(", ");
+          summary = `Updated person #${args.prospectId} (${changed})`;
+          break;
+        }
+        case "archive_prospects": {
+          const ids = args.prospectIds as number[];
+          let archived = 0;
+          for (const id of ids) {
+            await caller.prospects.archive({ id } as never);
+            archived++;
+          }
+          summary = `Archived ${archived} ${archived === 1 ? "person" : "people"} (reversible from the People page)`;
           break;
         }
         default:

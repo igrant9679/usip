@@ -131,6 +131,35 @@ describe("argument gates", () => {
     expect(parseToolArgs("preview_people_filter", JSON.stringify({ filter: { seniorities: ["vp"] } })))
       .toMatchObject({ filter: { seniorities: ["vp"] } });
   });
+
+  it("query_data is a READ tool whose spec gate rejects unbounded or malformed queries", () => {
+    expect(isMutatingTool("query_data")).toBe(false);
+    expect(parseToolArgs("query_data", JSON.stringify({ entity: "companies", filters: [{ column: "domain", op: "is_null" }] })))
+      .toMatchObject({ entity: "companies", limit: 25 });
+    expect(() => parseToolArgs("query_data", JSON.stringify({ entity: "companies", limit: 101 }))).toThrow();
+    expect(() => parseToolArgs("query_data", JSON.stringify({ entity: "companies", filters: [{ column: "x", op: "resembles", value: 1 }] }))).toThrow();
+    expect(() => parseToolArgs("query_data", JSON.stringify({}))).toThrow();
+  });
+
+  it("set_company_brand needs a name or a domain; update_prospect needs at least one field", () => {
+    expect(isMutatingTool("set_company_brand")).toBe(true);
+    expect(isMutatingTool("update_prospect")).toBe(true);
+    expect(isMutatingTool("archive_prospects")).toBe(true);
+    expect(() => parseToolArgs("set_company_brand", JSON.stringify({ companyId: 5 }))).toThrow();
+    expect(parseToolArgs("set_company_brand", JSON.stringify({ companyId: 5, domain: "acme.org" })))
+      .toMatchObject({ companyId: 5, domain: "acme.org" });
+    expect(() => parseToolArgs("update_prospect", JSON.stringify({ prospectId: 9, fields: {} }))).toThrow();
+    expect(parseToolArgs("update_prospect", JSON.stringify({ prospectId: 9, fields: { title: "CFO" } })))
+      .toMatchObject({ prospectId: 9 });
+  });
+
+  it("archive_prospects is capped like every bulk action and never deletes", () => {
+    const many = Array.from({ length: 51 }, (_, i) => i + 1);
+    expect(() => parseToolArgs("archive_prospects", JSON.stringify({ prospectIds: many }))).toThrow();
+    expect(parseToolArgs("archive_prospects", JSON.stringify({ prospectIds: [1, 2] }))).toMatchObject({ prospectIds: [1, 2] });
+    // No delete-shaped tool exists at all.
+    for (const name of Object.keys(TOOL_ARGS)) expect(name).not.toMatch(/delete|remove|purge/i);
+  });
 });
 
 describe("validateNavigateHref", () => {
@@ -156,6 +185,17 @@ describe("describeAction", () => {
     expect(describeAction("set_campaign_status", { campaignId: 13, status: "active" }))
       .toContain("ACTIVE");
     expect(describeAction("enrich_prospects", { prospectIds: [1] })).toContain("credits");
+  });
+
+  it("the new mutation cards state blast radius and reversibility", () => {
+    expect(describeAction("set_company_brand", { companyId: 630, domain: "calabasashigh.net" }))
+      .toContain("domain → calabasashigh.net");
+    expect(describeAction("set_company_brand", { companyId: 630, domain: "x.org" })).toContain("permanent until you unpin");
+    expect(describeAction("update_prospect", { prospectId: 9, fields: { title: "CFO", phone: null } }))
+      .toBe('Update person #9: title → "CFO", clear phone');
+    const a = describeAction("archive_prospects", { prospectIds: [1, 2, 3] });
+    expect(a).toContain("Archive 3 people");
+    expect(a).toContain("reversible");
   });
 
   it("propose_meetings says out loud that nothing is sent without approval", () => {

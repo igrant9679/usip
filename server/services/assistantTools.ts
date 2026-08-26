@@ -21,6 +21,7 @@
  */
 import { z } from "zod";
 import type { Tool } from "../_core/llm";
+import { EXPLORER_SPEC } from "./assistantDataExplorer";
 
 /* ─── Argument schemas (zod is the runtime gate; JSON schema is the LLM's) ── */
 
@@ -83,6 +84,14 @@ export const TOOL_ARGS = {
   help_lookup: z.object({ question: z.string().min(3).max(300) }),
   deals_pipeline: z.object({}).optional().or(z.object({}).passthrough()),
   preview_people_filter: z.object({ filter: PEOPLE_FILTER.refine(filterIsNonEmpty, { message: "At least one filter field is required" }) }),
+  list_data_entities: z.object({}).optional().or(z.object({}).passthrough()),
+  query_data: EXPLORER_SPEC,
+  search_companies: z.object({
+    query: z.string().trim().min(1).max(200).optional(),
+    hasDomain: z.boolean().optional(),
+    limit: z.number().int().min(1).max(50).optional(),
+  }),
+  get_company: z.object({ companyId: z.number().int().positive() }),
   // NAVIGATE
   navigate: z.object({ href: z.string().min(1).max(200), label: z.string().min(1).max(80) }),
   // MUTATING
@@ -140,17 +149,46 @@ export const TOOL_ARGS = {
     /** Voice/tone guidance for the Sequence Agent's copy. */
     sequencePrompt: z.string().trim().max(4000).optional(),
   }),
+  /** Pin a company's brand identity (domain and/or display name) — the same
+   *  user·100 override the company page offers; permanent until unpinned. */
+  set_company_brand: z.object({
+    companyId: z.number().int().positive(),
+    name: z.string().trim().min(1).max(200).optional(),
+    domain: z.string().trim().min(3).max(200).optional(),
+    reason: z.string().trim().max(300).optional(),
+  }).refine((v) => !!v.name || !!v.domain, { message: "name or domain required" }),
+  update_prospect: z.object({
+    prospectId: z.number().int().positive(),
+    // Mirrors prospects.update's editable contact fields — additions here
+    // must exist there.
+    fields: z.object({
+      firstName: z.string().min(1).max(80).optional(),
+      lastName: z.string().min(1).max(80).optional(),
+      title: z.string().max(200).nullable().optional(),
+      company: z.string().max(200).nullable().optional(),
+      companyDomain: z.string().max(200).nullable().optional(),
+      email: z.string().max(320).nullable().optional(),
+      phone: z.string().max(40).nullable().optional(),
+      city: z.string().max(80).nullable().optional(),
+      state: z.string().max(80).nullable().optional(),
+      country: z.string().max(80).nullable().optional(),
+      industry: z.string().max(80).nullable().optional(),
+      linkedinUrl: z.string().max(500).nullable().optional(),
+    }).refine((f) => Object.values(f).some((v) => v !== undefined), { message: "At least one field is required" }),
+  }),
+  archive_prospects: z.object({ prospectIds: idList }),
 } as const;
 
 export type AssistantToolName = keyof typeof TOOL_ARGS;
 
 export const READ_TOOLS: AssistantToolName[] = [
   "search_people", "get_person", "list_sequences", "list_lists", "list_campaigns", "whats_waiting", "help_lookup",
-  "deals_pipeline", "preview_people_filter",
+  "deals_pipeline", "preview_people_filter", "list_data_entities", "query_data", "search_companies", "get_company",
 ];
 export const MUTATING_TOOLS: AssistantToolName[] = [
   "enroll_in_sequence", "create_tasks", "add_to_list", "enrich_prospects", "set_campaign_status",
   "propose_meetings", "create_list_from_filter", "create_campaign",
+  "set_company_brand", "update_prospect", "archive_prospects",
 ];
 
 export function isMutatingTool(name: string): name is AssistantToolName {
@@ -227,6 +265,21 @@ export function describeAction(name: AssistantToolName, args: Record<string, unk
       const mode = args.autonomyMode === "review_release" ? "review & release" : "batch approval";
       return `Create campaign "${args.name}" as a DRAFT — targeting ${bits.join(", ") || "the workspace ICP"}; up to ${args.targetProspectCount ?? 100} prospects, ${args.dailySendCap ?? 25}/day cap, ${channels}, ${mode}. Nothing runs until you activate it.`;
     }
+    case "set_company_brand": {
+      const parts: string[] = [];
+      if (args.domain) parts.push(`domain → ${args.domain}`);
+      if (args.name) parts.push(`name → "${args.name}"`);
+      return `Pin company #${args.companyId}'s brand: ${parts.join(", ")} — permanent until you unpin it from the company page`;
+    }
+    case "update_prospect": {
+      const fields = (args.fields ?? {}) as Record<string, unknown>;
+      const parts = Object.entries(fields)
+        .filter(([, v]) => v !== undefined)
+        .map(([k, v]) => (v === null ? `clear ${k}` : `${k} → "${String(v)}"`));
+      return `Update person #${args.prospectId}: ${parts.join(", ")}`;
+    }
+    case "archive_prospects":
+      return `Archive ${n(args.prospectIds)} ${n(args.prospectIds) === 1 ? "person" : "people"} (marked rejected — reversible from the People page)`;
     default:
       return `Run ${name}`;
   }
@@ -287,6 +340,57 @@ export const ASSISTANT_TOOLS: Tool[] = [
     type: "object",
     properties: { filter: FILTER_SCHEMA },
     required: ["filter"],
+  }),
+  t("list_data_entities", "Catalog of everything query_data can query: entity names, what each holds, and their columns with types. Call this before query_data whenever you are not sure of an entity or column name.", { type: "object", properties: {} }),
+  t("query_data", "Run a read-only query over any core table: filter, group, aggregate, sort. Use for counting, auditing, and any data question the purpose-built tools don't cover ('how many companies have no domain?', 'sends per campaign this week', 'tasks overdue by owner'). Entities/columns must come from list_data_entities. Results are capped at 100 rows; 'total' reports the full match count.", {
+    type: "object",
+    properties: {
+      entity: { type: "string", description: "Entity name from list_data_entities (e.g. 'companies', 'people', 'email_log')" },
+      select: { type: "array", items: { type: "string" }, description: "Columns to return (default: all whitelisted)" },
+      filters: {
+        type: "array",
+        description: "ANDed conditions",
+        items: {
+          type: "object",
+          properties: {
+            column: { type: "string" },
+            op: { type: "string", enum: ["eq", "neq", "gt", "gte", "lt", "lte", "in", "contains", "starts_with", "is_null", "not_null"] },
+            value: { description: "Scalar, or array for 'in'; ISO date strings for date columns; omit for is_null/not_null" },
+          },
+          required: ["column", "op"],
+        },
+      },
+      groupBy: { type: "array", items: { type: "string" }, description: "Group rows by these columns (returns one row per group)" },
+      aggregate: {
+        type: "array",
+        description: "Aggregates to compute (with or without groupBy). count needs no column.",
+        items: {
+          type: "object",
+          properties: {
+            fn: { type: "string", enum: ["count", "sum", "avg", "min", "max"] },
+            column: { type: "string" },
+            as: { type: "string", description: "Output name" },
+          },
+          required: ["fn"],
+        },
+      },
+      sort: { type: "array", items: { type: "object", properties: { by: { type: "string" }, direction: { type: "string", enum: ["asc", "desc"] } }, required: ["by"] } },
+      limit: { type: "number", description: "Max rows (default 25, max 100)" },
+    },
+    required: ["entity"],
+  }),
+  t("search_companies", "Search the workspace's companies by name/domain fragment, optionally only those with (or without) a resolved domain. Returns compact rows with ids.", {
+    type: "object",
+    properties: {
+      query: { type: "string", description: "Name or domain fragment" },
+      hasDomain: { type: "boolean", description: "true = only companies with a domain; false = only companies without one" },
+      limit: { type: "number", description: "Max rows (default 15, max 50)" },
+    },
+  }),
+  t("get_company", "Fetch one company's profile: identity (name, domain, brand pin state), firmographics, and scores.", {
+    type: "object",
+    properties: { companyId: { type: "number" } },
+    required: ["companyId"],
   }),
   t("navigate", "Offer the user a link to an in-app page. Use after explaining where to go. href must be an in-app path starting with /.", {
     type: "object",
@@ -370,5 +474,39 @@ export const ASSISTANT_TOOLS: Tool[] = [
       sequencePrompt: { type: "string", description: "Voice/tone guidance for the generated emails" },
     },
     required: ["name", "targeting"],
+  }),
+  t("set_company_brand", "PROPOSE pinning a company's brand identity — its domain and/or display name. A pin is the strongest identity signal (user-verified) and sets the company's icon; it is permanent until the user unpins it. Only propose a domain you have verified belongs to THIS organization. The user must confirm.", {
+    type: "object",
+    properties: {
+      companyId: { type: "number" },
+      name: { type: "string", description: "Corrected display name (optional)" },
+      domain: { type: "string", description: "The company's own website domain, e.g. acme.org (optional)" },
+      reason: { type: "string", description: "Why — shown in the audit trail" },
+    },
+    required: ["companyId"],
+  }),
+  t("update_prospect", "PROPOSE editing one person's contact fields (name, title, company, email, phone, location, LinkedIn). Set a field to null to clear it. The user must confirm.", {
+    type: "object",
+    properties: {
+      prospectId: { type: "number" },
+      fields: {
+        type: "object",
+        description: "Only the fields to change",
+        properties: {
+          firstName: { type: "string" }, lastName: { type: "string" },
+          title: { type: ["string", "null"] }, company: { type: ["string", "null"] },
+          companyDomain: { type: ["string", "null"] }, email: { type: ["string", "null"] },
+          phone: { type: ["string", "null"] }, city: { type: ["string", "null"] },
+          state: { type: ["string", "null"] }, country: { type: ["string", "null"] },
+          industry: { type: ["string", "null"] }, linkedinUrl: { type: ["string", "null"] },
+        },
+      },
+    },
+    required: ["prospectId", "fields"],
+  }),
+  t("archive_prospects", "PROPOSE archiving people (marks them rejected and hides them from working views; reversible, never a hard delete). The user must confirm.", {
+    type: "object",
+    properties: { prospectIds: { type: "array", items: { type: "number" } } },
+    required: ["prospectIds"],
   }),
 ];
