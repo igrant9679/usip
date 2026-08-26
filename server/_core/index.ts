@@ -534,6 +534,22 @@ async function startServer() {
   setTimeout(runLogoBackfill, 9 * 60 * 1000); // stagger: 9 minutes after boot
   setInterval(runLogoBackfill, 6 * 60 * 60 * 1000); // every 6h; bounded per run
 
+  // Company-name verification: prospects imported/scraped/enriched with a
+  // company string that is just a slug of their domain ("Mncsf" @ mncsf.org)
+  // get the domain's OFFICIAL name read off the org's own website (cached
+  // per domain, LLM-extracted, acronyms expanded). Finds work by updatedAt
+  // look-back, so every ingest seam is covered without per-seam wiring.
+  // Only slug strings are ever rewritten — identity cannot change.
+  const runNameVerification = guardOverlap("NameVerification", () =>
+    import("../services/company/nameVerification")
+      .then((m) => m.runNameVerificationSweep())
+      .then((r) => {
+        if (r.slugCandidates > 0) console.log(`[NameVerify] scanned=${r.scanned} slugs=${r.slugCandidates} lookups=${r.domainsLookedUp} fixed=${r.fixed} kept=${r.kept} unusable=${r.unusableDomains}`);
+      }),
+  );
+  setTimeout(runNameVerification, 21 * 60 * 1000); // stagger: 21 minutes after boot
+  setInterval(runNameVerification, 30 * 60 * 1000); // every 30 minutes; look-back 24h absorbs downtime
+
   // Brand identity reconciliation: bounded Brand Search sweep over accounts
   // never verified / gone stale / renamed. Dormant without
   // BRANDFETCH_SEARCH_CLIENT_ID; throttled far under their 200 req/5min.

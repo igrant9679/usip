@@ -267,6 +267,28 @@ export const companiesRouter = router({
     }),
 
   /**
+   * Manual drain of the company-name verification sweep (the 30-min cron's
+   * engine, same slug-only safety). A large lookbackHours turns it into the
+   * historical backfill: the cron only watches recent updatedAt. Global by
+   * design, like runLogoBackfill — names are workspace-independent facts.
+   */
+  runNameVerification: workspaceProcedure
+    .input(z.object({
+      lookbackHours: z.number().int().min(1).max(24 * 365 * 10).default(24),
+      limit: z.number().int().min(1).max(2000).default(500),
+      maxLookups: z.number().int().min(1).max(100).default(25),
+    }).optional())
+    .mutation(async ({ ctx, input }) => {
+      requireRole(ctx.member.role, "admin");
+      const { runNameVerificationSweep } = await import("../services/company/nameVerification");
+      return runNameVerificationSweep({
+        lookbackHours: input?.lookbackHours ?? 24,
+        limit: input?.limit ?? 500,
+        maxLookups: input?.maxLookups ?? 25,
+      });
+    }),
+
+  /**
    * Bulk brand resolution (owner ask 2026-08-13: every company gets its
    * domain + icon). One call = repair URL-shaped account names in THIS
    * workspace, then run one bounded Brandfetch sweep pass (the same

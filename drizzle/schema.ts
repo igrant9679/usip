@@ -5422,6 +5422,34 @@ export const brandObservations = mysqlTable(
 );
 export type BrandObservation = typeof brandObservations.$inferSelect;
 
+/**
+ * Official-company-name lookup cache (migration 0173). Domain-keyed and
+ * workspace-independent: what an organization's own website calls it is a
+ * fact about the domain. Consumed by the name-verification sweep, which only
+ * rewrites prospect company strings that are slugs of the domain itself.
+ * status: pending | verified | unusable (parked/spam/not an org site,
+ * terminal for a while) | unreachable (transient, retried sooner).
+ */
+export const companyNameLookups = mysqlTable(
+  "company_name_lookups",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    domain: varchar("domain", { length: 200 }).notNull(),
+    status: varchar("status", { length: 16 }).default("pending").notNull(),
+    officialName: varchar("officialName", { length: 200 }),
+    acronym: varchar("acronym", { length: 40 }),
+    confidence: int("confidence").default(0).notNull(),
+    evidence: varchar("evidence", { length: 300 }),
+    attempts: int("attempts").default(0).notNull(),
+    checkedAt: timestamp("checkedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    byDomain: uniqueIndex("ux_cnl_domain").on(t.domain),
+  }),
+);
+export type CompanyNameLookup = typeof companyNameLookups.$inferSelect;
+
 /* ──────────────────────────────────────────────────────────────────────────
    Website visitor tracking (Migration 0108)
 

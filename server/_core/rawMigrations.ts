@@ -3822,6 +3822,33 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0173: official-company-name lookup cache (owner ask 08-26) ───────────
+  // "I'd like this entire process to run in the background, whenever a
+  // prospect is imported, scraped, or enriched sitewide" — the process being:
+  // read the org's OWN website and fix scraper-slugged company display
+  // strings ("Mncsf" → "Mission Neighborhood Centers (MNC)"). The cache is
+  // domain-keyed and workspace-independent (a domain's official name is a
+  // fact about the domain); the sweep that consumes it only ever rewrites
+  // strings that are slugs of the domain itself, so no identity can change.
+  {
+    name: "0173_company_name_lookups.sql",
+    statements: [
+      "CREATE TABLE IF NOT EXISTS `company_name_lookups` (" +
+        "`id` INT AUTO_INCREMENT PRIMARY KEY, " +
+        "`domain` VARCHAR(200) NOT NULL, " +
+        "`status` VARCHAR(16) NOT NULL DEFAULT 'pending', " +
+        "`officialName` VARCHAR(200) NULL, " +
+        "`acronym` VARCHAR(40) NULL, " +
+        "`confidence` INT NOT NULL DEFAULT 0, " +
+        "`evidence` VARCHAR(300) NULL, " +
+        "`attempts` INT NOT NULL DEFAULT 0, " +
+        "`checkedAt` TIMESTAMP NULL, " +
+        "`createdAt` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, " +
+        "UNIQUE KEY `ux_cnl_domain` (`domain`)" +
+      ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

@@ -90,6 +90,13 @@ export const CONFIDENCE = {
   /** Company name derived from the domain root ("acme-corp.com" → "Acme
    *  Corp") — the last-resort filler; any real source replaces it. */
   domainDerived: 40,
+  /** Company display name read off the organization's OWN website (title /
+   *  og:site_name / copyright) by the name-verification sweep. The org's own
+   *  branding is the authority the owner designated for name syntax — above
+   *  LinkedIn's self-reported strings, below a user pin. Only ever offered
+   *  for values that are slugs of the domain itself, so it corrects
+   *  rendering, never identity. */
+  websiteOfficial: 88,
   /** Domain taken from a brand-directory NAME match, with nothing else known
    *  about the company. Deliberately below `preexisting` and every evidence
    *  source: a name match is a good guess, not a fact — searching "aarp"
