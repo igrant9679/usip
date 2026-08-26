@@ -29,6 +29,25 @@ describe("digest24h reads the sitewide send log", () => {
   });
 });
 
+describe("dashboards read the send log the ARE campaigns write (owner report 2026-08-26)", () => {
+  const analytics = readFileSync(join(__dirname, "..", "client", "src", "pages", "usip", "AnalyticsV2.tsx"), "utf8");
+  const reports = readFileSync(join(__dirname, "routers", "reports.ts"), "utf8");
+
+  it("Analytics outreach reads emailActivity.stats, not sequences-only sums", () => {
+    expect(analytics).toContain("trpc.emailActivity.stats.useQuery");
+    // The old shape: outreach.sent summed getPerformanceAnalytics rows.
+    expect(analytics).not.toMatch(/const sent = rows\.reduce/);
+  });
+
+  it("the report builder exposes the emails object over email_log", () => {
+    expect(reports).toContain("emails: {");
+    expect(reports).toContain("table: emailLog");
+    expect(reports).toContain('"activities", "emails"');
+    // Presets make the new object discoverable rather than a hidden dropdown.
+    expect(reports).toContain('"emails-by-source"');
+  });
+});
+
 describe("Home's prospects query clears the server's validation floor", () => {
   it("perPage in Home.tsx >= the zod minimum in prospects.list", () => {
     const homeMatch = /trpc\.prospects\.list\.useQuery\(\{ page: 1, perPage: (\d+) \}/.exec(home);

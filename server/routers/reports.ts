@@ -14,7 +14,7 @@ import { TRPCError } from "@trpc/server";
 import { and, asc, avg, count, desc, eq, gt, gte, inArray, isNotNull, isNull, like, lt, lte, ne, or, sum, type SQL } from "drizzle-orm";
 import type { MySqlColumn } from "drizzle-orm/mysql-core";
 import { z } from "zod";
-import { activities, contacts, leads, opportunities, prospects, savedReports, users } from "../../drizzle/schema";
+import { activities, contacts, emailLog, leads, opportunities, prospects, savedReports, users } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { router } from "../_core/trpc";
 import { workspaceProcedure } from "../_core/workspace";
@@ -24,7 +24,7 @@ import { workspaceProcedure } from "../_core/workspace";
 type ColKind = "text" | "number" | "date" | "user";
 type ColDef = { col: MySqlColumn; label: string; kind: ColKind };
 type ObjectDef = {
-  table: typeof opportunities | typeof leads | typeof prospects | typeof contacts | typeof activities;
+  table: typeof opportunities | typeof leads | typeof prospects | typeof contacts | typeof activities | typeof emailLog;
   wsCol: MySqlColumn;
   columns: Record<string, ColDef>;
   defaultColumns: string[];
@@ -122,6 +122,29 @@ const OBJECTS: Record<string, ObjectDef> = {
       occurredAt: { col: activities.occurredAt, label: "Occurred", kind: "date" },
     },
   },
+  /**
+   * The sitewide send log (email_log, 0163) — every send path writes it:
+   * ARE campaign dispatch, sequences, mailbox composes, meeting invites.
+   * Without this object, email activity was unreportable and the builder was
+   * blind to the autonomous campaigns entirely (owner report 2026-08-26).
+   */
+  emails: {
+    table: emailLog,
+    wsCol: emailLog.workspaceId,
+    defaultColumns: ["toEmail", "subject", "source", "status", "sentAt"],
+    columns: {
+      toEmail: { col: emailLog.toEmail, label: "To", kind: "text" },
+      fromEmail: { col: emailLog.fromEmail, label: "From", kind: "text" },
+      subject: { col: emailLog.subject, label: "Subject", kind: "text" },
+      source: { col: emailLog.source, label: "Source", kind: "text" },
+      sourceLabel: { col: emailLog.sourceLabel, label: "Source detail", kind: "text" },
+      status: { col: emailLog.status, label: "Status", kind: "text" },
+      failureReason: { col: emailLog.failureReason, label: "Failure reason", kind: "text" },
+      campaignId: { col: emailLog.campaignId, label: "Campaign id", kind: "number" },
+      user: { col: emailLog.userId, label: "Sent by", kind: "user" },
+      sentAt: { col: emailLog.sentAt, label: "Sent", kind: "date" },
+    },
+  },
 };
 
 /* ─── Spec schema ────────────────────────────────────────────────────────── */
@@ -133,7 +156,7 @@ const filterSchema = z.object({
 });
 
 const specSchema = z.object({
-  object: z.enum(["deals", "leads", "prospects", "contacts", "activities"]),
+  object: z.enum(["deals", "leads", "prospects", "contacts", "activities", "emails"]),
   columns: z.array(z.string().max(64)).min(1).max(20),
   filters: z.array(filterSchema).max(12).default([]),
   groupBy: z.string().max(64).optional(),
@@ -272,6 +295,9 @@ export const PRESET_REPORTS: Array<{ key: string; name: string; description: str
   { key: "prospects-by-email-status", name: "Prospects by email status", description: "Deliverability shape of your list.", spec: { object: "prospects", columns: ["emailStatus"], filters: [], groupBy: "emailStatus", aggregate: "count", limit: 200 } },
   { key: "sendable-prospects", name: "Sendable prospects", description: "Valid-email prospects ready to enroll.", spec: { object: "prospects", columns: ["firstName", "lastName", "title", "company", "email", "createdAt"], filters: [{ field: "emailStatus", op: "eq", value: "valid" }], sort: { field: "createdAt", dir: "desc" }, limit: 500 } },
   { key: "activity-by-type", name: "Activity volume by type", description: "Logged touches per activity type.", spec: { object: "activities", columns: ["type"], filters: [], groupBy: "type", aggregate: "count", limit: 200 } },
+  { key: "emails-by-source", name: "Emails sent by source", description: "Send volume per product area — campaigns, sequences, mailbox.", spec: { object: "emails", columns: ["source"], filters: [{ field: "status", op: "eq", value: "sent" }], groupBy: "source", aggregate: "count", limit: 200 } },
+  { key: "recent-campaign-emails", name: "Recent campaign emails", description: "What the autonomous campaigns actually sent, newest first.", spec: { object: "emails", columns: ["toEmail", "subject", "sourceLabel", "status", "sentAt"], filters: [{ field: "source", op: "eq", value: "campaign" }], sort: { field: "sentAt", dir: "desc" }, limit: 500 } },
+  { key: "failed-emails", name: "Failed sends & reasons", description: "Every failed send with its recorded reason.", spec: { object: "emails", columns: ["toEmail", "subject", "source", "failureReason", "sentAt"], filters: [{ field: "status", op: "eq", value: "failed" }], sort: { field: "sentAt", dir: "desc" }, limit: 500 } },
 ];
 
 /* ─── Router ─────────────────────────────────────────────────────────────── */

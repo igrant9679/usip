@@ -36,15 +36,26 @@ export default function AnalyticsV2() {
   const convStats = trpc.conversations.stats.useQuery();
   const socialFunnel = trpc.unipile.socialFunnelStats.useQuery(undefined as any, { retry: false });
 
-  // Aggregate outreach performance across sequences.
+  // Outreach performance reads the SITEWIDE send log (emailActivity.stats,
+  // email_log 0163) — ARE campaign dispatch, sequences, and mailbox sends in
+  // one funnel. It used to sum sequences.getPerformanceAnalytics only, a
+  // product this workspace doesn't use, so the flagship analytics page said
+  // "Outreach sent: 0" while the ARE campaigns had delivered hundreds
+  // (owner report 2026-08-26). `enrolled` stays sequences-scoped — it is a
+  // sequences concept and is labeled as such.
+  const emailStats = trpc.emailActivity.stats.useQuery({}, { retry: false });
   const outreach = useMemo(() => {
+    const es = (emailStats.data as any) ?? {};
     const rows = (seqPerf.data as any[]) ?? [];
-    const sent = rows.reduce((s, r) => s + Number(r.sent ?? 0), 0);
-    const opens = rows.reduce((s, r) => s + Number(r.uniqueOpens ?? 0), 0);
-    const clicks = rows.reduce((s, r) => s + Number(r.uniqueClicks ?? 0), 0);
     const enrolled = rows.reduce((s, r) => s + Number(r.totalEnrolled ?? 0), 0);
-    return { sent, opens, clicks, enrolled, openRate: sent ? Math.round((opens / sent) * 100) : 0, clickRate: sent ? Math.round((clicks / sent) * 100) : 0 };
-  }, [seqPerf.data]);
+    return {
+      sent: Number(es.sent ?? 0),
+      scheduled: Number(es.scheduled ?? 0),
+      openRate: Number(es.openRate ?? 0),
+      clickRate: Number(es.clickRate ?? 0),
+      enrolled,
+    };
+  }, [emailStats.data, seqPerf.data]);
 
   const conv = convStats.data ?? { total: 0, willingToMeet: 0, meetingsProposed: 0 } as any;
   const meet = meetStats.data ?? { booked: 0, completed: 0, upcoming: 0 } as any;
@@ -226,12 +237,12 @@ export default function AnalyticsV2() {
             <section>
               <h2 className="text-sm font-semibold mb-2 flex items-center gap-2"><Mail className="size-4" style={{ color: accent }} /> Outreach performance</h2>
               <div className="grid grid-cols-3 gap-3">
-                <Stat label="Sent" value={outreach.sent} />
-                <Stat label="Open rate" value={`${outreach.openRate}%`} sub={`${outreach.opens} opens`} />
-                <Stat label="Click rate" value={`${outreach.clickRate}%`} sub={`${outreach.clicks} clicks`} />
+                <Stat label="Sent" value={outreach.sent} sub={outreach.scheduled ? `${outreach.scheduled.toLocaleString()} scheduled` : undefined} />
+                <Stat label="Open rate" value={`${outreach.openRate}%`} />
+                <Stat label="Click rate" value={`${outreach.clickRate}%`} />
               </div>
               <div className="mt-3 grid grid-cols-3 gap-3">
-                <Stat label="Enrolled" value={outreach.enrolled} />
+                <Stat label="Enrolled (sequences)" value={outreach.enrolled} />
                 <Stat label="AI tasks open" value={(taskStats.data as any)?.aiOpen ?? 0} tone="ai" />
                 <Stat label="Replies to handle" value={(convStats.data as any)?.unhandled ?? 0} tone="ai" />
               </div>
