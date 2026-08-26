@@ -111,6 +111,9 @@ export default function MeetingsV2() {
     onSuccess: (r) => {
       invalidateAll();
       if (r.proposed === 0) toast.info(r.skipped > 0 ? "Top prospects already have meetings proposed" : "No best-fit prospects to schedule yet");
+      // In Autonomous mode the button sends what it finds (same as the cron);
+      // the toast must say which of the two actually happened.
+      else if ((r as { sent?: number }).sent && (r as { sent?: number }).sent! > 0) toast.success(`AI proposed ${r.proposed} meeting${r.proposed === 1 ? "" : "s"} — ${(r as { sent?: number }).sent} invite${(r as { sent?: number }).sent === 1 ? "" : "s"} sent (Autonomous mode)`);
       else toast.success(`AI proposed ${r.proposed} meeting${r.proposed === 1 ? "" : "s"} to review`);
     },
     onError: (e) => toast.error(e.message),

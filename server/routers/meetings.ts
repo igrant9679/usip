@@ -136,13 +136,27 @@ export const meetingsRouter = router({
       return { id };
     }),
 
-  /** On-demand: propose meetings for the best-fit prospects (approval — never auto-sends). */
+  /**
+   * On-demand: propose meetings for the best-fit prospects. HONORS the
+   * workspace's Meeting Autopilot mode (owner ask 2026-08-26): in 'auto',
+   * what the button finds sends immediately — exactly like the 45-minute
+   * cron — because a workspace that chose full autonomy should not have its
+   * manual "find more" pass demand approvals the cron doesn't. 'approval'
+   * and 'off' keep every find as a reviewable proposal.
+   */
   generateProposals: repProcedure
     .input(z.object({ limit: z.number().int().min(1).max(20).optional() }).optional())
     .mutation(async ({ ctx, input }) => {
-      const res = await runMeetingAutopilotForWorkspace(ctx.workspace.id, "approval", input?.limit ?? 8, ctx.user.id);
-      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "ai_generate", entityType: "meeting", entityId: 0, after: res });
-      return res;
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [s] = await db.select({ mode: workspaceSettings.meetingAutopilotMode })
+        .from(workspaceSettings)
+        .where(eq(workspaceSettings.workspaceId, ctx.workspace.id))
+        .limit(1);
+      const mode = s?.mode === "auto" ? "auto" as const : "approval" as const;
+      const res = await runMeetingAutopilotForWorkspace(ctx.workspace.id, mode, input?.limit ?? 8, ctx.user.id);
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "ai_generate", entityType: "meeting", entityId: 0, after: { ...res, mode } });
+      return { ...res, mode };
     }),
 
   /** Manually create a meeting (already agreed or being scheduled). */

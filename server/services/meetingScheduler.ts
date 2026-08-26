@@ -21,10 +21,11 @@
  */
 import { archivedWorkspaceIds } from "../_core/workspaceArchive";
 import { and, eq, gte, inArray, isNull, lte, ne, or, sql } from "drizzle-orm";
-import { calendarAccounts, calendarEvents, contacts, leads, meetings, prospects, workspaceMembers, workspaceSettings } from "../../drizzle/schema";
+import { calendarAccounts, calendarEvents, contacts, leads, meetings, prospects, workspaceMembers, workspaceSettings, workspaces } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { invokeLLM } from "../_core/llm";
 import { HUMAN_COPY_RULES, humanizeAiCopy } from "./humanCopy";
+import { buildBrandContext } from "./brandContext";
 import { createCalendarAdapter } from "../calendarAdapter";
 import { attributeMeetingBookingToAre } from "../routers/are/execution";
 // One slot generator + one timezone rule, shared with the booking link. See
@@ -160,14 +161,24 @@ export async function createMeetingProposal(workspaceId: number, target: Meeting
   const name = target.name || "there";
   const firstName = target.firstName || name.split(" ")[0] || "there";
 
-  const prompt = `You are an autonomous SDR booking an intro sales meeting. Draft a concise, friendly meeting proposal. Return JSON only.
+  // Who the SENDER is. Without this the model had no identity to represent,
+  // and the prompt's example title literally said "Velocity <> Acme" — so
+  // proposals marketed the PLATFORM instead of the workspace's own brand
+  // (owner report 2026-08-26). The brand block is the ONE workspace voice
+  // (buildBrandContext), same as every other generation surface.
+  const [wsRow] = await db.select({ name: workspaces.name }).from(workspaces)
+    .where(eq(workspaces.id, workspaceId)).limit(1);
+  const senderCompany = wsRow?.name?.trim() || "our team";
+  const brandBlock = await buildBrandContext(workspaceId);
 
+  const prompt = `You are an SDR at ${senderCompany}, booking an intro meeting with a prospect about ${senderCompany}'s own products and services. Represent ${senderCompany} only — never pitch, name, or allude to any software platform used to send or schedule this message. Draft a concise, friendly meeting proposal. Return JSON only.
+${brandBlock ? `\n${brandBlock}\n` : ""}
 Attendee: ${name}${target.descriptor ? ` — ${target.descriptor}` : ""}${target.company ? ` at ${target.company}` : ""}
 Duration: ${durationMin} minutes
 Candidate times (already chosen — reference them exactly as written, including the timezone, and do not invent new ones): ${slots.map((s) => formatInZone(s, workspaceTz)).join("; ") || "to be proposed"}
 
 Return: {
-  "title": "<short meeting title, e.g. 'Velocity <> Acme intro'>",
+  "title": "<short meeting title, e.g. '${senderCompany} <> ${target.company || "Acme"} intro'>",
   "inviteMessage": "<2-3 sentence invite proposing the times, warm and specific>",
   "reasoning": "<one sentence: why this meeting, now>",
   "confidence": <integer 0-100>
