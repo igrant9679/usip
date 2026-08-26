@@ -44,7 +44,7 @@ const entity = (table: MySqlTable, workspaceCol: AnyMySqlColumn, description: st
 
 export const EXPLORER_ENTITIES: Record<string, ExplorerEntity> = {
   people: entity(prospects, prospects.workspaceId,
-    "People (prospects) — the sitewide person records.",
+    "People (prospects) — the sitewide person records, INCLUDING archived ones (verificationStatus 'rejected' = archived; filter it out with neq for the working set).",
     {
       id: prospects.id, firstName: prospects.firstName, lastName: prospects.lastName,
       title: prospects.title, seniority: prospects.seniority, company: prospects.company,
@@ -57,7 +57,7 @@ export const EXPLORER_ENTITIES: Record<string, ExplorerEntity> = {
       createdAt: prospects.createdAt, updatedAt: prospects.updatedAt,
     }),
   companies: entity(accounts, accounts.workspaceId,
-    "Companies (accounts). archivedAt is set when archived; domain is null when unresolved.",
+    "Companies (accounts), INCLUDING archived ones — filter archivedAt is_null for the active companies the UI shows. domain is null when unresolved.",
     {
       id: accounts.id, name: accounts.name, domain: accounts.domain, industry: accounts.industry,
       employeeCount: accounts.employeeCount, revenue: accounts.revenue, region: accounts.region,
