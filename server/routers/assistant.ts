@@ -384,9 +384,17 @@ export const assistantRouter = router({
           }
         }
         if (pendingAction) break;
-        if (round === MAX_ROUNDS - 1) {
-          answer = text || "I gathered what I could — ask me to continue if you need more.";
-        }
+      }
+
+      // Rounds exhausted mid-tool-use: the model has results it never got to
+      // narrate (query_data turns hit this — first live probe ended on "Let me
+      // check…" with the number sitting unread in a tool result). One final
+      // call WITHOUT tools forces it to answer from what it gathered.
+      if (!answer && !pendingAction) {
+        messages.push({ role: "user", content: "[assistant_note]: Tool budget for this turn is used up. Answer the user's question now from the tool results above; say plainly if something is still missing." });
+        const res = await invokeLLM({ messages, maxTokens: 900, workspaceId: ctx.workspace.id });
+        const msg = res.choices[0]?.message;
+        answer = (typeof msg?.content === "string" ? msg.content : "") || "";
       }
 
       if (!answer) answer = "I couldn't produce an answer — try rephrasing.";
