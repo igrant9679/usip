@@ -19,6 +19,7 @@ import { getDb } from "../db";
 import {
   areCampaigns,
   emailDrafts,
+  emailLog,
   emailReplies,
   meetings,
   prospectQueue,
@@ -91,8 +92,19 @@ export const attentionRouter = router({
         .where(and(eq(tasks.workspaceId, ws), eq(tasks.status, "draft"))),
       db.select({ id: areCampaigns.id, name: areCampaigns.name }).from(areCampaigns)
         .where(and(eq(areCampaigns.workspaceId, ws), eq(areCampaigns.status, "paused"))),
-      db.select({ n: sql<number>`count(*)` }).from(emailDrafts)
-        .where(and(eq(emailDrafts.workspaceId, ws), eq(emailDrafts.status, "sent"), gte(emailDrafts.sentAt, since))),
+      /**
+       * The 24h "emails sent" reads the SITEWIDE send log (email_log, 0163)
+       * — the one table every send path writes: campaign dispatch, sequence
+       * sends, mailbox composes. It used to count emailDrafts, which only
+       * the inbox AI-draft flow creates, so the Home tile said "0 sent" on
+       * days the campaigns delivered dozens (owner screenshot 2026-08-26).
+       * repliesReceived below deliberately keeps its draftId scope: the
+       * poller only matches inbound to DRAFTS, so campaign replies are not
+       * yet identifiable in email_replies, and counting all inbound would
+       * count the owner's private mail as "replies" (the 62k-row trap).
+       */
+      db.select({ n: sql<number>`count(*)` }).from(emailLog)
+        .where(and(eq(emailLog.workspaceId, ws), eq(emailLog.status, "sent"), gte(emailLog.sentAt, since))),
       db.select({ n: sql<number>`count(*)` }).from(prospectQueue)
         .where(and(eq(prospectQueue.workspaceId, ws), gte(prospectQueue.createdAt, since))),
       db.select({ n: sql<number>`count(*)` }).from(emailReplies)

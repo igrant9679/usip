@@ -213,7 +213,12 @@ export default function Home() {
   const [dragIdx, setDragIdx] = useState<number | null>(null);
 
   // live data for widgets
-  const people = ((trpc.prospects.list.useQuery({ page: 1, perPage: 8 }).data as any)?.data ?? []) as any[];
+  // perPage MUST be >= 10 — prospects.list's zod floor. This was 8, which
+  // failed validation and the `?? []` swallowed the error, so "Suggested
+  // leads" rendered "No prospects yet." against 1,190 real People (owner
+  // screenshot 2026-08-26). A filter either narrows the view or it lies —
+  // and so does a silently-defaulted error.
+  const people = ((trpc.prospects.list.useQuery({ page: 1, perPage: 10 }).data as any)?.data ?? []) as any[];
   const companies = (trpc.accounts.list.useQuery().data ?? []) as any[];
   const tasks = (trpc.tasks.list.useQuery({}).data ?? []) as any[];
   // The one definition of open/dueToday/overdue, in the workspace's timezone.
