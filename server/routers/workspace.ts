@@ -224,17 +224,20 @@ export const workspaceRouter = router({
     since.setUTCHours(0, 0, 0, 0);
     const dayKey = (d: Date) => d.toISOString().slice(0, 10);
     const days = Array.from({ length: 7 }, (_, i) => dayKey(new Date(since.getTime() + i * 86_400_000)));
-    const bucket = async (table: string, dateCol: string): Promise<number[]> => {
+    const bucket = async (table: string, dateCol: string, extraWhere = ""): Promise<number[]> => {
       const rows = (await db.execute(
-        sql.raw(`SELECT DATE(${dateCol}) d, COUNT(*) n FROM \`${table}\` WHERE workspaceId = ${Number(ctx.workspace.id)} AND ${dateCol} >= '${since.toISOString().slice(0, 19).replace("T", " ")}' GROUP BY DATE(${dateCol})`),
+        sql.raw(`SELECT DATE(${dateCol}) d, COUNT(*) n FROM \`${table}\` WHERE workspaceId = ${Number(ctx.workspace.id)} AND ${dateCol} >= '${since.toISOString().slice(0, 19).replace("T", " ")}'${extraWhere ? ` AND ${extraWhere}` : ""} GROUP BY DATE(${dateCol})`),
       )) as unknown as [Array<{ d: string | Date; n: number }>];
       const byDay = new Map((rows[0] ?? []).map((r) => [dayKey(new Date(r.d)), Number(r.n)]));
       return days.map((d) => byDay.get(d) ?? 0);
     };
+    const { GENUINE_REPLY_SQL } = await import("../services/replyScope");
     const [activities, meetings, replies] = await Promise.all([
       bucket("activities", "occurredAt"),
       bucket("meetings", "scheduledAt"),
-      bucket("email_replies", "receivedAt"),
+      // Genuine replies only — unscoped, this sparkline counted every synced
+      // inbound message (the owner's private mail) as a "reply".
+      bucket("email_replies", "receivedAt", GENUINE_REPLY_SQL),
     ]);
     return { activities, meetings, replies };
   }),

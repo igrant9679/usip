@@ -86,6 +86,11 @@ describe("email_replies scope in autonomous engines", () => {
         const win = src.split("\n").slice(i, i + 12).join("\n");
         const end = win.indexOf(";");
         const stmt = end === -1 ? win : win.slice(0, end + 1);
+        // Either form satisfies the invariant: the shared helper (the ONE
+        // definition, replyScope.ts — draft-matched OR campaign-matched,
+        // 2026-08-28) or the original draft-only literal where a read is
+        // legitimately draft-specific.
+        if (stmt.includes("genuineReplyScope()")) continue;
         if (stmt.includes("isNotNull(emailReplies.draftId)")) continue;
         const excuse = Object.entries(ALLOWED_UNSCOPED).find(
           ([marker, f]) => f === file && stmt.includes(marker),

@@ -14,6 +14,7 @@ import { recordAudit } from "../audit";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, repProcedure, workspaceProcedure } from "../_core/workspace";
 import { applyReplyAction, classifyReply, runConversationAutopilotForWorkspace, REPLY_CLASSES } from "../services/replyClassifier";
+import { genuineReplyScope } from "../services/replyScope";
 
 export const conversationsRouter = router({
   list: workspaceProcedure
@@ -26,12 +27,13 @@ export const conversationsRouter = router({
       if (!db) return [];
       // Push filters + the 300-row cap into SQL — this table can have tens of
       // thousands of replies, so never load them all into memory.
-      // Scoped to real replies, exactly as `stats` below is — the two must
+      // Scoped to genuine replies (draft-matched OR campaign-matched — the
+      // one shared definition), exactly as `stats` below is — the two must
       // move together or the header counts one population and the list shows
       // another. See the note on stats for what unscoped meant here.
       const conds = [
         eq(emailReplies.workspaceId, ctx.workspace.id),
-        isNotNull(emailReplies.draftId),
+        genuineReplyScope(),
       ];
       const f = input?.filter;
       if (f === "unhandled") conds.push(isNull(emailReplies.handledAt));
@@ -65,7 +67,7 @@ export const conversationsRouter = router({
     // Home even queries that too — then showed this number instead.
     }).from(emailReplies).where(and(
       eq(emailReplies.workspaceId, ctx.workspace.id),
-      isNotNull(emailReplies.draftId),
+      genuineReplyScope(),
     ));
     return {
       total: Number(row?.total ?? 0),

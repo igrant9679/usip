@@ -57,16 +57,20 @@ describe("expired meeting proposals cannot be booked (report #1)", () => {
 describe("reply counts mean replies (report #2)", () => {
   // Live: conversations.stats reported 70,484 unhandled in LSI where the true
   // figure is 0 — email_replies holds every synced inbound message.
+  // 2026-08-28: the scope literal became the shared genuineReplyScope()
+  // helper (draft-matched OR campaign-matched, replyScope.ts) so campaign
+  // replies count too; the invariant this test protects is unchanged —
+  // both procedures must be scoped, and scoped IDENTICALLY.
   const src = read("server/routers/conversations.ts");
 
   it("stats scopes to replies to something we sent", () => {
     const { text } = slice(src, "stats: workspaceProcedure", "\n  detail");
-    expect(text).toContain("isNotNull(emailReplies.draftId)");
+    expect(text).toContain("genuineReplyScope()");
   });
 
   it("list scopes the same way, so header and rows agree", () => {
     const { text } = slice(src, "list: workspaceProcedure", "stats: workspaceProcedure");
-    expect(text).toContain("isNotNull(emailReplies.draftId)");
+    expect(text).toContain("genuineReplyScope()");
   });
 });
 

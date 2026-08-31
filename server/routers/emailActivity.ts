@@ -47,6 +47,7 @@ import {
 } from "../../drizzle/schema";
 import { alias } from "drizzle-orm/mysql-core";
 import { getDb } from "../db";
+import { genuineReplyScope } from "../services/replyScope";
 import { workspaceProcedure } from "../_core/workspace";
 import {
   failureReasonFor, feedSourceApplies, mergeFeed,
@@ -367,7 +368,10 @@ export const emailActivityRouter = {
 
     /* ── 4. Inbound ──────────────────────────────────────────────────────── */
     const inboundRows: EmailFeedRow[] = !wants(input, "inbound") ? [] : await (async () => {
-      const conds = [eq(emailReplies.workspaceId, wsId)];
+      // Genuine replies only (replyScope.ts). Unscoped, this fed the owner's
+      // ENTIRE synced private inbox (~75k messages in one workspace) into a
+      // CRM tab — and its count disagreed with every reply surface.
+      const conds = [eq(emailReplies.workspaceId, wsId), genuineReplyScope()];
       if (input.contactId) conds.push(eq(emailReplies.contactId, input.contactId));
       if (term) {
         conds.push(sql`(${emailReplies.subject} LIKE ${like} OR ${emailReplies.fromEmail} LIKE ${like}
@@ -484,7 +488,9 @@ export const emailActivityRouter = {
         db
           .select({ count: sql<number>`count(*)` })
           .from(emailReplies)
-          .where(eq(emailReplies.workspaceId, wsId)),
+          // Genuine replies only (replyScope.ts) — unscoped, this stat said
+          // "74,943 inbound" on the Emails tab while Conversations said 0.
+          .where(and(eq(emailReplies.workspaceId, wsId), genuineReplyScope())),
         // Open/click rates read the owning rows, which is where the counters
         // actually live. Drafts and campaign sends are counted together
         // because the page presents one funnel, not two.

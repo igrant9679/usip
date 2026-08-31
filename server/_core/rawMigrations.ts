@@ -3849,6 +3849,38 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0174: persist the campaign linkage on inbound replies ────────────────
+  // The poller matched every inbound message against the ARE prospect queue
+  // but only used the match transiently (processSignal) — nothing stored it.
+  // A genuine campaign reply was therefore invisible on every reply surface
+  // (Conversations, Home, attention, Emails) while the campaign engine
+  // reacted to it (owner report 2026-08-28). Columns + backfill: the same
+  // rule the live poller uses — sender email equals an enrolled queue row's
+  // email in the same workspace, newest queue row wins; prospectId comes
+  // from the prospects table by the same email rule.
+  {
+    name: "0174_email_replies_campaign_linkage.sql",
+    statements: [
+      "ALTER TABLE `email_replies` ADD COLUMN `prospectId` INT NULL",
+      "ALTER TABLE `email_replies` ADD COLUMN `prospectQueueId` INT NULL",
+      "ALTER TABLE `email_replies` ADD COLUMN `campaignId` INT NULL",
+      "ALTER TABLE `email_replies` ADD INDEX `ix_er_campaign` (`campaignId`)",
+      // Backfill queue linkage: newest queue row per (workspace, email).
+      "UPDATE `email_replies` er " +
+        "JOIN (SELECT workspaceId, email, MAX(id) maxId FROM `prospect_queue` WHERE email IS NOT NULL AND email <> '' GROUP BY workspaceId, email) m " +
+        "ON m.workspaceId = er.workspaceId AND m.email = er.fromEmail " +
+        "JOIN `prospect_queue` pq ON pq.id = m.maxId " +
+        "SET er.prospectQueueId = pq.id, er.campaignId = pq.campaignId " +
+        "WHERE er.prospectQueueId IS NULL",
+      // Backfill prospect linkage by the same email rule (newest wins).
+      "UPDATE `email_replies` er " +
+        "JOIN (SELECT workspaceId, email, MAX(id) maxId FROM `prospects` WHERE email IS NOT NULL AND email <> '' GROUP BY workspaceId, email) m " +
+        "ON m.workspaceId = er.workspaceId AND m.email = er.fromEmail " +
+        "SET er.prospectId = m.maxId " +
+        "WHERE er.prospectId IS NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

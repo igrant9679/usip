@@ -28,6 +28,7 @@ import {
 import { workspaceProcedure } from "../_core/workspace";
 import { router } from "../_core/trpc";
 import { remindableMeetingStatuses } from "@shared/meetingStatus";
+import { genuineReplyScope } from "../services/replyScope";
 
 const EMPTY = {
   totalNeedingYou: 0,
@@ -75,10 +76,10 @@ export const attentionRouter = router({
         .where(and(eq(meetings.workspaceId, ws), eq(meetings.status, "proposed")))
         .orderBy(desc(meetings.id)).limit(3),
       db.select({ n: sql<number>`count(*)` }).from(emailReplies)
-        .where(and(eq(emailReplies.workspaceId, ws), isNotNull(emailReplies.draftId), isNull(emailReplies.handledAt))),
+        .where(and(eq(emailReplies.workspaceId, ws), genuineReplyScope(), isNull(emailReplies.handledAt))),
       db.select({ fromEmail: emailReplies.fromEmail, subject: emailReplies.subject, receivedAt: emailReplies.receivedAt })
         .from(emailReplies)
-        .where(and(eq(emailReplies.workspaceId, ws), isNotNull(emailReplies.draftId), isNull(emailReplies.handledAt)))
+        .where(and(eq(emailReplies.workspaceId, ws), genuineReplyScope(), isNull(emailReplies.handledAt)))
         .orderBy(desc(emailReplies.receivedAt)).limit(5),
       db.select({ campaignId: prospectQueue.campaignId, n: sql<number>`count(*)` })
         .from(prospectQueue)
@@ -98,17 +99,16 @@ export const attentionRouter = router({
        * sends, mailbox composes. It used to count emailDrafts, which only
        * the inbox AI-draft flow creates, so the Home tile said "0 sent" on
        * days the campaigns delivered dozens (owner screenshot 2026-08-26).
-       * repliesReceived below deliberately keeps its draftId scope: the
-       * poller only matches inbound to DRAFTS, so campaign replies are not
-       * yet identifiable in email_replies, and counting all inbound would
-       * count the owner's private mail as "replies" (the 62k-row trap).
+       * repliesReceived uses the shared genuine-reply scope (replyScope.ts):
+       * draft-matched or campaign-matched (0174) — never all inbound, which
+       * would count the owner's private mail as "replies" (the 75k-row trap).
        */
       db.select({ n: sql<number>`count(*)` }).from(emailLog)
         .where(and(eq(emailLog.workspaceId, ws), eq(emailLog.status, "sent"), gte(emailLog.sentAt, since))),
       db.select({ n: sql<number>`count(*)` }).from(prospectQueue)
         .where(and(eq(prospectQueue.workspaceId, ws), gte(prospectQueue.createdAt, since))),
       db.select({ n: sql<number>`count(*)` }).from(emailReplies)
-        .where(and(eq(emailReplies.workspaceId, ws), isNotNull(emailReplies.draftId), gte(emailReplies.receivedAt, since))),
+        .where(and(eq(emailReplies.workspaceId, ws), genuineReplyScope(), gte(emailReplies.receivedAt, since))),
       // "Booked" = the attendee has a time (invited/scheduled/rescheduled) —
       // the shared vocabulary's remindable set, NOT a hand-typed list.
       db.select({ n: sql<number>`count(*)` }).from(meetings)

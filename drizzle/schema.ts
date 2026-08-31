@@ -3105,6 +3105,14 @@ export const emailReplies = mysqlTable(
     contactId: int("contactId"),
     leadId: int("leadId"),
     accountId: int("accountId"),
+    /* Campaign linkage (migration 0174). The poller always MATCHED inbound
+       mail to the ARE prospect queue, but only used the match transiently for
+       processSignal — nothing persisted it, so a campaign reply's stored row
+       looked identical to private mail and no surface could show it. These
+       three make the match durable; see services/replyScope.ts. */
+    prospectId: int("prospectId"),
+    prospectQueueId: int("prospectQueueId"),
+    campaignId: int("campaignId"),
     imapUid: bigint("imapUid", { mode: "number" }),
     gmailMessageId: varchar("gmailMessageId", { length: 200 }),
     receivedAt: timestamp("receivedAt").notNull(),
@@ -3128,6 +3136,7 @@ export const emailReplies = mysqlTable(
     byAccount: index("ix_er_account").on(t.sendingAccountId),
     byDraft: index("ix_er_draft").on(t.draftId),
     byMsgId: index("ix_er_msgid").on(t.messageId),
+    byCampaign: index("ix_er_campaign").on(t.campaignId),
   }),
 );
 export type EmailReply = typeof emailReplies.$inferSelect;

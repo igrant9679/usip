@@ -35,6 +35,7 @@
  *     false for those cells, so the UI can say "not tracked" rather than "0%".
  */
 import { and, eq, isNotNull, isNull, sql } from "drizzle-orm";
+import { genuineReplyScope } from "./replyScope";
 import { getDb } from "../db";
 import {
   areAbVariants,
@@ -310,13 +311,14 @@ export async function getReplyMix(workspaceId: number): Promise<ReplyMix> {
       n: sql<number>`count(*)`,
     })
     .from(emailReplies)
-    .where(and(eq(emailReplies.workspaceId, workspaceId), isNotNull(emailReplies.draftId)))
+    // Attributed = the shared genuine-reply scope (draft- OR campaign-matched).
+    .where(and(eq(emailReplies.workspaceId, workspaceId), genuineReplyScope()))
     .groupBy(emailReplies.replyClass);
 
   const [unmatched] = await db
     .select({ n: sql<number>`count(*)` })
     .from(emailReplies)
-    .where(and(eq(emailReplies.workspaceId, workspaceId), isNull(emailReplies.draftId)));
+    .where(and(eq(emailReplies.workspaceId, workspaceId), isNull(emailReplies.draftId), isNull(emailReplies.campaignId)));
 
   const attributed = rows.reduce((n, r) => n + Number(r.n ?? 0), 0);
   const classes = rows.map((r) => ({

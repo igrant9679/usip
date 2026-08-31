@@ -355,6 +355,13 @@ export async function processInboundReply(data: InboundReplyData) {
     contactId: matchedContactId,
     leadId: matchedLeadId,
     accountId: matchedAccountId,
+    // Migration 0174: the queue/prospect match used to be transient (only
+    // processSignal saw it), which made campaign replies invisible on every
+    // reply surface. Persisting it is what lets services/replyScope.ts
+    // recognize this row as a genuine reply.
+    prospectId: matchedProspectId,
+    prospectQueueId: matchedQueueRow?.id ?? null,
+    campaignId: matchedQueueRow?.campaignId ?? null,
     imapUid: data.imapUid,
     receivedAt: data.receivedAt,
   });

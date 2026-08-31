@@ -1,5 +1,6 @@
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, gte, inArray, isNotNull, sql } from "drizzle-orm";
+import { genuineReplyScope } from "../services/replyScope";
 import { z } from "zod";
 import {
   accounts,
@@ -109,7 +110,9 @@ async function aggregateBehavior(workspaceId: number, leadId: number) {
     .where(and(
       eq(emailReplies.workspaceId, workspaceId),
       eq(emailReplies.leadId, leadId),
-      isNotNull(emailReplies.draftId),
+      // Shared genuine-reply scope (replyScope.ts): a campaign reply from
+      // this lead is engagement too, not just draft-matched ones.
+      genuineReplyScope(),
     ));
   const replies = replyRows.length;
 

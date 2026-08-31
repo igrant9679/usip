@@ -15,6 +15,7 @@
  */
 import { archivedWorkspaceIds } from "../_core/workspaceArchive";
 import { and, desc, eq, gte, isNotNull, isNull, sql } from "drizzle-orm";
+import { genuineReplyScope } from "./replyScope";
 import { emailReplies, emailSuppressions, tasks, unipileMessages, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { invokeLLM } from "../_core/llm";
@@ -433,7 +434,11 @@ export async function runConversationAutopilotForWorkspace(
     .where(and(
       eq(emailReplies.workspaceId, workspaceId),
       isNull(emailReplies.classifiedAt),
-      isNotNull(emailReplies.draftId),
+      // The shared genuine-reply scope (replyScope.ts): draft-matched OR
+      // campaign-matched (0174). Campaign replies now get classified too —
+      // before, they reached the ARE signal loop but never the 8-class
+      // taxonomy, so the Conversations UI could not even label them.
+      genuineReplyScope(),
     ))
     .orderBy(desc(emailReplies.receivedAt))
     .limit(limit);
