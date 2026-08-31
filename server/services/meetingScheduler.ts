@@ -362,12 +362,19 @@ export async function sendMeetingInvite(workspaceId: number, meetingId: number, 
     }
   }
 
-  // No calendar connected (or provider failed) — record the booking locally, invite not sent.
-  await db.update(meetings).set({ status: "scheduled", scheduledAt: start, inviteSent: false } as never)
-    .where(eq(meetings.id, meetingId));
-  // Booked locally (no calendar / provider error) still counts as a booking.
-  void attributeMeetingBookingToAre(workspaceId, { id: meetingId, contactEmail: m.contactEmail });
-  return { sent: false, scheduledAt: start.toISOString(), reason: acc ? "provider_error" : "no_calendar_connected" };
+  /**
+   * No calendar connected (or the provider failed): the invite did NOT reach
+   * the attendee, so NOTHING here may claim it did. This used to "book
+   * locally" — status 'scheduled', a scheduledAt the prospect never agreed
+   * to, an ARE meeting_booked signal that flipped the queue row to 'replied'
+   * and bumped the campaign KPI — manufacturing counterparty agreement out
+   * of thin air (owner: "did it invent the meetings?", 2026-08-28; migration
+   * 0175 deleted the accumulated phantoms). A system with no delivery
+   * channel cannot claim a response. The row stays a PROPOSAL; deliberate
+   * out-of-band bookings (agreed by phone) go through meetings.create or
+   * reschedule, where a human asserts the agreement themselves.
+   */
+  return { sent: false, scheduledAt: null, reason: acc ? "provider_error" : "no_calendar_connected" };
 }
 
 function startOfUtcDay(): Date {

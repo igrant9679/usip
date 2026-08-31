@@ -3881,6 +3881,55 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0175: delete phantom meetings and revert the lies they seeded ────────
+  // Meeting Autopilot's auto mode, with no calendar connected, "booked
+  // locally": status 'scheduled' + a scheduledAt the attendee never received,
+  // then attributed a meeting_booked signal that flipped the prospect to
+  // sequenceStatus 'replied', bumped are_campaigns.meetingsBooked, and
+  // promoted the prospect to CRM — counterparty agreement manufactured out
+  // of thin air. Owner (2026-08-28): "You can delete phantom meeting data."
+  // Phantom = AI-created, invite never sent, no calendar event, presented as
+  // scheduled (or since cancelled). Order matters: the KPI decrement, queue
+  // revert, and signal delete all JOIN through the meetings rows, so the
+  // meetings delete comes last. CRM promotions are deliberately NOT deleted
+  // (real-person records with cascading references) — reported instead.
+  {
+    name: "0175_delete_phantom_meetings.sql",
+    statements: [
+      // 1. Give back the campaign KPI credit the phantoms earned.
+      "UPDATE `are_campaigns` c JOIN (" +
+        "SELECT s.campaignId AS cid, COUNT(*) AS n FROM `are_signal_log` s " +
+        "JOIN `meetings` m ON JSON_EXTRACT(s.rawPayload, '$.meetingId') = m.id " +
+        "WHERE s.signalType = 'meeting_booked' AND m.source = 'ai' " +
+        "AND m.inviteSent = 0 AND m.calendarEventId IS NULL " +
+        "AND m.status IN ('scheduled','cancelled') GROUP BY s.campaignId" +
+      ") d ON d.cid = c.id " +
+        "SET c.meetingsBooked = GREATEST(0, c.meetingsBooked - d.n)",
+      // 2. Un-mark prospects a phantom flipped to 'replied' — unless a real
+      //    email_reply signal independently justifies the status.
+      "UPDATE `prospect_queue` pq " +
+        "JOIN `are_signal_log` s ON s.prospectQueueId = pq.id AND s.signalType = 'meeting_booked' " +
+        "JOIN `meetings` m ON JSON_EXTRACT(s.rawPayload, '$.meetingId') = m.id " +
+        "SET pq.sequenceStatus = 'enrolled' " +
+        "WHERE pq.sequenceStatus = 'replied' " +
+        "AND m.source = 'ai' AND m.inviteSent = 0 AND m.calendarEventId IS NULL " +
+        "AND m.status IN ('scheduled','cancelled') " +
+        "AND NOT EXISTS (SELECT 1 FROM `are_signal_log` s2 " +
+        "WHERE s2.prospectQueueId = pq.id AND s2.signalType = 'email_reply')",
+      // 3. Delete the phantom meeting_booked signals themselves.
+      "DELETE s FROM `are_signal_log` s " +
+        "JOIN `meetings` m ON JSON_EXTRACT(s.rawPayload, '$.meetingId') = m.id " +
+        "WHERE s.signalType = 'meeting_booked' AND m.source = 'ai' " +
+        "AND m.inviteSent = 0 AND m.calendarEventId IS NULL " +
+        "AND m.status IN ('scheduled','cancelled')",
+      // 4. Delete the phantom meetings. Scheduled EMAIL data (the campaign
+      //    send queue) is untouched by every statement here — explicitly out
+      //    of scope per the owner's authorization.
+      "DELETE FROM `meetings` WHERE source = 'ai' AND inviteSent = 0 " +
+        "AND calendarEventId IS NULL AND status IN ('scheduled','cancelled')",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

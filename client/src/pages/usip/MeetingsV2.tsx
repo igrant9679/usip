@@ -121,8 +121,15 @@ export default function MeetingsV2() {
   const approveSend = trpc.meetings.approveAndSend.useMutation({
     onSuccess: (r) => {
       invalidateAll();
+      // An invite that was not delivered is not a booking — the proposal is
+      // kept and the user is told exactly why nothing was sent. (The old
+      // message claimed "Meeting booked" with no invite sent — the phantom-
+      // booking fiction removed in migration 0175.)
       if (r.sent) toast.success(`Invite sent for ${fmtDateTime(r.scheduledAt)}`);
-      else toast.success(`Meeting booked for ${fmtDateTime(r.scheduledAt)} — connect a calendar to auto-send the invite`);
+      else if (r.reason === "no_calendar_connected") toast.error("No calendar connected — the invite was not sent and the proposal was kept. Connect a calendar in Settings, or record an agreed meeting manually.");
+      else if (r.reason === "provider_error") toast.error("The calendar provider rejected the invite — nothing was sent; the proposal was kept.");
+      else if (r.reason === "all_times_expired") toast.error("Every proposed time has passed — regenerate the proposal to offer new times.");
+      else toast.error(`Invite not sent (${r.reason ?? "unknown"}) — the proposal was kept.`);
     },
     onError: (e) => toast.error(e.message),
   });
