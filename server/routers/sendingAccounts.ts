@@ -333,18 +333,25 @@ export const sendingAccountsRouter = router({
       .from(sendingAccounts)
       .where(and(eq(sendingAccounts.workspaceId, ctx.workspace.id), eq(sendingAccounts.enabled, true)));
     const { listSendGridDomainDns } = await import("../services/sendgrid");
-    const seenKeys = new Set<string>();
-    const out: Array<{ domain: string; valid: boolean; records: Array<{ type: string; host: string; data: string; valid: boolean }> }> = [];
-    const errors: string[] = [];
+    // Distinct keys across every resolution tier — including the
+    // WORKSPACE-level key (this pool's accounts carry no per-account keys,
+    // which made the first version of this return nothing at all).
+    const keys = new Set<string>();
+    const wsKey = await resolveSendgridKey(db, ctx.workspace.id);
+    if (wsKey) keys.add(wsKey);
     for (const acc of accounts) {
       if (!acc.hasSg) continue;
-      const key = await resolveSendgridKey(db, ctx.workspace.id, undefined, acc.id);
-      if (!key || seenKeys.has(key)) continue;
-      seenKeys.add(key);
+      const k = await resolveSendgridKey(db, ctx.workspace.id, undefined, acc.id);
+      if (k) keys.add(k);
+    }
+    const out: Array<{ domain: string; valid: boolean; records: Array<{ type: string; host: string; data: string; valid: boolean }> }> = [];
+    const errors: string[] = [];
+    for (const key of keys) {
       const res = await listSendGridDomainDns(key);
-      if (!res.ok) { errors.push(`${acc.fromEmail}: ${res.error}`); continue; }
+      if (!res.ok) { errors.push(res.error); continue; }
       for (const d of res.domains) if (!out.some((o) => o.domain === d.domain)) out.push(d);
     }
+    if (keys.size === 0) errors.push("No SendGrid API key is saved for this workspace or its sending accounts.");
     return { domains: out.sort((a, b) => a.domain.localeCompare(b.domain)), errors };
   }),
 
