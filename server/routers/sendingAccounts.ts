@@ -346,7 +346,7 @@ export const sendingAccountsRouter = router({
     }
     const out: Array<{ domain: string; valid: boolean; records: Array<{ type: string; host: string; data: string; valid: boolean }> }> = [];
     const errors: string[] = [];
-    for (const key of keys) {
+    for (const key of Array.from(keys)) {
       const res = await listSendGridDomainDns(key);
       if (!res.ok) { errors.push(res.error); continue; }
       for (const d of res.domains) if (!out.some((o) => o.domain === d.domain)) out.push(d);
