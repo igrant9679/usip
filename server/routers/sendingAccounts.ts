@@ -319,6 +319,36 @@ export const sendingAccountsRouter = router({
   }),
 
   /**
+   * The exact DNS rows SendGrid requires for every authenticated sending
+   * domain in this workspace, straight from SendGrid's API — including
+   * domains whose DNS is still missing (those are the ones the owner needs
+   * the records for). One row set per distinct SendGrid key across the
+   * workspace's enabled accounts.
+   */
+  getDomainAuthDns: adminWsProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    const accounts = await db
+      .select({ id: sendingAccounts.id, fromEmail: sendingAccounts.fromEmail, hasSg: sendingAccounts.sendgridApiKeyEnc })
+      .from(sendingAccounts)
+      .where(and(eq(sendingAccounts.workspaceId, ctx.workspace.id), eq(sendingAccounts.enabled, true)));
+    const { listSendGridDomainDns } = await import("../services/sendgrid");
+    const seenKeys = new Set<string>();
+    const out: Array<{ domain: string; valid: boolean; records: Array<{ type: string; host: string; data: string; valid: boolean }> }> = [];
+    const errors: string[] = [];
+    for (const acc of accounts) {
+      if (!acc.hasSg) continue;
+      const key = await resolveSendgridKey(db, ctx.workspace.id, undefined, acc.id);
+      if (!key || seenKeys.has(key)) continue;
+      seenKeys.add(key);
+      const res = await listSendGridDomainDns(key);
+      if (!res.ok) { errors.push(`${acc.fromEmail}: ${res.error}`); continue; }
+      for (const d of res.domains) if (!out.some((o) => o.domain === d.domain)) out.push(d);
+    }
+    return { domains: out.sort((a, b) => a.domain.localeCompare(b.domain)), errors };
+  }),
+
+  /**
    * Enable/change/disable inbound reply routing. Setting a domain mints the
    * unguessable token on first use (the token IS the webhook's auth — the
    * endpoint is public because Inbound Parse cannot sign). Clearing the

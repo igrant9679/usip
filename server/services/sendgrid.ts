@@ -295,6 +295,57 @@ export type SendGridDomainList =
   | { ok: true; domains: string[] }
   | { ok: false; error: string };
 
+/**
+ * The full DNS record set SendGrid requires for each authenticated domain —
+ * exact host/type/value rows straight from `/v3/whitelabel/domains`, never
+ * templates. Unlike listSendGridAuthenticatedDomains this keeps INVALID
+ * domains too: a domain whose DNS is missing is precisely the one the owner
+ * needs the records for (Home's "Authenticate domains" nudge, owner ask
+ * 2026-09-02: "the exact DNS record values for each email").
+ */
+export type SendGridDomainDns =
+  | { ok: true; domains: Array<{ domain: string; valid: boolean; records: Array<{ type: string; host: string; data: string; valid: boolean }> }> }
+  | { ok: false; error: string };
+
+export async function listSendGridDomainDns(apiKey: string): Promise<SendGridDomainDns> {
+  const key = apiKey?.trim();
+  if (!key) return { ok: false, error: "API key is required" };
+  try {
+    const res = await fetch("https://api.sendgrid.com/v3/whitelabel/domains?limit=100", {
+      headers: { Authorization: `Bearer ${key}` },
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => null);
+      return { ok: false, error: describeSendGridError(res.status, body) };
+    }
+    const body = await res.json().catch(() => null);
+    if (!Array.isArray(body)) return { ok: false, error: "SendGrid returned an unexpected response shape" };
+    const domains = body.flatMap((d) => {
+      const r = d as Record<string, unknown>;
+      const domain = typeof r.domain === "string" ? r.domain.trim().toLowerCase() : "";
+      if (!domain) return [];
+      // `dns` is an object whose keys vary by setup (mail_cname/dkim1/dkim2
+      // for automated security; mail_server/subdomain_spf/dkim for legacy).
+      // Render whatever SendGrid sent rather than assuming a shape.
+      const dns = (r.dns && typeof r.dns === "object" ? r.dns : {}) as Record<string, unknown>;
+      const records = Object.values(dns).flatMap((rec) => {
+        const x = rec as Record<string, unknown>;
+        if (typeof x?.host !== "string" || typeof x?.data !== "string") return [];
+        return [{
+          type: String(x.type ?? "cname").toUpperCase(),
+          host: x.host,
+          data: x.data,
+          valid: x.valid === true || x.valid === "true",
+        }];
+      });
+      return [{ domain, valid: r.valid === true || r.valid === "true", records }];
+    });
+    return { ok: true, domains };
+  } catch (e) {
+    return { ok: false, error: `Could not reach SendGrid: ${(e as Error).message}` };
+  }
+}
+
 export async function listSendGridAuthenticatedDomains(apiKey: string): Promise<SendGridDomainList> {
   const key = apiKey?.trim();
   if (!key) return { ok: false, error: "API key is required" };
