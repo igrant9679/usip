@@ -80,6 +80,12 @@ const helpKeys = new Set([...navHelpBlock.matchAll(/"(\/[^"]*)":/g)].map((m) => 
  * fact rather than something the next reader has to rediscover.
  */
 const INERT_KEYS = new Set([
+  // Phase 4 folds (2026-09-02): these pages left the registry — reached by
+  // redirect (saved-*), by a SubNav (sender pools, deliverability,
+  // suppressions), or kept only for editor tools the absorbing page links to
+  // (email-drafts, ai-pipeline, data-health, pipeline-alerts). Copy stays.
+  "/email-drafts", "/ai-pipeline", "/data-health", "/pipeline-alerts",
+  "/v2/saved-people", "/v2/saved-companies", "/email-builder", "/snippets",
   "/v2/pipeline",        // Pipeline has no sidebar link
   "/v2/opportunities",   // reached from the pipeline board
   "/sending-accounts",   // Engage SubNav

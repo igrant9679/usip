@@ -64,7 +64,7 @@ import DealsV2 from "@/pages/usip/DealsV2";
 import WorkflowsV2 from "@/pages/usip/WorkflowsV2";
 import AnalyticsV2 from "@/pages/usip/AnalyticsV2";
 import EmailsV2 from "@/pages/usip/EmailsV2";
-import SavedRecordsV2 from "@/pages/usip/SavedRecordsV2";
+import SavedRedirect from "@/pages/usip/SavedRedirect";
 import FormsV2 from "@/pages/usip/FormsV2";
 import PublicForm from "@/pages/PublicForm";
 import BookingPage from "@/pages/BookingPage";
@@ -549,8 +549,9 @@ function Router() {
       <Route path="/c/:slug"><ChatPage /></Route>
       <Route path="/v2/landing-pages"><AuthGate><LandingPages /></AuthGate></Route>
       <Route path="/v2/chat"><AuthGate><ChatAgents /></AuthGate></Route>
-      <Route path="/v2/saved-people"><AuthGate><SavedRecordsV2 entityType="people" /></AuthGate></Route>
-      <Route path="/v2/saved-companies"><AuthGate><SavedRecordsV2 entityType="companies" /></AuthGate></Route>
+      {/* Saved People / Companies were Lists filtered by type — folded into Lists (phase 4, 2026-09-02); the type survives the redirect. */}
+      <Route path="/v2/saved-people"><AuthGate><SavedRedirect entityType="people" /></AuthGate></Route>
+      <Route path="/v2/saved-companies"><AuthGate><SavedRedirect entityType="companies" /></AuthGate></Route>
       <Route path="/v2/deliverability"><AuthGate><Deliverability /></AuthGate></Route>
       <Route path="/help"><AuthGate><HelpCenter /></AuthGate></Route>
       {/* Article cards in the Help Center have always linked here; the route

@@ -248,7 +248,7 @@ export default function DealsV2() {
 
           {/* At-risk alerts */}
           {activeAlerts.length > 0 && (
-            <div className="rounded-lg border border-amber-300/60 bg-amber-50/50 dark:bg-amber-900/10 px-4 py-2.5 shadow-sm">
+            <div id="alerts" className="rounded-lg border border-amber-300/60 bg-amber-50/50 dark:bg-amber-900/10 px-4 py-2.5 shadow-sm">
               <div className="text-[12px] font-medium flex items-center gap-1.5 text-amber-700 dark:text-amber-300 mb-1"><AlertTriangle className="size-3.5" /> {activeAlerts.length} deal{activeAlerts.length === 1 ? "" : "s"} need attention</div>
               <div className="flex flex-wrap gap-1.5">
                 {activeAlerts.slice(0, 6).map((a: any, i: number) => (

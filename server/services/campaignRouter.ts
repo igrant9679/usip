@@ -220,10 +220,10 @@ export async function runCampaignRoutingAllWorkspaces(): Promise<{ workspaces: n
   if (!db) return out;
   const rows = await db.select().from(workspaceSettings).where(ne(workspaceSettings.campaignRoutingMode, "off"));
   const { archivedWorkspaceIds } = await import("../_core/workspaceArchive");
-  const archived = await archivedWorkspaceIds();
+  const archivedWs = await archivedWorkspaceIds();
   const dayStart = startOfUtcDay();
   for (const ws of rows) {
-    if (archived.has(ws.workspaceId)) continue;
+    if (archivedWs.has(ws.workspaceId)) continue; // archived workspaces are frozen
     try {
       const mode = ws.campaignRoutingMode as "approval" | "auto";
       const cap = ws.campaignRoutingDailyCap ?? 25;

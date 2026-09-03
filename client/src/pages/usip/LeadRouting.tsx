@@ -69,6 +69,7 @@ export default function LeadRouting() {
         </Button>
       </PageHeader>
       <SubNav items={[
+        { href: "/lead-scoring", label: "Lead Scoring", title: "The grade thresholds that rank leads — one workflow with routing" },
         { href: "/territories", label: "Territories", title: "Define territories used by routing rules (geo / industry / vertical)" },
       ]} />
 

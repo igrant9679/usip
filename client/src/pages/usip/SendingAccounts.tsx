@@ -946,6 +946,7 @@ export default function SendingAccounts() {
         </PageHeader>
         <SubNav items={[
           { href: "/sender-pools", label: "Sender Pools", title: "Group sending accounts into pools for sequence load-balancing" },
+          { href: "/v2/deliverability", label: "Deliverability", title: "Domain health, warmup, bounce and spam monitoring across these accounts" },
           { href: "/connected-accounts", label: "Connected Accounts", title: "Connected mailboxes and calendars used for sync (read-side)" },
           { href: "/email-suppressions", label: "Opt-Outs", title: "Opt-outs and global suppression list — required for compliance" },
           { href: "/v2/settings/social-accounts", label: "Social Accounts", title: "Connect LinkedIn and messaging accounts for prospecting and DMs" },

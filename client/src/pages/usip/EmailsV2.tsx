@@ -20,7 +20,7 @@
  */
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { Link } from "wouter";
+import { Link, useSearch } from "wouter";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
@@ -250,9 +250,12 @@ export default function EmailsV2() {
   const accent = useAccentColor();
   const utils = trpc.useUtils();
 
-  const [direction, setDirection] = useState("all");
-  const [source, setSource] = useState("all");
-  const [status, setStatus] = useState("all");
+  // The three filters initialise from the URL (phase 4): Email Drafts and
+  // AI Pipeline became saved filters of this page — /v2/emails?status=…
+  const initial = new URLSearchParams(useSearch());
+  const [direction, setDirection] = useState(initial.get("direction") || "all");
+  const [source, setSource] = useState(initial.get("source") || "all");
+  const [status, setStatus] = useState(initial.get("status") || "all");
   const [search, setSearch] = useState("");
   const [searchDebounced, setSearchDebounced] = useState("");
   const [page, setPage] = useState(0);
@@ -482,6 +485,9 @@ export default function EmailsV2() {
                         <Button size="sm" variant="outline" className="h-7 gap-1" disabled={send.isPending} onClick={() => send.mutate({ id: row.draftId! })}><Send className="size-3.5" /> Send</Button>
                         <Button size="icon" variant="ghost" className="size-7" title="Approve" onClick={() => approve.mutate({ id: row.draftId! })}><Check className="size-4 text-emerald-500" /></Button>
                         <Button size="icon" variant="ghost" className="size-7" title="Reject" onClick={() => reject.mutate({ id: row.draftId! })}><X className="size-4 text-muted-foreground" /></Button>
+                        {/* Per-draft editor tools (subject A/B, research context, regenerate) still live on the
+                            original pages until they are ported here (phase 4). */}
+                        <Link href={row.status === "ai_pending_review" ? "/ai-pipeline" : "/email-drafts"} title="Open the full editor: subject A/B, research context, regenerate" className="inline-flex items-center justify-center size-7 rounded-md hover:bg-muted text-muted-foreground" onClick={(e) => e.stopPropagation()}><ExternalLink className="size-3.5" /></Link>
                       </div>
                     )}
                     {row.status === "approved" && row.draftId && (

@@ -96,12 +96,18 @@ export const TOOLS: Tool[] = [
   // still find "Import Contacts" by name and land on its tab.
   { href: "/v2/data-enrichment?tab=import-contacts", label: "Import Contacts", icon: Upload, group: "Prospecting",
     description: "Bring in a CSV of people or prospects.", keywords: ["csv", "upload"] },
-  { href: "/data-health", label: "Data Health", icon: BarChart3, group: "Prospecting",
-    description: "Duplicates, gaps, and import-mapping audits." },
-  { href: "/v2/saved-people", label: "Saved People", icon: Users, group: "Prospecting",
-    description: "People you bookmarked while sourcing." },
-  { href: "/v2/saved-companies", label: "Saved Companies", icon: Building2, group: "Prospecting",
-    description: "Companies you bookmarked while sourcing." },
+  // Folded into Data Enrichment (phase 4, 2026-09-02): the standalone page
+  // read the same query as the Data-health tab. The route stays for the
+  // scheduled-jobs builder the tab links out to.
+  { href: "/v2/data-enrichment?tab=data-health-center", label: "Data Health", icon: BarChart3, group: "Prospecting",
+    description: "Duplicates, gaps, and import-mapping audits — a tab of Data Enrichment.", keywords: ["data quality", "duplicates"] },
+  // Saved People / Saved Companies were the Lists page filtered by type —
+  // same router, same detail page. Folded into Lists (phase 4); the old
+  // routes redirect with the type preserved.
+  { href: "/v2/lists?type=people", label: "Saved People", icon: Users, group: "Prospecting",
+    description: "Your people lists — bookmarked while sourcing.", keywords: ["bookmarks", "lists"] },
+  { href: "/v2/lists?type=companies", label: "Saved Companies", icon: Building2, group: "Prospecting",
+    description: "Your company lists — bookmarked while sourcing.", keywords: ["bookmarks", "lists"] },
   // Inbound capture is prospecting too — a visitor, a form fill, a chat is a
   // person arriving instead of a person found.
   { href: "/v2/website-visitors", label: "Website Visitors", icon: Globe, group: "Prospecting",
@@ -126,8 +132,10 @@ export const TOOLS: Tool[] = [
     description: "Named sets of people or companies for targeting." },
   { href: "/v2/tasks", label: "Tasks", icon: ListChecks, group: "CRM",
     description: "Your to-dos, including AI-proposed drafts." },
-  { href: "/pipeline-alerts", label: "Pipeline Alerts", icon: AlertTriangle, group: "CRM",
-    description: "Stuck-deal and at-risk warnings (also shown on Deals)." },
+  // The alerts strip on Deals shows the same rows (phase 4); the route stays
+  // for its in-page deal actions.
+  { href: "/v2/deals#alerts", label: "Pipeline Alerts", icon: AlertTriangle, group: "CRM",
+    description: "Stuck-deal and at-risk warnings — the strip at the top of Deals.", keywords: ["stuck", "at risk"] },
 
   /* ── Outreach — 1:1, sequenced, per-person copy; replies and meetings ── */
   { href: "/are", label: "Revenue Engine", icon: Bot, group: "Outreach", primary: true,
@@ -146,12 +154,14 @@ export const TOOLS: Tool[] = [
     description: "LinkedIn, WhatsApp and social DMs in one place.", keywords: ["multichannel"] },
   { href: "/social", label: "Social", icon: Share2, group: "Outreach",
     description: "LinkedIn outreach: invites, DMs, and replies.", keywords: ["linkedin", "multichannel"] },
-  // Two views of the same drafts table as Emails — kept reachable until the
-  // Emails page absorbs them as saved filters.
-  { href: "/ai-pipeline", label: "AI Pipeline", icon: Sparkles, group: "Outreach",
-    description: "Approve or edit AI-written outreach before it sends (a filter of Emails).", keywords: ["approve", "queue", "drafts"] },
-  { href: "/email-drafts", label: "Email Drafts", icon: FileText, group: "Outreach",
-    description: "Review, edit, and send queued email drafts (a filter of Emails)." },
+  // Both were views of the same drafts table as Emails (phase 4): they are
+  // now saved filters of it. The old routes stay for the per-draft editor
+  // tools (subject A/B, research context, regenerate) until those are
+  // ported into the Emails drawer, which links to them.
+  { href: "/v2/emails?status=awaiting&source=ai_draft", label: "AI Pipeline", icon: Sparkles, group: "Outreach",
+    description: "AI-written outreach waiting for your approval — a filter of Emails.", keywords: ["approve", "queue", "drafts"] },
+  { href: "/v2/emails?status=awaiting&source=sequence", label: "Email Drafts", icon: FileText, group: "Outreach",
+    description: "Sequence drafts waiting for review — a filter of Emails.", keywords: ["drafts", "review"] },
 
   /* ── Marketing — one message to a segment ────────────────────────────── */
   // Not on the rail: the Campaigns product does not send yet (Launch flips a
@@ -159,11 +169,14 @@ export const TOOLS: Tool[] = [
   { href: "/campaigns", label: "Campaigns", icon: Megaphone, group: "Marketing",
     description: "Broadcast one message to a segment. Not yet sending — audiences and copy can be prepared.", keywords: ["broadcast", "bulk", "newsletter"] },
   { href: "/segments", label: "Segments", icon: Filter, group: "Marketing",
-    description: "Saved audience filters for broadcasts." },
-  { href: "/email-builder", label: "Email Builder", icon: LayoutTemplate, group: "Marketing",
-    description: "Design reusable HTML email templates block by block.", keywords: ["templates"] },
-  { href: "/snippets", label: "Snippets", icon: PenLine, group: "Marketing",
-    description: "Reusable copy blocks: openers, CTAs, objection handlers." },
+    description: "Saved audience filters for broadcasts and auto-enroll rules." },
+  // Live but unregistered until phase 4: the rules that auto-enroll matching
+  // people into sequences — the one consumer Segments actually has today.
+  { href: "/segment-rules", label: "Segment Rules", icon: GitFork, group: "Marketing",
+    description: "Auto-enroll people who match a segment into a sequence.", keywords: ["auto-enroll", "automation"] },
+  // Email Builder and Snippets have no consumer outside their own pages
+  // (audit 2026-09-02): hidden from the registry, routes kept, until the
+  // Broadcasts product exists to use them.
 
   /* ── Proposals — price it, propose it, sign it ───────────────────────── */
   { href: "/proposals", label: "Proposals", icon: ClipboardList, group: "Proposals", primary: true,
@@ -204,23 +217,28 @@ export const TOOLS: Tool[] = [
   /* ── Configuration — cross-cutting ───────────────────────────────────── */
   { href: "/v2/settings/profile", label: "Settings", icon: Settings, group: "Configuration",
     description: "Profile, workspace, integrations, billing — everything.", keywords: ["preferences", "api keys"] },
-  { href: "/sending-accounts", label: "Sending Accounts", icon: Mail, group: "Configuration",
-    description: "Mailboxes and API senders (SMTP, SendGrid) with caps.", keywords: ["sendgrid", "smtp"] },
+  // Email sending is ONE concern spread over four pages that SubNav-link
+  // each other (Sending Accounts → Sender Pools · Deliverability · Opt-Outs).
+  // One registry entry names the cluster; the others stay findable by name.
+  { href: "/sending-accounts", label: "Email Sending", icon: Mail, group: "Configuration",
+    description: "Sending accounts, sender pools, deliverability and suppressions — one cluster.", keywords: ["sendgrid", "smtp", "sending accounts", "sender pools", "deliverability", "suppressions", "opt-outs"] },
   { href: "/sender-pools", label: "Sender Pools", icon: Network, group: "Configuration",
-    description: "Rotate campaign sends across multiple senders." },
+    description: "Rotate campaign sends across multiple senders (part of Email Sending)." },
   { href: "/v2/deliverability", label: "Deliverability", icon: MailWarning, group: "Configuration",
-    description: "Domain health, warmup, bounce and spam monitoring." },
+    description: "Domain health, warmup, bounce and spam monitoring (part of Email Sending)." },
   { href: "/email-suppressions", label: "Suppressions", icon: ShieldCheck, group: "Configuration",
-    description: "Unsubscribes and do-not-contact addresses." },
+    description: "Unsubscribes and do-not-contact addresses (part of Email Sending)." },
   { href: "/connected-accounts", label: "Connected Accounts", icon: Plug, group: "Configuration",
     description: "OAuth links: mailboxes, calendars, LinkedIn." },
   { href: "/settings/linkedin-limits", label: "LinkedIn Limits", icon: Linkedin, group: "Configuration",
     description: "Per-account caps, pacing and working hours that keep LinkedIn accounts safe.",
     keywords: ["throttle", "rate limit", "invites", "ban", "restriction", "warmup"] },
+  // Lead handling: scoring and routing are one router and one workflow; the
+  // two pages SubNav-link each other (phase 4).
   { href: "/lead-scoring", label: "Lead Scoring", icon: Target, group: "Configuration",
-    description: "Tune the grade thresholds that rank leads." },
+    description: "Tune the grade thresholds that rank leads (with Lead Routing beside it).", keywords: ["lead handling"] },
   { href: "/lead-routing", label: "Lead Routing", icon: Sparkles, group: "Configuration",
-    description: "Assignment rules for new leads." },
+    description: "Assignment rules for new leads (with Lead Scoring beside it).", keywords: ["lead handling", "assignment"] },
   // How the AI writes and decides — configuration, not a daily surface.
   { href: "/brand-voice", label: "Brand Voice", icon: Mic2, group: "Configuration",
     description: "Teach the AI how your company sounds.", keywords: ["ai"] },

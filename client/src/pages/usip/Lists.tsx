@@ -8,7 +8,7 @@
  * lists hold accounts. Clicking a list opens its detail at /v2/lists/:id.
  */
 import { useMemo, useState } from "react";
-import { useLocation } from "wouter";
+import { useLocation, useSearch } from "wouter";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
@@ -149,7 +149,12 @@ export default function Lists() {
 
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState("modified");
-  const [openSections, setOpenSections] = useState<Set<string>>(new Set(["People", "Companies"]));
+  // ?type=people|companies (the Saved People / Saved Companies fold, phase 4)
+  // opens just that section so a redirected bookmark lands where it pointed.
+  const typeParam = new URLSearchParams(useSearch()).get("type");
+  const [openSections, setOpenSections] = useState<Set<string>>(
+    new Set(typeParam === "people" ? ["People"] : typeParam === "companies" ? ["Companies"] : ["People", "Companies"]),
+  );
   const [createOpen, setCreateOpen] = useState(false);
   const [newObject, setNewObject] = useState<"People" | "Companies">("People");
   const [newName, setNewName] = useState("");
