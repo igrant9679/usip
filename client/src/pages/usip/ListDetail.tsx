@@ -11,6 +11,7 @@
  */
 import { useMemo, useState } from "react";
 import { useParams, useLocation, Link } from "wouter";
+import { AddToMenu } from "@/components/usip/AddToMenu";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
 import { LinkedInUpdateIndicator, useEnrichJob } from "@/components/usip/people/LinkedInEnrichment";
 import { trpc } from "@/lib/trpc";
@@ -152,6 +153,12 @@ export default function ListDetail() {
             )}
             <span className="text-[12px] text-muted-foreground">{members.length} {members.length === 1 ? "record" : "records"}</span>
             <div className="flex-1" />
+            {/* A list is a targeting set — it should be one click from
+                outreach (seams audit, phase 2). Whole list, People lists only. */}
+            {memberProspectIds.length > 0 && (
+              <AddToMenu prospectIds={memberProspectIds} label={`Add all ${memberProspectIds.length} to…`} align="end"
+                trigger={<Button variant="outline" size="sm" className="h-7 gap-1.5"><Plus className="size-3.5" /> Add all {memberProspectIds.length} to… <ChevronDown className="size-3 opacity-70" /></Button>} />
+            )}
             <Button variant="outline" size="sm" className="h-7 gap-1.5" onClick={() => setLocation("/v2/data-enrichment?tab=import-contacts")}><Upload className="size-3.5" /> Import</Button>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>

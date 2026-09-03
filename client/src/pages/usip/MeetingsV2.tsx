@@ -43,6 +43,8 @@ type Meeting = {
   ownerUserId?: number | null;
   relatedType?: string | null;
   relatedId?: number | null;
+  /** The reply that produced this meeting, when a positive reply booked it. */
+  sourceReplyId?: number | null;
   contactName?: string | null;
   contactEmail?: string | null;
   company?: string | null;
@@ -175,6 +177,7 @@ export default function MeetingsV2() {
         {m.contactName && <span>{m.contactName}</span>}
         {m.company && <span className="inline-flex items-center gap-1"><Building2 className="size-3" /> {m.company}</span>}
         {href && <Link href={href} className="inline-flex items-center gap-1 hover:underline"><Link2 className="size-3" /> {m.relatedType}</Link>}
+        {m.sourceReplyId && <Link href={`/v2/conversations?reply=${m.sourceReplyId}`} className="inline-flex items-center gap-1 hover:underline"><Link2 className="size-3" /> the reply that booked this</Link>}
       </div>
     );
   };

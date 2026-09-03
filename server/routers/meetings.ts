@@ -99,7 +99,20 @@ export const meetingsRouter = router({
         .orderBy(desc(meetings.createdAt));
       if (input?.status) rows = rows.filter((m) => m.status === input.status);
       if (input?.ownerOnly) rows = rows.filter((m) => m.ownerUserId === ctx.user.id);
-      return rows;
+      // The reply that produced each meeting (emailReplies.meetingId is set
+      // when a positive reply's action books one). A meeting with no way back
+      // to the conversation was one of the audit's missing next-step links.
+      const { emailReplies } = await import("../../drizzle/schema");
+      const { inArray: inArr } = await import("drizzle-orm");
+      const ids = rows.map((m) => m.id);
+      const sourceByMeeting = new Map<number, number>();
+      if (ids.length > 0) {
+        const links = await db.select({ id: emailReplies.id, meetingId: emailReplies.meetingId })
+          .from(emailReplies)
+          .where(and(eq(emailReplies.workspaceId, ctx.workspace.id), inArr(emailReplies.meetingId, ids)));
+        for (const l of links) if (l.meetingId && !sourceByMeeting.has(l.meetingId)) sourceByMeeting.set(l.meetingId, l.id);
+      }
+      return rows.map((m) => ({ ...m, sourceReplyId: sourceByMeeting.get(m.id) ?? null }));
     }),
 
   stats: workspaceProcedure.query(async ({ ctx }) => {

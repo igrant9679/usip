@@ -41,6 +41,9 @@ type Reply = {
   contactId?: number | null;
   leadId?: number | null;
   accountId?: number | null;
+  /** Campaign linkage (migration 0174) — never rendered until phase 2. */
+  prospectId?: number | null;
+  campaignId?: number | null;
   replyClass?: string | null;
   sentiment?: string | null;
   classConfidence?: number | null;
@@ -91,6 +94,8 @@ function recordHref(r: Reply): string | null {
   if (r.contactId) return `/contacts/${r.contactId}`;
   if (r.leadId) return `/leads/${r.leadId}`;
   if (r.accountId) return `/accounts/${r.accountId}`;
+  // A campaign reply's sender is a People row — it had no link at all before.
+  if (r.prospectId) return `/prospects/${r.prospectId}`;
   return null;
 }
 
@@ -439,6 +444,9 @@ function SocialDialog({ reply, onClose, onChanged }: { reply: Reply | null; onCl
         <DialogFooter className="flex-wrap gap-2">
           {recordHref(reply) && (
             <Link href={recordHref(reply)!}><Button variant="outline"><Link2 className="size-3.5 mr-1.5" /> Open record</Button></Link>
+          )}
+          {reply.campaignId && (
+            <Link href={`/are/campaigns/${reply.campaignId}`}><Button variant="outline"><Link2 className="size-3.5 mr-1.5" /> Open campaign</Button></Link>
           )}
           <div className="flex-1" />
           <Button disabled={markHandled.isPending} onClick={() => markHandled.mutate({ id: reply.id })}>

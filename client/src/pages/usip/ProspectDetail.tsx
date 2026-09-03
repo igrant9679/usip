@@ -16,7 +16,7 @@ import { useState } from "react";
 import { useParams, Link, useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { Shell, PageHeader } from "@/components/usip/Shell";
-import { AddToSequenceButton } from "@/components/usip/AddToSequenceButton";
+import { AddToMenu } from "@/components/usip/AddToMenu";
 import { ProfileImageUploader, ProfileImageSourceBadge } from "@/components/usip/ProspectAvatar";
 import { LinkedInEnrichmentFullPanel } from "@/components/usip/people/LinkedInEnrichment";
 import { ProspectScoringPanel } from "@/components/usip/scoring/ProspectScoringPanel";
@@ -133,7 +133,7 @@ export default function ProspectDetail() {
         <Link href="/prospects">
           <Button variant="ghost" size="sm" className="gap-1.5"><ArrowLeft className="size-3.5" /> Back to list</Button>
         </Link>
-        <AddToSequenceButton entityType="prospect" entityId={id} />
+        <AddToMenu prospectIds={[id]} />
         <Button variant="outline" size="sm" onClick={() => reEnrich.mutate({ id })} disabled={reEnrich.isPending} className="gap-1.5">
           {reEnrich.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
           Re-enrich

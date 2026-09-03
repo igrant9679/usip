@@ -9,6 +9,7 @@
 import { useMemo, useState } from "react";
 import { useRoute, useLocation } from "wouter";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
+import { AddToMenu } from "@/components/usip/AddToMenu";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Button } from "@/components/ui/button";
@@ -92,7 +93,13 @@ export default function CompanyProfile() {
             </div>
             <div className="flex items-center gap-2 shrink-0">
               {canManage && <Button size="sm" className="gap-1.5" disabled={enrich.isPending} onClick={() => enrich.mutate({ accountId: id })}><RefreshCw className={`size-3.5 ${enrich.isPending ? "animate-spin" : ""}`} /> Enrich</Button>}
-              <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setLocation(`/v2/people`)}><Sparkles className="size-3.5" /> Find people</Button>
+              {/* Put this company's people into outreach from here (seams
+                  audit, phase 2) — the profile could only "Find people" before,
+                  which opened People unfiltered and enrolled no one. */}
+              {(contacts ?? []).length > 0 && (
+                <AddToMenu contactIds={(contacts ?? []).map((x: any) => x.id)} label={`Add ${(contacts ?? []).length} people to…`} />
+              )}
+              <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setLocation(`/v2/people?q=${encodeURIComponent(c.name ?? "")}`)}><Sparkles className="size-3.5" /> Find people</Button>
               {isAdmin && <Button size="sm" variant="outline" className="gap-1.5 text-red-600" onClick={() => { confirmAction({ title: `Archive ${c.name}?`, description: "The company is hidden from active views. You can restore it later.", confirmLabel: "Archive", destructive: false }, () => { archive.mutate({ accountId: id }); }); }}><Archive className="size-3.5" /></Button>}
             </div>
           </div>

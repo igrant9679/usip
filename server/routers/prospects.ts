@@ -36,6 +36,29 @@ import { SWEEP_DAILY_CAP_MAX, SWEEP_DAILY_CAP_MIN } from "@shared/enrichmentLimi
 import { promoteProspectRow } from "../services/prospectPromotion";
 
 export const prospectsRouter = router({
+  /**
+   * Where is each of these people right now? Active ARE campaigns and active
+   * sequences, batched for a page of rows — the reverse link every person
+   * surface was missing (seams audit, phase 2): you could put someone into
+   * outreach and never see, from their row, that you had.
+   */
+  enrollmentsFor: workspaceProcedure
+    .input(z.object({ ids: z.array(z.number().int().positive()).min(1).max(200) }))
+    .query(async ({ ctx, input }) => {
+      const { activeCampaignsForProspects, activeSequencesForProspects } = await import("../services/crossEngineEnrollment");
+      const [campaigns, seqs] = await Promise.all([
+        activeCampaignsForProspects(ctx.workspace.id, input.ids),
+        activeSequencesForProspects(ctx.workspace.id, input.ids),
+      ]);
+      const out: Record<number, { campaigns: Array<{ campaignId: number; campaignName: string; sequenceStatus: string }>; sequences: Array<{ sequenceId: number; sequenceName: string; status: string; currentStep: number }> }> = {};
+      for (const id of input.ids) {
+        const c = campaigns.get(id) ?? [];
+        const s = seqs.get(id) ?? [];
+        if (c.length || s.length) out[id] = { campaigns: c.map(({ campaignId, campaignName, sequenceStatus }) => ({ campaignId, campaignName, sequenceStatus })), sequences: s };
+      }
+      return out;
+    }),
+
   /** Fetch a single prospect (powers the /prospects/:id detail page). */
   get: workspaceProcedure
     .input(z.object({ id: z.number().int() }))

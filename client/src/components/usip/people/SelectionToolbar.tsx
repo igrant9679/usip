@@ -18,6 +18,7 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
+import { AddToMenu } from "@/components/usip/AddToMenu";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
@@ -97,7 +98,10 @@ export function SelectionToolbar({
         <Mail className="size-4" /> Email
       </Button>
 
-      <SequenceMenu selectedIds={selectedIds} />
+      {/* The one outreach action: Campaign · Sequence · List (seams audit, phase 2). */}
+      <AddToMenu prospectIds={selectedIds} label="Add to…" trigger={
+        <Button variant="ghost" size="sm" className="gap-1.5"><Send className="size-4" /> Add to… <ChevronDown className="size-3 opacity-60" /></Button>
+      } />
 
       <CreateTasksMenu selectedIds={selectedIds} />
 

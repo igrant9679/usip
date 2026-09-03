@@ -100,7 +100,8 @@ import { DefaultViewMenu } from "@/components/usip/people/DefaultViewMenu";
 import { ResearchAiMenu } from "@/components/usip/people/ResearchAiMenu";
 import { CreateWorkflowMenu } from "@/components/usip/people/CreateWorkflowMenu";
 import { SortMenu } from "@/components/usip/people/SortMenu";
-import { SequenceMenu, AddToListMenu } from "@/components/usip/people/SelectionToolbar";
+import { AddToListMenu } from "@/components/usip/people/SelectionToolbar";
+import { AddToMenu } from "@/components/usip/AddToMenu";
 import { ProspectScoringPanel } from "@/components/usip/scoring/ProspectScoringPanel";
 import { SelectionToolbar } from "@/components/usip/people/SelectionToolbar";
 import { SearchSettingsSheet, type AppliedFilter } from "@/components/usip/people/SearchSettingsSheet";
@@ -354,6 +355,13 @@ export default function People() {
   const liSummaryMap = useMemo(
     () => new Map((liSummaries ?? []).map((s: any) => [s.prospect_id, s])),
     [liSummaries],
+  );
+  // Where each visible person is right now — the "In: campaign" chip
+  // (seams audit, phase 2). One batched call per page, same shape as the
+  // LinkedIn indicators above; returns only people who are in something.
+  const { data: enrollmentMap } = trpc.prospects.enrollmentsFor.useQuery(
+    { ids: visibleIds },
+    { enabled: visibleIds.length > 0 },
   );
 
   // Velocity Priority Scores for the visible rows (batched). Drives the Score
@@ -925,7 +933,7 @@ export default function People() {
                               key === "name" && "sticky left-10 z-10 bg-inherit",
                             )}
                           >
-                            {COLUMN_REGISTRY[key].cell(p, { onAction, changeSummary: liSummaryMap.get(p.id), scoreCell: scoreMap.get(p.id) })}
+                            {COLUMN_REGISTRY[key].cell(p, { onAction, changeSummary: liSummaryMap.get(p.id), scoreCell: scoreMap.get(p.id), enrollments: enrollmentMap })}
                           </td>
                         ))}
                         <td className="border-b border-border/60 px-2 py-1.5" />
@@ -1196,9 +1204,9 @@ function DetailPanel({ p, onClose, onOpenFull }: { p: Prospect; onClose: () => v
             and were already exported with a `trigger` prop for exactly this;
             they were simply never wired up here. */}
         <div className="grid grid-cols-2 gap-2">
-          <SequenceMenu
-            selectedIds={[p.id]}
-            trigger={<Button variant="outline" size="sm" className="gap-1.5 w-full"><Sparkles className="size-4" /> Sequence</Button>}
+          <AddToMenu
+            prospectIds={[p.id]}
+            trigger={<Button variant="outline" size="sm" className="gap-1.5 w-full"><Sparkles className="size-4" /> Add to…</Button>}
           />
           <AddToListMenu
             selectedIds={[p.id]}

@@ -17,7 +17,8 @@ import { ProspectAvatar, type ProfileImage } from "../ProspectAvatar";
 import { isGenericInboxEmail } from "@shared/genericEmail";
 import { CompanyLogo as BrandCompanyLogo } from "../company/CompanyLogo";
 import { LinkedInUpdateIndicator, RowEnrichAction, type LinkedInChangeSummary } from "./LinkedInEnrichment";
-import { AddToListMenu, SequenceMenu } from "./SelectionToolbar";
+import { AddToListMenu } from "./SelectionToolbar";
+import { AddToMenu, EnrollmentChip, type EnrollmentMap } from "@/components/usip/AddToMenu";
 import { ScoreBadge, ScorePopover } from "../scoring/ScoreBadge";
 import {
   DropdownMenu,
@@ -243,6 +244,8 @@ export type ColumnDef = {
 export type ColumnCellCtx = {
   /** Row action handlers, wired by the page. */
   onAction?: (action: string, p: Prospect) => void;
+  /** Where each visible person is right now (batched prospects.enrollmentsFor). */
+  enrollments?: EnrollmentMap;
   /** Compact LinkedIn change summary for this row (People table indicator). */
   changeSummary?: LinkedInChangeSummary | null;
   /** Primary Fit score for this row (batched via scoring.scoreMap). The
@@ -268,6 +271,7 @@ export const COLUMN_REGISTRY: Record<ColumnKey, ColumnDef> = {
             <div className="flex min-w-0 items-center gap-1.5">
               <span className="truncate text-[13px] font-semibold text-foreground">{fullName}</span>
               {ctx.changeSummary ? <LinkedInUpdateIndicator summary={ctx.changeSummary} /> : null}
+              <EnrollmentChip prospectId={p.id} map={ctx.enrollments} />
             </div>
             {p.linkedinUrl ? <LinkedInChip url={p.linkedinUrl} className="mt-0.5" /> : null}
           </div>
@@ -387,12 +391,12 @@ export const COLUMN_REGISTRY: Record<ColumnKey, ColumnDef> = {
         ) : (
           <RowActionButton icon={Mail} label="Send email" title="No email yet — open preview" onClick={() => ctx.onAction?.("email", p)} />
         )}
-        <SequenceMenu
-          selectedIds={[p.id]}
+        <AddToMenu
+          prospectIds={[p.id]}
           trigger={
-            <button type="button" title="Add to sequence" className={rowActionCls}>
+            <button type="button" title="Add to campaign, sequence, or list" className={rowActionCls}>
               <Send className="size-3.5" />
-              <span className="text-[9px] font-medium leading-none whitespace-nowrap">Sequence</span>
+              <span className="text-[9px] font-medium leading-none whitespace-nowrap">Add to…</span>
             </button>
           }
         />

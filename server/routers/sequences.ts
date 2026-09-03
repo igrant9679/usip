@@ -1057,6 +1057,38 @@ export const sequencesRouter = router({
       finalLeadIds = dedupByEmail(finalLeadIds, candLEmails);
       finalProspectIds = dedupByEmail(finalProspectIds, candPEmails);
 
+      // ── The OTHER engine (seams audit, 2026-09-02) ───────────────
+      // A person an ARE campaign is actively working must not also be
+      // sequenced: two engines, two copies, no shared suppression. Resolve
+      // every candidate to its People row and ask the ARE queue.
+      let skippedInCampaign = 0;
+      {
+        const { resolveToPeopleIds, activeCampaignsForProspects } = await import("../services/crossEngineEnrollment");
+        const resolved = await resolveToPeopleIds(ctx.workspace.id, {
+          prospectIds: finalProspectIds, contactIds: finalContactIds, leadIds: finalLeadIds,
+        });
+        const inCampaign = await activeCampaignsForProspects(ctx.workspace.id, resolved.prospectIds);
+        if (inCampaign.size > 0) {
+          // Map back: which candidate ids correspond to a claimed People row.
+          const claimedEmails = new Set<string>();
+          const claimedProspectIds = new Set<number>();
+          const claimedPeople = await db.select({ id: prospects.id, email: prospects.email, linkedContactId: prospects.linkedContactId, linkedLeadId: prospects.linkedLeadId })
+            .from(prospects).where(and(eq(prospects.workspaceId, ctx.workspace.id), inArray(prospects.id, Array.from(inCampaign.keys()))));
+          const claimedContactIds = new Set<number>();
+          const claimedLeadIds = new Set<number>();
+          for (const p of claimedPeople) {
+            claimedProspectIds.add(p.id);
+            if (p.email) claimedEmails.add(p.email.toLowerCase());
+            if (p.linkedContactId) claimedContactIds.add(p.linkedContactId);
+            if (p.linkedLeadId) claimedLeadIds.add(p.linkedLeadId);
+          }
+          const drop = <T extends number>(ids: T[], hit: (id: T) => boolean): T[] => ids.filter((id) => { if (hit(id)) { skippedInCampaign++; return false; } return true; });
+          finalProspectIds = drop(finalProspectIds, (id) => claimedProspectIds.has(id) || claimedEmails.has(candPEmails.get(id) ?? " "));
+          finalContactIds = drop(finalContactIds, (id) => claimedContactIds.has(id) || claimedEmails.has(candCEmails.get(id) ?? " "));
+          finalLeadIds = drop(finalLeadIds, (id) => claimedLeadIds.has(id) || claimedEmails.has(candLEmails.get(id) ?? " "));
+        }
+      }
+
       const now = new Date();
       const rows: any[] = [];
       for (const cid of finalContactIds) rows.push({
@@ -1080,6 +1112,8 @@ export const sequencesRouter = router({
         enrolled: rows.length,
         skippedAlreadyEnrolled,
         blockedInvalidEmail,
+        /** Skipped because an ARE campaign is actively working them. */
+        skippedInCampaign,
       };
     }),
 

@@ -1,5 +1,6 @@
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
+import { AddToMenu } from "@/components/usip/AddToMenu";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -275,6 +276,10 @@ export default function Leads() {
             <Button variant="outline" onClick={() => setSendEmailOpen(true)} className="gap-2">
               <Send className="h-4 w-4 text-blue-500" />Send Email ({selectedIds.size})
             </Button>
+            {/* Outreach for leads: ARE campaign or sequence (seams audit,
+                phase 2). "Add to Campaign" below is the legacy broadcast
+                audience — a different, not-yet-sending product. */}
+            <AddToMenu leadIds={Array.from(selectedIds)} label={`Add to… (${selectedIds.size})`} onDone={() => setSelectedIds(new Set())} />
             <Button variant="outline" onClick={() => setAddToCampaignOpen(true)} className="gap-2">
               <Megaphone className="h-4 w-4 text-orange-500" />Add to Campaign ({selectedIds.size})
             </Button>

@@ -1758,10 +1758,17 @@ export const prospectsRouter = router({
     .input(z.object({
       campaignId: z.number(),
       /** CRM prospect ids (People), not queue row ids. */
-      prospectIds: z.array(z.number().int().positive()).min(1).max(100),
+      prospectIds: z.array(z.number().int().positive()).max(100).default([]),
+      /**
+       * Any person type may enter a campaign (seams audit, phase 2). Contacts
+       * and leads resolve to their People row — the mirror the CRM already
+       * keeps (contacts.personProspectId, leadBridge) — or get one created.
+       */
+      contactIds: z.array(z.number().int().positive()).max(100).default([]),
+      leadIds: z.array(z.number().int().positive()).max(100).default([]),
       /** Generate the sequence once enrichment lands. Off = just queue them. */
       generateSequence: z.boolean().default(true),
-    }))
+    }).refine((v) => v.prospectIds.length + v.contactIds.length + v.leadIds.length > 0, { message: "Pick at least one person." }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
@@ -1772,6 +1779,14 @@ export const prospectsRouter = router({
         .limit(1);
       if (!campaign) throw new TRPCError({ code: "NOT_FOUND", message: "Campaign not found" });
 
+      const { resolveToPeopleIds, activeSequencesForProspects } = await import("../../services/crossEngineEnrollment");
+      const resolved = await resolveToPeopleIds(ctx.workspace.id, input);
+      const skipped: Array<{ prospectId: number; reason: string }> = [];
+      for (const u of resolved.unresolved) {
+        skipped.push({ prospectId: -u.id, reason: `${u.type === "contact" ? "Contact" : "Lead"} ${u.id} has no name, email or LinkedIn to identify them by` });
+      }
+      if (resolved.prospectIds.length === 0) return { added: [], skipped };
+
       const people = await db
         .select({
           id: prospects.id, firstName: prospects.firstName, lastName: prospects.lastName,
@@ -1779,15 +1794,23 @@ export const prospectsRouter = router({
           title: prospects.title, company: prospects.company, companyDomain: prospects.companyDomain,
         })
         .from(prospects)
-        .where(and(eq(prospects.workspaceId, ctx.workspace.id), inArray(prospects.id, input.prospectIds)));
+        .where(and(eq(prospects.workspaceId, ctx.workspace.id), inArray(prospects.id, resolved.prospectIds)));
 
       const { workspaceQueueIdentityIndex, existingClaim } = await import("../../services/are/queueIdentity");
       const index = await workspaceQueueIdentityIndex(ctx.workspace.id);
+      // The other engine's view: a person a Sequence is actively working must
+      // not also be picked up by a campaign. Neither engine checked the other
+      // before 2026-09-02.
+      const inSequence = await activeSequencesForProspects(ctx.workspace.id, people.map((p) => p.id));
 
       const added: Array<{ prospectId: number; queueId: number }> = [];
-      const skipped: Array<{ prospectId: number; reason: string }> = [];
 
       for (const p of people) {
+        const seqHits = inSequence.get(p.id);
+        if (seqHits?.length) {
+          skipped.push({ prospectId: p.id, reason: `In an active sequence ("${seqHits[0].sequenceName}") — exit it first so two engines don't mail them` });
+          continue;
+        }
         const shape = {
           email: p.email, linkedinUrl: p.linkedinUrl,
           firstName: p.firstName, lastName: p.lastName,
