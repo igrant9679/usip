@@ -727,8 +727,8 @@ export default function AIPipelineQueue() {
               title={
                 `When ON, sequence drafts dispatch automatically on the next 5-min tick — no human review.\n\n` +
                 `Gating: recipient must have a score ≥ ${autoSendSettings?.aiAutoSendScoreMin ?? 70} (lead.score or contact.relStrengthScore), ` +
-                `UNLESS "Incl. cold/unscored" is on (needed for mass cold outreach to freshly imported contacts, which have no score).\n\n` +
-                `Note: aiAutoSendConfidenceMin (${autoSendSettings?.aiAutoSendConfidenceMin ?? 75}) is not yet enforced — no per-draft AI confidence signal exists. Only the score threshold gates sends today.`
+                `UNLESS "Incl. cold/unscored" is on (needed for mass cold outreach to freshly imported contacts, which have no score). ` +
+                `The score threshold is the only gate.`
               }
             >
               <Switch

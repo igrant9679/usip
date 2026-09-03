@@ -175,7 +175,11 @@ describe("ARE open tracking wiring", () => {
     expect(src).toContain("injectTracking");
     expect(src).toMatch(/trackingToken/);
     // Links are NOT click-wrapped on cold outbound (deliverability).
-    expect(src).toMatch(/open:\s*true,\s*\n?\s*click:\s*false/);
+    // Open follows the workspace preference since 2026-09-02 (the dispatcher
+    // used to hardcode `open: true` and ignore Settings); click stays off for
+    // cold outbound by design.
+    expect(src).toMatch(/open:\s*openTrackingPref,[\s\S]{0,400}click:\s*false/);
+    expect(src).toContain("workspaceSettings.emailOpenTracking");
   });
 
   it("fires the ARE email_open signal only on the FIRST open", async () => {

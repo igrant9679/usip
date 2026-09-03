@@ -14,7 +14,7 @@
  * `draftId IS NOT NULL` — the rows provably tied to something we sent.
  * Dropping that predicate turns the badge into "your entire inbox".
  */
-import { and, desc, eq, gte, inArray, isNotNull, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, isNull, like, sql } from "drizzle-orm";
 import { getDb } from "../db";
 import {
   areCampaigns,
@@ -22,8 +22,10 @@ import {
   emailLog,
   emailReplies,
   meetings,
+  optimizationRecommendations,
   prospectQueue,
   tasks,
+  unipileMessages,
 } from "../../drizzle/schema";
 import { workspaceProcedure } from "../_core/workspace";
 import { router } from "../_core/trpc";
@@ -38,6 +40,13 @@ const EMPTY = {
   areApprovals: { count: 0, byCampaign: [] as { campaignId: number; name: string; count: number }[] },
   draftTasks: { count: 0 },
   pausedCampaigns: [] as { id: number; name: string }[],
+  // The four queues that never reached this aggregator before 2026-09-02
+  // (audit: it covered five of nine human queues). Each is a real place a
+  // person has to act; a "what needs me" number that omits them is wrong.
+  sequenceDrafts: { count: 0 },
+  socialReplies: { count: 0 },
+  optimizationRecs: { count: 0 },
+  chatFollowUps: { count: 0 },
   digest24h: { emailsSent: 0, prospectsDiscovered: 0, repliesReceived: 0, meetingsBooked: 0 },
 };
 
@@ -62,6 +71,10 @@ export const attentionRouter = router({
       [digestDiscovered],
       [digestReplies],
       [digestMeetings],
+      [seqDraftAgg],
+      [socialAgg],
+      [optAgg],
+      [chatFollowAgg],
     ] = await Promise.all([
       db.select({ n: sql<number>`count(*)` }).from(emailDrafts)
         .where(and(eq(emailDrafts.workspaceId, ws), eq(emailDrafts.status, "ai_pending_review"))),
@@ -117,6 +130,27 @@ export const attentionRouter = router({
           inArray(meetings.status, remindableMeetingStatuses()),
           gte(meetings.createdAt, since),
         )),
+      // Sequence-engine drafts awaiting a human (the /email-drafts queue) —
+      // a different status value from the AI-pipeline drafts counted above.
+      db.select({ n: sql<number>`count(*)` }).from(emailDrafts)
+        .where(and(eq(emailDrafts.workspaceId, ws), eq(emailDrafts.status, "pending_review"))),
+      // Unhandled LinkedIn / WhatsApp replies (the Unified Inbox's queue).
+      db.select({ n: sql<number>`count(*)` }).from(unipileMessages)
+        .where(and(eq(unipileMessages.workspaceId, ws), eq(unipileMessages.direction, "inbound"), isNull(unipileMessages.handledAt))),
+      // Continuous-optimisation recommendations waiting for accept/dismiss.
+      db.select({ n: sql<number>`count(*)` }).from(optimizationRecommendations)
+        .where(and(eq(optimizationRecommendations.workspaceId, ws), eq(optimizationRecommendations.status, "pending" as never))),
+      // Chat follow-up review tasks: chatFollowUp inserts them OPEN (not
+      // draft), titled "Follow up: … left chat without booking" with the
+      // suggested email in the description — the only marker they carry.
+      db.select({ n: sql<number>`count(*)` }).from(tasks)
+        .where(and(
+          eq(tasks.workspaceId, ws),
+          eq(tasks.status, "open"),
+          eq(tasks.type, "follow_up"),
+          like(tasks.title, "Follow up:%"),
+          like(tasks.description, "Suggested email%"),
+        )),
     ]);
 
     // Campaign names for the ARE breakdown — one IN query, not a join in the
@@ -140,17 +174,26 @@ export const attentionRouter = router({
       })),
     };
     const draftTasks = { count: Number(taskAgg?.n ?? 0) };
+    const sequenceDrafts = { count: Number(seqDraftAgg?.n ?? 0) };
+    const socialReplies = { count: Number(socialAgg?.n ?? 0) };
+    const optimizationRecs = { count: Number(optAgg?.n ?? 0) };
+    const chatFollowUps = { count: Number(chatFollowAgg?.n ?? 0) };
 
     return {
       totalNeedingYou:
         aiDrafts.count + proposedMeetings.count + unhandledReplies.count +
-        areApprovals.count + draftTasks.count + paused.length,
+        areApprovals.count + draftTasks.count + paused.length +
+        sequenceDrafts.count + socialReplies.count + optimizationRecs.count + chatFollowUps.count,
       aiDrafts,
       proposedMeetings,
       unhandledReplies,
       areApprovals,
       draftTasks,
       pausedCampaigns: paused,
+      sequenceDrafts,
+      socialReplies,
+      optimizationRecs,
+      chatFollowUps,
       digest24h: {
         emailsSent: Number(digestSent?.n ?? 0),
         prospectsDiscovered: Number(digestDiscovered?.n ?? 0),

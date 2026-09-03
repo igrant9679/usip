@@ -87,8 +87,10 @@ const KPI_METRICS = [
   { value: "sales_cycle_length",label: "Sales cycle length (days)" },
   { value: "activity_counts",   label: "Activity counts" },
   { value: "meetings_booked",   label: "Meetings booked" },
-  { value: "response_rate",     label: "Response rate %" },
-  { value: "reply_rate",        label: "Reply rate %" },
+  // Honest names (audit 2026-09-02): these two are opportunity-stage ratios,
+  // not email engagement — the server has always computed them that way.
+  { value: "response_rate",     label: "Opportunities with activity %" },
+  { value: "reply_rate",        label: "Opportunities past proposal stage %" },
 ];
 
 const CHART_METRICS = [

@@ -880,11 +880,13 @@ function EmailSettingsTab({
             checked={emailPrefs.openTracking}
             onChange={(v) => setEmailPrefs({ ...emailPrefs, openTracking: v })}
             label="Enable open tracking"
+            helper="Applies to every send path, including Revenue Engine campaigns."
           />
           <CheckRow
             checked={emailPrefs.clickTracking}
             onChange={(v) => setEmailPrefs({ ...emailPrefs, clickTracking: v })}
             label="Enable click tracking"
+            helper="Applies to inbox and sequence sends. Revenue Engine campaigns never rewrite links — a tracking domain on every URL is a known spam signal for cold outbound."
           />
         </div>
 

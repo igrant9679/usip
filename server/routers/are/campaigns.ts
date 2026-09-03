@@ -5,12 +5,12 @@
  *   list, get, create, update, setStatus, approveBatch
  */
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import { z } from "zod";
-import { areCampaigns, personas, prospectIntelligence, prospectQueue } from "../../../drizzle/schema";
+import { areCampaigns, personas, prospectIntelligence, prospectQueue, workspaceSettings } from "../../../drizzle/schema";
 import { getDb } from "../../db";
 import { router } from "../../_core/trpc";
-import { workspaceProcedure } from "../../_core/workspace";
+import { adminWsProcedure, workspaceProcedure } from "../../_core/workspace";
 import { runAreEngine } from "../../areEngine";
 import { recordAudit } from "../../audit";
 import { invokeLLM } from "../../_core/llm";
@@ -166,6 +166,31 @@ export const campaignsRouter = router({
         );
       }
       return { id: row.id, launched: input.launch };
+    }),
+
+  /**
+   * One dial for the whole engine (Autonomy Center, audit 2026-09-02). The
+   * workspace default only ever governed campaigns created LATER, so the
+   * page's "engine autonomy" control changed nothing that was running and
+   * "All: Off" skipped the engine altogether. This sets every non-archived
+   * campaign AND the default in one call. `full` approves+sends above each
+   * campaign's own threshold; `batch_approval` is the engine's safest mode
+   * (nothing approved without a human). review_release is gone: it never had
+   * a branch — the engine treats any remaining rows as batch_approval.
+   */
+  setAllAutonomy: adminWsProcedure
+    .input(z.object({ mode: z.enum(["full", "batch_approval"]) }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const res = await db.update(areCampaigns)
+        .set({ autonomyMode: input.mode } as never)
+        .where(and(eq(areCampaigns.workspaceId, ctx.workspace.id), ne(areCampaigns.status, "archived" as never)));
+      await db.insert(workspaceSettings)
+        .values({ workspaceId: ctx.workspace.id, areDefaultAutonomyMode: input.mode } as never)
+        .onDuplicateKeyUpdate({ set: { areDefaultAutonomyMode: input.mode } as never });
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "are_autonomy_all", entityId: ctx.workspace.id, after: { mode: input.mode, campaignsUpdated: Number((res as any)?.[0]?.affectedRows ?? 0) } });
+      return { ok: true as const, campaignsUpdated: Number((res as any)?.[0]?.affectedRows ?? 0) };
     }),
 
   update: workspaceProcedure

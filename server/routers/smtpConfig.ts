@@ -30,6 +30,7 @@ import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { router } from "../_core/trpc";
 import { buildMergeContextFromDb, resolveMergeVars, bodyToHtmlDocument, injectTracking, resolveBookingUrl, renderSequenceOptOut } from "../mergeVars";
 import { isHtmlBody, htmlBodyToText } from "@shared/emailBody";
+import { areExecutionQueue } from "../../drizzle/schema";
 import { applyAccountSendDefaults } from "../services/sending/accountDefaults";
 import { isEmailSuppressed } from "./emailSuppressions";
 import { appBaseUrl as publicAppOrigin } from "../appUrl";
@@ -663,10 +664,30 @@ export const smtpConfigRouter = router({
       .from(emailDrafts)
       .where(and(eq(emailDrafts.workspaceId, ctx.workspace.id), eq(emailDrafts.status, "sent")));
 
-    const totalSent = allSent.length;
-    const totalOpens = allSent.reduce((s, d) => s + (d.openCount ?? 0), 0);
+    // Campaign (ARE) sends live in are_execution_queue, not email_drafts —
+    // this summary read drafts only, so the Email Analytics page showed zero
+    // for every campaign send while Analytics (fixed 2026-08-26) counted
+    // them. Same two-source funnel emailActivity.stats uses; kept in step.
+    const [areEng] = await db
+      .select({
+        sent: sql<number>`count(*)`,
+        opened: sql<number>`sum(case when ${areExecutionQueue.openedAt} is not null then 1 else 0 end)`,
+      })
+      .from(areExecutionQueue)
+      .where(and(
+        eq(areExecutionQueue.workspaceId, ctx.workspace.id),
+        eq(areExecutionQueue.channel, "email"),
+        eq(areExecutionQueue.status, "sent"),
+      ));
+    const areSent = Number(areEng?.sent ?? 0);
+    const areOpened = Number(areEng?.opened ?? 0);
+
+    const totalSent = allSent.length + areSent;
+    // The ARE records first-open only (no per-message open counter), so its
+    // contribution to "total opens" is one per opened message.
+    const totalOpens = allSent.reduce((s, d) => s + (d.openCount ?? 0), 0) + areOpened;
     const totalClicks = allSent.reduce((s, d) => s + (d.clickCount ?? 0), 0);
-    const uniqueOpened = allSent.filter((d) => (d.openCount ?? 0) > 0).length;
+    const uniqueOpened = allSent.filter((d) => (d.openCount ?? 0) > 0).length + areOpened;
     const uniqueClicked = allSent.filter((d) => (d.clickCount ?? 0) > 0).length;
     const openRate = totalSent > 0 ? Math.round((uniqueOpened / totalSent) * 100) : 0;
     const clickRate = totalSent > 0 ? Math.round((uniqueClicked / totalSent) * 100) : 0;

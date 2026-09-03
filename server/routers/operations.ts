@@ -43,6 +43,7 @@ import { evalConditions, executeRuleActions } from "../services/workflowEngine";
 // One arithmetic rule for quote money, shared with the client's preview so the
 // number the user approves is the number stored. See shared/quoteTotals.ts.
 import { centsToDecimal, computeQuoteTotals, formatMoney } from "@shared/quoteTotals";
+import { LIVE_TRIGGER_IDS, type LiveTrigger } from "@shared/workflowTriggers";
 import { zonedDowHour } from "@shared/availability";
 import { getWorkspaceTimezone } from "../services/workspaceTimezone";
 import crypto from "crypto";
@@ -204,7 +205,11 @@ export const workflowsRouter = router({
       name: z.string().min(1),
       description: z.string().optional(),
       enabled: z.boolean().default(true),
-      triggerType: z.enum(["record_created", "record_updated", "stage_changed", "task_overdue", "nps_submitted", "signal_received", "field_equals", "schedule", "deal_stuck"]),
+      // Only triggers that actually fire at runtime (shared/workflowTriggers).
+      // The inline list used to include nps_submitted / field_equals /
+      // schedule — nothing dispatches those, so the API accepted rules that
+      // could never run while the UI correctly refused to offer them.
+      triggerType: z.enum(LIVE_TRIGGER_IDS as unknown as [LiveTrigger, ...LiveTrigger[]]),
       triggerConfig: z.record(z.string(), z.any()),
       conditions: z.array(z.object({ field: z.string(), op: z.string(), value: z.any() })).default([]),
       actions: z.array(z.object({ type: z.string(), params: z.record(z.string(), z.any()) })).default([]),

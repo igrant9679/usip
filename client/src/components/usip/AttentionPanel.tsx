@@ -169,6 +169,24 @@ export function AttentionPanel() {
             count={s.draftTasks.count} cta="Review tasks" href="/v2/tasks" />
         )}
 
+        {/* The four queues the aggregator used to omit (audit 2026-09-02). */}
+        {(s.sequenceDrafts?.count ?? 0) > 0 && (
+          <QueueCard icon={<ListChecks className="size-4" />} tint="#0EA5E9" title="Sequence drafts to review"
+            count={s.sequenceDrafts.count} cta="Review drafts" href="/email-drafts" />
+        )}
+        {(s.socialReplies?.count ?? 0) > 0 && (
+          <QueueCard icon={<ListChecks className="size-4" />} tint="#0A66C2" title="LinkedIn & social replies"
+            count={s.socialReplies.count} cta="Open Unified Inbox" href="/unified-inbox" />
+        )}
+        {(s.optimizationRecs?.count ?? 0) > 0 && (
+          <QueueCard icon={<ListChecks className="size-4" />} tint="#10B981" title="Optimisation recommendations"
+            count={s.optimizationRecs.count} cta="Review" href="/are/performance" />
+        )}
+        {(s.chatFollowUps?.count ?? 0) > 0 && (
+          <QueueCard icon={<ListChecks className="size-4" />} tint="#14B8A6" title="Chat follow-ups to approve"
+            count={s.chatFollowUps.count} cta="Open tasks" href="/v2/tasks" />
+        )}
+
         {s.pausedCampaigns.length > 0 && (
           <QueueCard icon={<PauseCircle className="size-4" />} tint="#F43F5E" title="Paused campaigns"
             count={s.pausedCampaigns.length} cta="All campaigns" href="/are/campaigns">

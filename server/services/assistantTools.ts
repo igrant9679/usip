@@ -143,7 +143,10 @@ export const TOOL_ARGS = {
     }).refine((v) => Object.values(v).some((x) => x !== undefined && !(Array.isArray(x) && x.length === 0)), { message: "Targeting needs at least one field" }),
     targetProspectCount: z.number().int().min(1).max(1000).default(100),
     dailySendCap: z.number().int().min(1).max(100).default(25),
-    autonomyMode: z.enum(["batch_approval", "review_release"]).default("batch_approval"),
+    // Human-in-the-loop only: the assistant may never mint an unattended
+    // campaign (assistantTools.test pins that "full" throws). review_release
+    // was removed 2026-09-02 — it never had an engine branch.
+    autonomyMode: z.enum(["batch_approval"]).default("batch_approval"),
     channels: z.object({ email: z.boolean().default(true), linkedin: z.boolean().default(false) }).default({ email: true, linkedin: false }),
     goalType: z.enum(["meeting_booked", "reply", "opportunity_created"]).default("reply"),
     /** Voice/tone guidance for the Sequence Agent's copy. */
@@ -262,7 +265,7 @@ export function describeAction(name: AssistantToolName, args: Record<string, unk
       if (tg.employeeMin || tg.employeeMax) bits.push(`${tg.employeeMin ?? 1}–${tg.employeeMax ?? "∞"} employees`);
       const ch = (args.channels ?? {}) as { email?: boolean; linkedin?: boolean };
       const channels = [ch.email !== false ? "email" : null, ch.linkedin ? "LinkedIn" : null].filter(Boolean).join(" + ") || "email";
-      const mode = args.autonomyMode === "review_release" ? "review & release" : "batch approval";
+      const mode = "batch approval";
       return `Create campaign "${args.name}" as a DRAFT — targeting ${bits.join(", ") || "the workspace ICP"}; up to ${args.targetProspectCount ?? 100} prospects, ${args.dailySendCap ?? 25}/day cap, ${channels}, ${mode}. Nothing runs until you activate it.`;
     }
     case "set_company_brand": {
@@ -449,7 +452,7 @@ export const ASSISTANT_TOOLS: Tool[] = [
     },
     required: ["newListName", "filter"],
   }),
-  t("create_campaign", "PROPOSE creating an autonomous (ARE) outbound campaign as a DRAFT from the user's description: who to target (titles, industries, geographies, keywords, company size), how many prospects, daily cap, channels, goal, and tone guidance. It is created as status draft — it discovers and sends nothing until the user activates it (set_campaign_status, a separate confirmation). Autonomy is batch_approval (default) or review_release; fully unattended mode is not available here. If the user gave no name or no targeting, ask before proposing. The user must confirm.", {
+  t("create_campaign", "PROPOSE creating an autonomous (ARE) outbound campaign as a DRAFT from the user's description: who to target (titles, industries, geographies, keywords, company size), how many prospects, daily cap, channels, goal, and tone guidance. It is created as status draft — it discovers and sends nothing until the user activates it (set_campaign_status, a separate confirmation). Autonomy is batch_approval only (the engine screens out junk, the user approves prospects in batches); fully unattended mode is not available here. If the user gave no name or no targeting, ask before proposing. The user must confirm.", {
     type: "object",
     properties: {
       name: { type: "string", description: "Campaign name (2-200 chars)" },
@@ -468,7 +471,7 @@ export const ASSISTANT_TOOLS: Tool[] = [
       },
       targetProspectCount: { type: "number", description: "How many prospects to work (default 100, max 1000)" },
       dailySendCap: { type: "number", description: "Max sends per day once active (default 25, max 100)" },
-      autonomyMode: { type: "string", enum: ["batch_approval", "review_release"], description: "batch_approval (default): the user approves batches; review_release: the user reviews and releases each send" },
+      autonomyMode: { type: "string", enum: ["batch_approval"], description: "batch_approval (the only mode available here): the engine screens out junk and the user approves prospects in batches" },
       channels: { type: "object", properties: { email: { type: "boolean" }, linkedin: { type: "boolean" } } },
       goalType: { type: "string", enum: ["meeting_booked", "reply", "opportunity_created"] },
       sequencePrompt: { type: "string", description: "Voice/tone guidance for the generated emails" },

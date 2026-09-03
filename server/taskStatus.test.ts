@@ -151,6 +151,8 @@ const OPEN_ONLY_ALLOWED: Record<string, string> = {
     "Dashboard metric labelled 'open tasks' — a display count of literally-open tasks, not a dedupe.",
   "server/services/workflowEngine.ts":
     "task_overdue trigger. Whether an in_progress task should fire 'overdue' is a product decision, not drift — see the note in SESSION_STATUS.",
+  "server/routers/attention.ts":
+    "Chat follow-up review queue (2026-09-02). chatFollowUp inserts its review tasks with status 'open' (not 'draft'), so the 'needs you' count has to read literally-open follow-ups; an in_progress one is being handled and correctly drops out.",
 };
 
 describe("eq(tasks.status, \"open\") is only used where it is meant", () => {

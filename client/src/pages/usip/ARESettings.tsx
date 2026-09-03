@@ -54,7 +54,10 @@ const ARE_SOURCE_DESC: Record<string, string> = Object.fromEntries(
 );
 
 /* --- Types ---------------------------------------------------------------- */
-type AutonomyMode = "full" | "batch_approval" | "review_release";
+// review_release was removed 2026-09-02: it never had an engine branch (it
+// behaved like batch_approval minus the junk floor while the copy promised
+// a per-email hold). Rows still carrying it are treated as batch_approval.
+type AutonomyMode = "full" | "batch_approval";
 
 const AUTONOMY_OPTIONS: { value: AutonomyMode; label: string; description: string; color: string }[] = [
   {
@@ -68,12 +71,6 @@ const AUTONOMY_OPTIONS: { value: AutonomyMode; label: string; description: strin
     label: "Batch Approval",
     description: "The AI prepares batches of prospects and sequences. You review and approve each batch before sending. Balances speed with oversight.",
     color: "border-blue-500/40 bg-blue-500/5 text-blue-700 dark:text-blue-300",
-  },
-  {
-    value: "review_release",
-    label: "Review & Release",
-    description: "Every prospect requires individual approval before any outreach is sent. Maximum control — ideal for high-value or sensitive accounts.",
-    color: "border-amber-500/40 bg-amber-500/5 text-amber-700 dark:text-amber-300",
   },
 ];
 

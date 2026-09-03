@@ -2938,7 +2938,6 @@ export default function ARECampaignDetail() {
                     {([
                       { v: "full", title: "Fully autonomous", body: "Everyone at or above the auto-approve threshold is approved, sequenced, enrolled and sent — nobody reviews. Below the threshold is skipped." },
                       { v: "batch_approval", title: "Batch approval", body: "The engine screens out obvious misses; you approve the rest in batches before anything is sequenced or sent." },
-                      { v: "review_release", title: "Review & release", body: "Every prospect waits for your individual review before it moves." },
                     ] as const).map((o) => (
                       <button
                         key={o.v} type="button"

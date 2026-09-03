@@ -900,8 +900,25 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
           result.rejected++;
         }
         // else: leave 'pending' for human batch approval
+      } else {
+        // "review_release" was described everywhere as "holds every email
+        // for individual release" — and had no branch: it fell through here
+        // doing nothing, so it behaved like batch_approval minus the junk
+        // floor (audit 2026-09-02). It is no longer offered anywhere in the
+        // UI; rows that still carry the value get batch_approval's screening
+        // explicitly rather than a silent no-op.
+        if (score < AUTO_REJECT_FLOOR) {
+          await db
+            .update(prospectQueue)
+            .set({
+              sequenceStatus: "skipped",
+              rejectedAt: new Date(),
+              rejectionReason: `Auto-screened: ICP match ${score}/100 below floor ${AUTO_REJECT_FLOOR}`,
+            })
+            .where(eq(prospectQueue.id, p.id));
+          result.rejected++;
+        }
       }
-      // review_release: leave everything 'pending' for individual review
     }
     if (enriched.length > 0) {
       await emitLog(wsId, campId, "screen", "info",
@@ -1139,6 +1156,11 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
 
       // Resolved lazily on the first email step, then reused for the batch.
       let bookingUrl: string | undefined;
+      // The workspace's email tracking preference (Settings → Email delivery).
+      // The dispatcher hardcoded its own values and never read this, so
+      // unchecking "open tracking" did not stop the engine that sends most of
+      // the mail (audit 2026-09-02). Resolved once per campaign run.
+      let openTrackingPref: boolean | undefined;
       /**
        * Set once a LinkedIn step is refused for a reason every other LinkedIn
        * step this tick would share — throttled by the activity gate, or no
@@ -1329,12 +1351,24 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
         // markup; AI-generated plain text keeps the escape+linkify contract
         // (shared/emailBody decides, same as every other send path).
         const bodyIsHtml = isHtmlBody(body);
+        if (openTrackingPref === undefined) {
+          const [prefs] = await db
+            .select({ open: workspaceSettings.emailOpenTracking })
+            .from(workspaceSettings)
+            .where(eq(workspaceSettings.workspaceId, wsId))
+            .limit(1);
+          openTrackingPref = prefs?.open ?? true;
+        }
         const html = injectTracking(
           bodyIsHtml ? `<!DOCTYPE html><html><body>${body}</body></html>` : textToHtml(body),
           trackingToken,
           appBaseUrl,
           {
-            open: true,
+            open: openTrackingPref,
+            // Click stays off for cold outbound regardless of the workspace
+            // setting — rewriting every link to a tracking domain is a
+            // known spam signal (see the note above). The Settings copy
+            // says so, rather than pretending the toggle reaches here.
             click: false,
           },
         );

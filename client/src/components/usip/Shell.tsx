@@ -313,23 +313,26 @@ const TOP_LINKS: NavLink[] = [
 // three surfaces can never disagree about what exists. The previous rail
 // listed ~44 items across 8 architecture-named sections — a feature catalog
 // the owner told us they got lost in.
+// Rail sections ARE the products (owner, 2026-09-02): Prospecting → CRM →
+// Outreach → Proposals → Dialer → Customer Success reads as the story of the
+// app top to bottom. Marketing has no rail section on purpose — its one
+// product (Campaigns/Broadcasts) does not send yet and comes back to the
+// rail the day it does; Analytics and Configuration are cross-cutting and
+// live in the Library / palette / admin panel.
 const GROUP_META: { group: ToolGroup; label: string; icon: any; color: string; darkColor: string }[] = [
-  // CRM leads: the records themselves (people, companies, deals, leads) —
-  // the owner asked for the record layer as its own nav grouping (2026-08-11).
+  { group: "Prospecting", label: "Prospecting", icon: Radar, color: "#EA580C", darkColor: "#FB923C" },
   { group: "CRM", label: "CRM", icon: Database, color: "#0891B2", darkColor: "#22D3EE" },
-  // "Prospect" section dissolved into CRM (owner ask 2026-08-25) — Data
-  // Enrichment rides the CRM section now.
-  { group: "Engage", label: "Engage", icon: Send, color: "#9333EA", darkColor: "#D8B4FE" },
-  { group: "Win deals", label: "Win deals", icon: DollarSign, color: "#10B981", darkColor: "#34D399" },
-  { group: "Autopilot & AI", label: "Autopilot", icon: Bot, color: "#7C3AED", darkColor: "#A78BFA" },
+  { group: "Outreach", label: "Outreach", icon: Send, color: "#9333EA", darkColor: "#D8B4FE" },
+  { group: "Proposals", label: "Proposals", icon: DollarSign, color: "#10B981", darkColor: "#34D399" },
+  { group: "Dialer", label: "Dialer", icon: Phone, color: "#7C3AED", darkColor: "#A78BFA" },
+  { group: "Customer Success", label: "Customer Success", icon: Heart, color: "#DB2777", darkColor: "#F472B6" },
 ];
 
 /** Accent hues for tools whose group has no rail section (Library reach). */
 const EXTRA_GROUP_COLORS: Partial<Record<ToolGroup, { c: string; d: string }>> = {
   "Daily": { c: "#3B82F6", d: "#93C5FD" },
-  "Customer success": { c: "#DB2777", d: "#F472B6" },
-  "Analytics & reporting": { c: "#F59E0B", d: "#FBBF24" },
-  "Inbound": { c: "#14B8A6", d: "#2DD4BF" },
+  "Marketing": { c: "#B45309", d: "#FCD34D" },
+  "Analytics": { c: "#F59E0B", d: "#FBBF24" },
   "Configuration": { c: "#64748B", d: "#94A3B8" },
 };
 

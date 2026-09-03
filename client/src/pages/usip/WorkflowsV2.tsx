@@ -136,7 +136,9 @@ export default function WorkflowsV2() {
     { key: "conversations", label: "Conversation Autopilot", icon: MessageSquare, blurb: "Classify replies + act", href: "/v2/conversations", mode: convAp.data?.mode ?? "off", lastRunAt: convAp.data?.lastRunAt, set: (m: string) => setConvAp.mutate({ mode: m as any }) },
     { key: "deals", label: "Deal Autopilot", icon: KanbanSquare, blurb: "Advance deals toward close", href: "/v2/deals", mode: dealAp.data?.mode ?? "off", lastRunAt: dealAp.data?.lastRunAt, set: (m: string) => setDealAp.mutate({ mode: m as any }) },
     { key: "social", label: "Social Autopilot", icon: Share2, blurb: "Auto-invite leads → opener on accept", href: "/v2/conversations", mode: socialAp.data?.mode ?? "off", lastRunAt: socialAp.data?.lastRunAt, set: (m: string) => setSocialAp.mutate({ mode: m as any }) },
-    { key: "jobChange", label: "Job Change Autopilot", icon: UserRoundCog, blurb: "Re-engage when a prospect changes jobs", href: "/v2/data-enrichment", mode: jobChangeAp.data?.mode ?? "off", lastRunAt: jobChangeAp.data?.lastRunAt, set: (m: string) => setJobChangeAp.mutate({ mode: m as any }) },
+    // No schedule of its own: it fires when a LinkedIn enrichment detects a
+    // company change, so the Enrichment Sweep is what supplies its triggers.
+    { key: "jobChange", label: "Job Change Autopilot", icon: UserRoundCog, blurb: "Re-engage when an enrichment detects a job change (runs off the Enrichment Sweep — no schedule of its own)", href: "/v2/data-enrichment", mode: jobChangeAp.data?.mode ?? "off", lastRunAt: jobChangeAp.data?.lastRunAt, set: (m: string) => setJobChangeAp.mutate({ mode: m as any }) },
     { key: "enrichSweep", label: "Enrichment Sweep", icon: Database, blurb: "Backfill missing emails from company sites", href: "/prospects", mode: sweepAp.data?.mode ?? "off", lastRunAt: sweepAp.data?.lastRunAt, set: (m: string) => setSweepAp.mutate({ mode: m as any }) },
     { key: "companyBackfill", label: "Company Backfill", icon: Users, blurb: "Read missing employers off LinkedIn profiles", href: "/v2/data-enrichment", mode: backfillAp.data?.mode ?? "off", lastRunAt: backfillAp.data?.lastRunAt, set: (m: string) => setBackfillAp.mutate({ mode: m as any }) },
     { key: "chat", label: "Inbound Chat Agent", icon: MessageSquare, blurb: "Qualify website visitors → book the meeting", href: "/v2/chat", mode: chatAp.data?.mode ?? "off", lastRunAt: undefined, set: (m: string) => setChatAp.mutate({ mode: m as any }) },
@@ -157,7 +159,14 @@ export default function WorkflowsV2() {
     setBackfillAp.mutate({ mode: mode as any });
     setChatFollowAp.mutate({ mode: mode as any });
     setOptAp.mutate({ mode: mode as any });
-    toast.success(mode === "off" ? "All autopilots turned off" : `All autopilots set to ${MODE_LABEL[mode]}`);
+    // The engine has no "off": batch approval is its safest mode (nothing is
+    // approved without a human). "All: Off" used to skip it entirely, so the
+    // one system sending cold outbound kept its setting while the page said
+    // everything was off (audit 2026-09-02).
+    setAllEngineAutonomy.mutate({ mode: "batch_approval" });
+    toast.success(mode === "off"
+      ? "All autopilots turned off · engine set to batch approval (its safest mode — pause a campaign to stop its sends)"
+      : `All autopilots set to ${MODE_LABEL[mode]} · engine set to batch approval`);
   };
 
   // One click to enable the whole autonomous stack in the safe Approve mode.
@@ -174,12 +183,23 @@ export default function WorkflowsV2() {
     setChatFollowAp.mutate({ mode: "approval" as any });
     setOptAp.mutate({ mode: "approval" as any });
     setEmailAutoEnabled(true);
+    // Approve mode for the engine = batch approval (prospects queue for your OK).
+    setAllEngineAutonomy.mutate({ mode: "batch_approval" });
     toast.success("Full autonomy on (Approve mode) — AI actions will queue for your review");
   };
 
   // ── ARE campaigns ──
   const campaigns = trpc.are.campaigns.list.useQuery({ limit: 20 } as any, { retry: false });
   const areSettings = trpc.settings.getAreSettings.useQuery();
+  // One call sets every campaign AND the default (see are.campaigns.setAllAutonomy).
+  const setAllEngineAutonomy = trpc.are.campaigns.setAllAutonomy.useMutation({
+    onSuccess: (r) => {
+      utils.settings.getAreSettings.invalidate();
+      utils.are.campaigns.list.invalidate();
+      toast.success(`Engine autonomy applied to ${r.campaignsUpdated} campaign${r.campaignsUpdated === 1 ? "" : "s"}`);
+    },
+    onError: (e) => toast.error(e.message.includes("FORBIDDEN") ? "Only admins can change engine autonomy" : e.message),
+  });
   const setAreAutonomy = trpc.settings.updateAreSettings.useMutation({
     onSuccess: () => { utils.settings.getAreSettings.invalidate(); toast.success("Engine autonomy saved"); },
     onError: (e: any) => toast.error(e.message.includes("FORBIDDEN") ? "Only admins can change engine autonomy" : e.message),
@@ -325,7 +345,7 @@ export default function WorkflowsV2() {
               </span>
               <div className="min-w-0 flex-1">
                 <Link href="/v2/emails" className="text-sm font-medium hover:underline">Email auto-send</Link>
-                <div className="text-[11px] text-muted-foreground">AI drafts send themselves when lead score &amp; confidence are high enough</div>
+                <div className="text-[11px] text-muted-foreground">AI drafts send themselves when the recipient's lead score clears the threshold</div>
               </div>
               <Switch checked={!!(emailAuto.data as any)?.aiAutoSendEnabled} onCheckedChange={setEmailAutoEnabled} disabled={setEmailAuto.isPending || !emailAuto.data} />
             </div>
@@ -334,30 +354,31 @@ export default function WorkflowsV2() {
           {/* ARE campaigns */}
           <Section icon={Activity} title="Autonomous Revenue Engine"
             action={<Link href="/are" className="text-[11px] text-muted-foreground hover:text-foreground inline-flex items-center gap-1"><ExternalLink className="size-3" /> Open ARE hub</Link>}>
-            {/* The engine's autonomy dial uses ITS OWN three-mode vocabulary
-                (full / batch_approval / review_release), older than the
-                Off/Approve/Auto convention above. Surfaced here so this page
-                really is every dial in one place — "All: Off" above does NOT
-                touch this one. Per-campaign overrides live on each campaign. */}
+            {/* The engine's autonomy dial uses ITS OWN vocabulary (full /
+                batch_approval), older than the Off/Approve/Auto convention
+                above. This control applies to EVERY campaign — running ones
+                too — and sets the default for new ones; "All: Off" and "Turn
+                on full autonomy" above include it (the engine has no off: its
+                safest mode is batch approval, where nothing is approved
+                without a human; pause a campaign to stop its sends). */}
             <div className="rounded-xl border bg-card p-3 shadow-sm flex items-center gap-3 mb-3">
               <span className="shrink-0 size-9 rounded-full flex items-center justify-center" style={{ backgroundColor: areSettings.data?.areDefaultAutonomyMode === "full" ? "#7c3aed1f" : "hsl(var(--muted))", color: areSettings.data?.areDefaultAutonomyMode === "full" ? "#7c3aed" : undefined }}>
                 <Bot className="size-4" />
               </span>
               <div className="min-w-0 flex-1">
-                <span className="text-sm font-medium">Engine autonomy (new campaigns)</span>
+                <span className="text-sm font-medium">Engine autonomy (all campaigns)</span>
                 <div className="text-[11px] text-muted-foreground">
-                  <b>Full</b> sends without review · <b>Batch approval</b> queues prospects for your OK · <b>Review &amp; release</b> holds every email. Existing campaigns keep their own setting.
+                  <b>Full</b> approves and sends on its own above each campaign's threshold · <b>Batch approval</b> screens out junk and waits for your OK. Applies to every campaign now and sets the default for new ones; a campaign can still be changed individually afterwards.
                 </div>
               </div>
               <Select
-                value={areSettings.data?.areDefaultAutonomyMode ?? "batch_approval"}
-                onValueChange={(v) => setAreAutonomy.mutate({ areDefaultAutonomyMode: v as "full" | "batch_approval" | "review_release" })}
+                value={areSettings.data?.areDefaultAutonomyMode === "full" ? "full" : "batch_approval"}
+                onValueChange={(v) => setAllEngineAutonomy.mutate({ mode: v as "full" | "batch_approval" })}
               >
                 <SelectTrigger className="h-7 w-[150px] text-xs shrink-0"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="full">Full autonomy</SelectItem>
                   <SelectItem value="batch_approval">Batch approval</SelectItem>
-                  <SelectItem value="review_release">Review &amp; release</SelectItem>
                 </SelectContent>
               </Select>
             </div>

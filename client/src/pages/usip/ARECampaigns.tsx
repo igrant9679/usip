@@ -620,7 +620,6 @@ export default function ARECampaigns() {
                   <SelectContent>
                     <SelectItem value="full">Full Auto — engine approves, sequences, and sends end-to-end</SelectItem>
                     <SelectItem value="batch_approval">Batch Approval — you approve batches of enriched prospects</SelectItem>
-                    <SelectItem value="review_release">Review &amp; Release — every prospect requires individual approval</SelectItem>
                   </SelectContent>
                 </Select>
                 <p className="text-[11px] text-muted-foreground mt-1">

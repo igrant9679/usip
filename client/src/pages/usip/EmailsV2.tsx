@@ -350,7 +350,7 @@ export default function EmailsV2() {
               <div className="text-sm font-medium">Autonomous AI auto-send</div>
               <div className="text-[12px] text-muted-foreground">
                 {s?.aiAutoSendEnabled
-                  ? `On — AI drafts send automatically when lead score ≥ ${s?.aiAutoSendScoreMin ?? 70} and confidence ≥ ${s?.aiAutoSendConfidenceMin ?? 75}%.`
+                  ? `On — AI drafts send automatically when lead score ≥ ${s?.aiAutoSendScoreMin ?? 70}.`
                   : "Off — AI drafts wait for your approval before sending."}
               </div>
             </div>
