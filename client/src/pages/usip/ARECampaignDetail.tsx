@@ -56,6 +56,10 @@ import { AddExistingProspectsDialog } from "@/components/usip/are/AddExistingPro
 import { ActiveSequenceTimeline } from "@/components/usip/are/ActiveSequenceTimeline";
 import { AreMessageDialog } from "@/components/usip/are/AreMessageDialog";
 import { StepFunnelSankey, type FunnelSelection } from "@/components/usip/are/StepFunnelSankey";
+import {
+  DEFAULT_DISPATCH_TABLE_STATE, OUTCOME_LABEL, OUTCOME_ORDER, filterDispatches, groupDispatchesByStep, isFiltered,
+  nextSort, outcomeCounts, outcomeOf, sortDispatches, type DispatchSortKey, type DispatchTableState,
+} from "@/components/usip/are/dispatchTableModel";
 import { RichTextEditor } from "@/components/usip/RichTextEditor";
 import { sanitizeEmailHtml } from "@/lib/sanitizeHtml";
 import { isHtmlBody } from "@shared/emailBody";
@@ -67,7 +71,10 @@ import {
 } from "@shared/areSignals";
 import {
   Activity,
+  ArrowDown,
   ArrowLeft,
+  ArrowUp,
+  ArrowUpDown,
   AtSign,
   BarChart2,
   Bot,
@@ -2107,6 +2114,9 @@ export default function ARECampaignDetail() {
    * described a message and gave no way to read it.
    */
   const [previewExecId, setPreviewExecId] = useState<number | null>(null);
+  // Filter + sort state for the dispatch table on Step performance (owner ask
+  // 2026-09-03). The logic is in dispatchTableModel.ts; this is only the state.
+  const [perf, setPerf] = useState<DispatchTableState>(DEFAULT_DISPATCH_TABLE_STATE);
   // A click on any Sankey node/band → the people it counted (owner ask 2026-08-19).
   const [funnelList, setFunnelList] = useState<FunnelSelection | null>(null);
   const funnelRows = trpc.are.prospects.byIds.useQuery(
@@ -2786,38 +2796,126 @@ export default function ARECampaignDetail() {
                     the roll-up the cards' section title carried. */}
                 {(() => {
                   const list = dispatches ?? [];
-                  const bySteps = new Map<number, typeof list>();
-                  for (const d of list) { const arr = bySteps.get(d.stepIndex) ?? []; arr.push(d); bySteps.set(d.stepIndex, arr); }
+                  // Filter → sort → group. All three are pure functions in
+                  // dispatchTableModel.ts (tested as functions); the sort applies
+                  // within each step, so the step headers keep their meaning.
+                  const shown = sortDispatches(filterDispatches(list, perf), perf.sort);
+                  const bySteps = groupDispatchesByStep(shown);
+                  const stepTotals = new Map<number, number>();
+                  for (const d of list) stepTotals.set(d.stepIndex, (stepTotals.get(d.stepIndex) ?? 0) + 1);
+                  const stepsPresent = Array.from(stepTotals.keys()).sort((a, b) => a - b);
+                  const counts = outcomeCounts(list);
+                  const filtered = isFiltered(perf);
                   const stepAgg = new Map((abVariants ?? []).map((v) => [v.stepIndex, v]));
                   const when = (d: Date | string | null | undefined) =>
                     d ? new Date(d).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "—";
-                  const outcome = (d: (typeof list)[number]) =>
-                    d.meeting ? <Badge className="text-[10px] px-1.5 py-0 h-4 bg-emerald-600 text-white border-0">Meeting</Badge>
-                      : d.replied ? <Badge className="text-[10px] px-1.5 py-0 h-4 bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border-emerald-500/30">Replied</Badge>
-                        : d.opened ? <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 border-blue-500/30 text-blue-600">Opened</Badge>
-                          : <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 text-muted-foreground">{d.opensTracked ? "No open yet" : "Opens not tracked"}</Badge>;
+                  const outcome = (d: (typeof list)[number]) => {
+                    const o = outcomeOf(d);
+                    return o === "meeting" ? <Badge className="text-[10px] px-1.5 py-0 h-4 bg-emerald-600 text-white border-0">Meeting</Badge>
+                      : o === "replied" ? <Badge className="text-[10px] px-1.5 py-0 h-4 bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border-emerald-500/30">Replied</Badge>
+                        : o === "opened" ? <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 border-blue-500/30 text-blue-600">Opened</Badge>
+                          : <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 text-muted-foreground">{OUTCOME_LABEL[o]}</Badge>;
+                  };
+                  // A column header is the sort button: click to sort by it,
+                  // click again to flip. The active one shows its direction.
+                  const SortHead = ({ k, label, className }: { k: DispatchSortKey; label: string; className?: string }) => {
+                    const active = perf.sort.key === k;
+                    return (
+                      <TableHead className={className}>
+                        <button
+                          type="button"
+                          onClick={() => setPerf((p) => ({ ...p, sort: nextSort(p.sort, k) }))}
+                          className={`inline-flex items-center gap-1 -ml-1 rounded px-1 py-0.5 hover:bg-muted hover:text-foreground ${active ? "text-foreground font-semibold" : ""}`}
+                          title={active ? `Sorted by ${label.toLowerCase()} — click to flip` : `Sort by ${label.toLowerCase()}`}
+                          aria-sort={active ? (perf.sort.dir === "asc" ? "ascending" : "descending") : "none"}
+                        >
+                          {label}
+                          {active ? (perf.sort.dir === "asc" ? <ArrowUp className="size-3" /> : <ArrowDown className="size-3" />) : <ArrowUpDown className="size-3 opacity-40" />}
+                        </button>
+                      </TableHead>
+                    );
+                  };
+                  const chip = (on: boolean) =>
+                    `h-7 rounded-full border px-2.5 text-[11.5px] font-medium transition-colors ${on ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:bg-muted hover:text-foreground"}`;
                   return (
+                    <div className="space-y-2">
+                      {/* Filter row: search, step, outcome chips, and a reset when anything is active. */}
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="flex h-8 min-w-[220px] items-center gap-2 rounded-md border border-border bg-background px-2.5">
+                          <Search className="size-3.5 shrink-0 text-muted-foreground" />
+                          <input
+                            value={perf.query}
+                            onChange={(e) => setPerf((p) => ({ ...p, query: e.target.value }))}
+                            placeholder="Filter by prospect, company or subject"
+                            aria-label="Filter dispatches"
+                            className="min-w-0 flex-1 bg-transparent text-[12.5px] outline-none"
+                          />
+                          {perf.query && (
+                            <button type="button" onClick={() => setPerf((p) => ({ ...p, query: "" }))} className="text-muted-foreground hover:text-foreground" aria-label="Clear search">
+                              <X className="size-3.5" />
+                            </button>
+                          )}
+                        </div>
+                        <select
+                          value={perf.step === null ? "all" : String(perf.step)}
+                          onChange={(e) => setPerf((p) => ({ ...p, step: e.target.value === "all" ? null : Number(e.target.value) }))}
+                          aria-label="Filter by step"
+                          className="h-8 rounded-md border border-border bg-background px-2 text-[12.5px]"
+                        >
+                          <option value="all">All steps</option>
+                          {stepsPresent.map((s) => (
+                            <option key={s} value={String(s)}>Step {s + 1} ({stepTotals.get(s)})</option>
+                          ))}
+                        </select>
+                        <div className="flex flex-wrap items-center gap-1" role="group" aria-label="Filter by outcome">
+                          <button type="button" className={chip(perf.outcome === "all")} onClick={() => setPerf((p) => ({ ...p, outcome: "all" }))}>
+                            All <span className="opacity-70 tabular-nums">{list.length}</span>
+                          </button>
+                          {OUTCOME_ORDER.filter((o) => counts[o] > 0).map((o) => (
+                            <button key={o} type="button" className={chip(perf.outcome === o)} onClick={() => setPerf((p) => ({ ...p, outcome: p.outcome === o ? "all" : o }))}>
+                              {OUTCOME_LABEL[o]} <span className="opacity-70 tabular-nums">{counts[o]}</span>
+                            </button>
+                          ))}
+                        </div>
+                        <div className="ml-auto flex items-center gap-2 text-[11.5px] text-muted-foreground tabular-nums">
+                          {filtered ? <span>Showing {shown.length} of {list.length}</span> : <span>{list.length} dispatch{list.length === 1 ? "" : "es"}</span>}
+                          {(filtered || perf.sort.key !== DEFAULT_DISPATCH_TABLE_STATE.sort.key || perf.sort.dir !== DEFAULT_DISPATCH_TABLE_STATE.sort.dir) && (
+                            <Button size="sm" variant="ghost" className="h-7 px-2 text-[11.5px]" onClick={() => setPerf(DEFAULT_DISPATCH_TABLE_STATE)}>
+                              <X className="size-3 mr-1" /> Reset
+                            </Button>
+                          )}
+                        </div>
+                      </div>
                     <div className="rounded-lg border border-border overflow-x-auto">
                       <Table>
                         <TableHeader>
                           <TableRow>
-                            <TableHead className="min-w-[180px]">Prospect</TableHead>
-                            <TableHead className="min-w-[220px]">Subject</TableHead>
-                            <TableHead className="whitespace-nowrap">Sent</TableHead>
-                            <TableHead className="whitespace-nowrap">Opened</TableHead>
-                            <TableHead className="whitespace-nowrap">Outcome</TableHead>
+                            <SortHead k="prospect" label="Prospect" className="min-w-[180px]" />
+                            <SortHead k="subject" label="Subject" className="min-w-[220px]" />
+                            <SortHead k="sent" label="Sent" className="whitespace-nowrap" />
+                            <SortHead k="opened" label="Opened" className="whitespace-nowrap" />
+                            <SortHead k="outcome" label="Outcome" className="whitespace-nowrap" />
                           </TableRow>
                         </TableHeader>
                         <TableBody>
-                          {Array.from(bySteps.entries()).sort((x, y) => x[0] - y[0]).map(([stepIndex, items]) => {
+                          {bySteps.length === 0 && (
+                            <TableRow>
+                              <TableCell colSpan={5} className="py-8 text-center text-[13px] text-muted-foreground">
+                                No dispatches match these filters.{" "}
+                                <button type="button" className="underline hover:text-foreground" onClick={() => setPerf(DEFAULT_DISPATCH_TABLE_STATE)}>Reset</button>
+                              </TableCell>
+                            </TableRow>
+                          )}
+                          {bySteps.map(([stepIndex, items]) => {
                             const agg = stepAgg.get(stepIndex);
+                            const stepTotal = stepTotals.get(stepIndex) ?? items.length;
                             return [
                               <TableRow key={`h${stepIndex}`} className="bg-muted/40 hover:bg-muted/40">
                                 <TableCell colSpan={5} className="py-1.5">
                                   <div className="flex items-baseline gap-3 flex-wrap">
                                     <span className="text-[13px] font-semibold">Step {stepIndex + 1}</span>
                                     <span className="text-xs text-muted-foreground tabular-nums">
-                                      {items.length} dispatched
+                                      {items.length} dispatched{filtered && items.length !== stepTotal ? ` (of ${stepTotal})` : ""}
                                       {agg && agg.opensTracked ? <> · {agg.opens} opened ({agg.openRate.toFixed(0)}%)</> : null}
                                       {agg ? <> · {agg.replies} replied · {agg.meetings} meeting{agg.meetings === 1 ? "" : "s"}</> : null}
                                     </span>
@@ -2858,6 +2956,7 @@ export default function ARECampaignDetail() {
                           })}
                         </TableBody>
                       </Table>
+                    </div>
                     </div>
                   );
                 })()}
