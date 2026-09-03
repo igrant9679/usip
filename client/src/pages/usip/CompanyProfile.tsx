@@ -10,6 +10,13 @@ import { useMemo, useState } from "react";
 import { useRoute, useLocation } from "wouter";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
 import { AddToMenu } from "@/components/usip/AddToMenu";
+// AccountDetail (the legacy second company page over the same row) retired
+// in phase 5: its opportunities, custom fields, tasks, activities, notes and
+// files live here now, so /accounts/:id can redirect to this profile.
+import { CustomFieldsPanel } from "@/components/usip/CustomFieldsPanel";
+import { EntityDetailTabs } from "@/components/usip/EntityDetail";
+import { RelatedTasks } from "@/pages/usip/Tasks";
+import { Link } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Button } from "@/components/ui/button";
@@ -49,6 +56,8 @@ export default function CompanyProfile() {
 
   const { data: c, isLoading } = trpc.companies.get.useQuery({ accountId: id }, { enabled: Number.isFinite(id) });
   const { data: contacts } = trpc.companies.contacts.useQuery({ accountId: id }, { enabled: Number.isFinite(id) });
+  const { data: allOpps } = trpc.opportunities.list.useQuery(undefined, { enabled: Number.isFinite(id) });
+  const opps = useMemo(() => ((allOpps ?? []) as any[]).filter((o) => o.accountId === id), [allOpps, id]);
   const { data: history } = trpc.companies.enrichmentHistory.useQuery({ accountId: id }, { enabled: Number.isFinite(id) });
   const { data: activity } = trpc.companies.activity.useQuery({ accountId: id }, { enabled: Number.isFinite(id) });
 
@@ -148,6 +157,35 @@ export default function CompanyProfile() {
                 </tbody>
               </table></div>
             ) : <div className="px-4 py-6 text-[13px] text-muted-foreground">No linked people yet.</div>}
+          </section>
+
+          {/* deals (from the retired AccountDetail) */}
+          <section className="rounded-lg border border-border">
+            <div className="flex items-center justify-between px-4 py-2.5 border-b border-border">
+              <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Deals ({opps.length})</div>
+              <Button size="sm" variant="ghost" className="h-7 text-[12px]" onClick={() => setLocation("/v2/deals")}>Open pipeline</Button>
+            </div>
+            {opps.length > 0 ? (
+              <ul className="divide-y divide-border">
+                {opps.map((o: any) => (
+                  <li key={o.id} className="px-4 py-2.5 flex items-center gap-3 text-sm">
+                    <div className="flex-1 min-w-0">
+                      <Link href={`/opportunities/${o.id}`} className="font-medium hover:underline truncate block">{o.name}</Link>
+                      <div className="text-[12px] text-muted-foreground">{o.stage} · ${Math.round(Number(o.value ?? 0)).toLocaleString()} · {o.winProb}%</div>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            ) : <div className="px-4 py-6 text-[13px] text-muted-foreground">No deals for this company yet.</div>}
+          </section>
+
+          <CustomFieldsPanel entityType="account" entityId={id} />
+          <RelatedTasks entityType="account" entityId={id} />
+
+          {/* activities · notes · files — the shared CRM tabs */}
+          <section className="rounded-lg border border-border p-4">
+            <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-3">Activity, notes &amp; files</div>
+            <EntityDetailTabs entityType="account" entityId={id} overview={<div className="text-[13px] text-muted-foreground">Everything about this company is on the sections above — use the tabs for the timeline, notes and files.</div>} />
           </section>
 
           {/* enrichment history + activity */}

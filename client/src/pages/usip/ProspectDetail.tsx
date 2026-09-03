@@ -15,18 +15,17 @@
 import { useState } from "react";
 import { useParams, Link, useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
-import { Shell, PageHeader } from "@/components/usip/Shell";
+import { Shell } from "@/components/usip/Shell";
+import { DetailHeader, DetailSection, DetailBody } from "@/components/usip/DetailShell";
 import { AddToMenu } from "@/components/usip/AddToMenu";
 import { ProfileImageUploader, ProfileImageSourceBadge } from "@/components/usip/ProspectAvatar";
 import { LinkedInEnrichmentFullPanel } from "@/components/usip/people/LinkedInEnrichment";
 import { ProspectScoringPanel } from "@/components/usip/scoring/ProspectScoringPanel";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Separator } from "@/components/ui/separator";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import {
@@ -124,78 +123,47 @@ export default function ProspectDetail() {
 
   return (
     <Shell title={fullName}>
-      <PageHeader
+      <div className="flex flex-col h-full min-h-0">
+      {/* v2 detail shell (phase 5): the avatar + identity + verification
+          banner that used to be two stacked cards ARE the header now. The
+          avatar appears only here, on the full profile — never in results. */}
+      <DetailHeader
+        back={{ href: "/v2/people", label: "People" }}
+        avatar={<ProfileImageUploader image={p.profile_image} name={fullName} prospectId={id} size="lg" />}
         title={fullName}
-        pageKey="prospect-detail"
-        description={[p.title, p.company].filter(Boolean).join(" · ")}
-        icon={<User className="size-5" />}
-      >
-        <Link href="/prospects">
-          <Button variant="ghost" size="sm" className="gap-1.5"><ArrowLeft className="size-3.5" /> Back to list</Button>
-        </Link>
-        <AddToMenu prospectIds={[id]} />
-        <Button variant="outline" size="sm" onClick={() => reEnrich.mutate({ id })} disabled={reEnrich.isPending} className="gap-1.5">
-          {reEnrich.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
-          Re-enrich
-        </Button>
-        <Button variant="outline" size="sm" onClick={startEdit} className="gap-1.5"><Pencil className="size-3.5" /> Edit</Button>
-        <Button variant="outline" size="sm" onClick={() => archive.mutate({ id })} disabled={archive.isPending} className="gap-1.5 text-destructive">
-          <Archive className="size-3.5" /> Archive
-        </Button>
-      </PageHeader>
+        tourId="page-prospect-detail"
+        badges={<>
+          <Badge className={`text-[11px] gap-1 ${tierClass}`}><TierIcon className="size-3" /> {p.confidenceScore ?? "—"}/100 · {p.confidenceTier ?? "unscored"}</Badge>
+          {p.verificationStatus === "verified" && <Badge variant="outline" className="text-[11px] border-emerald-500/40 text-emerald-700">verified</Badge>}
+          {p.verificationStatus === "needs_review" && <Badge variant="outline" className="text-[11px] border-amber-500/40 text-amber-700">needs review</Badge>}
+          {p.verificationStatus === "rejected" && <Badge variant="outline" className="text-[11px] border-destructive/40 text-destructive">archived</Badge>}
+          {p.linkedinUrlVerified && <Badge variant="outline" className="text-[11px] border-emerald-500/40 text-emerald-700 gap-1"><Linkedin className="size-2.5" /> LinkedIn verified</Badge>}
+          {p.profile_image?.url ? <ProfileImageSourceBadge source={p.profile_image.source_type} /> : null}
+        </>}
+        meta={<>
+          {p.title && <span className="inline-flex items-center gap-1"><Building2 className="size-3.5" />{p.title}</span>}
+          {p.company && <span className="inline-flex items-center gap-1"><Building2 className="size-3.5" />{p.company}</span>}
+          {p.email && <a href={`mailto:${p.email}`} className="inline-flex items-center gap-1 text-blue-600 hover:underline"><Mail className="size-3.5" />{p.email}</a>}
+          {p.linkedinUrl && <a href={p.linkedinUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-blue-600 hover:underline"><Linkedin className="size-3.5" />LinkedIn</a>}
+          {p.lastEnrichedAt && <span className="inline-flex items-center gap-1"><Calendar className="size-3.5" />Enriched {new Date(p.lastEnrichedAt).toLocaleDateString()}</span>}
+        </>}
+        actions={<>
+          <AddToMenu prospectIds={[id]} />
+          <Button variant="outline" size="sm" onClick={() => reEnrich.mutate({ id })} disabled={reEnrich.isPending} className="gap-1.5">
+            {reEnrich.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
+            Re-enrich
+          </Button>
+          <Button variant="outline" size="sm" onClick={startEdit} className="gap-1.5"><Pencil className="size-3.5" /> Edit</Button>
+          <Button variant="outline" size="sm" onClick={() => archive.mutate({ id })} disabled={archive.isPending} className="gap-1.5 text-destructive">
+            <Archive className="size-3.5" /> Archive
+          </Button>
+        </>}
+      />
 
-      <div className="p-4 md:p-6 max-w-5xl mx-auto space-y-5">
-        {/* Profile header — circular avatar + identity. The avatar appears
-            ONLY here, on the full profile; never in People Search results. */}
-        <Card>
-          <CardContent className="p-4 flex items-center gap-4">
-            <ProfileImageUploader image={p.profile_image} name={fullName} prospectId={id} size="lg" />
-            <div className="min-w-0">
-              <div className="text-lg font-semibold truncate">{fullName}</div>
-              <div className="text-sm text-muted-foreground truncate">
-                {[p.title, p.company].filter(Boolean).join(" · ") || "—"}
-              </div>
-              {p.profile_image?.url ? (
-                <ProfileImageSourceBadge source={p.profile_image.source_type} className="mt-1.5" />
-              ) : null}
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Verification banner */}
-        <Card>
-          <CardContent className="p-4 flex flex-wrap items-center gap-3">
-            <Badge className={`text-xs gap-1 ${tierClass}`}>
-              <TierIcon className="size-3" /> {p.confidenceScore ?? "—"}/100 · {p.confidenceTier ?? "unscored"}
-            </Badge>
-            {p.verificationStatus === "verified" && (
-              <Badge variant="outline" className="text-xs border-emerald-500/40 text-emerald-700">verified</Badge>
-            )}
-            {p.verificationStatus === "needs_review" && (
-              <Badge variant="outline" className="text-xs border-amber-500/40 text-amber-700">needs review</Badge>
-            )}
-            {p.verificationStatus === "rejected" && (
-              <Badge variant="outline" className="text-xs border-destructive/40 text-destructive">archived</Badge>
-            )}
-            {p.linkedinUrlVerified && (
-              <Badge variant="outline" className="text-xs border-emerald-500/40 text-emerald-700 gap-1">
-                <Linkedin className="size-2.5" /> LinkedIn verified
-              </Badge>
-            )}
-            {p.lastEnrichedAt && (
-              <span className="text-[11px] text-muted-foreground ml-auto flex items-center gap-1">
-                <Calendar className="size-3" /> Last enriched {new Date(p.lastEnrichedAt).toLocaleString()}
-              </span>
-            )}
-          </CardContent>
-        </Card>
-
+      <DetailBody className="max-w-5xl w-full mx-auto">
         {/* Profile fields */}
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm">Profile</CardTitle>
-          </CardHeader>
-          <CardContent className="grid gap-3 sm:grid-cols-2 text-sm">
+        <DetailSection title="Profile">
+          <div className="grid gap-3 sm:grid-cols-2 text-sm">
             <ProfileField icon={Building2} label="Title">{p.title || <Muted />}</ProfileField>
             <ProfileField icon={Building2} label="Company">{p.company || <Muted />}</ProfileField>
             <ProfileField icon={Globe} label="Company domain">
@@ -214,31 +182,20 @@ export default function ProspectDetail() {
             <ProfileField icon={MapPin} label="Location">
               {[p.city, p.state, p.country].filter(Boolean).join(", ") || <Muted />}
             </ProfileField>
-          </CardContent>
-        </Card>
+          </div>
+        </DetailSection>
 
         {/* LinkedIn enrichment (Unipile) — optional metadata, daily-checked */}
         <LinkedInEnrichmentFullPanel prospectId={id} />
 
         {/* Velocity Priority Score — explainable fit + priority breakdown */}
-        <Card>
-          <CardContent className="pt-4">
-            <ProspectScoringPanel objectType="person" objectId={id} />
-          </CardContent>
-        </Card>
+        <DetailSection title="Velocity priority score">
+          <ProspectScoringPanel objectType="person" objectId={id} />
+        </DetailSection>
 
         {/* Evidence panel */}
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm flex items-center gap-2">
-              <ExternalLink className="size-4 text-violet-500" />
-              Evidence — every source URL
-            </CardTitle>
-            <CardDescription className="text-[11px]">
-              These are the public web pages the discovery pipeline pulled this prospect's data from. Click any to verify the underlying claim yourself.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
+        <DetailSection title="Evidence — every source URL" tag="the public pages the discovery pipeline pulled this person's data from; open any to verify the claim">
+          <div>
             {sourceUrls.length === 0 ? (
               <div className="text-xs text-muted-foreground italic">No source URLs recorded — this prospect predates Discovery v2 or was created manually.</div>
             ) : (
@@ -252,45 +209,27 @@ export default function ProspectDetail() {
                 ))}
               </ul>
             )}
-          </CardContent>
-        </Card>
+          </div>
+        </DetailSection>
 
         {/* Verification notes */}
         {p.verificationNotes && (
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm flex items-center gap-2">
-                <AlertTriangle className="size-4 text-amber-500" />
-                Verification notes
-              </CardTitle>
-              <CardDescription className="text-[11px]">
-                Why the pipeline flagged this prospect — missing fields, source disagreements, format issues.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="text-xs whitespace-pre-wrap bg-muted/40 rounded p-3 font-mono leading-relaxed">{p.verificationNotes}</div>
-            </CardContent>
-          </Card>
+          <DetailSection title="Verification notes" tag={<span className="inline-flex items-center gap-1"><AlertTriangle className="size-3 text-amber-500" /> why the pipeline flagged this person</span>}>
+            <div className="text-xs whitespace-pre-wrap bg-muted/40 rounded p-3 font-mono leading-relaxed">{p.verificationNotes}</div>
+          </DetailSection>
         )}
 
         {/* Discovery run trail */}
         {p.lastDiscoveryRunId && (
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm">Discovery run</CardTitle>
-              <CardDescription className="text-[11px]">
-                The pipeline run that last touched this prospect.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Link href={`/v2/data-enrichment?tab=find-prospects&runId=${p.lastDiscoveryRunId}`}>
-                <Button variant="outline" size="sm" className="gap-1.5 text-xs">
-                  Run #{p.lastDiscoveryRunId} <ExternalLink className="size-3" />
-                </Button>
-              </Link>
-            </CardContent>
-          </Card>
+          <DetailSection title="Discovery run" tag="the pipeline run that last touched this person">
+            <Link href={`/v2/data-enrichment?tab=find-prospects&runId=${p.lastDiscoveryRunId}`}>
+              <Button variant="outline" size="sm" className="gap-1.5 text-xs">
+                Run #{p.lastDiscoveryRunId} <ExternalLink className="size-3" />
+              </Button>
+            </Link>
+          </DetailSection>
         )}
+      </DetailBody>
       </div>
 
       {/* Edit dialog */}

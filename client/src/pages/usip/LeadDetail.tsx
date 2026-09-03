@@ -1,17 +1,21 @@
 /**
  * /leads/:id — lead profile with score history + convert CTA.
+ *
+ * v2 detail shell (phase 5, 2026-09-02): DetailHeader + DetailSection from
+ * components/usip/DetailShell — the same vocabulary as CompanyProfile, so
+ * opening a lead from the list no longer flips the design language.
  */
 import { useParams, Link, useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { CustomFieldsPanel } from "@/components/usip/CustomFieldsPanel";
-import { Shell, PageHeader, EmptyState } from "@/components/usip/Shell";
+import { Shell, EmptyState } from "@/components/usip/Shell";
+import { DetailHeader, DetailSection, DetailFact, DetailBody } from "@/components/usip/DetailShell";
 import { EntityDetailTabs } from "@/components/usip/EntityDetail";
 import { RelatedTasks } from "@/pages/usip/Tasks";
 import { AddToMenu } from "@/components/usip/AddToMenu";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, Target, Mail, Phone, Briefcase, Zap } from "lucide-react";
+import { Target, Mail, Phone, Briefcase, Zap, Building2 } from "lucide-react";
 import { toast } from "sonner";
 
 export default function LeadDetail() {
@@ -31,67 +35,77 @@ export default function LeadDetail() {
     onError: (e) => toast.error(e.message),
   });
 
-  if (isLoading) return <Shell title="Lead"><div className="p-4 md:p-5 text-sm text-muted-foreground">Loading…</div></Shell>;
+  if (isLoading) return <Shell title="Lead"><div className="p-6 space-y-3">{Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-16 rounded-lg bg-muted/50 animate-pulse" />)}</div></Shell>;
   if (!lead) return <Shell title="Lead"><EmptyState title="Lead not found" /></Shell>;
 
   const converted = lead.status === "converted";
+  const name = `${lead.firstName} ${lead.lastName}`.trim();
 
   const overview = (
-    <div className="space-y-3">
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-      <Card><CardContent className="pt-4 space-y-2 text-sm">
-        <div className="flex items-center gap-2 font-medium"><Target className="size-4 text-muted-foreground" />{lead.firstName} {lead.lastName}</div>
-        {lead.title && <div className="text-muted-foreground">{lead.title}</div>}
-        {lead.company && <div className="flex items-center gap-2"><Briefcase className="size-4 text-muted-foreground" />{lead.company}</div>}
-        {lead.email && <div className="flex items-center gap-2"><Mail className="size-4 text-muted-foreground" /><a href={`mailto:${lead.email}`} className="hover:underline">{lead.email}</a></div>}
-        {lead.phone && <div className="flex items-center gap-2"><Phone className="size-4 text-muted-foreground" />{lead.phone}</div>}
-        <div className="flex items-center gap-2 pt-1">
-          <Badge variant="outline">{lead.status}</Badge>
-          {lead.grade && <Badge>Grade {lead.grade}</Badge>}
-          <Badge variant="secondary">Score {lead.score}</Badge>
-          {lead.source && <Badge variant="outline">{lead.source}</Badge>}
-        </div>
-      </CardContent></Card>
-      <Card><CardContent className="pt-4 space-y-2 text-sm">
-        <div className="font-medium flex items-center gap-2"><Zap className="size-4" /> AI next action</div>
-        {lead.aiNextAction ? (
-          <>
-            <div>{lead.aiNextAction}</div>
-            {lead.aiNextActionNote && <div className="text-xs text-muted-foreground">{lead.aiNextActionNote}</div>}
-          </>
-        ) : <div className="text-xs text-muted-foreground">No AI suggestion yet.</div>}
-        {!converted && (
-          <div className="pt-2">
-            <Button size="sm" disabled={convert.isPending}
-              onClick={() => convert.mutate({ id: lead.id, createOpportunity: true })}>
-              {convert.isPending ? "Converting…" : "Convert to opportunity"}
-            </Button>
-            <p className="text-xs text-muted-foreground mt-1">Creates the account, primary contact, and opportunity, then opens the deal.</p>
+    <div className="space-y-5">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <DetailSection title="Lead details">
+          <div className="grid grid-cols-2 gap-4">
+            <DetailFact icon={Briefcase} label="Title" value={lead.title} />
+            <DetailFact icon={Building2} label="Company" value={lead.company} />
+            <DetailFact icon={Mail} label="Email" value={lead.email ? <a href={`mailto:${lead.email}`} className="hover:underline">{lead.email}</a> : null} />
+            <DetailFact icon={Phone} label="Phone" value={lead.phone} />
+            <DetailFact label="Source" value={lead.source} />
+            <DetailFact label="Score" value={`${lead.score}${lead.grade ? ` · grade ${lead.grade}` : ""}`} />
           </div>
-        )}
-        {converted && (
-          <div className="text-xs text-muted-foreground pt-2">
-            Converted →{" "}
-            {lead.convertedAccountId && <Link className="hover:underline" href={`/accounts/${lead.convertedAccountId}`}>account</Link>}
-            {lead.convertedContactId && <> · <Link className="hover:underline" href={`/contacts/${lead.convertedContactId}`}>contact</Link></>}
-            {lead.convertedOpportunityId && <> · <Link className="hover:underline" href={`/opportunities/${lead.convertedOpportunityId}`}>opportunity</Link></>}
-          </div>
-        )}
-      </CardContent></Card>
-    </div>
-    <CustomFieldsPanel entityType="lead" entityId={lead.id} />
-    <RelatedTasks entityType="lead" entityId={lead.id} />
+        </DetailSection>
+        <DetailSection title="AI next action" tag={<Zap className="size-3" />}>
+          {lead.aiNextAction ? (
+            <>
+              <div className="text-[13px]">{lead.aiNextAction}</div>
+              {lead.aiNextActionNote && <div className="text-[12px] text-muted-foreground mt-1">{lead.aiNextActionNote}</div>}
+            </>
+          ) : <div className="text-[12px] text-muted-foreground">No AI suggestion yet.</div>}
+          {!converted ? (
+            <div className="pt-3">
+              <Button size="sm" disabled={convert.isPending} onClick={() => convert.mutate({ id: lead.id, createOpportunity: true })}>
+                {convert.isPending ? "Converting…" : "Convert to opportunity"}
+              </Button>
+              <p className="text-[11.5px] text-muted-foreground mt-1">Creates the account, primary contact, and opportunity, then opens the deal.</p>
+            </div>
+          ) : (
+            <div className="text-[12px] text-muted-foreground pt-3">
+              Converted →{" "}
+              {lead.convertedAccountId && <Link className="hover:underline" href={`/accounts/${lead.convertedAccountId}`}>company</Link>}
+              {lead.convertedContactId && <> · <Link className="hover:underline" href={`/contacts/${lead.convertedContactId}`}>person</Link></>}
+              {lead.convertedOpportunityId && <> · <Link className="hover:underline" href={`/opportunities/${lead.convertedOpportunityId}`}>deal</Link></>}
+            </div>
+          )}
+        </DetailSection>
+      </div>
+      <CustomFieldsPanel entityType="lead" entityId={lead.id} />
+      <RelatedTasks entityType="lead" entityId={lead.id} />
     </div>
   );
 
   return (
-    <Shell title={`${lead.firstName} ${lead.lastName}`}>
-      <PageHeader title={`${lead.firstName} ${lead.lastName}`} description={lead.company ?? undefined} icon={<Target className="size-5" />}>
-        <AddToMenu leadIds={[lead.id]} />
-        <Button variant="outline" size="sm" onClick={() => setLocation("/leads")}><ArrowLeft className="size-4 mr-1" /> Back</Button>
-      </PageHeader>
-      <div className="p-4 md:p-5">
-        <EntityDetailTabs entityType="lead" entityId={lead.id} overview={overview} />
+    <Shell title={name}>
+      <div className="flex flex-col h-full min-h-0">
+        <DetailHeader
+          back={{ href: "/leads", label: "Leads" }}
+          icon={<Target />}
+          title={name}
+          tourId="page-lead-detail"
+          badges={<>
+            <Badge variant="outline" className="text-[11px]">{lead.status}</Badge>
+            {lead.grade && <Badge className="text-[11px]">Grade {lead.grade}</Badge>}
+            <Badge variant="secondary" className="text-[11px]">Score {lead.score}</Badge>
+          </>}
+          meta={<>
+            {lead.title && <span className="inline-flex items-center gap-1"><Briefcase className="size-3.5" />{lead.title}</span>}
+            {lead.company && <span className="inline-flex items-center gap-1"><Building2 className="size-3.5" />{lead.company}</span>}
+            {lead.email && <a href={`mailto:${lead.email}`} className="inline-flex items-center gap-1 text-blue-600 hover:underline"><Mail className="size-3.5" />{lead.email}</a>}
+          </>}
+          actions={<AddToMenu leadIds={[lead.id]} />}
+        />
+        <DetailBody>
+          <EntityDetailTabs entityType="lead" entityId={lead.id} overview={overview} />
+        </DetailBody>
       </div>
     </Shell>
   );

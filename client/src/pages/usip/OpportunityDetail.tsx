@@ -9,14 +9,14 @@ import { useParams, Link, useLocation } from "wouter";
 import { useEffect, useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { CustomFieldsPanel } from "@/components/usip/CustomFieldsPanel";
-import { Shell, PageHeader, EmptyState } from "@/components/usip/Shell";
+import { Shell, EmptyState } from "@/components/usip/Shell";
+import { DetailHeader, DetailSection, DetailBody } from "@/components/usip/DetailShell";
 import { EntityDetailTabs } from "@/components/usip/EntityDetail";
 import { RelatedTasks } from "@/pages/usip/Tasks";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { ArrowLeft, KanbanSquare, Building2, Users, DollarSign, Brain, History, Loader2, Trash2 } from "lucide-react";
+import { KanbanSquare, Building2, Users, DollarSign, Brain, Loader2, Trash2 } from "lucide-react";
 import { ConfirmButton } from "@/components/usip/Common";
 import { toast } from "sonner";
 
@@ -73,10 +73,10 @@ export default function OpportunityDetail() {
   const reasonValue = isClosedWon ? o.winReason : isClosedLost ? o.lostReason : null;
 
   const overview = (
-    <div className="space-y-3">
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-      <Card className="md:col-span-2"><CardContent className="pt-4 space-y-2 text-sm">
-        <div className="flex items-center gap-2 font-medium"><KanbanSquare className="size-4 text-muted-foreground" />{o.name}</div>
+    <div className="space-y-5">
+    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <DetailSection title="Deal" className="md:col-span-2">
+        <div className="space-y-2 text-sm">
         <div className="flex items-center gap-2 flex-wrap">
           <Badge variant="outline">{o.stage}</Badge>
           <Badge variant="secondary">{fmt$(o.value)}</Badge>
@@ -104,9 +104,10 @@ export default function OpportunityDetail() {
             </div>
           </div>
         )}
-      </CardContent></Card>
-      <Card><CardContent className="pt-4 space-y-2 text-sm">
-        <div className="font-medium flex items-center gap-2"><Brain className="size-4" /> AI intelligence</div>
+        </div>
+      </DetailSection>
+      <DetailSection title="AI intelligence" tag={<Brain className="size-3" />}>
+        <div className="space-y-2 text-sm">
         {intel ? (
           <>
             <div className="text-muted-foreground">Win prob: <span className="text-foreground">{Math.round(Number(intel.winProbability))}%</span></div>
@@ -116,7 +117,8 @@ export default function OpportunityDetail() {
             {intel.aiSummary && <div className="text-xs">{intel.aiSummary}</div>}
           </>
         ) : <div className="text-xs text-muted-foreground">No analysis yet — run from Pipeline.</div>}
-      </CardContent></Card>
+        </div>
+      </DetailSection>
     </div>
     <CustomFieldsPanel entityType="opportunity" entityId={o.id} />
     <RelatedTasks entityType="opportunity" entityId={o.id} />
@@ -202,9 +204,23 @@ export default function OpportunityDetail() {
 
   return (
     <Shell title={o.name}>
-      <PageHeader title={o.name} description={account?.name ?? undefined} icon={<KanbanSquare className="size-5" />}>
-        <Button variant="outline" size="sm" onClick={() => setLocation("/pipeline")}><ArrowLeft className="size-4 mr-1" /> Back to pipeline</Button>
-        <ConfirmButton
+      <div className="flex flex-col h-full min-h-0">
+      <DetailHeader
+        back={{ href: "/v2/deals", label: "Deals" }}
+        icon={<KanbanSquare />}
+        title={o.name}
+        tourId="page-opportunity-detail"
+        badges={<>
+          <Badge variant="outline" className="text-[11px]">{o.stage}</Badge>
+          <Badge variant="secondary" className="text-[11px]">{fmt$(o.value)}</Badge>
+          <Badge className="text-[11px]">{o.winProb}%</Badge>
+        </>}
+        meta={<>
+          {account && <Link href={`/accounts/${account.id}`} className="inline-flex items-center gap-1 text-blue-600 hover:underline"><Building2 className="size-3.5" />{account.name}</Link>}
+          {o.closeDate && <span>Close {new Date(o.closeDate).toLocaleDateString()}</span>}
+          {o.daysInStage > 0 && <span>{o.daysInStage}d in stage</span>}
+        </>}
+        actions={<ConfirmButton
           variant="outline"
           size="sm"
           ariaLabel="Delete this opportunity"
@@ -216,9 +232,9 @@ export default function OpportunityDetail() {
           onConfirm={() => del.mutate({ id })}
         >
           <Trash2 className="size-4 mr-1" /> Delete
-        </ConfirmButton>
-      </PageHeader>
-      <div className="p-4 md:p-5">
+        </ConfirmButton>}
+      />
+      <DetailBody>
         <EntityDetailTabs
           entityType="opportunity"
           entityId={o.id}
@@ -226,6 +242,7 @@ export default function OpportunityDetail() {
           related={related}
           extraTabs={stageTab ? [stageTab] : undefined}
         />
+      </DetailBody>
       </div>
     </Shell>
   );

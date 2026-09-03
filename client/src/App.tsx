@@ -4,7 +4,7 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { WorkspaceProvider } from "@/contexts/WorkspaceContext";
 import NotFound from "@/pages/NotFound";
-import Accounts from "@/pages/usip/Accounts";
+import AccountRedirect from "@/pages/usip/AccountRedirect";
 import Audit from "@/pages/usip/Audit";
 import Campaigns from "@/pages/usip/Campaigns";
 import ContactRedirect from "@/pages/usip/ContactRedirect";
@@ -39,7 +39,6 @@ import SequenceEditor from "@/pages/usip/SequenceEditor";
 import Home from "@/pages/usip/Home";
 import Library from "@/pages/usip/Library";
 import ProspectDetail from "@/pages/usip/ProspectDetail";
-import AccountDetail from "@/pages/usip/AccountDetail";
 import LeadDetail from "@/pages/usip/LeadDetail";
 import OpportunityDetail from "@/pages/usip/OpportunityDetail";
 import SettingsPipelines from "@/pages/usip/SettingsPipelines";
@@ -441,8 +440,11 @@ function Router() {
           linked PERSON so old deep links keep working. See ContactRedirect. */}
       <Route path="/contacts"><AuthGate><ContactRedirect /></AuthGate></Route>
       <Route path="/contacts/:id"><AuthGate><ContactRedirect /></AuthGate></Route>
-      <Route path="/accounts"><AuthGate><Accounts /></AuthGate></Route>
-      <Route path="/accounts/:id"><AuthGate><AccountDetail /></AuthGate></Route>
+      {/* The legacy Accounts list and AccountDetail page were a second company
+          surface over the same rows Companies / CompanyProfile render.
+          Retired in phase 5 (2026-09-02); ids are preserved in the redirect. */}
+      <Route path="/accounts"><AuthGate><AccountRedirect /></AuthGate></Route>
+      <Route path="/accounts/:id"><AuthGate><AccountRedirect /></AuthGate></Route>
       <Route path="/leads/:id"><AuthGate><LeadDetail /></AuthGate></Route>
       <Route path="/opportunities/:id"><AuthGate><OpportunityDetail /></AuthGate></Route>
       <Route path="/pipeline"><AuthGate><Pipeline /></AuthGate></Route>
