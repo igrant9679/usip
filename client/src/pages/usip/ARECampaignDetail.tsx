@@ -2257,6 +2257,16 @@ export default function ARECampaignDetail() {
     else setSelectedIds(new Set(prospects.map((p) => p.id)));
   };
 
+  // Copy mode (phase 6): per-person AI copy, or one fixed template per step
+  // (the Sequences product's model, now a mode of this one engine).
+  const [copyDraft, setCopyDraft] = useState<"per_person" | "fixed" | null>(null);
+  const [fixedDraft, setFixedDraft] = useState<Array<{ stepIndex: number; day: number; channel: "email" | "linkedin"; subject: string; body: string }> | null>(null);
+  const copyActive = copyDraft ?? ((campaign as any)?.copyMode === "fixed" ? "fixed" : "per_person");
+  const fixedSteps = fixedDraft ?? ((Array.isArray((campaign as any)?.fixedSteps) ? (campaign as any).fixedSteps : []) as Array<{ stepIndex: number; day: number; channel: "email" | "linkedin"; subject: string; body: string }>);
+  const setFixedStep = (i: number, patch: Partial<{ day: number; subject: string; body: string }>) =>
+    setFixedDraft(fixedSteps.map((s, idx) => (idx === i ? { ...s, ...patch } : s)));
+  const addFixedStep = () => setFixedDraft([...fixedSteps, { stepIndex: fixedSteps.length, day: fixedSteps.length === 0 ? 0 : (fixedSteps[fixedSteps.length - 1]?.day ?? 0) + 7, channel: "email", subject: "", body: "" }]);
+  const removeFixedStep = (i: number) => setFixedDraft(fixedSteps.filter((_, idx) => idx !== i).map((s, idx) => ({ ...s, stepIndex: idx })));
   const updateCampaign = trpc.are.campaigns.update.useMutation({
     onSuccess: () => {
       toast.success("Campaign settings saved");
@@ -2959,6 +2969,61 @@ export default function ARECampaignDetail() {
                       <span>I understand that with <strong>Fully autonomous</strong> this campaign will approve and email prospects on its own, up to {campaign?.dailySendCap ?? 50}/day, with no human review between discovery and send. The auto-approve threshold {autoThreshold !== null ? `(${autoThreshold})` : "(currently off — set one below, or everyone is approved)"} is the only gate.</span>
                     </label>
                   )}
+                </CardContent>
+              </Card>
+
+              {/* Copy mode (phase 6): the difference between the two old engines,
+                  now a setting on the one that survived. */}
+              <Card className="bg-card border">
+                <CardHeader className="pb-2 pt-4 px-4">
+                  <CardTitle className="text-sm flex items-center gap-2">
+                    <Bot className="size-4 text-emerald-500" />
+                    Copy
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="px-4 pb-4 space-y-3">
+                  <p className="text-xs text-muted-foreground leading-relaxed">
+                    Who writes the emails. Takes effect for prospects sequenced after you save; prospects already sequenced keep their steps.
+                  </p>
+                  <div className="space-y-2">
+                    {([
+                      { v: "per_person", title: "Per-person AI copy", body: "The engine researches each prospect and writes every email for them — different words for every person." },
+                      { v: "fixed", title: "Fixed template", body: "You write one message per step and everyone gets the same steps, with merge tags ({{firstName}}, {{company}}) filled in at send time — the old Sequences model." },
+                    ] as const).map((o) => (
+                      <button key={o.v} type="button" onClick={() => setCopyDraft(o.v)}
+                        className={`w-full text-left rounded-md border px-3 py-2 transition-colors ${copyActive === o.v ? "border-emerald-500/50 bg-emerald-500/5" : "border-border hover:bg-muted/40"}`}>
+                        <div className="flex items-center gap-2">
+                          <span className={`size-2 rounded-full ${copyActive === o.v ? "bg-emerald-500" : "bg-muted-foreground/30"}`} />
+                          <span className="text-xs font-medium">{o.title}</span>
+                          {((campaign as any)?.copyMode ?? "per_person") === o.v && <span className="text-[10px] text-muted-foreground">· current</span>}
+                        </div>
+                        <p className="text-[11px] text-muted-foreground mt-1 leading-relaxed">{o.body}</p>
+                      </button>
+                    ))}
+                  </div>
+                  {copyActive === "fixed" && (
+                    <div className="space-y-2">
+                      {fixedSteps.length === 0 && <p className="text-[11px] text-muted-foreground">No steps yet — add the first one.</p>}
+                      {fixedSteps.map((s, i) => (
+                        <div key={i} className="rounded-md border border-border p-3 space-y-2">
+                          <div className="flex items-center gap-2">
+                            <span className="text-[11px] font-medium">Step {i + 1}</span>
+                            <span className="text-[11px] text-muted-foreground">· day</span>
+                            <Input type="number" min={0} max={365} value={s.day} onChange={(e) => setFixedStep(i, { day: Math.max(0, Number(e.target.value) || 0) })} className="h-7 w-20 text-xs" />
+                            <div className="flex-1" />
+                            <Button size="sm" variant="ghost" className="h-7 text-[11px] text-destructive" onClick={() => removeFixedStep(i)}>Remove</Button>
+                          </div>
+                          <Input value={s.subject} placeholder="Subject — merge tags like {{firstName}} work here" onChange={(e) => setFixedStep(i, { subject: e.target.value })} className="h-8 text-xs" />
+                          <Textarea value={s.body} placeholder="Body" rows={4} onChange={(e) => setFixedStep(i, { body: e.target.value })} className="text-xs" />
+                        </div>
+                      ))}
+                      <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={addFixedStep}>+ Add step</Button>
+                    </div>
+                  )}
+                  <Button size="sm" className="h-7 text-[11px]" disabled={updateCampaign.isPending || (copyDraft === null && fixedDraft === null)}
+                    onClick={() => updateCampaign.mutate({ id: campaign!.id, copyMode: copyActive, fixedSteps: copyActive === "fixed" ? fixedSteps : undefined } as any)}>
+                    {updateCampaign.isPending ? "Saving…" : "Save copy settings"}
+                  </Button>
                 </CardContent>
               </Card>
 

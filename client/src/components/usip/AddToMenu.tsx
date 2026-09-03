@@ -190,6 +190,8 @@ export function AddToMenu({ prospectIds = [], contactIds = [], leadIds = [], tri
                   className="w-full flex items-center gap-2 px-3 py-2 text-[13px] hover:bg-muted text-left disabled:opacity-60">
                   <Bot className="size-3.5 shrink-0 text-muted-foreground" />
                   <span className="flex-1 truncate">{c.name}</span>
+                  {/* Phase 6: the copy model is the difference the user is choosing. */}
+                  <span className="text-[10px] text-muted-foreground">{c.copyMode === "fixed" ? "fixed copy" : "AI copy"}</span>
                   <span className="text-[10px] text-muted-foreground capitalize">{c.status}</span>
                 </button>
               ))}

@@ -135,6 +135,13 @@ export default function SequencesV2() {
     onSuccess: (res: any) => { utils.sequences.list.invalidate(); setChoiceOpen(false); setTplOpen(false); if (res?.id) setLocation(`/v2/sequences/${res.id}`); },
     onError: (e) => toast.error(e.message),
   });
+  // Phase 6: sequences fold into the engine as fixed-copy campaigns — same
+  // steps, same merge tags, but the engine's dispatcher, suppression list and
+  // approval queue instead of a second engine that checked none of them.
+  const convertMut = trpc.are.campaigns.createFixedFromSequence.useMutation({
+    onSuccess: (r) => { toast.success(`Created fixed-copy campaign "${r.name}" (draft) — review its steps, then activate`); setLocation(`/are/campaigns/${r.id}`); },
+    onError: (e) => toast.error(e.message),
+  });
   const publishMut = trpc.sequences.publishAsTemplate.useMutation({
     onSuccess: () => { utils.sequences.list.invalidate(); utils.sequences.listTemplates.invalidate(); toast.success("Published to the team template library"); },
     onError: (e) => toast.error(e.message.includes("FORBIDDEN") ? "Only admins can publish templates" : e.message),
@@ -324,6 +331,8 @@ export default function SequencesV2() {
                               <DropdownMenuTrigger asChild><Button variant="ghost" size="icon-sm"><MoreHorizontal className="size-4" /></Button></DropdownMenuTrigger>
                               <DropdownMenuContent align="end">
                                 <DropdownMenuItem onClick={() => setLocation(`/v2/sequences/${s.id}`)}><ExternalLink className="size-4 mr-2" /> Open in builder</DropdownMenuItem>
+                                {/* Phase 6: a sequence is a fixed-copy campaign in the one engine. */}
+                                <DropdownMenuItem disabled={convertMut.isPending} onClick={() => convertMut.mutate({ sequenceId: s.id })}><ExternalLink className="size-4 mr-2" /> Convert to fixed-copy campaign</DropdownMenuItem>
                                 {isAdmin && <DropdownMenuItem onClick={() => publishMut.mutate({ id: s.id })}><BookOpen className="size-4 mr-2" /> Publish as team template</DropdownMenuItem>}
                                 {isManager && (
                                   <>

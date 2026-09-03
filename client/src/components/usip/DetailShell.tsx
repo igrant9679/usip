@@ -84,6 +84,40 @@ export function DetailFact({ icon: Icon, label, value }: { icon?: any; label: st
   );
 }
 
+/**
+ * The CRM spine, as a stepper (phase 6): Prospect → Lead → Opportunity →
+ * Customer. Rendered from the server-derived lifecycle so it can never
+ * disagree with the data. Reached stages link to the record that proves it.
+ */
+export type LifecycleStage = "prospect" | "lead" | "opportunity" | "customer";
+export function LifecycleStepper({ stage, hrefs }: { stage: LifecycleStage; hrefs?: Partial<Record<LifecycleStage, string>> }) {
+  const accent = useAccentColor();
+  const [, setLocation] = useLocation();
+  const order: LifecycleStage[] = ["prospect", "lead", "opportunity", "customer"];
+  const labels: Record<LifecycleStage, string> = { prospect: "Prospect", lead: "Lead", opportunity: "Opportunity", customer: "Customer" };
+  const reached = order.indexOf(stage);
+  return (
+    <div className="inline-flex items-center gap-1" role="list" aria-label={`Lifecycle: ${labels[stage]}`} title={`This person is at the ${labels[stage]} stage`}>
+      {order.map((s, i) => {
+        const done = i <= reached;
+        const href = hrefs?.[s];
+        const cls = cn("text-[10.5px] font-medium rounded-full px-2 py-0.5 border transition-colors", done ? "text-white border-transparent" : "text-muted-foreground border-border bg-transparent");
+        const el = (
+          <span key={s} role="listitem" className={cls} style={done ? { backgroundColor: i === reached ? accent : `${accent}99` } : undefined}>
+            {labels[s]}
+          </span>
+        );
+        return (
+          <span key={s} className="inline-flex items-center gap-1">
+            {href && done ? <button type="button" onClick={() => setLocation(href)} className="contents">{el}</button> : el}
+            {i < order.length - 1 && <span aria-hidden className="text-muted-foreground/50 text-[10px]">›</span>}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
 /** The scrolling body under a DetailHeader. */
 export function DetailBody({ children, className }: { children: ReactNode; className?: string }) {
   return <div className={cn("flex-1 min-h-0 overflow-y-auto p-5 space-y-5", className)}>{children}</div>;

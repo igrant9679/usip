@@ -3960,6 +3960,20 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0177: fixed-copy campaigns — Sequences fold into the engine (phase 6) ─
+  // Two outreach engines shared no code and no suppression list. The
+  // Sequences product's one real difference — one fixed message per step,
+  // the same to everyone — becomes a copy MODE of the ARE campaign, so both
+  // run on one step model, one dispatcher, one suppression list and one
+  // approval queue. Existing sequences convert into fixed-copy campaigns.
+  {
+    name: "0177_campaign_copy_mode.sql",
+    statements: [
+      "ALTER TABLE `are_campaigns` ADD COLUMN `copyMode` ENUM('per_person','fixed') NOT NULL DEFAULT 'per_person'",
+      "ALTER TABLE `are_campaigns` ADD COLUMN `fixedSteps` JSON NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

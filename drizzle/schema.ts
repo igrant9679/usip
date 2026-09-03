@@ -3658,6 +3658,14 @@ export const areCampaigns = mysqlTable(
      *  { steps: [{stepIndex, day, channel, archetype, skeleton, ctaPattern}] }. */
     generatedTemplate: json("generatedTemplate"),
     generatedTemplateAt: timestamp("generatedTemplateAt"),
+    /* Copy mode (migration 0177, phase 6). `per_person`: the engine writes
+       every email for each prospect (the ARE's native mode). `fixed`: one
+       template per step, the same to everyone — the CRM Sequences product's
+       model, now a mode of the ONE engine so both share the step model, the
+       dispatcher, suppression and the approval queue. fixedSteps:
+       [{ stepIndex, day, channel, subject, body }] with merge tags. */
+    copyMode: mysqlEnum("copyMode", ["per_person", "fixed"]).default("per_person").notNull(),
+    fixedSteps: json("fixedSteps"),
     /** Per-slice rotation state used by the discovery query fan-out
      *  (migration 0084). Shape:
      *    { slices: [{ id, q, lastSearchedAt, lastNewCount }], updatedAt }

@@ -911,6 +911,38 @@ export async function runSequenceAgent(
     `Sequence generation started for ${prospect.firstName} ${prospect.lastName}`, { prospectId, force: !!options.force });
 
   try {
+    // Fixed copy (phase 6): the campaign carries one template per step and
+    // every prospect gets the same steps — merge tags resolve at dispatch
+    // through applyMerge, exactly as generated copy does. No LLM call, no
+    // quality pass; this is the Sequences product's model as an engine mode.
+    if ((campaign as { copyMode?: string }).copyMode === "fixed") {
+      const raw = Array.isArray((campaign as { fixedSteps?: unknown }).fixedSteps) ? ((campaign as { fixedSteps: unknown[] }).fixedSteps) : [];
+      const steps = raw.map((s, i) => {
+        const x = (s ?? {}) as Record<string, unknown>;
+        return {
+          stepIndex: typeof x.stepIndex === "number" ? x.stepIndex : i,
+          day: typeof x.day === "number" ? x.day : i * DEFAULT_STEP_GAP_DAYS,
+          channel: x.channel === "linkedin" ? "linkedin" : "email",
+          subject: String(x.subject ?? ""),
+          body: String(x.body ?? ""),
+          variantKey: DEFAULT_VARIANT_KEY,
+        };
+      }).filter((s) => s.subject.trim() || s.body.trim());
+      if (steps.length === 0) throw new Error("This fixed-copy campaign has no steps yet — add at least one step with a subject or body");
+      const fixedPatch = {
+        generatedSequence: steps,
+        sequenceQualityScore: null,
+        sequenceQualityBreakdown: { fixed: true, note: "Fixed-copy campaign: identical steps for every prospect; no quality pass" },
+        sequenceRewriteCount: 0,
+      };
+      await db.update(prospectIntelligence).set(fixedPatch as never)
+        .where(eq(prospectIntelligence.prospectQueueId, prospectId));
+      const durationMs = Date.now() - startedAt;
+      await emitSeqLog(db, workspaceId, campaignId, "info", "sequence.fixed",
+        `Fixed-copy steps assigned to ${prospect.firstName} ${prospect.lastName} — ${steps.length} steps, no generation`, { prospectId, steps: steps.length, durationMs });
+      return { ok: true, reused: false, steps: steps.length, qualityScore: 0, durationMs, prospectId };
+    }
+
     // (1) Ensure the campaign template exists (one LLM call, cached forever).
     const template = await generateCampaignTemplate(campaign, false);
     if (template.steps.length === 0) {

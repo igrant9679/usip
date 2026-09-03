@@ -7,7 +7,7 @@
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import { z } from "zod";
-import { areCampaigns, campaignRoutingSuggestions, personas, prospectIntelligence, prospectQueue, prospects, workspaceSettings } from "../../../drizzle/schema";
+import { areCampaigns, campaignRoutingSuggestions, personas, prospectIntelligence, prospectQueue, prospects, sequences, workspaceSettings } from "../../../drizzle/schema";
 import { getDb } from "../../db";
 import { router } from "../../_core/trpc";
 import { adminWsProcedure, workspaceProcedure } from "../../_core/workspace";
@@ -277,6 +277,61 @@ export const campaignsRouter = router({
       return { ok: true as const, ...result };
     }),
 
+  /**
+   * A CRM Sequence becomes a fixed-copy campaign in the ONE engine (phase 6).
+   * Email steps carry over verbatim (subject, body, merge tags); `days` gaps
+   * become cumulative day offsets; task/wait steps only contribute their
+   * gap. Created as a DRAFT with batch approval and no targeting, so the
+   * owner reviews the steps and adds people (or targeting) before it sends.
+   */
+  createFixedFromSequence: workspaceProcedure
+    .input(z.object({ sequenceId: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [seq] = await db.select().from(sequences)
+        .where(and(eq(sequences.id, input.sequenceId), eq(sequences.workspaceId, ctx.workspace.id))).limit(1);
+      if (!seq) throw new TRPCError({ code: "NOT_FOUND", message: "Sequence not found" });
+      const raw = Array.isArray(seq.steps) ? (seq.steps as unknown[]) : [];
+      let day = 0;
+      const fixedSteps: Array<{ stepIndex: number; day: number; channel: "email"; subject: string; body: string }> = [];
+      for (const s of raw) {
+        const x = (s ?? {}) as Record<string, unknown>;
+        const gap = Number(x.days ?? x.waitDays ?? 0);
+        if (Number.isFinite(gap) && gap > 0) day += gap;
+        if (x.enabled === false) continue;
+        if (x.type !== "email") continue; // task/wait steps: gap only
+        fixedSteps.push({
+          stepIndex: fixedSteps.length,
+          day,
+          channel: "email",
+          subject: String(x.subject ?? "").slice(0, 240),
+          body: String(x.body ?? "").slice(0, 8000),
+        });
+      }
+      if (fixedSteps.length === 0) throw new TRPCError({ code: "BAD_REQUEST", message: "This sequence has no email steps to convert." });
+      const name = `${seq.name}`.slice(0, 190);
+      const [row] = await db.insert(areCampaigns).values({
+        workspaceId: ctx.workspace.id,
+        name,
+        description: seq.description ?? `Converted from the sequence "${seq.name}" (phase 6)`,
+        autonomyMode: "batch_approval",
+        icpOverrides: {},
+        prospectSources: ARE_DEFAULT_SOURCES,
+        targetProspectCount: 100,
+        dailySendCap: 25,
+        channelsEnabled: { email: true, linkedin: false },
+        sequenceTemplate: "standard_7step",
+        stepGapDays: 7,
+        goalType: "reply",
+        ownerUserId: ctx.user.id,
+        copyMode: "fixed",
+        fixedSteps,
+      } as never).$returningId();
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "create", entityType: "are_campaign_from_sequence", entityId: row.id, after: { sequenceId: seq.id, steps: fixedSteps.length } });
+      return { id: row.id, name, steps: fixedSteps.length };
+    }),
+
   setAllAutonomy: adminWsProcedure
     .input(z.object({ mode: z.enum(["full", "batch_approval"]) }))
     .mutation(async ({ ctx, input }) => {
@@ -299,6 +354,15 @@ export const campaignsRouter = router({
         name: z.string().min(2).max(200).optional(),
         description: z.string().optional(),
         autonomyMode: z.enum(["full", "batch_approval", "review_release"]).optional(),
+        // Copy mode (phase 6): per-person AI copy, or one fixed template per step.
+        copyMode: z.enum(["per_person", "fixed"]).optional(),
+        fixedSteps: z.array(z.object({
+          stepIndex: z.number().int().min(0),
+          day: z.number().int().min(0).max(365),
+          channel: z.enum(["email", "linkedin"]).default("email"),
+          subject: z.string().max(240).default(""),
+          body: z.string().max(8000).default(""),
+        })).max(12).optional(),
         targetProspectCount: z.number().min(1).max(10000).optional(),
         dailySendCap: z.number().min(1).max(500).optional(),
         channelsEnabled: z.any().optional(),
@@ -324,6 +388,8 @@ export const campaignsRouter = router({
       if (rest.name !== undefined) updates.name = rest.name;
       if (rest.description !== undefined) updates.description = rest.description;
       if (rest.autonomyMode !== undefined) updates.autonomyMode = rest.autonomyMode;
+      if (rest.copyMode !== undefined) updates.copyMode = rest.copyMode;
+      if (rest.fixedSteps !== undefined) updates.fixedSteps = rest.fixedSteps;
       if (rest.targetProspectCount !== undefined) updates.targetProspectCount = rest.targetProspectCount;
       if (rest.dailySendCap !== undefined) updates.dailySendCap = rest.dailySendCap;
       if (rest.channelsEnabled !== undefined) updates.channelsEnabled = rest.channelsEnabled;

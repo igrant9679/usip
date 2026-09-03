@@ -16,7 +16,7 @@ import { useState } from "react";
 import { useParams, Link, useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { Shell } from "@/components/usip/Shell";
-import { DetailHeader, DetailSection, DetailBody } from "@/components/usip/DetailShell";
+import { DetailHeader, DetailSection, DetailBody, LifecycleStepper } from "@/components/usip/DetailShell";
 import { AddToMenu } from "@/components/usip/AddToMenu";
 import { ProfileImageUploader, ProfileImageSourceBadge } from "@/components/usip/ProspectAvatar";
 import { LinkedInEnrichmentFullPanel } from "@/components/usip/people/LinkedInEnrichment";
@@ -139,6 +139,18 @@ export default function ProspectDetail() {
           {p.verificationStatus === "rejected" && <Badge variant="outline" className="text-[11px] border-destructive/40 text-destructive">archived</Badge>}
           {p.linkedinUrlVerified && <Badge variant="outline" className="text-[11px] border-emerald-500/40 text-emerald-700 gap-1"><Linkedin className="size-2.5" /> LinkedIn verified</Badge>}
           {p.profile_image?.url ? <ProfileImageSourceBadge source={p.profile_image.source_type} /> : null}
+          {/* The CRM spine (phase 6): where this person is, derived server-side. */}
+          {(p as any).lifecycle && (
+            <LifecycleStepper
+              stage={(p as any).lifecycle.stage}
+              hrefs={{
+                prospect: `/prospects/${id}`,
+                lead: (p as any).lifecycle.leadId ? `/leads/${(p as any).lifecycle.leadId}` : undefined,
+                opportunity: (p as any).lifecycle.opportunityId ? `/opportunities/${(p as any).lifecycle.opportunityId}` : undefined,
+                customer: (p as any).lifecycle.accountId ? `/customers` : undefined,
+              }}
+            />
+          )}
         </>}
         meta={<>
           {p.title && <span className="inline-flex items-center gap-1"><Building2 className="size-3.5" />{p.title}</span>}

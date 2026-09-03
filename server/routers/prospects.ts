@@ -35,6 +35,49 @@ import { resolveProspectProfileImage } from "../services/profileImage";
 import { SWEEP_DAILY_CAP_MAX, SWEEP_DAILY_CAP_MIN } from "@shared/enrichmentLimits";
 import { promoteProspectRow } from "../services/prospectPromotion";
 
+/**
+ * Where a person is on the CRM spine, derived from the linkages that already
+ * exist rather than a new column that could drift:
+ *   customer     — their company is a customers row (won account)
+ *   opportunity  — they hold a role on an opportunity (via their contact)
+ *                  or their company has an open deal
+ *   lead         — they were promoted to a lead that is not yet converted
+ *   prospect     — everything else (the People master row itself)
+ */
+export type LifecycleStage = "prospect" | "lead" | "opportunity" | "customer";
+export async function deriveLifecycle(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  workspaceId: number,
+  row: { id: number; linkedLeadId: number | null; linkedContactId: number | null; accountId: number | null },
+): Promise<{ stage: LifecycleStage; leadId: number | null; opportunityId: number | null; accountId: number | null }> {
+  const { customers, opportunities, opportunityContactRoles, leads } = await import("../../drizzle/schema");
+  const { desc: descBy } = await import("drizzle-orm");
+  const out = { stage: "prospect" as LifecycleStage, leadId: row.linkedLeadId, opportunityId: null as number | null, accountId: row.accountId };
+  if (row.accountId) {
+    const [cust] = await db.select({ id: customers.id }).from(customers)
+      .where(and(eq(customers.workspaceId, workspaceId), eq(customers.accountId, row.accountId))).limit(1);
+    if (cust) return { ...out, stage: "customer" };
+  }
+  if (row.linkedContactId) {
+    const [role] = await db.select({ opportunityId: opportunityContactRoles.opportunityId }).from(opportunityContactRoles)
+      .where(and(eq(opportunityContactRoles.workspaceId, workspaceId), eq(opportunityContactRoles.contactId, row.linkedContactId)))
+      .orderBy(descBy(opportunityContactRoles.id)).limit(1);
+    if (role) return { ...out, stage: "opportunity", opportunityId: role.opportunityId };
+  }
+  if (row.accountId) {
+    const [open] = await db.select({ id: opportunities.id }).from(opportunities)
+      .where(and(eq(opportunities.workspaceId, workspaceId), eq(opportunities.accountId, row.accountId), sql`${opportunities.stage} NOT IN ('won','lost')`))
+      .orderBy(descBy(opportunities.id)).limit(1);
+    if (open) return { ...out, stage: "opportunity", opportunityId: open.id };
+  }
+  if (row.linkedLeadId) {
+    const [lead] = await db.select({ id: leads.id, status: leads.status }).from(leads)
+      .where(and(eq(leads.workspaceId, workspaceId), eq(leads.id, row.linkedLeadId))).limit(1);
+    if (lead && lead.status !== "converted") return { ...out, stage: "lead" };
+  }
+  return out;
+}
+
 export const prospectsRouter = router({
   /**
    * Where is each of these people right now? Active ARE campaigns and active
@@ -73,7 +116,14 @@ export const prospectsRouter = router({
       if (!row) throw new TRPCError({ code: "NOT_FOUND" });
       // Full profile only: attach resolved profile-image metadata (compliance
       // gate decides whether the URL is exposed). Search/list never get this.
-      return { ...row, profile_image: resolveProspectProfileImage(row) };
+      //
+      // Lifecycle (phase 6, 2026-09-02): the owner's CRM spine is Prospect →
+      // Lead → Opportunity → Customer, and every transition already exists
+      // in the data — as nine separate mechanisms across four tables, with
+      // no single place that says where a person IS. This derives the stage
+      // from the linkages so the profile can show the spine.
+      const lifecycle = await deriveLifecycle(db, ctx.workspace.id, row);
+      return { ...row, profile_image: resolveProspectProfileImage(row), lifecycle };
     }),
 
   /**
