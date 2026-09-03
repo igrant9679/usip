@@ -1807,6 +1807,31 @@ export const prospectsRouter = router({
       return { added, skipped };
     }),
 
+  /**
+   * Read-only REHEARSAL of pushExisting for the Add-existing wizard (owner
+   * ask 2026-09-03). Per person: the verdict the push would give (through
+   * the write path's own classifier — see services/are/pushPeople.ts),
+   * duplicates inside the selection and elsewhere in People, and every
+   * campaign + sequence membership, active or past. Writes nothing.
+   */
+  pushExistingPreview: workspaceProcedure
+    .input(z.object({
+      campaignId: z.number(),
+      /** CRM prospect ids (People), not queue row ids. */
+      prospectIds: z.array(z.number().int().positive()).min(1).max(200),
+    }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [campaign] = await db.select({ id: areCampaigns.id, name: areCampaigns.name })
+        .from(areCampaigns)
+        .where(and(eq(areCampaigns.id, input.campaignId), eq(areCampaigns.workspaceId, ctx.workspace.id)))
+        .limit(1);
+      if (!campaign) throw new TRPCError({ code: "NOT_FOUND", message: "Campaign not found" });
+      const { previewAddExisting } = await import("../../services/are/addExistingPreview");
+      return previewAddExisting(ctx.workspace.id, campaign, input.prospectIds);
+    }),
+
   addManual: workspaceProcedure
     .input(z.object({
       campaignId: z.number(),

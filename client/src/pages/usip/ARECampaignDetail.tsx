@@ -3610,6 +3610,7 @@ export default function ARECampaignDetail() {
         open={addExistingOpen}
         onOpenChange={setAddExistingOpen}
         campaignId={campaignId}
+        campaignName={campaign.name}
         onPushed={() => { utils.are.prospects.list.invalidate(); utils.are.campaigns.get.invalidate(); }}
       />
 

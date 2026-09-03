@@ -23,6 +23,17 @@ export const ACTIVE_QUEUE_STATUSES = ["pending", "approved", "enrolled", "paused
 /** Enrollment statuses that mean "a sequence is currently working this person". */
 export const ACTIVE_ENROLLMENT_STATUSES = ["active", "paused"] as const;
 
+/**
+ * Which memberships to return. Omitted = the ACTIVE set (the gate the write
+ * paths ask). `statuses: null` = EVERY status — membership HISTORY, for the
+ * Add-existing wizard's "where is this person" view, where a campaign
+ * someone completed last quarter is worth seeing even though it blocks
+ * nothing.
+ */
+export interface MembershipOpts { statuses?: readonly string[] | null }
+const statusFilter = (col: any, statuses: readonly string[] | null) =>
+  statuses === null ? undefined : inArray(col, [...statuses] as any);
+
 export interface ActiveSequenceHit { sequenceId: number; sequenceName: string; status: string; currentStep: number }
 export interface ActiveCampaignHit { campaignId: number; campaignName: string; sequenceStatus: string; queueId: number }
 
@@ -34,6 +45,7 @@ export interface ActiveCampaignHit { campaignId: number; campaignName: string; s
 export async function activeSequencesForProspects(
   workspaceId: number,
   prospectIds: number[],
+  opts: MembershipOpts = {},
 ): Promise<Map<number, ActiveSequenceHit[]>> {
   const out = new Map<number, ActiveSequenceHit[]>();
   const db = await getDb();
@@ -69,7 +81,7 @@ export async function activeSequencesForProspects(
     .leftJoin(prospects, eq(prospects.id, enrollments.prospectId))
     .where(and(
       eq(enrollments.workspaceId, workspaceId),
-      inArray(enrollments.status, [...ACTIVE_ENROLLMENT_STATUSES]),
+      statusFilter(enrollments.status, opts.statuses === undefined ? ACTIVE_ENROLLMENT_STATUSES : opts.statuses),
       or(
         inArray(enrollments.prospectId, prospectIds),
         contactIds.length ? inArray(enrollments.contactId, contactIds) : sql`false`,
@@ -114,6 +126,7 @@ export async function activeSequencesForProspects(
 export async function activeCampaignsForProspects(
   workspaceId: number,
   prospectIds: number[],
+  opts: MembershipOpts = {},
 ): Promise<Map<number, ActiveCampaignHit[]>> {
   const out = new Map<number, ActiveCampaignHit[]>();
   const db = await getDb();
@@ -143,7 +156,7 @@ export async function activeCampaignsForProspects(
     .innerJoin(areCampaigns, eq(areCampaigns.id, prospectQueue.campaignId))
     .where(and(
       eq(prospectQueue.workspaceId, workspaceId),
-      inArray(prospectQueue.sequenceStatus, [...ACTIVE_QUEUE_STATUSES]),
+      statusFilter(prospectQueue.sequenceStatus, opts.statuses === undefined ? ACTIVE_QUEUE_STATUSES : opts.statuses),
       or(
         inArray(prospectQueue.personProspectId, prospectIds),
         emails.length ? inArray(prospectQueue.email, emails) : sql`false`,
@@ -164,6 +177,13 @@ export async function activeCampaignsForProspects(
   }
   return out;
 }
+
+/** Every sequence membership, any status — history, not a gate. */
+export const sequenceMembershipsForProspects = (workspaceId: number, prospectIds: number[]) =>
+  activeSequencesForProspects(workspaceId, prospectIds, { statuses: null });
+/** Every campaign membership, any status — history, not a gate. */
+export const campaignMembershipsForProspects = (workspaceId: number, prospectIds: number[]) =>
+  activeCampaignsForProspects(workspaceId, prospectIds, { statuses: null });
 
 /**
  * Resolve contacts and leads to their People rows (creating the mirror when
