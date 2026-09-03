@@ -44,6 +44,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
@@ -2777,77 +2778,88 @@ export default function ARECampaignDetail() {
                   <StepFunnelSankey funnel={stepFunnel} onSelectStep={(i) => void openStepPreview(i)} onSelectMembers={(sel) => { funnelSel.clear(); setFunnelList(sel); }} />
                 )}
                 <p className="text-sm text-muted-foreground">
-                  The engine writes uniquely personalised copy for every prospect, so every dispatch is its own message. Each card below is <strong>one message that was actually sent</strong> — who it went to, what it said, and whether that person opened or replied — grouped by step. The bands above are the roll-up of these.
+                  The engine writes uniquely personalised copy for every prospect, so every dispatch is its own message. Each row below is <strong>one message that was actually sent</strong> — who it went to, what it said, and whether that person opened or replied — grouped by step. The bands above are the roll-up of these. Click a row to read the message and its stats.
                 </p>
+                {/* One table, a header row per step (2026-09-03: was a grid of
+                    cards, three to a row — 80 dispatches meant 27 rows of
+                    scrolling to compare two steps). The step header carries
+                    the roll-up the cards' section title carried. */}
                 {(() => {
                   const list = dispatches ?? [];
                   const bySteps = new Map<number, typeof list>();
                   for (const d of list) { const arr = bySteps.get(d.stepIndex) ?? []; arr.push(d); bySteps.set(d.stepIndex, arr); }
                   const stepAgg = new Map((abVariants ?? []).map((v) => [v.stepIndex, v]));
-                  return Array.from(bySteps.entries()).sort((x, y) => x[0] - y[0]).map(([stepIndex, items]) => {
-                    const agg = stepAgg.get(stepIndex);
-                    return (
-                      <div key={stepIndex} className="space-y-3">
-                        <div className="flex items-baseline gap-3 flex-wrap">
-                          <h3 className="text-sm font-semibold">Step {stepIndex + 1}</h3>
-                          <span className="text-xs text-muted-foreground tabular-nums">
-                            {items.length} dispatched
-                            {agg && agg.opensTracked ? <> · {agg.opens} opened ({agg.openRate.toFixed(0)}%)</> : null}
-                            {agg ? <> · {agg.replies} replied · {agg.meetings} meeting{agg.meetings === 1 ? "" : "s"}</> : null}
-                          </span>
-                          {agg && agg.sent > 0 && !agg.sampleSufficient && (
-                            <span className="text-[10px] text-amber-600 dark:text-amber-500">too few sends to judge the step yet</span>
-                          )}
-                        </div>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
-                          {items.map((d) => {
-                            const sentLabel = d.sentAt ? new Date(d.sentAt).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "—";
-                            const tone = d.replied || d.meeting ? "border-emerald-500/40" : d.opened ? "border-blue-500/30" : "";
-                            return (
-                              <Card
-                                key={d.executionId}
-                                className={"bg-card border cursor-pointer transition-colors hover:border-primary/40 " + tone}
-                                role="button"
-                                tabIndex={0}
-                                title="Open this message and its stats"
-                                onClick={() => setPreviewExecId(d.executionId)}
-                                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setPreviewExecId(d.executionId); } }}
-                              >
-                                <CardHeader className="pb-2 pt-3 px-4">
-                                  <div className="flex items-start gap-2">
-                                    <div className="min-w-0 flex-1">
-                                      <div className="text-xs font-semibold truncate">{d.prospectName}</div>
-                                      <div className="text-[11px] text-muted-foreground truncate">
-                                        {[d.prospectTitle, d.companyName].filter(Boolean).join(" · ") || "—"}
-                                      </div>
-                                    </div>
-                                    <div className="flex items-center gap-1 shrink-0">
-                                      {d.meeting && <Badge className="text-[9px] px-1.5 py-0 h-4 bg-emerald-600 text-white border-0">Meeting</Badge>}
-                                      {!d.meeting && d.replied && <Badge className="text-[9px] px-1.5 py-0 h-4 bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border-emerald-500/30">Replied</Badge>}
-                                      {!d.replied && !d.meeting && d.opened && <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 border-blue-500/30 text-blue-600">Opened</Badge>}
-                                      {!d.replied && !d.meeting && !d.opened && (
-                                        <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 text-muted-foreground">
-                                          {d.opensTracked ? "No open yet" : "Opens not tracked"}
-                                        </Badge>
-                                      )}
-                                    </div>
+                  const when = (d: Date | string | null | undefined) =>
+                    d ? new Date(d).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "—";
+                  const outcome = (d: (typeof list)[number]) =>
+                    d.meeting ? <Badge className="text-[10px] px-1.5 py-0 h-4 bg-emerald-600 text-white border-0">Meeting</Badge>
+                      : d.replied ? <Badge className="text-[10px] px-1.5 py-0 h-4 bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border-emerald-500/30">Replied</Badge>
+                        : d.opened ? <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 border-blue-500/30 text-blue-600">Opened</Badge>
+                          : <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 text-muted-foreground">{d.opensTracked ? "No open yet" : "Opens not tracked"}</Badge>;
+                  return (
+                    <div className="rounded-lg border border-border overflow-x-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead className="min-w-[180px]">Prospect</TableHead>
+                            <TableHead className="min-w-[220px]">Subject</TableHead>
+                            <TableHead className="whitespace-nowrap">Sent</TableHead>
+                            <TableHead className="whitespace-nowrap">Opened</TableHead>
+                            <TableHead className="whitespace-nowrap">Outcome</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {Array.from(bySteps.entries()).sort((x, y) => x[0] - y[0]).map(([stepIndex, items]) => {
+                            const agg = stepAgg.get(stepIndex);
+                            return [
+                              <TableRow key={`h${stepIndex}`} className="bg-muted/40 hover:bg-muted/40">
+                                <TableCell colSpan={5} className="py-1.5">
+                                  <div className="flex items-baseline gap-3 flex-wrap">
+                                    <span className="text-[13px] font-semibold">Step {stepIndex + 1}</span>
+                                    <span className="text-xs text-muted-foreground tabular-nums">
+                                      {items.length} dispatched
+                                      {agg && agg.opensTracked ? <> · {agg.opens} opened ({agg.openRate.toFixed(0)}%)</> : null}
+                                      {agg ? <> · {agg.replies} replied · {agg.meetings} meeting{agg.meetings === 1 ? "" : "s"}</> : null}
+                                    </span>
+                                    {agg && agg.sent > 0 && !agg.sampleSufficient && (
+                                      <span className="text-[10px] text-amber-600 dark:text-amber-500">too few sends to judge the step yet</span>
+                                    )}
                                   </div>
-                                  {d.subject && <div className="text-xs font-medium mt-1.5 line-clamp-1">{d.subject}</div>}
-                                </CardHeader>
-                                <CardContent className="px-4 pb-3 space-y-2">
-                                  {d.bodyPreview && <p className="text-[11px] text-muted-foreground leading-relaxed line-clamp-3">{d.bodyPreview}</p>}
-                                  <div className="flex items-center justify-between text-[10px] text-muted-foreground">
-                                    <span>Sent {sentLabel}</span>
-                                    {d.opened && d.openedAt && <span>Opened {new Date(d.openedAt).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</span>}
-                                  </div>
-                                </CardContent>
-                              </Card>
-                            );
+                                </TableCell>
+                              </TableRow>,
+                              ...items.map((d) => (
+                                <TableRow
+                                  key={d.executionId}
+                                  className="cursor-pointer hover:bg-muted/50"
+                                  role="button"
+                                  tabIndex={0}
+                                  title="Open this message and its stats"
+                                  onClick={() => setPreviewExecId(d.executionId)}
+                                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setPreviewExecId(d.executionId); } }}
+                                >
+                                  <TableCell className="py-2">
+                                    <div className="text-xs font-semibold truncate max-w-[220px]">{d.prospectName}</div>
+                                    <div className="text-[11px] text-muted-foreground truncate max-w-[220px]" title={[d.prospectTitle, d.companyName].filter(Boolean).join(" · ") || undefined}>
+                                      {[d.prospectTitle, d.companyName].filter(Boolean).join(" · ") || "—"}
+                                    </div>
+                                  </TableCell>
+                                  <TableCell className="py-2">
+                                    <div className="text-xs font-medium truncate max-w-[360px]" title={d.subject ?? undefined}>{d.subject || "—"}</div>
+                                    {d.bodyPreview && <div className="text-[11px] text-muted-foreground truncate max-w-[360px]" title={d.bodyPreview}>{d.bodyPreview}</div>}
+                                  </TableCell>
+                                  <TableCell className="py-2 text-[11px] text-muted-foreground whitespace-nowrap tabular-nums">{when(d.sentAt)}</TableCell>
+                                  <TableCell className="py-2 text-[11px] text-muted-foreground whitespace-nowrap tabular-nums">
+                                    {d.opened && d.openedAt ? when(d.openedAt) : d.opensTracked ? "—" : <span title="This send carries no tracking pixel">not tracked</span>}
+                                  </TableCell>
+                                  <TableCell className="py-2">{outcome(d)}</TableCell>
+                                </TableRow>
+                              )),
+                            ];
                           })}
-                        </div>
-                      </div>
-                    );
-                  });
+                        </TableBody>
+                      </Table>
+                    </div>
+                  );
                 })()}
               </div>
             )}

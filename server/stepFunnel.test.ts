@@ -98,6 +98,27 @@ describe("the funnel follows people, not steps", () => {
     expect(f.nodes.some((n) => n.id === "step:1")).toBe(false);
   });
 
+  it("a step sent twice to one prospect is ONE visit — never a band back into the step", () => {
+    // 2026-09-03: CF campaigns 19 and 21 each had one prospect with two
+    // execution rows at step 0 (a re-send). The journey then read
+    // step:0 → unopened:0 → step:0 → … — a cycle, and Recharts' Sankey has no
+    // cycle guard: every x came out NaN and the chart collapsed into a single
+    // column of labels with no bands. The tab looked broken for the whole
+    // campaign because of one person.
+    const f = computeStepFunnel([send(1, 0), send(1, 0, { openedAt: new Date() }), send(1, 1), send(2, 0)], []);
+    expect(f.links.some((l) => l.target === "step:0"), "no band may enter step 0").toBe(false);
+    for (const l of f.links) {
+      const col = (id: string) => (id.startsWith("step:") ? 2 * Number(id.slice(5)) : /^(opened|unopened):/.test(id) ? 2 * Number(id.split(":")[1]) + 1 : 99);
+      expect(col(l.target), `${l.source} → ${l.target} must move forward`).toBeGreaterThan(col(l.source));
+    }
+    // The merged visit keeps the open (any row opened = the person opened).
+    expect(linkOf(f, "step:0", "opened:0")).toBe(1);
+    expect(linkOf(f, "opened:0", "step:1")).toBe(1);
+    // …and the step counts the PERSON once, not both rows.
+    expect(f.nodes.find((n) => n.id === "step:0")?.value).toBe(2);
+    expect(f.totalProspects).toBe(2);
+  });
+
   it("emits no link pointing at a node it did not emit", () => {
     // Recharts resolves links positionally — a dangling endpoint would attach
     // the band to whatever node happened to sit at that index.

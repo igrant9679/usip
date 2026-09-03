@@ -92,6 +92,30 @@ describe("layerFunnel", () => {
     expect(laneHops).toEqual([5, 5, 18, 18]); // opened: lane@2→lane@3, lane@3→terminal; unopened: same
   });
 
+  it("a same-column or backward link is dropped — Recharts has no cycle guard (2026-09-03 crash)", () => {
+    // What CF campaigns 19/21 actually sent: one prospect dispatched step 1
+    // twice → "No open on step 1" → "Step 1". Fed to Recharts as-is, the
+    // depth walk yields NaN for every x and the chart collapses to one column.
+    const poisoned: StepFunnelDto = {
+      ...funnel,
+      links: [...funnel.links, { source: "unopened:0", target: "step:0", value: 1 }, { source: "step:0", target: "step:0", value: 1 }],
+    };
+    const out = layerFunnel(poisoned);
+    const col = (i: number) => {
+      const n = out.nodes[i];
+      if (n.passthrough) return NaN;
+      return n.stepIndex === null ? 4 : n.kind === "step" ? 2 * n.stepIndex : 2 * n.stepIndex + 1;
+    };
+    for (const l of out.links) {
+      const a = col(l.source), b = col(l.target);
+      if (Number.isNaN(a) || Number.isNaN(b)) continue; // a lane hop; spans one column by construction
+      expect(b, `${l.source}→${l.target}`).toBeGreaterThan(a);
+    }
+    expect(out.links.some((l) => l.target === out.nodes.findIndex((n) => n.id === "step:0"))).toBe(false);
+    // Everything else survives exactly as before.
+    expect(out.links.length).toBe(layerFunnel(funnel).links.length);
+  });
+
   it("a link whose endpoint was never emitted is dropped, not mis-attached", () => {
     const bad = { ...funnel, links: [...funnel.links, { source: "step:0", target: "ghost", value: 99 }] };
     const o = layerFunnel(bad);

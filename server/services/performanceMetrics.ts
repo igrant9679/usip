@@ -798,6 +798,28 @@ export function computeStepFunnel(
     byProspect[pid].sort(
       (a: FunnelSendRow, b: FunnelSendRow) => Number(a.stepIndex ?? 0) - Number(b.stepIndex ?? 0),
     );
+    // ONE visit per prospect per step. The engine can dispatch the same step
+    // to a prospect twice (a retry, a re-send after an edit), and this funnel
+    // is a per-PROSPECT journey: two rows at step 0 drew a band from "No open
+    // on step 1" BACK into "Step 1" — a cycle. Recharts' Sankey walks depth
+    // recursively with no cycle guard, so it recursed until the stack blew,
+    // the chart threw, and the Step performance tab lost it (CF campaigns 19
+    // and 21, found 2026-09-03). Same-step rows merge: opened if any was,
+    // a pixel if any carried one — so the step still counts that person once.
+    const merged: FunnelSendRow[] = [];
+    for (const s of byProspect[pid]) {
+      const last = merged[merged.length - 1];
+      if (last && Number(last.stepIndex ?? 0) === Number(s.stepIndex ?? 0)) {
+        merged[merged.length - 1] = {
+          ...last,
+          openedAt: last.openedAt || s.openedAt || null,
+          trackingToken: last.trackingToken || s.trackingToken || null,
+        };
+      } else {
+        merged.push(s);
+      }
+    }
+    byProspect[pid] = merged;
   }
 
   const replied: Record<string, true> = {};

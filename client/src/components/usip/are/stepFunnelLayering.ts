@@ -62,6 +62,13 @@ export function layerFunnel(funnel: StepFunnelDto): { nodes: ChartNode[]; links:
     // once Recharts resolves it positionally.
     if (!src || !tgt) continue;
     const ds = depthOf(src), dt = depthOf(tgt);
+    // A same-column or BACKWARD link is a cycle to Recharts' depth walk,
+    // which recurses with no guard until the stack blows and the chart
+    // throws (2026-09-03: a prospect sent step 1 twice produced
+    // "No open on step 1" → "Step 1"). The server no longer emits one, but
+    // a chart that can be crashed by its data is not a chart — dropped here
+    // too, so this component never hands Recharts a cycle whatever it is fed.
+    if (dt <= ds) continue;
     const srcIdx = index.get(l.source)!, tgtIdx = index.get(l.target)!;
     const origin: LinkOrigin = { source: l.source, target: l.target, sourceName: src.name, targetName: tgt.name };
     if (dt - ds <= 1) { direct.push({ source: srcIdx, target: tgtIdx, value: l.value, origins: [origin] }); continue; }

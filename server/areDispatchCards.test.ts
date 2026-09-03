@@ -57,7 +57,12 @@ describe("getDispatchStats reads what the aggregate reads", () => {
   });
 });
 
-describe("the tab renders one card per dispatch", () => {
+// 2026-09-03: the cards became rows of ONE table (owner: "a more visually
+// efficient table view" — three cards to a row meant 27 rows of scrolling to
+// compare two steps). The invariants below are unchanged: one row per
+// dispatch, keyed by execution id, opening THAT message, under a step header
+// that carries the aggregate.
+describe("the tab renders one row per dispatch", () => {
   const page = readFileSync(join(__dirname, "../client/src/pages/usip/ARECampaignDetail.tsx"), "utf8");
   const tab = page.slice(page.indexOf('<TabsContent value="ab"'), page.indexOf('<TabsContent value="signals"'));
 
@@ -65,12 +70,15 @@ describe("the tab renders one card per dispatch", () => {
     expect(page).toContain("trpc.are.prospects.getDispatches.useQuery({ campaignId })");
   });
 
-  it("maps cards over dispatches, keyed by execution id", () => {
-    expect(tab).toContain("{items.map((d) => {");
+  it("maps table rows over dispatches, keyed by execution id", () => {
+    expect(tab).toContain("...items.map((d) => (");
     expect(tab).toContain("key={d.executionId}");
+    expect(tab).toContain("<Table>");
+    // The step header is a row of the same table, spanning every column.
+    expect(tab).toContain("<TableCell colSpan={5}");
   });
 
-  it("each card opens THAT message, not a step's newest specimen", () => {
+  it("each row opens THAT message, not a step's newest specimen", () => {
     expect(tab).toContain("setPreviewExecId(d.executionId)");
     expect(tab).not.toContain("openStepPreview(v.stepIndex, v.variantKey)");
   });
