@@ -15,11 +15,16 @@ import { readFileSync } from "node:fs";
 import { queueIdentityKeys, nameOrgDedupKey } from "./services/are/queueIdentity";
 
 const router = readFileSync("server/routers/are/prospects.ts", "utf8");
-const proc = router.slice(router.indexOf("pushExisting: workspaceProcedure"), router.indexOf("addManual: workspaceProcedure"));
+// Phase 3 (2026-09-02) moved the loop body into services/are/pushPeople.ts —
+// the ONE write path the manual push and the campaign router share. The
+// procedure resolves ids and calls it; the invariants below live in the
+// write path, so both sources are read as one text.
+const writePath = readFileSync("server/services/are/pushPeople.ts", "utf8");
+const proc = router.slice(router.indexOf("pushExisting: workspaceProcedure"), router.indexOf("addManual: workspaceProcedure")) + "\n" + writePath;
 
 describe("it reuses the one identity vocabulary", () => {
   it("resolves exclusivity through queueIdentity, not a local rule", () => {
-    expect(proc).toContain("workspaceQueueIdentityIndex(ctx.workspace.id)");
+    expect(proc).toMatch(/workspaceQueueIdentityIndex\((ctx\.workspace\.id|workspaceId)\)/);
     expect(proc).toContain("existingClaim(index, shape)");
   });
 
@@ -52,7 +57,7 @@ describe("the queue row points back at the person", () => {
 
   it("is scoped to the caller's workspace on both reads", () => {
     expect(proc).toContain("eq(areCampaigns.workspaceId, ctx.workspace.id)");
-    expect(proc).toContain("eq(prospects.workspaceId, ctx.workspace.id)");
+    expect(proc).toMatch(/eq\(prospects\.workspaceId, (ctx\.workspace\.id|workspaceId)\)/);
   });
 });
 
@@ -74,7 +79,9 @@ describe("enrichment runs BEFORE sequence generation", () => {
   });
 
   it("sequence generation is optional", () => {
-    expect(proc).toContain("if (input.generateSequence)");
+    // The procedure forwards the flag; the write path honours it.
+    expect(proc).toContain("generateSequence: input.generateSequence");
+    expect(proc).toContain("if (opts.generateSequence !== false)");
   });
 });
 

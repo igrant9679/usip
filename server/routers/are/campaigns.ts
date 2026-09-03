@@ -7,7 +7,7 @@
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import { z } from "zod";
-import { areCampaigns, personas, prospectIntelligence, prospectQueue, workspaceSettings } from "../../../drizzle/schema";
+import { areCampaigns, campaignRoutingSuggestions, personas, prospectIntelligence, prospectQueue, prospects, workspaceSettings } from "../../../drizzle/schema";
 import { getDb } from "../../db";
 import { router } from "../../_core/trpc";
 import { adminWsProcedure, workspaceProcedure } from "../../_core/workspace";
@@ -178,6 +178,105 @@ export const campaignsRouter = router({
    * (nothing approved without a human). review_release is gone: it never had
    * a branch — the engine treats any remaining rows as batch_approval.
    */
+  /* ── Campaign routing (phase 3): the best-fit router ─────────────────── */
+
+  getRoutingSettings: workspaceProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) return { mode: "off" as const, dailyCap: 25, lastRunAt: null as Date | null };
+    const [row] = await db.select({ mode: workspaceSettings.campaignRoutingMode, dailyCap: workspaceSettings.campaignRoutingDailyCap, lastRunAt: workspaceSettings.campaignRoutingLastRunAt })
+      .from(workspaceSettings).where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
+    return row ?? { mode: "off" as const, dailyCap: 25, lastRunAt: null };
+  }),
+
+  setRoutingSettings: adminWsProcedure
+    .input(z.object({ mode: z.enum(["off", "approval", "auto"]), dailyCap: z.number().int().min(1).max(500).optional() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const set: Record<string, unknown> = { campaignRoutingMode: input.mode };
+      if (input.dailyCap !== undefined) set.campaignRoutingDailyCap = input.dailyCap;
+      await db.insert(workspaceSettings).values({ workspaceId: ctx.workspace.id, ...set } as never).onDuplicateKeyUpdate({ set: set as never });
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "campaign_routing_settings", entityId: ctx.workspace.id, after: input });
+      return { ok: true as const };
+    }),
+
+  /** Score people against every active campaign. Read-only: returns picks. */
+  routeBestFit: workspaceProcedure
+    .input(z.object({
+      prospectIds: z.array(z.number().int().positive()).max(100).default([]),
+      contactIds: z.array(z.number().int().positive()).max(100).default([]),
+      leadIds: z.array(z.number().int().positive()).max(100).default([]),
+    }).refine((v) => v.prospectIds.length + v.contactIds.length + v.leadIds.length > 0, { message: "Pick at least one person." }))
+    .query(async ({ ctx, input }) => {
+      const { resolveToPeopleIds } = await import("../../services/crossEngineEnrollment");
+      const { routeProspects } = await import("../../services/campaignRouter");
+      const resolved = await resolveToPeopleIds(ctx.workspace.id, input);
+      const picks = await routeProspects(ctx.workspace.id, resolved.prospectIds);
+      const db = await getDb();
+      const names = db && resolved.prospectIds.length
+        ? await db.select({ id: prospects.id, firstName: prospects.firstName, lastName: prospects.lastName }).from(prospects)
+            .where(and(eq(prospects.workspaceId, ctx.workspace.id), inArray(prospects.id, resolved.prospectIds)))
+        : [];
+      const nameOf = new Map(names.map((n) => [n.id, `${n.firstName ?? ""} ${n.lastName ?? ""}`.trim()]));
+      return { picks: picks.map((p) => ({ ...p, name: nameOf.get(p.prospectId) ?? `#${p.prospectId}` })), unresolved: resolved.unresolved };
+    }),
+
+  /** Enroll confirmed picks through the one write path. */
+  applyBestFit: workspaceProcedure
+    .input(z.object({ picks: z.array(z.object({ prospectId: z.number().int().positive(), campaignId: z.number().int().positive(), fit: z.number().int().min(0).max(100), reasoning: z.string().max(400).default("") })).min(1).max(100) }))
+    .mutation(async ({ ctx, input }) => {
+      const { applyPicks } = await import("../../services/campaignRouter");
+      const r = await applyPicks(ctx.workspace.id, input.picks.map((p) => ({ ...p, campaignName: null, alternatives: [], usedModel: false })));
+      const db = await getDb();
+      if (db) {
+        await db.insert(campaignRoutingSuggestions).values(input.picks.map((p) => ({
+          workspaceId: ctx.workspace.id, prospectId: p.prospectId, campaignId: p.campaignId, fit: p.fit, reasoning: p.reasoning,
+          status: "accepted" as const, source: "manual" as const, decidedAt: new Date(), decidedBy: ctx.user.id,
+        })) as never);
+      }
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "create", entityType: "campaign_routing_apply", entityId: 0, after: r });
+      return r;
+    }),
+
+  listRoutingSuggestions: workspaceProcedure
+    .input(z.object({ limit: z.number().int().min(1).max(200).default(50) }).optional())
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) return [];
+      return db.select({
+        id: campaignRoutingSuggestions.id, prospectId: campaignRoutingSuggestions.prospectId, campaignId: campaignRoutingSuggestions.campaignId,
+        campaignName: areCampaigns.name, fit: campaignRoutingSuggestions.fit, reasoning: campaignRoutingSuggestions.reasoning,
+        alternatives: campaignRoutingSuggestions.alternatives, createdAt: campaignRoutingSuggestions.createdAt,
+        firstName: prospects.firstName, lastName: prospects.lastName, title: prospects.title, company: prospects.company,
+      })
+        .from(campaignRoutingSuggestions)
+        .innerJoin(areCampaigns, eq(areCampaigns.id, campaignRoutingSuggestions.campaignId))
+        .innerJoin(prospects, eq(prospects.id, campaignRoutingSuggestions.prospectId))
+        .where(and(eq(campaignRoutingSuggestions.workspaceId, ctx.workspace.id), eq(campaignRoutingSuggestions.status, "pending")))
+        .orderBy(desc(campaignRoutingSuggestions.fit), desc(campaignRoutingSuggestions.id))
+        .limit(input?.limit ?? 50);
+    }),
+
+  decideRoutingSuggestion: workspaceProcedure
+    .input(z.object({ id: z.number().int().positive(), decision: z.enum(["accept", "dismiss"]) }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [s] = await db.select().from(campaignRoutingSuggestions)
+        .where(and(eq(campaignRoutingSuggestions.id, input.id), eq(campaignRoutingSuggestions.workspaceId, ctx.workspace.id), eq(campaignRoutingSuggestions.status, "pending")));
+      if (!s) throw new TRPCError({ code: "NOT_FOUND", message: "Suggestion not found or already decided" });
+      let result: { added: number; skipped: number } = { added: 0, skipped: 0 };
+      if (input.decision === "accept") {
+        const { applyPicks } = await import("../../services/campaignRouter");
+        result = await applyPicks(ctx.workspace.id, [{ prospectId: s.prospectId, campaignId: s.campaignId, campaignName: null, fit: s.fit, reasoning: s.reasoning ?? "", alternatives: [], usedModel: false }]);
+      }
+      await db.update(campaignRoutingSuggestions)
+        .set({ status: input.decision === "accept" ? "accepted" : "dismissed", decidedAt: new Date(), decidedBy: ctx.user.id } as never)
+        .where(and(eq(campaignRoutingSuggestions.id, input.id), eq(campaignRoutingSuggestions.workspaceId, ctx.workspace.id)));
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "campaign_routing_suggestion", entityId: input.id, after: { decision: input.decision, ...result } });
+      return { ok: true as const, ...result };
+    }),
+
   setAllAutonomy: adminWsProcedure
     .input(z.object({ mode: z.enum(["full", "batch_approval"]) }))
     .mutation(async ({ ctx, input }) => {

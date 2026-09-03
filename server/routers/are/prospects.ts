@@ -140,37 +140,9 @@ Score each dimension 0-20 and provide a total score 0-100.
   };
 }
 
-/**
- * Merge a campaign's icpOverrides over the workspace ICP into the "effective
- * ICP" that scoring must use. Scoring only the global ICP graded a nonprofit
- * campaign's Executive Directors against a B2B-tech profile — every
- * on-audience prospect scored 10-40 and screening auto-rejected them all.
- * Overrides win per-field; the ICP fills gaps + supplies anti-patterns.
- * Returns null when there is neither an ICP nor any override targeting.
- */
-function buildEffectiveIcp(
-  icp: typeof icpProfiles.$inferSelect | undefined,
-  icpOverrides: unknown,
-): typeof icpProfiles.$inferSelect | null {
-  const ov = (icpOverrides ?? {}) as {
-    targetTitles?: string[]; targetIndustries?: string[]; targetGeographies?: string[];
-    employeeMin?: number; employeeMax?: number;
-  };
-  const hasOverrides =
-    (ov.targetTitles?.length ?? 0) > 0 ||
-    (ov.targetIndustries?.length ?? 0) > 0 ||
-    (ov.targetGeographies?.length ?? 0) > 0;
-  if (!icp && !hasOverrides) return null;
-  return {
-    ...(icp ?? {}),
-    targetTitles: ov.targetTitles?.length ? ov.targetTitles : (icp?.targetTitles ?? []),
-    targetIndustries: ov.targetIndustries?.length ? ov.targetIndustries : (icp?.targetIndustries ?? []),
-    targetGeographies: ov.targetGeographies?.length ? ov.targetGeographies : (icp?.targetGeographies ?? []),
-    targetCompanySizeMin: ov.employeeMin ?? icp?.targetCompanySizeMin ?? null,
-    targetCompanySizeMax: ov.employeeMax ?? icp?.targetCompanySizeMax ?? null,
-    antiPatterns: icp?.antiPatterns ?? [],
-  } as typeof icpProfiles.$inferSelect;
-}
+// buildEffectiveIcp moved to services/are/effectiveIcp.ts (phase 3): the
+// campaign router needs the same merge for every campaign at once.
+import { buildEffectiveIcp } from "../../services/are/effectiveIcp";
 
 /* ─── Enrich Agent ───────────────────────────────────────────────────────── */
 
@@ -1779,7 +1751,7 @@ export const prospectsRouter = router({
         .limit(1);
       if (!campaign) throw new TRPCError({ code: "NOT_FOUND", message: "Campaign not found" });
 
-      const { resolveToPeopleIds, activeSequencesForProspects } = await import("../../services/crossEngineEnrollment");
+      const { resolveToPeopleIds } = await import("../../services/crossEngineEnrollment");
       const resolved = await resolveToPeopleIds(ctx.workspace.id, input);
       const skipped: Array<{ prospectId: number; reason: string }> = [];
       for (const u of resolved.unresolved) {
@@ -1787,86 +1759,13 @@ export const prospectsRouter = router({
       }
       if (resolved.prospectIds.length === 0) return { added: [], skipped };
 
-      const people = await db
-        .select({
-          id: prospects.id, firstName: prospects.firstName, lastName: prospects.lastName,
-          email: prospects.email, linkedinUrl: prospects.linkedinUrl, phone: prospects.phone,
-          title: prospects.title, company: prospects.company, companyDomain: prospects.companyDomain,
-        })
-        .from(prospects)
-        .where(and(eq(prospects.workspaceId, ctx.workspace.id), inArray(prospects.id, resolved.prospectIds)));
-
-      const { workspaceQueueIdentityIndex, existingClaim } = await import("../../services/are/queueIdentity");
-      const index = await workspaceQueueIdentityIndex(ctx.workspace.id);
-      // The other engine's view: a person a Sequence is actively working must
-      // not also be picked up by a campaign. Neither engine checked the other
-      // before 2026-09-02.
-      const inSequence = await activeSequencesForProspects(ctx.workspace.id, people.map((p) => p.id));
-
-      const added: Array<{ prospectId: number; queueId: number }> = [];
-
-      for (const p of people) {
-        const seqHits = inSequence.get(p.id);
-        if (seqHits?.length) {
-          skipped.push({ prospectId: p.id, reason: `In an active sequence ("${seqHits[0].sequenceName}") — exit it first so two engines don't mail them` });
-          continue;
-        }
-        const shape = {
-          email: p.email, linkedinUrl: p.linkedinUrl,
-          firstName: p.firstName, lastName: p.lastName,
-          companyName: p.company, companyDomain: p.companyDomain,
-        };
-        // Identity-less rows are refused at ingest everywhere else; a manual
-        // push is no exception. Without a key this person cannot be deduped,
-        // and the queue fills with untraceable duplicates.
-        const { queueIdentityKeys } = await import("../../services/are/queueIdentity");
-        if (queueIdentityKeys(shape).length === 0) {
-          skipped.push({ prospectId: p.id, reason: "No email, LinkedIn URL, or name + company to identify them by" });
-          continue;
-        }
-        const claim = existingClaim(index, shape);
-        if (claim) {
-          skipped.push({
-            prospectId: p.id,
-            reason: claim.campaignId === input.campaignId
-              ? "Already in this campaign"
-              : `Already in another campaign (id ${claim.campaignId ?? "—"}) — a prospect can only be in one at a time`,
-          });
-          continue;
-        }
-
-        const [row] = await db.insert(prospectQueue).values({
-          workspaceId: ctx.workspace.id,
-          campaignId: input.campaignId,
-          sourceType: "internal_contact",
-          firstName: p.firstName, lastName: p.lastName,
-          email: p.email, linkedinUrl: p.linkedinUrl, phone: p.phone,
-          title: p.title, companyName: p.company, companyDomain: p.companyDomain,
-          // The link back to People — what keeps enrichment, field history and
-          // the drawer pointing at one person rather than a queue-only copy.
-          personProspectId: p.id,
-          icpMatchScore: 0,
-          enrichmentStatus: "pending",
-          sequenceStatus: "pending",
-        }).$returningId();
-
-        added.push({ prospectId: p.id, queueId: row.id });
-        // Claim the identity for the rest of THIS batch too, so pushing the
-        // same person twice in one selection cannot slip past.
-        for (const k of queueIdentityKeys(shape)) if (!index.has(k)) index.set(k, { rowId: row.id, campaignId: input.campaignId });
-      }
-
-      // Enrich → sequence, in that order, off the request path.
-      for (const a of added) {
-        void (async () => {
-          await runEnrichAgent(a.queueId, ctx.workspace.id);
-          if (input.generateSequence) {
-            // allowWithoutIntel: enrichment may legitimately find nothing for
-            // this person, and a manual push should still produce a sequence.
-            await runSequenceAgent(a.queueId, ctx.workspace.id, input.campaignId, { force: false, allowWithoutIntel: true });
-          }
-        })().catch((e) => console.error(`[are.pushExisting] queue ${a.queueId}:`, (e as Error)?.message ?? e));
-      }
+      // The one write path (services/are/pushPeople.ts) — shared with the
+      // campaign router's auto mode, so dedupe, the cross-engine check and
+      // the enrich → sequence follow-up cannot drift between the two.
+      const { pushPeopleIntoCampaign } = await import("../../services/are/pushPeople");
+      const pushed = await pushPeopleIntoCampaign(ctx.workspace.id, input.campaignId, resolved.prospectIds, { generateSequence: input.generateSequence });
+      const added = pushed.added;
+      skipped.push(...pushed.skipped);
 
       await recordAudit({
         workspaceId: ctx.workspace.id, actorUserId: ctx.user.id,

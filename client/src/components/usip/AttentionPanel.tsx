@@ -186,6 +186,19 @@ export function AttentionPanel() {
           <QueueCard icon={<ListChecks className="size-4" />} tint="#14B8A6" title="Chat follow-ups to approve"
             count={s.chatFollowUps.count} cta="Open tasks" href="/v2/tasks" />
         )}
+        {(s.routingSuggestions?.count ?? 0) > 0 && (
+          <QueueCard icon={<ListChecks className="size-4" />} tint="#7C3AED" title="People the engine wants to put in a campaign"
+            count={s.routingSuggestions.count} cta="Review picks" href="/are">
+            <ul className="space-y-1">
+              {s.routingSuggestions.byCampaign.slice(0, 3).map((c: { campaignId: number; name: string; count: number }) => (
+                <li key={c.campaignId} className="text-xs text-muted-foreground truncate">
+                  <Link href={`/are/campaigns/${c.campaignId}`} className="hover:underline text-foreground/90">{c.name}</Link>
+                  <span> — {c.count} suggested</span>
+                </li>
+              ))}
+            </ul>
+          </QueueCard>
+        )}
 
         {s.pausedCampaigns.length > 0 && (
           <QueueCard icon={<PauseCircle className="size-4" />} tint="#F43F5E" title="Paused campaigns"

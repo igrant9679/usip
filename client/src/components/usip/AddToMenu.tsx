@@ -31,7 +31,7 @@ export interface AddToMenuProps {
   onDone?: () => void;
 }
 
-type Pane = "root" | "campaign" | "sequence";
+type Pane = "root" | "campaign" | "sequence" | "bestfit";
 
 export function AddToMenu({ prospectIds = [], contactIds = [], leadIds = [], trigger, label = "Add to…", align = "start", onDone }: AddToMenuProps) {
   const [open, setOpen] = useState(false);
@@ -80,7 +80,20 @@ export function AddToMenu({ prospectIds = [], contactIds = [], leadIds = [], tri
     },
     onError: (e: any) => toast.error(e.message),
   });
-  const pending = pushExisting.isPending || bulkEnroll.isPending;
+  // Phase 3: the router scores every active campaign; the user confirms.
+  const bestFitQ = trpc.are.campaigns.routeBestFit.useQuery({ prospectIds, contactIds, leadIds }, { enabled: open && pane === "bestfit", retry: false });
+  const applyBestFit = trpc.are.campaigns.applyBestFit.useMutation({
+    onSuccess: (r: any) => {
+      if (r.added > 0) toast.success(`Added ${r.added} to their best-fit campaign${r.added === 1 ? "" : "s"} — the engine will enrich and write their emails`);
+      if (r.skipped > 0) toast.info(`${r.skipped} skipped (already in outreach or unidentifiable)`);
+      invalidatePeople();
+      utils.are.prospects.list.invalidate();
+      close();
+    },
+    onError: (e: any) => toast.error(e.message),
+  });
+  const routable = ((bestFitQ.data?.picks ?? []) as any[]).filter((p) => p.campaignId != null);
+  const pending = pushExisting.isPending || bulkEnroll.isPending || applyBestFit.isPending;
 
   return (
     <Popover open={open} onOpenChange={(o) => { setOpen(o); if (!o) setPane("root"); }}>
@@ -95,6 +108,14 @@ export function AddToMenu({ prospectIds = [], contactIds = [], leadIds = [], tri
         {pane === "root" && (
           <div className="py-1">
             <div className="px-3 py-2 text-[11px] uppercase tracking-wide text-muted-foreground">Add {n === 1 ? "this person" : `${n} people`} to</div>
+            <button type="button" onClick={() => setPane("bestfit")} className="w-full flex items-start gap-2.5 px-3 py-2.5 hover:bg-muted text-left">
+              <Bot className="size-4 mt-0.5 shrink-0 text-violet-600" />
+              <span className="flex-1 min-w-0">
+                <span className="block text-[13px] font-medium">Best-fit campaign ✦</span>
+                <span className="block text-[11.5px] text-muted-foreground">The engine scores every active campaign and shows its pick</span>
+              </span>
+              <ChevronRight className="size-3.5 mt-1 text-muted-foreground" />
+            </button>
             <button type="button" onClick={() => setPane("campaign")} className="w-full flex items-start gap-2.5 px-3 py-2.5 hover:bg-muted text-left">
               <Bot className="size-4 mt-0.5 shrink-0 text-violet-600" />
               <span className="flex-1 min-w-0">
@@ -119,6 +140,39 @@ export function AddToMenu({ prospectIds = [], contactIds = [], leadIds = [], tri
                   <span className="block text-[11.5px] text-muted-foreground">Bookmark them — no outreach</span>
                 </span>
               </Link>
+            )}
+          </div>
+        )}
+        {pane === "bestfit" && (
+          <div>
+            <button type="button" onClick={() => setPane("root")} className="w-full px-3 py-2 border-b text-[13px] font-medium text-left hover:bg-muted">‹ Best-fit campaign</button>
+            <div className="max-h-72 overflow-y-auto py-1">
+              {bestFitQ.isLoading ? (
+                <div className="px-3 py-4 text-xs text-muted-foreground flex items-center gap-2"><Loader2 className="size-3 animate-spin" /> Scoring against every active campaign…</div>
+              ) : bestFitQ.error ? (
+                <p className="px-3 py-4 text-[13px] text-red-600">{bestFitQ.error.message}</p>
+              ) : ((bestFitQ.data?.picks ?? []) as any[]).length === 0 ? (
+                <p className="px-3 py-4 text-[13px] text-muted-foreground">No one to route.</p>
+              ) : ((bestFitQ.data?.picks ?? []) as any[]).map((p) => (
+                <div key={p.prospectId} className="px-3 py-2 border-b last:border-0">
+                  <div className="flex items-center gap-2 text-[13px]">
+                    <span className="font-medium truncate flex-1">{p.name}</span>
+                    {p.campaignId != null ? <span className="text-[10px] font-semibold text-violet-700 dark:text-violet-300">{p.fit}/100</span> : <span className="text-[10px] text-muted-foreground">no fit</span>}
+                  </div>
+                  <div className="text-[11.5px] text-muted-foreground">
+                    {p.campaignId != null ? <><span className="text-foreground/90">→ {p.campaignName}</span>{p.reasoning ? ` — ${p.reasoning}` : ""}</> : p.skipReason}
+                  </div>
+                </div>
+              ))}
+            </div>
+            {routable.length > 0 && (
+              <div className="p-2 border-t">
+                <Button size="sm" className="w-full" disabled={pending}
+                  onClick={() => applyBestFit.mutate({ picks: routable.map((p) => ({ prospectId: p.prospectId, campaignId: p.campaignId, fit: p.fit, reasoning: String(p.reasoning ?? "").slice(0, 400) })) })}>
+                  {applyBestFit.isPending ? <Loader2 className="size-3.5 animate-spin mr-1.5" /> : null}
+                  Add {routable.length} to {routable.length === 1 ? "this" : "their"} best-fit campaign{routable.length === 1 ? "" : "s"}
+                </Button>
+              </div>
             )}
           </div>
         )}

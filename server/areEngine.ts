@@ -1981,7 +1981,7 @@ function buildQuerySlices(args: {
  * plus B2B anchor bonuses (company domain, having a title at all). Used to
  * rank within a tick and to gate enrichment (campaign.minConfidence).
  */
-function scoreIcpMatch(
+export function scoreIcpMatch(
   p: Record<string, unknown>,
   icp: { titles: string[]; industries: string[]; geos: string[]; keywords: string[] },
 ): number {

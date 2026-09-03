@@ -18,6 +18,7 @@ import { and, desc, eq, gte, inArray, isNotNull, isNull, like, sql } from "drizz
 import { getDb } from "../db";
 import {
   areCampaigns,
+  campaignRoutingSuggestions,
   emailDrafts,
   emailLog,
   emailReplies,
@@ -47,6 +48,8 @@ const EMPTY = {
   socialReplies: { count: 0 },
   optimizationRecs: { count: 0 },
   chatFollowUps: { count: 0 },
+  /** Best-fit campaign suggestions awaiting accept/dismiss (phase 3). */
+  routingSuggestions: { count: 0, byCampaign: [] as { campaignId: number; name: string; count: number }[] },
   digest24h: { emailsSent: 0, prospectsDiscovered: 0, repliesReceived: 0, meetingsBooked: 0 },
 };
 
@@ -75,6 +78,7 @@ export const attentionRouter = router({
       [socialAgg],
       [optAgg],
       [chatFollowAgg],
+      routingByCampaign,
     ] = await Promise.all([
       db.select({ n: sql<number>`count(*)` }).from(emailDrafts)
         .where(and(eq(emailDrafts.workspaceId, ws), eq(emailDrafts.status, "ai_pending_review"))),
@@ -151,6 +155,12 @@ export const attentionRouter = router({
           like(tasks.title, "Follow up:%"),
           like(tasks.description, "Suggested email%"),
         )),
+      // Best-fit campaign suggestions (phase 3) — pending, grouped by campaign.
+      db.select({ campaignId: campaignRoutingSuggestions.campaignId, name: areCampaigns.name, n: sql<number>`count(*)` })
+        .from(campaignRoutingSuggestions)
+        .innerJoin(areCampaigns, eq(areCampaigns.id, campaignRoutingSuggestions.campaignId))
+        .where(and(eq(campaignRoutingSuggestions.workspaceId, ws), eq(campaignRoutingSuggestions.status, "pending")))
+        .groupBy(campaignRoutingSuggestions.campaignId, areCampaigns.name),
     ]);
 
     // Campaign names for the ARE breakdown — one IN query, not a join in the
@@ -178,12 +188,17 @@ export const attentionRouter = router({
     const socialReplies = { count: Number(socialAgg?.n ?? 0) };
     const optimizationRecs = { count: Number(optAgg?.n ?? 0) };
     const chatFollowUps = { count: Number(chatFollowAgg?.n ?? 0) };
+    const routingSuggestions = {
+      count: routingByCampaign.reduce((s, r) => s + Number(r.n), 0),
+      byCampaign: routingByCampaign.map((r) => ({ campaignId: r.campaignId, name: r.name, count: Number(r.n) })),
+    };
 
     return {
       totalNeedingYou:
         aiDrafts.count + proposedMeetings.count + unhandledReplies.count +
         areApprovals.count + draftTasks.count + paused.length +
-        sequenceDrafts.count + socialReplies.count + optimizationRecs.count + chatFollowUps.count,
+        sequenceDrafts.count + socialReplies.count + optimizationRecs.count + chatFollowUps.count +
+        routingSuggestions.count,
       aiDrafts,
       proposedMeetings,
       unhandledReplies,
@@ -194,6 +209,7 @@ export const attentionRouter = router({
       socialReplies,
       optimizationRecs,
       chatFollowUps,
+      routingSuggestions,
       digest24h: {
         emailsSent: Number(digestSent?.n ?? 0),
         prospectsDiscovered: Number(digestDiscovered?.n ?? 0),

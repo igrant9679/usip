@@ -61,9 +61,12 @@ describe("the two engines check each other before a manual add", () => {
     expect(svc).toContain("export async function resolveToPeopleIds");
   });
   it("a campaign push refuses someone a sequence is working", () => {
-    const router = read("routers", "are", "prospects.ts");
-    expect(router).toContain("activeSequencesForProspects(ctx.workspace.id, people.map((p) => p.id))");
-    expect(router).toContain("In an active sequence");
+    // The check lives in the ONE write path (services/are/pushPeople.ts,
+    // phase 3) that both the manual push and the router go through.
+    const write = read("services", "are", "pushPeople.ts");
+    expect(write).toContain("activeSequencesForProspects(workspaceId, people.map((p) => p.id))");
+    expect(write).toContain("In an active sequence");
+    expect(read("routers", "are", "prospects.ts")).toContain('await import("../../services/are/pushPeople")');
   });
   it("a sequence enroll refuses someone a campaign is working, and says so", () => {
     const seq = read("routers", "sequences.ts");

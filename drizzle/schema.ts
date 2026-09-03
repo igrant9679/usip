@@ -854,6 +854,36 @@ export const emailDrafts = mysqlTable(
    create a second set of counters to keep in step, which is how
    `are_ab_variants` ended up with columns nothing ever wrote.
    ────────────────────────────────────────────────────────────────────────── */
+/**
+ * Campaign routing suggestions (migration 0176, phase 3). In approval mode the
+ * router records its pick here instead of enrolling; a human accepts or
+ * dismisses from the Revenue Engine hub / attention list. One pending row per
+ * person at a time.
+ */
+export const campaignRoutingSuggestions = mysqlTable(
+  "campaign_routing_suggestions",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    prospectId: int("prospectId").notNull(),
+    campaignId: int("campaignId").notNull(),
+    /** 0-100 fit for the chosen campaign. */
+    fit: int("fit").notNull(),
+    reasoning: text("reasoning"),
+    /** The other campaigns considered, [{campaignId, fit}], for the review card. */
+    alternatives: json("alternatives"),
+    status: mysqlEnum("status", ["pending", "accepted", "dismissed"]).default("pending").notNull(),
+    source: mysqlEnum("source", ["manual", "sweep"]).default("sweep").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    decidedAt: timestamp("decidedAt"),
+    decidedBy: int("decidedBy"),
+  },
+  (t) => ({
+    byWs: index("ix_crs_ws").on(t.workspaceId, t.status),
+    byProspect: index("ix_crs_prospect").on(t.prospectId),
+  }),
+);
+
 export const emailLog = mysqlTable(
   "email_log",
   {
@@ -1583,6 +1613,13 @@ export const workspaceSettings = mysqlTable("workspace_settings", {
   autoExtendDays: int("autoExtendDays").default(7).notNull(),
   /** ARE global defaults */
   areDefaultAutonomyMode: mysqlEnum("areDefaultAutonomyMode", ["full", "batch_approval", "review_release"]).default("batch_approval").notNull(),
+  /* Campaign routing (migration 0176, phase 3): the engine evaluates a
+     person against every active campaign and either suggests the best fit
+     (approval) or enrolls them (auto). Same Off/Approve/Auto vocabulary as
+     every other autopilot so the Autonomy Center renders it unchanged. */
+  campaignRoutingMode: mysqlEnum("campaignRoutingMode", ["off", "approval", "auto"]).default("off").notNull(),
+  campaignRoutingDailyCap: int("campaignRoutingDailyCap").default(25).notNull(),
+  campaignRoutingLastRunAt: timestamp("campaignRoutingLastRunAt"),
   areDefaultDailySendCap: int("areDefaultDailySendCap").default(50).notNull(),
   areDefaultAutoApproveThreshold: int("areDefaultAutoApproveThreshold"),
   areDefaultSignalToOpportunity: boolean("areDefaultSignalToOpportunity").default(false).notNull(),

@@ -47,6 +47,7 @@ import { runNightlyBatch } from "../nightlyBatch";
 import { runDailyCheckAllWorkspaces } from "../services/linkedinEnrichment/dailyCheck";
 import { runAreEngine } from "../areEngine";
 import { runTaskAutopilotAllWorkspaces } from "../services/taskAutopilot";
+import { runCampaignRoutingAllWorkspaces } from "../services/campaignRouter";
 import { runMeetingAutopilotAllWorkspaces } from "../services/meetingScheduler";
 import { sendDueMeetingReminders } from "../services/meetingReminders";
 import { runConversationAutopilotAllWorkspaces } from "../services/replyClassifier";
@@ -343,6 +344,17 @@ async function startServer() {
   };
   setTimeout(runAutopilot, 3 * 60 * 1000); // first run 3 minutes after boot
   setInterval(runAutopilot, 30 * 60 * 1000); // every 30 minutes
+
+  // Campaign routing (phase 3): route people who are in nothing yet to their
+  // best-fit campaign — suggest in approval mode, enroll in auto — under the
+  // per-workspace daily cap. Human-scale cadence; 30 min is plenty.
+  const runRouting = () => {
+    runCampaignRoutingAllWorkspaces().catch((e) =>
+      console.error("[CampaignRouting] cron run failed:", e)
+    );
+  };
+  setTimeout(runRouting, 6 * 60 * 1000); // first run 6 minutes after boot
+  setInterval(runRouting, 30 * 60 * 1000); // every 30 minutes
 
   // Chat abandonment follow-up (0137): a visitor who gave an email and left
   // without booking is the most recoverable thing the chat produces. Only acts

@@ -9,6 +9,7 @@
  *   5. Live signal feed — colour-coded by sentiment with action badges
  */
 import { Shell, PageHeader, StatCard, EmptyState, SubNav, useAccentColor } from "@/components/usip/Shell";
+import { RoutingSuggestions } from "@/components/usip/RoutingSuggestions";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -623,6 +624,9 @@ export default function AREHub() {
               </div>
             )}
           </section>
+
+          {/* Best-fit routing suggestions (phase 3) — approval mode's queue. */}
+          <RoutingSuggestions />
 
           {/* Signal feed — 2/5 */}
           <section className="lg:col-span-2" data-tour-id="are-signal-feed">

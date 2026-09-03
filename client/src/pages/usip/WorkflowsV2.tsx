@@ -107,6 +107,8 @@ export default function WorkflowsV2() {
   // running. Optimisation defaults to `approval` (i.e. ON) and in `auto` edits
   // your sequences; chat follow-up in `auto` SENDS EMAIL. A global off switch
   // that misses either is worse than no global switch, because it is believed.
+  const routingAp = trpc.are.campaigns.getRoutingSettings.useQuery(undefined as any, { retry: false });
+  const setRoutingAp = trpc.are.campaigns.setRoutingSettings.useMutation({ onSuccess: () => utils.are.campaigns.getRoutingSettings.invalidate(), onError: (e) => toast.error(e.message.includes("FORBIDDEN") ? "Only admins can change Campaign Routing" : e.message) });
   const optAp = trpc.optimization.getSettings.useQuery(undefined as any, { retry: false });
   const setOptAp = trpc.optimization.setSettings.useMutation({ onSuccess: () => utils.optimization.getSettings.invalidate(), onError: (e) => toast.error(e.message) });
   const chatFollowAp = trpc.chatAgents.getFollowUpSettings.useQuery(undefined as any, { retry: false });
@@ -144,6 +146,9 @@ export default function WorkflowsV2() {
     { key: "chat", label: "Inbound Chat Agent", icon: MessageSquare, blurb: "Qualify website visitors → book the meeting", href: "/v2/chat", mode: chatAp.data?.mode ?? "off", lastRunAt: undefined, set: (m: string) => setChatAp.mutate({ mode: m as any }) },
     { key: "chatFollowUp", label: "Chat Follow-up", icon: Mail, blurb: "Email visitors who left the chat without booking", href: "/v2/chat", mode: chatFollowAp.data?.mode ?? "off", lastRunAt: undefined, set: (m: string) => setChatFollowAp.mutate({ mode: m as any }) },
     { key: "optimization", label: "Continuous Optimisation", icon: Zap, blurb: "Measure what works and tune sequences", href: "/are/performance", mode: optAp.data?.mode ?? "off", lastRunAt: (optAp.data as any)?.lastRunAt, set: (m: string) => setOptAp.mutate({ mode: m as any }) },
+    // Phase 3: the best-fit campaign router. Approve = suggests picks for
+    // review on the Revenue Engine hub; Auto = enrolls them.
+    { key: "routing", label: "Campaign Routing", icon: Bot, blurb: "Put people who are in nothing yet into the campaign that fits them best", href: "/are", mode: routingAp.data?.mode ?? "off", lastRunAt: (routingAp.data as any)?.lastRunAt, set: (m: string) => setRoutingAp.mutate({ mode: m as any }) },
   ];
   const onCount = autopilots.filter((a) => a.mode !== "off").length;
 
@@ -159,6 +164,7 @@ export default function WorkflowsV2() {
     setBackfillAp.mutate({ mode: mode as any });
     setChatFollowAp.mutate({ mode: mode as any });
     setOptAp.mutate({ mode: mode as any });
+    setRoutingAp.mutate({ mode: mode as any });
     // The engine has no "off": batch approval is its safest mode (nothing is
     // approved without a human). "All: Off" used to skip it entirely, so the
     // one system sending cold outbound kept its setting while the page said
@@ -182,6 +188,7 @@ export default function WorkflowsV2() {
     setBackfillAp.mutate({ mode: "approval" as any });
     setChatFollowAp.mutate({ mode: "approval" as any });
     setOptAp.mutate({ mode: "approval" as any });
+    setRoutingAp.mutate({ mode: "approval" as any });
     setEmailAutoEnabled(true);
     // Approve mode for the engine = batch approval (prospects queue for your OK).
     setAllEngineAutonomy.mutate({ mode: "batch_approval" });

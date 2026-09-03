@@ -3930,6 +3930,36 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0176: campaign routing — the best-fit campaign router (phase 3) ─────
+  // Nothing in the product evaluated a person against more than one
+  // campaign; a prospect was bound to whichever campaign claimed it first.
+  // The router scores every active campaign and either suggests (approval)
+  // or enrolls (auto) under the house Off/Approve/Auto dial.
+  {
+    name: "0176_campaign_routing.sql",
+    statements: [
+      "ALTER TABLE `workspace_settings` ADD COLUMN `campaignRoutingMode` ENUM('off','approval','auto') NOT NULL DEFAULT 'off'",
+      "ALTER TABLE `workspace_settings` ADD COLUMN `campaignRoutingDailyCap` INT NOT NULL DEFAULT 25",
+      "ALTER TABLE `workspace_settings` ADD COLUMN `campaignRoutingLastRunAt` TIMESTAMP NULL",
+      "CREATE TABLE IF NOT EXISTS `campaign_routing_suggestions` (" +
+        "`id` INT AUTO_INCREMENT PRIMARY KEY, " +
+        "`workspaceId` INT NOT NULL, " +
+        "`prospectId` INT NOT NULL, " +
+        "`campaignId` INT NOT NULL, " +
+        "`fit` INT NOT NULL, " +
+        "`reasoning` TEXT NULL, " +
+        "`alternatives` JSON NULL, " +
+        "`status` ENUM('pending','accepted','dismissed') NOT NULL DEFAULT 'pending', " +
+        "`source` ENUM('manual','sweep') NOT NULL DEFAULT 'sweep', " +
+        "`createdAt` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, " +
+        "`decidedAt` TIMESTAMP NULL, " +
+        "`decidedBy` INT NULL, " +
+        "INDEX `ix_crs_ws` (`workspaceId`, `status`), " +
+        "INDEX `ix_crs_prospect` (`prospectId`)" +
+      ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------
